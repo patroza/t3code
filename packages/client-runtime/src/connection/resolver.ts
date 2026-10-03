@@ -1,12 +1,15 @@
-import type { AuthClientPresentationMetadata } from "@t3tools/contracts";
 import { appendOmegentT3ProductHandshake } from "@t3tools/shared/productFamily";
+import type {
+  AuthClientPresentationMetadata,
+  ExecutionEnvironmentDescriptor,
+} from "@t3tools/contracts";
 import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as HttpClient from "effect/unstable/http/HttpClient";
 
 import { appendClientConnectionParams } from "../authorization/remote.ts";
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
@@ -50,6 +53,17 @@ export class ConnectionResolver extends Context.Service<
     readonly prepare: (
       entry: ConnectionCatalogEntry,
     ) => Effect.Effect<PreparedConnection, ConnectionAttemptError>;
+    /**
+     * Authorizes a socket without the orchestration protocol gate, for hosts
+     * too old to connect normally. Only update RPCs may run over it.
+     */
+    readonly prepareForUpdate: (entry: ConnectionCatalogEntry) => Effect.Effect<
+      {
+        readonly prepared: PreparedConnection;
+        readonly descriptor: ExecutionEnvironmentDescriptor;
+      },
+      ConnectionAttemptError
+    >;
   }
 >()("@t3tools/client-runtime/connection/resolver/ConnectionResolver") {}
 
@@ -246,7 +260,7 @@ export const make = Effect.gen(function* () {
   const ssh = yield* makeSshBroker();
   const httpClient = yield* HttpClient.HttpClient;
 
-  const prepare = Effect.fn("clientRuntime.connection.broker.prepare")(function* (
+  const authorize = Effect.fn("clientRuntime.connection.broker.authorize")(function* (
     entry: ConnectionCatalogEntry,
   ) {
     const target: ConnectionTarget = entry.target;
@@ -278,14 +292,24 @@ export const make = Effect.gen(function* () {
         actual: descriptor.environmentId,
       });
     }
+    return { prepared, descriptor };
+  });
+
+  const prepare = Effect.fn("clientRuntime.connection.broker.prepare")(function* (
+    entry: ConnectionCatalogEntry,
+  ) {
+    const { prepared, descriptor } = yield* authorize(entry);
     const compatibilityError = orchestrationProtocolCompatibilityError(descriptor);
     if (compatibilityError !== null) {
       return yield* compatibilityError;
     }
-    return { ...prepared, socketUrl: appendOrchestrationProtocol(prepared.socketUrl) };
+    return {
+      ...prepared,
+      socketUrl: appendOrchestrationProtocol(prepared.socketUrl),
+    };
   });
 
-  return ConnectionResolver.of({ prepare });
+  return ConnectionResolver.of({ prepare, prepareForUpdate: authorize });
 });
 
 export const layer = Layer.effect(ConnectionResolver, make);

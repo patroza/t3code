@@ -68,7 +68,6 @@ describe("searchSettings", () => {
     ).toEqual([]);
     expect(searchSettings("work").map((item) => item.id)).toEqual([
       "storage-worktrees",
-      "working-shelf",
       "worktree-remove-confirmation",
       "network-access",
       "project-defaults",
@@ -308,6 +307,10 @@ describe("searchSettings", () => {
     });
     expect(searchSettings("word wrap")[0]).toMatchObject({
       id: "word-wrap",
+      to: "/settings/appearance",
+    });
+    expect(searchSettings("composer context")[0]).toMatchObject({
+      id: "composer-context",
       to: "/settings/appearance",
     });
     expect(searchSettings("environment identification")[0]).toMatchObject({

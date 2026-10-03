@@ -1,4 +1,5 @@
-import type { OrchestrationThreadActivity, TurnId } from "@t3tools/contracts";
+import { type IntegrationActivity as OrchestrationThreadActivity } from "@t3tools/shared/integrationThreadView";
+import type { TurnId } from "@t3tools/contracts";
 
 export interface PresentedTask {
   readonly step: string;

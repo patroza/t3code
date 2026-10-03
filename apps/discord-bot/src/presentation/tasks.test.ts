@@ -1,4 +1,5 @@
-import { TurnId, type OrchestrationThreadActivity } from "@t3tools/contracts";
+import { type IntegrationActivity as OrchestrationThreadActivity } from "@t3tools/shared/integrationThreadView";
+import { TurnId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { formatTasksForDiscord, presentTasks } from "./tasks.ts";

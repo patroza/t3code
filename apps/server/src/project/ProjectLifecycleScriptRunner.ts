@@ -23,7 +23,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ProjectStoreV2 } from "../orchestration-v2/ProjectStore.ts";
+import { ProjectionStoreV2 } from "../orchestration-v2/ProjectionStore.ts";
 import * as ProcessRunner from "../processRunner.ts";
 
 const LIFECYCLE_SCRIPT_TIMEOUT = "10 minutes";
@@ -122,7 +123,8 @@ const selectScript = (
     : prMergedProjectScript(scripts);
 
 export const make = Effect.gen(function* () {
-  const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+  const projects = yield* ProjectStoreV2;
+  const projection = yield* ProjectionStoreV2;
   const processRunner = yield* ProcessRunner.ProcessRunner;
   const platform = yield* HostProcessPlatform;
   const hostEnvironment = yield* HostProcessEnvironment;
@@ -145,8 +147,8 @@ export const make = Effect.gen(function* () {
       });
 
     if (input.projectId) {
-      const projectById = yield* projectionSnapshotQuery
-        .getProjectShellById(ProjectId.make(input.projectId))
+      const projectById = yield* projects
+        .get(ProjectId.make(input.projectId))
         .pipe(Effect.map(Option.getOrUndefined), Effect.mapError(mapResolveError));
       if (projectById) {
         return projectById;
@@ -157,9 +159,10 @@ export const make = Effect.gen(function* () {
       (value): value is string => typeof value === "string" && value.length > 0,
     );
     for (const root of candidateRoots) {
-      const projectByRoot = yield* projectionSnapshotQuery
-        .getActiveProjectByWorkspaceRoot(root)
-        .pipe(Effect.map(Option.getOrUndefined), Effect.mapError(mapResolveError));
+      const projectByRoot = yield* projects.listShells().pipe(
+        Effect.map((all) => all.find((project) => project.workspaceRoot === root)),
+        Effect.mapError(mapResolveError),
+      );
       if (projectByRoot) {
         return projectByRoot;
       }
@@ -167,9 +170,7 @@ export const make = Effect.gen(function* () {
 
     // Status cwd is often a worktree path that is not the project workspace root.
     // Resolve via thread shells that link this path.
-    const shell = yield* projectionSnapshotQuery
-      .getShellSnapshot()
-      .pipe(Effect.mapError(mapResolveError));
+    const shell = yield* projection.getShellSnapshot().pipe(Effect.mapError(mapResolveError));
     const thread = shell.threads.find(
       (entry) => entry.worktreePath !== null && entry.worktreePath === input.worktreePath,
     );
@@ -177,9 +178,11 @@ export const make = Effect.gen(function* () {
       return null;
     }
     return (
-      shell.projects.find((project) => project.id === thread.projectId) ??
-      (yield* projectionSnapshotQuery
-        .getProjectShellById(thread.projectId)
+      (yield* projects.listShells().pipe(Effect.mapError(mapResolveError))).find(
+        (project) => project.id === thread.projectId,
+      ) ??
+      (yield* projects
+        .get(thread.projectId)
         .pipe(Effect.map(Option.getOrUndefined), Effect.mapError(mapResolveError)))
     );
   });

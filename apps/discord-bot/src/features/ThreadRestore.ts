@@ -1,3 +1,4 @@
+import { type IntegrationThreadShellView as OrchestrationThreadShell } from "@t3tools/shared/integrationThreadView";
 // @effect-diagnostics anyUnknownInErrorContext:off missingEffectContext:off missingEffectError:off
 /**
  * Boot / T3-reconnect rehydrate of Discord↔T3 bridges.
@@ -10,7 +11,7 @@
  *
  * Cap 50 by lastActivityAt desc. Concurrent ensure 4.
  */
-import type { OrchestrationThreadShell, ThreadId } from "@t3tools/contracts";
+import type { ThreadId } from "@t3tools/contracts";
 import { sessionNeedsWakeUp } from "@t3tools/shared/sessionWake";
 import { DiscordREST } from "dfx";
 import * as Effect from "effect/Effect";

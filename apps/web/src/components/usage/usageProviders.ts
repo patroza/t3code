@@ -1,55 +1,47 @@
 import type { UsageProviderKind } from "@t3tools/contracts";
 
-import {
-  AntigravityIcon,
-  ClaudeAI,
-  CursorIcon,
-  GrokIcon,
-  type Icon,
-  KimiIcon,
-  OpenAI,
-  OpenCodeIcon,
-} from "../Icons";
+import { ProviderDriverKind } from "@t3tools/contracts";
 
 type UsageProviderPresentation = {
   readonly label: string;
   readonly color: string;
-  readonly mark: Icon;
+  readonly driverKind: ProviderDriverKind;
 };
 
 /**
  * Exhaustive presentation for providers supported by the usage contract.
- * Declaration order is reused by every chart, table, legend, and skeleton, so
- * adding a provider only requires its contract support and one entry here.
- *
- * Stacked bands have to stay distinguishable side by side, so Kimi's warmer
- * orange is kept clear of Claude's.
+ * Declaration order is reused by every chart and table, so adding a provider
+ * only requires its contract support and one entry here.
  */
 export const PROVIDER_PRESENTATION = {
   codex: {
     label: "Codex",
     color: "var(--contrast-foreground)",
-    mark: OpenAI,
+    driverKind: ProviderDriverKind.make("codex"),
   },
   claude: {
     label: "Claude Code",
     color: "#d97757",
-    mark: ClaudeAI,
+    driverKind: ProviderDriverKind.make("claudeAgent"),
   },
   grok: {
     label: "Grok Build",
     // Contrast-aware neutral between the Codex series and muted chart chrome.
     color: "color-mix(in oklab, var(--contrast-foreground) 72%, var(--background))",
-    mark: GrokIcon,
+    driverKind: ProviderDriverKind.make("grok"),
   },
-  kimi: {
-    label: "Kimi",
-    color: "#ff6a3d",
-    mark: KimiIcon,
+  cursor: { label: "Cursor", color: "#8b8b8b", driverKind: ProviderDriverKind.make("cursor") },
+  opencode: {
+    label: "OpenCode",
+    color: "#5b9bbd",
+    driverKind: ProviderDriverKind.make("opencode"),
   },
-  cursor: { label: "Cursor", color: "#8b8b8b", mark: CursorIcon },
-  opencode: { label: "OpenCode", color: "#5b9bbd", mark: OpenCodeIcon },
-  antigravity: { label: "Antigravity", color: "#8c7bd1", mark: AntigravityIcon },
+  kimi: { label: "Kimi", color: "#ff6a3d", driverKind: ProviderDriverKind.make("kimi") },
+  antigravity: {
+    label: "Antigravity",
+    color: "#8c7bd1",
+    driverKind: ProviderDriverKind.make("antigravity"),
+  },
 } satisfies Record<UsageProviderKind, UsageProviderPresentation>;
 
 /** Stable provider reading order across charts, summaries, tables, and hover rows. */

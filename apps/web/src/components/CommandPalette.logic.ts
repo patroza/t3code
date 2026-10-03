@@ -280,7 +280,7 @@ export type BuildThreadActionItemsThread = Pick<
   | "originSource"
   | "participantSummaries"
   | "projectId"
-  | "session"
+  | "runtime"
   | "title"
   | "worktreePath"
 > & {

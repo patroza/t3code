@@ -40,7 +40,7 @@ export { DEFAULT_OWNERSHIP_RELATION };
 export interface HomeListOptions {
   /**
    * Multi-select environment filter. Empty means all environments.
-   * Applies to the thread list. Persisted on device when
+   * Applies to Threads mode. Persisted on device when
    * the provider is given a storage callback.
    */
   readonly selectedEnvironmentIds: readonly EnvironmentId[];

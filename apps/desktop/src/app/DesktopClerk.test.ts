@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off globalFetchInEffect:off - Hosted handoff test uses a real localhost listener without an OpenAI account.
 import * as NodeHttp from "node:http";
+import * as NodePath from "@effect/platform-node/NodePath";
 import { codexAuthHandoffUrl, readCodexAuthDelivery } from "@t3tools/shared/codexAuthHandoff";
 import { EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
 import { HostProcessArguments } from "@t3tools/shared/hostProcess";
@@ -81,6 +82,7 @@ const makeDesktopClerkLayer = (
   return DesktopClerk.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        NodePath.layer,
         Layer.succeed(DesktopEnvironment.DesktopEnvironment, environment),
         Layer.succeed(ElectronApp.ElectronApp, electronApp),
         Layer.succeed(ElectronShell.ElectronShell, shell),
@@ -187,11 +189,12 @@ describe("DesktopClerk", () => {
     });
   });
 
-  for (const { isDevelopment, scheme } of [
+  it.effect.each([
     { isDevelopment: true, scheme: "t3code-dev" },
     { isDevelopment: false, scheme: "t3code" },
-  ] as const) {
-    it.effect(`configures the SDK with the ${scheme} renderer origin`, () => {
+  ] as const)(
+    "configures the SDK with the $scheme renderer origin",
+    ({ isDevelopment, scheme }) => {
       const bridge = { cleanup: vi.fn(), isPrimaryInstance: true };
       storageMock.mockReturnValue(storageAdapter);
       createClerkBridgeMock.mockReturnValue(bridge);
@@ -211,8 +214,8 @@ describe("DesktopClerk", () => {
         storageMock.mockClear();
         createClerkBridgeMock.mockClear();
       });
-    });
-  }
+    },
+  );
 
   it.effect("registers the second-instance handler in the primary instance", () => {
     storageMock.mockReturnValue(storageAdapter);
@@ -462,8 +465,9 @@ describe("DesktopClerk", () => {
     },
   );
 
-  for (const entry of ["startup", "open-url"] as const) {
-    it.effect(`receives hosted web sign-in through the desktop ${entry} handler`, () =>
+  it.effect.each(["startup", "open-url"] as const)(
+    "receives hosted web sign-in through the desktop %s handler",
+    (entry) =>
       Effect.gen(function* () {
         storageMock.mockReturnValue(storageAdapter);
         createClerkBridgeMock.mockReturnValue({ cleanup: vi.fn(), isPrimaryInstance: true });
@@ -540,6 +544,5 @@ describe("DesktopClerk", () => {
           Effect.provideService(ElectronWindow.ElectronWindow, noopElectronWindow),
         );
       }).pipe(Effect.scoped),
-    );
-  }
+  );
 });

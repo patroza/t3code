@@ -1,4 +1,4 @@
-import type * as EffectAcpSchema from "effect-acp/schema";
+import type * as EffectAcpSchema from "effect-acp/compat";
 import { describe, expect, it } from "vite-plus/test";
 
 import { buildKimiModelsFromConfigOptions } from "./KimiProvider.ts";
@@ -12,12 +12,12 @@ const configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> = [
     currentValue: "kimi-code/k3",
     options: [
       {
-        group: "current",
+        groupId: "current",
         name: "Current",
         options: [{ value: "kimi-code/k3", name: "Kimi K3" }],
       },
       {
-        group: "legacy",
+        groupId: "legacy",
         name: "Legacy",
         options: [
           { value: "kimi-code/k2.5", name: "Kimi K2.5" },

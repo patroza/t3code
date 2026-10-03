@@ -9,6 +9,7 @@ import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as OpenCodeServerLedger from "./OpenCodeServerLedger.ts";
 import { OpenCodeRuntime, OpenCodeRuntimeLive } from "./opencodeRuntime.ts";
 
 it.effect("launches a local OpenCode server with the project cwd and final environment", () => {
@@ -35,6 +36,7 @@ it.effect("launches a local OpenCode server with the project cwd and final envir
   });
   const runtimeLayer = OpenCodeRuntimeLive.pipe(
     Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner)),
+    Layer.provide(OpenCodeServerLedger.layerTest),
   );
 
   return Effect.gen(function* () {

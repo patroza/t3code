@@ -1,20 +1,24 @@
+import {
+  integrationThreadView,
+  integrationThreadShellView,
+  type IntegrationThreadView as OrchestrationThread,
+  type IntegrationThreadShellView as OrchestrationThreadShell,
+} from "@t3tools/shared/integrationThreadView";
 // @effect-diagnostics globalDate:off globalFetch:off globalFetchInEffect:off globalTimers:off globalErrorInEffectCatch:off globalErrorInEffectFailure:off anyUnknownInErrorContext:off missingEffectContext:off missingEffectError:off preferSchemaOverJson:off tryCatchInEffectGen:off deterministicKeys:off
 import {
-  ApprovalRequestId,
-  DEFAULT_RUNTIME_MODE,
   EnvironmentId,
-  ORCHESTRATION_WS_METHODS,
+  ORCHESTRATION_V2_WS_METHODS,
+  OrchestrationV2ThreadDetailSnapshot,
+  type OrchestrationV2ThreadProjection,
+  RuntimeRequestId,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
   ProjectId,
   WS_METHODS,
-  type ClientOrchestrationCommand,
+  type OrchestrationV2Command,
   type MessageId,
   type ModelSelection,
   type OrchestrationProjectShell,
-  type OrchestrationShellSnapshot,
-  type OrchestrationThread,
-  type OrchestrationThreadDetailSnapshot,
-  type OrchestrationThreadShell,
+  type OrchestrationV2ShellSnapshot,
   type ProviderApprovalDecision,
   type ProviderInteractionMode,
   type ProviderUserInputAnswers,
@@ -26,7 +30,7 @@ import {
   type VcsResolveBranchChangeRequestResult,
   type VcsStatusStreamEvent,
 } from "@t3tools/contracts";
-import { type DiscordClientSourceHint, withTurnSourceHint } from "./sourceHint.ts";
+import { type DiscordClientSourceHint } from "./sourceHint.ts";
 import {
   PrimaryConnectionTarget,
   type PreparedConnection,
@@ -43,10 +47,10 @@ import {
 } from "@t3tools/client-runtime/authorization";
 import { fetchRemoteEnvironmentDescriptor } from "@t3tools/client-runtime/environment";
 import { applyShellStreamEvent } from "@t3tools/client-runtime/state/shell";
+import { modelSelectionCommandType } from "@t3tools/shared/model";
 import { appendOmegentT3ProductHandshake } from "@t3tools/shared/productFamily";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -55,8 +59,13 @@ import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Result from "effect/Result";
 import * as Scope from "effect/Scope";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Socket from "effect/unstable/socket/Socket";
+
+const decodeThreadDetailSnapshot = Schema.decodeUnknownEffect(
+  Schema.toCodecJson(OrchestrationV2ThreadDetailSnapshot),
+);
 
 import type { DiscordBotConfig } from "../config.ts";
 import { preferredModelSelection } from "../config.ts";
@@ -87,6 +96,7 @@ function localSocketUrl(httpBaseUrl: string): string {
   url.pathname = "/ws";
   url.search = "";
   url.hash = "";
+  url.searchParams.set("orchestrationProtocol", "2");
   return appendOmegentT3ProductHandshake(url.toString());
 }
 
@@ -196,7 +206,12 @@ export interface T3SessionService {
   readonly waitUntilReady: (options?: {
     readonly timeoutMs?: number;
   }) => Effect.Effect<void, T3SessionError>;
-  readonly shell: () => Effect.Effect<OrchestrationShellSnapshot | null>;
+  readonly shell: () => Effect.Effect<
+    | (Omit<OrchestrationV2ShellSnapshot, "threads"> & {
+        readonly threads: ReadonlyArray<OrchestrationThreadShell>;
+      })
+    | null
+  >;
   readonly serverConfig: () => Effect.Effect<ServerConfig | null>;
   readonly findProjectByWorkspaceRoot: (
     workspaceRoot: string,
@@ -234,7 +249,7 @@ export interface T3SessionService {
   /**
    * Inject a server-queued follow-up into the active turn (or start a turn if
    * idle). Used after `startTurn` queues a mid-turn Discord message so the bot
-   * keeps historical steer-by-default behavior.
+   * supports explicit immediate steering.
    */
   readonly steerQueuedMessage: (input: {
     readonly threadId: ThreadId;
@@ -264,9 +279,13 @@ export interface T3SessionService {
       readonly onSequence?: (sequence: number) => Effect.Effect<void, unknown, unknown>;
       readonly warmSeed?: {
         readonly snapshotSequence: number;
-        readonly thread: OrchestrationThread;
+        readonly projection: OrchestrationV2ThreadProjection;
       } | null;
       readonly projectThread?: (thread: OrchestrationThread) => OrchestrationThread;
+      readonly onProjection?: (
+        projection: OrchestrationV2ThreadProjection,
+        sequence: number,
+      ) => Effect.Effect<void, unknown, unknown>;
     },
   ) => Effect.Effect<void, T3SessionError, unknown>;
   readonly respondToApproval: (
@@ -295,7 +314,10 @@ export interface T3SessionService {
    */
   readonly fetchThreadDetail: (
     threadId: ThreadId,
-  ) => Effect.Effect<OrchestrationThreadDetailSnapshot | null, T3SessionError>;
+  ) => Effect.Effect<
+    { readonly snapshotSequence: number; readonly thread: OrchestrationThread } | null,
+    T3SessionError
+  >;
   readonly resolveBranchChangeRequest: (input: {
     readonly cwd: string;
     readonly refName: string;
@@ -342,7 +364,7 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
   Effect.sync(() => {
     const runtime = ManagedRuntime.make(
       Layer.merge(
-        rpcSessionFactoryLayer.pipe(Layer.provide(Socket.layerWebSocketConstructorGlobal)),
+        rpcSessionFactoryLayer({}).pipe(Layer.provide(Socket.layerWebSocketConstructorGlobal)),
         remoteHttpClientLayer((input, init) => globalThis.fetch(input, init)),
       ),
     );
@@ -352,7 +374,7 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
     let httpBaseUrl: string | null = null;
     /** Bearer used for HTTP snapshot reloads (same token as WS connect). */
     let httpBearerToken: string | null = null;
-    let shell: OrchestrationShellSnapshot | null = null;
+    let shell: OrchestrationV2ShellSnapshot | null = null;
     let serverConfig: ServerConfig | null = null;
     let shellFiber: Fiber.Fiber<void, unknown> | null = null;
     let browserFiber: Fiber.Fiber<void, unknown> | null = null;
@@ -494,13 +516,11 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
       );
     };
 
-    const nowIso = () => DateTime.formatIso(DateTime.nowUnsafe());
-
-    const dispatch = (command: ClientOrchestrationCommand) =>
+    const dispatch = (command: OrchestrationV2Command) =>
       Effect.tryPromise({
         try: () =>
           runtime.runPromise(
-            requireSession().client[ORCHESTRATION_WS_METHODS.dispatchCommand](command),
+            requireSession().client[ORCHESTRATION_V2_WS_METHODS.dispatchCommand](command),
           ),
         catch: (cause) => {
           if (isT3TransportError(cause)) {
@@ -553,6 +573,9 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
                 bearerToken,
               }),
             );
+            const protocolSocketUrl = new URL(socketUrl);
+            protocolSocketUrl.searchParams.set("orchestrationProtocol", "2");
+            socketUrl = appendOmegentT3ProductHandshake(protocolSocketUrl.toString());
             label = descriptor.label;
             environmentId = descriptor.environmentId;
           }
@@ -592,7 +615,7 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
             serverConfig = await runtime.runPromise(connected.initialConfig);
             superviseClose(connected);
 
-            const stream = connected.client[ORCHESTRATION_WS_METHODS.subscribeShell]({}).pipe(
+            const stream = connected.client[ORCHESTRATION_V2_WS_METHODS.subscribeShell]({}).pipe(
               Stream.runForEach((item) =>
                 Effect.sync(() => {
                   if (item.kind === "snapshot") shell = item.snapshot;
@@ -840,16 +863,37 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
     const providersForSelection = (): ReadonlyArray<ServerProvider> =>
       serverConfig?.providers ?? [];
 
-    const fetchThreadDetailHttp = (threadId: ThreadId) =>
+    const persistAttachments = (
+      threadId: ThreadId,
+      messageId: MessageId,
+      attachments: ReadonlyArray<UploadChatAttachment>,
+    ) =>
       Effect.tryPromise({
-        try: async (): Promise<OrchestrationThreadDetailSnapshot | null> => {
+        try: () =>
+          runtime.runPromise(
+            requireSession().client[WS_METHODS.assetsPersistChatAttachments]({
+              threadId,
+              messageId,
+              attachments,
+            }),
+          ),
+        catch: (cause) =>
+          new T3SessionError(`Attachment upload failed: ${messageFromCause(cause)}`, { cause }),
+      }).pipe(Effect.map((result) => result.attachments));
+
+    const fetchThreadProjectionHttp = (threadId: ThreadId) =>
+      Effect.tryPromise({
+        try: async (): Promise<unknown> => {
           const base = httpBaseUrl;
           if (base === null) return null;
           const url = new URL(
             `/api/orchestration/threads/${encodeURIComponent(threadId)}`,
             base,
           ).toString();
-          const headers: Record<string, string> = { Accept: "application/json" };
+          const headers: Record<string, string> = {
+            Accept: "application/json",
+            "X-T3-Orchestration-Protocol": "2",
+          };
           if (httpBearerToken !== null) {
             headers.Authorization = `Bearer ${httpBearerToken}`;
           }
@@ -857,13 +901,22 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
           if (!response.ok) {
             throw new Error(`HTTP ${response.status} loading thread snapshot`);
           }
-          return (await response.json()) as OrchestrationThreadDetailSnapshot;
+          return response.json() as Promise<unknown>;
         },
         catch: (cause) =>
           new T3SessionError(`Thread snapshot fetch failed: ${messageFromCause(cause)}`, {
             cause,
           }),
       }).pipe(
+        Effect.flatMap((raw) =>
+          raw === null ? Effect.succeed(null) : decodeThreadDetailSnapshot(raw),
+        ),
+        Effect.mapError(
+          (cause) =>
+            new T3SessionError(`Thread snapshot decode failed: ${messageFromCause(cause)}`, {
+              cause,
+            }),
+        ),
         Effect.catch((error) =>
           Effect.logWarning("Could not fetch thread snapshot over HTTP", {
             threadId,
@@ -881,7 +934,12 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
       isConnected: () => Effect.sync(() => session !== null),
       isReady: () => Effect.sync(() => session !== null && shell !== null),
       waitUntilReady,
-      shell: () => Effect.succeed(shell),
+      shell: () =>
+        Effect.succeed(
+          shell === null
+            ? null
+            : { ...shell, threads: shell.threads.map(integrationThreadShellView) },
+        ),
       serverConfig: () => Effect.succeed(serverConfig),
       findProjectByWorkspaceRoot: (workspaceRoot) =>
         Effect.gen(function* () {
@@ -918,8 +976,21 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
           }),
         ),
       getThreadShell: (threadId) =>
-        Effect.sync(() => shell?.threads.find((thread) => thread.id === threadId) ?? null),
-      fetchThreadDetail: (threadId) => fetchThreadDetailHttp(threadId),
+        Effect.sync(() => {
+          const thread = shell?.threads.find((thread) => thread.id === threadId);
+          return thread ? integrationThreadShellView(thread) : null;
+        }),
+      fetchThreadDetail: (threadId) =>
+        fetchThreadProjectionHttp(threadId).pipe(
+          Effect.map((snapshot) =>
+            snapshot === null
+              ? null
+              : {
+                  snapshotSequence: snapshot.snapshotSequence,
+                  thread: integrationThreadView(snapshot.projection),
+                },
+          ),
+        ),
       resolveBranchChangeRequest: (input) =>
         Effect.tryPromise({
           try: () =>
@@ -936,53 +1007,44 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
         Effect.gen(function* () {
           const threadId = newThreadId();
           const messageId = newMessageId();
-          const createdAt = nowIso();
           const title = formatThreadTitle(input.titleSeed ?? input.prompt, 72, "Discord thread");
           const interactionMode = input.interactionMode ?? "default";
           const runtimeMode = input.runtimeMode ?? botConfig.t3DefaultRuntimeMode;
           const worktreeBranch = `t3-discord/${shortId()}`;
 
           yield* claimBrowserHost(threadId);
-          const createTurn = {
-            type: "thread.turn.start" as const,
-            commandId: newCommandId(),
+          const attachments = yield* persistAttachments(
             threadId,
-            message: {
-              messageId,
-              role: "user" as const,
-              text: input.prompt,
-              attachments: (input.attachments ?? []) as ReadonlyArray<UploadChatAttachment>,
-            },
-            modelSelection: input.modelSelection,
-            titleSeed: title,
-            runtimeMode,
-            interactionMode,
-            bootstrap: {
-              createThread: {
-                projectId: input.project.id,
-                title,
-                modelSelection: input.modelSelection,
-                runtimeMode,
-                interactionMode,
-                branch: null,
-                worktreePath: null,
-                createdAt,
-              },
-              ...(input.local
-                ? {}
-                : {
-                    prepareWorktree: {
-                      projectCwd: input.project.workspaceRoot,
-                      baseBranch: input.baseBranch,
-                      branch: worktreeBranch,
-                      startFromOrigin: true,
-                    },
-                    runSetupScript: true,
-                  }),
-            },
-            createdAt,
-          };
-          yield* dispatch(withTurnSourceHint(createTurn, input.sourceHint));
+            messageId,
+            input.attachments ?? [],
+          );
+          yield* Effect.tryPromise({
+            try: () =>
+              runtime.runPromise(
+                requireSession().client[ORCHESTRATION_V2_WS_METHODS.launchThread]({
+                  commandId: newCommandId(),
+                  threadId,
+                  projectId: input.project.id,
+                  title,
+                  modelSelection: input.modelSelection,
+                  runtimeMode,
+                  interactionMode,
+                  creationSource: "server",
+                  workspaceStrategy: input.local
+                    ? { type: "root" }
+                    : {
+                        type: "worktree",
+                        baseRef: input.baseBranch,
+                        branch: worktreeBranch,
+                        startFromOrigin: true,
+                      },
+                  initialMessage: { messageId, text: input.prompt, attachments },
+                  ...(input.sourceHint ? { sourceHint: input.sourceHint } : {}),
+                }),
+              ),
+            catch: (cause) =>
+              new T3SessionError(`Thread launch failed: ${messageFromCause(cause)}`, { cause }),
+          });
 
           return { threadId, messageId };
         }),
@@ -992,10 +1054,15 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
           const messageId = input.messageId ?? newMessageId();
           // Sticky model on continue: never re-apply bot defaults (codex/gpt-5.4).
           // Explicit overrides come only from Discord --provider/--model flags.
-          // modelSelection is optional on thread.turn.start; omit when unknown so the
+          // modelSelection is optional on message.dispatch; omit when unknown so the
           // server keeps the thread's existing selection (Grok refuses mid-thread switches).
           const modelSelection = input.modelSelection ?? thread?.modelSelection;
           yield* claimBrowserHost(input.threadId);
+          const attachments = yield* persistAttachments(
+            input.threadId,
+            messageId,
+            input.attachments ?? [],
+          );
           if (
             shouldPersistThreadModelSelectionForNextTurn({
               ...(thread?.modelSelection === undefined
@@ -1005,46 +1072,92 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
             })
           ) {
             yield* dispatch({
-              type: "thread.meta.update",
+              type: thread?.modelSelection
+                ? modelSelectionCommandType(thread.modelSelection.instanceId, modelSelection!)
+                : "thread.model-selection.set",
               commandId: newCommandId(),
               threadId: input.threadId,
-              modelSelection,
+              modelSelection: modelSelection!,
             });
           }
-          const continueTurn = {
-            type: "thread.turn.start" as const,
+          if (input.runtimeMode !== undefined && input.runtimeMode !== thread?.runtimeMode)
+            yield* dispatch({
+              type: "thread.runtime-mode.set",
+              commandId: newCommandId(),
+              threadId: input.threadId,
+              runtimeMode: input.runtimeMode,
+            });
+          if (
+            input.interactionMode !== undefined &&
+            input.interactionMode !== thread?.interactionMode
+          )
+            yield* dispatch({
+              type: "thread.interaction-mode.set",
+              commandId: newCommandId(),
+              threadId: input.threadId,
+              interactionMode: input.interactionMode,
+            });
+          yield* dispatch({
+            type: "message.dispatch",
             commandId: newCommandId(),
             threadId: input.threadId,
-            message: {
-              messageId,
-              role: "user" as const,
-              text: input.prompt,
-              attachments: (input.attachments ?? []) as ReadonlyArray<UploadChatAttachment>,
-            },
-            ...(modelSelection === undefined ? {} : { modelSelection }),
-            titleSeed: input.prompt.trim().slice(0, 80) || "Continue",
-            runtimeMode: input.runtimeMode ?? thread?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
-            interactionMode: input.interactionMode ?? thread?.interactionMode ?? "default",
-            createdAt: nowIso(),
-          };
-          yield* dispatch(withTurnSourceHint(continueTurn, input.sourceHint));
+            messageId,
+            text: input.prompt,
+            attachments,
+            createdBy: "user",
+            creationSource: "server",
+            dispatchMode: { type: "queue_after_active" },
+            ...(modelSelection ? { modelSelection } : {}),
+            ...(input.sourceHint ? { sourceHint: input.sourceHint } : {}),
+          });
+
           return { messageId };
         }),
       steerQueuedMessage: (input) =>
-        dispatch({
-          type: "thread.queue.steer",
-          commandId: newCommandId(),
-          threadId: input.threadId,
-          messageId: input.messageId,
-          createdAt: nowIso(),
+        Effect.gen(function* () {
+          const snapshot = yield* fetchThreadProjectionHttp(input.threadId);
+          if (snapshot === null)
+            return yield* Effect.fail(
+              new T3SessionError("Could not load the queued runs from this server."),
+            );
+          const queued = snapshot?.projection.runs.find(
+            (run) => run.status === "queued" && run.userMessageId === input.messageId,
+          );
+          const active = snapshot?.projection.runs.findLast((run) =>
+            ["preparing", "starting", "running", "waiting"].includes(run.status),
+          );
+          if (!queued) return;
+          if (!active)
+            return yield* dispatch({
+              type: "queue.resume",
+              commandId: newCommandId(),
+              threadId: input.threadId,
+            });
+          yield* dispatch({
+            type: "queued-message.promote-to-steer",
+            commandId: newCommandId(),
+            threadId: input.threadId,
+            queuedRunId: queued.id,
+            targetRunId: active.id,
+          });
         }),
       removeQueuedMessage: (input) =>
-        dispatch({
-          type: "thread.queue.remove",
-          commandId: newCommandId(),
-          threadId: input.threadId,
-          messageId: input.messageId,
-          createdAt: nowIso(),
+        Effect.gen(function* () {
+          const snapshot = yield* fetchThreadProjectionHttp(input.threadId);
+          if (snapshot === null)
+            return yield* Effect.fail(
+              new T3SessionError("Could not load the queued runs from this server."),
+            );
+          const queued = snapshot?.projection.runs.find(
+            (run) => run.status === "queued" && run.userMessageId === input.messageId,
+          );
+          if (!queued) return;
+          yield* dispatch({
+            type: "queued-run.cancel",
+            commandId: newCommandId(),
+            threadId: input.threadId,
+            runId: queued.id,
+          });
         }),
       /**
        * Subscribe to thread events and run `onThread` in the **caller's** Effect context.
@@ -1068,9 +1181,10 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
               ? { projectThread: options.projectThread }
               : {}),
             onThread,
-            fetchSnapshot: () => fetchThreadDetailHttp(threadId),
+            fetchSnapshot: () => fetchThreadProjectionHttp(threadId),
+            ...(options?.onProjection ? { onProjection: options.onProjection } : {}),
             openStream: ({ afterSequence }) =>
-              active.client[ORCHESTRATION_WS_METHODS.subscribeThread]({
+              active.client[ORCHESTRATION_V2_WS_METHODS.subscribeThread]({
                 threadId,
                 ...(afterSequence !== undefined ? { afterSequence } : {}),
               }).pipe(
@@ -1124,42 +1238,41 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
         }).pipe(Effect.asVoid),
       respondToApproval: (threadId, requestId, decision) =>
         dispatch({
-          type: "thread.approval.respond",
+          type: "runtime-request.respond",
           commandId: newCommandId(),
           threadId,
-          requestId: ApprovalRequestId.make(requestId),
+          requestId: RuntimeRequestId.make(requestId),
           decision,
-          createdAt: nowIso(),
         }),
       respondToUserInput: (threadId, requestId, answers) =>
         dispatch({
-          type: "thread.user-input.respond",
+          type: "runtime-request.respond",
           commandId: newCommandId(),
           threadId,
-          requestId: ApprovalRequestId.make(requestId),
+          requestId: RuntimeRequestId.make(requestId),
           answers,
-          createdAt: nowIso(),
         }),
       interrupt: (threadId) =>
         Effect.gen(function* () {
-          const threadShell = shell?.threads.find((entry) => entry.id === threadId);
+          const snapshot = yield* fetchThreadProjectionHttp(threadId);
+          const active = snapshot?.projection.runs.findLast((run) =>
+            ["preparing", "starting", "running", "waiting"].includes(run.status),
+          );
+          if (!active) return;
           yield* dispatch({
-            type: "thread.turn.interrupt",
+            type: "run.interrupt",
             commandId: newCommandId(),
             threadId,
-            ...(threadShell?.latestTurn?.turnId === undefined
-              ? {}
-              : { turnId: threadShell.latestTurn.turnId }),
-            createdAt: nowIso(),
+            runId: active.id,
+            holdQueue: true,
           });
         }),
-      compact: (threadId) =>
-        dispatch({
-          type: "thread.context.compact",
-          commandId: newCommandId(),
-          threadId,
-          createdAt: nowIso(),
-        }),
+      compact: () =>
+        Effect.fail(
+          new T3SessionError(
+            "This server's orchestration runtime does not expose context compaction.",
+          ),
+        ),
       createAttachmentUrl: (attachmentId) =>
         Effect.tryPromise({
           try: async () => {

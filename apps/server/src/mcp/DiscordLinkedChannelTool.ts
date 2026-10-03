@@ -8,7 +8,8 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { McpSchema, McpServer } from "effect/unstable/ai";
 
-import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
+import { ProjectStoreV2 } from "../orchestration-v2/ProjectStore.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 
 const DISCORD_API_BASE_URL = "https://discord.com/api/v10";
@@ -693,7 +694,8 @@ function errorResult(message: string, tag = "DiscordLinkedChannelPostError") {
 export const registerDiscordLinkedChannelPostTool = Effect.fn("DiscordLinkedChannelTool.register")(
   function* () {
     const server = yield* McpServer.McpServer;
-    const snapshotQuery = yield* ProjectionSnapshotQuery;
+    const snapshotQuery = yield* ThreadManagementService;
+    const projects = yield* ProjectStoreV2;
 
     yield* server.addTool({
       tool: new McpSchema.Tool({
@@ -765,13 +767,13 @@ export const registerDiscordLinkedChannelPostTool = Effect.fn("DiscordLinkedChan
           }
 
           return Effect.gen(function* () {
-            const threadShell = yield* snapshotQuery.getThreadShellById(invocation.threadId);
+            const threadShell = yield* snapshotQuery
+              .getThreadShell(invocation.threadId)
+              .pipe(Effect.map(Option.fromNullishOr));
             if (Option.isNone(threadShell)) {
               return errorResult(`Thread ${invocation.threadId} was not found.`, "ThreadNotFound");
             }
-            const projectShell = yield* snapshotQuery.getProjectShellById(
-              threadShell.value.projectId,
-            );
+            const projectShell = yield* projects.get(threadShell.value.projectId);
             if (Option.isNone(projectShell)) {
               return errorResult(
                 `Project ${threadShell.value.projectId} was not found for this thread.`,

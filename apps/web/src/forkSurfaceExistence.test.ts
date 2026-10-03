@@ -18,6 +18,13 @@ function readSrc(relativePath: string): string {
 }
 
 describe("fork surface existence (anti stack-drop)", () => {
+  it("keeps branch reuse available in the shared worktree picker", () => {
+    expect(readSrc("components/BranchPicker.tsx")).toContain(
+      'aria-label="Reuse the selected branch in the worktree"',
+    );
+    expect(readSrc("components/BranchToolbarBranchSelector.tsx")).toContain("reuseBaseControl=");
+    expect(readSrc("components/ChatView.tsx")).toContain("onReuseBaseBranchChange");
+  });
   it("classic sidebar keeps the collapsible Settled shelf chrome", () => {
     const sidebar = readSrc("components/LegacySidebar.tsx");
     expect(sidebar).toContain('data-testid="sidebar-v1-settled-shelf-toggle"');
@@ -171,34 +178,19 @@ describe("fork surface existence (anti stack-drop)", () => {
     }
   });
 
-  it("every send path routes on the steering-queue prediction", () => {
-    const chatView = readSrc("components/ChatView.tsx");
-    // Both send paths (composer + plan follow-up) branch on the prediction:
-    // queue-bound sends become chips, everything else takes the live edge.
-    expect(chatView.match(/sendEntersSteeringQueue\(\{/g)).toHaveLength(2);
-    expect(chatView).toContain("hasPendingTurnStart: activeThread.pendingTurnStart !== null");
-    expect(chatView.match(/if \(followUpShouldQueue && followUpWouldQueue\)/g)).toHaveLength(1);
-    expect(
-      chatView.match(/if \(settings\.followUpBehavior === "queue" && followUpWouldQueue\)/g),
-    ).toHaveLength(1);
-    expect(
-      chatView.match(
-        /setOptimisticQueuedMessageIds\(\(existing\) => new Set\(existing\)\.add\(messageIdForSend\)\)/g,
-      ),
-    ).toHaveLength(4);
-    // The chips render the merged list, never the raw server queue.
-    expect(chatView).toContain("queuedMessages={displayQueuedMessages}");
-    expect(chatView).not.toContain("queuedMessageStore");
-    expect(chatView).toContain('command === "thread.steerQueuedMessage"');
-    expect(chatView).toContain("displayQueuedMessages.find((queued) => !queued.pending)");
-  });
-
-  it("queued message chips keep edit + send-now labels", () => {
-    const chips = readSrc("components/chat/QueuedMessageChips.tsx");
-    expect(chips).toContain('aria-label="Edit queued message"');
-    expect(chips).toContain('aria-label="Send queued message now"');
-    expect(chips).toContain("Remove from queue and edit in composer");
-    expect(chips).toContain("steerShortcutLabel");
+  it("uses native queued runs and keeps steering and editing reachable", () => {
+    const chat = readSrc("components/ChatView.tsx");
+    expect(chat).toContain("<QueuedRunsControl");
+    expect(chat).toContain("onEditQueuedRun={beginEditingQueuedRun}");
+    expect(chat).toContain("queuedRunsControlRef.current?.steerNext");
+    expect(chat).toContain("queuedRunsControlRef.current?.editLatest");
+    expect(chat).not.toContain("QueuedMessageChips");
+    expect(chat).not.toContain("threadTurnOutbox");
+    const queue = readSrc("components/chat/QueuedRunsControl.tsx");
+    expect(queue).toContain('aria-label="Edit queued message"');
+    expect(queue).toContain('aria-label="Remove queued message"');
+    expect(queue).toContain("canPromoteToSteer");
+    expect(queue).toContain("Reorder queued message");
   });
 
   it("git action menu keeps the GitHub pull request list link", () => {
@@ -258,7 +250,7 @@ describe("fork surface existence (anti stack-drop)", () => {
   });
 
   it("every thread surface filters through the shared ownership predicate", () => {
-    // Thread lists must apply the shared ownership preference consistently.
+    // Thread lists apply the shared ownership filter consistently.
     const sidebar = readSrc("components/Sidebar.tsx");
     for (const source of [sidebar]) {
       expect(source).toContain("useOwnershipFilter()");

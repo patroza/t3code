@@ -2,8 +2,6 @@ import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   MessageId,
-  type OrchestrationThread,
-  type OrchestrationThreadShell,
   type ModelSelection,
   type RepositoryIdentity,
   ThreadId,
@@ -32,8 +30,14 @@ import * as Semaphore from "effect/Semaphore";
 import * as IdentityService from "../identity/IdentityService.ts";
 import { buildIntegrationSourceRef } from "../identity/stampSource.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
-import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
-import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ProjectStoreV2 } from "../orchestration-v2/ProjectStore.ts";
+import { OrchestratorV2 } from "../orchestration-v2/Orchestrator.ts";
+import {
+  integrationThreadView,
+  integrationThreadShellView,
+  type IntegrationThreadView as OrchestrationThread,
+  type IntegrationThreadShellView as OrchestrationThreadShell,
+} from "@t3tools/shared/integrationThreadView";
 import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { getAutoBootstrapThreadModelSelection } from "../serverRuntimeStartup.ts";
@@ -256,6 +260,8 @@ export function discoverGitHubTargetTurnId(
   if (options.userMessageId !== null) {
     const userIndex = thread.messages.findIndex((message) => message.id === options.userMessageId);
     if (userIndex >= 0) {
+      const linkedRun = thread.messages[userIndex]?.turnId;
+      if (linkedRun != null) return linkedRun;
       for (let index = userIndex + 1; index < thread.messages.length; index += 1) {
         const message = thread.messages[index]!;
         if (message.role === "assistant" && message.turnId !== null) {
@@ -331,6 +337,20 @@ export function resolveGitHubBridgeTurnOutcome(
   const targetTurnId = discoverGitHubTargetTurnId(thread, options);
   if (targetTurnId === null) return { _tag: "waiting" };
 
+  const nativeRun = thread.runStatuses?.find((run) => run.id === targetTurnId);
+  if (nativeRun !== undefined) {
+    if (["queued", "preparing", "starting", "running", "waiting"].includes(nativeRun.status))
+      return { _tag: "waiting" };
+    const completed = nativeRun.status === "completed";
+    return {
+      _tag: "terminal",
+      status: completed ? "completed" : "rejected",
+      body: completed
+        ? githubFinalAnswerWithStats(thread, targetTurnId) || FAILED_RESPONSE
+        : FAILED_RESPONSE,
+      targetTurnId,
+    };
+  }
   const latest = thread.latestTurn;
   const session = thread.session;
   const assistants = assistantMessagesForTurn(thread, targetTurnId);
@@ -500,9 +520,34 @@ export const make = Effect.gen(function* () {
   const github = yield* GitHubAppClient;
   const deliveries = yield* GitHubDeliveryStore;
   const workItems = yield* ThreadWorkItemStore;
-  const projection = yield* ProjectionSnapshotQuery;
+  const engineProjection = yield* OrchestratorV2;
+  const projectStore = yield* ProjectStoreV2;
+  const projection = {
+    getShellSnapshot: () =>
+      Effect.all([engineProjection.getShellSnapshot(), projectStore.listShells()], {
+        concurrency: "unbounded",
+      }).pipe(
+        Effect.map(([shell, projects]) => ({
+          ...shell,
+          projects,
+          threads: shell.threads.map(integrationThreadShellView),
+        })),
+      ),
+    getThreadShellById: (id: ThreadId) =>
+      engineProjection
+        .getThreadShell(id)
+        .pipe(
+          Effect.map((shell) =>
+            shell === null ? Option.none() : Option.some(integrationThreadShellView(shell)),
+          ),
+        ),
+    getThreadDetailById: (id: ThreadId) =>
+      engineProjection
+        .getThreadProjection(id)
+        .pipe(Effect.map((value) => Option.some(integrationThreadView(value)))),
+  };
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
-  const engine = yield* OrchestrationEngineService;
+  const engine = yield* OrchestratorV2;
   const projectSetupScriptRunner = yield* ProjectSetupScriptRunner;
   const providerRegistry = yield* ProviderRegistry;
   const identity = yield* IdentityService.IdentityService;
@@ -761,7 +806,6 @@ export const make = Effect.gen(function* () {
       readonly runSetup: boolean;
     }) {
       const threadId = ThreadId.make(yield* crypto.randomUUIDv4);
-      const createdAt = DateTime.formatIso(yield* DateTime.now);
       const title = githubCommentThreadTitle(input.invocation, input.threadMode);
       yield* Effect.logInfo("Creating T3 thread for GitHub PR comment", {
         repository: input.invocation.repository,
@@ -775,6 +819,8 @@ export const make = Effect.gen(function* () {
       });
       yield* engine.dispatch({
         type: "thread.create",
+        createdBy: "user",
+        creationSource: "server",
         commandId: CommandId.make(yield* crypto.randomUUIDv4),
         threadId,
         projectId: input.projectId,
@@ -784,7 +830,6 @@ export const make = Effect.gen(function* () {
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         branch: input.branch,
         worktreePath: input.worktreePath,
-        createdAt,
       });
       if (input.runSetup) {
         yield* projectSetupScriptRunner
@@ -807,28 +852,10 @@ export const make = Effect.gen(function* () {
             ),
           );
       }
-      return provisioned({
-        id: threadId,
-        projectId: input.projectId,
-        title,
-        modelSelection: input.modelSelection,
-        runtimeMode: "full-access" as const,
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        branch: input.branch,
-        worktreePath: input.worktreePath,
-        pullRequests: [],
-        latestTurn: null,
-        createdAt,
-        updatedAt: createdAt,
-        archivedAt: null,
-        settledAt: null,
-        settledOverride: null,
-        session: null,
-        latestUserMessageAt: null,
-        hasPendingApprovals: false,
-        hasPendingUserInput: false,
-        hasActionableProposedPlan: false,
-      } satisfies OrchestrationThreadShell);
+      const created = yield* engine.getThreadShell(threadId);
+      return created === null
+        ? provisionFailed(FAILED_RESPONSE)
+        : provisioned(integrationThreadShellView(created));
     },
   );
 
@@ -1425,25 +1452,22 @@ export const make = Effect.gen(function* () {
     });
     const dispatched = yield* engine
       .dispatch({
-        type: "thread.turn.start",
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "server",
+        dispatchMode: { type: "queue_after_active" },
         commandId,
         threadId: thread.id,
-        message: {
-          messageId,
-          role: "user",
-          text: buildGitHubTurnPrompt(turnInvocation, {
-            discordLinkRequested: parsedCommand.discord,
-            stackContext,
-            threadMode,
-          }),
-          attachments: [],
-        },
+        messageId,
+        text: buildGitHubTurnPrompt(turnInvocation, {
+          discordLinkRequested: parsedCommand.discord,
+          stackContext,
+          threadMode,
+        }),
+        attachments: [],
         modelSelection: turnModelSelection,
         titleSeed: turnInvocation.prompt.slice(0, 80) || "GitHub PR comment",
-        runtimeMode: thread.runtimeMode,
-        interactionMode: thread.interactionMode,
         source,
-        createdAt: DateTime.formatIso(yield* DateTime.now),
       })
       .pipe(
         Effect.as(true),

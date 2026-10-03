@@ -1,10 +1,11 @@
+import type { SidebarThreadSummary } from "../types";
+import { deriveActiveWorkStartedAt } from "../session-logic.ts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit/sortable";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 import {
   animateSidebarLayoutChanges,
-  applySidebarThreadDrop,
   archiveSelectedThreadEntries,
   buildBulkTitleRegenerationContextMenuItem,
   buildBulkUnpinContextMenuItem,
@@ -14,36 +15,39 @@ import {
   createThreadJumpHintVisibilityController,
   deleteSelectedThreadEntries,
   filterSidebarProjectScopeItems,
-  formatWorktreeGroupLabel,
-  getSidebarThreadIdsToPrewarm,
-  resolveSidebarThreadPrewarmLimit,
-  SIDEBAR_THREAD_PREWARM_LIMIT,
-  resolveAdjacentThreadId,
-  reduceSidebarProjectScopeMenuState,
+  filterSidebarV2VisibleThreads,
+  formatWorkingDurationLabel,
   getFallbackThreadIdAfterDelete,
   getProjectSortTimestamp,
+  getSidebarForkParentThreadId,
+  getSidebarThreadIdsToPrewarm,
   hasUnseenCompletion,
   isContextMenuPointerDown,
-  isSidebarNestedLinkClick,
+  isSidebarSubagentThread,
   isSidebarThreadWorking,
   isTrailingDoubleClick,
   normalizeWorktreePathForSidebarGroup,
   orderItemsByPreferredIds,
+  pinOrderKeyBetween,
+  reduceSidebarProjectScopeMenuState,
+  resolveAdjacentThreadId,
   resolveProjectStatusIndicator,
-  resolveSidebarProjectBadgeColorIndex,
   resolveSidebarProjectBadgeLabel,
-  resolveSidebarNewThreadSeedContext,
-  resolveSidebarNewThreadEnvMode,
-  resolveSidebarRowAccessibility,
+  resolveSidebarProjectBadgeColorIndex,
+  resolveSidebarThreadPrewarmLimit,
+  SIDEBAR_THREAD_PREWARM_LIMIT,
   resolveSidebarStageBadgeLabel,
+  resolveSidebarThreadSection,
+  resolveSidebarRowAccessibility,
   resolveThreadRowClassName,
   resolveSidebarThreadStatus,
   resolveSidebarV2TopStatus,
+  resolveThreadLastVisitedAt,
   resolveThreadStatusPill,
   resolveWorkingStartedAt,
   searchSidebarThreads,
-  formatWorkingDurationLabel,
   shouldClearThreadSelectionOnMouseDown,
+  shouldShowSidebarV2Duration,
   shouldRecedeSidebarThread,
   sortLogicalProjectsForSidebar,
   sortInboxThreadsByReturn,
@@ -52,14 +56,11 @@ import {
   resolveSettledThreadTimestamp,
   sortSettledThreadsForSidebar,
   resolveSidebarDropTarget,
-  pinOrderKeyBetween,
   planSidebarThreadDrop,
-  sidebarMarkerId,
-  sidebarListItemId,
   sortPinnedThreadsForSidebar,
-  sortThreadsForSidebar,
   sortProjectsForSidebar,
   sortScopedProjectsForSidebar,
+  sortSidebarV2ProjectGroups,
   shouldCreateNewThreadInCurrentProject,
   shouldNavigateAfterThreadPark,
   THREAD_JUMP_HINT_SHOW_DELAY_MS,
@@ -70,22 +71,15 @@ import {
 } from "./Sidebar.logic";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
-import {
-  EnvironmentId,
-  OrchestrationLatestTurn,
-  ProjectId,
-  ProviderInstanceId,
-  ThreadId,
-  TurnId,
-} from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, ProviderInstanceId, RunId, ThreadId } from "@t3tools/contracts";
 
 import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
   type Project,
-  type SidebarThreadSummary,
   type Thread,
 } from "../types";
+import { makeThreadFixture, type ThreadFixtureOverrides } from "../test-fixtures";
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
 
@@ -160,6 +154,23 @@ describe("animateSidebarLayoutChanges", () => {
 
   it("keeps layout movement while the user is sorting", () => {
     expect(animateSidebarLayoutChanges({ ...baseArgs, isSorting: true })).toBe(true);
+  });
+});
+
+describe("resolveSidebarThreadSection", () => {
+  it("keeps a pinned thread in the pinned shelf", () => {
+    expect(resolveSidebarThreadSection({ snoozed: false, settled: false, pinned: true })).toBe(
+      "pinned",
+    );
+  });
+
+  it("keeps lifecycle shelves authoritative over a stale pin", () => {
+    expect(resolveSidebarThreadSection({ snoozed: true, settled: true, pinned: true })).toBe(
+      "snoozed",
+    );
+    expect(resolveSidebarThreadSection({ snoozed: false, settled: true, pinned: true })).toBe(
+      "settled",
+    );
   });
 });
 
@@ -375,92 +386,6 @@ describe("buildMultiSelectThreadContextMenuItems", () => {
   });
 });
 
-describe("buildSidebarV2ThreadContextMenuItems", () => {
-  const baseInput = {
-    branch: null,
-    supportsSettlement: false,
-    isSettled: false,
-    supportsSnooze: false,
-    isSnoozed: false,
-    canSnoozeNow: true,
-    snoozePresets: [],
-  } as const;
-
-  it("offers settlement actions matching the thread's state and server support", () => {
-    expect(
-      buildSidebarV2ThreadContextMenuItems({
-        ...baseInput,
-        supportsSettlement: true,
-      })[0],
-    ).toEqual({ id: "settle", label: "Settle thread" });
-    expect(
-      buildSidebarV2ThreadContextMenuItems({
-        ...baseInput,
-        supportsSettlement: true,
-        isSettled: true,
-      })[0],
-    ).toEqual({ id: "unsettle", label: "Un-settle thread" });
-    expect(buildSidebarV2ThreadContextMenuItems(baseInput)).toEqual([
-      { id: "rename", label: "Rename thread" },
-      { id: "mark-unread", label: "Mark unread" },
-      { id: "copy-path", label: "Copy path", icon: "copy" },
-      { id: "copy-thread-id", label: "Copy Thread ID", icon: "copy" },
-      { id: "delete", label: "Delete", destructive: true, icon: "trash" },
-    ]);
-  });
-
-  it("leads with a new-thread item for the thread's branch", () => {
-    expect(
-      buildSidebarV2ThreadContextMenuItems({
-        ...baseInput,
-        branch: "feature/login",
-        supportsSettlement: true,
-      })[0],
-    ).toEqual({ id: "new-thread-on-branch", label: "New thread on feature/login" });
-  });
-
-  it("offers snooze presets when supported, disabled while the thread blocks on the user", () => {
-    const presets = [
-      {
-        id: "hour",
-        label: "In 1 hour",
-        whenLabel: "10:00 AM",
-        snoozedUntil: "2026-07-24T10:00:00.000Z",
-      },
-    ] as const;
-    expect(
-      buildSidebarV2ThreadContextMenuItems({
-        ...baseInput,
-        supportsSnooze: true,
-        snoozePresets: presets,
-      })[0],
-    ).toEqual({
-      id: "snooze",
-      label: "Snooze",
-      disabled: false,
-      children: [{ id: "snooze:hour", label: "In 1 hour (10:00 AM)" }],
-    });
-    expect(
-      buildSidebarV2ThreadContextMenuItems({
-        ...baseInput,
-        supportsSnooze: true,
-        canSnoozeNow: false,
-        snoozePresets: presets,
-      })[0],
-    ).toMatchObject({ id: "snooze", disabled: true });
-  });
-
-  it("offers wake instead of snooze for a snoozed thread", () => {
-    expect(
-      buildSidebarV2ThreadContextMenuItems({
-        ...baseInput,
-        supportsSnooze: true,
-        isSnoozed: true,
-      })[0],
-    ).toEqual({ id: "unsnooze", label: "Wake thread" });
-  });
-});
-
 describe("resolveSidebarStageBadgeLabel", () => {
   it("returns Nightly for nightly primary server versions", () => {
     expect(
@@ -499,24 +424,107 @@ describe("resolveSidebarStageBadgeLabel", () => {
   });
 });
 
-function makeLatestTurn(overrides?: {
+describe("sidebar thread lineage helpers", () => {
+  it("keeps only top-level, unarchived threads in the Sidebar V2 project scope", () => {
+    const parentId = ThreadId.make("thread-parent");
+    const projectId = ProjectId.make("project-visible");
+    const environmentId = EnvironmentId.make("environment-visible");
+    const root = makeThreadFixture({
+      id: parentId,
+      environmentId,
+      projectId,
+    });
+    const subagent = makeThreadFixture({
+      id: ThreadId.make("thread-subagent"),
+      environmentId,
+      projectId,
+      lineage: {
+        rootThreadId: parentId,
+        parentThreadId: parentId,
+        relationshipToParent: "subagent",
+      },
+    });
+    const fork = makeThreadFixture({
+      id: ThreadId.make("thread-fork"),
+      environmentId,
+      projectId,
+      lineage: {
+        rootThreadId: parentId,
+        parentThreadId: parentId,
+        relationshipToParent: "fork",
+      },
+    });
+    const archived = makeThreadFixture({
+      id: ThreadId.make("thread-archived"),
+      environmentId,
+      projectId,
+      archivedAt: "2026-01-02T00:00:00.000Z",
+    });
+    const otherProject = makeThreadFixture({
+      id: ThreadId.make("thread-other-project"),
+      environmentId,
+      projectId: ProjectId.make("project-other"),
+    });
+
+    expect(
+      filterSidebarV2VisibleThreads(
+        [root, subagent, fork, archived, otherProject],
+        new Set([`${environmentId}:${projectId}`]),
+      ).map((thread) => thread.id),
+    ).toEqual([parentId, fork.id]);
+  });
+
+  it("identifies subagent threads so the sidebar can hide them", () => {
+    const parentId = ThreadId.make("thread-parent");
+    const subagent = makeThreadFixture({
+      lineage: {
+        rootThreadId: parentId,
+        parentThreadId: parentId,
+        relationshipToParent: "subagent",
+      },
+    });
+
+    expect(isSidebarSubagentThread(subagent)).toBe(true);
+    expect(isSidebarSubagentThread(makeThreadFixture())).toBe(false);
+  });
+
+  it("resolves the parent thread for fork sidebar affordances", () => {
+    const parentId = ThreadId.make("thread-parent");
+    const fallbackParentId = ThreadId.make("thread-fallback-parent");
+    const runFork = makeThreadFixture({
+      forkedFrom: { type: "run", threadId: parentId, runId: "run-1" as never },
+      lineage: {
+        rootThreadId: parentId,
+        parentThreadId: fallbackParentId,
+        relationshipToParent: "fork",
+      },
+    });
+    const lineageFork = makeThreadFixture({
+      lineage: {
+        rootThreadId: parentId,
+        parentThreadId: fallbackParentId,
+        relationshipToParent: "fork",
+      },
+    });
+
+    expect(getSidebarForkParentThreadId(runFork)).toBe(parentId);
+    expect(getSidebarForkParentThreadId(lineageFork)).toBe(fallbackParentId);
+    expect(getSidebarForkParentThreadId(makeThreadFixture())).toBeNull();
+  });
+});
+
+function makeLatestRun(overrides?: {
   completedAt?: string | null;
   startedAt?: string | null;
-  state?: OrchestrationLatestTurn["state"];
-}): OrchestrationLatestTurn {
-  const state = overrides?.state ?? "completed";
+}): NonNullable<Thread["latestRun"]> {
   return {
-    turnId: "turn-1" as never,
-    state,
+    runId: "turn-1" as never,
+    status: "completed",
     assistantMessageId: null,
     requestedAt: "2026-03-09T10:00:00.000Z",
     startedAt: overrides?.startedAt ?? "2026-03-09T10:00:00.000Z",
     completedAt:
-      overrides?.completedAt !== undefined
-        ? overrides.completedAt
-        : state === "completed"
-          ? "2026-03-09T10:05:00.000Z"
-          : null,
+      overrides?.completedAt !== undefined ? overrides.completedAt : "2026-03-09T10:05:00.000Z",
   };
 }
 
@@ -528,9 +536,9 @@ describe("hasUnseenCompletion", () => {
         hasPendingApprovals: false,
         hasPendingUserInput: false,
         interactionMode: "default",
-        latestTurn: makeLatestTurn(),
+        latestRun: makeLatestRun(),
         lastVisitedAt: "2026-03-09T10:04:00.000Z",
-        session: null,
+        runtime: null,
       }),
     ).toBe(true);
   });
@@ -542,16 +550,16 @@ describe("hasUnseenCompletion", () => {
         hasPendingApprovals: false,
         hasPendingUserInput: false,
         interactionMode: "default",
-        latestTurn: makeLatestTurn(),
+        latestRun: makeLatestRun(),
         lastVisitedAt: undefined,
-        session: null,
+        runtime: null,
       }),
     ).toBe(false);
   });
 });
 
 describe("shouldRecedeSidebarThread", () => {
-  it.each(["working", "monitoring"] as const)(
+  it.each(["working", "waiting"] as const)(
     "recedes an inactive %s thread even when it is unread and woke",
     (status) => {
       expect(
@@ -749,316 +757,6 @@ describe("isTrailingDoubleClick", () => {
   });
 });
 
-describe("resolveSidebarNewThreadEnvMode", () => {
-  it("uses the app default when the caller does not request a specific mode", () => {
-    expect(
-      resolveSidebarNewThreadEnvMode({
-        defaultEnvMode: "worktree",
-      }),
-    ).toBe("worktree");
-  });
-
-  it("preserves an explicit requested mode over the app default", () => {
-    expect(
-      resolveSidebarNewThreadEnvMode({
-        requestedEnvMode: "local",
-        defaultEnvMode: "worktree",
-      }),
-    ).toBe("local");
-  });
-});
-
-describe("resolveSidebarNewThreadSeedContext", () => {
-  it("inherits an active draft worktree context even when the default is new worktree mode", () => {
-    expect(
-      resolveSidebarNewThreadSeedContext({
-        projectId: "project-1",
-        defaultEnvMode: "worktree",
-        activeThread: {
-          projectId: "project-1",
-          branch: "feature/existing",
-          worktreePath: "/repo/.t3/worktrees/existing",
-        },
-        activeDraftThread: {
-          projectId: "project-1",
-          branch: "feature/draft",
-          worktreePath: "/repo/.t3/worktrees/draft",
-          envMode: "worktree",
-          startFromOrigin: true,
-        },
-      }),
-    ).toEqual({
-      branch: "feature/draft",
-      worktreePath: "/repo/.t3/worktrees/draft",
-      envMode: "local",
-      startFromOrigin: true,
-    });
-  });
-
-  it("inherits an active server thread worktree context even when the default is new worktree mode", () => {
-    expect(
-      resolveSidebarNewThreadSeedContext({
-        projectId: "project-1",
-        defaultEnvMode: "worktree",
-        activeThread: {
-          projectId: "project-1",
-          branch: "feature/existing",
-          worktreePath: "/repo/.t3/worktrees/existing",
-        },
-        activeDraftThread: null,
-      }),
-    ).toEqual({
-      branch: "feature/existing",
-      worktreePath: "/repo/.t3/worktrees/existing",
-      envMode: "local",
-    });
-  });
-
-  it("inherits the active server thread context when creating a new thread in the same project", () => {
-    expect(
-      resolveSidebarNewThreadSeedContext({
-        projectId: "project-1",
-        defaultEnvMode: "local",
-        activeThread: {
-          projectId: "project-1",
-          branch: "effect-atom",
-          worktreePath: null,
-        },
-        activeDraftThread: null,
-      }),
-    ).toEqual({
-      branch: "effect-atom",
-      worktreePath: null,
-      envMode: "local",
-    });
-  });
-
-  it("prefers the active draft thread context when it matches the target project", () => {
-    expect(
-      resolveSidebarNewThreadSeedContext({
-        projectId: "project-1",
-        defaultEnvMode: "local",
-        activeThread: {
-          projectId: "project-1",
-          branch: "effect-atom",
-          worktreePath: null,
-        },
-        activeDraftThread: {
-          projectId: "project-1",
-          branch: "feature/new-draft",
-          worktreePath: "/repo/worktree",
-          envMode: "worktree",
-          startFromOrigin: true,
-        },
-      }),
-    ).toEqual({
-      branch: "feature/new-draft",
-      worktreePath: "/repo/worktree",
-      envMode: "local",
-      startFromOrigin: true,
-    });
-  });
-
-  it("falls back to the default env mode when there is no matching active thread context", () => {
-    expect(
-      resolveSidebarNewThreadSeedContext({
-        projectId: "project-2",
-        defaultEnvMode: "worktree",
-        activeThread: {
-          projectId: "project-1",
-          branch: "effect-atom",
-          worktreePath: null,
-        },
-        activeDraftThread: null,
-      }),
-    ).toEqual({
-      envMode: "worktree",
-    });
-  });
-});
-
-describe("buildSidebarThreadWorktreeSections", () => {
-  it("groups multiple threads on the same environment project worktree", () => {
-    const sections = buildSidebarThreadWorktreeSections([
-      makeSidebarThreadSummary({
-        id: ThreadId.make("thread-a"),
-        environmentId: EnvironmentId.make("env-1"),
-        projectId: ProjectId.make("project-1"),
-        branch: "feature/a",
-        worktreePath: "/repo/.t3/worktrees/feature-a/",
-      }),
-      makeSidebarThreadSummary({
-        id: ThreadId.make("thread-b"),
-        environmentId: EnvironmentId.make("env-1"),
-        projectId: ProjectId.make("project-1"),
-        branch: "feature/a",
-        worktreePath: "/repo/.t3/worktrees/feature-a",
-      }),
-      makeSidebarThreadSummary({
-        id: ThreadId.make("thread-c"),
-        environmentId: EnvironmentId.make("env-1"),
-        projectId: ProjectId.make("project-1"),
-        branch: "feature/b",
-        worktreePath: "/repo/.t3/worktrees/feature-b",
-      }),
-    ]);
-
-    expect(sections).toHaveLength(2);
-    expect(sections[0]?.kind).toBe("worktree");
-    if (sections[0]?.kind !== "worktree") {
-      throw new Error("expected worktree section");
-    }
-    expect(sections[0].label).toBe("feature/a · feature-a");
-    expect(sections[0].worktreePath).toBe("/repo/.t3/worktrees/feature-a");
-    expect(sections[0].threads.map((thread) => thread.id)).toEqual([
-      ThreadId.make("thread-a"),
-      ThreadId.make("thread-b"),
-    ]);
-    expect(sections[1]?.kind).toBe("thread");
-    if (sections[1]?.kind !== "thread") {
-      throw new Error("expected thread section");
-    }
-    expect(sections[1].checkoutPath).toBe("/repo/.t3/worktrees/feature-b");
-  });
-
-  it("groups multiple local checkout threads by resolved project path", () => {
-    const sections = buildSidebarThreadWorktreeSections(
-      [
-        makeSidebarThreadSummary({
-          id: ThreadId.make("thread-a"),
-          environmentId: EnvironmentId.make("env-1"),
-          projectId: ProjectId.make("project-1"),
-          branch: "main",
-          worktreePath: null,
-        }),
-        makeSidebarThreadSummary({
-          id: ThreadId.make("thread-b"),
-          environmentId: EnvironmentId.make("env-1"),
-          projectId: ProjectId.make("project-1"),
-          branch: "main",
-          worktreePath: null,
-        }),
-      ],
-      {
-        resolveLocalCheckoutPath: () => "/repo/t3code/",
-      },
-    );
-
-    expect(sections).toHaveLength(1);
-    expect(sections[0]?.kind).toBe("worktree");
-    if (sections[0]?.kind !== "worktree") {
-      throw new Error("expected checkout section");
-    }
-    expect(sections[0].source).toBe("local");
-    expect(sections[0].label).toBe("main · t3code");
-    expect(sections[0].checkoutPath).toBe("/repo/t3code");
-    expect(sections[0].worktreePath).toBeNull();
-    expect(sections[0].threads.map((thread) => thread.id)).toEqual([
-      ThreadId.make("thread-a"),
-      ThreadId.make("thread-b"),
-    ]);
-  });
-
-  it("attaches checkoutPath to single local checkout threads", () => {
-    const sections = buildSidebarThreadWorktreeSections(
-      [
-        makeSidebarThreadSummary({
-          id: ThreadId.make("thread-a"),
-          environmentId: EnvironmentId.make("env-1"),
-          projectId: ProjectId.make("project-1"),
-          branch: "main",
-          worktreePath: null,
-        }),
-      ],
-      {
-        resolveLocalCheckoutPath: () => "/repo/t3code/",
-      },
-    );
-
-    expect(sections).toHaveLength(1);
-    expect(sections[0]).toEqual({
-      kind: "thread",
-      checkoutPath: "/repo/t3code",
-      thread: expect.objectContaining({ id: ThreadId.make("thread-a") }),
-    });
-  });
-
-  it("does not group identical worktree paths across environments or projects", () => {
-    const sections = buildSidebarThreadWorktreeSections([
-      makeSidebarThreadSummary({
-        id: ThreadId.make("thread-env-1"),
-        environmentId: EnvironmentId.make("env-1"),
-        projectId: ProjectId.make("project-1"),
-        worktreePath: "/repo/worktree",
-      }),
-      makeSidebarThreadSummary({
-        id: ThreadId.make("thread-env-2"),
-        environmentId: EnvironmentId.make("env-2"),
-        projectId: ProjectId.make("project-1"),
-        worktreePath: "/repo/worktree",
-      }),
-      makeSidebarThreadSummary({
-        id: ThreadId.make("thread-project-2"),
-        environmentId: EnvironmentId.make("env-1"),
-        projectId: ProjectId.make("project-2"),
-        worktreePath: "/repo/worktree",
-      }),
-    ]);
-
-    expect(sections.map((section) => section.kind)).toEqual(["thread", "thread", "thread"]);
-    for (const section of sections) {
-      if (section.kind !== "thread") {
-        throw new Error("expected thread section");
-      }
-      expect(section.checkoutPath).toBe("/repo/worktree");
-    }
-  });
-
-  it("normalizes worktree paths and formats labels", () => {
-    expect(normalizeWorktreePathForSidebarGroup(" /repo/worktree// ")).toBe("/repo/worktree");
-    expect(formatWorktreeGroupLabel({ worktreePath: "C:\\repo\\wt", branch: null })).toBe("wt");
-    expect(
-      formatWorktreeGroupLabel({ worktreePath: "/repo/t3code", branch: null, source: "local" }),
-    ).toBe("Local checkout · t3code");
-  });
-});
-
-describe("isSidebarNestedLinkClick", () => {
-  const linkTarget = {
-    closest: (selector: string) => (selector === "a[href]" ? ({} as Element) : null),
-  } as unknown as EventTarget;
-
-  it("ignores row clicks that originated on a nested link", () => {
-    expect(isSidebarNestedLinkClick(linkTarget)).toBe(true);
-  });
-
-  it("walks up from a text node to the enclosing link", () => {
-    expect(isSidebarNestedLinkClick({ parentElement: linkTarget } as unknown as EventTarget)).toBe(
-      true,
-    );
-  });
-
-  it("leaves ordinary row clicks alone", () => {
-    expect(isSidebarNestedLinkClick({ closest: () => null } as unknown as EventTarget)).toBe(false);
-    expect(isSidebarNestedLinkClick(null)).toBe(false);
-  });
-});
-
-describe("shouldCreateNewThreadInCurrentProject", () => {
-  it("creates directly on shift+click in a multi-project setup", () => {
-    expect(shouldCreateNewThreadInCurrentProject(true, 2)).toBe(true);
-  });
-
-  it("opens the picker on a plain click in a multi-project setup", () => {
-    expect(shouldCreateNewThreadInCurrentProject(false, 2)).toBe(false);
-  });
-
-  it("creates directly on any click with a single project", () => {
-    expect(shouldCreateNewThreadInCurrentProject(false, 1)).toBe(true);
-    expect(shouldCreateNewThreadInCurrentProject(true, 1)).toBe(true);
-  });
-});
-
 describe("orderItemsByPreferredIds", () => {
   it("keeps preferred ids first, skips stale ids, and preserves the relative order of remaining items", () => {
     const ordered = orderItemsByPreferredIds({
@@ -1237,27 +935,25 @@ describe("isContextMenuPointerDown", () => {
 });
 
 describe("resolveSidebarThreadStatus", () => {
-  const session = {
-    threadId: ThreadId.make("thread-1"),
+  const runtime = {
     status: "running" as const,
-    providerName: "Codex",
+    activeRunId: null,
     providerInstanceId: ProviderInstanceId.make("codex"),
-    runtimeMode: DEFAULT_RUNTIME_MODE,
-    activeTurnId: "turn-1" as never,
+    providerName: "Codex",
     lastError: null,
     updatedAt: "2026-03-09T10:00:00.000Z",
   };
 
-  const idle = { hasPendingApprovals: false, hasPendingUserInput: false };
+  const idle = { hasPendingApprovals: false, hasPendingUserInput: false, runtime: null };
 
-  it("prioritizes approval over a running session", () => {
-    expect(resolveSidebarThreadStatus({ ...idle, hasPendingApprovals: true, session })).toBe(
+  it("prioritizes approval over a running runtime", () => {
+    expect(resolveSidebarThreadStatus({ ...idle, hasPendingApprovals: true, runtime })).toBe(
       "approval",
     );
   });
 
-  it("prioritizes awaiting input over a running session, below approval", () => {
-    expect(resolveSidebarThreadStatus({ ...idle, hasPendingUserInput: true, session })).toBe(
+  it("prioritizes awaiting input over a running runtime, below approval", () => {
+    expect(resolveSidebarThreadStatus({ ...idle, hasPendingUserInput: true, runtime })).toBe(
       "input",
     );
     expect(
@@ -1265,44 +961,83 @@ describe("resolveSidebarThreadStatus", () => {
         ...idle,
         hasPendingApprovals: true,
         hasPendingUserInput: true,
-        session,
+        runtime,
       }),
     ).toBe("approval");
   });
 
-  it("reports working for running and starting sessions", () => {
-    expect(resolveSidebarThreadStatus({ ...idle, session })).toBe("working");
+  it("reports working for running and starting runtimes", () => {
+    expect(resolveSidebarThreadStatus({ ...idle, runtime })).toBe("working");
     expect(
       resolveSidebarThreadStatus({
         ...idle,
-        session: { ...session, status: "starting" as const },
+        runtime: { ...runtime, status: "starting" as const },
       }),
     ).toBe("working");
   });
 
-  it("reports failed only while the session status is error", () => {
+  it("keeps usage-limit stops Limited and visible until the thread recovers", () => {
+    const limited = {
+      ...runtime,
+      status: "failed" as const,
+      lastError: "Plan limit reached",
+      lastErrorClass: "usage_limit" as const,
+    };
+    expect(resolveSidebarThreadStatus({ ...idle, runtime: limited })).toBe("limited");
+    expect(
+      resolveSidebarThreadStatus({ ...idle, runtime: { ...limited, status: "running" } }),
+    ).toBe("working");
+    expect(
+      resolveSidebarThreadStatus({ ...idle, runtime: { ...limited, status: "completed" } }),
+    ).toBe("ready");
+    expect(resolveSidebarV2TopStatus({ status: "limited", isUnread: false, isWoke: false })).toBe(
+      "limited",
+    );
+    expect(
+      shouldRecedeSidebarThread({
+        status: "limited",
+        isUnread: false,
+        isWoke: false,
+        isActive: false,
+        isSelected: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("reports failed only while the latest run failed", () => {
     expect(
       resolveSidebarThreadStatus({
         ...idle,
-        session: { ...session, status: "error" as const, lastError: "boom" },
+        runtime: { ...runtime, status: "failed" as const, lastError: "boom" },
       }),
     ).toBe("failed");
     expect(
       resolveSidebarThreadStatus({
         ...idle,
-        session: { ...session, status: "stopped" as const, lastError: "persisted" },
+        runtime: { ...runtime, status: "completed" as const, lastError: "persisted" },
       }),
     ).toBe("ready");
     expect(
       resolveSidebarThreadStatus({
         ...idle,
-        session: { ...session, status: "ready" as const, lastError: "persisted" },
+        runtime: { ...runtime, status: "idle" as const, lastError: "persisted" },
       }),
-    ).toBe("ready");
+    ).toBe("waiting");
   });
 
-  it("defaults to ready with no session", () => {
-    expect(resolveSidebarThreadStatus({ ...idle, session: null })).toBe("ready");
+  it("defaults to ready with no runtime", () => {
+    expect(resolveSidebarThreadStatus(idle)).toBe("ready");
+  });
+
+  it("keeps a waiting runtime visible ahead of unread and woke presentation", () => {
+    expect(resolveSidebarV2TopStatus({ status: "waiting", isUnread: true, isWoke: true })).toBe(
+      "waiting",
+    );
+  });
+
+  it("keeps Waiting static while Working shows elapsed duration", () => {
+    expect(shouldShowSidebarV2Duration("waiting")).toBe(false);
+    expect(shouldShowSidebarV2Duration("working")).toBe(true);
   });
 });
 
@@ -1419,1110 +1154,85 @@ describe("reduceSidebarProjectScopeMenuState", () => {
   });
 });
 
-describe("pinOrderKeyBetween", () => {
-  it("produces keys that sort between their bounds", () => {
-    const middle = pinOrderKeyBetween(null, null)!;
-    const top = pinOrderKeyBetween(null, middle)!;
-    const bottom = pinOrderKeyBetween(middle, null)!;
-    expect(top < middle).toBe(true);
-    expect(middle < bottom).toBe(true);
-
-    const between = pinOrderKeyBetween(top, middle)!;
-    expect(top < between && between < middle).toBe(true);
-  });
-
-  it("extends into new digits when bounds are adjacent", () => {
-    const key = pinOrderKeyBetween("g", "h")!;
-    expect("g" < key && key < "h").toBe(true);
-  });
-
-  it("stays strictly ordered under repeated top insertion", () => {
-    // Every new pin lands at the head of the arranged run; keys must keep
-    // sorting before the previous head without ever bottoming out.
-    let head: string | null = null;
-    const keys: string[] = [];
-    for (let i = 0; i < 100; i += 1) {
-      const key: string = pinOrderKeyBetween(null, head)!;
-      expect(key).not.toBeNull();
-      if (head !== null) expect(key < head).toBe(true);
-      keys.push(key);
-      head = key;
-    }
-    expect(new Set(keys).size).toBe(100);
-  });
-
-  it("stays strictly ordered under repeated middle insertion", () => {
-    let low = pinOrderKeyBetween(null, null)!;
-    let high = pinOrderKeyBetween(low, null)!;
-    for (let i = 0; i < 100; i += 1) {
-      const key: string = pinOrderKeyBetween(low, high)!;
-      expect(low < key && key < high).toBe(true);
-      if (i % 2 === 0) low = key;
-      else high = key;
-    }
-  });
-
-  it("returns null for corrupt or out-of-order bounds instead of throwing", () => {
-    expect(pinOrderKeyBetween("z", "a")).toBeNull();
-    expect(pinOrderKeyBetween("A!", null)).toBeNull();
-    expect(pinOrderKeyBetween(null, "ma")).toBeNull();
-    expect(pinOrderKeyBetween("m", "m")).toBeNull();
-  });
-});
-
-describe("resolveSidebarDropTarget", () => {
-  const thread = (key: string, section: SidebarSection): SidebarListItem => ({
-    kind: "thread",
-    key,
-    section,
-  });
-  const marker = (marker: SidebarListMarker): SidebarListItem => ({ kind: "marker", marker });
-  // Pinned p1 p2 | Active a1 a2 | Snoozed z1 | Settled s1
-  const items: readonly SidebarListItem[] = [
-    marker("pinned-header"),
-    thread("p1", "pinned"),
-    thread("p2", "pinned"),
-    marker("pinned-divider"),
-    thread("a1", "active"),
-    thread("a2", "active"),
-    marker("snoozed-header"),
-    thread("z1", "snoozed"),
-    marker("settled-header"),
-    thread("s1", "settled"),
-  ];
-  const resolve = (activeKey: string, overId: string) =>
-    resolveSidebarDropTarget(items, activeKey, overId);
-
-  it("keeps marker-like scoped thread keys draggable", () => {
-    const key = "marker:pinned-header";
-    const list: SidebarListItem[] = [
-      marker("pinned-header"),
-      thread(key, "pinned"),
-      thread("env:other", "pinned"),
-      marker("pinned-divider"),
-    ];
-    expect(new Set(list.map(sidebarListItemId)).size).toBe(list.length);
-    expect(resolveSidebarDropTarget(list, key, "env:other")).toEqual({
-      section: "pinned",
-      pinnedOrder: ["env:other", key],
-      activeOrder: [],
-    });
-  });
-
-  it("reads the section off the markers above the gap", () => {
-    expect(resolve("p1", "a2")).toEqual({
-      section: "active",
-      pinnedOrder: ["p2"],
-      activeOrder: ["a1", "a2", "p1"],
-    });
-    expect(resolve("a1", "s1")).toEqual({
-      section: "settled",
-      pinnedOrder: ["p1", "p2"],
-      activeOrder: ["a2"],
-    });
-    expect(resolve("s1", "a1")).toEqual({
-      section: "active",
-      pinnedOrder: ["p1", "p2"],
-      activeOrder: ["s1", "a1", "a2"],
-    });
-  });
-
-  it("uses arrayMove placement, so a marker hovered from below lands above it", () => {
-    // Dragging a1 up onto the divider: the divider shifts down, a1 becomes
-    // the last pinned row.
-    expect(resolve("a1", sidebarMarkerId("pinned-divider"))).toEqual({
-      section: "pinned",
-      pinnedOrder: ["p1", "p2", "a1"],
-      activeOrder: ["a2"],
-    });
-    // Dragging p2 down onto the divider: the divider shifts up, p2 is the
-    // first inbox row — an unpin.
-    expect(resolve("p2", sidebarMarkerId("pinned-divider"))).toEqual({
-      section: "active",
-      pinnedOrder: ["p1"],
-      activeOrder: ["p2", "a1", "a2"],
-    });
-    // Same on the Settled header: from above it settles; from below the
-    // gap lands in whatever is above the header — here the snoozed shelf,
-    // which is never a target.
-    expect(resolve("a2", sidebarMarkerId("settled-header"))?.section).toBe("settled");
-    expect(resolve("s1", sidebarMarkerId("settled-header"))).toBeNull();
-  });
-
-  it("reorders inside the pinned block with the dragged row at the over slot", () => {
-    expect(resolve("p1", "p2")).toEqual({
-      section: "pinned",
-      pinnedOrder: ["p2", "p1"],
-      activeOrder: ["a1", "a2"],
-    });
-    expect(resolve("a2", "p1")).toEqual({
-      section: "pinned",
-      pinnedOrder: ["a2", "p1", "p2"],
-      activeOrder: ["a1"],
-    });
-  });
-
-  it("lands first in Pinned when hovering its permanent header", () => {
-    expect(resolve("a2", sidebarMarkerId("pinned-header"))).toEqual({
-      section: "pinned",
-      pinnedOrder: ["a2", "p1", "p2"],
-      activeOrder: ["a1"],
-    });
-  });
-
-  it("reorders active rows in either direction without changing sections", () => {
-    for (const [from, to] of [
-      ["a1", "a2"],
-      ["a2", "a1"],
-    ] as const) {
-      expect(resolve(from, to)).toEqual({
-        section: "active",
-        pinnedOrder: ["p1", "p2"],
-        activeOrder: ["a2", "a1"],
-      });
-    }
-  });
-
-  it("never lands in the snoozed shelf", () => {
-    expect(resolve("a1", "z1")).toBeNull();
-    expect(resolve("a1", sidebarMarkerId("snoozed-header"))).toBeNull();
-  });
-
-  it("lands on a placeholder when the section is otherwise empty", () => {
-    const withPlaceholder: readonly SidebarListItem[] = [
-      marker("pinned-header"),
-      marker("pinned-divider"),
-      thread("a1", "active"),
-      marker("settled-header"),
-      marker("settled-placeholder"),
-    ];
-    expect(
-      resolveSidebarDropTarget(withPlaceholder, "a1", sidebarMarkerId("settled-placeholder")),
-    ).toEqual({ section: "settled", pinnedOrder: [], activeOrder: [] });
-  });
-
-  it("lands in empty Pinned using its header without an extra placeholder", () => {
-    const emptyPinned: readonly SidebarListItem[] = [
-      marker("pinned-header"),
-      marker("pinned-divider"),
-      thread("a1", "active"),
-    ];
-    expect(resolveSidebarDropTarget(emptyPinned, "a1", sidebarMarkerId("pinned-header"))).toEqual({
-      section: "pinned",
-      pinnedOrder: ["a1"],
-      activeOrder: [],
-    });
-    expect(resolveSidebarDropTarget(emptyPinned, "a1", sidebarMarkerId("pinned-divider"))).toEqual({
-      section: "pinned",
-      pinnedOrder: ["a1"],
-      activeOrder: [],
-    });
-  });
-
-  it("rejects ids that are not in the list", () => {
-    expect(resolve("a1", "nope")).toBeNull();
-    expect(resolve("nope", "a1")).toBeNull();
-    expect(resolve(sidebarMarkerId("pinned-divider"), "a1")).toBeNull();
-  });
-});
-
-describe("planSidebarThreadDrop", () => {
-  const pinnedKeysById = new Map<string, string | null>([
-    ["p1", "f"],
-    ["p2", "m"],
-    ["p3", "t"],
-  ]);
-  const activeKeysById = new Map<string, string | null>([
-    ["a1", "f"],
-    ["a2", "m"],
-    ["a3", "t"],
-  ]);
-  const plan = (
-    overrides: Partial<Omit<Parameters<typeof planSidebarThreadDrop>[0], "target">> & {
-      activeKey: string;
-      activeSection: "pinned" | "active" | "snoozed" | "settled";
-      target: Omit<Parameters<typeof planSidebarThreadDrop>[0]["target"], "activeOrder"> & {
-        activeOrder?: readonly string[];
-      };
-    },
-  ) =>
-    planSidebarThreadDrop({
-      pinnedOrder: ["p1", "p2", "p3"],
-      pinnedKeysById,
-      activeOrder: ["a1", "a2", "a3"],
-      activeKeysById,
-      ...overrides,
-      target: { activeOrder: [], ...overrides.target },
-    });
-
-  it("allows old-server pinned reordering while rejecting settlement", () => {
-    expect(
-      plan({
-        activeKey: "p1",
-        activeSection: "pinned",
-        supportsSettlement: false,
-        target: { section: "pinned", pinnedOrder: ["p2", "p1", "p3"] },
-      }).kind,
-    ).toBe("reorder-pinned");
-    expect(
-      plan({
-        activeKey: "p1",
-        activeSection: "pinned",
-        supportsSettlement: false,
-        target: { section: "settled", pinnedOrder: ["p2", "p3"] },
-      }),
-    ).toEqual({ kind: "none" });
-  });
-
-  it.each(["pinned", "active"] as const)("reserves hidden %s slots during a drop", (section) => {
-    const order = section === "pinned" ? ["p2", "p1", "p3"] : ["a2", "a1", "a3"];
-    const keys = new Map(section === "pinned" ? pinnedKeysById : activeKeysById);
-    const moved = section === "pinned" ? "p1" : "a1";
-    const reserved = pinOrderKeyBetween(keys.get(order[0]!)!, keys.get(order[2]!)!)!;
-    keys.set("snoozed", reserved);
-    const result = plan({
-      activeKey: moved,
-      activeSection: section,
-      pinnedKeysById: section === "pinned" ? keys : pinnedKeysById,
-      activeKeysById: section === "active" ? keys : activeKeysById,
-      target: {
-        section,
-        pinnedOrder: section === "pinned" ? order : [],
-        activeOrder: section === "active" ? order : [],
-      },
-    });
-    if (result.kind !== "reorder-pinned" && result.kind !== "move-active")
-      throw new Error("Expected reorder");
-    expect(result.assignments).toHaveLength(1);
-    expect(result.assignments[0]!.orderKey).not.toBe(reserved);
-  });
-
-  it.each([
-    { key: "p2", section: "pinned" as const, unpin: true, unsettle: false, unsnooze: false },
-    { key: "s1", section: "settled" as const, unpin: false, unsettle: true, unsnooze: false },
-    { key: "z1", section: "snoozed" as const, unpin: false, unsettle: false, unsnooze: true },
-  ])("moves a $section thread to the chosen Active slot", (source) => {
-    const order = ["a1", source.key, "a2", "a3"];
-    const result = plan({
-      activeKey: source.key,
-      activeSection: source.section,
-      target: { section: "active", pinnedOrder: [], activeOrder: order },
-    });
-    expect(result).toEqual({
-      kind: "move-active",
-      order,
-      assignments: [{ id: source.key, orderKey: expect.any(String) }],
-      unpin: source.unpin,
-      unsettle: source.unsettle,
-      unsnooze: source.unsnooze,
-    });
-    if (result.kind !== "move-active") return;
-    const key = result.assignments[0]!.orderKey;
-    expect(key > "f" && key < "m").toBe(true);
-  });
-
-  it.each([
-    { state: "pinned", activePinned: true, activeSettled: false },
-    { state: "settled", activePinned: false, activeSettled: true },
-    { state: "pinned and settled", activePinned: true, activeSettled: true },
-  ])("clears a snoozed thread's $state state before waking it into Active", (hiddenState) => {
-    expect(
-      plan({
-        activeKey: "z1",
-        activeSection: "snoozed",
-        activePinned: hiddenState.activePinned,
-        activeSettled: hiddenState.activeSettled,
-        target: {
-          section: "active",
-          pinnedOrder: ["p1", "p2", "p3"],
-          activeOrder: ["a1", "z1", "a2", "a3"],
-        },
-      }),
-    ).toEqual({
-      kind: "move-active",
-      order: ["a1", "z1", "a2", "a3"],
-      assignments: [{ id: "z1", orderKey: expect.any(String) }],
-      unpin: hiddenState.activePinned,
-      unsettle: hiddenState.activeSettled,
-      unsnooze: true,
-    });
-  });
-
-  it("saves the first Active reorder, then moves only one key on subsequent drops", () => {
-    const rows = ["a1", "a2", "a3"].map((id, index) => ({
-      id,
-      createdAt: new Date(Date.UTC(2026, 8, 4, 12 - index)).toISOString(),
-      activeOrderKey: null as string | null,
-    }));
-    const firstOrder = ["a2", "a3", "a1"];
-    const first = plan({
-      activeKey: "a1",
-      activeSection: "active",
-      target: { section: "active", pinnedOrder: [], activeOrder: firstOrder },
-      activeKeysById: new Map(rows.map((row) => [row.id, row.activeOrderKey])),
-    });
-    expect(first.kind).toBe("move-active");
-    if (first.kind !== "move-active") return;
-    expect(first.unpin || first.unsettle || first.unsnooze).toBe(false);
-    const savedKeys = new Map(first.assignments.map(({ id, orderKey }) => [id, orderKey]));
-    const savedRows = rows.map((row) => ({
-      ...row,
-      activeOrderKey: savedKeys.get(row.id) ?? null,
-    }));
-    expect(sortThreadsForSidebar(savedRows).map((row) => row.id)).toEqual(firstOrder);
-
-    const secondOrder = ["a2", "a1", "a3"];
-    const second = plan({
-      activeKey: "a1",
-      activeSection: "active",
-      activeOrder: firstOrder,
-      activeKeysById: savedKeys,
-      target: { section: "active", pinnedOrder: [], activeOrder: secondOrder },
-    });
-    expect(second.kind).toBe("move-active");
-    if (second.kind !== "move-active") return;
-    expect(second.assignments).toEqual([{ id: "a1", orderKey: expect.any(String) }]);
-    const finalRows = savedRows.map((row) =>
-      row.id === "a1" ? { ...row, activeOrderKey: second.assignments[0]!.orderKey } : row,
-    );
-    expect(sortThreadsForSidebar(finalRows).map((row) => row.id)).toEqual(secondOrder);
-  });
-
-  it("does not write when an Active thread is dropped in its existing slot", () => {
-    expect(
-      plan({
-        activeKey: "a2",
-        activeSection: "active",
-        target: { section: "active", pinnedOrder: [], activeOrder: ["a1", "a2", "a3"] },
-      }),
-    ).toEqual({ kind: "none" });
-  });
-
-  it("requires Active ordering support only for the threads whose keys must change", () => {
-    const input = {
-      activeKey: "a3",
-      activeSection: "active" as const,
-      target: { section: "active" as const, pinnedOrder: [], activeOrder: ["a1", "a3", "a2"] },
-      activeReorderableKeys: new Set(["a3"]),
-    };
-    expect(plan(input).kind).toBe("move-active");
-    expect(
-      plan({
-        ...input,
-        activeKeysById: new Map([
-          ["a1", null],
-          ["a2", "m"],
-          ["a3", "t"],
-        ]),
-      }),
-    ).toEqual({ kind: "none" });
-    expect(plan({ ...input, activeReorderableKeys: new Set() })).toEqual({ kind: "none" });
-  });
-
-  it("settles anything dropped on Settled except a settled thread", () => {
-    const target = { section: "settled", pinnedOrder: ["p1", "p2", "p3"] } as const;
-    expect(plan({ activeKey: "a1", activeSection: "active", target })).toEqual({ kind: "settle" });
-    expect(plan({ activeKey: "p1", activeSection: "pinned", target })).toEqual({ kind: "settle" });
-    expect(plan({ activeKey: "z1", activeSection: "snoozed", target })).toEqual({ kind: "settle" });
-    expect(plan({ activeKey: "s1", activeSection: "settled", target })).toEqual({ kind: "none" });
-  });
-
-  it("pins a foreign thread with a key between its new neighbors", () => {
-    const result = plan({
-      activeKey: "a1",
-      activeSection: "active",
-      target: { section: "pinned", pinnedOrder: ["p1", "a1", "p2", "p3"] },
-    });
-    expect(result.kind).toBe("pin");
-    if (result.kind !== "pin") return;
-    expect(result.order).toEqual(["p1", "a1", "p2", "p3"]);
-    expect(result.orderKey).toBeDefined();
-    expect(result.orderKey! > "f" && result.orderKey! < "m").toBe(true);
-    expect(result.extraAssignments).toEqual([]);
-
-    const empty = plan({
-      activeKey: "a1",
-      activeSection: "active",
-      target: { section: "pinned", pinnedOrder: ["a1"] },
-      pinnedOrder: [],
-      pinnedKeysById: new Map(),
-    });
-    expect(empty.kind).toBe("pin");
-    if (empty.kind !== "pin") return;
-    expect(empty.orderKey).toBeDefined();
-  });
-
-  it("reorders an already-pinned snoozed thread after pinning wakes it", () => {
-    const result = plan({
-      activeKey: "z1",
-      activeSection: "snoozed",
-      activePinned: true,
-      target: { section: "pinned", pinnedOrder: ["p1", "z1", "p2", "p3"] },
-      pinnedKeysById: new Map([...pinnedKeysById, ["z1", "x"]]),
-    });
-    expect(result.kind).toBe("pin");
-    if (result.kind !== "pin") return;
-    expect(result.extraAssignments).toEqual([{ id: "z1", orderKey: result.orderKey }]);
-    expect(result.orderKey! > "f" && result.orderKey! < "m").toBe(true);
-  });
-
-  it("uses keyed disabled neighbors as anchors without writing to them", () => {
-    const insertion = plan({
-      activeKey: "a1",
-      activeSection: "active",
-      target: { section: "pinned", pinnedOrder: ["p1", "a1", "p2", "p3"] },
-      reorderableKeys: new Set(["a1"]),
-    });
-    expect(insertion.kind).toBe("pin");
-    if (insertion.kind !== "pin") return;
-    expect(insertion.order).toEqual(["p1", "a1", "p2", "p3"]);
-    expect(insertion.orderKey! > "f" && insertion.orderKey! < "m").toBe(true);
-    expect(insertion.extraAssignments).toEqual([]);
-
-    const reorder = plan({
-      activeKey: "p3",
-      activeSection: "pinned",
-      target: { section: "pinned", pinnedOrder: ["p1", "p3", "p2"] },
-      reorderableKeys: new Set(["p3"]),
-    });
-    expect(reorder.kind).toBe("reorder-pinned");
-    if (reorder.kind !== "reorder-pinned") return;
-    expect(reorder.assignments).toEqual([{ id: "p3", orderKey: expect.any(String) }]);
-    expect(reorder.assignments[0]!.orderKey > "f").toBe(true);
-    expect(reorder.assignments[0]!.orderKey < "m").toBe(true);
-  });
-
-  it.each([
-    {
-      activeKey: "a1",
-      activeSection: "active" as const,
-      order: ["p1", "p3", "a1", "p2"],
-    },
-    { activeKey: "p1", activeSection: "pinned" as const, order: ["p3", "p1", "p2"] },
-  ])("rejects $activeSection drops that require rewriting a disabled neighbor", (source) => {
-    expect(
-      plan({
-        activeKey: source.activeKey,
-        activeSection: source.activeSection,
-        target: { section: "pinned", pinnedOrder: source.order },
-        pinnedOrder: ["p1", "p3", "p2"],
-        pinnedKeysById: new Map([
-          ["p1", "f"],
-          ["p2", null],
-          ["p3", "t"],
-        ]),
-        reorderableKeys: new Set(["p1", "p3", source.activeKey]),
-      }),
-    ).toEqual({ kind: "none" });
-  });
-
-  it("rewrites the section when a foreign thread lands next to a keyless pin", () => {
-    const result = plan({
-      activeKey: "a1",
-      activeSection: "active",
-      target: { section: "pinned", pinnedOrder: ["p1", "a1", "p2", "p3"] },
-      pinnedKeysById: new Map([
-        ["p1", null],
-        ["p2", "m"],
-        ["p3", "t"],
-      ]),
-    });
-    expect(result.kind).toBe("pin");
-    if (result.kind !== "pin") return;
-    expect(result.orderKey).toBeDefined();
-    expect(result.extraAssignments.map((entry) => entry.id)).toEqual(["p1", "p2", "p3"]);
-    const byId = new Map([
-      ["a1", result.orderKey!],
-      ...result.extraAssignments.map((e) => [e.id, e.orderKey] as const),
-    ]);
-    const ordered = result.order.map((id) => byId.get(id)!);
-    expect([...ordered].sort()).toEqual(ordered);
-  });
-
-  it("reorders within the pinned block, and is a no-op when the order is unchanged", () => {
-    const down = plan({
-      activeKey: "p1",
-      activeSection: "pinned",
-      target: { section: "pinned", pinnedOrder: ["p2", "p3", "p1"] },
-    });
-    expect(down.kind).toBe("reorder-pinned");
-    if (down.kind !== "reorder-pinned") return;
-    expect(down.assignments).toEqual([{ id: "p1", orderKey: expect.any(String) }]);
-    expect(down.assignments[0]!.orderKey > "t").toBe(true);
-
-    expect(
-      plan({
-        activeKey: "p1",
-        activeSection: "pinned",
-        target: { section: "pinned", pinnedOrder: ["p1", "p2", "p3"] },
-      }),
-    ).toEqual({ kind: "none" });
-  });
-});
-
-describe("applySidebarThreadDrop", () => {
-  const createdAt = "2026-03-09T08:00:00.000Z";
-  const earlier = "2026-03-09T09:00:00.000Z";
-  const now = "2026-03-09T12:00:00.000Z";
-  const serverNow = "2026-03-09T12:00:01.000Z";
-  const wakeAt = "2026-03-10T08:00:00.000Z";
-  const thread = (overrides: Partial<SidebarThreadSummary> = {}) => ({
-    id: ThreadId.make("dragged"),
-    title: "Keep this title",
-    createdAt,
-    updatedAt: earlier,
-    latestUserMessageAt: null,
-    latestTurn: null,
-    pinnedAt: null,
-    pinOrderKey: null,
-    activeOrderKey: null,
-    snoozedAt: null,
-    snoozedUntil: null,
-    settledAt: null,
-    settledOverride: null,
-    unsettledAt: null,
-    ...overrides,
-  });
-  const newer = thread({ id: ThreadId.make("newer"), createdAt: "2026-03-09T11:00:00.000Z" });
-
-  it("previews an un-settle at the same active position as the eventual server row", () => {
-    const source = thread({ settledOverride: "settled", settledAt: earlier });
-    const preview = applySidebarThreadDrop(source, "active", now);
-    const final = {
-      ...source,
-      settledOverride: "active" as const,
-      settledAt: null,
-      unsettledAt: serverNow,
-    };
-    expect(sortThreadsForSidebar([newer, preview]).map((row) => row.id)).toEqual([
-      "dragged",
-      "newer",
-    ]);
-    expect(sortThreadsForSidebar([newer, preview]).map((row) => row.id)).toEqual(
-      sortThreadsForSidebar([newer, final]).map((row) => row.id),
-    );
-  });
-
-  it.each([
-    { state: "pin", pinnedAt: earlier, pinOrderKey: "m", snoozedAt: null, snoozedUntil: null },
-    {
-      state: "snooze",
-      pinnedAt: null,
-      pinOrderKey: null,
-      snoozedAt: earlier,
-      snoozedUntil: wakeAt,
-    },
-    {
-      state: "snoozed pin",
-      pinnedAt: earlier,
-      pinOrderKey: "m",
-      snoozedAt: earlier,
-      snoozedUntil: wakeAt,
-    },
-  ])("preserves the active sort anchor when clearing a $state", ({ state: _state, ...parked }) => {
-    const source = thread({ ...parked, settledOverride: "active", unsettledAt: earlier });
-    const preview = applySidebarThreadDrop(source, "active", now);
-    const final = {
-      ...source,
-      pinnedAt: null,
-      pinOrderKey: null,
-      snoozedAt: null,
-      snoozedUntil: null,
-      updatedAt: serverNow,
-    };
-    expect(preview).toEqual({ ...final, updatedAt: source.updatedAt });
-    expect(sortThreadsForSidebar([newer, preview]).map((row) => row.id)).toEqual([
-      "newer",
-      "dragged",
-    ]);
-    expect(sortThreadsForSidebar([newer, preview]).map((row) => row.id)).toEqual(
-      sortThreadsForSidebar([newer, final]).map((row) => row.id),
-    );
-  });
-
-  it("clears underlying pinning and settlement when waking into Active", () => {
-    const source = thread({
-      pinnedAt: earlier,
-      pinOrderKey: "m",
-      snoozedAt: earlier,
-      snoozedUntil: wakeAt,
-      settledOverride: "settled",
-      settledAt: earlier,
-    });
-    expect(applySidebarThreadDrop(source, "active", now)).toEqual({
-      ...source,
-      pinnedAt: null,
-      pinOrderKey: null,
-      snoozedAt: null,
-      snoozedUntil: null,
-      settledOverride: "active",
-      settledAt: null,
-      unsettledAt: now,
-    });
-  });
-
-  it("previews a new settlement at the same position as the eventual server row", () => {
-    const source = thread({
-      pinnedAt: earlier,
-      pinOrderKey: "m",
-      snoozedAt: earlier,
-      snoozedUntil: wakeAt,
-      unsettledAt: earlier,
-    });
-    const preview = applySidebarThreadDrop(source, "settled", now);
-    const final = {
-      ...source,
-      pinnedAt: null,
-      pinOrderKey: null,
-      snoozedAt: null,
-      snoozedUntil: null,
-      settledOverride: "settled" as const,
-      settledAt: serverNow,
-      unsettledAt: null,
-    };
-    const existing = { ...newer, settledOverride: "settled" as const, settledAt: newer.createdAt };
-    expect(preview).toEqual({ ...final, settledAt: now });
-    expect(sortSettledThreads([existing, preview]).map((row) => row.id)).toEqual([
-      "dragged",
-      "newer",
-    ]);
-    expect(sortSettledThreads([existing, preview]).map((row) => row.id)).toEqual(
-      sortSettledThreads([existing, final]).map((row) => row.id),
-    );
-  });
-
-  it("retains a snoozed thread's earlier settlement and its position when settling again", () => {
-    const source = thread({
-      snoozedAt: earlier,
-      snoozedUntil: wakeAt,
-      settledOverride: "settled",
-      settledAt: earlier,
-    });
-    const preview = applySidebarThreadDrop(source, "settled", now);
-    const final = { ...source, snoozedAt: null, snoozedUntil: null };
-    const existing = { ...newer, settledOverride: "settled" as const, settledAt: newer.createdAt };
-    expect(preview).toEqual(final);
-    expect(sortSettledThreads([existing, preview]).map((row) => row.id)).toEqual([
-      "newer",
-      "dragged",
-    ]);
-  });
-
-  it("pins a settled thread at its requested slot and projects the re-entry stamp", () => {
-    const source = thread({
-      snoozedAt: earlier,
-      snoozedUntil: wakeAt,
-      settledOverride: "settled",
-      settledAt: earlier,
-    });
-    const original = { ...source };
-    const preview = applySidebarThreadDrop(source, "pinned", now, "m");
-    expect(preview).toEqual({
-      ...source,
-      pinnedAt: now,
-      pinOrderKey: "m",
-      snoozedAt: null,
-      snoozedUntil: null,
-      settledOverride: "active",
-      settledAt: null,
-      unsettledAt: now,
-    });
-    expect(
-      sortPinnedThreadsForSidebar([
-        thread({ id: ThreadId.make("after"), pinnedAt: earlier, pinOrderKey: "t" }),
-        preview,
-        thread({ id: ThreadId.make("before"), pinnedAt: earlier, pinOrderKey: "f" }),
-      ]).map((row) => row.id),
-    ).toEqual(["before", "dragged", "after"]);
-    expect(source).toEqual(original);
-  });
-
-  it("keeps an existing pin's timestamp and key unless the drop supplies a new key", () => {
-    const source = thread({
-      pinnedAt: earlier,
-      pinOrderKey: "t",
-      snoozedAt: earlier,
-      snoozedUntil: wakeAt,
-      settledOverride: "active",
-      unsettledAt: earlier,
-    });
-    const unchangedSlot = applySidebarThreadDrop(source, "pinned", now);
-    expect(unchangedSlot).toEqual({ ...source, snoozedAt: null, snoozedUntil: null });
-    expect(applySidebarThreadDrop(source, "pinned", now, "m")).toEqual({
-      ...unchangedSlot,
-      pinOrderKey: "m",
-    });
-  });
-
-  it("keeps an Active drop at its chosen position after unpinning", () => {
-    const source = thread({ pinnedAt: earlier, pinOrderKey: "g", activeOrderKey: "z" });
-    const preview = applySidebarThreadDrop(source, "active", now, "m");
-    expect(preview).toMatchObject({ pinnedAt: null, pinOrderKey: null, activeOrderKey: "m" });
-    expect(
-      sortThreadsForSidebar([
-        thread({ id: ThreadId.make("after"), activeOrderKey: "t" }),
-        preview,
-        thread({ id: ThreadId.make("before"), activeOrderKey: "f" }),
-      ]).map((row) => row.id),
-    ).toEqual(["before", "dragged", "after"]);
-  });
-
-  it("clears the manual Active position when settling so reopening returns to the top", () => {
-    const source = thread({ activeOrderKey: "z" });
-    const settled = applySidebarThreadDrop(source, "settled", now);
-    expect(settled.activeOrderKey).toBeNull();
-    const reopened = applySidebarThreadDrop(settled, "active", serverNow);
-    expect(sortThreadsForSidebar([newer, reopened]).map((row) => row.id)).toEqual([
-      "dragged",
-      "newer",
-    ]);
-  });
-});
-
-describe("sortPinnedThreadsForSidebar", () => {
-  const pinnable = (input: { id: string; createdAt: string; pinOrderKey?: string | null }) => ({
-    id: input.id,
-    createdAt: input.createdAt,
-    pinOrderKey: input.pinOrderKey ?? null,
-  });
-
-  it("sorts keyed threads by key ahead of keyless threads in creation order", () => {
-    const sorted = sortPinnedThreadsForSidebar([
-      pinnable({ id: "keyless-old", createdAt: "2026-03-09T08:00:00.000Z" }),
-      pinnable({ id: "second", createdAt: "2026-03-09T09:00:00.000Z", pinOrderKey: "t" }),
-      pinnable({ id: "keyless-new", createdAt: "2026-03-09T12:00:00.000Z" }),
-      pinnable({ id: "first", createdAt: "2026-03-09T07:00:00.000Z", pinOrderKey: "g" }),
-    ]);
-
-    expect(sorted.map((thread) => thread.id)).toEqual([
-      "first",
-      "second",
-      "keyless-new",
-      "keyless-old",
-    ]);
-  });
-
-  it("breaks equal keys by id so raced writes render identically everywhere", () => {
-    const sorted = sortPinnedThreadsForSidebar([
-      pinnable({ id: "b", createdAt: "2026-03-09T10:00:00.000Z", pinOrderKey: "m" }),
-      pinnable({ id: "a", createdAt: "2026-03-09T11:00:00.000Z", pinOrderKey: "m" }),
-    ]);
-
-    expect(sorted.map((thread) => thread.id)).toEqual(["a", "b"]);
-  });
-});
-
-describe("sortSettledThreadsForSidebar", () => {
-  const settled = (input: {
-    id: string;
-    settledAt?: string | null;
-    latestUserMessageAt?: string | null;
-    latestTurn?: OrchestrationLatestTurn | null;
-    updatedAt?: string;
-  }) => ({
-    id: input.id,
-    settledAt: input.settledAt ?? null,
-    latestUserMessageAt: input.latestUserMessageAt ?? null,
-    latestTurn: input.latestTurn ?? null,
-    updatedAt: input.updatedAt ?? "2026-03-09T09:00:00.000Z",
-  });
-
-  it("orders by settle time, most recently settled first", () => {
-    const sorted = sortSettledThreadsForSidebar([
-      settled({
-        id: "settled-first",
-        settledAt: "2026-03-09T10:00:00.000Z",
-        // Created/active later than the other thread: settle time must win.
-        latestUserMessageAt: "2026-03-09T09:59:00.000Z",
-      }),
-      settled({
-        id: "settled-last",
-        settledAt: "2026-03-09T12:00:00.000Z",
-        latestUserMessageAt: "2026-03-09T08:00:00.000Z",
-      }),
-    ]);
-
-    expect(sorted.map((thread) => thread.id)).toEqual(["settled-last", "settled-first"]);
-  });
-
-  it("falls back to last activity for auto-settled threads without a settledAt stamp", () => {
-    const sorted = sortSettledThreadsForSidebar([
-      settled({ id: "auto-old", latestUserMessageAt: "2026-03-09T08:00:00.000Z" }),
-      settled({ id: "explicit", settledAt: "2026-03-09T10:00:00.000Z" }),
-      settled({ id: "auto-recent", latestUserMessageAt: "2026-03-09T11:00:00.000Z" }),
-    ]);
-
-    expect(sorted.map((thread) => thread.id)).toEqual(["auto-recent", "explicit", "auto-old"]);
-  });
-
-  it("counts a turn completion as activity for auto-settled threads", () => {
-    // The message came in before the other thread's, but its turn finished
-    // after: completion time is the real "work ended" moment.
-    const sorted = sortSettledThreadsForSidebar([
-      settled({ id: "message-only", latestUserMessageAt: "2026-03-09T10:04:00.000Z" }),
-      settled({
-        id: "completed-later",
-        latestUserMessageAt: "2026-03-09T10:00:00.000Z",
-        latestTurn: makeLatestTurn({ completedAt: "2026-03-09T10:30:00.000Z" }),
-      }),
-    ]);
-
-    expect(sorted.map((thread) => thread.id)).toEqual(["completed-later", "message-only"]);
-  });
-
-  it("breaks timestamp ties by id so the order is stable", () => {
-    const sorted = sortSettledThreadsForSidebar([
-      settled({ id: "b", settledAt: "2026-03-09T10:00:00.000Z" }),
-      settled({ id: "a", settledAt: "2026-03-09T10:00:00.000Z" }),
-    ]);
-
-    expect(sorted.map((thread) => thread.id)).toEqual(["a", "b"]);
-  });
-});
-
-describe("resolveSettledThreadTimestamp", () => {
-  it("prefers explicit settledAt over later message activity", () => {
-    expect(
-      resolveSettledThreadTimestamp({
-        settledAt: "2026-03-09T10:00:00.000Z",
-        latestUserMessageAt: "2026-03-09T12:00:00.000Z",
-        latestTurn: null,
-        updatedAt: "2026-03-09T13:00:00.000Z",
-      }),
-    ).toBe("2026-03-09T10:00:00.000Z");
-  });
-
-  it("falls back to the latest activity stamp when settledAt is missing", () => {
-    expect(
-      resolveSettledThreadTimestamp({
-        settledAt: null,
-        latestUserMessageAt: "2026-03-09T09:00:00.000Z",
-        latestTurn: makeLatestTurn({ completedAt: "2026-03-09T11:00:00.000Z" }),
-        updatedAt: "2026-03-09T08:00:00.000Z",
-      }),
-    ).toBe("2026-03-09T11:00:00.000Z");
-  });
-});
-
-describe("isThreadSettledForDisplay", () => {
-  const now = "2026-04-10T00:00:00.000Z";
-  const baseThread = {
-    id: ThreadId.make("thread-settled-display"),
-    environmentId: localEnvironmentId,
-    projectId: ProjectId.make("project-1"),
-    title: "Settled display",
-    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
-    runtimeMode: DEFAULT_RUNTIME_MODE,
-    interactionMode: DEFAULT_INTERACTION_MODE,
-    session: null,
-    createdAt: "2026-04-01T00:00:00.000Z",
-    updatedAt: now,
-    archivedAt: null,
-    latestTurn: null,
-    latestUserMessageAt: "2026-04-01T00:00:00.000Z",
-    branch: null,
-    worktreePath: null,
-    hasPendingApprovals: false,
-    hasPendingUserInput: false,
-    hasActionableProposedPlan: false,
-    settledOverride: "settled" as const,
-    settledAt: now,
-  };
-
-  it("never treats threads as settled when the server lacks threadSettlement", () => {
-    const serverConfigs = {
-      get(_environmentId: string) {
-        return {
-          environment: {
-            capabilities: { threadSettlement: false },
-          },
-        };
-      },
-    };
-
-    expect(
-      isThreadSettledForDisplay(baseThread, {
-        serverConfigs,
-        now,
-        autoSettleAfterDays: 7,
-        changeRequestState: null,
-      }),
-    ).toBe(false);
-  });
-
-  it("honors settled override when the server supports settlement", () => {
-    const serverConfigs = {
-      get(_environmentId: string) {
-        return {
-          environment: {
-            capabilities: { threadSettlement: true },
-          },
-        };
-      },
-    };
-
-    expect(
-      isThreadSettledForDisplay(baseThread, {
-        serverConfigs,
-        now,
-        autoSettleAfterDays: 7,
-        changeRequestState: null,
-      }),
-    ).toBe(true);
-  });
-
-  it("does not client-auto-settle a merged or closed PR; the server stamps settledOverride", () => {
-    const serverConfigs = {
-      get(_environmentId: string) {
-        return {
-          environment: {
-            capabilities: { threadSettlement: true },
-          },
-        };
-      },
-    };
-    // Activity well past the queued-turn grace window so PR auto-settle is
-    // not blocked by a just-sent message without a turn.
-    const activeThread = {
-      ...baseThread,
-      settledOverride: null,
-      settledAt: null,
-      latestUserMessageAt: "2026-04-01T00:00:00.000Z",
-    };
-
-    expect(
-      isThreadSettledForDisplay(activeThread, {
-        serverConfigs,
-        now,
-        autoSettleAfterDays: null,
-        changeRequestState: "merged",
-      }),
-    ).toBe(false);
-    expect(
-      isThreadSettledForDisplay(activeThread, {
-        serverConfigs,
-        now,
-        autoSettleAfterDays: null,
-        changeRequestState: "closed",
-      }),
-    ).toBe(false);
-    expect(
-      isThreadSettledForDisplay(activeThread, {
-        serverConfigs,
-        now,
-        autoSettleAfterDays: null,
-        changeRequestState: null,
-      }),
-    ).toBe(false);
-  });
-});
-
-describe("groupSettledThreadsByRecencyForSidebarV2", () => {
-  // Fixed local afternoon so last-hour and earlier-today both fit the day.
-  const now = new Date(2026, 2, 15, 14, 30, 0);
-
-  const settled = (input: {
-    id: string;
-    settledAt?: string | null;
-    latestUserMessageAt?: string | null;
-    updatedAt?: string;
-  }) => ({
-    id: input.id,
-    settledAt: input.settledAt ?? null,
-    latestUserMessageAt: input.latestUserMessageAt ?? null,
-    latestTurn: null,
-    updatedAt: input.updatedAt ?? "2026-03-09T09:00:00.000Z",
-  });
-
-  it("groups by settle/activity time and shows headers when multiple buckets", () => {
-    const lastHourIso = new Date(now.getTime() - 5 * 60_000).toISOString();
-    const olderIso = new Date(
-      new Date(2026, 2, 15).getTime() - 40 * 24 * 60 * 60 * 1000,
-    ).toISOString();
-    const ordered = sortSettledThreadsForSidebar([
-      settled({ id: "old", settledAt: olderIso }),
-      settled({ id: "fresh", settledAt: lastHourIso }),
-    ]);
-    const layout = groupSettledThreadsByRecencyForSidebarV2(ordered, now);
-    expect(layout.showHeaders).toBe(true);
-    expect(layout.groups.map((group) => group.id)).toEqual(["last_hour", "older"]);
-    expect(layout.groups[0]?.threads.map((thread) => thread.id)).toEqual(["fresh"]);
-    expect(layout.groups[1]?.threads.map((thread) => thread.id)).toEqual(["old"]);
-  });
-
-  it("suppresses headers when every row is in one bucket", () => {
-    const lastHourIso = new Date(now.getTime() - 5 * 60_000).toISOString();
-    const layout = groupSettledThreadsByRecencyForSidebarV2(
-      [settled({ id: "a", settledAt: lastHourIso }), settled({ id: "b", settledAt: lastHourIso })],
-      now,
-    );
-    expect(layout.showHeaders).toBe(false);
-    expect(layout.groups).toHaveLength(1);
-    expect(layout.groups[0]?.threads.map((thread) => thread.id)).toEqual(["a", "b"]);
-  });
-
-  it("preserves input order within a bucket", () => {
-    const t1 = new Date(now.getTime() - 2 * 60_000).toISOString();
-    const t2 = new Date(now.getTime() - 10 * 60_000).toISOString();
-    // Caller is expected to pre-sort; newer first.
-    const layout = groupSettledThreadsByRecencyForSidebarV2(
-      [settled({ id: "newer", settledAt: t1 }), settled({ id: "older-hour", settledAt: t2 })],
-      now,
-    );
-    expect(layout.groups[0]?.threads.map((thread) => thread.id)).toEqual(["newer", "older-hour"]);
-  });
-});
-
 describe("resolveWorkingStartedAt", () => {
-  const session = {
-    threadId: ThreadId.make("thread-1"),
+  const runtime = {
     status: "running" as const,
     providerName: "Codex",
     providerInstanceId: ProviderInstanceId.make("codex"),
-    runtimeMode: DEFAULT_RUNTIME_MODE,
-    activeTurnId: "turn-1" as never,
+    activeRunId: RunId.make("turn-1"),
     lastError: null,
     updatedAt: "2026-03-09T10:02:00.000Z",
   };
 
-  it("uses the running turn's start time", () => {
+  it("uses the running run's start time", () => {
     expect(
       resolveWorkingStartedAt({
-        latestTurn: makeLatestTurn({ completedAt: null }),
-        session,
+        latestRun: makeLatestRun({ completedAt: null }),
+        runtime,
       }),
     ).toBe("2026-03-09T10:00:00.000Z");
   });
 
-  it("uses the request time while a turn awaits adoption", () => {
+  it("uses the request time while a run awaits adoption", () => {
     expect(
       resolveWorkingStartedAt({
-        latestTurn: makeLatestTurn({ startedAt: null, completedAt: null }),
-        session,
+        latestRun: makeLatestRun({ startedAt: null, completedAt: null }),
+        runtime,
       }),
     ).toBe("2026-03-09T10:00:00.000Z");
   });
 
-  it("falls back to the session transition when the latest turn already completed", () => {
+  it("does not invent a start from activity updates when the newest run completed", () => {
     expect(
       resolveWorkingStartedAt({
-        latestTurn: makeLatestTurn(),
-        session,
+        latestRun: makeLatestRun(),
+        runtime,
       }),
-    ).toBe("2026-03-09T10:02:00.000Z");
+    ).toBeNull();
   });
 
   it("skips a malformed startedAt instead of returning it", () => {
     expect(
       resolveWorkingStartedAt({
-        latestTurn: makeLatestTurn({ startedAt: "not-a-date", completedAt: null }),
-        session,
+        latestRun: makeLatestRun({ startedAt: "not-a-date", completedAt: null }),
+        runtime,
       }),
     ).toBe("2026-03-09T10:00:00.000Z");
   });
 
-  it("returns null with neither a running turn nor a session", () => {
-    expect(resolveWorkingStartedAt({ latestTurn: null, session: null })).toBeNull();
+  it.each(["queued", "cancelled"] as const)(
+    "shares the detail timer when a newer run is %s",
+    (status) => {
+      const activityStartedAt = "2026-03-09T10:00:00.000Z";
+      const latestRun = {
+        ...makeLatestRun(),
+        runId: RunId.make("newer-run"),
+        status,
+        startedAt: null,
+        completedAt: status === "queued" ? null : "2026-03-09T10:05:00.000Z",
+      };
+      for (const updatedAt of ["2026-03-09T10:30:00.000Z", "2026-03-09T10:50:00.000Z"]) {
+        const activeRuntime = { ...runtime, updatedAt, activityStartedAt };
+        expect(resolveWorkingStartedAt({ latestRun, runtime: activeRuntime })).toBe(
+          activityStartedAt,
+        );
+        expect(deriveActiveWorkStartedAt(latestRun, activeRuntime, updatedAt)).toBe(
+          activityStartedAt,
+        );
+      }
+      // A server-owned run without a valid start must not borrow a local dispatch clock.
+      expect(
+        deriveActiveWorkStartedAt(
+          latestRun,
+          { ...runtime, activityStartedAt: null },
+          "2026-03-09T10:50:00.000Z",
+        ),
+      ).toBeNull();
+    },
+  );
+
+  it("returns null with neither a running run nor a runtime", () => {
+    expect(resolveWorkingStartedAt({ latestRun: null, runtime: null })).toBeNull();
   });
 });
 
@@ -2546,15 +1256,13 @@ describe("resolveThreadStatusPill", () => {
     hasPendingApprovals: false,
     hasPendingUserInput: false,
     interactionMode: "plan" as const,
-    latestTurn: null,
+    latestRun: null,
     lastVisitedAt: undefined,
-    session: {
-      threadId: ThreadId.make("thread-1"),
+    runtime: {
       status: "running" as const,
       providerName: "Codex",
       providerInstanceId: ProviderInstanceId.make("codex"),
-      runtimeMode: DEFAULT_RUNTIME_MODE,
-      activeTurnId: "turn-1" as never,
+      activeRunId: "turn-1" as never,
       lastError: null,
       updatedAt: "2026-03-09T10:00:00.000Z",
     },
@@ -2591,32 +1299,48 @@ describe("resolveThreadStatusPill", () => {
     ).toMatchObject({ label: "Working", pulse: true });
   });
 
-  it("shows that an interrupted mid-turn session needs a wake-up", () => {
+  it("shows waiting for an idle thread with pending background tasks", () => {
     expect(
       resolveThreadStatusPill({
         thread: {
           ...baseThread,
-          latestTurn: makeLatestTurn({ state: "running" }),
-          session: {
-            ...baseThread.session,
-            status: "interrupted",
-            activeTurnId: null,
+          pendingBackgroundTasks: [{ taskId: "bg-1", description: "sleep 20", kind: "command" }],
+          runtime: {
+            ...baseThread.runtime,
+            status: "idle",
+            activeRunId: null,
           },
         },
       }),
-    ).toMatchObject({ label: "Wake Required", pulse: false });
+    ).toMatchObject({
+      label: "Waiting",
+      colorClass: "text-sidebar-muted-foreground",
+      dotClass: "bg-sidebar-muted-foreground",
+      pulse: false,
+    });
   });
 
-  it("does not show wake-up for zombie interrupted sessions with a completed turn", () => {
+  it("keeps an active turn working when background tasks are also present", () => {
     expect(
       resolveThreadStatusPill({
         thread: {
           ...baseThread,
-          latestTurn: makeLatestTurn({ state: "completed" }),
-          session: {
-            ...baseThread.session,
-            status: "interrupted",
-            activeTurnId: null,
+          pendingBackgroundTasks: [{ taskId: "bg-1", description: "sleep 20", kind: "command" }],
+        },
+      }),
+    ).toMatchObject({ label: "Working", pulse: true });
+  });
+
+  it("does not show waiting after the background task roster clears", () => {
+    expect(
+      resolveThreadStatusPill({
+        thread: {
+          ...baseThread,
+          pendingBackgroundTasks: [],
+          runtime: {
+            ...baseThread.runtime,
+            status: "idle",
+            activeRunId: null,
           },
         },
       }),
@@ -2629,11 +1353,11 @@ describe("resolveThreadStatusPill", () => {
         thread: {
           ...baseThread,
           hasActionableProposedPlan: true,
-          latestTurn: makeLatestTurn(),
-          session: {
-            ...baseThread.session,
-            status: "ready",
-            activeTurnId: null,
+          latestRun: makeLatestRun(),
+          runtime: {
+            ...baseThread.runtime,
+            status: "completed",
+            activeRunId: null,
           },
         },
       }),
@@ -2647,11 +1371,11 @@ describe("resolveThreadStatusPill", () => {
           ...baseThread,
           hasActionableProposedPlan: true,
           interactionMode: "plan",
-          latestTurn: makeLatestTurn({ completedAt: null }),
-          session: {
-            ...baseThread.session,
+          latestRun: makeLatestRun({ completedAt: null }),
+          runtime: {
+            ...baseThread.runtime,
             status: "running",
-            activeTurnId: TurnId.make("turn-running"),
+            activeRunId: RunId.make("turn-running"),
           },
         },
       }),
@@ -2663,11 +1387,11 @@ describe("resolveThreadStatusPill", () => {
       resolveThreadStatusPill({
         thread: {
           ...baseThread,
-          latestTurn: makeLatestTurn(),
-          session: {
-            ...baseThread.session,
-            status: "ready",
-            activeTurnId: null,
+          latestRun: makeLatestRun(),
+          runtime: {
+            ...baseThread.runtime,
+            status: "completed",
+            activeRunId: null,
           },
         },
       }),
@@ -2680,12 +1404,12 @@ describe("resolveThreadStatusPill", () => {
         thread: {
           ...baseThread,
           interactionMode: "default",
-          latestTurn: makeLatestTurn(),
+          latestRun: makeLatestRun(),
           lastVisitedAt: "2026-03-09T10:04:00.000Z",
-          session: {
-            ...baseThread.session,
-            status: "ready",
-            activeTurnId: null,
+          runtime: {
+            ...baseThread.runtime,
+            status: "completed",
+            activeRunId: null,
           },
         },
       }),
@@ -2741,6 +1465,38 @@ describe("resolveProjectStatusIndicator", () => {
       ]),
     ).toMatchObject({ label: "Plan Ready", dotClass: "bg-violet-500" });
   });
+
+  it("ranks waiting below active work and above plan-ready", () => {
+    const waiting = {
+      label: "Waiting" as const,
+      colorClass: "text-sidebar-muted-foreground",
+      dotClass: "bg-sidebar-muted-foreground",
+      pulse: false,
+    };
+
+    expect(
+      resolveProjectStatusIndicator([
+        waiting,
+        {
+          label: "Working",
+          colorClass: "text-sky-600",
+          dotClass: "bg-sky-500",
+          pulse: true,
+        },
+      ]),
+    ).toMatchObject({ label: "Working" });
+    expect(
+      resolveProjectStatusIndicator([
+        {
+          label: "Plan Ready",
+          colorClass: "text-violet-600",
+          dotClass: "bg-violet-500",
+          pulse: false,
+        },
+        waiting,
+      ]),
+    ).toMatchObject({ label: "Waiting" });
+  });
 });
 
 function makeProject(overrides: Partial<Project> = {}): Project {
@@ -2763,8 +1519,8 @@ function makeProject(overrides: Partial<Project> = {}): Project {
   };
 }
 
-function makeThread(overrides: Partial<Thread> = {}): Thread {
-  return {
+function makeThread(overrides: ThreadFixtureOverrides = {}): Thread {
+  return makeThreadFixture({
     id: ThreadId.make("thread-1"),
     environmentId: localEnvironmentId,
     projectId: ProjectId.make("project-1"),
@@ -2776,10 +1532,8 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     },
     runtimeMode: DEFAULT_RUNTIME_MODE,
     interactionMode: DEFAULT_INTERACTION_MODE,
-    session: null,
+    runtime: null,
     messages: [],
-    queuedMessages: [],
-    pendingTurnStart: null,
     proposedPlans: [],
     createdAt: "2026-03-09T10:00:00.000Z",
     archivedAt: null,
@@ -2787,14 +1541,11 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     settledAt: null,
     deletedAt: null,
     updatedAt: "2026-03-09T10:00:00.000Z",
-    latestTurn: null,
+    latestRun: null,
     branch: null,
     worktreePath: null,
-    checkpoints: [],
-    pullRequests: [],
-    activities: [],
     ...overrides,
-  };
+  });
 }
 
 function makeSidebarThreadSummary(
@@ -2819,28 +1570,24 @@ describe("getFallbackThreadIdAfterDelete", () => {
           projectId: ProjectId.make("project-1"),
           createdAt: "2026-03-09T10:00:00.000Z",
           messages: [],
-          queuedMessages: [],
         }),
         makeThread({
           id: ThreadId.make("thread-active"),
           projectId: ProjectId.make("project-1"),
           createdAt: "2026-03-09T10:05:00.000Z",
           messages: [],
-          queuedMessages: [],
         }),
         makeThread({
           id: ThreadId.make("thread-newest"),
           projectId: ProjectId.make("project-1"),
           createdAt: "2026-03-09T10:10:00.000Z",
           messages: [],
-          queuedMessages: [],
         }),
         makeThread({
           id: ThreadId.make("thread-other-project"),
           projectId: ProjectId.make("project-2"),
           createdAt: "2026-03-09T10:20:00.000Z",
           messages: [],
-          queuedMessages: [],
         }),
       ],
       deletedThreadId: ThreadId.make("thread-active"),
@@ -2858,21 +1605,18 @@ describe("getFallbackThreadIdAfterDelete", () => {
           projectId: ProjectId.make("project-1"),
           createdAt: "2026-03-09T10:05:00.000Z",
           messages: [],
-          queuedMessages: [],
         }),
         makeThread({
           id: ThreadId.make("thread-newest"),
           projectId: ProjectId.make("project-1"),
           createdAt: "2026-03-09T10:10:00.000Z",
           messages: [],
-          queuedMessages: [],
         }),
         makeThread({
           id: ThreadId.make("thread-next"),
           projectId: ProjectId.make("project-1"),
           createdAt: "2026-03-09T10:07:00.000Z",
           messages: [],
-          queuedMessages: [],
         }),
       ],
       deletedThreadId: ThreadId.make("thread-active"),
@@ -2898,7 +1642,7 @@ describe("sortProjectsForSidebar", () => {
             id: "message-1" as never,
             role: "user",
             text: "older project user message",
-            turnId: null,
+            runId: null,
             createdAt: "2026-03-09T10:01:00.000Z",
             updatedAt: "2026-03-09T10:01:00.000Z",
             streaming: false,
@@ -2914,7 +1658,7 @@ describe("sortProjectsForSidebar", () => {
             id: "message-2" as never,
             role: "user",
             text: "newer project user message",
-            turnId: null,
+            runId: null,
             createdAt: "2026-03-09T10:05:00.000Z",
             updatedAt: "2026-03-09T10:05:00.000Z",
             streaming: false,
@@ -3193,43 +1937,159 @@ describe("sortLogicalProjectsForSidebar", () => {
   });
 });
 
-describe("resolveSidebarV2TopStatus", () => {
-  it("shows monitoring as its own calm status, not as Working", () => {
-    // Sidebar rows read this. Folding monitoring into Working gave a watch loop
-    // the active-progress shimmer, which is what the v1 pill (pulse: false) and
-    // the v2 sidebar row both deliberately avoid.
-    const monitoring = resolveSidebarV2TopStatus({ status: "monitoring", isUnread: false });
-    expect(monitoring?.label).toBe("Monitoring");
-    expect(monitoring?.icon).toBeNull();
-    expect(monitoring?.className).not.toContain("animate-sidebar-working-text");
-  });
+describe("sortSidebarV2ProjectGroups", () => {
+  it("does not let a hidden subagent thread reorder projects", () => {
+    const olderProjectId = ProjectId.make("project-older");
+    const newerProjectId = ProjectId.make("project-newer");
+    const olderRootThreadId = ThreadId.make("thread-older-root");
+    const projects = [
+      {
+        ...makeProject({ id: olderProjectId, title: "A older project" }),
+        projectKey: "logical-older",
+        memberProjectRefs: [{ environmentId: localEnvironmentId, projectId: olderProjectId }],
+      },
+      {
+        ...makeProject({ id: newerProjectId, title: "Z newer project" }),
+        projectKey: "logical-newer",
+        memberProjectRefs: [{ environmentId: localEnvironmentId, projectId: newerProjectId }],
+      },
+    ];
+    const threads = [
+      makeThread({
+        id: olderRootThreadId,
+        projectId: olderProjectId,
+        updatedAt: "2026-03-09T10:01:00.000Z",
+      }),
+      makeThread({
+        id: ThreadId.make("thread-newer-root"),
+        projectId: newerProjectId,
+        updatedAt: "2026-03-09T10:05:00.000Z",
+      }),
+      makeThread({
+        id: ThreadId.make("thread-hidden-subagent"),
+        projectId: olderProjectId,
+        updatedAt: "2026-03-09T10:10:00.000Z",
+        lineage: {
+          rootThreadId: olderRootThreadId,
+          parentThreadId: olderRootThreadId,
+          relationshipToParent: "subagent",
+        },
+      }),
+    ];
 
-  it("keeps working animated so the two remain distinguishable", () => {
-    const working = resolveSidebarV2TopStatus({ status: "working", isUnread: false });
-    expect(working?.label).toBe("Working");
-    expect(working?.icon).toBe("working");
-    expect(working?.className).toContain("animate-sidebar-working-text");
+    expect(
+      sortSidebarV2ProjectGroups(projects, threads, "updated_at").map(
+        (project) => project.projectKey,
+      ),
+    ).toEqual(["logical-newer", "logical-older"]);
   });
 });
 
-describe("resolveSidebarDropVerb", () => {
-  it("names the state change a cross-section drop performs", () => {
-    expect(resolveSidebarDropVerb("active", "pinned")).toBe("pin");
-    expect(resolveSidebarDropVerb("settled", "pinned")).toBe("pin");
-    expect(resolveSidebarDropVerb("snoozed", "pinned")).toBe("pin");
-    expect(resolveSidebarDropVerb("pinned", "active")).toBe("unpin");
-    expect(resolveSidebarDropVerb("settled", "active")).toBe("unsettle");
-    expect(resolveSidebarDropVerb("snoozed", "active")).toBe("wake");
-    expect(resolveSidebarDropVerb("active", "settled")).toBe("settle");
-    expect(resolveSidebarDropVerb("pinned", "settled")).toBe("settle");
-    expect(resolveSidebarDropVerb("snoozed", "settled")).toBe("settle");
+describe("resolveThreadLastVisitedAt", () => {
+  it("uses the local watermark when the server does not track visits", () => {
+    expect(resolveThreadLastVisitedAt(undefined, "2026-07-30T10:00:00.000Z")).toBe(
+      "2026-07-30T10:00:00.000Z",
+    );
+    expect(resolveThreadLastVisitedAt(undefined, undefined)).toBeUndefined();
   });
 
-  it("stays silent for same-section reorders, no target, and the snoozed shelf", () => {
-    expect(resolveSidebarDropVerb("active", "active")).toBeNull();
-    expect(resolveSidebarDropVerb("pinned", "pinned")).toBeNull();
-    expect(resolveSidebarDropVerb("active", null)).toBeNull();
-    expect(resolveSidebarDropVerb("active", "snoozed")).toBeNull();
+  it("keeps the server watermark authoritative when visited tracking exists", () => {
+    // A rewound server value (mark-unread) must win even over a newer local
+    // watermark left behind by earlier viewing on this device.
+    expect(resolveThreadLastVisitedAt("2026-07-30T10:00:00.000Z", "2026-07-30T10:00:05.000Z")).toBe(
+      "2026-07-30T10:00:00.000Z",
+    );
+    expect(resolveThreadLastVisitedAt("2026-07-30T10:00:00.000Z", undefined)).toBe(
+      "2026-07-30T10:00:00.000Z",
+    );
+  });
+
+  it("treats an explicit server-side null as never visited", () => {
+    expect(resolveThreadLastVisitedAt(null, "2026-07-30T10:00:00.000Z")).toBeUndefined();
+  });
+});
+
+describe("pinOrderKeyBetween", () => {
+  it("produces keys that sort between their bounds", () => {
+    const middle = pinOrderKeyBetween(null, null)!;
+    const top = pinOrderKeyBetween(null, middle)!;
+    const bottom = pinOrderKeyBetween(middle, null)!;
+    expect(top < middle).toBe(true);
+    expect(middle < bottom).toBe(true);
+
+    const between = pinOrderKeyBetween(top, middle)!;
+    expect(top < between && between < middle).toBe(true);
+  });
+
+  it("extends into new digits when bounds are adjacent", () => {
+    const key = pinOrderKeyBetween("g", "h")!;
+    expect("g" < key && key < "h").toBe(true);
+  });
+
+  it("stays strictly ordered under repeated top insertion", () => {
+    // Every new pin lands at the head of the arranged run; keys must keep
+    // sorting before the previous head without ever bottoming out.
+    let head: string | null = null;
+    const keys: string[] = [];
+    for (let i = 0; i < 100; i += 1) {
+      const key: string = pinOrderKeyBetween(null, head)!;
+      expect(key).not.toBeNull();
+      if (head !== null) expect(key < head).toBe(true);
+      keys.push(key);
+      head = key;
+    }
+    expect(new Set(keys).size).toBe(100);
+  });
+
+  it("stays strictly ordered under repeated middle insertion", () => {
+    let low = pinOrderKeyBetween(null, null)!;
+    let high = pinOrderKeyBetween(low, null)!;
+    for (let i = 0; i < 100; i += 1) {
+      const key: string = pinOrderKeyBetween(low, high)!;
+      expect(low < key && key < high).toBe(true);
+      if (i % 2 === 0) low = key;
+      else high = key;
+    }
+  });
+
+  it("returns null for corrupt or out-of-order bounds instead of throwing", () => {
+    expect(pinOrderKeyBetween("z", "a")).toBeNull();
+    expect(pinOrderKeyBetween("A!", null)).toBeNull();
+    expect(pinOrderKeyBetween(null, "ma")).toBeNull();
+    expect(pinOrderKeyBetween("m", "m")).toBeNull();
+  });
+});
+
+describe("sortPinnedThreadsForSidebar", () => {
+  const pinnable = (input: { id: string; createdAt: string; pinOrderKey?: string | null }) => ({
+    id: input.id,
+    createdAt: input.createdAt,
+    pinOrderKey: input.pinOrderKey ?? null,
+  });
+
+  it("sorts keyed threads by key ahead of keyless threads in creation order", () => {
+    const sorted = sortPinnedThreadsForSidebar([
+      pinnable({ id: "keyless-old", createdAt: "2026-03-09T08:00:00.000Z" }),
+      pinnable({ id: "second", createdAt: "2026-03-09T09:00:00.000Z", pinOrderKey: "t" }),
+      pinnable({ id: "keyless-new", createdAt: "2026-03-09T12:00:00.000Z" }),
+      pinnable({ id: "first", createdAt: "2026-03-09T07:00:00.000Z", pinOrderKey: "g" }),
+    ]);
+
+    expect(sorted.map((thread) => thread.id)).toEqual([
+      "first",
+      "second",
+      "keyless-new",
+      "keyless-old",
+    ]);
+  });
+
+  it("breaks equal keys by id so raced writes render identically everywhere", () => {
+    const sorted = sortPinnedThreadsForSidebar([
+      pinnable({ id: "b", createdAt: "2026-03-09T10:00:00.000Z", pinOrderKey: "m" }),
+      pinnable({ id: "a", createdAt: "2026-03-09T11:00:00.000Z", pinOrderKey: "m" }),
+    ]);
+
+    expect(sorted.map((thread) => thread.id)).toEqual(["a", "b"]);
   });
 });
 
@@ -3275,36 +2135,40 @@ describe("navigation after parking a thread", () => {
 });
 
 describe("Working shelf (beta)", () => {
-  const session = {
-    threadId: ThreadId.make("thread-1"),
+  const runtime = {
     status: "running" as const,
-    providerName: "Codex",
+    activeRunId: null,
     providerInstanceId: ProviderInstanceId.make("codex"),
-    runtimeMode: DEFAULT_RUNTIME_MODE,
-    activeTurnId: "turn-1" as never,
+    providerName: "Codex",
     lastError: null,
     updatedAt: "2026-03-09T10:00:00.000Z",
   };
+  const backgroundTask = { taskId: "bg-1", description: "sleep 20", kind: "command" as const };
   const idle = {
     hasActionableProposedPlan: false,
     hasPendingApprovals: false,
     hasPendingUserInput: false,
     interactionMode: "default" as const,
-    latestTurn: makeLatestTurn(),
-    session: { ...session, status: "ready" as const },
+    latestRun: makeLatestRun(),
+    runtime: null,
+  };
+  // Stopped with background tasks still open: V2's "waiting" sidebar status.
+  const waiting = {
+    ...idle,
+    runtime: { ...runtime, status: "idle" as const },
+    pendingBackgroundTasks: [backgroundTask],
   };
 
-  it("folds away running and monitoring threads only", () => {
-    expect(isSidebarThreadWorking({ ...idle, session })).toBe(true);
-    expect(isSidebarThreadWorking({ ...idle, backgroundLiveness: "monitoring" })).toBe(true);
+  it("folds away running threads and threads waiting on background work only", () => {
+    expect(isSidebarThreadWorking({ ...idle, runtime })).toBe(true);
+    expect(isSidebarThreadWorking(waiting)).toBe(true);
     expect(isSidebarThreadWorking(idle)).toBe(false);
-    expect(isSidebarThreadWorking({ ...idle, session, hasPendingApprovals: true })).toBe(false);
-    expect(isSidebarThreadWorking({ ...idle, session, hasPendingUserInput: true })).toBe(false);
+    expect(isSidebarThreadWorking({ ...idle, runtime, hasPendingApprovals: true })).toBe(false);
+    expect(isSidebarThreadWorking({ ...idle, runtime, hasPendingUserInput: true })).toBe(false);
     expect(
       isSidebarThreadWorking({
-        ...idle,
-        backgroundLiveness: "working",
-        session: { ...session, status: "error" as const, lastError: "boom" },
+        ...waiting,
+        runtime: { ...runtime, status: "failed" as const, lastError: "boom" },
       }),
     ).toBe(false);
   });
@@ -3312,10 +2176,9 @@ describe("Working shelf (beta)", () => {
   it("keeps a ready plan in the inbox while background work runs", () => {
     expect(
       isSidebarThreadWorking({
-        ...idle,
+        ...waiting,
         interactionMode: "plan",
         hasActionableProposedPlan: true,
-        backgroundLiveness: "working",
       }),
     ).toBe(false);
   });
@@ -3329,10 +2192,10 @@ describe("Working shelf (beta)", () => {
       environmentId: localEnvironmentId,
       createdAt: input.createdAt,
       unsettledAt: input.unsettledAt ?? null,
-      latestTurn:
+      latestRun:
         input.completedAt === undefined
           ? null
-          : { ...makeLatestTurn({ completedAt: input.completedAt }), requestedAt: input.createdAt },
+          : { ...makeLatestRun({ completedAt: input.completedAt }), requestedAt: input.createdAt },
     });
 
     it("puts the thread that finished last on top, whatever its age", () => {

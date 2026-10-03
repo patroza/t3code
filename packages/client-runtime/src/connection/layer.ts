@@ -70,23 +70,19 @@ export const watchDiscoveredCompatibility = Effect.fn("connection.watchDiscovere
 
 export function layerWithOptions(options: RpcSession.RpcSessionOptions) {
   const driverLayer = ConnectionDriver.layer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        ConnectionResolver.layer,
-        RpcSession.layerWithOptions(options),
-        diagnosticsLogLayer,
-      ),
-    ),
+    Layer.provide(Layer.mergeAll(ConnectionResolver.layer, RpcSession.layer(options))),
   );
   const registryLayer = EnvironmentRegistry.layer.pipe(
-    Layer.provide(Layer.mergeAll(driverLayer, diagnosticsLogLayer)),
+    Layer.provide(driverLayer),
+    Layer.provide(diagnosticsLogLayer),
   );
   const onboardingLayer = ConnectionOnboarding.layer.pipe(Layer.provide(registryLayer));
   const connectionServicesLayer = Layer.mergeAll(
     registryLayer,
     RelayEnvironmentDiscovery.layer,
     onboardingLayer,
-    diagnosticsLogLayer,
+    // Exposed for updating hosts too old to connect through the driver.
+    ConnectionResolver.layer,
   );
   const connectionStartupLayer = Layer.effectDiscard(
     Effect.gen(function* () {

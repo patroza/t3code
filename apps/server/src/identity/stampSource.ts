@@ -6,7 +6,7 @@
 import type {
   AuthClientMetadataDeviceType,
   ClientSourceHint,
-  OrchestrationCommand,
+  OrchestrationV2Command,
   SessionIdentityClaim,
   SourceChannel,
   SourceRef,
@@ -113,12 +113,12 @@ export function sourceRefFromHintAndMap(input: {
  * Priority: session claim → sourceHint+map (integrations) → channel-only for bots.
  */
 export function stampOrchestrationCommandSource(input: {
-  readonly command: OrchestrationCommand;
+  readonly command: OrchestrationV2Command;
   readonly claim: SessionIdentityClaim | null;
   readonly clientDeviceType?: AuthClientMetadataDeviceType | undefined;
   readonly people?: ReadonlyArray<IdentityMapPerson> | undefined;
-}): OrchestrationCommand {
-  if (input.command.type !== "thread.turn.start") {
+}): OrchestrationV2Command {
+  if (input.command.type !== "message.dispatch") {
     return input.command;
   }
 
@@ -163,12 +163,12 @@ export function stampOrchestrationCommandSource(input: {
   const { sourceHint: _dropped, ...withoutHint } = input.command;
   void _dropped;
   if (source === undefined) {
-    return withoutHint as OrchestrationCommand;
+    return withoutHint as OrchestrationV2Command;
   }
   return {
     ...withoutHint,
     source,
-  } as OrchestrationCommand;
+  } as OrchestrationV2Command;
 }
 
 /** Build a full SourceRef for in-process bridges (GitHub/Jira) with map resolution. */

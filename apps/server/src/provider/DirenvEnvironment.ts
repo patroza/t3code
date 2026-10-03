@@ -4,12 +4,12 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
 import * as ProcessRunner from "../processRunner.ts";
-import { ProviderAdapterProcessError } from "./Errors.ts";
 
 const DIRENV_MAX_OUTPUT_BYTES = 64 * 1024;
 const DIRENV_TIMEOUT = "30 seconds";
@@ -63,20 +63,20 @@ export const resolveProviderSessionEnvironment = (input: {
   readonly threadId: string;
   readonly cwd: string;
   readonly environment: NodeJS.ProcessEnv;
-}): Effect.Effect<NodeJS.ProcessEnv, ProviderAdapterProcessError> =>
+}): Effect.Effect<NodeJS.ProcessEnv, DirenvEnvironmentError> =>
   input.resolve === undefined
     ? Effect.succeed(input.environment)
-    : input.resolve({ cwd: input.cwd, environment: input.environment }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderAdapterProcessError({
-              provider: input.provider,
-              threadId: input.threadId,
-              detail: cause.message,
-              cause,
-            }),
-        ),
-      );
+    : input.resolve({ cwd: input.cwd, environment: input.environment });
+
+/** Optional at adapter boundaries so isolated adapters keep their configured environment. */
+export const resolveCurrentProviderEnvironment = Effect.fn("resolveCurrentProviderEnvironment")(
+  function* (cwd: string, environment: NodeJS.ProcessEnv) {
+    const resolver = yield* Effect.serviceOption(DirenvEnvironment);
+    return Option.isSome(resolver)
+      ? yield* resolver.value.resolve({ cwd, environment })
+      : environment;
+  },
+);
 
 function conciseStderr(stderr: string, environment: NodeJS.ProcessEnv): string | undefined {
   let redacted = stderr;

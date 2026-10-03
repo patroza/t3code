@@ -7,7 +7,9 @@ import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   MessageId,
-  OrchestrationCommand,
+  OrchestrationV2Command,
+  SourceRef,
+  TurnId,
   type ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -24,9 +26,9 @@ import {
   Result,
   Stream,
 } from "effect";
-import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
-import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurns.ts";
+import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
+import { ProjectStoreV2 } from "../orchestration-v2/ProjectStore.ts";
+
 import { GitWorkflowService } from "../git/GitWorkflowService.ts";
 import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
 import { DEFAULT_THREAD_TITLE } from "@t3tools/shared/threadTitle";
@@ -81,15 +83,15 @@ type T3GatewayRequirements =
     Dispatches thread creation and turn-start commands.
     Provides the T3 event stream used to detect outcomes.
    */
-  | OrchestrationEngineService
+  | ThreadManagementService
   /*
     Loads the selected T3 project and reads thread outcomes.
   */
-  | ProjectionSnapshotQuery
+  | ProjectStoreV2
   /*
     Finds the exact projected turn associated with the original T3 user message.
   */
-  | ProjectionTurnRepository
+
   /*
     Creates the isolated branch and worktree for each external request.
   */
@@ -180,6 +182,20 @@ export interface T3Gateway {
 
 export const T3Gateway = Context.Service<T3Gateway>("t3code/ntbs/t3Gateway");
 
+const sourceForUri = (uri: string) => {
+  const channel = uri.split(":")[0];
+  return SourceRef.make({
+    channel:
+      channel === "discord" ||
+      channel === "github" ||
+      channel === "jira" ||
+      channel === "slack" ||
+      channel === "teams"
+        ? channel
+        : "unknown",
+  });
+};
+
 const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Effect.gen(
   function* () {
     const orFail =
@@ -194,11 +210,21 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
               : RetryableError,
         );
 
-    const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+    const projects = yield* ProjectStoreV2;
+    const projectionSnapshotQuery = {
+      getProjectShellById: (id: ProjectId) =>
+        projects
+          .listShells()
+          .pipe(
+            Effect.map((all) => Option.fromNullishOr(all.find((project) => project.id === id))),
+          ),
+      getThreadShellById: (id: ThreadId) =>
+        orchestrationEngine.getThreadShell(id).pipe(Effect.map(Option.fromNullishOr)),
+    };
 
     const serverSettings = yield* ServerSettingsService;
 
-    const orchestrationEngine = yield* OrchestrationEngineService;
+    const orchestrationEngine = yield* ThreadManagementService;
 
     /*
       The lookup failing is operational; the project being absent is not.
@@ -416,8 +442,6 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
 
     const projectScriptRunner = yield* ProjectSetupScriptRunner;
 
-    const projectionTurnRepository = yield* ProjectionTurnRepository;
-
     const planCoordinates = (
       projectId: ProjectId,
       startBranchName: string,
@@ -478,175 +502,99 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
       state: NTBS.ThreadCreated,
     ): Effect.Effect<NTBS.ThreadCreatedContext, RetryableError> =>
       Effect.gen(function* () {
-        const turns = yield* projectionTurnRepository
-          .listByThreadId({ threadId: state.t3.threadId })
+        const shell = yield* orchestrationEngine
+          .getThreadShell(state.t3.threadId)
           .pipe(
-            orFail("retryable")(
-              "projectionTurnRepository.listByThreadId",
-              "Could not load the turns of thread " + state.t3.threadId,
-            ),
+            orFail("retryable")("thread.getShell", "Could not load thread " + state.t3.threadId),
           );
-
-        /*
-          `.find` is safe: a userMessageId labels at most one turn. It is minted once per request,
-          and a turn start is only repeated by recovery when no turn exists for it yet.
-        */
-        const turn = turns.find((turn) => turn.pendingMessageId === state.t3.userMessageId);
-
-        // The thread detail holds both the thread's messages and its session.
-        const loadThreadDetail = projectionSnapshotQuery
-          .getThreadDetailById(state.t3.threadId)
-          .pipe(
-            orFail("retryable")(
-              "projectionSnapshotQuery.getThreadDetailById",
-              "Could not load thread " + state.t3.threadId,
-            ),
-          );
-
-        if (turn === undefined) {
-          /*
-            No turn for our message. Two cases:
-            1. we never dispatched the turn start -> missing, start it
-            2. the provider failed before starting -> T3 keeps our message and marks the session
-               as errored, but never links a turn to our message -> failure reply
-
-            Note: Loading the whole thread detail is expensive. That is fine for the one-minute sweep, but this arm also runs on every activity ping between our turn-start and T3 marking the session as running, and any streaming thread in the system pings during that window. TODO: We should review and find cheaper strategies.
-          */
-          // No turn ever adopted our message, so a failure here refers to the thread and message only.
-          const settledWithoutTurn: NTBS.FailureCause = {
-            type: "settled",
-            threadId: state.t3.threadId,
-            userMessageId: state.t3.userMessageId,
-            turnId: null,
-          };
-
-          const maybeThread = yield* loadThreadDetail;
-          if (Option.isNone(maybeThread)) {
-            // The thread existed when we reached ThreadCreated, so it was deleted since.
-            // Retrying cannot bring it back: report the failure.
-            return {
-              turn: "completed",
-              reply: {
-                type: "failure",
-                text: "T3's thread could no longer be found.",
-                cause: settledWithoutTurn,
-              },
-            } as const;
-          }
-
-          const thread = maybeThread.value;
-          const hasOurMessage = thread.messages.some(
-            (message) => message.role === "user" && message.id === state.t3.userMessageId,
-          );
-
-          if (hasOurMessage && thread.session?.status === "error") {
-            return {
-              turn: "completed",
-              reply: {
-                type: "failure",
-                text: thread.session.lastError ?? "T3 failed while processing this request.",
-                cause: settledWithoutTurn,
-              },
-            } as const;
-          }
-
-          return { turn: "missing" } as const;
-        }
-
-        // A row without a turn id is the pending-start placeholder; T3 assigns one when the provider adopts the turn.
-        if (turn.turnId === null || turn.state === "pending" || turn.state === "running") {
-          return { turn: "active" } as const;
-        }
-
-        // Every reply from here on came out of this turn.
-        const coordinates: NTBS.TurnCoordinates = {
-          threadId: state.t3.threadId,
-          userMessageId: state.t3.userMessageId,
-          turnId: turn.turnId,
-        };
-
-        // Only a settled turn needs the thread detail: the reply text lives in its messages.
-        const maybeThread = yield* loadThreadDetail;
-
-        if (Option.isNone(maybeThread)) {
-          // The turn settled but its thread is gone. An observed fact, not a lookup error: retrying cannot bring the thread back, so it becomes a failure reply.
+        if (shell === null)
           return {
             turn: "completed",
             reply: {
               type: "failure",
-              text: "T3 finished, but its thread could no longer be found.",
-              cause: { type: "settled", ...coordinates },
+              text: "T3's thread could no longer be found.",
+              cause: {
+                type: "settled",
+                threadId: state.t3.threadId,
+                userMessageId: state.t3.userMessageId,
+                turnId: null,
+              },
             },
           } as const;
+        const projection = yield* orchestrationEngine
+          .getThreadProjection(state.t3.threadId)
+          .pipe(
+            orFail("retryable")(
+              "thread.getProjection",
+              "Could not load thread " + state.t3.threadId,
+            ),
+          );
+        const run = projection.runs.find((entry) => entry.userMessageId === state.t3.userMessageId);
+        if (run === undefined) return { turn: "missing" } as const;
+        if (["queued", "preparing", "starting", "running", "waiting"].includes(run.status))
+          return { turn: "active" } as const;
+        const coordinates = {
+          threadId: state.t3.threadId,
+          userMessageId: state.t3.userMessageId,
+          turnId: TurnId.make(run.id),
+        };
+        if (run.status === "completed") {
+          const text = projection.messages
+            .filter((message) => message.runId === run.id && message.role === "assistant")
+            .map((message) => message.text)
+            .join("\n")
+            .trim();
+          return {
+            turn: "completed",
+            reply:
+              text.length > 0
+                ? { type: "answer", text, ...coordinates }
+                : {
+                    type: "failure",
+                    text: "T3 completed without producing a response.",
+                    cause: { type: "settled", ...coordinates },
+                  },
+          } as const;
         }
-
-        const thread = maybeThread.value;
-
-        switch (turn.state) {
-          case "completed": {
-            const assistantMessage =
-              turn.assistantMessageId === null
-                ? undefined
-                : thread.messages.find((message) => message.id === turn.assistantMessageId);
-            const text = assistantMessage?.text.trim() ?? "";
-
-            return {
-              turn: "completed",
-              reply:
-                text.length > 0
-                  ? ({ type: "answer", text, ...coordinates } as const)
-                  : ({
-                      type: "failure",
-                      text: "T3 completed without producing a response.",
-                      cause: { type: "settled", ...coordinates },
-                    } as const),
-            } as const;
-          }
-
-          case "error":
-            return {
-              turn: "completed",
-              reply: {
-                type: "failure",
-                text: thread.session?.lastError ?? "T3 failed while processing this request.",
-                cause: { type: "settled", ...coordinates },
-              },
-            } as const;
-
-          case "interrupted":
-            return {
-              turn: "completed",
-              reply: {
-                type: "cancellation",
-                text: "T3 stopped processing this request.",
-                ...coordinates,
-              },
-            } as const;
-        }
+        if (run.status === "interrupted" || run.status === "cancelled")
+          return {
+            turn: "completed",
+            reply: {
+              type: "cancellation",
+              text: "T3 stopped processing this request.",
+              ...coordinates,
+            },
+          } as const;
+        return {
+          turn: "completed",
+          reply: {
+            type: "failure",
+            text: "T3 failed while processing this request.",
+            cause: { type: "settled", ...coordinates },
+          },
+        } as const;
       });
 
     const startTurn = (
       state: NTBS.ThreadCreated,
     ): Effect.Effect<void, RetryableError | FatalError> =>
       Effect.gen(function* () {
-        const commandId = CommandId.make(yield* randomUUID);
+        const commandId = CommandId.make(`ntbs:message:${state.t3.userMessageId}`);
         const createdAt = yield* getNow;
 
         yield* orchestrationEngine
           .dispatch(
-            OrchestrationCommand.make({
-              type: "thread.turn.start",
+            OrchestrationV2Command.make({
+              type: "message.dispatch",
               commandId,
               threadId: state.t3.threadId,
-              message: {
-                messageId: state.t3.userMessageId,
-                role: "user",
-                text: state.snapshot,
-                attachments: state.attachments,
-              },
-              runtimeMode: "full-access",
-              interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-              createdAt,
+              messageId: state.t3.userMessageId,
+              text: state.snapshot,
+              attachments: state.attachments,
+              createdBy: "user",
+              creationSource: "server",
+              source: sourceForUri(state.sourceUri),
+              dispatchMode: { type: "queue_after_active" },
             }),
           )
           .pipe(
@@ -656,7 +604,8 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
               Judgment call: "queue full" is an invariant that time can heal (the queue drains when the active turn completes), but a full queue on an NTBS-owned thread means something else is hammering it, and a visible failure beats silently retrying into it.
             */
             Effect.mapError((cause) =>
-              cause._tag === "OrchestrationCommandInvariantError"
+              cause._tag === "OrchestratorCommandRejectedError" ||
+              cause._tag === "OrchestratorCommandPreviouslyRejectedError"
                 ? new FatalError({
                     method: "orchestrationEngine.dispatch",
                     reason: "T3 rejected the turn start for thread " + state.t3.threadId,
@@ -679,38 +628,15 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
       Ordinary activity appends change nothing the queries answer, but `context-compaction` and `provider.turn.start.failed` do, because both delete the pending turn start. Streaming deltas are `thread.message-sent` with `streaming: true`: the bulk of a live turn, and none of them change what the queries answer before the turn settles.
     */
     const threadActivity = orchestrationEngine.streamDomainEvents.pipe(
-      Stream.filterMap((event) => {
-        if (event.aggregateKind !== "thread") {
-          return Result.failVoid;
-        }
-
-        const threadId = event.aggregateId as ThreadId; // safe to cast as filtered the aggregate
-
-        switch (event.type) {
-          case "thread.created":
-          case "thread.deleted":
-          case "thread.turn-start-requested":
-          case "thread.turn-interrupt-requested":
-          case "thread.turn-diff-completed":
-          case "thread.session-set":
-          case "thread.messages-resynced":
-          case "thread.reverted":
-            return Result.succeed(threadId);
-
-          case "thread.message-sent":
-            return event.payload.streaming ? Result.failVoid : Result.succeed(threadId);
-
-          case "thread.activity-appended": {
-            const kind = event.payload.activity.kind;
-            return kind === "context-compaction" || kind === "provider.turn.start.failed"
-              ? Result.succeed(threadId)
-              : Result.failVoid;
-          }
-
-          default:
-            return Result.failVoid;
-        }
-      }),
+      Stream.filter(
+        (event) =>
+          event.type === "run.created" ||
+          event.type === "run.updated" ||
+          (event.type === "message.updated" && !event.payload.streaming) ||
+          event.type === "thread.deleted",
+      ),
+      Stream.map((event) => event.threadId),
+      Stream.catch(() => Stream.empty),
     );
 
     /**
@@ -781,7 +707,7 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
 
           yield* orchestrationEngine
             .dispatch(
-              OrchestrationCommand.make({
+              OrchestrationV2Command.make({
                 type: "thread.create",
                 branch: state.t3.worktreeBranchName,
                 worktreePath: worktreePath,
@@ -790,7 +716,8 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
                 title: DEFAULT_THREAD_TITLE,
                 modelSelection: modelSelection,
                 commandId,
-                createdAt,
+                createdBy: "user",
+                creationSource: "server",
                 projectId: project.id,
                 runtimeMode: "full-access",
                 interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -827,11 +754,10 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
                           threadCreationState = "recovered";
                         })
                       : Effect.fail(
-                          // TODO: `OrchestrationCommandInvariantError` does not expose
-                          // which invariant failed. Treat it as fatal for now, but T3
-                          // needs a structured rejection reason before NTBS can distinguish
-                          // a missing project from other rejected create attempts.
-                          cause._tag === "OrchestrationCommandInvariantError"
+                          // Native command rejections are terminal; dispatch failures
+                          // remain retryable so durable provisioning can resume.
+                          cause._tag === "OrchestratorCommandRejectedError" ||
+                            cause._tag === "OrchestratorCommandPreviouslyRejectedError"
                             ? new FatalError({
                                 method: "orchestrationEngine.dispatch",
                                 reason:
@@ -879,7 +805,7 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
             return Effect.gen(function* () {
               if (threadCreationState === "created") {
                 yield* orchestrationEngine.dispatch(
-                  OrchestrationCommand.make({
+                  OrchestrationV2Command.make({
                     type: "thread.delete",
                     commandId: CommandId.make(yield* randomUUID),
                     threadId: state.t3.threadId,

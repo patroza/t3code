@@ -39,7 +39,7 @@ function toNativeHeaderMenuItems(items: HomeListFilterMenu["items"]): NativeHead
 
 /**
  * Right-side UINavigationBar items for the sidebar column: filter/sort menu,
- * the thread-list icon and settings.
+ * the two alternate list-mode icons (Recent / Projects), and settings.
  */
 export function createSidebarHeaderItems(input: {
   readonly filterIcon: string;

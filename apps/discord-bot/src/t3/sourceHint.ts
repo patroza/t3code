@@ -1,5 +1,5 @@
 /**
- * Platform provenance for bot-dispatched turn.start.
+ * Platform provenance for bot-dispatched messages.
  *
  * Mirrors `@t3tools/contracts` ClientSourceHint so the Discord overlay can
  * stamp actors without depending on the identity overlay at compile time.
@@ -53,13 +53,4 @@ export function discordSourceHint(input: {
         }
       : {}),
   };
-}
-
-/** Attach sourceHint for servers that understand it (identity overlay). */
-export function withTurnSourceHint<T extends { readonly type: "thread.turn.start" }>(
-  command: T,
-  sourceHint: DiscordClientSourceHint | undefined,
-): T {
-  if (sourceHint === undefined) return command;
-  return { ...command, sourceHint } as T;
 }

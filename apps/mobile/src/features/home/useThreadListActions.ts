@@ -29,6 +29,7 @@ import {
   threadDropLifecycle,
 } from "../threads/threadOrder";
 import { getThreadListV2OrderedSection } from "../threads/threadListV2";
+import { threadCanArchive } from "./threadArchive";
 import { resolveThreadTitleRename } from "../threads/thread-title-rename";
 import {
   actionFailureMessage,
@@ -122,11 +123,7 @@ function useThreadActionExecutor(
         }
         // Archive keeps its original, narrower guard: never interrupt a
         // thread mid-turn.
-        if (
-          action === "archive" &&
-          thread.session?.status === "running" &&
-          thread.session.activeTurnId != null
-        ) {
+        if (action === "archive" && !threadCanArchive(thread.runtime)) {
           Alert.alert(
             actionFailureTitle(action),
             "This thread is working. Interrupt it first, then try again.",
@@ -268,7 +265,7 @@ export function useThreadListActions(): {
         // mid-turn keeps the original archive guard: executeAction re-checks
         // and surfaces the alert, so it must not be prompted for cleanup.
         previewCandidate: async () => {
-          if (thread.session?.status === "running" && thread.session.activeTurnId != null) {
+          if (thread.runtime?.status === "running" && thread.runtime.activeRunId !== null) {
             return null;
           }
           const preview = await previewWorktreeCleanup({

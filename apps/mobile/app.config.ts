@@ -243,18 +243,14 @@ const config: ExpoConfig = {
   slug: "t3-code",
   platforms: ["ios", "android"],
   scheme: variant.scheme,
-  version: "1.4.0",
-  // Development manifests resolve on every launch, so avoid fingerprint's
-  // expensive native-project calculation there. Preview and production stay
-  // fingerprinted so OTAs only reach binaries with matching native projects.
-  // Override with MOBILE_RUNTIME_VERSION_OVERRIDE when CI must ship pure-JS
-  // fixes to an already-installed binary (e.g. Free-plan build quota exhausted).
+  version: "2.0.0",
   runtimeVersion: (() => {
     const override = process.env.MOBILE_RUNTIME_VERSION_OVERRIDE?.trim();
-    if (override) {
-      return override;
-    }
+    if (override) return override;
     return {
+      // Development manifests resolve on every launch, so avoid fingerprint's
+      // expensive native-project calculation there. Preview and production stay
+      // fingerprinted so OTAs only reach binaries with matching native projects.
       policy: runtimeVersionPolicy,
     };
   })(),

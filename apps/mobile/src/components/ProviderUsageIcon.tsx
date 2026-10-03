@@ -7,6 +7,7 @@ import { ProviderIcon } from "./ProviderIcon";
 export interface ProviderUsageIconProps {
   readonly provider: string | null | undefined;
   readonly size?: number;
+  readonly iconUrl?: string | null;
   readonly marker?: UsageMarker | null;
 }
 
@@ -18,7 +19,7 @@ export function ProviderUsageIcon(props: ProviderUsageIconProps) {
   const { provider, size = 16, marker } = props;
 
   if (!marker) {
-    return <ProviderIcon provider={provider} size={size} />;
+    return <ProviderIcon iconUrl={props.iconUrl} provider={provider} size={size} />;
   }
 
   const { fill, outlookAtRisk } = marker;
@@ -36,7 +37,7 @@ export function ProviderUsageIcon(props: ProviderUsageIconProps) {
     dotColor = "#6b7280";
     ringColor = "#f59e0b";
   } else {
-    return <ProviderIcon provider={provider} size={size} />;
+    return <ProviderIcon iconUrl={props.iconUrl} provider={provider} size={size} />;
   }
 
   const dotSize = ringColor ? 7 : 5;
@@ -52,7 +53,7 @@ export function ProviderUsageIcon(props: ProviderUsageIconProps) {
         position: "relative",
       }}
     >
-      <ProviderIcon provider={provider} size={size} />
+      <ProviderIcon iconUrl={props.iconUrl} provider={provider} size={size} />
       <View
         style={{
           position: "absolute",

@@ -1,4 +1,13 @@
-import type { OrchestrationThreadActivity, UserInputQuestion } from "@t3tools/contracts";
+import type { UserInputQuestion } from "@t3tools/contracts";
+
+export interface UserInputTranscriptActivity {
+  readonly id: string;
+  readonly kind: string;
+  readonly payload: unknown;
+  readonly sequence?: number;
+  readonly createdAt: string;
+  readonly turnId: import("@t3tools/contracts").TurnId | null;
+}
 
 export interface ResolvedUserInputAnswer {
   readonly questionId: string;
@@ -11,7 +20,7 @@ export interface ResolvedUserInputTranscript {
   readonly activityId: string;
   readonly requestId: string;
   readonly createdAt: string;
-  readonly turnId: OrchestrationThreadActivity["turnId"];
+  readonly turnId: UserInputTranscriptActivity["turnId"];
   readonly answers: ReadonlyArray<ResolvedUserInputAnswer>;
   readonly preview: string;
   readonly detail: string;
@@ -54,8 +63,8 @@ function formatAnswer(value: unknown): string | null {
 }
 
 function compareActivities(
-  left: OrchestrationThreadActivity,
-  right: OrchestrationThreadActivity,
+  left: UserInputTranscriptActivity,
+  right: UserInputTranscriptActivity,
 ): number {
   if (left.sequence !== undefined && right.sequence !== undefined) {
     return left.sequence - right.sequence;
@@ -64,7 +73,7 @@ function compareActivities(
 }
 
 export function deriveResolvedUserInputTranscripts(
-  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  activities: ReadonlyArray<UserInputTranscriptActivity>,
 ): ReadonlyArray<ResolvedUserInputTranscript> {
   const questionsByRequestId = new Map<string, ReadonlyArray<UserInputQuestion>>();
   const transcripts: ResolvedUserInputTranscript[] = [];

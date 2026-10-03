@@ -1,12 +1,20 @@
 import { describe, expect, it, vi } from "@effect/vitest";
-import { type OrchestrationProject, ProjectId } from "@t3tools/contracts";
+import {
+  type OrchestrationProjectShell,
+  ProjectId,
+  ThreadId,
+  ProviderInstanceId,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 
-import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ProjectionStoreV2 } from "../orchestration-v2/ProjectionStore.ts";
+import { ProjectStoreV2, ProjectRow } from "../orchestration-v2/ProjectStore.ts";
+import { v2PullRequestThread } from "../orchestration-v2/testkit/pullRequestFixtures.ts";
+import * as DateTime from "effect/DateTime";
 import * as ProcessRunner from "../processRunner.ts";
 import * as ProjectLifecycleScriptRunner from "./ProjectLifecycleScriptRunner.ts";
 
@@ -26,7 +34,7 @@ const okProcessOutput = (
 
 const isLifecycleFailed = Schema.is(ProjectLifecycleScriptRunner.ProjectLifecycleScriptFailedError);
 
-const makeProject = (scripts: OrchestrationProject["scripts"]): OrchestrationProject => ({
+const makeProject = (scripts: OrchestrationProjectShell["scripts"]): OrchestrationProjectShell => ({
   id: ProjectId.make("project-1"),
   title: "Project",
   workspaceRoot: "/repo/project",
@@ -34,87 +42,70 @@ const makeProject = (scripts: OrchestrationProject["scripts"]): OrchestrationPro
   scripts,
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
-  deletedAt: null,
 });
 
+const decodeProjectRow = Schema.decodeUnknownSync(ProjectRow);
 const makeProjectionSnapshotQueryLayer = (
-  project: OrchestrationProject | null,
+  project: OrchestrationProjectShell | null,
   options?: { readonly worktreePath?: string },
 ) =>
-  Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
-    getUserInputActivity: () => Effect.die("unused"),
-    getCommandReadModel: () => Effect.die("unused"),
-    getThreadRuntimeContext: () => Effect.die("unused"),
-    getTurnStartMessage: () => Effect.die("unused"),
-    getThreadActivitiesPage: () => Effect.die("unused"),
-    getSnapshot: () => Effect.die("unused"),
-    listActivitiesByKind: () => Effect.die("unused"),
-    getDeletedWorktreeThreads: () => Effect.die("unused"),
-    listThreadsWithPullRequests: () => Effect.die("unused"),
-    getShellSnapshot: () =>
-      Effect.succeed({
-        snapshotSequence: 1,
-        projects: project ? [project] : [],
-        threads:
-          project && options?.worktreePath
-            ? [
-                {
-                  id: "thread-1" as never,
+  Layer.mergeAll(
+    Layer.mock(ProjectStoreV2, {
+      get: (id) =>
+        Effect.succeed(
+          project && id === project.id
+            ? Option.some(
+                decodeProjectRow({
+                  ...project,
                   projectId: project.id,
-                  title: "Thread",
-                  modelSelection: {
-                    instanceId: "codex" as never,
-                    model: "gpt",
-                  },
-                  runtimeMode: "full-access" as never,
-                  interactionMode: "default" as never,
-                  branch: null,
-                  worktreePath: options.worktreePath,
-                  pullRequests: [],
-                  latestTurn: null,
-                  createdAt: "2026-01-01T00:00:00.000Z",
-                  updatedAt: "2026-01-01T00:00:00.000Z",
-                  archivedAt: null,
-                  settledOverride: null,
-                  settledAt: null,
-                  session: null,
-                  latestUserMessageAt: null,
-                  hasPendingApprovals: false,
-                  hasPendingUserInput: false,
-                  hasActionableProposedPlan: false,
-                },
-              ]
-            : [],
-        updatedAt: "2026-01-01T00:00:00.000Z",
-      }),
-    getArchivedShellSnapshot: () => Effect.die("unused"),
-    getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
-    getCounts: () => Effect.die("unused"),
-    getActiveProjectByWorkspaceRoot: (workspaceRoot) =>
-      Effect.succeed(
-        project && workspaceRoot === project.workspaceRoot ? Option.some(project) : Option.none(),
-      ),
-    getProjectShellById: (projectId) =>
-      Effect.succeed(project && projectId === project.id ? Option.some(project) : Option.none()),
-    getProjectShells: () => Effect.die("unused"),
-    getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
-    getImportedAgentSessionSources: () => Effect.die("unused"),
-    getThreadCheckpointContext: () => Effect.die("unused"),
-    getFullThreadDiffContext: () => Effect.die("unused"),
-    getThreadShellById: () => Effect.die("unused"),
-    getSessionStopContextById: () => Effect.die("unused"),
-    getThreadDetailById: () => Effect.die("unused"),
-    getThreadDetailSnapshot: () => Effect.die("unused"),
-    searchThreads: () => Effect.succeed({ matches: [] }),
-    getThreadLifecycleById: () => Effect.die("unused"),
-    getEventReplayStats: () => Effect.die("unused"),
-  });
+                  defaultThreadEnvMode: null,
+                  autoPull: false,
+                  faviconPath: null,
+                  projectIcon: null,
+                }),
+              )
+            : Option.none(),
+        ),
+      listShells: () => Effect.succeed(project ? [project] : []),
+    }),
+    Layer.mock(ProjectionStoreV2, {
+      getShellSnapshot: () =>
+        Effect.succeed({
+          schemaVersion: 2,
+          snapshotSequence: 1,
+          archivedThreads: [],
+          threads:
+            project && options?.worktreePath
+              ? [
+                  v2PullRequestThread({
+                    id: ThreadId.make("thread-1"),
+                    projectId: project.id,
+                    title: "Thread",
+                    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt" },
+                    runtimeMode: "auto",
+                    interactionMode: "default",
+                    branch: null,
+                    worktreePath: options.worktreePath,
+                    pullRequests: [],
+                    latestUserMessageAt: null,
+                    createdAt: project.createdAt,
+                    updatedAt: project.updatedAt,
+                    archivedAt: null,
+                    settledOverride: null,
+                    settledAt: null,
+                  }),
+                ]
+              : [],
+          updatedAt: DateTime.makeUnsafe("2026-01-01T00:00:00Z"),
+        }),
+    }),
+  );
 
 const makeProcessRunnerLayer = (run: ProcessRunner.ProcessRunner["Service"]["run"]) =>
   Layer.succeed(ProcessRunner.ProcessRunner, { run });
 
 const testLayer = (
-  project: OrchestrationProject | null,
+  project: OrchestrationProjectShell | null,
   run: ProcessRunner.ProcessRunner["Service"]["run"],
   options?: { readonly worktreePath?: string },
 ) =>

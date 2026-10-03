@@ -1,6 +1,6 @@
+import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import * as React from "react";
-import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit/sortable";
 import {
   groupThreadsByRecency,
   shouldShowRecencySectionHeaders,
@@ -10,6 +10,7 @@ import {
   isAtomCommandInterrupted,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
+import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit/sortable";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import type { ContextMenuItem, EnvironmentId, ThreadId } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
@@ -31,8 +32,7 @@ import {
 } from "@t3tools/client-runtime/state/thread-sort";
 import type { SidebarThreadSummary, Thread } from "../types";
 import { cn } from "../lib/utils";
-import { sessionNeedsWakeUp } from "@t3tools/shared/sessionWake";
-import { isLatestTurnSettled, shouldShowPlanReadyStatus } from "../session-logic";
+import { isLatestRunSettled } from "../session-logic";
 import { resolveServerBackedAppStageLabel } from "../branding.logic";
 import type { SnoozePreset } from "./Sidebar.snooze";
 
@@ -148,7 +148,7 @@ export function resolveSidebarRowAccessibility(input: {
 export const SIDEBAR_THREAD_PREWARM_LIMIT = 3;
 // Settled-tail paging: recent history is the common lookup; the deep tail
 // stays behind an explicit Show more. Shared by SidebarV2, classic Recent
-// (hide-settled shelf + recency headers).
+// (hide-settled shelf + recency headers), and the board.
 export const SETTLED_TAIL_INITIAL_COUNT = 10;
 export const SETTLED_TAIL_PAGE_COUNT = 25;
 export type SidebarNewThreadEnvMode = "local" | "worktree";
@@ -235,6 +235,19 @@ export const animateSidebarLayoutChanges: AnimateLayoutChanges = (args) =>
 // follows live status, so it is neither a drag source nor a destination.
 
 export type SidebarSection = "pinned" | "active" | "working" | "snoozed" | "settled";
+
+/** Resolve the shelf a visible thread belongs to. Snooze is temporary and
+ * wins until its wake boundary; settlement then wins over a stale pin. */
+export function resolveSidebarThreadSection(input: {
+  readonly snoozed: boolean;
+  readonly settled: boolean;
+  readonly pinned: boolean;
+}): SidebarSection {
+  if (input.snoozed) return "snoozed";
+  if (input.settled) return "settled";
+  if (input.pinned) return "pinned";
+  return "active";
+}
 
 /** Sortable ids: thread rows use their scoped key; structural items use a
     colon-free prefix: scoped thread keys always contain a colon. */
@@ -591,9 +604,7 @@ export async function archiveSelectedThreadEntries<
     const result = await input.archive(entry, () => {
       didArchive = true;
     });
-    if (didArchive || result._tag === "Success") {
-      archivedThreadKeys.push(entry.threadKey);
-    }
+    if (didArchive || result._tag === "Success") archivedThreadKeys.push(entry.threadKey);
     if (result._tag === "Success") continue;
     const failure = result as Extract<TResult, { readonly _tag: "Failure" }>;
     if (didArchive) {
@@ -619,6 +630,36 @@ export function buildMultiSelectThreadContextMenuItems(input: {
     },
     { id: "delete", label: `Delete (${input.count})`, destructive: true },
   ];
+}
+
+export function isSidebarSubagentThread(thread: Pick<SidebarThreadSummary, "lineage">): boolean {
+  return thread.lineage.relationshipToParent === "subagent";
+}
+
+export function filterSidebarV2VisibleThreads<
+  T extends Pick<SidebarThreadSummary, "archivedAt" | "lineage"> & {
+    environmentId: string;
+    projectId: string;
+  },
+>(threads: readonly T[], scopedProjectKeys: ReadonlySet<string> | null): T[] {
+  return threads.filter(
+    (thread) =>
+      thread.archivedAt === null &&
+      !isSidebarSubagentThread(thread) &&
+      (scopedProjectKeys === null ||
+        scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
+  );
+}
+
+export function getSidebarForkParentThreadId(
+  thread: Pick<SidebarThreadSummary, "forkedFrom" | "lineage">,
+) {
+  if (thread.lineage.relationshipToParent !== "fork") {
+    return null;
+  }
+  return thread.forkedFrom?.type === "run"
+    ? thread.forkedFrom.threadId
+    : thread.lineage.parentThreadId;
 }
 
 export function buildBulkTitleRegenerationContextMenuItem(input: {
@@ -674,7 +715,7 @@ export type SidebarV2ThreadContextMenuAction =
   | "delete";
 
 // Single source for the per-thread menu on both v2 surfaces (sidebar rows
-// and classic sidebar rows) so the two can't drift apart item-by-item.
+// and board cards) so the two can't drift apart item-by-item.
 export function buildSidebarV2ThreadContextMenuItems(input: {
   branch: string | null;
   supportsSettlement: boolean;
@@ -759,29 +800,24 @@ export function buildBulkUnpinContextMenuItem(input: {
 export interface ThreadStatusPill {
   label:
     | "Working"
-    | "Monitoring"
     | "Connecting"
     | "Completed"
     | "Pending Approval"
     | "Awaiting Input"
-    | "Wake Required"
+    | "Waiting"
     | "Plan Ready";
   colorClass: string;
   dotClass: string;
   pulse: boolean;
 }
 
-// Rollup order mirrors the per-thread resolver exactly: attention states,
-// then active work, then the actionable plan prompt, then passive
-// monitoring. A Monitoring sibling must never hide a Plan Ready thread.
 const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
-  "Pending Approval": 6,
-  "Awaiting Input": 5,
-  "Wake Required": 4,
-  Working: 4,
-  Connecting: 4,
-  "Plan Ready": 3,
-  Monitoring: 2,
+  "Pending Approval": 5,
+  "Awaiting Input": 4,
+  Working: 3,
+  Connecting: 3,
+  Waiting: 2.5,
+  "Plan Ready": 2,
   Completed: 1,
 };
 
@@ -791,11 +827,11 @@ type ThreadStatusInput = Pick<
   | "hasPendingApprovals"
   | "hasPendingUserInput"
   | "interactionMode"
-  | "latestTurn"
-  | "session"
-  | "backgroundLiveness"
+  | "latestRun"
+  | "runtime"
 > & {
-  lastVisitedAt?: string | undefined;
+  lastVisitedAt?: string | null | undefined;
+  pendingBackgroundTasks?: SidebarThreadSummary["pendingBackgroundTasks"] | undefined;
 };
 
 export function resolveSidebarStageBadgeLabel(input: {
@@ -891,29 +927,36 @@ export function useThreadJumpHintVisibility(): {
 }
 
 /**
- * Whether `completedAt` is a completion the user has not seen yet: a missing
- * last-visited timestamp counts as seen, an unparsable one as unseen.
+ * Effective visited watermark for a thread. Servers with visited tracking
+ * project `lastVisitedAt` on the shell and are authoritative — that value is
+ * shared across every device connected to the environment. Pre-tracking
+ * servers omit the field, and the browser's locally persisted watermark keeps
+ * working as before.
  */
-export function isCompletionUnseen(
-  completedAt: string | null | undefined,
-  lastVisitedAt: string | null | undefined,
-): boolean {
-  if (!completedAt) return false;
-  const completedAtMs = Date.parse(completedAt);
-  if (Number.isNaN(completedAtMs)) return false;
-  if (!lastVisitedAt) return false;
-
-  const lastVisitedAtMs = Date.parse(lastVisitedAt);
-  if (Number.isNaN(lastVisitedAtMs)) return true;
-  return completedAtMs > lastVisitedAtMs;
+export function resolveThreadLastVisitedAt(
+  serverLastVisitedAt: string | null | undefined,
+  localLastVisitedAt: string | undefined,
+): string | undefined {
+  // When the server tracks visits it is authoritative — including explicit
+  // rewinds from mark-unread, which a newer browser-local watermark must not
+  // mask. The local value only carries servers without visited tracking.
+  if (serverLastVisitedAt === undefined) return localLastVisitedAt;
+  return serverLastVisitedAt ?? undefined;
 }
 
 export function hasUnseenCompletion(thread: ThreadStatusInput): boolean {
-  return isCompletionUnseen(thread.latestTurn?.completedAt, thread.lastVisitedAt);
+  if (!thread.latestRun?.completedAt) return false;
+  const completedAt = Date.parse(thread.latestRun.completedAt);
+  if (Number.isNaN(completedAt)) return false;
+  if (!thread.lastVisitedAt) return false;
+
+  const lastVisitedAtMs = Date.parse(thread.lastVisitedAt);
+  if (Number.isNaN(lastVisitedAtMs)) return true;
+  return completedAt > lastVisitedAtMs;
 }
 
 /**
- * Shared settled classification for display surfaces (sidebar v1/v2),
+ * Shared settled classification for display surfaces (sidebar v1/v2, board),
  * so they always agree on what is settled. Threads on servers without the
  * settlement capability (old server, or descriptor not loaded yet) never
  * classify as settled: the user could neither un-settle nor pin them, so
@@ -1268,19 +1311,23 @@ export function isContextMenuPointerDown(input: {
   return input.isMac && input.button === 0 && input.ctrlKey;
 }
 
-// ── Sidebar thread status model ─────────────────────────────────────
-// Five visual states, three colors: color is reserved for "act now"
+// ── Sidebar v2 status model ─────────────────────────────────────────
+// Six visual states, three colors: color is reserved for "act now"
 // (approval), "in motion" (working), and "broken" (failed). Ready is the
 // unlabeled resting state — the agent stopped and is waiting on the user,
-// whether it finished, asked a question, or proposed a plan.
+// whether it finished, asked a question, or proposed a plan. Waiting
+// (runtime status "idle") is the agent stopped with background tasks still
+// open: not the user's turn yet, so it renders grey like working, not as a
+// false Done.
 // Unread completion is tracked separately: it describes whether a ready
 // thread needs attention, not what the thread is currently doing.
 export type SidebarThreadStatus =
   | "approval"
   | "input"
   | "working"
-  | "monitoring"
+  | "waiting"
   | "failed"
+  | "limited"
   | "ready";
 
 export function shouldRecedeSidebarThread(input: {
@@ -1291,7 +1338,7 @@ export function shouldRecedeSidebarThread(input: {
   isSelected: boolean;
 }): boolean {
   if (input.isActive || input.isSelected || input.status === "input") return false;
-  if (input.status === "working" || input.status === "monitoring") return true;
+  if (input.status === "working" || input.status === "waiting") return true;
   if (input.status === "ready" || input.status === "approval") {
     return !input.isUnread && !input.isWoke;
   }
@@ -1300,7 +1347,7 @@ export function shouldRecedeSidebarThread(input: {
 
 type SidebarThreadStatusInput = Pick<
   SidebarThreadSummary,
-  "hasPendingApprovals" | "hasPendingUserInput" | "session" | "backgroundLiveness"
+  "hasPendingApprovals" | "hasPendingUserInput" | "runtime"
 >;
 
 export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): SidebarThreadStatus {
@@ -1310,89 +1357,80 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
   if (thread.hasPendingUserInput) {
     return "input";
   }
-  if (thread.session?.status === "running" || thread.session?.status === "starting") {
+  if (
+    thread.runtime !== null &&
+    ["preparing", "queued", "starting", "running", "waiting"].includes(thread.runtime.status)
+  ) {
     return "working";
   }
-  // A failed session outranks lingering background liveness: the user must
-  // see the failure, not a stale Working (review finding).
-  if (thread.session?.status === "error") {
-    return "failed";
+  if (thread.runtime?.status === "idle") {
+    return "waiting";
   }
-  // Background work outlives the turn: fleets read as working; monitoring
-  // only when watch loops are the sole live work.
-  if (thread.backgroundLiveness === "working") {
-    return "working";
-  }
-  if (thread.backgroundLiveness === "monitoring") {
-    return "monitoring";
+  if (thread.runtime?.status === "failed") {
+    return thread.runtime.lastErrorClass === "usage_limit" ? "limited" : "failed";
   }
   return "ready";
 }
 
+export type SidebarV2TopStatusKind =
+  | "approval"
+  | "done"
+  | "failed"
+  | "limited"
+  | "input"
+  | "waiting"
+  | "woke"
+  | "working";
+
+export function resolveSidebarV2TopStatus(input: {
+  readonly status: SidebarThreadStatus;
+  readonly isUnread: boolean;
+  readonly isWoke: boolean;
+}): SidebarV2TopStatusKind | null {
+  if (input.status === "working") {
+    return "working";
+  }
+  if (input.status === "waiting") {
+    return "waiting";
+  }
+  if (input.status === "approval") {
+    return "approval";
+  }
+  if (input.status === "input") {
+    return "input";
+  }
+  if (input.status === "failed" || input.status === "limited") {
+    return input.status;
+  }
+  if (input.isWoke) {
+    return "woke";
+  }
+  return input.isUnread ? "done" : null;
+}
+
+export function shouldShowSidebarV2Duration(status: SidebarThreadStatus): boolean {
+  return status === "working";
+}
+
 /** Working beta: threads busy with work that does not need the user fold into
-    the Working shelf. Approvals, questions, plan prompts, and failures stay
-    in the inbox. */
+    the Working shelf: a running run, or one stopped with background tasks
+    still open. Approvals, questions, plan prompts, and failures stay in the
+    inbox. */
 export function isSidebarThreadWorking(thread: ThreadStatusInput): boolean {
   const status = resolveSidebarThreadStatus(thread);
-  if (status !== "working" && status !== "monitoring") return false;
-  // A plan prompt outranks lingering background work, as in the status pill.
-  return resolveThreadStatusPill({ thread })?.label !== "Plan Ready";
+  if (status !== "working" && status !== "waiting") return false;
+  // A plan prompt outranks lingering background work: the user has to act on it.
+  return !(
+    thread.interactionMode === "plan" &&
+    thread.hasActionableProposedPlan &&
+    isLatestRunSettled(thread.latestRun, thread.runtime)
+  );
 }
 
 export interface SidebarV2TopStatus {
   label: "Working" | "Monitoring" | "Approval" | "Input" | "Failed" | "Done";
   icon: "working" | "done" | null;
   className: string;
-}
-
-export function resolveSidebarV2TopStatus(input: {
-  status: SidebarThreadStatus;
-  isUnread: boolean;
-}): SidebarV2TopStatus | null {
-  switch (input.status) {
-    case "working":
-      return {
-        label: "Working",
-        icon: "working",
-        className:
-          "animate-sidebar-working-text text-sky-600 motion-reduce:animate-none dark:text-sky-400",
-      };
-    // Steady label, no icon, no duty-cycled shimmer: monitoring is calm
-    // background presence, not active progress (monitoring-pill D6). Matches the
-    // v2 sidebar row and the v1 pill, which uses pulse: false here.
-    case "monitoring":
-      return {
-        label: "Monitoring",
-        icon: null,
-        className: "text-sky-600 dark:text-sky-400",
-      };
-    case "approval":
-      return {
-        label: "Approval",
-        icon: null,
-        className: "text-amber-700 dark:text-amber-300",
-      };
-    case "input":
-      return {
-        label: "Input",
-        icon: null,
-        className: "text-indigo-600 dark:text-indigo-300",
-      };
-    case "failed":
-      return {
-        label: "Failed",
-        icon: null,
-        className: "text-red-700 dark:text-red-300",
-      };
-    case "ready":
-      return input.isUnread
-        ? {
-            label: "Done",
-            icon: "done",
-            className: "text-emerald-700 dark:text-emerald-300",
-          }
-        : null;
-  }
 }
 
 /** First VALID timestamp wins: `a ?? b` falls through on null, but a present-
@@ -1407,18 +1445,6 @@ export function firstValidTimestampMs(
     if (!Number.isNaN(parsed)) return parsed;
   }
   return 0;
-}
-
-/** String twin of firstValidTimestampMs for callers that need the ISO string
-    (display labels, tick anchors) rather than epoch ms. */
-function firstValidTimestamp(
-  ...candidates: ReadonlyArray<string | null | undefined>
-): string | null {
-  for (const candidate of candidates) {
-    if (candidate == null) continue;
-    if (!Number.isNaN(Date.parse(candidate))) return candidate;
-  }
-  return null;
 }
 
 export { sortActiveThreadsByOrderKey as sortThreadsForSidebar } from "@t3tools/client-runtime/state/thread-sort";
@@ -1510,7 +1536,7 @@ export function reduceSidebarProjectScopeMenuState(
 export function sortInboxThreadsByReturn<
   T extends Pick<
     SidebarThreadSummary,
-    "id" | "environmentId" | "createdAt" | "unsettledAt" | "latestTurn"
+    "id" | "environmentId" | "createdAt" | "unsettledAt" | "latestRun"
   >,
 >(threads: readonly T[], observedReturnAt?: (thread: T) => number | undefined): T[] {
   const timestamps = new Map(
@@ -1519,8 +1545,8 @@ export function sortInboxThreadsByReturn<
       Math.max(
         toSortableTimestamp(thread.createdAt) ?? 0,
         toSortableTimestamp(thread.unsettledAt ?? undefined) ?? 0,
-        toSortableTimestamp(thread.latestTurn?.requestedAt) ?? 0,
-        toSortableTimestamp(thread.latestTurn?.completedAt ?? undefined) ?? 0,
+        toSortableTimestamp(thread.latestRun?.requestedAt ?? undefined) ?? 0,
+        toSortableTimestamp(thread.latestRun?.completedAt ?? undefined) ?? 0,
         observedReturnAt?.(thread) ?? 0,
       ),
     ]),
@@ -1580,18 +1606,13 @@ export function groupSettledThreadsByRecencyForSidebarV2<
   };
 }
 
-/** The timestamp a working thread's elapsed label counts from: the running
-    turn's start (request time until adoption), falling back to the session's
-    last transition when the turn projection lags behind. Malformed
-    timestamps fall through to the next candidate, not just missing ones. */
+/** The timestamp a working thread's elapsed label counts from: when its
+    current work started (request time until adoption). Background wakes do
+    not reset it. Malformed timestamps fall through to the next candidate. */
 export function resolveWorkingStartedAt(
-  thread: Pick<SidebarThreadSummary, "latestTurn" | "session">,
+  thread: Pick<SidebarThreadSummary, "latestRun" | "runtime">,
 ): string | null {
-  const turn = thread.latestTurn;
-  if (turn && turn.completedAt === null) {
-    return firstValidTimestamp(turn.startedAt, turn.requestedAt, thread.session?.updatedAt);
-  }
-  return firstValidTimestamp(thread.session?.updatedAt);
+  return resolveThreadWorkingStartedAt(thread);
 }
 
 export function formatWorkingDurationLabel(elapsedMs: number): string {
@@ -1625,63 +1646,11 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  // Plan Ready outranks Working: Grok often stays "running" long after the plan
-  // is captured (agent-entered plan mode). Users need Implement immediately.
-  if (
-    shouldShowPlanReadyStatus({
-      interactionMode: thread.interactionMode,
-      hasPendingUserInput: thread.hasPendingUserInput,
-      hasActionableProposedPlan: thread.hasActionableProposedPlan,
-    })
-  ) {
-    return {
-      label: "Plan Ready",
-      colorClass: "text-violet-600 dark:text-violet-300/90",
-      dotClass: "bg-violet-500 dark:bg-violet-300/90",
-      pulse: false,
-    };
-  }
-
-  if (thread.session?.status === "running") {
-    return {
-      label: "Working",
-      colorClass: "text-sky-600 dark:text-sky-300/80",
-      dotClass: "bg-sky-500 dark:bg-sky-300/80",
-      pulse: true,
-    };
-  }
-
-  if (thread.session?.status === "starting") {
-    return {
-      label: "Connecting",
-      colorClass: "text-sky-600 dark:text-sky-300/80",
-      dotClass: "bg-sky-500 dark:bg-sky-300/80",
-      pulse: true,
-    };
-  }
-
-  if (
-    sessionNeedsWakeUp({
-      sessionStatus: thread.session?.status ?? null,
-      activeTurnId: thread.session?.activeTurnId ?? null,
-      latestTurnState: thread.latestTurn?.state ?? null,
-      latestTurnCompletedAt: thread.latestTurn?.completedAt ?? null,
-    })
-  ) {
-    return {
-      label: "Wake Required",
-      colorClass: "text-orange-600 dark:text-orange-300/90",
-      dotClass: "bg-orange-500 dark:bg-orange-300/90",
-      pulse: false,
-    };
-  }
-
   // An actionable plan prompt outranks lingering background work: it needs
   // the user's decision, while liveness merely reports (review finding).
   const hasPlanReadyPrompt =
     !thread.hasPendingUserInput &&
     thread.interactionMode === "plan" &&
-    isLatestTurnSettled(thread.latestTurn, thread.session) &&
     thread.hasActionableProposedPlan;
   if (hasPlanReadyPrompt) {
     return {
@@ -1692,11 +1661,7 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  // The turn can settle while native background work runs on. Subagent and
-  // workflow fleets read as plain Working; Monitoring is reserved for watch
-  // loops (a parent agent babysitting a PR, tailing checks) with no other
-  // live work. Same recede treatment as Working per inbox-zero.
-  if (thread.backgroundLiveness === "working") {
+  if (thread.runtime?.status === "running" || thread.runtime?.status === "waiting") {
     return {
       label: "Working",
       colorClass: "text-sky-600 dark:text-sky-300/80",
@@ -1705,11 +1670,24 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  if (thread.backgroundLiveness === "monitoring") {
+  if (
+    thread.runtime?.status === "preparing" ||
+    thread.runtime?.status === "starting" ||
+    thread.runtime?.status === "queued"
+  ) {
     return {
-      label: "Monitoring",
+      label: "Connecting",
       colorClass: "text-sky-600 dark:text-sky-300/80",
       dotClass: "bg-sky-500 dark:bg-sky-300/80",
+      pulse: true,
+    };
+  }
+
+  if ((thread.pendingBackgroundTasks?.length ?? 0) > 0) {
+    return {
+      label: "Waiting",
+      colorClass: "text-sidebar-muted-foreground",
+      dotClass: "bg-sidebar-muted-foreground",
       pulse: false,
     };
   }
@@ -1871,6 +1849,21 @@ export function sortLogicalProjectsForSidebar<
     (project) => threadsByProjectKey.get(project.projectKey) ?? [],
     (left, right) =>
       left.title.localeCompare(right.title) || left.projectKey.localeCompare(right.projectKey),
+  );
+}
+
+export function sortSidebarV2ProjectGroups<
+  TProject extends LogicalSidebarProject,
+  TThread extends ScopedSidebarThread & Pick<SidebarThreadSummary, "lineage">,
+>(
+  projects: readonly TProject[],
+  threads: readonly TThread[],
+  sortOrder: SidebarProjectSortOrder,
+): TProject[] {
+  return sortLogicalProjectsForSidebar(
+    projects,
+    filterSidebarV2VisibleThreads(threads, null),
+    sortOrder,
   );
 }
 

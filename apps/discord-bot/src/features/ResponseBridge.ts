@@ -1,9 +1,10 @@
+import type { OrchestrationV2ThreadProjection } from "@t3tools/contracts";
+import { type IntegrationThreadView as OrchestrationThread } from "@t3tools/shared/integrationThreadView";
 // @effect-diagnostics anyUnknownInErrorContext:off missingEffectContext:off globalFetchInEffect:off unknownInEffectCatch:off nodeBuiltinImport:off
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import type {
   ChatImageAttachment,
-  OrchestrationThread,
   ThreadId,
   VcsStatusChangeRequest,
   VcsStatusResult,
@@ -2516,12 +2517,15 @@ export const runBridge = (
         lastFinalizedAssistantId: deliveredMemoryTrim.lastFinalizedAssistantId,
         buffer: DISCORD_DELIVERED_MESSAGE_MEMORY_BUFFER,
       });
-    const persistWarmThreadCache = (thread: OrchestrationThread, sequence: number) =>
+    const persistWarmThreadCache = (
+      projection: OrchestrationV2ThreadProjection,
+      sequence: number,
+    ) =>
       warmCache
         .save({
           threadId: input.t3ThreadId,
           snapshotSequence: sequence,
-          thread: projectThreadForDiscordMemory(thread),
+          projection,
           lastFinalizedAssistantId: deliveredMemoryTrim.lastFinalizedAssistantId,
         })
         .pipe(
@@ -5593,7 +5597,6 @@ export const runBridge = (
         if (observed !== null && Number.isFinite(observed)) {
           yield* persistDeliverySequence(observed);
           // Durable warm base (trimmed) for restart resume without full HTTP tip.
-          yield* persistWarmThreadCache(latest, observed);
         }
         // Mark the generation we *started* with as done; if newer arrived mid-run,
         // the loop continues and re-applies the latest snapshot.
@@ -5857,7 +5860,7 @@ export const runBridge = (
               afterSequence: seed.afterSequence,
               warmSeed: {
                 snapshotSequence: seed.afterSequence,
-                thread: seed.thread,
+                projection: warmForSubscribe!.projection,
               },
             }
           : seed.kind === "http"
@@ -5867,6 +5870,7 @@ export const runBridge = (
               : {}),
         onSequence: persistSequenceMarker,
         projectThread: projectThreadForDiscordMemory,
+        onProjection: persistWarmThreadCache,
       })
       .pipe(
         Effect.catchCause((cause) =>

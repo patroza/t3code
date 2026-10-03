@@ -1,18 +1,16 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { OrchestrationThreadActivity } from "@t3tools/contracts";
+import type { UserInputTranscriptActivity } from "./userInputTranscript.ts";
 import { deriveResolvedUserInputTranscripts } from "./userInputTranscript.ts";
 
-function activity(kind: string, payload: unknown, sequence: number): OrchestrationThreadActivity {
+function activity(kind: string, payload: unknown, sequence: number): UserInputTranscriptActivity {
   return {
     id: `event-${sequence}`,
     kind,
     payload,
     sequence,
-    summary: kind,
-    tone: "info",
     turnId: null,
     createdAt: `2026-07-11T00:00:0${sequence}.000Z`,
-  } as OrchestrationThreadActivity;
+  };
 }
 
 describe("deriveResolvedUserInputTranscripts", () => {

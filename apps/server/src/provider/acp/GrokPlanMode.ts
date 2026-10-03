@@ -1,5 +1,5 @@
 import type { ProviderInteractionMode } from "@t3tools/contracts";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import type * as EffectAcpSchema from "effect-acp/compat";
 
 const GROK_PLAN_MODE_ALIASES = ["plan", "architect"] as const;
 const GROK_DEFAULT_MODE_ALIASES = [

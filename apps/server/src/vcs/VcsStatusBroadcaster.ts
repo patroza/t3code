@@ -1,3 +1,4 @@
+import * as ProjectLifecycleScriptRunner from "../project/ProjectLifecycleScriptRunner.ts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -25,8 +26,7 @@ import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
-import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import * as ProjectLifecycleScriptRunner from "../project/ProjectLifecycleScriptRunner.ts";
+import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 
 const DEFAULT_VCS_STATUS_REFRESH_INTERVAL = Duration.seconds(30);
@@ -164,15 +164,15 @@ export class VcsAutoPullPolicy extends Context.Reference<{
 export const autoPullPolicyLayer = Layer.effect(
   VcsAutoPullPolicy,
   Effect.gen(function* () {
-    const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+    const projects = yield* ProjectStore.ProjectStoreV2;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
     return {
       isEnabled: Effect.fn("VcsAutoPullPolicy.isEnabled")(
         function* (cwd: string) {
-          const project = yield* snapshots.getActiveProjectByWorkspaceRoot(cwd);
+          const project = yield* projects.findActiveByWorkspaceRoot(cwd);
           if (project._tag === "None") return false;
           const settings = yield* serverSettings.getSettings;
-          return resolveProjectSettings(settings, project.value.id).settings.defaultAutoPull;
+          return resolveProjectSettings(settings, project.value.projectId).settings.defaultAutoPull;
         },
         Effect.orElseSucceed(() => false),
       ),
@@ -278,7 +278,7 @@ export const make = Effect.gen(function* () {
     return lock.withPermits(1)(effect);
   };
   const pollersRef = yield* SynchronizedRef.make(new Map<string, ActiveRemotePoller>());
-  /** cwd → list-mode subscriber count (high-cardinality sidebar rows). */
+  /** cwd → list-mode subscriber count (high-cardinality sidebar/board rows). */
   const listInterestRef = yield* SynchronizedRef.make(new Map<string, number>());
   const listRefreshFiberRef = yield* SynchronizedRef.make<Fiber.Fiber<void, never> | null>(null);
   /** Round-robin cursor across list-interested cwds. */

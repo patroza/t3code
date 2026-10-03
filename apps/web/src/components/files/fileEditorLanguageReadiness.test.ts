@@ -40,7 +40,7 @@ const source = "export const View = () => <div>Ready</div>;";
 let pool: WorkerPoolManager;
 let renderer: FileRenderer;
 let terminationPromises: Promise<number>[];
-let animationFrames: Set<ReturnType<typeof setImmediate>>;
+const pendingAnimationFrames = new Set<ReturnType<typeof setImmediate>>();
 
 class WorkerTransport {
   private readonly worker = new NodeWorkerThreads.Worker(
@@ -97,18 +97,17 @@ function firstEnter(highlighter: DiffsHighlighter, file: FileContents, language:
 
 beforeEach(async () => {
   terminationPromises = [];
-  animationFrames = new Set();
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-    const frame = setImmediate(() => {
-      animationFrames.delete(frame);
+    const handle = setImmediate(() => {
+      pendingAnimationFrames.delete(handle);
       callback(0);
     });
-    animationFrames.add(frame);
-    return frame;
+    pendingAnimationFrames.add(handle);
+    return handle;
   });
-  vi.stubGlobal("cancelAnimationFrame", (frame: ReturnType<typeof setImmediate>) => {
-    animationFrames.delete(frame);
-    clearImmediate(frame);
+  vi.stubGlobal("cancelAnimationFrame", (handle: ReturnType<typeof setImmediate>) => {
+    pendingAnimationFrames.delete(handle);
+    clearImmediate(handle);
   });
   vi.stubGlobal("window", { matchMedia: () => ({ matches: true }) });
   await disposeHighlighter();
@@ -128,9 +127,8 @@ afterEach(async () => {
   await disposeHighlighter();
   // Drain the pool's final state broadcast before removing the animation frame stubs.
   await new Promise<void>((resolve) => setImmediate(resolve));
-  // Pool termination can queue a final broadcast after its workers have exited.
-  for (const frame of animationFrames) clearImmediate(frame);
-  animationFrames.clear();
+  for (const handle of pendingAnimationFrames) clearImmediate(handle);
+  pendingAnimationFrames.clear();
   vi.unstubAllGlobals();
 });
 

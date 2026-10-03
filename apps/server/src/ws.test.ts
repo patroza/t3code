@@ -1,62 +1,50 @@
-import { assert, describe, it } from "@effect/vitest";
+import { assert, it } from "@effect/vitest";
+import { ORCHESTRATION_PROTOCOL_VERSION } from "@t3tools/contracts";
+import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 
-import type { OrchestrationEvent } from "@t3tools/contracts";
+import {
+  hasCompatibleOrchestrationProtocol,
+  resolveAvailableEditorsForConfig,
+  shouldUseBoundedThreadSnapshot,
+} from "./ws.ts";
 
-import { isThreadDetailEvent } from "./ws.ts";
-
-const event = (type: string): OrchestrationEvent =>
-  ({
-    type,
-    aggregateKind: "thread",
-    aggregateId: "thread-1",
-    sequence: 1,
-    occurredAt: "2026-07-14T00:00:00.000Z",
-    eventId: "event-1",
-    commandId: null,
-    causationEventId: null,
-    correlationId: null,
-    metadata: {},
-    payload: {},
-  }) as unknown as OrchestrationEvent;
-
-describe("isThreadDetailEvent", () => {
-  // A thread-detail subscriber resumes from `afterSequence` and never re-reads
-  // the projection, so anything omitted here never reaches the client at all.
-  it("passes the events a thread transcript is built from", () => {
-    for (const type of [
-      "thread.message-sent",
-      "thread.messages-resynced",
-      "thread.meta-updated",
-      "thread.proposed-plan-upserted",
-      "thread.activity-appended",
-      "thread.turn-diff-completed",
-      "thread.reverted",
-      "thread.session-set",
-    ]) {
-      assert.isTrue(isThreadDetailEvent(event(type)), `${type} must reach thread subscribers`);
-    }
-  });
-
-  it("passes resync events so a rebuilt transcript reaches connected clients", () => {
-    // Regression: this was omitted, so backfills were written and projected but
-    // silently dropped en route to every client.
-    assert.isTrue(isThreadDetailEvent(event("thread.messages-resynced")));
-  });
-
-  it("passes metadata updates so connected clients observe title changes", () => {
-    // Regression: MCP title updates reached the projection but not the live
-    // Discord bridge subscription, leaving the linked thread name stale.
-    assert.isTrue(isThreadDetailEvent(event("thread.meta-updated")));
-  });
-
-  it("drops events a transcript does not render", () => {
-    for (const type of [
-      "thread.created",
-      "thread.archived",
-      "thread.turn-start-requested",
-      "project.created",
-    ]) {
-      assert.isFalse(isThreadDetailEvent(event(type)), `${type} must not reach thread subscribers`);
-    }
-  });
+it("accepts only the current orchestration protocol before websocket RPC setup", () => {
+  assert.isTrue(
+    hasCompatibleOrchestrationProtocol(
+      new URL(`https://host.test/ws?orchestrationProtocol=${ORCHESTRATION_PROTOCOL_VERSION}`),
+    ),
+  );
+  assert.isFalse(hasCompatibleOrchestrationProtocol(new URL("https://host.test/ws")));
+  assert.isFalse(
+    hasCompatibleOrchestrationProtocol(
+      new URL(`https://host.test/ws?orchestrationProtocol=${ORCHESTRATION_PROTOCOL_VERSION - 1}`),
+    ),
+  );
 });
+
+it("keeps full thread snapshot fallback unless the client opts into bounded history", () => {
+  assert.isFalse(shouldUseBoundedThreadSnapshot({}));
+  assert.isFalse(shouldUseBoundedThreadSnapshot({ acceptBoundedSnapshot: false }));
+  assert.isTrue(shouldUseBoundedThreadSnapshot({ acceptBoundedSnapshot: true }));
+});
+
+it.effect("does not block server config when editor discovery never resolves", () =>
+  Effect.gen(function* () {
+    const discoveryInterrupted = yield* Deferred.make<void>();
+    const responseFiber = yield* resolveAvailableEditorsForConfig(
+      Effect.never.pipe(
+        Effect.onInterrupt(() => Deferred.succeed(discoveryInterrupted, undefined)),
+      ),
+    ).pipe(Effect.forkChild);
+
+    yield* TestClock.adjust(Duration.seconds(5));
+
+    const availableEditors = yield* Fiber.join(responseFiber);
+    yield* Deferred.await(discoveryInterrupted);
+    assert.deepEqual(availableEditors, []);
+  }),
+);

@@ -1,6 +1,8 @@
 import * as NodeBuffer from "node:buffer";
 import * as NodeCrypto from "node:crypto";
 import { describe, expect, it } from "@effect/vitest";
+import * as Schema from "effect/Schema";
+import { IntegrationThreadView } from "@t3tools/shared/integrationThreadView";
 
 import {
   buildGitHubTurnPrompt,
@@ -519,10 +521,13 @@ function threadFixture(input: {
     readonly payload: unknown;
   }>;
 }) {
-  return {
+  return Schema.decodeUnknownSync(IntegrationThreadView)({
     id: "thread-1",
     projectId: "project-1",
     title: "PR #1",
+    pullRequests: [],
+    settledOverride: null,
+    settledAt: null,
     modelSelection: input.modelSelection ?? {
       instanceId: "codex",
       model: "gpt-5.4",
@@ -551,11 +556,17 @@ function threadFixture(input: {
     deletedAt: null,
     messages: input.messages,
     proposedPlans: [],
-    activities: input.activities ?? [],
+    activities: (input.activities ?? []).map((activity, index) => ({
+      id: `test-activity:${index}`,
+      tone: "info",
+      summary: "Activity",
+      createdAt: "2026-07-22T00:00:00.000Z",
+      ...activity,
+    })),
     checkpoints: (input.checkpoints ?? []).map((checkpoint) => ({
       turnId: checkpoint.turnId,
       checkpointTurnCount: 1,
-      checkpointRef: null,
+      checkpointRef: "test-ref",
       status: "ready" as const,
       files: [],
       assistantMessageId: null,
@@ -567,7 +578,13 @@ function threadFixture(input: {
         : input.session === null
           ? null
           : {
-              status: input.session.status,
+              threadId: "thread-1",
+              status:
+                input.session.status === "idle"
+                  ? "ready"
+                  : input.session.status === "interrupted"
+                    ? "stopped"
+                    : input.session.status,
               providerName: "codex",
               providerInstanceId: "codex",
               providerSessionId: null,
@@ -577,7 +594,7 @@ function threadFixture(input: {
               updatedAt: "2026-07-22T00:01:00.000Z",
               runtimeMode: "full-access" as const,
             },
-  } as never;
+  });
 }
 
 describe("GitHub PR response bridge turn resolution", () => {
@@ -859,5 +876,63 @@ describe("GitHub PR response bridge turn resolution", () => {
       body: "Wake-up restatement for the new delivery only.\n\n_`gpt-5.4` · 1m_",
       targetTurnId: "turn-2",
     });
+  });
+});
+
+describe("native queued run delivery ownership", () => {
+  it("waits for the queued delivery even when another run has an answer", () => {
+    const thread = threadFixture({
+      messages: [
+        message({ id: "queued-user", role: "user", text: "Queued request", turnId: "queued-run" }),
+        message({
+          id: "other-answer",
+          role: "assistant",
+          text: "Answer for another delivery",
+          turnId: "other-run",
+        }),
+      ],
+      latestTurn: { turnId: "other-run", state: "completed" },
+    });
+    expect(
+      resolveGitHubBridgeTurnOutcome(
+        {
+          ...thread,
+          runStatuses: [
+            { id: "queued-run", status: "queued", userMessageId: thread.messages[0]!.id },
+          ],
+        },
+        { userMessageId: "queued-user", previousTurnId: null, knownTargetTurnId: null },
+      ),
+    ).toEqual({ _tag: "waiting" });
+  });
+
+  it("rejects a failed target without waiting for or posting a later run", () => {
+    const thread = threadFixture({
+      messages: [
+        message({ id: "failed-user", role: "user", text: "Failed request", turnId: "failed-run" }),
+        message({
+          id: "later-answer",
+          role: "assistant",
+          text: "Unrelated later answer",
+          turnId: "later-run",
+        }),
+      ],
+      latestTurn: { turnId: "later-run", state: "completed" },
+    });
+    const outcome = resolveGitHubBridgeTurnOutcome(
+      {
+        ...thread,
+        runStatuses: [
+          { id: "failed-run", status: "failed", userMessageId: thread.messages[0]!.id },
+        ],
+      },
+      { userMessageId: "failed-user", previousTurnId: null, knownTargetTurnId: null },
+    );
+    expect(outcome).toMatchObject({
+      _tag: "terminal",
+      status: "rejected",
+      targetTurnId: "failed-run",
+    });
+    if (outcome._tag === "terminal") expect(outcome.body).not.toContain("Unrelated later answer");
   });
 });

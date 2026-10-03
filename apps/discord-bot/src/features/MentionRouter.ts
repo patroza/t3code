@@ -1,8 +1,8 @@
+import { type IntegrationThreadView as OrchestrationThread } from "@t3tools/shared/integrationThreadView";
 // @effect-diagnostics anyUnknownInErrorContext:off missingEffectContext:off globalDate:off globalErrorInEffectFailure:off outdatedApi:off globalFetchInEffect:off
 import {
   MessageId,
   type ModelSelection,
-  type OrchestrationThread,
   type ServerProvider,
   type ThreadId,
   type UploadChatAttachment,
@@ -3669,7 +3669,9 @@ const make = (botConfig: DiscordBotConfig) =>
               // HTTP lag / soft-failed fetchThreadDetail so just-queued 📥 items still flush.
               const detail = yield* t3.fetchThreadDetail(link.t3ThreadId);
               const resolved = resolveSteernowMessageIds({
-                serverQueued: detail?.thread.queuedMessages ?? [],
+                serverQueued: (detail?.thread.runStatuses ?? [])
+                  .filter((run) => run.status === "queued")
+                  .map((run) => ({ messageId: MessageId.make(run.userMessageId) })),
                 localPending: queuedPrompts.listForThread(link.t3ThreadId),
                 detailLoaded: detail !== null,
               });

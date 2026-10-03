@@ -11,10 +11,13 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
-import { makeAcpTextGeneration } from "../../textGeneration/CursorTextGeneration.ts";
+import { makeAcpTextGeneration } from "../../textGeneration/AcpTextGeneration.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { applyKimiAcpModelSelection, makeKimiAcpRuntime } from "../acp/KimiAcpSupport.ts";
-import { makeKimiAdapter } from "../Layers/KimiAdapter.ts";
+import {
+  KimiAdapterV2Driver,
+  type KimiAdapterV2DriverEnv,
+} from "../../orchestration-v2/Adapters/KimiAdapterV2.ts";
 import {
   buildInitialKimiProviderSnapshot,
   checkKimiProviderStatus,
@@ -60,6 +63,7 @@ const UPDATE = makePackageManagedProviderMaintenanceResolver({
 });
 
 export type KimiDriverEnv =
+  | KimiAdapterV2DriverEnv
   | BackgroundPolicy.BackgroundPolicy
   | ChildProcessSpawner.ChildProcessSpawner
   | Crypto.Crypto
@@ -122,11 +126,24 @@ export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv> = {
           Effect.provideService(Path.Path, pathService),
         ),
       );
-      const adapter = yield* makeKimiAdapter(effectiveConfig, {
-        environment: processEnv,
-        ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
+      const orchestrationAdapter = yield* KimiAdapterV2Driver.create({
         instanceId,
-      });
+        displayName,
+        accentColor,
+        environment,
+        enabled,
+        config,
+      }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProviderDriverError({
+              driver: DRIVER_KIND,
+              instanceId,
+              detail: "Failed to build Kimi orchestration adapter.",
+              cause,
+            }),
+        ),
+      );
       const textGeneration = yield* makeAcpTextGeneration(
         effectiveConfig,
         {
@@ -184,7 +201,7 @@ export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv> = {
         accentColor,
         enabled,
         snapshot,
-        adapter,
+        orchestrationAdapter,
         textGeneration,
       } satisfies ProviderInstance;
     }),

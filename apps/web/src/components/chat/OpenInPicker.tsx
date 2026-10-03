@@ -338,6 +338,7 @@ export const OpenInPicker = memo(function OpenInPicker({
   openInCwd: string | null;
   presentation?: "toolbar" | "menu";
   compact?: boolean;
+  displayMode?: "toolbar" | "panel";
   enableShortcut?: boolean;
 }) {
   const formId = useId();

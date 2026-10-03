@@ -20,13 +20,13 @@ describe("mobile surface existence (anti stack-drop)", () => {
 
     expect(threadRoute).toContain('testID="thread-conversation-surface"');
     expect(threadRoute).toMatch(
-      /testID="thread-conversation-surface"[\s\S]*?style=\{\{ flex: 1 \}\}/,
+      /testID="thread-conversation-surface"[\s\S]*?style=\{\{\s*flex: 1\s*\}\}/,
     );
     // Inner host stays a real flex container so the composer overlay still
     // anchors to the true bottom. Android uses a canvas class and rounded
     // corners; iOS stays flex-1.
     expect(threadRoute).toMatch(
-      /className=\{Platform\.OS === "android" \? "flex-1 bg-thread-canvas" : "flex-1"\}[\s\S]*?flex: 1[\s\S]*?<ThreadDetailScreen/,
+      /testID="thread-conversation-surface"[\s\S]*?flex: 1[\s\S]*?<ThreadDetailScreen/,
     );
   });
 
@@ -42,46 +42,20 @@ describe("mobile surface existence (anti stack-drop)", () => {
     );
   });
 
-  it("keeps the feed still for sends the server will hold in the steering queue", () => {
-    const composerState = readSrc("state/use-thread-composer-state.ts");
-    const detailScreen = readSrc("features/threads/ThreadDetailScreen.tsx");
-
-    // The prediction is the shared one (same rule as the server decider and
-    // the web client), not a mobile-local re-derivation that can drift.
-    expect(composerState).toContain('from "@t3tools/shared/chatList"');
-    expect(composerState).toContain("sendEntersSteeringQueue({");
-    expect(composerState).toContain("hasPendingTurnStart:");
-
-    // A queue-bound send must move neither the viewport nor the anchor: both
-    // live inside the guard, and the anchor would otherwise stay armed and
-    // fire whenever the queue eventually drains.
-    expect(detailScreen).toMatch(
-      /if \(!sendWillQueue\) \{[\s\S]*?scrollToEnd\(\{ animated: false \}\)[\s\S]*?setAnchorMessageId\(messageId\)[\s\S]*?\}/,
-    );
-  });
-
-  it('"Send now" moves the message optimistically and can put it back', () => {
-    const composerState = readSrc("state/use-thread-composer-state.ts");
-
-    // The feed and the chip list both read the promoted detail, so one piece
-    // of state moves the message and one revert puts it back.
-    expect(composerState).toContain("promoteSteeredQueuedMessages(selectedThreadDetail");
-    expect(composerState).toMatch(/const selectedThreadMessages = steeredDetail\?\.messages/);
-    expect(composerState).toMatch(/const selectedThreadActivities = steeredDetail\?\.activities/);
-    expect(composerState).toContain("buildThreadFeed(");
-    expect(composerState).toMatch(/messages: selectedThreadMessages/);
-    expect(composerState).toMatch(/timelineIds = new Set\(steeredDetail\?\.messages/);
-    // Failure puts it back rather than leaving a bubble the agent never got.
-    expect(composerState).toMatch(
-      /if \(result\._tag === "Success"\) \{[\s\S]*?return;[\s\S]*?\}[\s\S]*?pruneSteeringQueuedMessageIds\([\s\S]*?setPendingConnectionError/,
-    );
+  it("keeps native queued-message editing and steering reachable", () => {
+    const detail = readSrc("features/threads/ThreadDetailScreen.tsx");
+    const controls = readSrc("features/threads/ThreadQueueControl.tsx");
+    expect(detail).toContain("useThreadQueuedCount");
+    expect(detail).toContain("queuedRunEdit");
+    expect(controls).toContain("threadEnvironment.promoteQueuedRun");
+    expect(controls).toContain("threadEnvironment.cancelQueuedRun");
   });
 
   it("keeps list-mode titles under the connection-status title swap", () => {
     // Upstream's connection-aware header hardcodes the brand lockup and the
     // literal "Threads" (#5372). This fork's headers show a list-mode title
-    // (Threads), so every surface that adopts the swap has
-    // to pass its own title through — a plain adoption silently renames Threads
+    // (Threads / Projects), so every surface that adopts the swap has
+    // to pass its own title through — a plain adoption silently renames
     // and Projects to "Threads", which is exactly what slipped through once.
     const sidebar = NodeFS.readFileSync(
       NodePath.join(root, "features/threads/ThreadNavigationSidebar.tsx"),

@@ -1,4 +1,5 @@
-import type { OrchestrationThreadActivity, UserInputQuestion } from "@t3tools/contracts";
+import { type IntegrationActivity as OrchestrationThreadActivity } from "@t3tools/shared/integrationThreadView";
+import type { UserInputQuestion } from "@t3tools/contracts";
 
 export interface PendingApproval {
   readonly kind: "approval";

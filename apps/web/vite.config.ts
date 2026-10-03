@@ -178,7 +178,7 @@ const isolatedUnitTestFiles = [
   // Button leak as ProjectIconPickerDialog.test.tsx.
   "src/components/usage/UsagePage.test.tsx",
   // Partial `../../state/server` mock (`serverEnvironment` only). Isolate so
-  // it cannot steal the module from openPullRequestLink.
+  // it cannot replace the server module used by other test files.
   "src/components/usage/UsagePage.refresh.test.tsx",
   "src/connection/storage.test.ts",
   "src/contextMenuFallback.test.ts",

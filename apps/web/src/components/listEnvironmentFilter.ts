@@ -3,7 +3,7 @@ import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 
 /**
- * Multi-select environment filter shared by both sidebar layouts.
+ * Multi-select environment filter shared by the thread lists.
  * Empty selection means all environments.
  */
 export function matchesEnvironmentFilter(

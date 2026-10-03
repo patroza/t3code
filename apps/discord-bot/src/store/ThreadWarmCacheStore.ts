@@ -1,14 +1,18 @@
+import {
+  integrationThreadView,
+  type IntegrationThreadView as OrchestrationThread,
+} from "@t3tools/shared/integrationThreadView";
 // @effect-diagnostics globalErrorInEffectCatch:off globalErrorInEffectFailure:off preferSchemaOverJson:off tryCatchInEffectGen:off missingEffectError:off nodeBuiltinImport:off globalDate:off globalRandom:off globalDateInEffect:off
 /**
- * Durable trimmed warm base for Discord bridge resume.
+ * Durable native warm base for Discord bridge resume.
  *
- * Mirrors web/desktop EnvironmentCacheStore thread snapshots: keep a reduced
- * OrchestrationThread + snapshotSequence on disk so restart can
+ * Mirrors web/desktop EnvironmentCacheStore thread snapshots: keep the native V2
+ * projection + snapshotSequence on disk so restart can
  * `subscribeThread({ afterSequence })` without re-downloading the full tip over HTTP.
  *
  * Storage: `$dataDir/thread-cache/<threadId>.json` (atomic write), same dataDir as links.json.
  */
-import type { OrchestrationThread, ThreadId } from "@t3tools/contracts";
+import { OrchestrationV2ThreadProjection, type ThreadId } from "@t3tools/contracts";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -18,7 +22,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
-export const THREAD_WARM_CACHE_VERSION = 1 as const;
+export const THREAD_WARM_CACHE_VERSION = 2 as const;
 
 export const WarmThreadCacheDocument = Schema.Struct({
   version: Schema.Literal(THREAD_WARM_CACHE_VERSION),
@@ -31,7 +35,7 @@ export const WarmThreadCacheDocument = Schema.Struct({
    * Full OrchestrationThread JSON. Intentionally not Schema-validated field-by-field
    * (contracts evolve); structural checks happen in parseWarmThreadCacheDocument.
    */
-  thread: Schema.Unknown,
+  projection: Schema.Unknown,
 });
 export type WarmThreadCacheDocument = typeof WarmThreadCacheDocument.Type;
 
@@ -41,7 +45,13 @@ export type WarmThreadCacheEntry = {
   readonly lastFinalizedAssistantId: string | null;
   readonly updatedAt: string;
   readonly thread: OrchestrationThread;
+  readonly projection: OrchestrationV2ThreadProjection;
 };
+
+const encodeProjection = Schema.encodeEffect(Schema.toCodecJson(OrchestrationV2ThreadProjection));
+const decodeProjection = Schema.decodeUnknownSync(
+  Schema.toCodecJson(OrchestrationV2ThreadProjection),
+);
 
 const decodeDocument = Schema.decodeUnknownSync(WarmThreadCacheDocument);
 
@@ -59,10 +69,9 @@ function safeThreadFileName(threadId: string): string {
 export function parseWarmThreadCacheDocument(raw: unknown): WarmThreadCacheEntry | null {
   try {
     const doc = decodeDocument(raw);
-    const thread = doc.thread as OrchestrationThread | null;
-    if (thread === null || typeof thread !== "object") return null;
-    if (typeof (thread as { id?: unknown }).id !== "string") return null;
-    if (!Array.isArray((thread as { messages?: unknown }).messages)) return null;
+    const projection = decodeProjection(doc.projection);
+    if (projection.thread.id !== doc.threadId) return null;
+    const thread = integrationThreadView(projection);
     if (!Number.isFinite(doc.snapshotSequence) || doc.snapshotSequence < 0) return null;
     return {
       threadId: doc.threadId as ThreadId,
@@ -70,6 +79,7 @@ export function parseWarmThreadCacheDocument(raw: unknown): WarmThreadCacheEntry
       lastFinalizedAssistantId: doc.lastFinalizedAssistantId,
       updatedAt: doc.updatedAt,
       thread,
+      projection,
     };
   } catch {
     return null;
@@ -100,7 +110,7 @@ export interface ThreadWarmCacheStoreService {
   readonly save: (input: {
     readonly threadId: ThreadId | string;
     readonly snapshotSequence: number;
-    readonly thread: OrchestrationThread;
+    readonly projection: OrchestrationV2ThreadProjection;
     readonly lastFinalizedAssistantId?: string | null;
   }) => Effect.Effect<void>;
   readonly remove: (threadId: ThreadId | string) => Effect.Effect<void>;
@@ -142,7 +152,7 @@ export const makeThreadWarmCacheStore = (dataDirRaw: string) =>
               snapshotSequence: input.snapshotSequence,
               lastFinalizedAssistantId: input.lastFinalizedAssistantId ?? null,
               updatedAt: new Date().toISOString(),
-              thread: input.thread,
+              projection: yield* encodeProjection(input.projection).pipe(Effect.orDie),
             };
             const body = `${JSON.stringify(doc)}\n`;
             yield* Effect.promise(() => atomicWriteFile(pathFor(String(input.threadId)), body));

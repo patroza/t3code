@@ -1,6 +1,12 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { NonNegativeInt, PositiveInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  NonNegativeInt,
+  PositiveInt,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 import { SourceControlProviderError, SourceControlProviderInfo } from "./sourceControl.ts";
 import { VcsDriverKind } from "./vcs.ts";
 
@@ -112,7 +118,7 @@ export type GitResolvedPullRequest = typeof GitResolvedPullRequest.Type;
  *   for the active thread / git chrome.
  * - `list`: still keeps remote/PR state **up to date** via a **shared budgeted**
  *   refresher for all list-interested worktrees (not one poller fiber per row).
- *   Use for sidebar/list PR badges.
+ *   Use for sidebar/board/list PR badges.
  */
 export const VcsStatusSubscribeMode = Schema.Literals(["full", "list"]);
 export type VcsStatusSubscribeMode = typeof VcsStatusSubscribeMode.Type;
@@ -147,6 +153,7 @@ export const GitRunStackedActionInput = Schema.Struct({
   ),
   /** The thread the action runs beside; a pull request it creates is linked to it. */
   threadId: Schema.optional(ThreadId),
+  projectId: Schema.optional(ProjectId),
 });
 export type GitRunStackedActionInput = typeof GitRunStackedActionInput.Type;
 

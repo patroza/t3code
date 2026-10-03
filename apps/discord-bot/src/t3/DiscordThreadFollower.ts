@@ -1,25 +1,19 @@
+import {
+  integrationThreadView,
+  type IntegrationThreadView,
+} from "@t3tools/shared/integrationThreadView";
 // @effect-diagnostics anyUnknownInErrorContext:off missingEffectError:off
-/**
- * Headless orchestration-thread follower for the Discord bot.
- *
- * Intentionally mirrors packages/client-runtime EnvironmentThreadState apply/reload
- * semantics (sequence cursor, snapshot seed, reload-required → HTTP) without pulling
- * in EnvironmentSupervisor / Atom / React. Core packages stay untouched; Discord only
- * adapts the same reducer + transport patterns clients already use.
- *
- * Source of truth for event application: `applyThreadDetailEvent` from
- * `@t3tools/client-runtime/state/threads` (re-export of threadReducer).
- *
- * Discord-specific projection (ResponseBridge tips / finalize) sits *on top* of this
- * follower — same split as web: runtime holds OrchestrationThread, UI/surface paints it.
+/** Retains native V2 projections and resumes stream cursors across disconnects.
+ * Discord presentation is derived only for delivery; reducers and durable warm
+ * caches always keep the native projection rather than a trimmed renderer view.
  */
 
 import type {
-  OrchestrationThread,
-  OrchestrationThreadDetailSnapshot,
-  OrchestrationThreadStreamItem,
+  OrchestrationV2ThreadDetailSnapshot as OrchestrationThreadDetailSnapshot,
+  OrchestrationV2ThreadProjection as OrchestrationThread,
+  OrchestrationV2ThreadStreamItem as OrchestrationThreadStreamItem,
 } from "@t3tools/contracts";
-import { applyThreadDetailEvent } from "@t3tools/client-runtime/state/threads";
+import { applyOrchestrationV2ProjectionEvent } from "@t3tools/client-runtime/state/orchestration-v2-projection";
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
@@ -101,8 +95,8 @@ export function applyDiscordThreadStreamItem(
   item: OrchestrationThreadStreamItem,
 ): DiscordThreadFollowerApplyResult {
   if (item.kind === "snapshot") {
-    const sequence = item.snapshot.snapshotSequence;
-    const thread = item.snapshot.thread;
+    const sequence = item.snapshotSequence;
+    const thread = item.projection;
     return {
       _tag: "deliver",
       state: { current: thread, lastSequence: sequence },
@@ -115,7 +109,9 @@ export function applyDiscordThreadStreamItem(
     return { _tag: "none", state };
   }
 
-  const sequence = item.event.sequence;
+  const sequence = item.sequence;
+  if (!("event" in item))
+    return { _tag: "reload-required", state, sequence, eventType: item.eventType };
   if (sequence <= state.lastSequence) {
     return { _tag: "none", state };
   }
@@ -130,38 +126,18 @@ export function applyDiscordThreadStreamItem(
     };
   }
 
-  const result = applyThreadDetailEvent(state.current, item.event);
-  if (result.kind === "updated") {
-    return {
-      _tag: "deliver",
-      state: { current: result.thread, lastSequence: sequence },
-      thread: result.thread,
-      sequence,
-    };
-  }
-  if (result.kind === "deleted") {
-    return {
-      _tag: "deleted",
-      state: { current: null, lastSequence: sequence },
-      sequence,
-    };
-  }
-  if (result.kind === "reload-required") {
-    return {
-      _tag: "reload-required",
-      state: { ...state, lastSequence: sequence },
-      sequence,
-      eventType: item.event.type,
-    };
-  }
-  // unchanged — advance sequence so we do not re-apply
+  const projection = applyOrchestrationV2ProjectionEvent(state.current, item.event);
+  if (projection === null || projection.thread.deletedAt !== null)
+    return { _tag: "deleted", state: { current: null, lastSequence: sequence }, sequence };
   return {
-    _tag: "none",
-    state: { ...state, lastSequence: sequence },
+    _tag: "deliver",
+    state: { current: projection, lastSequence: sequence },
+    thread: projection,
+    sequence,
   };
 }
 
-export type FollowOrchestrationThreadInput = {
+export type FollowOrchestrationThreadInput<R = unknown> = {
   readonly threadId: string;
   /**
    * Open a WS subscribeThread stream. May end with failure (transport drop);
@@ -172,7 +148,7 @@ export type FollowOrchestrationThreadInput = {
   }) => Stream.Stream<OrchestrationThreadStreamItem, unknown>;
   /** HTTP full snapshot — used for resume seed + reload-required when warm seed missing. */
   readonly fetchSnapshot: () => Effect.Effect<OrchestrationThreadDetailSnapshot | null>;
-  readonly onThread: (thread: OrchestrationThread) => Effect.Effect<void, unknown, unknown>;
+  readonly onThread: (thread: IntegrationThreadView) => Effect.Effect<void, unknown, R>;
   /**
    * Durable cursor. With no warmSeed: HTTP-seed then WS afterSequence (cold/HTTP path).
    * With warmSeed: ignored for seed base; warmSeed.snapshotSequence drives afterSequence.
@@ -184,14 +160,18 @@ export type FollowOrchestrationThreadInput = {
    */
   readonly warmSeed?: {
     readonly snapshotSequence: number;
-    readonly thread: OrchestrationThread;
+    readonly projection: OrchestrationThread;
   } | null;
   /**
    * Optional projection applied before onThread and retained as the apply base
    * (e.g. drop Discord-finalized messages beyond a small buffer).
    */
-  readonly projectThread?: (thread: OrchestrationThread) => OrchestrationThread;
-  readonly onSequence?: (sequence: number) => Effect.Effect<void, unknown, unknown>;
+  readonly projectThread?: (thread: IntegrationThreadView) => IntegrationThreadView;
+  readonly onProjection?: (
+    projection: OrchestrationThread,
+    sequence: number,
+  ) => Effect.Effect<void, unknown, R>;
+  readonly onSequence?: (sequence: number) => Effect.Effect<void, unknown, R>;
   /**
    * When true (default), reconnect forever with backoff — matches client durable
    * subscription intent. Set false for tests / one-shot.
@@ -203,9 +183,9 @@ export type FollowOrchestrationThreadInput = {
  * Follow a thread the way other T3 clients do: seed snapshot, apply events in order,
  * reload on reload-required, retry the subscription on transport death.
  */
-export function followOrchestrationThread(
-  input: FollowOrchestrationThreadInput,
-): Effect.Effect<void, never, unknown> {
+export function followOrchestrationThread<R>(
+  input: FollowOrchestrationThreadInput<R>,
+): Effect.Effect<void, never, R> {
   const retryForever = input.retryForever !== false;
   const noteSequence = (sequence: number) =>
     input.onSequence === undefined
@@ -229,8 +209,10 @@ export function followOrchestrationThread(
 
   const deliver = (thread: OrchestrationThread, sequence: number) =>
     Effect.gen(function* () {
-      // Project first so the retained apply base matches what Discord keeps in memory.
-      const projected = projectThread !== undefined ? projectThread(thread) : thread;
+      // Trim only the renderer view; the retained reducer base stays native.
+      const view = integrationThreadView(thread);
+      const projected = projectThread !== undefined ? projectThread(view) : view;
+      if (input.onProjection) yield* input.onProjection(thread, sequence);
       yield* noteSequence(sequence);
       yield* input.onThread(projected).pipe(
         Effect.catchCause((cause) =>
@@ -240,7 +222,7 @@ export function followOrchestrationThread(
           }),
         ),
       );
-      return projected;
+      return thread;
     });
 
   // Retained across SocketClose retries so we never re-paint Discord from a stale
@@ -269,7 +251,7 @@ export function followOrchestrationThread(
 
     if (seedPlan === "replay-warm" && warmSeed !== null) {
       // First seed this process only — durable tip + afterSequence, no HTTP.
-      const projected = yield* deliver(warmSeed.thread, warmSeed.snapshotSequence);
+      const projected = yield* deliver(warmSeed.projection, warmSeed.snapshotSequence);
       state = {
         current: projected,
         lastSequence: warmSeed.snapshotSequence,
@@ -291,7 +273,7 @@ export function followOrchestrationThread(
       // HTTP base snapshot, then events after that sequence.
       const seed = yield* input.fetchSnapshot();
       if (seed !== null) {
-        const projected = yield* deliver(seed.thread, seed.snapshotSequence);
+        const projected = yield* deliver(seed.projection, seed.snapshotSequence);
         state = {
           current: projected,
           lastSequence: seed.snapshotSequence,
@@ -326,7 +308,7 @@ export function followOrchestrationThread(
               return;
             }
             const sequence = Math.max(fresh.snapshotSequence, applied.sequence);
-            const projected = yield* deliver(fresh.thread, sequence);
+            const projected = yield* deliver(fresh.projection, sequence);
             state = {
               current: projected,
               lastSequence: sequence,

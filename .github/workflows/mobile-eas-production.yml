@@ -6,26 +6,35 @@ name: Mobile EAS Production
 # fingerprint (platform-specific deps + pnpm version) and errors. On this Linux
 # runner, with corepack pinning pnpm 10.24 in eas.json, local == build.
 #
-# mode=auto uses apps/mobile/scripts/eas-continuous-deploy.sh (full logs). When a
-# native rebuild is needed but blocked (e.g. Expo Free plan monthly iOS quota),
-# it falls back to OTA against the latest finished production binary runtime so
-# pure-JS fixes still reach installed TestFlight clients.
-#
-# Manual store builds: if the latest production build's version differs from
-# app.config.ts, cut a new build and submit it (TestFlight + Play internal
-# track). Bumping `version` starts the next release train — the first build of
-# a version enters external-TestFlight beta review immediately, and later
-# builds of the same version auto-approve until that version is released.
-# After App Store approval, Apple closes the release train and `version` must
-# be bumped before another iOS build can be submitted. Releasing to the App
-# Store stays a manual App Store Connect step.
+# Fork Release dispatches this workflow to reconcile each selected platform:
+#   1. Store builds: if the latest production build's version differs from
+#      app.config.ts, cut a new build and submit it (TestFlight + Play internal
+#      track). Bumping `version` is therefore all it takes to
+#      start the next release train — the first build of a version enters
+#      external-TestFlight beta review immediately, and later builds of the
+#      same version auto-approve until that version is released. After App
+#      Store approval, Apple closes the release train and `version` must be
+#      bumped before another iOS build can be submitted. Releasing to the App
+#      Store stays a manual App Store Connect step.
+#   2. OTA: publish a production-channel update for each platform where at
+#      least one finished production build matches the current native
+#      fingerprint. Older binaries of the same major version with a matching
+#      fingerprint receive it too; the major version is part of the
+#      fingerprint (apps/mobile/fingerprint.config.js), so a new major never
+#      reaches the previous major's store binaries over the air. When native
+#      drift means no binary could install the update,
+#      it is skipped and flagged in the job summary instead of published
+#      into the void.
+# workflow_dispatch remains as a manual override for both modes (e.g. to
+# retry an errored build or force an OTA).
 # Manual v2-preview builds keep the production app identity and disable OTA.
+# They auto-submit to TestFlight and the Google Play closed testing track v2.
 # Select the v2 branch when dispatching a preview build.
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "auto (fingerprint decides), build (+ auto-submit to TestFlight), or update (OTA)"
+        description: "auto (fingerprint decides), build (+ auto-submit to TestFlight / Google Play), or update (OTA)"
         required: true
         type: choice
         default: auto
@@ -34,7 +43,7 @@ on:
           - build
           - update
       profile:
-        description: "Store build profile (v2-preview supports build mode only)"
+        description: "Store build profile (v2-preview: TestFlight + Play closed track v2; build only)"
         required: true
         type: choice
         default: production
@@ -45,7 +54,7 @@ on:
         description: "Target platform"
         required: true
         type: choice
-        default: ios
+        default: all
         options:
           - ios
           - android

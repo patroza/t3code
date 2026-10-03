@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { discordSourceHint, withTurnSourceHint } from "./sourceHint.ts";
+import { discordSourceHint } from "./sourceHint.ts";
 
 describe("discordSourceHint", () => {
   it("builds a discord hint with actor + location for map resolution", () => {
@@ -25,25 +25,5 @@ describe("discordSourceHint", () => {
 
   it("always stamps channel discord even when author is missing", () => {
     expect(discordSourceHint({})).toEqual({ channel: "discord" });
-  });
-});
-
-describe("withTurnSourceHint", () => {
-  it("attaches sourceHint to turn.start without mutating when undefined", () => {
-    const base = {
-      type: "thread.turn.start" as const,
-      commandId: "cmd-1",
-    };
-    expect(withTurnSourceHint(base, undefined)).toBe(base);
-    expect(
-      withTurnSourceHint(base, {
-        channel: "discord",
-        actor: { platformId: "1" },
-      }),
-    ).toEqual({
-      type: "thread.turn.start",
-      commandId: "cmd-1",
-      sourceHint: { channel: "discord", actor: { platformId: "1" } },
-    });
   });
 });

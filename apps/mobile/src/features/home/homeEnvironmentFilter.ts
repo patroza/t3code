@@ -1,7 +1,7 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 
 /**
- * Multi-select environment filter used by the thread list.
+ * Multi-select environment filter used by Recent and Projects.
  * Empty selection means "all environments".
  */
 export function matchesEnvironmentFilter(

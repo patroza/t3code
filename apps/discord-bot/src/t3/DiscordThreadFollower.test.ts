@@ -1,29 +1,14 @@
-import { describe, expect, it } from "vite-plus/test";
-import type { OrchestrationThread, OrchestrationThreadStreamItem } from "@t3tools/contracts";
-
+import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
+import { EventId, type OrchestrationV2ThreadStreamItem } from "@t3tools/contracts";
+import { v2Projection, v2Now, v2ThreadId } from "./nativeThreadTestFixtures.ts";
 import {
   applyDiscordThreadStreamItem,
   initialDiscordThreadFollowerState,
   planThreadFollowerReconnectSeed,
+  followOrchestrationThread,
 } from "./DiscordThreadFollower.ts";
-
-const baseThread = (overrides?: Partial<OrchestrationThread>): OrchestrationThread =>
-  ({
-    id: "thread-1",
-    projectId: "project-1",
-    title: "t",
-    createdAt: "2026-01-01T00:00:00.000Z",
-    updatedAt: "2026-01-01T00:00:00.000Z",
-    messages: [],
-    activities: [],
-    proposedPlans: [],
-    checkpoints: [],
-    latestTurn: null,
-    session: null,
-    worktreePath: null,
-    modelSelection: null,
-    ...overrides,
-  }) as OrchestrationThread;
 
 describe("planThreadFollowerReconnectSeed", () => {
   it("replays warm tip only on the first seed this process", () => {
@@ -47,80 +32,108 @@ describe("planThreadFollowerReconnectSeed", () => {
   });
 });
 
-describe("applyDiscordThreadStreamItem (client-runtime parity)", () => {
-  it("applies embedded snapshots and advances sequence", () => {
-    const thread = baseThread({ title: "from-snapshot" });
-    const item: OrchestrationThreadStreamItem = {
+describe("native Discord thread stream", () => {
+  it("seeds the native projection without an HTTP reload", () => {
+    const result = applyDiscordThreadStreamItem(initialDiscordThreadFollowerState(), {
       kind: "snapshot",
-      snapshot: { snapshotSequence: 10, thread },
-    };
-    const result = applyDiscordThreadStreamItem(initialDiscordThreadFollowerState(), item);
-    expect(result._tag).toBe("deliver");
-    if (result._tag === "deliver") {
-      expect(result.sequence).toBe(10);
-      expect(result.thread.title).toBe("from-snapshot");
-      expect(result.state.lastSequence).toBe(10);
-    }
-  });
-
-  it("drops duplicate / older sequences", () => {
-    const thread = baseThread();
-    const state = initialDiscordThreadFollowerState({
-      current: thread,
-      lastSequence: 5,
+      snapshotSequence: 10,
+      projection: v2Projection,
     });
-    const item: OrchestrationThreadStreamItem = {
+    expect(result._tag).toBe("deliver");
+    expect(result.state.current).toBe(v2Projection);
+    expect(result.state.lastSequence).toBe(10);
+  });
+  it("applies native metadata events and ignores replayed events", () => {
+    const state = { current: v2Projection, lastSequence: 10 };
+    const item: OrchestrationV2ThreadStreamItem = {
       kind: "event",
+      sequence: 11,
       event: {
-        type: "thread.title-updated",
-        sequence: 5,
-        threadId: "thread-1",
-        title: "nope",
-      } as OrchestrationThreadStreamItem extends { kind: "event"; event: infer E } ? E : never,
+        id: EventId.make("event-1"),
+        threadId: v2ThreadId,
+        occurredAt: v2Now,
+        type: "thread.metadata-updated",
+        payload: { ...v2Projection.thread, title: "Updated" },
+      },
     };
     const result = applyDiscordThreadStreamItem(state, item);
-    expect(result._tag).toBe("none");
-    expect(result.state.lastSequence).toBe(5);
+    expect(result._tag).toBe("deliver");
+    expect(result.state.current?.thread.title).toBe("Updated");
+    expect(applyDiscordThreadStreamItem(result.state, item)._tag).toBe("none");
   });
-
-  it("requests reload when an event arrives without a transcript", () => {
-    const item: OrchestrationThreadStreamItem = {
+  it("requests a base snapshot when a native event arrives before a base", () => {
+    const result = applyDiscordThreadStreamItem(initialDiscordThreadFollowerState(), {
       kind: "event",
+      sequence: 1,
       event: {
-        type: "thread.title-updated",
-        sequence: 1,
-        threadId: "thread-1",
-        title: "x",
-      } as never,
-    };
-    const result = applyDiscordThreadStreamItem(initialDiscordThreadFollowerState(), item);
+        id: EventId.make("event-1"),
+        threadId: v2ThreadId,
+        occurredAt: v2Now,
+        type: "thread.metadata-updated",
+        payload: v2Projection.thread,
+      },
+    });
     expect(result._tag).toBe("reload-required");
   });
-
-  it("applies thread.deleted via client-runtime reducer", () => {
-    const state = initialDiscordThreadFollowerState({
-      current: baseThread(),
-      lastSequence: 1,
-    });
-    const item: OrchestrationThreadStreamItem = {
-      kind: "event",
-      event: {
-        type: "thread.deleted",
-        sequence: 2,
-        occurredAt: "2026-04-01T02:00:00.000Z",
-        aggregateKind: "thread",
-        aggregateId: "thread-1",
-        payload: {
-          threadId: "thread-1",
-          deletedAt: "2026-04-01T02:00:00.000Z",
+  it("drops the retained projection when the thread is deleted", () => {
+    const result = applyDiscordThreadStreamItem(
+      { current: v2Projection, lastSequence: 10 },
+      {
+        kind: "event",
+        sequence: 11,
+        event: {
+          id: EventId.make("delete-1"),
+          threadId: v2ThreadId,
+          occurredAt: v2Now,
+          type: "thread.metadata-updated",
+          payload: { ...v2Projection.thread, deletedAt: v2Now },
         },
-      } as never,
-    };
-    const result = applyDiscordThreadStreamItem(state, item);
+      },
+    );
     expect(result._tag).toBe("deleted");
-    if (result._tag === "deleted") {
-      expect(result.state.current).toBeNull();
-      expect(result.state.lastSequence).toBe(2);
-    }
+    expect(result.state.current).toBeNull();
   });
 });
+
+it.effect("resumes native warm state and applies streamed metadata without snapshot fetches", () =>
+  Effect.gen(function* () {
+    const delivered: string[] = [];
+    const retained: string[] = [];
+    let snapshotFetches = 0;
+    yield* followOrchestrationThread({
+      threadId: v2ThreadId,
+      warmSeed: { snapshotSequence: 10, projection: v2Projection },
+      openStream: ({ afterSequence }) => {
+        expect(afterSequence).toBe(10);
+        return Stream.make({
+          kind: "event",
+          sequence: 11,
+          event: {
+            id: EventId.make("stream-metadata"),
+            threadId: v2ThreadId,
+            occurredAt: v2Now,
+            type: "thread.metadata-updated",
+            payload: { ...v2Projection.thread, title: "Live title" },
+          },
+        } as const);
+      },
+      fetchSnapshot: () =>
+        Effect.sync(() => {
+          snapshotFetches += 1;
+          return null;
+        }),
+      onThread: (view) =>
+        Effect.sync(() => {
+          delivered.push(view.title);
+        }),
+      onProjection: (projection) =>
+        Effect.sync(() => {
+          retained.push(projection.thread.title);
+        }),
+      retryForever: false,
+    });
+    expect(snapshotFetches).toBe(0);
+    expect(delivered).toEqual([v2Projection.thread.title, "Live title"]);
+    expect(retained).toEqual(delivered);
+  }),
+);

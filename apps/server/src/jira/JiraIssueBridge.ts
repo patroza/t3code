@@ -5,7 +5,6 @@ import {
   MessageId,
   ProjectId,
   ThreadId,
-  type OrchestrationThread,
   type SourceRef,
   type TurnId,
 } from "@t3tools/contracts";
@@ -31,8 +30,14 @@ import {
 } from "../github/GitHubPrBridge.ts";
 import * as IdentityService from "../identity/IdentityService.ts";
 import { buildIntegrationSourceRef } from "../identity/stampSource.ts";
-import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
-import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ProjectStoreV2 } from "../orchestration-v2/ProjectStore.ts";
+import { OrchestratorV2 } from "../orchestration-v2/Orchestrator.ts";
+import {
+  integrationThreadView,
+  integrationThreadShellView,
+  type IntegrationThreadView as OrchestrationThread,
+  type IntegrationThreadShellView as OrchestrationThreadShell,
+} from "@t3tools/shared/integrationThreadView";
 import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
 import { getAutoBootstrapThreadModelSelection } from "../serverRuntimeStartup.ts";
 import {
@@ -172,8 +177,33 @@ const make = Effect.gen(function* () {
   const deliveries = yield* JiraDeliveryStore;
   const workItems = yield* ThreadWorkItemStore;
   const jira = yield* JiraAppClient;
-  const engine = yield* OrchestrationEngineService;
-  const projection = yield* ProjectionSnapshotQuery;
+  const engine = yield* OrchestratorV2;
+  const engineProjection = yield* OrchestratorV2;
+  const projectStore = yield* ProjectStoreV2;
+  const projection = {
+    getShellSnapshot: () =>
+      Effect.all([engineProjection.getShellSnapshot(), projectStore.listShells()], {
+        concurrency: "unbounded",
+      }).pipe(
+        Effect.map(([shell, projects]) => ({
+          ...shell,
+          projects,
+          threads: shell.threads.map(integrationThreadShellView),
+        })),
+      ),
+    getThreadShellById: (id: ThreadId) =>
+      engineProjection
+        .getThreadShell(id)
+        .pipe(
+          Effect.map((shell) =>
+            shell === null ? Option.none() : Option.some(integrationThreadShellView(shell)),
+          ),
+        ),
+    getThreadDetailById: (id: ThreadId) =>
+      engineProjection
+        .getThreadProjection(id)
+        .pipe(Effect.map((value) => Option.some(integrationThreadView(value)))),
+  };
   const serverEnvironment = yield* ServerEnvironment;
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
   const projectSetupScriptRunner = yield* ProjectSetupScriptRunner;
@@ -449,6 +479,8 @@ const make = Effect.gen(function* () {
 
         yield* engine.dispatch({
           type: "thread.create",
+          createdBy: "user",
+          creationSource: "server",
           commandId: CommandId.make(yield* crypto.randomUUIDv4),
           threadId,
           projectId: ProjectId.make(project.id),
@@ -458,7 +490,6 @@ const make = Effect.gen(function* () {
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           branch: prepared.branch,
           worktreePath: prepared.worktreePath,
-          createdAt,
         });
 
         yield* projectSetupScriptRunner
@@ -805,21 +836,18 @@ const make = Effect.gen(function* () {
     const source = jiraSourceRef(input.invocation, mapPeople);
     const dispatched = yield* engine
       .dispatch({
-        type: "thread.turn.start",
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "server",
+        dispatchMode: { type: "queue_after_active" },
         commandId,
         threadId: thread.id,
-        message: {
-          messageId,
-          role: "user",
-          text: buildJiraTurnPrompt(input.invocation),
-          attachments: [],
-        },
+        messageId,
+        text: buildJiraTurnPrompt(input.invocation),
+        attachments: [],
         modelSelection: thread.modelSelection,
         titleSeed: input.invocation.prompt.slice(0, 80) || "Jira comment",
-        runtimeMode: thread.runtimeMode,
-        interactionMode: thread.interactionMode,
         source,
-        createdAt: DateTime.formatIso(yield* DateTime.now),
       })
       .pipe(
         Effect.as(true),

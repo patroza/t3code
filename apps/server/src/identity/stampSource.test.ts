@@ -84,18 +84,15 @@ describe("buildIntegrationSourceRef", () => {
 
 describe("stampOrchestrationCommandSource", () => {
   const baseCommand = {
-    type: "thread.turn.start" as const,
+    type: "message.dispatch" as const,
     commandId: CommandId.make("00000000-0000-4000-8000-0000000000bb"),
     threadId: ThreadId.make("00000000-0000-4000-8000-0000000000cc"),
-    message: {
-      messageId: MessageId.make("00000000-0000-4000-8000-0000000000dd"),
-      role: "user" as const,
-      text: "hello",
-      attachments: [],
-    },
-    runtimeMode: "full-access" as const,
-    interactionMode: "default" as const,
-    createdAt: "2026-01-01T00:00:00.000Z",
+    messageId: MessageId.make("message-1"),
+    text: "hello",
+    attachments: [],
+    createdBy: "user" as const,
+    creationSource: "web" as const,
+    dispatchMode: { type: "start_immediately" as const },
   };
 
   it("stamps from claim for interactive clients", () => {
@@ -104,8 +101,8 @@ describe("stampOrchestrationCommandSource", () => {
       clientDeviceType: "desktop",
       command: baseCommand,
     });
-    expect(stamped.type).toBe("thread.turn.start");
-    if (stamped.type === "thread.turn.start") {
+    expect(stamped.type).toBe("message.dispatch");
+    if (stamped.type === "message.dispatch") {
       expect(stamped.source).toEqual({
         channel: "desktop",
         personId: "patroza",
@@ -134,7 +131,7 @@ describe("stampOrchestrationCommandSource", () => {
         },
       },
     });
-    if (stamped.type === "thread.turn.start") {
+    if (stamped.type === "message.dispatch") {
       expect(stamped.source?.personId).toBe("patroza");
       expect(stamped.source?.channel).toBe("discord");
       expect(stamped.sourceHint).toBeUndefined();

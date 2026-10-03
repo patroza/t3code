@@ -12,55 +12,44 @@ import {
   parseWarmThreadCacheDocument,
 } from "./ThreadWarmCacheStore.ts";
 
-const sampleThread = {
-  id: "thread-1",
-  projectId: "project-1",
-  title: "Warm cache",
-  modelSelection: { instanceId: "grok", model: "grok-4.5" },
-  runtimeMode: "full-access",
-  interactionMode: "default",
-  branch: null,
-  worktreePath: null,
-  latestTurn: null,
-  createdAt: "2026-07-21T00:00:00.000Z",
-  updatedAt: "2026-07-21T00:00:00.000Z",
-  archivedAt: null,
-  deletedAt: null,
-  messages: [
-    {
-      id: "a1",
-      role: "assistant",
-      text: "hello",
-      turnId: null,
-      streaming: false,
-      createdAt: "2026-07-21T00:00:00.000Z",
-      updatedAt: "2026-07-21T00:00:00.000Z",
-    },
-  ],
-  proposedPlans: [],
-  activities: [],
-  checkpoints: [],
-  session: null,
+import { OrchestrationV2ThreadProjection } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
+import { v2Projection } from "../t3/nativeThreadTestFixtures.ts";
+const sampleProjection = {
+  ...v2Projection,
+  thread: { ...v2Projection.thread, id: "thread-1" as never },
 };
 
 describe("parseWarmThreadCacheDocument / canResumeFromWarmThreadCache", () => {
   vitestIt("parses a valid document", () => {
     const entry = parseWarmThreadCacheDocument({
-      version: 1,
+      version: 2,
       threadId: "thread-1",
       snapshotSequence: 42,
       lastFinalizedAssistantId: "a1",
       updatedAt: "2026-07-21T00:00:00.000Z",
-      thread: sampleThread,
+      projection: Schema.encodeSync(Schema.toCodecJson(OrchestrationV2ThreadProjection))(
+        sampleProjection,
+      ),
     });
     expect(entry?.snapshotSequence).toBe(42);
-    expect(entry?.thread.messages).toHaveLength(1);
+    expect(entry?.projection.thread.title).toBe(sampleProjection.thread.title);
     expect(canResumeFromWarmThreadCache(entry)).toBe(true);
   });
 
   vitestIt("rejects corrupt payloads", () => {
     expect(parseWarmThreadCacheDocument(null)).toBeNull();
-    expect(parseWarmThreadCacheDocument({ version: 1, threadId: "x" })).toBeNull();
+    expect(
+      parseWarmThreadCacheDocument({
+        version: 1,
+        threadId: "thread-1",
+        snapshotSequence: 42,
+        lastFinalizedAssistantId: null,
+        updatedAt: "2026-07-21T00:00:00.000Z",
+        thread: { id: "thread-1", messages: [] },
+      }),
+    ).toBeNull();
+    expect(parseWarmThreadCacheDocument({ version: 2, threadId: "x" })).toBeNull();
     expect(canResumeFromWarmThreadCache(null)).toBe(false);
   });
 });
@@ -76,13 +65,13 @@ describe("makeThreadWarmCacheStore", () => {
           yield* store.save({
             threadId: "thread-1",
             snapshotSequence: 99,
-            thread: sampleThread as never,
+            projection: sampleProjection,
             lastFinalizedAssistantId: "a1",
           });
           const loaded = yield* store.load("thread-1");
           expect(loaded?.snapshotSequence).toBe(99);
           expect(loaded?.lastFinalizedAssistantId).toBe("a1");
-          expect(loaded?.thread.messages[0]?.id).toBe("a1");
+          expect(loaded?.projection.thread.title).toBe(sampleProjection.thread.title);
           yield* store.remove("thread-1");
           expect(yield* store.load("thread-1")).toBeNull();
         }) as Effect.Effect<void, never, never>,
