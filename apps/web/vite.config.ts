@@ -72,6 +72,8 @@ const buildSourcemap: boolean | "hidden" =
       : true;
 
 const isolatedUnitTestFiles = [
+  // These exercise the real live-refresh hook; sibling presentation tests mock it.
+  "src/hooks/usePullRequestChecksRefresh.test.ts",
   "src/authBootstrap.test.ts",
   // Mocks `~/state/session`; same isolate:false hazard as the favicon test —
   // it failed in one full run and passed in the next, purely on file ordering.
