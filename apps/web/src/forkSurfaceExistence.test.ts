@@ -18,6 +18,18 @@ function readSrc(relativePath: string): string {
 }
 
 describe("fork surface existence (anti stack-drop)", () => {
+  it("removes the board route and navigation while retaining thread filters", () => {
+    expect(NodeFS.existsSync(NodePath.join(root, "routes/_chat.board.tsx"))).toBe(false);
+    expect(NodeFS.existsSync(NodePath.join(root, "components/board"))).toBe(false);
+    expect(readSrc("routeTree.gen.ts")).not.toContain("_chat/board");
+    expect(readSrc("components/CommandPalette.tsx")).not.toContain('"board.open"');
+    for (const file of ["components/Sidebar.tsx", "components/LegacySidebar.tsx"]) {
+      const sidebar = readSrc(file);
+      expect(sidebar).not.toContain('to="/board"');
+      expect(sidebar).toContain("ThreadIdentityMark");
+      expect(sidebar).toContain("ownership");
+    }
+  });
   it("classic sidebar keeps the collapsible Settled shelf chrome", () => {
     const sidebar = readSrc("components/LegacySidebar.tsx");
     expect(sidebar).toContain('data-testid="sidebar-v1-settled-shelf-toggle"');
@@ -40,8 +52,9 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(sidebarV2).toContain("Settled shelf");
     expect(sidebarV2).toMatch(/New thread|new thread/i);
     expect(sidebarV2).toContain("sidebar-pinned-divider");
-    expect(sidebarV2).toContain("sidebar-snoozed-shelf-toggle");
-    expect(sidebarV2).toContain("sidebar-settled-shelf-toggle");
+    expect(sidebarV2).toContain("sidebar-${shelf}-shelf-toggle");
+    expect(sidebarV2).toContain('marker="snoozed-header"');
+    expect(sidebarV2).toContain('marker="settled-header"');
     expect(sidebarV2).toContain("attemptPin");
     expect(sidebarV2).toContain("attemptUnpin");
   });
@@ -250,9 +263,6 @@ describe("fork surface existence (anti stack-drop)", () => {
     const chat = readSrc("components/ChatView.tsx");
     expect(chat).toContain("requestIdentityClaimGate");
     expect(sidebarV2).toContain("ThreadIdentityMark");
-    // The board is a thread surface too: a card has to say where a thread came
-    // from, the same as a sidebar row and the mobile board card.
-    expect(readSrc("components/board/BoardCard.tsx")).toContain("ThreadIdentityMark");
     expect(sidebarV2).toContain("sidebar-ownership-filter-");
     expect(sidebarV1).toContain("ThreadIdentityMark");
     expect(sidebarV1).not.toContain("ThreadIdentityLeading");
@@ -260,13 +270,9 @@ describe("fork surface existence (anti stack-drop)", () => {
   });
 
   it("every thread surface filters through the shared ownership predicate", () => {
-    // The Board shipped reading the same thread atom as the sidebar but never
-    // applying the ownership filter, so a sidebar filtered to Mine sat beside
-    // a board showing everyone's threads. Both must go through the one
-    // predicate rather than each re-deriving the call.
-    const board = readSrc("components/board/BoardView.tsx");
+    // Thread lists must apply the shared ownership preference consistently.
     const sidebar = readSrc("components/Sidebar.tsx");
-    for (const source of [board, sidebar]) {
+    for (const source of [sidebar]) {
       expect(source).toContain("useOwnershipFilter()");
       expect(source).toContain("buildOwnershipPredicate({");
       expect(source).toContain("ownershipPredicate(thread)");

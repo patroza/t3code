@@ -50,13 +50,7 @@ export function HomeHeader(props: HomeHeaderProps) {
   const { width: headerWidth } = useWindowDimensions();
   const theme = useUniwindTheme();
   const iconColor = theme["--color-icon"];
-  const sheetBackground = theme["--color-sheet"];
   const alternateModes = otherHomeListModes(props.listMode);
-  const isBoardMode = props.listMode === "board";
-  // Board columns are nested horizontal/vertical lists — not one UIKit scroll
-  // view that glass can sample / auto-inset. Use a solid bar so cards never
-  // paint under the status/nav chrome (same as the dedicated Board route).
-  const useSolidBoardHeader = isBoardMode && NATIVE_LIQUID_GLASS_SUPPORTED;
   const hasCustomListOptions =
     props.selectedEnvironmentIds.length > 0 ||
     props.ownershipFilter !== DEFAULT_OWNERSHIP_FILTER ||
@@ -83,7 +77,6 @@ export function HomeHeader(props: HomeHeaderProps) {
     onOwnershipFilterChange: props.onOwnershipFilterChange,
     onOwnershipRelationChange: props.onOwnershipRelationChange,
     listOrganization: false,
-    showProjectFilter: props.listMode !== "board",
     threadGrouping: props.listMode === "threads" ? props.threadGrouping : undefined,
     onThreadGroupingChange: props.listMode === "threads" ? props.onThreadGroupingChange : undefined,
     ...(props.listMode === "threads"
@@ -99,13 +92,7 @@ export function HomeHeader(props: HomeHeaderProps) {
   return (
     <>
       <NativeStackScreenOptions
-        optionsVersion={[
-          filterMenu.items,
-          props.listMode,
-          headerTitle,
-          useSolidBoardHeader,
-          headerWidth,
-        ]}
+        optionsVersion={[filterMenu.items, props.listMode, headerTitle, headerWidth]}
         options={{
           // The iOS Home header owns the native title, so the connection
           // status has to swap in here. The list-mode title is passed
@@ -122,23 +109,12 @@ export function HomeHeader(props: HomeHeaderProps) {
             ),
           }),
           headerTintColor: iconColor,
-          // Explicitly toggle glass ↔ solid when switching modes so board
-          // underlap does not stick after leaving Board, and vice versa.
           ...(NATIVE_LIQUID_GLASS_SUPPORTED
-            ? useSolidBoardHeader
-              ? {
-                  headerTransparent: false,
-                  // native-stack types backgroundColor as string; ColorValue is fine at runtime.
-                  headerStyle: {
-                    backgroundColor: sheetBackground as unknown as string,
-                  },
-                  scrollEdgeEffects: undefined,
-                }
-              : {
-                  headerTransparent: true,
-                  headerStyle: { backgroundColor: "transparent" },
-                  scrollEdgeEffects: HEADER_SCROLL_EDGE_EFFECTS,
-                }
+            ? {
+                headerTransparent: true,
+                headerStyle: { backgroundColor: "transparent" },
+                scrollEdgeEffects: HEADER_SCROLL_EDGE_EFFECTS,
+              }
             : {}),
           unstable_headerRightItems: () => [
             ...alternateModes.map((mode) =>
@@ -160,51 +136,47 @@ export function HomeHeader(props: HomeHeaderProps) {
               type: "button",
             }),
           ],
-          // Board has no thread search. Mail-search toolbar is iOS 26+ only;
+          // Mail-search toolbar is iOS 26+ only;
           // pre-Liquid-Glass falls back to the standard nav search field.
           // Keys are omitted (not `undefined`) on the NativeHeaderToolbar
           // fallback so a reapply cannot clobber options that toolbar owns.
           ...(NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED
-            ? isBoardMode
-              ? { unstable_headerToolbarItems: undefined }
-              : {
-                  unstable_headerToolbarItems: () => [
-                    createNativeMailSearchToolbarItem({
-                      composeButtonId: "home-new-task",
-                      composeSystemImageName: "square.and.pencil",
-                      filterMenu,
-                      filterButtonId: "home-filter",
-                      filterSystemImageName: hasCustomListOptions
-                        ? "line.3.horizontal.decrease.circle.fill"
-                        : "line.3.horizontal.decrease",
-                      onComposePress: props.onStartNewTask,
-                      onSearchTextChange: props.onSearchQueryChange,
-                      placeholder: "Search",
-                      searchTextChangeId: "home-search-text",
-                      showsSearchDismissButton: true,
-                    }),
-                  ],
-                }
-            : isBoardMode
-              ? {}
-              : {
-                  headerSearchBarOptions: {
-                    ref: searchBarRef,
-                    autoCapitalize: "none" as const,
-                    hideNavigationBar: false,
+            ? {
+                unstable_headerToolbarItems: () => [
+                  createNativeMailSearchToolbarItem({
+                    composeButtonId: "home-new-task",
+                    composeSystemImageName: "square.and.pencil",
+                    filterMenu,
+                    filterButtonId: "home-filter",
+                    filterSystemImageName: hasCustomListOptions
+                      ? "line.3.horizontal.decrease.circle.fill"
+                      : "line.3.horizontal.decrease",
+                    onComposePress: props.onStartNewTask,
+                    onSearchTextChange: props.onSearchQueryChange,
                     placeholder: "Search",
-                    onCancelButtonPress: () => {
-                      props.onSearchQueryChange("");
-                    },
-                    onChangeText: (event: { nativeEvent: { text: string } }) => {
-                      props.onSearchQueryChange(event.nativeEvent.text);
-                    },
+                    searchTextChangeId: "home-search-text",
+                    showsSearchDismissButton: true,
+                  }),
+                ],
+              }
+            : {
+                headerSearchBarOptions: {
+                  ref: searchBarRef,
+                  autoCapitalize: "none" as const,
+                  hideNavigationBar: false,
+                  placeholder: "Search",
+                  onCancelButtonPress: () => {
+                    props.onSearchQueryChange("");
                   },
-                }),
+                  onChangeText: (event: { nativeEvent: { text: string } }) => {
+                    props.onSearchQueryChange(event.nativeEvent.text);
+                  },
+                },
+              }),
         }}
       />
 
-      {NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED || isBoardMode ? null : (
+      {NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED ? null : (
         <NativeHeaderToolbar placement="bottom">
           <NativeHeaderToolbar.Menu
             accessibilityLabel="Filter threads"

@@ -43,7 +43,6 @@ import { usePendingThreadOrder } from "../../state/thread-order";
 import { environmentServerConfigsAtom } from "../../state/server";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { useQueuedThreadKeys } from "../../state/use-thread-outbox";
-import { BoardScreen } from "../board/BoardScreen";
 import {
   ThreadListV2PendingRow,
   ThreadListV2Row,
@@ -925,13 +924,6 @@ export function HomeScreen(props: HomeScreenProps) {
         ? (props.savedConnectionsById[props.selectedEnvironmentIds[0]!]?.environmentLabel ??
           "this environment")
         : `${props.selectedEnvironmentIds.length} environments`;
-  const environmentLabelById = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const connection of Object.values(props.savedConnectionsById)) {
-      map.set(connection.environmentId, connection.environmentLabel);
-    }
-    return map;
-  }, [props.savedConnectionsById]);
   // Connection state surfaces in the header title slot
   // (WorkspaceConnectionTitle) — nothing renders inside the list, so
   // reconnects never shift the rows.
@@ -940,9 +932,7 @@ export function HomeScreen(props: HomeScreenProps) {
     projectCount: props.projects.length,
   });
 
-  // Board owns its empty chrome; connection-level empty still applies below
-  // when the workspace has no threads at all.
-  if (!hasAnyThreads && props.listMode !== "board") {
+  if (!hasAnyThreads) {
     return (
       <View className="flex-1 bg-screen android:bg-header">
         <View
@@ -1020,29 +1010,6 @@ export function HomeScreen(props: HomeScreenProps) {
         variant={Platform.OS === "android" ? "plain" : undefined}
       />
     );
-
-  if (props.listMode === "board") {
-    // Solid nav header is forced for Board mode (HomeHeader): horizontal
-    // columns are not UIKit-auto-inset scroll views, so glass underlapped cards.
-    return (
-      <View className="flex-1 bg-screen">
-        <BoardScreen
-          projects={props.projects}
-          threads={props.threads}
-          projectGroupingMode={props.projectGroupingMode}
-          environmentLabelById={environmentLabelById}
-          selectedEnvironmentIds={props.selectedEnvironmentIds}
-          onClearEnvironments={props.onClearEnvironments}
-          onToggleEnvironment={props.onToggleEnvironment}
-          onSelectThread={props.onSelectThread}
-          onArchiveThread={props.onArchiveThread}
-          onDeleteThread={props.onDeleteThread}
-          onSettleThread={props.onSettleThread}
-          onUnsettleThread={props.onUnsettleThread}
-        />
-      </View>
-    );
-  }
 
   if (Platform.OS === "android" && threadListV2Items.length === 0) {
     return (

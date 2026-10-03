@@ -174,7 +174,7 @@ export function getConnectionAwareBrandHeaderOptions(opts: {
   readonly fallbackTitleStyle?: NativeStackNavigationOptions["headerTitleStyle"];
   /**
    * Screens whose native header shows something other than the brand lockup
-   * (this fork's list-mode titles: Threads / Projects / Board) pass their own
+   * (this fork's list-mode titles: Threads) pass their own
    * title here. Without it the returned options overwrite the caller's
    * `title`/`headerTitle` with the brand, silently dropping the mode name.
    */

@@ -3,7 +3,7 @@ import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 
 /**
- * Multi-select environment filter shared by Threads and Board.
+ * Multi-select environment filter shared by both sidebar layouts.
  * Empty selection means all environments.
  */
 export function matchesEnvironmentFilter(
@@ -48,18 +48,17 @@ export function resolveSelectedEnvironmentIds(
   return next.length === selectedEnvironmentIds.length ? selectedEnvironmentIds : next;
 }
 
-/** Main list surface: combined thread list vs Board. */
-export type WebListMode = "threads" | "board";
+/** Main list surface: combined thread list. */
+export type WebListMode = "threads";
 
-export const WEB_LIST_MODES = ["threads", "board"] as const satisfies readonly WebListMode[];
+export const WEB_LIST_MODES = ["threads"] as const satisfies readonly WebListMode[];
 
 export const WEB_LIST_MODE_LABELS: Record<WebListMode, string> = {
   threads: "Threads",
-  board: "Board",
 };
 
 export function isWebListMode(value: unknown): value is WebListMode {
-  return value === "threads" || value === "board";
+  return value === "threads";
 }
 
 /**
@@ -98,7 +97,7 @@ export const LIST_ENVIRONMENT_FILTER_STORAGE_KEY = "t3code:list:environment-filt
 /** Persists surface mode. Legacy values `recent` / `projects` decode as `threads`. */
 export const LIST_MODE_STORAGE_KEY = "t3code:list:mode:v1";
 export const LIST_THREAD_GROUPING_STORAGE_KEY = "t3code:list:thread-grouping:v1";
-/** Sidebar Threads project scope; Board keeps its own storage key. */
+/** Sidebar Threads project scope. */
 export const LIST_PROJECT_FILTER_STORAGE_KEY = "t3code:list:project-filter:v1";
 export const LIST_PROJECT_FILTER_ALL = "all";
 /**
@@ -165,9 +164,9 @@ export const ListHideSettledSchema = Schema.Boolean;
 const WebListModeStored = Schema.Literals(["threads", "board", "recent", "projects"]);
 export const WebListModeSchema = WebListModeStored.pipe(
   Schema.decodeTo(
-    Schema.Literals(["threads", "board"]),
-    SchemaTransformation.transform({
-      decode: (value) => (value === "board" ? ("board" as const) : ("threads" as const)),
+    Schema.Literals(["threads"]),
+    SchemaTransformation.transform<WebListMode, typeof WebListModeStored.Type>({
+      decode: () => "threads",
       encode: (value) => value,
     }),
   ),

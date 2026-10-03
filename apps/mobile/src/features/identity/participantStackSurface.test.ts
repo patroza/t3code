@@ -10,7 +10,6 @@ describe("mobile participation indicator surface", () => {
   it("keeps the claimed-participant marker wired across mobile thread lists", () => {
     const stack = readSource("./ParticipantStack.tsx");
     const listV2 = readSource("../threads/thread-list-v2-items.tsx");
-    const board = readSource("../board/BoardScreen.tsx");
 
     expect(stack).toContain('testID={youParticipated ? "you-participated-indicator"');
     expect(stack).toContain("+{extras.length}");
@@ -27,10 +26,7 @@ describe("mobile participation indicator surface", () => {
       "<SourceChannelGlyph channel={props.channel ?? lead.firstChannel} overlay",
     );
     expect(listV2).toContain("environmentId={thread.environmentId}");
-    expect(board).toContain("environmentId={props.thread.environmentId}");
     expect(listV2).toContain("ThreadIdentityMark");
-    expect(board).toContain("ThreadIdentityMark");
     expect(listV2).not.toContain("ThreadIdentityLeading");
-    expect(board).not.toContain("ThreadIdentityLeading");
   });
 });

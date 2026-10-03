@@ -50,7 +50,6 @@ import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import { useThreadJumpShortcuts } from "../keyboard/threadKeyboardShortcuts";
-import { BoardScreen } from "../board/BoardScreen";
 import { DEFAULT_OWNERSHIP_FILTER, useHomeListOptions } from "../home/home-list-options";
 import { buildHomeListFilterMenu } from "../home/home-list-filter-menu";
 import { matchesEnvironmentFilter } from "../home/homeEnvironmentFilter";
@@ -337,13 +336,6 @@ function ThreadNavigationSidebarPane(
       threads,
     ],
   );
-  const environmentLabelById = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const connection of Object.values(savedConnectionsById)) {
-      map.set(connection.environmentId, connection.environmentLabel);
-    }
-    return map;
-  }, [savedConnectionsById]);
   const projectByKey = useMemo(() => {
     const map = new Map<string, EnvironmentProject>();
     for (const project of projects) {
@@ -661,7 +653,7 @@ function ThreadNavigationSidebarPane(
           })),
         ],
       },
-      ...(projectFilterOptions.length === 0 || options.listMode === "board"
+      ...(projectFilterOptions.length === 0
         ? []
         : ([
             {
@@ -716,7 +708,7 @@ function ThreadNavigationSidebarPane(
       const event = nativeEvent.event;
       if (event.startsWith("list-mode:")) {
         const mode = event.slice("list-mode:".length);
-        if (mode === "threads" || mode === "board") {
+        if (mode === "threads") {
           setListMode(mode);
         }
         return;
@@ -1073,7 +1065,6 @@ function ThreadNavigationSidebarPane(
         onProjectSortOrderChange: setProjectSortOrder,
         onThreadSortOrderChange: setThreadSortOrder,
         listOrganization: false,
-        showProjectFilter: options.listMode !== "board",
         threadGrouping: options.listMode === "threads" ? options.threadGrouping : undefined,
         onThreadGroupingChange: options.listMode === "threads" ? setThreadGrouping : undefined,
         ...(options.listMode === "threads"
@@ -1105,23 +1096,6 @@ function ThreadNavigationSidebarPane(
       toggleSelectedEnvironmentId,
     ],
   );
-  const boardContent =
-    options.listMode === "board" ? (
-      <BoardScreen
-        projects={projects}
-        threads={threads}
-        projectGroupingMode={options.projectGroupingMode}
-        environmentLabelById={environmentLabelById}
-        selectedEnvironmentIds={options.selectedEnvironmentIds}
-        onClearEnvironments={clearSelectedEnvironments}
-        onToggleEnvironment={toggleSelectedEnvironmentId}
-        onSelectThread={handleSelectThread}
-        onArchiveThread={archiveThread}
-        onDeleteThread={confirmDeleteThread}
-        onSettleThread={settleThread}
-        onUnsettleThread={unsettleThread}
-      />
-    ) : null;
   const nativeHeaderItems = useMemo(
     () =>
       createSidebarHeaderItems({
@@ -1175,7 +1149,7 @@ function ThreadNavigationSidebarPane(
             // Connection status swaps into the title slot so reconnects
             // surface in the header instead of shifting the list. The fork's
             // list-mode title is passed through: the helper's default brand
-            // lockup would otherwise overwrite "Board" / "Threads".
+            // lockup would otherwise overwrite "Threads".
             ...getConnectionAwareBrandHeaderOptions({
               headerWidth: props.width,
               trailingItemCount: nativeHeaderItems.length,
@@ -1189,81 +1163,66 @@ function ThreadNavigationSidebarPane(
               ),
             }),
             ...(NATIVE_LIQUID_GLASS_SUPPORTED
-              ? options.listMode === "board"
-                ? {
-                    headerTransparent: false,
-                    headerStyle: {
-                      backgroundColor: backgroundColor as unknown as string,
-                    },
-                    scrollEdgeEffects: undefined,
-                  }
-                : {
-                    headerTransparent: true,
-                    headerStyle: { backgroundColor: "transparent" },
-                  }
+              ? {
+                  headerTransparent: true,
+                  headerStyle: { backgroundColor: "transparent" },
+                }
               : {}),
-            headerSearchBarOptions:
-              options.listMode === "board"
-                ? undefined
-                : {
-                    ref: searchBarRef,
-                    autoCapitalize: "none",
-                    hideNavigationBar: false,
-                    // Keep the search bar pinned under the title — UIKit's default
-                    // hidesSearchBarWhenScrolling collapses it on scroll.
-                    hideWhenScrolling: false,
-                    obscureBackground: false,
-                    placeholder: "Search",
-                    placement: "stacked",
-                    onCancelButtonPress: () => {
-                      props.onSearchQueryChange("");
-                    },
-                    onChangeText: (event) => {
-                      props.onSearchQueryChange(event.nativeEvent.text);
-                    },
-                  },
+            headerSearchBarOptions: {
+              ref: searchBarRef,
+              autoCapitalize: "none",
+              hideNavigationBar: false,
+              // Keep the search bar pinned under the title — UIKit's default
+              // hidesSearchBarWhenScrolling collapses it on scroll.
+              hideWhenScrolling: false,
+              obscureBackground: false,
+              placeholder: "Search",
+              placement: "stacked",
+              onCancelButtonPress: () => {
+                props.onSearchQueryChange("");
+              },
+              onChangeText: (event) => {
+                props.onSearchQueryChange(event.nativeEvent.text);
+              },
+            },
             unstable_headerRightItems: () => nativeHeaderItems,
           }}
         />
         <View className="flex-1">
-          {boardContent !== null ? (
-            boardContent
-          ) : (
-            <SwipeableScrollGateProvider enabled={swipeEnabled}>
-              <GestureDetector gesture={sidebarScrollGesture}>
-                <LegendList
-                  data={listItems}
-                  drawDistance={500}
-                  estimatedItemSize={64}
-                  extraData={listExtraData}
-                  getItemType={(item) => item.type}
-                  itemsAreEqual={sidebarItemsAreEqual}
-                  keyExtractor={(item) => item.key}
-                  renderItem={renderListItem}
-                  automaticallyAdjustsScrollIndicatorInsets={NATIVE_LIQUID_GLASS_SUPPORTED}
-                  contentInsetAdjustmentBehavior={
-                    NATIVE_LIQUID_GLASS_SUPPORTED ? "automatic" : "never"
-                  }
-                  contentContainerStyle={[
-                    styles.threadListContent,
-                    Platform.OS === "android" ? { paddingHorizontal: 0 } : null,
-                    {
-                      paddingBottom: Math.max(insets.bottom, 16) + 16,
-                      paddingTop: 6,
-                    },
-                  ]}
-                  keyboardDismissMode="on-drag"
-                  keyboardShouldPersistTaps="handled"
-                  {...scrollGateHandlers}
-                  recycleItems
-                  scrollEventThrottle={16}
-                  showsVerticalScrollIndicator={false}
-                  style={styles.threadList}
-                  ListEmptyComponent={listEmpty}
-                />
-              </GestureDetector>
-            </SwipeableScrollGateProvider>
-          )}
+          <SwipeableScrollGateProvider enabled={swipeEnabled}>
+            <GestureDetector gesture={sidebarScrollGesture}>
+              <LegendList
+                data={listItems}
+                drawDistance={500}
+                estimatedItemSize={64}
+                extraData={listExtraData}
+                getItemType={(item) => item.type}
+                itemsAreEqual={sidebarItemsAreEqual}
+                keyExtractor={(item) => item.key}
+                renderItem={renderListItem}
+                automaticallyAdjustsScrollIndicatorInsets={NATIVE_LIQUID_GLASS_SUPPORTED}
+                contentInsetAdjustmentBehavior={
+                  NATIVE_LIQUID_GLASS_SUPPORTED ? "automatic" : "never"
+                }
+                contentContainerStyle={[
+                  styles.threadListContent,
+                  Platform.OS === "android" ? { paddingHorizontal: 0 } : null,
+                  {
+                    paddingBottom: Math.max(insets.bottom, 16) + 16,
+                    paddingTop: 6,
+                  },
+                ]}
+                keyboardDismissMode="on-drag"
+                keyboardShouldPersistTaps="handled"
+                {...scrollGateHandlers}
+                recycleItems
+                scrollEventThrottle={16}
+                showsVerticalScrollIndicator={false}
+                style={styles.threadList}
+                ListEmptyComponent={listEmpty}
+              />
+            </GestureDetector>
+          </SwipeableScrollGateProvider>
         </View>
       </>
     );
@@ -1293,11 +1252,7 @@ function ThreadNavigationSidebarPane(
             : { paddingBottom: insets.bottom }
         }
       >
-        {boardContent !== null ? (
-          <View className="flex-1" style={{ paddingTop: topListInset }}>
-            {boardContent}
-          </View>
-        ) : Platform.OS === "android" && listItems.length === 0 ? (
+        {Platform.OS === "android" && listItems.length === 0 ? (
           <View className="flex-1 items-center justify-center">{listEmpty}</View>
         ) : (
           <SwipeableScrollGateProvider enabled={swipeEnabled}>
@@ -1386,7 +1341,7 @@ function ThreadNavigationSidebarPane(
             </View>
           </View>
 
-          {options.listMode === "board" ? null : (
+          {
             <View className="mx-4 mt-[9px] h-[38px] flex-row items-center gap-1.5 rounded-xl bg-sidebar-search pr-2.5 pl-[11px]">
               <SymbolView
                 name="magnifyingglass"
@@ -1411,7 +1366,7 @@ function ThreadNavigationSidebarPane(
                 value={props.searchQuery}
               />
             </View>
-          )}
+          }
         </View>
       )}
     </View>

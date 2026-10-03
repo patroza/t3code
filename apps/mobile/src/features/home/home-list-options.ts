@@ -40,7 +40,7 @@ export { DEFAULT_OWNERSHIP_RELATION };
 export interface HomeListOptions {
   /**
    * Multi-select environment filter. Empty means all environments.
-   * Applies to Threads and Board modes. Persisted on device when
+   * Applies to the thread list. Persisted on device when
    * the provider is given a storage callback.
    */
   readonly selectedEnvironmentIds: readonly EnvironmentId[];
@@ -51,7 +51,7 @@ export interface HomeListOptions {
    */
   readonly ownershipRelation: OwnershipRelation;
   readonly listMode: HomeListMode;
-  /** Organization of the Threads list (ignored on Board). */
+  /** Organization of the Threads list. */
   readonly threadGrouping: HomeThreadGrouping;
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly threadSortOrder: SidebarThreadSortOrder;

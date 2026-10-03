@@ -92,7 +92,7 @@ import {
   settlePromise,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { useLocation, useNavigate, useParams, useRouter } from "@tanstack/react-router";
+import { useNavigate, useParams, useRouter } from "@tanstack/react-router";
 import {
   MAX_SIDEBAR_THREAD_PREVIEW_COUNT,
   MIN_SIDEBAR_THREAD_PREVIEW_COUNT,
@@ -339,7 +339,7 @@ import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 /**
  * Active sidebar rows report resolved PR state upward so hide-settled /
  * settled-shelf classification can auto-settle merged/closed PRs the same way
- * Sidebar V2 and the board do. Settled history rows skip reporting.
+ * Sidebar V2 does. Settled history rows skip reporting.
  */
 type SidebarChangeRequestStateReporter = (
   threadKey: string,
@@ -4747,7 +4747,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
               </Tooltip>
             )}
           </div>
-          {/* Compact chrome: Threads|Board + view/filter menu. */}
+          {/* Compact chrome: Threads + view/filter menu. */}
           <div className="mt-1.5 flex items-center gap-1 px-0.5">
             <ToggleGroup
               className="min-w-0 flex-1"
@@ -5202,19 +5202,11 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
           ) : null}
         </SidebarGroup>
       ) : null}
-      {listMode === "board" ? (
-        <SidebarGroup>
-          <div className="px-2 text-center text-xs text-muted-foreground/60">
-            Board view is open in the main panel
-          </div>
-        </SidebarGroup>
-      ) : null}
     </SidebarContent>
   );
 });
 
 export default function LegacySidebar() {
-  const pathname = useLocation({ select: (loc) => loc.pathname });
   const projects = useProjects();
   const sidebarThreads = useThreadShells();
   const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
@@ -5380,18 +5372,8 @@ export default function LegacySidebar() {
   const handleListModeChange = useCallback(
     (mode: WebListMode) => {
       setStoredListMode(mode);
-      if (mode === "board") {
-        if (isMobile) {
-          setOpenMobile(false);
-        }
-        void navigate({ to: "/board" });
-        return;
-      }
-      if (pathname === "/board") {
-        void navigate({ to: "/" });
-      }
     },
-    [isMobile, navigate, pathname, setOpenMobile, setStoredListMode],
+    [setStoredListMode],
   );
   const handleSelectedEnvironmentIdsChange = useCallback(
     (next: readonly EnvironmentId[]) => {
@@ -5702,7 +5684,7 @@ export default function LegacySidebar() {
   const isManualProjectSorting = sidebarProjectSortOrder === "manual";
   // PR states stream in per-row (rows own the VCS subscriptions); a merged or
   // closed PR auto-settles its thread on the next classification pass — same
-  // path Sidebar V2 and the board use so hide-settled matches across surfaces.
+  // path Sidebar V2 uses so hide-settled matches across surfaces.
   const [changeRequestStateByKey, setChangeRequestStateByKey] = useState<
     ReadonlyMap<string, "open" | "closed" | "merged">
   >(() => new Map());
@@ -5966,16 +5948,6 @@ export default function LegacySidebar() {
         platform,
         context: shortcutContext,
       });
-      if (command === "board.open") {
-        event.preventDefault();
-        event.stopPropagation();
-        setStoredListMode("board");
-        if (isMobile) {
-          setOpenMobile(false);
-        }
-        void navigate({ to: "/board" });
-        return;
-      }
 
       const traversalDirection = threadTraversalDirectionFromCommand(command);
       if (traversalDirection !== null) {

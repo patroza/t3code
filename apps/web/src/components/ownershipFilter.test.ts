@@ -86,7 +86,7 @@ describe("buildOwnershipPredicate", () => {
 
   it("keeps fully unattributed threads under mine", () => {
     // Local work carries no person at all; hiding it under the default filter
-    // would empty the board for anyone not using identity claims.
+    // would empty the thread list for anyone not using identity claims.
     const predicate = buildOwnershipPredicate({
       claimPersonIdByEnvironment: claims,
       mode: "mine",
