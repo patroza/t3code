@@ -14,6 +14,9 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
+import { findThreadById, fromWireReadModel } from "./commandReadModel.ts";
+import * as HashMap from "effect/HashMap";
+import * as Option from "effect/Option";
 import { decideOrchestrationCommand } from "./decider.ts";
 import { projectEvent } from "./projector.ts";
 import { isThreadDetailEvent } from "../ws.ts";
@@ -94,6 +97,8 @@ function makeReadModel(pullRequests: ReadonlyArray<ThreadPullRequestLink>): Orch
         settledAt: null,
         deletedAt: null,
         messages: [],
+        queuedMessages: [],
+        pendingTurnStart: null,
         proposedPlans: [],
         activities: [],
         checkpoints: [],
@@ -102,6 +107,14 @@ function makeReadModel(pullRequests: ReadonlyArray<ThreadPullRequestLink>): Orch
     ],
     updatedAt: NOW,
   };
+}
+
+function makeCommandReadModel(pullRequests: ReadonlyArray<ThreadPullRequestLink>) {
+  return fromWireReadModel(makeReadModel(pullRequests));
+}
+
+function threadOf(model: ReturnType<typeof makeCommandReadModel>) {
+  return findThreadById(model, THREAD_ID)!;
 }
 
 const snapshot: ThreadPullRequestSnapshot = {
@@ -121,7 +134,7 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
         host: "forge.example",
         url: "http://forge.example:3000/t3tools/t3code/pulls/42",
       });
-      let model = makeReadModel([existing]);
+      let model = makeCommandReadModel([existing]);
       const command = yield* decodeCommand({
         type: "thread.pull-request.link",
         commandId: "link-other-port",
@@ -138,7 +151,7 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
       );
       expect(linked.payload.link.host).toBe("forge.example:4000");
       model = yield* projectEvent(model, { ...linked, sequence: 1 });
-      expect(model.threads[0]!.pullRequests).toHaveLength(2);
+      expect(threadOf(model).pullRequests).toHaveLength(2);
       const unlink = yield* decodeCommand({
         type: "thread.pull-request.unlink",
         commandId: "unlink-old-port",
@@ -152,7 +165,7 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
         "thread.pull-request-unlinked",
       );
       model = yield* projectEvent(model, { ...unlinked, sequence: 2 });
-      expect(model.threads[0]!.pullRequests.map((link) => link.url)).toEqual([
+      expect(threadOf(model).pullRequests.map((link) => link.url)).toEqual([
         linked.payload.link.url,
       ]);
     }),
@@ -173,7 +186,7 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
         linkedPullRequest: null,
       });
       const decided = yield* decideOrchestrationCommand({
-        readModel: makeReadModel([own, foreign]),
+        readModel: makeCommandReadModel([own, foreign]),
         command,
       });
       const event = expectSingleEvent(decided, "thread.pull-request-unlinked");
@@ -185,7 +198,7 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
     Effect.gen(function* () {
       const other = makeLink({ number: 7, snapshot: { ...snapshot, state: "merged" } });
       const current = makeLink({ linkedAt: "2026-01-02T00:00:00Z" });
-      let model = makeReadModel([other, current]);
+      let model = makeCommandReadModel([other, current]);
       const command = yield* decodeCommand({
         type: "thread.meta.update",
         commandId: "replace",
@@ -205,7 +218,7 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
       ]);
       for (const event of events)
         model = yield* projectEvent(model, { ...event, sequence: model.snapshotSequence + 1 });
-      expect(model.threads[0]!.pullRequests.map((link) => link.number)).toEqual([7, 99]);
+      expect(threadOf(model).pullRequests.map((link) => link.number)).toEqual([7, 99]);
     }),
   );
   it.effect("round-trips an Azure legacy link and unlinks only its organization", () =>
@@ -216,10 +229,11 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
         number: 7,
         url: "https://dev.azure.com/org-b/project/_git/web/pullrequest/7",
       });
-      let model = makeReadModel([foreign]);
+      let model = makeCommandReadModel([foreign]);
+      const project = Option.getOrThrow(HashMap.get(model.projects, ProjectId.make("project-1")));
       model = {
         ...model,
-        projects: model.projects.map((project) => ({
+        projects: HashMap.set(model.projects, project.id, {
           ...project,
           repositoryIdentity: {
             ...project.repositoryIdentity!,
@@ -228,7 +242,7 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
             displayName: "v3/org-a/project/web",
             name: "web",
           },
-        })),
+        }),
       };
       const legacy = {
         projectId: "project-1",
@@ -248,15 +262,15 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
           model = yield* projectEvent(model, { ...event, sequence: model.snapshotSequence + 1 });
         }
         if (linkedPullRequest !== null) {
-          expect(model.threads[0]!.linkedPullRequest).toEqual(legacy);
-          expect(model.threads[0]!.pullRequests.map((link) => link.repository)).toEqual([
+          expect(threadOf(model).linkedPullRequest).toEqual(legacy);
+          expect(threadOf(model).pullRequests.map((link) => link.repository)).toEqual([
             "org-b/project/_git/web",
             "org-a/project/_git/web",
           ]);
         }
       }
-      expect(model.threads[0]!.pullRequests).toEqual([foreign]);
-      expect(model.threads[0]!.linkedPullRequest).toBeNull();
+      expect(threadOf(model).pullRequests).toEqual([foreign]);
+      expect(threadOf(model).linkedPullRequest).toBeNull();
     }),
   );
   it.effect("legacy unlink alone does not emit an empty metadata event", () =>
@@ -268,7 +282,7 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
         linkedPullRequest: null,
       });
       const decided = yield* decideOrchestrationCommand({
-        readModel: makeReadModel([makeLink()]),
+        readModel: makeCommandReadModel([makeLink()]),
         command,
       });
       const events = Array.isArray(decided) ? decided : [decided];
@@ -281,7 +295,7 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
       Effect.gen(function* () {
         const other = makeLink({ number: 7, snapshot: { ...snapshot, state: "merged" } });
         const current = makeLink({ source, linkedAt: "2026-01-02T00:00:00.000Z" });
-        let model = makeReadModel([other, current]);
+        let model = makeCommandReadModel([other, current]);
         // This is the pre-array command shape sent by older clients.
         const command = yield* decodeCommand({
           type: "thread.meta.update",
@@ -297,10 +311,15 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
           const encoded = yield* Schema.encodeEffect(OrchestrationEvent)(event);
           const decoded = yield* Schema.decodeEffect(OrchestrationEvent)(encoded);
           // Older detail-event unions must never receive the new PR discriminants.
-          expect(isThreadDetailEvent(decoded)).toBe(false);
+          // Fork still delivers `thread.meta-updated` as a live detail event so
+          // Discord/title subscribers see renames; only the PR discriminants
+          // must stay off that union.
+          if (decoded.type.startsWith("thread.pull-request-")) {
+            expect(isThreadDetailEvent(decoded)).toBe(false);
+          }
           model = yield* projectEvent(model, decoded);
         }
-        const thread = model.threads[0]!;
+        const thread = threadOf(model);
         expect(thread.title).toBe("Renamed by old client");
         expect(thread.pullRequests).toEqual(
           source === "stack" ? [other, { ...current, source: "stack-dismissed" }] : [other],
@@ -324,7 +343,7 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
           url: "https://github.com/t3tools/t3code/pull/42",
           source: "manual",
         },
-        readModel: makeReadModel([]),
+        readModel: makeCommandReadModel([]),
       });
       expect(Array.isArray(decided)).toBe(false);
       const event = expectSingleEvent(decided, "thread.pull-request-linked");
@@ -355,7 +374,7 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
           url: "https://github.com/t3tools/t3code/pull/42",
           source: "agent",
         },
-        readModel: makeReadModel([makeLink()]),
+        readModel: makeCommandReadModel([makeLink()]),
       }).pipe(Effect.flip);
       expect(error._tag).toBe("OrchestrationCommandInvariantError");
     }),
@@ -386,7 +405,7 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
           url: "https://github.com/t3tools/t3code/pull/42",
           source: "manual",
         },
-        readModel: makeReadModel([dismissed]),
+        readModel: makeCommandReadModel([dismissed]),
       });
       const event = expectSingleEvent(decided, "thread.pull-request-linked");
       // Host state survives the flip; only the source changes.
@@ -407,7 +426,7 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
           url: "https://github.com/t3tools/t3code/pull/42",
           source: "stack",
         },
-        readModel: makeReadModel([makeLink({ source: "stack-dismissed" })]),
+        readModel: makeCommandReadModel([makeLink({ source: "stack-dismissed" })]),
       }).pipe(Effect.flip);
       expect(error._tag).toBe("OrchestrationCommandInvariantError");
     }),
@@ -424,7 +443,7 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
           repository: "t3tools/t3code",
           number: 42,
         },
-        readModel: makeReadModel([makeLink()]),
+        readModel: makeCommandReadModel([makeLink()]),
       });
       const event = expectSingleEvent(decided, "thread.pull-request-unlinked");
       expect(event.payload).toMatchObject({
@@ -448,7 +467,7 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
           repository: "t3tools/t3code",
           number: 42,
         },
-        readModel: makeReadModel([member]),
+        readModel: makeCommandReadModel([member]),
       });
       const event = expectSingleEvent(decided, "thread.pull-request-linked");
       expect(event.payload.link).toEqual({ ...member, source: "stack-dismissed" });
@@ -474,7 +493,7 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
             ],
           },
         });
-        let model = makeReadModel([member, sibling]);
+        let model = makeCommandReadModel([member, sibling]);
         const decided = yield* decideOrchestrationCommand({
           readModel: model,
           command: {
@@ -488,7 +507,7 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
         });
         const event = expectSingleEvent(decided, "thread.pull-request-linked");
         model = yield* projectEvent(model, { ...event, sequence: 1 });
-        expect(model.threads[0]!.pullRequests).toEqual([
+        expect(threadOf(model).pullRequests).toEqual([
           { ...member, source: "stack-dismissed" },
           sibling,
         ]);
@@ -521,7 +540,7 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
           repository: "t3tools/t3code",
           number: 7,
         },
-        readModel: makeReadModel([makeLink()]),
+        readModel: makeCommandReadModel([makeLink()]),
       }).pipe(Effect.flip);
       expect(error._tag).toBe("OrchestrationCommandInvariantError");
     }),
@@ -540,7 +559,7 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
           snapshot,
           stack: null,
         },
-        readModel: makeReadModel([]),
+        readModel: makeCommandReadModel([]),
       }).pipe(Effect.flip);
       expect(error._tag).toBe("OrchestrationCommandInvariantError");
     }),
@@ -559,7 +578,7 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
           snapshot,
           stack: null,
         },
-        readModel: makeReadModel([makeLink()]),
+        readModel: makeCommandReadModel([makeLink()]),
       });
       const event = expectSingleEvent(decided, "thread.pull-request-synced");
       expect(event.payload).toMatchObject({

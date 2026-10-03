@@ -52,6 +52,9 @@ function toChangeRequest(summary: GitHubCli.GitHubPullRequestSummary): ChangeReq
     ...(summary.headRepositoryOwnerLogin !== undefined
       ? { headRepositoryOwnerLogin: summary.headRepositoryOwnerLogin }
       : {}),
+    ...(summary.hasFailingChecks !== undefined
+      ? { hasFailingChecks: summary.hasFailingChecks }
+      : {}),
   };
 }
 
@@ -273,30 +276,35 @@ export const make = Effect.gen(function* () {
     },
     listChangeRequests,
     getChangeRequest: (input) =>
-      github
-        .getPullRequest({
+      Effect.all({
+        summary: github.getPullRequest({
           ...input,
           ...(input.context === undefined
             ? {}
             : { rateLimitHost: new URL(input.context.provider.baseUrl).host }),
-        })
-        .pipe(
-          Effect.map(toChangeRequest),
-          Effect.mapError(
-            (error) =>
-              new SourceControlProviderError({
-                provider: "github",
-                operation: "getChangeRequest",
-                command: error.command,
-                cwd: input.cwd,
-                reference: SourceControlProvider.transportSafeSourceControlErrorValue(
-                  input.reference,
-                ),
-                detail: error.detail,
-                cause: error,
-              }),
-          ),
+        }),
+        hasFailingChecks: github
+          .getPullRequestHasFailingChecks(input)
+          .pipe(Effect.orElseSucceed(() => false)),
+      }).pipe(
+        Effect.map(({ summary, hasFailingChecks }) =>
+          toChangeRequest({ ...summary, ...(hasFailingChecks ? { hasFailingChecks } : {}) }),
         ),
+        Effect.mapError(
+          (error) =>
+            new SourceControlProviderError({
+              provider: "github",
+              operation: "getChangeRequest",
+              command: error.command,
+              cwd: input.cwd,
+              reference: SourceControlProvider.transportSafeSourceControlErrorValue(
+                input.reference,
+              ),
+              detail: error.detail,
+              cause: error,
+            }),
+        ),
+      ),
     createChangeRequest: (input) =>
       github
         .createPullRequest({
