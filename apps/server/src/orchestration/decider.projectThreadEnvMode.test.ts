@@ -9,12 +9,21 @@ import {
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as HashMap from "effect/HashMap";
+import * as Option from "effect/Option";
 
 import { decideOrchestrationCommand } from "./decider.ts";
 import { createEmptyReadModel, projectEvent } from "./projector.ts";
 
 const now = "2026-01-01T00:00:00.000Z";
 const projectId = ProjectId.make("project-env-mode");
+
+const projectFromModel = (model: {
+  readonly projects: HashMap.HashMap<typeof projectId, unknown>;
+}) =>
+  Option.getOrUndefined(HashMap.get(model.projects, projectId)) as
+    | { readonly defaultThreadEnvMode: string | null }
+    | undefined;
 
 const seedProjectCreated = (sequence: number): OrchestrationEvent => ({
   sequence,
@@ -88,7 +97,7 @@ it.layer(NodeServices.layer)("decider project defaults", (it) => {
   it.effect("propagates defaultThreadEnvMode through meta.update into the read model", () =>
     Effect.gen(function* () {
       const readModel = yield* projectEvent(createEmptyReadModel(now), seedProjectCreated(1));
-      expect(readModel.projects[0]?.defaultThreadEnvMode).toBeNull();
+      expect(projectFromModel(readModel)?.defaultThreadEnvMode).toBeNull();
 
       const result = yield* decideOrchestrationCommand({
         command: {
@@ -107,7 +116,7 @@ it.layer(NodeServices.layer)("decider project defaults", (it) => {
       );
 
       const updated = yield* projectEvent(readModel, { ...event, sequence: 2 });
-      expect(updated.projects[0]?.defaultThreadEnvMode).toBe("worktree");
+      expect(projectFromModel(updated)?.defaultThreadEnvMode).toBe("worktree");
     }),
   );
 
@@ -150,14 +159,16 @@ it.layer(NodeServices.layer)("decider project defaults", (it) => {
       });
       const clearEvent = Array.isArray(clear) ? clear[0] : clear;
       const afterClear = yield* projectEvent(afterSet, { ...clearEvent, sequence: 3 });
-      expect(afterClear.projects[0]?.defaultThreadEnvMode).toBeNull();
+      expect(projectFromModel(afterClear)?.defaultThreadEnvMode).toBeNull();
     }),
   );
 
   it.effect("propagates autoPull through meta.update into the read model", () =>
     Effect.gen(function* () {
       const readModel = yield* projectEvent(createEmptyReadModel(now), seedProjectCreated(1));
-      expect(readModel.projects[0]?.autoPull).toBe(false);
+      expect(
+        (projectFromModel(readModel) as { readonly autoPull?: boolean } | undefined)?.autoPull,
+      ).toBe(false);
 
       const result = yield* decideOrchestrationCommand({
         command: {
@@ -172,7 +183,9 @@ it.layer(NodeServices.layer)("decider project defaults", (it) => {
       expect((event.payload as { autoPull?: unknown }).autoPull).toBe(true);
 
       const updated = yield* projectEvent(readModel, { ...event, sequence: 2 });
-      expect(updated.projects[0]?.autoPull).toBe(true);
+      expect(
+        (projectFromModel(updated) as { readonly autoPull?: boolean } | undefined)?.autoPull,
+      ).toBe(true);
     }),
   );
 });

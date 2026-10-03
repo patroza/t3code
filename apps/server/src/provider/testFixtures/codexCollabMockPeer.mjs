@@ -169,6 +169,12 @@ rl.on("line", (line) => {
       : fixture.responses.turnStart.turn;
     activeTurn = turn;
     turnStartCount += 1;
+    // Append-only sidecar the tests read to tell a steered follow-up (no new
+    // turn) apart from one that opened a second provider turn.
+    NodeFS.appendFileSync(
+      `${process.env.T3_CODEX_COLLAB_SCRIPT}.turns`,
+      `${JSON.stringify({ turnId: turn.id })}\n`,
+    );
     write({ id, result: { ...fixture.responses.turnStart, turn } });
     const rootThreadId = script.rootThreadId;
     if (script.onlyFirstTurnStarts !== true || turnStartCount === 1) {
@@ -210,6 +216,18 @@ rl.on("line", (line) => {
         },
       });
     }
+    return;
+  }
+  if (method === "turn/steer") {
+    // The fork appends follow-up input to the running turn instead of
+    // opening a second provider turn. `rejectSteer` models a turn that
+    // cannot accept steering (review, manual compact), which sends the
+    // runtime back to turn/start.
+    if (script.rejectSteer === true) {
+      write({ id, error: { code: -32000, message: "turn is not steerable" } });
+      return;
+    }
+    write({ id, result: { turnId: message.params?.expectedTurnId } });
     return;
   }
   if (method === "turn/interrupt") {

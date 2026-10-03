@@ -75,6 +75,8 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import { ServerActivation } from "../../serverActivation.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
+import * as IdentityService from "../../identity/IdentityService.ts";
+import type { IdentityMapPerson } from "@t3tools/shared/identityMap";
 
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);
 const asApprovalRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.make(value);
@@ -188,6 +190,7 @@ describe("ProviderCommandReactor", () => {
       session: ProviderSession,
     ) => Effect.Effect<ProviderSession, ProviderServiceError>;
     readonly tryHandlePromptCommandEffect?: ProviderAuthService["Service"]["tryHandlePromptCommand"];
+    readonly identityPeople?: ReadonlyArray<IdentityMapPerson>;
   }) {
     const now = "2026-01-01T00:00:00.000Z";
     const baseDir =
@@ -361,6 +364,7 @@ describe("ProviderCommandReactor", () => {
       startSession: startSession as ProviderServiceShape["startSession"],
       sendTurn: sendTurn as ProviderServiceShape["sendTurn"],
       compactThread,
+      compactSession: () => unsupported(),
       interruptTurn: interruptTurn as ProviderServiceShape["interruptTurn"],
       respondToRequest: respondToRequest as ProviderServiceShape["respondToRequest"],
       respondToUserInput: respondToUserInput as ProviderServiceShape["respondToUserInput"],
@@ -494,6 +498,7 @@ describe("ProviderCommandReactor", () => {
       ),
       Layer.provideMerge(Layer.mock(TerminalManager)({ closeIdle: closeIdleTerminals })),
       Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(IdentityService.layerWithPeople(input?.identityPeople ?? [])),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
@@ -598,6 +603,49 @@ describe("ProviderCommandReactor", () => {
     if (!input?.deferReactorStart) await startReactor();
     const drain = () => Effect.runPromise(reactor.drain);
 
+    // Queue-by-default holds turn.start commands while the session is
+    // starting/running. The mock provider never emits runtime events, so
+    // tests that send a follow-up on an idle thread must settle the session
+    // back to ready first — in production, turn completion does this.
+    const harnessRuntime = runtime!;
+    let settleIndex = 0;
+    const settleSession = async (threadId: ThreadId = ThreadId.make("thread-1")) => {
+      settleIndex += 1;
+      const readModel = await harnessRuntime.runPromise(snapshotQuery.getSnapshot());
+      const session = readModel.threads.find((entry) => entry.id === threadId)?.session;
+      if (!session) {
+        return;
+      }
+      await harnessRuntime.runPromise(
+        engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make(`cmd-session-run-${settleIndex}`),
+          threadId,
+          session: {
+            ...session,
+            status: "running",
+            activeTurnId: asTurnId(`turn-settle-${settleIndex}`),
+            updatedAt: now,
+          },
+          createdAt: now,
+        }),
+      );
+      await harnessRuntime.runPromise(
+        engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make(`cmd-session-settle-${settleIndex}`),
+          threadId,
+          session: {
+            ...session,
+            status: "ready",
+            activeTurnId: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        }),
+      );
+    };
+
     return {
       engine,
       snapshotQuery,
@@ -614,6 +662,7 @@ describe("ProviderCommandReactor", () => {
           }),
         ),
       tryHandlePromptCommand,
+      settleSession,
       startSession,
       sendTurn,
       compactThread,
@@ -2940,6 +2989,7 @@ describe("ProviderCommandReactor", () => {
     );
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await harness.settleSession();
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -2994,6 +3044,7 @@ describe("ProviderCommandReactor", () => {
         });
 
         yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+        yield* Effect.promise(() => harness.settleSession());
 
         yield* harness.engine.dispatch({
           type: "thread.turn.start",
@@ -3114,6 +3165,7 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await harness.settleSession();
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -3163,6 +3215,7 @@ describe("ProviderCommandReactor", () => {
     );
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await harness.settleSession();
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -3227,6 +3280,7 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await harness.settleSession();
     expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
       cwd: "/tmp/provider-project",
     });
@@ -3305,6 +3359,7 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await harness.settleSession();
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -3561,6 +3616,7 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await harness.settleSession();
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -3769,7 +3825,12 @@ describe("ProviderCommandReactor", () => {
             const thread = (await harness.readModel()).threads.find(
               (entry) => entry.id === ThreadId.make("thread-1"),
             );
-            return thread?.session?.status === "stopped";
+            return (
+              thread?.session?.status === "stopped" &&
+              thread.activities.some(
+                (activity) => activity.kind === "provider.turn.interrupt.failed",
+              )
+            );
           }),
         );
 

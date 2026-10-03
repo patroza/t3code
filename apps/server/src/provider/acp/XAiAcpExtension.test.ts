@@ -6,7 +6,10 @@ import * as NodeURL from "node:url";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
 import { describe, expect } from "vite-plus/test";
 
 import {
@@ -355,6 +358,44 @@ describe("XAiAcpExtension", () => {
           requestId: secondPromptId,
         },
       });
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("steers a running turn instead of queueing behind it", () =>
+    Effect.gen(function* () {
+      const runtime = yield* makePromptCompletionRuntime({ T3_ACP_XAI_SEND_NOW_QUEUE: "1" });
+      yield* runtime.start();
+
+      const runningTurn = yield* runtime
+        .prompt({ prompt: [{ type: "text", text: "long task" }] })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+
+      const steerResult = yield* runtime
+        .prompt({ prompt: [{ type: "text", text: "actually, do this" }] }, { steer: true })
+        .pipe(Effect.timeout("10 seconds"));
+
+      expect(steerResult.stopReason).toBe("end_turn");
+      const runningTurnResult = yield* Fiber.join(runningTurn).pipe(Effect.timeout("10 seconds"));
+      expect(runningTurnResult.stopReason).toBe("cancelled");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("keeps a non-steering prompt queued behind the running turn", () =>
+    Effect.gen(function* () {
+      const runtime = yield* makePromptCompletionRuntime({ T3_ACP_XAI_SEND_NOW_QUEUE: "1" });
+      yield* runtime.start();
+
+      yield* runtime
+        .prompt({ prompt: [{ type: "text", text: "long task" }] })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+
+      const queuedFiber = yield* runtime
+        .prompt({ prompt: [{ type: "text", text: "follow-up" }] })
+        .pipe(Effect.timeout("1 second"), Effect.option, Effect.forkChild);
+
+      yield* TestClock.adjust("1 second");
+      const queued = yield* Fiber.join(queuedFiber);
+      expect(Option.isNone(queued)).toBe(true);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 

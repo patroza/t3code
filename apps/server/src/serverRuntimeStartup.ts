@@ -7,6 +7,7 @@ import {
   type ServerSettings as ServerSettingsValue,
   type ModelSelection,
   type OrchestrationProjectShell,
+  type OrchestrationSession,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -24,6 +25,7 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -31,6 +33,10 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import {
+  SERVER_RUNTIME_DESCRIPTOR_FILE,
+  ServerRuntimeDescriptor,
+} from "@t3tools/shared/serverRuntime";
 
 import * as ServerConfig from "./config.ts";
 import { flushCompileCache } from "./compileCache.ts";
@@ -40,13 +46,22 @@ import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngi
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as OrchestrationReactor from "./orchestration/Services/OrchestrationReactor.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
+import { runWebVersionWatcher } from "./webVersionWatcher.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as ProviderService from "./provider/Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDirectory.ts";
+import {
+  hasServerUpdateContinuationMarker,
+  readRuntimePayload,
+  readServerUpdateContinuationTurnId,
+  SERVER_UPDATE_CONTINUATION_KEY,
+  SERVER_UPDATE_CONTINUATION_PROMPT,
+} from "./provider/providerSessionContinuation.ts";
 import * as ProviderSessionReaper from "./provider/Services/ProviderSessionReaper.ts";
+import * as OrphanSessionRecovery from "./orchestration/Services/OrphanSessionRecovery.ts";
 import { forkParked } from "./serverActivation.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
@@ -176,7 +191,7 @@ const recordStartupHeartbeat = Effect.gen(function* () {
   });
 });
 
-const getAutoBootstrapThreadModelSelection = (): ModelSelection => ({
+export const getAutoBootstrapThreadModelSelection = (): ModelSelection => ({
   instanceId: ProviderInstanceId.make("codex"),
   model: DEFAULT_MODEL,
 });
@@ -341,10 +356,39 @@ const runStartupPhase = <A, E, R>(phase: string, effect: Effect.Effect<A, E, R>)
     Effect.withSpan(`server.startup.${phase}`),
   );
 
+/**
+ * Pure helper for session rows that claimed to be live across a process restart.
+ * Only marks **Wake Required** (`interrupted`) when a turn was actually in flight.
+ * Zombie `running`/`starting` sessions with no active turn settle to `ready`.
+ */
+export function interruptSessionAfterServerRestart(
+  session: OrchestrationSession | null,
+  updatedAt: string,
+): OrchestrationSession | null {
+  if (session?.status !== "starting" && session?.status !== "running") {
+    return null;
+  }
+  const hadActiveTurn = session.activeTurnId != null;
+  if (!hadActiveTurn) {
+    return {
+      ...session,
+      status: "ready",
+      activeTurnId: null,
+      lastError: null,
+      updatedAt,
+    };
+  }
+  return {
+    ...session,
+    status: "interrupted",
+    activeTurnId: null,
+    lastError: "Server restarted while the agent was working. Send a follow-up to resume it.",
+    updatedAt,
+  };
+}
+
 const ORPHANED_PROVIDER_SESSION_ERROR =
   "Provider session did not survive a server restart. Send a new message to continue.";
-const SERVER_UPDATE_CONTINUATION_KEY = "continueAfterServerUpdate";
-const SERVER_UPDATE_CONTINUATION_PROMPT = "Continue where you left off.";
 
 class ProviderSessionContinuationError extends Schema.TaggedError<ProviderSessionContinuationError>()(
   "ProviderSessionContinuationError",
@@ -368,34 +412,7 @@ export class ServerUpdateThreadContinuationError extends Schema.TaggedError<Serv
   }
 }
 
-function hasServerUpdateContinuationMarker(
-  runtimePayload: unknown,
-): runtimePayload is Record<string, unknown> {
-  return (
-    runtimePayload !== null &&
-    typeof runtimePayload === "object" &&
-    !Array.isArray(runtimePayload) &&
-    SERVER_UPDATE_CONTINUATION_KEY in runtimePayload
-  );
-}
-
-function readRuntimePayload(runtimePayload: unknown): Record<string, unknown> {
-  return runtimePayload !== null &&
-    typeof runtimePayload === "object" &&
-    !Array.isArray(runtimePayload)
-    ? (runtimePayload as Record<string, unknown>)
-    : {};
-}
-
 const isServerUpdateThreadContinuationError = Schema.is(ServerUpdateThreadContinuationError);
-
-function readServerUpdateContinuationTurnId(runtimePayload: unknown): TurnId | null {
-  if (!hasServerUpdateContinuationMarker(runtimePayload)) {
-    return null;
-  }
-  const value = runtimePayload[SERVER_UPDATE_CONTINUATION_KEY];
-  return typeof value === "string" && value.length > 0 ? TurnId.make(value) : null;
-}
 
 const toServerUpdateThreadContinuationError = (cause: unknown) =>
   isServerUpdateThreadContinuationError(cause)
@@ -700,12 +717,29 @@ export const reconcileProviderSessions = Effect.gen(function* () {
               });
             }
             const capabilities = yield* providerService.getCapabilities(providerInstanceId);
-            yield* providerService.sendTurn({
+            const result = yield* providerService.sendTurn({
               threadId: thread.id,
               ...(capabilities.promptlessTurnContinuation === true
                 ? { continuation: true }
                 : { input: SERVER_UPDATE_CONTINUATION_PROMPT }),
               interactionMode: thread.interactionMode,
+            });
+            // Resume/continuation often does not emit turn.started until the
+            // replacement turn finishes. Leave the session running with the
+            // admitted turn id so queue.steer is not blocked for the whole turn.
+            const continuedAt = DateTime.formatIso(yield* DateTime.now);
+            yield* orchestrationEngine.dispatch({
+              type: "thread.session.set",
+              commandId: CommandId.make(yield* crypto.randomUUIDv4),
+              threadId: thread.id,
+              session: {
+                ...session,
+                status: "running",
+                activeTurnId: result.turnId,
+                lastError: null,
+                updatedAt: continuedAt,
+              },
+              createdAt: continuedAt,
             });
           });
           const continuationExit = yield* Effect.exit(continuation);
@@ -834,6 +868,20 @@ interface StartupOptions {
   readonly abort?: (error: ServerRuntimeStartupError) => Effect.Effect<void>;
 }
 
+const ServerRuntimeDescriptorJson = Schema.fromJsonString(ServerRuntimeDescriptor);
+const encodeServerRuntimeDescriptor = Schema.encodeEffect(ServerRuntimeDescriptorJson);
+const decodeServerRuntimeDescriptor = Schema.decodeEffect(ServerRuntimeDescriptorJson);
+
+/**
+ * Exact contents written to the runtime descriptor file. The desktop client
+ * reads this file back and decodes it with the same schema
+ * (`DesktopExistingBackend`), so the on-disk shape is a cross-process contract.
+ */
+export const encodeServerRuntimeDescriptorFile = (
+  descriptor: ServerRuntimeDescriptor,
+): Effect.Effect<string, Schema.SchemaError> =>
+  encodeServerRuntimeDescriptor(descriptor).pipe(Effect.map((json) => `${json}\n`));
+
 export const autoPullProjects = Effect.fn("autoPullProjects")(function* (
   projects: ReadonlyArray<OrchestrationProjectShell>,
   settings: ServerSettingsValue = DEFAULT_SERVER_SETTINGS,
@@ -898,10 +946,16 @@ export const autoPullProjects = Effect.fn("autoPullProjects")(function* (
 export const make = (options?: StartupOptions) =>
   Effect.gen(function* () {
     const serverConfig = yield* ServerConfig.ServerConfig;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
     const keybindings = yield* Keybindings.Keybindings;
     const orchestrationReactor = yield* OrchestrationReactor.OrchestrationReactor;
     const providerSessionReaper = yield* ProviderSessionReaper.ProviderSessionReaper;
+    const orphanSessionRecovery = yield* OrphanSessionRecovery.OrphanSessionRecovery;
     const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
+    // Broadcast when the served web bundle is hot-swapped on disk so clients can
+    // offer a reload without a server restart.
+    yield* Effect.forkScoped(runWebVersionWatcher(lifecycleEvents));
     const serverSettings = yield* ServerSettings.ServerSettingsService;
     const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
@@ -963,6 +1017,22 @@ export const make = (options?: StartupOptions) =>
         Effect.gen(function* () {
           yield* orchestrationReactor.start().pipe(Scope.provide(reactorScope));
           yield* providerSessionReaper.start().pipe(Scope.provide(reactorScope));
+        }),
+      );
+
+      yield* runStartupPhase(
+        "sessions.interrupt-stale",
+        Effect.gen(function* () {
+          // Full orphan audit: clear shell sessions *and* provider runtimes that
+          // claim to be live. No provider process can have survived the restart,
+          // so leaving them "running" deadlocks resync/reaper behind active turns.
+          const result = yield* orphanSessionRecovery.settleAllAfterServerRestart();
+          if (result.settledSessions > 0 || result.settledRuntimes > 0) {
+            yield* Effect.logWarning("interrupted stale provider sessions after server restart", {
+              interruptedCount: result.settledSessions,
+              settledRuntimes: result.settledRuntimes,
+            });
+          }
         }),
       );
 
@@ -1038,6 +1108,39 @@ export const make = (options?: StartupOptions) =>
 
       yield* Effect.logDebug("startup phase: waiting for http listener");
       yield* runStartupPhase("http.wait", Deferred.await(httpListening));
+
+      const runtimeDescriptorPath = path.join(
+        serverConfig.stateDir,
+        SERVER_RUNTIME_DESCRIPTOR_FILE,
+      );
+      const descriptorHost =
+        serverConfig.host === undefined || isWildcardHost(serverConfig.host)
+          ? "127.0.0.1"
+          : serverConfig.host;
+      const runtimeStartedAt = DateTime.formatIso(yield* DateTime.now);
+      const runtimeDescriptorContents = yield* encodeServerRuntimeDescriptorFile({
+        version: 1,
+        pid: process.pid,
+        stateDir: serverConfig.stateDir,
+        httpBaseUrl: `http://${formatHostForUrl(descriptorHost)}:${serverConfig.port}`,
+        startedAt: runtimeStartedAt,
+      }).pipe(Effect.orDie);
+      yield* fileSystem
+        .writeFileString(runtimeDescriptorPath, runtimeDescriptorContents, { mode: 0o600 })
+        .pipe(Effect.orDie);
+      yield* Effect.addFinalizer(() =>
+        // Best-effort cleanup: only this process's own descriptor is removed,
+        // and a missing, unreadable, or malformed file must not fail shutdown.
+        fileSystem.readFileString(runtimeDescriptorPath).pipe(
+          Effect.flatMap(decodeServerRuntimeDescriptor),
+          Effect.flatMap((current) =>
+            current.pid === process.pid
+              ? fileSystem.remove(runtimeDescriptorPath, { force: true })
+              : Effect.void,
+          ),
+          Effect.ignore,
+        ),
+      );
       yield* runStartupPhase(
         "auxiliary-roots.parked",
         options?.awaitAuxiliaryParked ?? Effect.void,

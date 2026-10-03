@@ -41,7 +41,9 @@ export interface OrchestrationEngineShape {
    * @param fromSequenceExclusive - Sequence cursor (exclusive).
    * @param limit - Maximum number of events to read. Defaults to the event
    *   store's page-bounded default; pass a higher value when the caller must
-   *   read a wider global range. Thread subscriptions use readThreadEvents.
+   *   read a wider global range. Callers must keep this bounded; use a
+   *   projection snapshot instead of replaying an arbitrarily stale cursor.
+   *   Thread subscriptions use readThreadEvents.
    * @returns Stream containing ordered events.
    */
   readonly readEvents: (

@@ -38,6 +38,7 @@ import * as CodexErrors from "effect-codex-app-server/errors";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
+import { DirenvEnvironmentError } from "../DirenvEnvironment.ts";
 import type { CodexAdapterShape } from "../Services/CodexAdapter.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
 import {
@@ -90,6 +91,8 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
     Promise.resolve(undefined),
   );
 
+  public readonly compactSessionImpl = vi.fn((): Promise<void> => Promise.resolve(undefined));
+
   public readonly readThreadImpl = vi.fn((): Promise<CodexThreadSnapshot> =>
     Promise.resolve({
       threadId: "provider-thread-1",
@@ -138,6 +141,10 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
 
   interruptTurn(turnId?: TurnId) {
     return Effect.promise(() => this.interruptTurnImpl(turnId));
+  }
+
+  get compactSession() {
+    return Effect.promise(() => this.compactSessionImpl());
   }
 
   readThread = Effect.promise(() => this.readThreadImpl());
@@ -319,6 +326,78 @@ const sessionErrorLayer = it.layer(
 );
 
 sessionErrorLayer("CodexAdapterLive session errors", (it) => {
+  it.effect(
+    "uses the resolved environment and preserves an existing session on resolver failure",
+    () => {
+      const runtimeFactory = makeRuntimeFactory();
+      let shouldFail = false;
+      const resolvedEnvironment = {
+        PATH: process.env.PATH,
+        PROVIDER_VALUE: "from-direnv",
+        T3CODE_CODEX_LAUNCH_ARGS: "--enable direnv-feature",
+      };
+      const resolveEnvironment = vi.fn((_input: { readonly cwd: string }) =>
+        shouldFail
+          ? Effect.fail(
+              new DirenvEnvironmentError({
+                stage: "execution",
+                detail: "direnv allow is required.",
+              }),
+            )
+          : Effect.succeed(resolvedEnvironment),
+      );
+      const layer = Layer.effect(
+        CodexAdapter,
+        Effect.gen(function* () {
+          const codexConfig = decodeCodexSettings({});
+          return yield* makeCodexAdapter(codexConfig, {
+            environment: { PATH: process.env.PATH, PROVIDER_VALUE: "configured" },
+            resolveEnvironment,
+            makeRuntime: runtimeFactory.factory,
+          });
+        }),
+      ).pipe(
+        Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+        Layer.provideMerge(ServerSettingsService.layerTest()),
+        Layer.provideMerge(providerSessionDirectoryTestLayer),
+        Layer.provideMerge(NodeServices.layer),
+      );
+
+      return Effect.gen(function* () {
+        const adapter = yield* CodexAdapter;
+        const threadId = asThreadId("sess-direnv-preserve");
+        yield* adapter.startSession({
+          provider: ProviderDriverKind.make("codex"),
+          threadId,
+          cwd: ".",
+          runtimeMode: "full-access",
+        });
+
+        const runtime = runtimeFactory.lastRuntime;
+        NodeAssert.ok(runtime);
+        NodeAssert.strictEqual(runtime.options.environment, resolvedEnvironment);
+        NodeAssert.equal(runtime.options.launchArgs, "--enable direnv-feature");
+        NodeAssert.equal(resolveEnvironment.mock.calls[0]?.[0].cwd, process.cwd());
+
+        shouldFail = true;
+        const error = yield* adapter
+          .startSession({
+            provider: ProviderDriverKind.make("codex"),
+            threadId,
+            cwd: ".",
+            runtimeMode: "full-access",
+          })
+          .pipe(Effect.flip);
+
+        NodeAssert.equal(error._tag, "ProviderAdapterProcessError");
+        NodeAssert.match(error.detail, /direnv allow/u);
+        NodeAssert.equal(runtimeFactory.factory.mock.calls.length, 1);
+        NodeAssert.equal(runtime.closeImpl.mock.calls.length, 0);
+        NodeAssert.equal((yield* adapter.listSessions()).length, 1);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
   it.effect("maps missing adapter sessions to ProviderAdapterSessionNotFoundError", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
@@ -718,6 +797,50 @@ function codexTurnEvent(method: "turn/started" | "turn/completed", turnId: strin
 }
 
 lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
+  it.effect("keeps forwarding events after the start-session caller exits", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-short-lived-start-caller");
+      const startCaller = yield* adapter
+        .startSession({
+          provider: ProviderDriverKind.make("codex"),
+          threadId,
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.forkChild);
+      yield* Fiber.join(startCaller);
+
+      const runtime = lifecycleRuntimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      yield* runtime.emit({
+        id: asEventId("evt-after-start-caller-exited"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "turn/started",
+        threadId,
+        turnId: asTurnId("turn-after-start-caller-exited"),
+        payload: {
+          threadId: "provider-thread-1",
+          turn: {
+            id: "turn-after-start-caller-exited",
+            status: "inProgress",
+            items: [],
+            error: null,
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber).pipe(Effect.timeout("1 second"));
+      NodeAssert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") return;
+      NodeAssert.equal(firstEvent.value.type, "turn.started");
+      NodeAssert.equal(firstEvent.value.turnId, "turn-after-start-caller-exited");
+    }),
+  );
+
   it.effect("calculates one Codex turn total from cumulative counters", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();

@@ -147,9 +147,16 @@ const CODEX_DRIVER_KIND = ProviderDriverKind.make("codex");
 const CLAUDE_DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
 const CURSOR_DRIVER_KIND = ProviderDriverKind.make("cursor");
 const GROK_DRIVER_KIND = ProviderDriverKind.make("grok");
+const KIMI_DRIVER_KIND = ProviderDriverKind.make("kimi");
 const OPENCODE_DRIVER_KIND = ProviderDriverKind.make("opencode");
 
 export const DEFAULT_MODEL = "gpt-6-astra";
+
+/**
+ * Grok's default model. Grok Build held this slot from the original Grok
+ * integration; 4.6 is the frontier model Grok's own session default reports.
+ */
+export const GROK_DEFAULT_MODEL = "grok-4.6";
 
 /**
  * Codex default-model preference, most preferred first. The provider snapshot
@@ -170,8 +177,8 @@ export const DEFAULT_MODEL_BY_PROVIDER: Partial<Record<ProviderDriverKind, strin
   [CODEX_DRIVER_KIND]: DEFAULT_MODEL,
   [CLAUDE_DRIVER_KIND]: "claude-fable-5-1",
   [CURSOR_DRIVER_KIND]: "auto",
-  // Product slug, not an ACP model id. The Grok adapter treats it as "the session's current model".
-  [GROK_DRIVER_KIND]: "grok-build",
+  [GROK_DRIVER_KIND]: GROK_DEFAULT_MODEL,
+  [KIMI_DRIVER_KIND]: "kimi-code/k3",
   [OPENCODE_DRIVER_KIND]: "openai/gpt-5",
   [ProviderDriverKind.make("antigravity")]: ANTIGRAVITY_DEFAULT_MODEL,
 };
@@ -184,6 +191,7 @@ export const DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER: Partial<
   [ProviderDriverKind.make("antigravity")]: ANTIGRAVITY_DEFAULT_MODEL,
   [CLAUDE_DRIVER_KIND]: "claude-haiku-4-5",
   [CURSOR_DRIVER_KIND]: "composer-2",
+  [KIMI_DRIVER_KIND]: "kimi-code/k3",
   [OPENCODE_DRIVER_KIND]: "openai/gpt-5",
 };
 

@@ -120,6 +120,14 @@ export type AcpParsedSessionEvent =
       readonly rawPayload: unknown;
     }
   | {
+      /** ACP `usage_update`, or `_meta.totalTokens` on ordinary session updates
+       * (Grok, Cursor, Kimi). */
+      readonly _tag: "UsageUpdated";
+      readonly used: number;
+      readonly size?: number;
+      readonly rawPayload: unknown;
+    }
+  | {
       readonly _tag: "ThoughtDelta";
       readonly text: string;
       readonly rawPayload: unknown;
@@ -869,6 +877,25 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
       }
       break;
     }
+    case "usage_update": {
+      const used =
+        typeof upd.used === "number" && Number.isFinite(upd.used)
+          ? Math.round(upd.used)
+          : undefined;
+      const size =
+        typeof upd.size === "number" && Number.isFinite(upd.size)
+          ? Math.round(upd.size)
+          : undefined;
+      if (used !== undefined && used >= 0 && size !== undefined && size > 0) {
+        events.push({
+          _tag: "UsageUpdated",
+          used,
+          size,
+          rawPayload: params,
+        });
+      }
+      break;
+    }
     case "agent_thought_chunk": {
       if (upd.content.type === "text" && upd.content.text.length > 0) {
         events.push({
@@ -883,5 +910,42 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
       break;
   }
 
+  appendUsageFromSessionMeta(params, events);
+
   return { ...(modeId !== undefined ? { modeId } : {}), events };
+}
+
+function totalTokensFromMeta(value: unknown): number | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const totalTokens = value.totalTokens;
+  if (typeof totalTokens !== "number" || !Number.isFinite(totalTokens) || totalTokens <= 0) {
+    return undefined;
+  }
+  return Math.round(totalTokens);
+}
+
+/**
+ * ACP agents may report a running total on `_meta.totalTokens` of ordinary
+ * session updates instead of (or as well as) `usage_update`.
+ */
+function appendUsageFromSessionMeta(
+  params: EffectAcpSchema.SessionNotification,
+  events: Array<AcpParsedSessionEvent>,
+): void {
+  if (events.some((event) => event._tag === "UsageUpdated")) {
+    return;
+  }
+  const used =
+    totalTokensFromMeta(isRecord(params.update) ? params.update._meta : undefined) ??
+    totalTokensFromMeta(params._meta);
+  if (used === undefined) {
+    return;
+  }
+  events.push({
+    _tag: "UsageUpdated",
+    used,
+    rawPayload: params,
+  });
 }

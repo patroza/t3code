@@ -14,6 +14,7 @@ import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
@@ -40,8 +41,14 @@ import {
   type OrchestrationDispatchError,
   type OrchestrationProjectorDecodeError,
 } from "../Errors.ts";
+import {
+  createEmptyCommandReadModel,
+  findThreadById,
+  fromWireReadModel,
+  type CommandReadModel,
+} from "../commandReadModel.ts";
 import { decideOrchestrationCommand } from "../decider.ts";
-import { createEmptyReadModel, projectEvent } from "../projector.ts";
+import { projectEvent } from "../projector.ts";
 import { OrchestrationProjectionPipeline } from "../Services/ProjectionPipeline.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { ThreadBackgroundLivenessService } from "../ThreadBackgroundLiveness.ts";
@@ -91,15 +98,15 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
-  let commandReadModel = createEmptyReadModel(yield* nowIso);
+  let commandReadModel: CommandReadModel = createEmptyCommandReadModel(yield* nowIso);
 
   const commandQueue = yield* Queue.unbounded<CommandEnvelope>();
   const eventPubSub = yield* PubSub.unbounded<OrchestrationEvent>();
 
   const projectEventsOntoReadModel = (
-    baseReadModel: OrchestrationReadModel,
+    baseReadModel: CommandReadModel,
     events: ReadonlyArray<OrchestrationEvent>,
-  ): Effect.Effect<OrchestrationReadModel, OrchestrationProjectorDecodeError, never> =>
+  ): Effect.Effect<CommandReadModel, OrchestrationProjectorDecodeError, never> =>
     Effect.gen(function* () {
       let nextReadModel = baseReadModel;
       for (const event of events) {
@@ -225,18 +232,20 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           envelope.command.linkedPullRequest !== undefined
         ) {
           const threadId = envelope.command.threadId;
-          const thread = commandReadModel.threads.find((thread) => thread.id === threadId);
+          const thread = findThreadById(commandReadModel, threadId);
           if (thread !== undefined) {
             const project = yield* projectionSnapshotQuery.getProjectShellById(thread.projectId);
             if (Option.isSome(project)) {
-              commandReadModel = {
-                ...commandReadModel,
-                projects: commandReadModel.projects.map((entry) =>
-                  entry.id === thread.projectId
-                    ? { ...entry, repositoryIdentity: project.value.repositoryIdentity }
-                    : entry,
-                ),
-              };
+              const existing = HashMap.get(commandReadModel.projects, thread.projectId);
+              if (Option.isSome(existing)) {
+                commandReadModel = {
+                  ...commandReadModel,
+                  projects: HashMap.set(commandReadModel.projects, thread.projectId, {
+                    ...existing.value,
+                    repositoryIdentity: project.value.repositoryIdentity,
+                  }),
+                };
+              }
             }
           }
         }
@@ -418,12 +427,21 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   };
 
   yield* projectionPipeline.bootstrap;
-  commandReadModel = yield* projectionSnapshotQuery.getCommandReadModel();
+  // Seed the in-memory command model from the DB projection. Deleted threads
+  // are dropped so the model starts consistent with the projector's eviction
+  // policy (see commandReadModel.ts / the `thread.deleted` projector branch).
+  commandReadModel = fromWireReadModel(yield* projectionSnapshotQuery.getCommandReadModel(), {
+    dropDeletedThreads: true,
+  });
 
   const worker = Effect.forever(Queue.take(commandQueue).pipe(Effect.flatMap(processEnvelope)));
   yield* Effect.forkScoped(worker);
   yield* Effect.logDebug("orchestration engine started").pipe(
-    Effect.annotateLogs({ sequence: commandReadModel.snapshotSequence }),
+    Effect.annotateLogs({
+      sequence: commandReadModel.snapshotSequence,
+      threadCount: HashMap.size(commandReadModel.threads),
+      projectCount: HashMap.size(commandReadModel.projects),
+    }),
   );
 
   const readEvents: OrchestrationEngineShape["readEvents"] = (fromSequenceExclusive, limit) =>

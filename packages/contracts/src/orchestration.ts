@@ -24,6 +24,7 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
+import { ClientSourceHint, SourceRef, ThreadParticipantSummary } from "./identity.ts";
 import {
   PullRequestActor,
   PullRequestChecksState,
@@ -36,6 +37,7 @@ export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
   getWorkflowScript: "orchestration.getWorkflowScript",
   getTurnDiff: "orchestration.getTurnDiff",
+  getThreadActivities: "orchestration.getThreadActivities",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
   searchThreads: "orchestration.searchThreads",
   getArchivedShellSnapshot: "orchestration.getArchivedShellSnapshot",
@@ -426,6 +428,17 @@ export const ProjectScript = Schema.Struct({
   icon: ProjectScriptIcon,
   runOnWorktreeCreate: Schema.Boolean,
   /**
+   * When true, the script runs (and must exit 0) before a worktree is removed.
+   * Absent/undefined means false so older stored scripts keep decoding.
+   */
+  runOnWorktreeRemove: Schema.optional(Schema.Boolean),
+  /**
+   * When true, the script runs when T3 observes the branch change request
+   * transition to merged (status poll), independent of worktree removal.
+   * Absent/undefined means false so older stored scripts keep decoding.
+   */
+  runOnPrMerged: Schema.optional(Schema.Boolean),
+  /**
    * For `runOnWorktreeCreate` scripts: when false, the agent's first turn waits
    * for the script to exit. Absent or true starts the agent right away and
    * lets the script finish in the background.
@@ -579,6 +592,8 @@ export const OrchestrationMessage = Schema.Struct({
   context: Schema.optional(OrchestrationMessageContext),
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,
+  /** Server-authored provenance; absent on legacy / assistant messages. */
+  source: Schema.optional(SourceRef),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -702,6 +717,23 @@ export const ThreadTitleRegeneration = Schema.Struct({
   startedAt: IsoDateTime,
 });
 export type ThreadTitleRegeneration = typeof ThreadTitleRegeneration.Type;
+/**
+ * A follow-up message held server-side while a turn is running. Queued
+ * messages are not part of the thread timeline; they enter it via the
+ * normal `thread.message-sent` event when dispatched (auto-drain on turn
+ * completion, or an explicit `thread.queue.steer`).
+ */
+export const OrchestrationQueuedMessage = Schema.Struct({
+  messageId: MessageId,
+  text: Schema.String,
+  attachments: Schema.Array(ChatAttachment),
+  modelSelection: Schema.optional(ModelSelection),
+  sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  /** Server-stamped at enqueue; preserved when the queue drains to message-sent. */
+  source: Schema.optional(SourceRef),
+  queuedAt: IsoDateTime,
+});
+export type OrchestrationQueuedMessage = typeof OrchestrationQueuedMessage.Type;
 
 /**
  * Legacy single-PR link. Still emitted as the thread's derived current pull
@@ -847,12 +879,35 @@ export const OrchestrationThread = Schema.Struct({
   titleState: Schema.optional(Schema.NullOr(ThreadTitleState)),
   deletedAt: Schema.NullOr(IsoDateTime),
   messages: Schema.Array(OrchestrationMessage),
+  queuedMessages: Schema.Array(OrchestrationQueuedMessage).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+  /**
+   * The turn start that was requested but not yet adopted by a provider
+   * session. Non-null between `thread.turn-start-requested` and the session
+   * reporting running (or a terminal status / start failure). While set,
+   * follow-up sends queue and drains hold — the session status alone cannot
+   * see this window. Read-model twin of the SQL pending-turn-start row.
+   */
+  pendingTurnStart: Schema.NullOr(
+    Schema.Struct({
+      messageId: MessageId,
+      requestedAt: IsoDateTime,
+    }),
+  ).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   proposedPlans: Schema.Array(OrchestrationProposedPlan).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   activities: Schema.Array(OrchestrationThreadActivity),
+  // The detail snapshot windows `activities` to the most recent page; this is
+  // true when older activities exist beyond the window and can be lazy-loaded
+  // via the getThreadActivities RPC. Absent on lightweight (shell) threads.
+  hasMoreActivities: Schema.optional(Schema.Boolean),
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
   session: Schema.NullOr(OrchestrationSession),
+  originSource: Schema.optional(Schema.NullOr(SourceRef)),
+  // Optional without default so legacy fixtures omit the field; clients use ?? [].
+  participantSummaries: Schema.optional(Schema.Array(ThreadParticipantSummary)),
 });
 export type OrchestrationThread = typeof OrchestrationThread.Type;
 
@@ -920,6 +975,13 @@ export const OrchestrationThreadShell = Schema.Struct({
   hasPendingApprovals: Schema.Boolean,
   hasPendingUserInput: Schema.Boolean,
   hasActionableProposedPlan: Schema.Boolean,
+  /** First user message SourceRef; null/absent on legacy threads. */
+  originSource: Schema.optional(Schema.NullOr(SourceRef)),
+  /**
+   * Distinct people on user messages: origin person first, then first-participation order.
+   * Used for creator + +N participant stack. Absent on legacy shells (clients use ?? []).
+   */
+  participantSummaries: Schema.optional(Schema.Array(ThreadParticipantSummary)),
   /**
    * Native background work alive after the turn settles: "working" while
    * subagents/workflows run, "monitoring" when watch loops are the only
@@ -1305,6 +1367,9 @@ const ThreadTurnStartBootstrapPrepareWorktree = Schema.Struct({
   baseBranch: TrimmedNonEmptyString,
   branch: Schema.optional(TrimmedNonEmptyString),
   startFromOrigin: Schema.optional(Schema.Boolean),
+  // Check out `baseBranch` in the worktree instead of creating a new branch
+  // from it. Wins over `branch`/`startFromOrigin` when set.
+  reuseBaseBranch: Schema.optional(Schema.Boolean),
   requireWorktree: Schema.optional(Schema.Boolean),
 });
 
@@ -1335,6 +1400,17 @@ export const ThreadTurnStartCommand = Schema.Struct({
   ),
   bootstrap: Schema.optional(ThreadTurnStartBootstrap),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  /**
+   * Server-authored only. Gate layer stamps from session claim + deviceType
+   * or resolves platform actors from `sourceHint` (bots / integrations).
+   * Clients must not send trusted person fields.
+   */
+  source: Schema.optional(SourceRef),
+  /**
+   * Non-person hints from trusted integrations (Discord bot, etc.).
+   * Server resolves personId via the identity map; never trusts client person fields.
+   */
+  sourceHint: Schema.optional(ClientSourceHint),
   createdAt: IsoDateTime,
 });
 
@@ -1355,6 +1431,8 @@ const ClientThreadTurnStartCommand = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   bootstrap: Schema.optional(ThreadTurnStartBootstrap),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  /** Platform actor/location only — server stamps person from the identity map. */
+  sourceHint: Schema.optional(ClientSourceHint),
   createdAt: IsoDateTime,
 });
 
@@ -1363,6 +1441,46 @@ const ThreadTurnInterruptCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   turnId: Schema.optional(TurnId),
+  createdAt: IsoDateTime,
+});
+
+/**
+ * Request provider context compaction for a thread session.
+ * Adapters that support manual compact run it; others surface an unsupported error.
+ */
+const ThreadContextCompactCommand = Schema.Struct({
+  type: Schema.Literal("thread.context.compact"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  createdAt: IsoDateTime,
+});
+
+/**
+ * Send a queued message immediately, steering the active turn. Degrades to
+ * a normal turn start when the thread is idle by the time it is processed.
+ */
+const ThreadQueueSteerCommand = Schema.Struct({
+  type: Schema.Literal("thread.queue.steer"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  createdAt: IsoDateTime,
+});
+
+const ThreadQueueRemoveCommand = Schema.Struct({
+  type: Schema.Literal("thread.queue.remove"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  createdAt: IsoDateTime,
+});
+
+const ThreadQueueUpdateCommand = Schema.Struct({
+  type: Schema.Literal("thread.queue.update"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  text: Schema.String,
   createdAt: IsoDateTime,
 });
 
@@ -1448,6 +1566,10 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadInteractionModeSetCommand,
   ThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
+  ThreadContextCompactCommand,
+  ThreadQueueSteerCommand,
+  ThreadQueueRemoveCommand,
+  ThreadQueueUpdateCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
   ThreadUserInputDismissCommand,
@@ -1482,6 +1604,10 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadInteractionModeSetCommand,
   ClientThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
+  ThreadContextCompactCommand,
+  ThreadQueueSteerCommand,
+  ThreadQueueRemoveCommand,
+  ThreadQueueUpdateCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
   ThreadUserInputDismissCommand,
@@ -1566,6 +1692,8 @@ const ThreadMessageUserAppendCommand = Schema.Struct({
     attachments: Schema.Array(ChatAttachment),
     context: Schema.optional(OrchestrationMessageContext),
   }),
+  /** Copied from the bootstrap turn.start stamp. Worktree creates skip message-sent. */
+  source: Schema.optional(SourceRef),
   createdAt: IsoDateTime,
 });
 
@@ -1596,6 +1724,18 @@ const ThreadActivityAppendCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   activity: OrchestrationThreadActivity,
+  createdAt: IsoDateTime,
+});
+
+/**
+ * Server-internal: dispatch the queued-message head as a turn after a
+ * natural (non-interrupted) turn completion. Rejected when the queue is
+ * empty or the thread is busy again; the dispatcher ignores the rejection.
+ */
+const ThreadQueueDrainCommand = Schema.Struct({
+  type: Schema.Literal("thread.queue.drain"),
+  commandId: CommandId,
+  threadId: ThreadId,
   createdAt: IsoDateTime,
 });
 
@@ -1630,6 +1770,25 @@ const ThreadTitleRegenerationCompleteCommand = Schema.Struct({
   threadId: ThreadId,
   requestId: CommandId,
   title: Schema.optional(TrimmedNonEmptyString),
+  createdAt: IsoDateTime,
+});
+
+/**
+ * Rebuild a thread's transcript tail from an authoritative external source.
+ *
+ * Server-internal: raised when T3 notices a provider's own session log has run
+ * ahead of the thread (the ACP stream dropped updates, or the session was driven
+ * from another client). See ThreadMessagesResyncedPayload for the rewind
+ * semantics.
+ */
+const ThreadMessagesResyncCommand = Schema.Struct({
+  type: Schema.Literal("thread.messages.resync"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  afterMessageId: Schema.NullOr(MessageId),
+  messages: Schema.Array(OrchestrationMessage),
+  reason: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
 });
 
 const ThreadPullRequestSyncCommand = Schema.Struct({
@@ -1672,12 +1831,12 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadProposedPlanUpsertCommand,
   ThreadTurnDiffCompleteCommand,
   ThreadActivityAppendCommand,
+  ThreadQueueDrainCommand,
   ThreadRevertCompleteCommand,
   ThreadTitleRegenerationCompleteCommand,
+  ThreadMessagesResyncCommand,
   ThreadTitleGenerateCompleteCommand,
   ThreadTitleRefineCommand,
-  ThreadPullRequestSyncCommand,
-  ThreadPullRequestLinkSyncCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 
@@ -1710,12 +1869,16 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.runtime-mode-set",
   "thread.interaction-mode-set",
   "thread.message-sent",
+  "thread.message-queued",
+  "thread.queued-message-removed",
   "thread.turn-start-requested",
   "thread.turn-interrupt-requested",
+  "thread.context-compact-requested",
   "thread.approval-response-requested",
   "thread.user-input-response-requested",
   "thread.checkpoint-revert-requested",
   "thread.reverted",
+  "thread.messages-resynced",
   "thread.session-stop-requested",
   "thread.session-set",
   "thread.proposed-plan-upserted",
@@ -1919,8 +2082,32 @@ export const ThreadMessageSentPayload = Schema.Struct({
   // Events persisted before the field existed carry no key at all.
   turnId: Schema.NullOr(TurnId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   streaming: Schema.Boolean,
+  /** Server-authored only; clients must not invent person fields. */
+  source: Schema.optional(SourceRef),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
+});
+
+export const ThreadMessageQueuedPayload = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  text: Schema.String,
+  attachments: Schema.Array(ChatAttachment),
+  modelSelection: Schema.optional(ModelSelection),
+  sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  /** Server-stamped provenance for the queued user message. */
+  source: Schema.optional(SourceRef),
+  queuedAt: IsoDateTime,
+});
+
+export const ThreadQueuedMessageRemovedReason = Schema.Literals(["user", "dispatched"]);
+export type ThreadQueuedMessageRemovedReason = typeof ThreadQueuedMessageRemovedReason.Type;
+
+export const ThreadQueuedMessageRemovedPayload = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  reason: ThreadQueuedMessageRemovedReason,
+  removedAt: IsoDateTime,
 });
 
 export const ThreadTurnStartRequestedPayload = Schema.Struct({
@@ -1939,6 +2126,11 @@ export const ThreadTurnStartRequestedPayload = Schema.Struct({
 export const ThreadTurnInterruptRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   turnId: Schema.optional(TurnId),
+  createdAt: IsoDateTime,
+});
+
+export const ThreadContextCompactRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
   createdAt: IsoDateTime,
 });
 
@@ -1967,6 +2159,28 @@ export const ThreadCheckpointRevertRequestedPayload = Schema.Struct({
 export const ThreadRevertedPayload = Schema.Struct({
   threadId: ThreadId,
   turnCount: NonNegativeInt,
+});
+
+/**
+ * A thread's transcript was rebuilt from an authoritative external source (e.g.
+ * a grok session backfill after the ACP stream dropped updates).
+ *
+ * Out-of-band writes straight to the projection are invisible to clients: a
+ * warm-cache client resumes from `afterSequence` and only ever receives events
+ * past that cursor. This event is what makes such a rebuild observable — it
+ * lands past every client's cursor, so the existing catch-up replay delivers it.
+ *
+ * It carries a rewind point rather than a whole snapshot: everything up to and
+ * including `afterMessageId` is known-good and untouched; only the tail after it
+ * is replaced by `messages`. `afterMessageId: null` replaces the whole
+ * transcript. A client that does not hold `afterMessageId` cannot rewind
+ * precisely and must reload the thread instead.
+ */
+export const ThreadMessagesResyncedPayload = Schema.Struct({
+  threadId: ThreadId,
+  afterMessageId: Schema.NullOr(MessageId),
+  messages: Schema.Array(OrchestrationMessage),
+  reason: TrimmedNonEmptyString,
 });
 
 export const ThreadSessionStopRequestedPayload = Schema.Struct({
@@ -2154,6 +2368,16 @@ export const OrchestrationEvent = Schema.Union([
   }),
   Schema.Struct({
     ...EventBaseFields,
+    type: Schema.Literal("thread.message-queued"),
+    payload: ThreadMessageQueuedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.queued-message-removed"),
+    payload: ThreadQueuedMessageRemovedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
     type: Schema.Literal("thread.turn-start-requested"),
     payload: ThreadTurnStartRequestedPayload,
   }),
@@ -2161,6 +2385,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.turn-interrupt-requested"),
     payload: ThreadTurnInterruptRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.context-compact-requested"),
+    payload: ThreadContextCompactRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
@@ -2181,6 +2410,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.reverted"),
     payload: ThreadRevertedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.messages-resynced"),
+    payload: ThreadMessagesResyncedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
@@ -2281,6 +2515,37 @@ export type OrchestrationGetTurnDiffInput = typeof OrchestrationGetTurnDiffInput
 export const OrchestrationGetTurnDiffResult = ThreadTurnDiff;
 export type OrchestrationGetTurnDiffResult = typeof OrchestrationGetTurnDiffResult.Type;
 
+/**
+ * Cursor-paginated load of a thread's OLDER activities (lazy-load / infinite
+ * scroll). Sequenced activity uses `beforeSequence`, the `sequence` of the
+ * oldest activity the client currently holds. Legacy unsequenced activity uses
+ * the `(beforeCreatedAt, beforeActivityId)` pair from the oldest loaded
+ * activity. The server returns the page of activities immediately older than the
+ * cursor (chronological ascending) plus whether any remain beyond that.
+ */
+export const OrchestrationGetThreadActivitiesInput = Schema.Union([
+  Schema.Struct({
+    threadId: ThreadId,
+    beforeSequence: NonNegativeInt,
+    limit: Schema.optional(NonNegativeInt),
+  }),
+  Schema.Struct({
+    threadId: ThreadId,
+    beforeCreatedAt: IsoDateTime,
+    beforeActivityId: EventId,
+    limit: Schema.optional(NonNegativeInt),
+  }),
+]);
+export type OrchestrationGetThreadActivitiesInput =
+  typeof OrchestrationGetThreadActivitiesInput.Type;
+
+export const OrchestrationGetThreadActivitiesResult = Schema.Struct({
+  activities: Schema.Array(OrchestrationThreadActivity),
+  hasMore: Schema.Boolean,
+});
+export type OrchestrationGetThreadActivitiesResult =
+  typeof OrchestrationGetThreadActivitiesResult.Type;
+
 export const OrchestrationGetFullThreadDiffInput = Schema.Struct({
   threadId: ThreadId,
   toTurnCount: NonNegativeInt,
@@ -2377,6 +2642,10 @@ export const OrchestrationRpcSchemas = {
     input: OrchestrationGetTurnDiffInput,
     output: OrchestrationGetTurnDiffResult,
   },
+  getThreadActivities: {
+    input: OrchestrationGetThreadActivitiesInput,
+    output: OrchestrationGetThreadActivitiesResult,
+  },
   getFullThreadDiff: {
     input: OrchestrationGetFullThreadDiffInput,
     output: OrchestrationGetFullThreadDiffResult,
@@ -2399,11 +2668,26 @@ export const OrchestrationRpcSchemas = {
   },
 } as const;
 
+/**
+ * Why a thread snapshot could not be produced. Lets subscribers distinguish a
+ * permanently unavailable thread ("thread-deleted"/"thread-archived" — stop
+ * retrying) from a potentially transient miss ("thread-missing" — the
+ * projection row may simply not be written yet, so retrying is correct).
+ */
+export const OrchestrationSnapshotUnavailableReason = Schema.Literals([
+  "thread-deleted",
+  "thread-archived",
+  "thread-missing",
+]);
+export type OrchestrationSnapshotUnavailableReason =
+  typeof OrchestrationSnapshotUnavailableReason.Type;
+
 export class OrchestrationGetSnapshotError extends Schema.TaggedError<OrchestrationGetSnapshotError>()(
   "OrchestrationGetSnapshotError",
   {
     message: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),
+    reason: Schema.optional(OrchestrationSnapshotUnavailableReason),
   },
 ) {}
 
@@ -2411,6 +2695,8 @@ export class OrchestrationDispatchCommandError extends Schema.TaggedError<Orches
   "OrchestrationDispatchCommandError",
   {
     message: TrimmedNonEmptyString,
+    /** Optional machine code (e.g. identity_claim_required) for client branching. */
+    code: Schema.optionalKey(TrimmedNonEmptyString),
     cause: Schema.optional(Schema.Defect()),
     bootstrapThreadDisposition: Schema.optional(Schema.Literals(["deleted", "not-created"])),
   },
@@ -2418,6 +2704,14 @@ export class OrchestrationDispatchCommandError extends Schema.TaggedError<Orches
 
 export class OrchestrationGetTurnDiffError extends Schema.TaggedError<OrchestrationGetTurnDiffError>()(
   "OrchestrationGetTurnDiffError",
+  {
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
+export class OrchestrationGetThreadActivitiesError extends Schema.TaggedError<OrchestrationGetThreadActivitiesError>()(
+  "OrchestrationGetThreadActivitiesError",
   {
     message: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),

@@ -29,6 +29,7 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as Tracer from "effect/Tracer";
 import * as TestClock from "effect/testing/TestClock";
+import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -668,7 +669,6 @@ describe("signRelayAgentActivityPublishProof", { concurrent: false }, () => {
   it.effect("publishes agent activity to the relay transport URL, not the relay issuer", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const originalFetch = globalThis.fetch;
         const events = yield* Queue.unbounded<OrchestrationEvent>();
         let resolveFetchSeen: (url: URL) => void = () => {};
         const fetchSeen = new Promise<URL>((resolve) => {
@@ -756,7 +756,7 @@ describe("signRelayAgentActivityPublishProof", { concurrent: false }, () => {
           },
         } satisfies ExecutionEnvironmentDescriptor;
 
-        globalThis.fetch = ((input: Parameters<typeof fetch>[0]) => {
+        const testFetch = ((input: Parameters<typeof fetch>[0]) => {
           const url = new URL(
             typeof input === "string" || input instanceof URL
               ? input
@@ -765,11 +765,6 @@ describe("signRelayAgentActivityPublishProof", { concurrent: false }, () => {
           resolveFetchSeen(url);
           return Promise.resolve(Response.json({ ok: true, deliveries: [] }));
         }) as unknown as typeof fetch;
-        yield* Effect.addFinalizer(() =>
-          Effect.sync(() => {
-            globalThis.fetch = originalFetch;
-          }),
-        );
 
         const layer = Layer.mergeAll(
           Layer.succeed(ServerSecretStore.ServerSecretStore, secrets.store),
@@ -836,6 +831,7 @@ describe("signRelayAgentActivityPublishProof", { concurrent: false }, () => {
             ),
           ),
           Effect.provideService(RelayClientTracer, Option.some(collectingTracer(productSpans))),
+          Effect.provideService(FetchHttpClient.Fetch, testFetch),
           Effect.withTracer(collectingTracer(userSpans)),
         );
       }),

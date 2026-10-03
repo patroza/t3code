@@ -12,12 +12,15 @@ import type {
   CheckpointRef,
   MessageId,
   OrchestrationCheckpointSummary,
+  OrchestrationGetThreadActivitiesInput,
+  OrchestrationGetThreadActivitiesResult,
   OrchestrationMessage,
   OrchestrationProject,
   OrchestrationProjectShell,
   OrchestrationReadModel,
   OrchestrationSearchThreadsInput,
   OrchestrationSearchThreadsResult,
+  OrchestrationSession,
   OrchestrationShellSnapshot,
   OrchestrationThread,
   OrchestrationThreadActivity,
@@ -53,6 +56,11 @@ export interface ProjectionThreadCheckpointContext {
   readonly workspaceRoot: string;
   readonly worktreePath: string | null;
   readonly checkpoints: ReadonlyArray<OrchestrationCheckpointSummary>;
+}
+
+export interface ProjectionSessionStopContext {
+  readonly threadId: ThreadId;
+  readonly session: OrchestrationSession | null;
 }
 
 export interface ProjectionFullThreadDiffContext {
@@ -245,6 +253,18 @@ export interface ProjectionSnapshotQueryShape {
   ) => Effect.Effect<Option.Option<ProjectionFullThreadDiffContext>, ProjectionRepositoryError>;
 
   /**
+   * Read the narrow context needed to stop a thread's provider session.
+   *
+   * Unlike the shell/detail queries this includes archived, nondeleted
+   * threads: session-stop commands dispatched as part of archiving must
+   * still resolve the thread after `archivedAt` is set, or the provider
+   * session would never be stopped.
+   */
+  readonly getSessionStopContextById: (
+    threadId: ThreadId,
+  ) => Effect.Effect<Option.Option<ProjectionSessionStopContext>, ProjectionRepositoryError>;
+
+  /**
    * Read a single active thread shell row by id.
    */
   readonly getThreadShellById: (
@@ -256,7 +276,10 @@ export interface ProjectionSnapshotQueryShape {
     threadId: ThreadId,
   ) => Effect.Effect<
     Option.Option<
-      Pick<OrchestrationThreadShell, "id" | "projectId" | "title" | "titleState" | "session">
+      Pick<
+        OrchestrationThreadShell,
+        "id" | "projectId" | "title" | "titleState" | "session" | "interactionMode"
+      >
     >,
     ProjectionRepositoryError
   >;
@@ -304,6 +327,29 @@ export interface ProjectionSnapshotQueryShape {
     threadId: ThreadId,
     window?: OrchestrationThreadDetailWindow,
   ) => Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>, ProjectionRepositoryError>;
+
+  /**
+   * Cursor-paginated load of a thread's older activities (lazy-load / infinite
+   * scroll). Returns the page of activities immediately older than the provided
+   * sequence or unsequenced activity cursor, ascending, plus whether older ones
+   * remain.
+   */
+  readonly getThreadActivitiesPage: (
+    input: OrchestrationGetThreadActivitiesInput,
+  ) => Effect.Effect<OrchestrationGetThreadActivitiesResult, ProjectionRepositoryError>;
+
+  /**
+   * Read a thread's lifecycle markers regardless of its deleted/archived
+   * state. Lets callers that got no active row distinguish a thread that was
+   * deleted or archived (permanent) from one whose projection row does not
+   * exist (possibly not projected yet).
+   */
+  readonly getThreadLifecycleById: (
+    threadId: ThreadId,
+  ) => Effect.Effect<
+    Option.Option<{ readonly deletedAt: string | null; readonly archivedAt: string | null }>,
+    ProjectionRepositoryError
+  >;
 }
 
 /**

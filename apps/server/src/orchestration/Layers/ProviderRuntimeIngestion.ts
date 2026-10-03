@@ -3,6 +3,7 @@ import {
   CommandId,
   MessageId,
   type OrchestrationEvent,
+  type OrchestrationMessage,
   OrchestrationProposedPlanId,
   CheckpointRef,
   classifyTaskAgentKind,
@@ -31,11 +32,14 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { sanitizeTitle } from "@t3tools/shared/threadTitle";
 import { formatTokens } from "@t3tools/shared/usageFormat";
 
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
+import { ProjectionQueuedMessageRepository } from "../../persistence/Services/ProjectionQueuedMessages.ts";
+import { ProjectionQueuedMessageRepositoryLive } from "../../persistence/Layers/ProjectionQueuedMessages.ts";
 import { ProjectionThreadActivityRepository } from "../../persistence/Services/ProjectionThreadActivities.ts";
 import { ProjectionThreadActivityRepositoryLive } from "../../persistence/Layers/ProjectionThreadActivities.ts";
 import * as CheckpointStore from "../../checkpointing/CheckpointStore.ts";
@@ -311,6 +315,11 @@ function assistantSegmentBaseKeyFromEvent(event: ProviderRuntimeEvent): string {
  * machinery; only the message id namespace differs. The prefix is what tells a
  * buffered segment apart when it is flushed or finalized long after the delta
  * that opened it, so the role never has to be threaded through those paths.
+ *
+ * ACP adapters (Grok/Cursor) already use item ids of the form
+ * `assistant:<session>:<run>:segment:<n>`. Prefix only when the base key is not
+ * already in the role namespace so delta + completion paths stay aligned and we
+ * never fork `assistant:assistant:…` twins for the same segment.
  */
 type MessageStreamRole = "assistant" | "reasoning";
 
@@ -326,9 +335,18 @@ function assistantSegmentMessageId(
   role: MessageStreamRole = "assistant",
 ): MessageId {
   const prefix = role === "reasoning" ? REASONING_MESSAGE_ID_PREFIX : "assistant:";
+  const normalizedBase = baseKey.startsWith(prefix) ? baseKey : `${prefix}${baseKey}`;
   return MessageId.make(
-    segmentIndex === 0 ? `${prefix}${baseKey}` : `${prefix}${baseKey}:segment:${segmentIndex}`,
+    segmentIndex === 0 ? normalizedBase : `${normalizedBase}:segment:${segmentIndex}`,
   );
+}
+
+function assistantCompletionMessageId(event: ProviderRuntimeEvent): MessageId {
+  return assistantSegmentMessageId(assistantSegmentBaseKeyFromEvent(event), 0);
+}
+
+function normalizeAssistantText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
 }
 
 /** A provider may stream a reasoning summary and the raw chain of thought over
@@ -1050,6 +1068,7 @@ const make = Effect.gen(function* () {
   const projectionThreadMessages = yield* ProjectionThreadMessageRepository;
   const projectionThreadProposedPlans = yield* ProjectionThreadProposedPlanRepository;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
+  const projectionQueuedMessageRepository = yield* ProjectionQueuedMessageRepository;
   const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
   const serverSettingsService = yield* ServerSettingsService;
   const checkpointStore = yield* CheckpointStore.CheckpointStore;
@@ -1128,6 +1147,29 @@ const make = Effect.gen(function* () {
         Option.filter(description, (value) => value.length > 0).pipe(Option.getOrUndefined),
       ),
     );
+
+  const dispatchQueueDrain = Effect.fn("dispatchQueueDrain")(function* (
+    threadId: ThreadId,
+    event: ProviderRuntimeEvent,
+    now: string,
+  ) {
+    const queuedMessages = yield* projectionQueuedMessageRepository.listByThreadId({ threadId });
+    if (queuedMessages.length === 0) {
+      return;
+    }
+    yield* orchestrationEngine
+      .dispatch({
+        type: "thread.queue.drain",
+        commandId: yield* providerCommandId(event, "queue-drain"),
+        threadId,
+        createdAt: now,
+      })
+      .pipe(
+        // A drain losing the race to a fresh user turn (or an already-empty
+        // queue) is expected; the next natural completion re-attempts.
+        Effect.catchTag("OrchestrationCommandInvariantError", () => Effect.void),
+      );
+  });
 
   const resolveThreadRuntimeContext = Effect.fn("resolveThreadRuntimeContext")(function* (
     threadId: ThreadId,
@@ -1504,6 +1546,13 @@ const make = Effect.gen(function* () {
     finalDeltaCommandTag: string;
     fallbackText?: string;
     hasProjectedMessage?: boolean;
+    /** Already-projected text for this message id (streaming path). */
+    projectedText?: string;
+    /**
+     * Prior assistant messages for this turn (excluding `messageId`). Used to
+     * drop consecutive identical Grok-style status segments.
+     */
+    previousAssistantMessages?: ReadonlyArray<OrchestrationMessage>;
   }) =>
     Effect.gen(function* () {
       const bufferedText = yield* takeBufferedAssistantText(input.messageId);
@@ -1512,12 +1561,49 @@ const make = Effect.gen(function* () {
           ? bufferedText
           : (input.fallbackText?.trim().length ?? 0) > 0
             ? input.fallbackText!
-            : "";
+            : (input.projectedText ?? "");
       const hasRenderableText = hasRenderableAssistantText(text);
 
       const isReasoning = messageStreamRoleOf(input.messageId) === "reasoning";
 
-      if (hasRenderableText) {
+      // Drop consecutive identical assistant segments in a turn (Grok multi-step
+      // ACP can re-open a bubble with the same status text after tools).
+      if (!isReasoning && hasRenderableText && input.previousAssistantMessages) {
+        const previous = input.previousAssistantMessages.at(-1);
+        if (
+          previous &&
+          previous.role === "assistant" &&
+          !previous.streaming &&
+          normalizeAssistantText(previous.text) === normalizeAssistantText(text)
+        ) {
+          yield* clearAssistantMessageState(input.messageId);
+          if (input.turnId) {
+            yield* forgetAssistantMessageId(input.threadId, input.turnId, input.messageId);
+          }
+          // Twin was already streamed into the projection under a new id — still
+          // complete it so the row settles, then the timeline collapses identical
+          // consecutive assistants. For buffered twins we never projected.
+          if (input.hasProjectedMessage) {
+            yield* orchestrationEngine.dispatch({
+              type: "thread.message.assistant.complete",
+              commandId: yield* providerCommandId(input.event, input.commandTag),
+              threadId: input.threadId,
+              messageId: input.messageId,
+              ...(input.turnId ? { turnId: input.turnId } : {}),
+              createdAt: input.createdAt,
+            });
+          }
+          return;
+        }
+      }
+
+      const shouldEmitFinalDelta =
+        hasRenderableText &&
+        (bufferedText.length > 0 ||
+          ((input.projectedText?.length ?? 0) === 0 &&
+            (input.fallbackText?.trim().length ?? 0) > 0));
+
+      if (shouldEmitFinalDelta) {
         yield* orchestrationEngine.dispatch({
           type: isReasoning ? "thread.message.reasoning.delta" : "thread.message.assistant.delta",
           commandId: yield* providerCommandId(input.event, input.finalDeltaCommandTag),
@@ -1813,6 +1899,7 @@ const make = Effect.gen(function* () {
           : Option.none();
       const hasPendingTurnStart =
         Option.isSome(pendingTurnStart) && thread.session?.status === "starting";
+      let drainQueueAfterTurnFinalize = false;
 
       const conflictsWithActiveTurn =
         activeTurnId !== null && eventTurnId !== undefined && !sameId(activeTurnId, eventTurnId);
@@ -1955,6 +2042,15 @@ const make = Effect.gen(function* () {
             },
             createdAt: now,
           });
+
+          // Auto-drain queued follow-ups only on natural completion —
+          // never after an interrupt (the user stopped the agent to take
+          // control) or a failure. The dispatch happens after the
+          // assistant-finalization block below so the drained user message
+          // sequences after the assistant text it follows up on.
+          drainQueueAfterTurnFinalize =
+            event.type === "turn.completed" &&
+            normalizeRuntimeTurnState(event.payload.state) === "completed";
         }
       }
 
@@ -2252,9 +2348,7 @@ const make = Effect.gen(function* () {
       const assistantCompletion =
         event.type === "item.completed" && event.payload.itemType === "assistant_message"
           ? {
-              messageId: MessageId.make(
-                `assistant:${event.itemId ?? event.turnId ?? event.eventId}`,
-              ),
+              messageId: assistantCompletionMessageId(event),
               fallbackText: event.payload.detail,
             }
           : undefined;
@@ -2301,16 +2395,49 @@ const make = Effect.gen(function* () {
         const shouldApplyFallbackCompletionText =
           !existingAssistantMessage || existingAssistantMessage.text.length === 0;
 
-        const shouldSkipRedundantCompletion =
-          Option.isNone(activeAssistantMessageId) &&
+        // Queue-drain race: after turn.completed finalizes a segment under turn A,
+        // the next provider session can re-emit assistant.complete for the same
+        // message id with turn B. Re-dispatching rebinds turnId in the projector
+        // and orphans the final from turn A (Discord loses it under Working).
+        const alreadyBoundToOtherTurn =
+          existingAssistantMessage !== undefined &&
+          existingAssistantMessage.role === "assistant" &&
+          existingAssistantMessage.turnId !== null &&
           turnId !== undefined &&
-          hasAssistantMessagesForTurn &&
-          (assistantCompletion.fallbackText?.trim().length ?? 0) === 0;
+          !sameId(existingAssistantMessage.turnId, turnId);
+
+        const shouldSkipRedundantCompletion =
+          alreadyBoundToOtherTurn ||
+          (Option.isNone(activeAssistantMessageId) &&
+            turnId !== undefined &&
+            hasAssistantMessagesForTurn &&
+            (assistantCompletion.fallbackText?.trim().length ?? 0) === 0);
 
         if (!shouldSkipRedundantCompletion) {
           if (turnId && Option.isNone(activeAssistantMessageId)) {
             yield* rememberAssistantMessageId(thread.id, turnId, assistantMessageId);
           }
+
+          const previousAssistantMessages = turnId
+            ? (yield* projectionThreadMessages.listByThreadId({ threadId: thread.id }))
+                .filter(
+                  (message) =>
+                    message.role === "assistant" &&
+                    message.turnId === turnId &&
+                    message.messageId !== assistantMessageId,
+                )
+                .map((message): OrchestrationMessage => ({
+                  id: message.messageId,
+                  role: message.role,
+                  text: message.text,
+                  attachments: message.attachments,
+                  turnId: message.turnId,
+                  streaming: message.isStreaming,
+                  source: message.source,
+                  createdAt: message.createdAt,
+                  updatedAt: message.updatedAt,
+                }))
+            : [];
 
           yield* finalizeAssistantMessage({
             event,
@@ -2321,6 +2448,10 @@ const make = Effect.gen(function* () {
             commandTag: "assistant-complete",
             finalDeltaCommandTag: "assistant-delta-finalize",
             hasProjectedMessage: existingAssistantMessage !== undefined,
+            previousAssistantMessages,
+            ...(existingAssistantMessage?.text
+              ? { projectedText: existingAssistantMessage.text }
+              : {}),
             ...(assistantCompletion.fallbackText !== undefined && shouldApplyFallbackCompletionText
               ? { fallbackText: assistantCompletion.fallbackText }
               : {}),
@@ -2423,6 +2554,10 @@ const make = Effect.gen(function* () {
             updatedAt: now,
           });
         }
+
+        if (drainQueueAfterTurnFinalize) {
+          yield* dispatchQueueDrain(thread.id, event, now);
+        }
       }
 
       if (event.type === "session.exited") {
@@ -2459,17 +2594,37 @@ const make = Effect.gen(function* () {
       }
 
       if (event.type === "thread.metadata.updated" && event.payload.name) {
+        // Provider-supplied names can carry control characters and arbitrary
+        // length; skip a manual title and still sanitise before generating.
         if (thread.titleState?.source !== "manual" && canReplaceThreadTitle(thread.title)) {
-          yield* orchestrationEngine.dispatch({
-            type: "thread.title.generate.complete",
-            commandId: yield* providerCommandId(event, "thread-meta-update"),
-            threadId: thread.id,
-            title: event.payload.name,
-            expectedTitle: thread.title,
-            expectedVersion: thread.titleState?.version ?? null,
-            needsRefinement: false,
-          });
+          const sanitized = sanitizeTitle(event.payload.name);
+          if (sanitized.length > 0) {
+            yield* orchestrationEngine.dispatch({
+              type: "thread.title.generate.complete",
+              commandId: yield* providerCommandId(event, "thread-meta-update"),
+              threadId: thread.id,
+              title: sanitized,
+              expectedTitle: thread.title,
+              expectedVersion: thread.titleState?.version ?? null,
+              needsRefinement: false,
+            });
+          }
         }
+      }
+
+      // Provider-initiated mode changes (e.g. Grok entering plan mode via
+      // enter_plan_mode / session mode update) sync the thread interaction mode.
+      if (
+        event.type === "session.mode.changed" &&
+        thread.interactionMode !== event.payload.interactionMode
+      ) {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.interaction-mode.set",
+          commandId: yield* providerCommandId(event, "interaction-mode-set"),
+          threadId: thread.id,
+          interactionMode: event.payload.interactionMode,
+          createdAt: now,
+        });
       }
 
       if (event.type === "task.started" || event.type === "task.progress") {
@@ -2736,6 +2891,7 @@ export const ProviderRuntimeIngestionLive = Layer.effect(
   ProviderRuntimeIngestionService,
   make,
 ).pipe(
+  Layer.provide(ProjectionQueuedMessageRepositoryLive),
   Layer.provide(ProjectionThreadActivityRepositoryLive),
   Layer.provide(ProjectionThreadMessageRepositoryLive),
   Layer.provide(ProjectionThreadProposedPlanRepositoryLive),

@@ -10,12 +10,19 @@ import {
   ProviderInstanceId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
 
-import { listThreadsByProjectId, requireThread, requireThreadAbsent } from "./commandInvariants.ts";
+import { fromWireReadModel, type CommandReadModel } from "./commandReadModel.ts";
+import {
+  findThreadById,
+  listThreadsByProjectId,
+  requireThread,
+  requireThreadAbsent,
+} from "./commandInvariants.ts";
 
 const now = "2026-01-01T00:00:00.000Z";
 
-const readModel: OrchestrationReadModel = {
+const wireReadModel: OrchestrationReadModel = {
   snapshotSequence: 2,
   updatedAt: now,
   projects: [
@@ -67,6 +74,8 @@ const readModel: OrchestrationReadModel = {
       settledAt: null,
       latestTurn: null,
       messages: [],
+      queuedMessages: [],
+      pendingTurnStart: null,
       session: null,
       activities: [],
       proposedPlans: [],
@@ -93,6 +102,8 @@ const readModel: OrchestrationReadModel = {
       settledAt: null,
       latestTurn: null,
       messages: [],
+      queuedMessages: [],
+      pendingTurnStart: null,
       session: null,
       activities: [],
       proposedPlans: [],
@@ -101,6 +112,8 @@ const readModel: OrchestrationReadModel = {
     },
   ],
 };
+
+const readModel = fromWireReadModel(wireReadModel, { dropDeletedThreads: false });
 
 const messageSendCommand: OrchestrationCommand = {
   type: "thread.turn.start",
@@ -197,12 +210,14 @@ describe("commandInvariants", () => {
 
   it("lets a draft retry re-create a thread id after its first attempt was deleted", async () => {
     const threadId = ThreadId.make("thread-1");
-    const firstAttempt = readModel.threads.find((thread) => thread.id === threadId)!;
-    const afterRollback: OrchestrationReadModel = {
+    const firstAttempt = findThreadById(readModel, threadId)!;
+    const afterRollback: CommandReadModel = {
       ...readModel,
-      threads: readModel.threads.map((thread) =>
-        thread.id === threadId ? { ...thread, deletedAt: now, updatedAt: now } : thread,
-      ),
+      threads: HashMap.set(readModel.threads, threadId, {
+        ...firstAttempt,
+        deletedAt: now,
+        updatedAt: now,
+      }),
     };
     const retry: OrchestrationCommand = {
       type: "thread.create",

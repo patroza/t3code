@@ -8,11 +8,13 @@ import {
   isImportedAgentSessionMessageId,
   type OrchestrationCommand,
   type OrchestrationEvent,
-  type OrchestrationReadModel,
+  type OrchestrationMessage,
+  type OrchestrationQueuedMessage,
   type OrchestrationThread,
   type ThreadPullRequestKey,
   type ThreadPullRequestLink,
   type OrchestrationThreadActivity,
+  type SourceRef,
 } from "@t3tools/contracts";
 import {
   legacyLinkedPullRequestOf,
@@ -29,6 +31,7 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import type * as PlatformError from "effect/PlatformError";
 
+import { findProjectById, findThreadById, type CommandReadModel } from "./commandReadModel.ts";
 import {
   OrchestrationCommandInvariantError,
   OrchestrationThreadSettleBlockedError,
@@ -174,12 +177,238 @@ type DecideOrchestrationCommandResult =
   | PlannedOrchestrationEvent
   | ReadonlyArray<PlannedOrchestrationEvent>;
 
+/**
+ * A turn is considered active while its session is starting or running.
+ * Follow-up `thread.turn.start` commands arriving in that window are queued
+ * instead of dispatched; explicit `thread.queue.steer` bypasses the queue.
+ */
+function isThreadTurnActive(thread: OrchestrationThread): boolean {
+  const status = thread.session?.status;
+  return status === "running" || status === "starting";
+}
+
+function isPendingCompactTurnStart(thread: OrchestrationThread): boolean {
+  const pending = thread.pendingTurnStart;
+  if (pending === null) {
+    return false;
+  }
+  const message = thread.messages.find((entry) => entry.id === pending.messageId);
+  return (
+    message !== undefined &&
+    message.role === "user" &&
+    (message.attachments?.length ?? 0) === 0 &&
+    message.text.trim().toLowerCase() === "/compact"
+  );
+}
+
+/**
+ * Enforced here in the decider so a `thread.message-queued` event past the
+ * cap is never emitted — projections and persistence stay in lockstep with
+ * the event stream instead of each clamping independently.
+ */
+const MAX_THREAD_QUEUED_MESSAGES = 50;
+
+interface TurnStartMessageInput {
+  readonly messageId: OrchestrationQueuedMessage["messageId"];
+  readonly text: string;
+  readonly attachments: OrchestrationQueuedMessage["attachments"];
+  readonly context?: OrchestrationMessage["context"];
+  readonly modelSelection?: OrchestrationQueuedMessage["modelSelection"];
+  readonly titleSeed?: string;
+  readonly sourceProposedPlan?: OrchestrationQueuedMessage["sourceProposedPlan"];
+  /** Server-stamped SourceRef for this user message (absent when identity off). */
+  readonly source?: SourceRef;
+}
+
+/**
+ * Plan the `thread.message-sent` + `thread.turn-start-requested` event pair
+ * shared by immediate turn starts, queued-message steers, and queue drains.
+ * Skip `thread.message-sent` when the user message was already persisted
+ * (`thread.message.user.append` during worktree bootstrap).
+ */
+const planTurnStartEvents = Effect.fn("planTurnStartEvents")(function* ({
+  commandId,
+  thread,
+  message,
+  occurredAt,
+}: {
+  readonly commandId: OrchestrationCommand["commandId"];
+  readonly thread: OrchestrationThread;
+  readonly message: TurnStartMessageInput;
+  readonly occurredAt: string;
+}): Effect.fn.Return<
+  ReadonlyArray<PlannedOrchestrationEvent>,
+  PlatformError.PlatformError,
+  Crypto.Crypto
+> {
+  // A worktree bootstrap persists the message ahead of the turn with
+  // `thread.message.user.append`; the turn then only references it.
+  const persistedUserMessage = thread.messages.find(
+    (entry) => entry.id === message.messageId && entry.role === "user" && entry.turnId === null,
+  );
+  const userMessageEvent: PlannedOrchestrationEvent | null = persistedUserMessage
+    ? null
+    : {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: thread.id,
+          occurredAt,
+          commandId,
+        })),
+        type: "thread.message-sent",
+        payload: {
+          threadId: thread.id,
+          messageId: message.messageId,
+          role: "user",
+          text: message.text,
+          attachments: message.attachments,
+          ...(message.context !== undefined ? { context: message.context } : {}),
+          turnId: null,
+          streaming: false,
+          ...(message.source !== undefined ? { source: message.source } : {}),
+          createdAt: occurredAt,
+          updatedAt: occurredAt,
+        },
+      };
+  const turnStartRequestedEvent: PlannedOrchestrationEvent = {
+    ...(yield* withEventBase({
+      aggregateKind: "thread",
+      aggregateId: thread.id,
+      occurredAt,
+      commandId,
+    })),
+    ...(userMessageEvent ? { causationEventId: userMessageEvent.eventId } : {}),
+    type: "thread.turn-start-requested",
+    payload: {
+      threadId: thread.id,
+      messageId: message.messageId,
+      ...(message.modelSelection !== undefined ? { modelSelection: message.modelSelection } : {}),
+      ...(message.titleSeed !== undefined ? { titleSeed: message.titleSeed } : {}),
+      runtimeMode: thread.runtimeMode,
+      interactionMode: thread.interactionMode,
+      ...(message.sourceProposedPlan !== undefined
+        ? { sourceProposedPlan: message.sourceProposedPlan }
+        : {}),
+      createdAt: occurredAt,
+    },
+  };
+  // Real activity resets lifecycle overrides. It wakes an explicitly
+  // settled thread, clears a keep-active pin, and spends a snooze return
+  // ticket when the user re-engages.
+  const lifecycleResetEvents: Array<PlannedOrchestrationEvent> = [];
+  if (thread.settledOverride !== null) {
+    lifecycleResetEvents.push({
+      ...(yield* withEventBase({
+        aggregateKind: "thread",
+        aggregateId: thread.id,
+        occurredAt,
+        commandId,
+      })),
+      type: "thread.unsettled",
+      payload: {
+        threadId: thread.id,
+        reason: "activity",
+        updatedAt: occurredAt,
+      },
+    });
+  }
+  // Older snapshots may omit the optional snooze fields entirely. Treat both
+  // null and undefined as awake; only a real wake timestamp needs an event.
+  if (thread.snoozedUntil != null) {
+    lifecycleResetEvents.push({
+      ...(yield* withEventBase({
+        aggregateKind: "thread",
+        aggregateId: thread.id,
+        occurredAt,
+        commandId,
+      })),
+      type: "thread.unsnoozed",
+      payload: {
+        threadId: thread.id,
+        reason: "activity",
+        updatedAt: occurredAt,
+      },
+    });
+  }
+  return [
+    ...lifecycleResetEvents,
+    ...(userMessageEvent ? [userMessageEvent] : []),
+    turnStartRequestedEvent,
+  ];
+});
+
+/**
+ * Plan the dispatch of one queued message: remove it from the queue and
+ * start (or steer into) a turn with it. `sourceProposedPlan` is dropped
+ * rather than failed when the referenced plan no longer exists — the
+ * message itself must still send.
+ */
+const planQueuedMessageDispatch = Effect.fn("planQueuedMessageDispatch")(function* ({
+  commandId,
+  readModel,
+  thread,
+  queuedMessage,
+  occurredAt,
+}: {
+  readonly commandId: OrchestrationCommand["commandId"];
+  readonly readModel: CommandReadModel;
+  readonly thread: OrchestrationThread;
+  readonly queuedMessage: OrchestrationQueuedMessage;
+  readonly occurredAt: string;
+}): Effect.fn.Return<
+  ReadonlyArray<PlannedOrchestrationEvent>,
+  PlatformError.PlatformError,
+  Crypto.Crypto
+> {
+  const sourceProposedPlan = queuedMessage.sourceProposedPlan;
+  const sourceThread = sourceProposedPlan
+    ? findThreadById(readModel, sourceProposedPlan.threadId)
+    : undefined;
+  const sourcePlanStillValid =
+    sourceProposedPlan !== undefined &&
+    sourceThread !== undefined &&
+    sourceThread.projectId === thread.projectId &&
+    sourceThread.proposedPlans.some((entry) => entry.id === sourceProposedPlan.planId);
+
+  const removedEvent: PlannedOrchestrationEvent = {
+    ...(yield* withEventBase({
+      aggregateKind: "thread",
+      aggregateId: thread.id,
+      occurredAt,
+      commandId,
+    })),
+    type: "thread.queued-message-removed",
+    payload: {
+      threadId: thread.id,
+      messageId: queuedMessage.messageId,
+      reason: "dispatched",
+      removedAt: occurredAt,
+    },
+  };
+  const turnStartEvents = yield* planTurnStartEvents({
+    commandId,
+    thread,
+    message: {
+      messageId: queuedMessage.messageId,
+      text: queuedMessage.text,
+      attachments: queuedMessage.attachments,
+      ...(queuedMessage.modelSelection !== undefined
+        ? { modelSelection: queuedMessage.modelSelection }
+        : {}),
+      ...(sourcePlanStillValid ? { sourceProposedPlan } : {}),
+      ...(queuedMessage.source !== undefined ? { source: queuedMessage.source } : {}),
+    },
+    occurredAt,
+  });
+  return [removedEvent, ...turnStartEvents];
+});
+
 const decideCommandSequence = Effect.fn("decideCommandSequence")(function* ({
   commands,
   readModel,
 }: {
   readonly commands: ReadonlyArray<OrchestrationCommand>;
-  readonly readModel: OrchestrationReadModel;
+  readonly readModel: CommandReadModel;
 }): Effect.fn.Return<
   ReadonlyArray<PlannedOrchestrationEvent>,
   OrchestrationCommandRejection | PlatformError.PlatformError,
@@ -214,7 +443,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
   userInputActivity,
 }: {
   readonly command: OrchestrationCommand;
-  readonly readModel: OrchestrationReadModel;
+  readonly readModel: CommandReadModel;
   readonly userInputActivity?: OrchestrationThreadActivity;
 }): Effect.fn.Return<
   DecideOrchestrationCommandResult,
@@ -932,7 +1161,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const legacy = legacyLinkedPullRequestOf(
         thread.pullRequests,
         thread.projectId,
-        readModel.projects.find((project) => project.id === thread.projectId)?.repositoryIdentity,
+        findProjectById(readModel, thread.projectId)?.repositoryIdentity,
       );
       const currentPullRequest =
         legacy === null
@@ -942,7 +1171,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ) ?? null);
       if (command.linkedPullRequest != null) {
         const { linkedPullRequest: linked, ...metadata } = command;
-        const project = readModel.projects.find((project) => project.id === thread.projectId);
+        const project = findProjectById(readModel, thread.projectId);
         // Historical clients can send links without a parseable URL.
         const host = URL.canParse(linked.url)
           ? new URL(linked.url).hostname
@@ -1004,6 +1233,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         thread.branch !== command.expectedBranch
           ? thread.branch
           : command.branch;
+      const nextWorktreePath =
+        command.worktreePath === null && thread.worktreePath !== null
+          ? thread.worktreePath
+          : command.worktreePath;
       const occurredAt = yield* nowIso;
       return {
         ...(yield* withEventBase({
@@ -1047,7 +1280,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { modelSelection: command.modelSelection }
             : {}),
           ...(branch !== undefined ? { branch } : {}),
-          ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),
+          ...(nextWorktreePath !== undefined ? { worktreePath: nextWorktreePath } : {}),
           ...(command.linkedPullRequest !== undefined
             ? { linkedPullRequest: command.linkedPullRequest }
             : {}),
@@ -1423,104 +1656,225 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Proposed plan '${sourceProposedPlan?.planId}' belongs to thread '${sourceThread.id}' in a different project.`,
         });
       }
-      // A worktree bootstrap persists the message ahead of the turn with
-      // `thread.message.user.append`; the turn then only references it.
-      const persistedUserMessage = targetThread.messages.find(
-        (message) =>
-          message.id === command.message.messageId &&
-          message.role === "user" &&
-          message.turnId === null,
+      // Queue-by-default: a follow-up arriving while a turn is active is
+      // held server-side and drained on natural turn completion. Explicit
+      // mid-turn injection goes through `thread.queue.steer`. Bootstrap
+      // starts are exempt — their thread was created in the same dispatch.
+      // `pendingTurnStart` covers the window where a turn start was just
+      // dispatched (by a send or a queue drain) but the provider has not
+      // reported the session status yet — a send in that gap must queue,
+      // not open a second concurrent turn ahead of already-queued chips.
+      //
+      // Compaction is the other exemption: `/compact` occupies the pending
+      // slot (and the session stays `starting`) so the reactor can restore
+      // it, but follow-ups must still emit `thread.turn-start-requested`
+      // for the in-memory compaction queue. Replaying an already-sent
+      // message id is the restore path (`server:after-compaction:`) — the
+      // previous replay's pending start is still live, so queueing would
+      // swallow the rest of the held turns.
+      const isCompactionQueueHold = isPendingCompactTurnStart(targetThread);
+      const isAfterCompactionReplay = targetThread.messages.some(
+        (entry) => entry.id === command.message.messageId && entry.role === "user",
       );
-      const userMessageEvent: Omit<OrchestrationEvent, "sequence"> | null = persistedUserMessage
-        ? null
-        : {
-            ...(yield* withEventBase({
-              aggregateKind: "thread",
-              aggregateId: command.threadId,
-              occurredAt: command.createdAt,
-              commandId: command.commandId,
-            })),
-            type: "thread.message-sent",
-            payload: {
-              threadId: command.threadId,
-              messageId: command.message.messageId,
-              role: "user",
-              text: command.message.text,
-              attachments: command.message.attachments,
-              ...(command.message.context !== undefined
-                ? { context: command.message.context }
-                : {}),
-              turnId: null,
-              streaming: false,
-              createdAt: command.createdAt,
-              updatedAt: command.createdAt,
-            },
-          };
-      const turnStartRequestedEvent: Omit<OrchestrationEvent, "sequence"> = {
+      if (
+        command.bootstrap === undefined &&
+        !isCompactionQueueHold &&
+        !isAfterCompactionReplay &&
+        (isThreadTurnActive(targetThread) || targetThread.pendingTurnStart !== null)
+      ) {
+        if (targetThread.queuedMessages.length >= MAX_THREAD_QUEUED_MESSAGES) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Thread '${command.threadId}' already has ${MAX_THREAD_QUEUED_MESSAGES} queued messages.`,
+          });
+        }
+        return {
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.message-queued",
+          payload: {
+            threadId: command.threadId,
+            messageId: command.message.messageId,
+            text: command.message.text,
+            attachments: command.message.attachments,
+            ...(command.modelSelection !== undefined
+              ? { modelSelection: command.modelSelection }
+              : {}),
+            ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
+            ...(command.source !== undefined ? { source: command.source } : {}),
+            queuedAt: command.createdAt,
+          },
+        };
+      }
+
+      return yield* planTurnStartEvents({
+        commandId: command.commandId,
+        thread: targetThread,
+        message: {
+          messageId: command.message.messageId,
+          text: command.message.text,
+          attachments: command.message.attachments,
+          ...(command.message.context !== undefined ? { context: command.message.context } : {}),
+          ...(command.modelSelection !== undefined
+            ? { modelSelection: command.modelSelection }
+            : {}),
+          ...(command.titleSeed !== undefined ? { titleSeed: command.titleSeed } : {}),
+          ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
+          ...(command.source !== undefined ? { source: command.source } : {}),
+        },
+        occurredAt: command.createdAt,
+      });
+    }
+
+    case "thread.queue.steer": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const queuedMessage = thread.queuedMessages.find(
+        (entry) => entry.messageId === command.messageId,
+      );
+      if (!queuedMessage) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Queued message '${command.messageId}' does not exist on thread '${command.threadId}'.`,
+        });
+      }
+      // While a turn start is still pending there is no provider turn to
+      // steer into — dispatching now would race the pending turn/start with
+      // a second one. The message stays queued; steer again once running.
+      // A session that already tracks an active turn (running, or a
+      // provider reconnect mid-turn) is steerable. Rejected shapes: starting
+      // with no active turn, and any session without an active turn while a
+      // just-dispatched turn start is still awaiting adoption — including
+      // "running" with a null activeTurnId (provider waiting).
+      const steerRacesPendingStart =
+        (thread.session?.status === "starting" && thread.session.activeTurnId === null) ||
+        (thread.pendingTurnStart !== null && (thread.session?.activeTurnId ?? null) === null);
+      if (steerRacesPendingStart) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' is still starting a turn; steer once it is running.`,
+        });
+      }
+      // Otherwise dispatch unconditionally: with a running turn the provider
+      // adapters treat the resulting sendTurn as a steer; on an idle thread
+      // this degrades to a normal turn start.
+      return yield* planQueuedMessageDispatch({
+        commandId: command.commandId,
+        readModel,
+        thread,
+        queuedMessage,
+        occurredAt: command.createdAt,
+      });
+    }
+
+    case "thread.queue.remove": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const queuedMessage = thread.queuedMessages.find(
+        (entry) => entry.messageId === command.messageId,
+      );
+      if (!queuedMessage) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Queued message '${command.messageId}' does not exist on thread '${command.threadId}'.`,
+        });
+      }
+      return {
         ...(yield* withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
           occurredAt: command.createdAt,
           commandId: command.commandId,
         })),
-        ...(userMessageEvent ? { causationEventId: userMessageEvent.eventId } : {}),
-        type: "thread.turn-start-requested",
+        type: "thread.queued-message-removed",
         payload: {
           threadId: command.threadId,
-          messageId: command.message.messageId,
-          ...(command.modelSelection !== undefined
-            ? { modelSelection: command.modelSelection }
-            : {}),
-          ...(command.titleSeed !== undefined ? { titleSeed: command.titleSeed } : {}),
-          runtimeMode: targetThread.runtimeMode,
-          interactionMode: targetThread.interactionMode,
-          ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
-          createdAt: command.createdAt,
+          messageId: command.messageId,
+          reason: "user",
+          removedAt: command.createdAt,
         },
       };
-      // Real activity resets ANY override: it wakes an explicitly settled
-      // thread, and it clears a keep-active pin back to neutral so the
-      // thread can auto-settle again after this burst of work goes stale.
-      // A snooze clears the same way — sending a message to a snoozed
-      // thread is the user re-engaging, so the return ticket is spent.
-      const lifecycleResetEvents: Array<Omit<OrchestrationEvent, "sequence">> = [];
-      if (targetThread.settledOverride !== null) {
-        lifecycleResetEvents.push({
-          ...(yield* withEventBase({
-            aggregateKind: "thread",
-            aggregateId: command.threadId,
-            occurredAt: command.createdAt,
-            commandId: command.commandId,
-          })),
-          type: "thread.unsettled",
-          payload: {
-            threadId: command.threadId,
-            reason: "activity",
-            updatedAt: command.createdAt,
-          },
+    }
+
+    case "thread.queue.update": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const queuedMessage = thread.queuedMessages.find(
+        (entry) => entry.messageId === command.messageId,
+      );
+      if (!queuedMessage) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Queued message '${command.messageId}' does not exist on thread '${command.threadId}'.`,
         });
       }
-      if (targetThread.snoozedUntil != null) {
-        lifecycleResetEvents.push({
-          ...(yield* withEventBase({
-            aggregateKind: "thread",
-            aggregateId: command.threadId,
-            occurredAt: command.createdAt,
-            commandId: command.commandId,
-          })),
-          type: "thread.unsnoozed",
-          payload: {
-            threadId: command.threadId,
-            reason: "activity",
-            updatedAt: command.createdAt,
-          },
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.message-queued",
+        payload: {
+          threadId: command.threadId,
+          messageId: queuedMessage.messageId,
+          text: command.text,
+          attachments: queuedMessage.attachments,
+          ...(queuedMessage.modelSelection !== undefined
+            ? { modelSelection: queuedMessage.modelSelection }
+            : {}),
+          ...(queuedMessage.sourceProposedPlan !== undefined
+            ? { sourceProposedPlan: queuedMessage.sourceProposedPlan }
+            : {}),
+          queuedAt: queuedMessage.queuedAt,
+        },
+      };
+    }
+
+    case "thread.queue.drain": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const queuedMessage = thread.queuedMessages.at(0);
+      if (!queuedMessage) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' has no queued messages to drain.`,
         });
       }
-      return [
-        ...lifecycleResetEvents,
-        ...(userMessageEvent ? [userMessageEvent] : []),
-        turnStartRequestedEvent,
-      ];
+      // The user may have raced a new message in between turn completion and
+      // this drain; keep the queue intact and let the next completion retry.
+      // The pending-start check also stops a duplicate drain from double-
+      // dispatching while the first drained turn's session is still unset.
+      if (isThreadTurnActive(thread) || thread.pendingTurnStart !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' is busy; queued messages drain on turn completion.`,
+        });
+      }
+      return yield* planQueuedMessageDispatch({
+        commandId: command.commandId,
+        readModel,
+        thread,
+        queuedMessage,
+        occurredAt: command.createdAt,
+      });
     }
 
     case "thread.message.user.append": {
@@ -1559,6 +1913,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.message.context !== undefined ? { context: command.message.context } : {}),
           turnId: null,
           streaming: false,
+          ...(command.source !== undefined ? { source: command.source } : {}),
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
@@ -1582,6 +1937,27 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           ...(command.turnId !== undefined ? { turnId: command.turnId } : {}),
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.context.compact": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.context-compact-requested",
+        payload: {
+          threadId: command.threadId,
           createdAt: command.createdAt,
         },
       };
@@ -1681,9 +2057,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             [`${question.question}\n${answer.trim()}`, attachmentLabels].filter(Boolean).join("\n"),
           );
         }
-        // Commit the answer and its message together. The normal turn path
-        // steers a running agent or resumes an idle session.
-        return yield* decideCommandSequence({
+        // Commit the answer and its message together. Do not go through
+        // `thread.turn.start` here: queue-by-default would hold the answer
+        // while the agent is still running, and the user never sees it.
+        const resolvedEvents = yield* decideCommandSequence({
           readModel,
           commands: [
             {
@@ -1708,22 +2085,19 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
                 },
               },
             },
-            {
-              type: "thread.turn.start",
-              commandId: command.commandId,
-              threadId: command.threadId,
-              createdAt: command.createdAt,
-              runtimeMode: thread.runtimeMode,
-              interactionMode: thread.interactionMode,
-              message: {
-                messageId: MessageId.make(`async-answer:${command.requestId}`),
-                role: "user",
-                text: replies.join("\n\n"),
-                attachments,
-              },
-            },
           ],
         });
+        const turnEvents = yield* planTurnStartEvents({
+          commandId: command.commandId,
+          thread,
+          message: {
+            messageId: MessageId.make(`async-answer:${command.requestId}`),
+            text: replies.join("\n\n"),
+            attachments,
+          },
+          occurredAt: command.createdAt,
+        });
+        return [...resolvedEvents, ...turnEvents];
       }
       const responseEvent = {
         ...(yield* withEventBase({
@@ -2156,6 +2530,29 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           turnCount: command.turnCount,
+        },
+      };
+    }
+
+    case "thread.messages.resync": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.messages-resynced",
+        payload: {
+          threadId: command.threadId,
+          afterMessageId: command.afterMessageId,
+          messages: command.messages,
+          reason: command.reason,
         },
       };
     }

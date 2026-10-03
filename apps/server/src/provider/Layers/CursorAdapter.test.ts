@@ -5,7 +5,7 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeURL from "node:url";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, it } from "@effect/vitest";
+import { assert, it, vi } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -29,6 +29,7 @@ import { ServerConfig } from "../../config.ts";
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import type { CursorAdapterShape } from "../Services/CursorAdapter.ts";
+import { pollUntil } from "../testUtils/pollUntil.ts";
 import { makeCursorAdapter } from "./CursorAdapter.ts";
 import { execScriptSource, writeFakeCli } from "../../testUtils/fakeCli.ts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -91,36 +92,33 @@ async function readJsonLines(filePath: string) {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as Record<string, unknown>);
+    .flatMap((line) => {
+      // A poll can observe the mock child halfway through appending its final
+      // line. The next poll will see the complete JSON record.
+      try {
+        return [JSON.parse(line) as Record<string, unknown>];
+      } catch {
+        return [];
+      }
+    });
 }
 
-async function waitForFileContent(filePath: string, attempts = 40) {
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    try {
-      const raw = await NodeFSP.readFile(filePath, "utf8");
-      if (raw.trim().length > 0) {
-        return raw;
-      }
-    } catch {}
-    await Effect.runPromise(Effect.yieldNow);
-  }
-  throw new Error(`Timed out waiting for file content at ${filePath}`);
+function waitForFileContent(filePath: string) {
+  return pollUntil({
+    poll: Effect.promise(() => NodeFSP.readFile(filePath, "utf8").catch(() => "")),
+    until: (raw) => raw.trim().length > 0,
+    description: `file content at ${filePath}`,
+  });
 }
 
 function waitForJsonLogMatch(
   filePath: string,
   predicate: (entry: Record<string, unknown>) => boolean,
-  attempts = 40,
 ) {
-  return Effect.gen(function* () {
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
-      const requests = yield* Effect.promise(() => readJsonLines(filePath));
-      if (requests.some(predicate)) {
-        return requests;
-      }
-      yield* Effect.yieldNow;
-    }
-    return yield* Effect.promise(() => readJsonLines(filePath));
+  return pollUntil({
+    poll: Effect.promise(() => readJsonLines(filePath)),
+    until: (entries) => entries.some(predicate),
+    description: `a matching json log entry in ${filePath}`,
   });
 }
 
@@ -162,6 +160,41 @@ const cursorAdapterTestLayer = it.layer(
 );
 
 cursorAdapterTestLayer("CursorAdapterLive", (it) => {
+  it.effect("passes the resolved complete environment to the Cursor ACP child", () =>
+    Effect.gen(function* () {
+      const tempDirectory = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "cursor-direnv-")),
+      );
+      const requestLogPath = NodePath.join(tempDirectory, "requests.jsonl");
+      const wrapperPath = yield* Effect.promise(() => makeMockAgentWrapper());
+      const resolveEnvironment = vi.fn((input) =>
+        Effect.succeed({
+          ...input.environment,
+          PROVIDER_VALUE: "from-direnv",
+          T3_ACP_REQUEST_LOG_PATH: requestLogPath,
+        }),
+      );
+      const adapter = yield* makeCursorAdapter(decodeCursorSettings({ binaryPath: wrapperPath }), {
+        environment: { ...process.env, PROVIDER_VALUE: "configured" },
+        resolveEnvironment,
+      });
+      const threadId = ThreadId.make("cursor-direnv-thread");
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("cursor"),
+        cwd: ".",
+        runtimeMode: "full-access",
+      });
+
+      assert.equal(resolveEnvironment.mock.calls[0]?.[0].cwd, process.cwd());
+      // The wait only succeeds once the child saw the resolved environment
+      // (the request log path only exists inside it).
+      yield* waitForJsonLogMatch(requestLogPath, (entry) => entry.method === "initialize");
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
   it.effect("rejects rollback without discarding the provider conversation", () =>
     Effect.gen(function* () {
       const adapter = yield* CursorAdapter;
@@ -229,7 +262,9 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
       const wrapperPath = yield* Effect.promise(() => makeMockAgentWrapper());
       yield* settings.updateSettings({ providers: { cursor: { binaryPath: wrapperPath } } });
 
-      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 9).pipe(
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId),
+        Stream.takeUntil((event) => event.type === "turn.completed"),
         Stream.runCollect,
         Effect.forkChild,
       );
@@ -280,6 +315,8 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
       assert.isDefined(delta);
       if (delta?.type === "content.delta") {
         assert.equal(delta.payload.delta, "hello from mock");
+        // The middle segment is a per-run id: it keeps a resumed session from
+        // reusing the item ids of its earlier runs.
         assert.match(String(delta.itemId), /^assistant:mock-session-1:runtime:[^:]+:segment:0$/);
       }
 
@@ -342,7 +379,16 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
           [
             {
               prompt: [{ type: "text", text: "please /review this" }],
-              result: { stopReason: "end_turn" },
+              result: {
+                stopReason: "end_turn",
+                usage: {
+                  cachedReadTokens: 200,
+                  inputTokens: 1000,
+                  outputTokens: 400,
+                  thoughtTokens: 100,
+                  totalTokens: 1500,
+                },
+              },
             },
           ],
         ],
@@ -470,7 +516,7 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
 
       yield* adapter.stopSession(threadId);
 
-      const exitLog = yield* Effect.promise(() => waitForFileContent(exitLogPath));
+      const exitLog = yield* waitForFileContent(exitLogPath);
       assert.include(exitLog, "SIGTERM");
     }),
   );
@@ -522,7 +568,7 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
 
         yield* adapter.stopSession(threadId);
 
-        const exitLog = yield* Effect.promise(() => waitForFileContent(exitLogPath));
+        const exitLog = yield* waitForFileContent(exitLogPath);
         assert.equal(exitLog.match(/SIGTERM/g)?.length ?? 0, 2);
       }),
   );
@@ -676,7 +722,7 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
           modelSelection,
         });
 
-        yield* Effect.promise(() => waitForFileContent(requestLogPath));
+        yield* waitForFileContent(requestLogPath);
 
         const requestsAfterStart = yield* Effect.promise(() => readJsonLines(requestLogPath));
         const configIdsAfterStart = requestsAfterStart.flatMap((entry) =>
@@ -685,13 +731,16 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
             ? [String((entry.params as Record<string, unknown>).configId)]
             : [],
         );
-        assert.deepStrictEqual(configIdsAfterStart, [
-          "model",
-          "reasoning",
-          "context",
-          "fast",
-          "mode",
-        ]);
+        assert.deepStrictEqual(configIdsAfterStart, ["model", "reasoning", "context", "fast"]);
+        const modeIdsAfterStart = requestsAfterStart
+          .filter((entry) => entry.method === "session/set_mode")
+          .map((entry) => {
+            const params = entry.params as Record<string, unknown> | undefined;
+            return typeof params?.modeId === "string" ? params.modeId : undefined;
+          })
+          .filter((modeId): modeId is string => modeId !== undefined);
+        assert.isAbove(modeIdsAfterStart.length, 0);
+        assert.include(["code", "agent", "default", "chat", "implement"], modeIdsAfterStart[0]);
 
         yield* adapter.sendTurn({
           threadId,
@@ -709,7 +758,16 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
             ? [String((entry.params as Record<string, unknown>).configId)]
             : [],
         );
-        assert.deepStrictEqual(finalConfigIds, ["model", "reasoning", "context", "fast", "mode"]);
+        assert.deepStrictEqual(finalConfigIds, ["model", "reasoning", "context", "fast"]);
+        const finalModeIds = finalRequests
+          .filter((entry) => entry.method === "session/set_mode")
+          .map((entry) => {
+            const params = entry.params as Record<string, unknown> | undefined;
+            return typeof params?.modeId === "string" ? params.modeId : undefined;
+          })
+          .filter((modeId): modeId is string => modeId !== undefined);
+        // Mode is applied once at startSession; first sendTurn is a no-op when already set.
+        assert.deepStrictEqual(finalModeIds, modeIdsAfterStart);
         assert.equal(finalRequests.filter((entry) => entry.method === "session/prompt").length, 1);
       }),
   );
@@ -847,6 +905,8 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
           if (contentDelta?.type === "content.delta") {
             assert.equal(String(contentDelta.turnId), String(turn.turnId));
             assert.equal(contentDelta.payload.delta, "hello from mock");
+            // The middle segment is a per-run id: it keeps a resumed session
+            // from reusing the item ids of its earlier runs.
             assert.match(
               String(contentDelta.itemId),
               /^assistant:mock-session-1:runtime:[^:]+:segment:0$/,
@@ -1208,6 +1268,44 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
       assert.isTrue(approvalResponses.some(isCancelledApprovalResponse));
 
       yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("removes the session and emits session.exited when the ACP process dies", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CursorAdapter;
+      const serverSettings = yield* ServerSettingsService;
+      const threadId = ThreadId.make("cursor-process-exit");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockAgentWrapper({ T3_ACP_EXIT_AFTER_PROMPT: "1" }),
+      );
+      yield* serverSettings.updateSettings({ providers: { cursor: { binaryPath: wrapperPath } } });
+
+      const sessionExited = yield* Deferred.make<ProviderRuntimeEvent>();
+      yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        String(event.threadId) === String(threadId) && event.type === "session.exited"
+          ? Deferred.succeed(sessionExited, event).pipe(Effect.ignore)
+          : Effect.void,
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("cursor"),
+        cwd: process.cwd(),
+        runtimeMode: "approval-required",
+        modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model: "default" },
+      });
+
+      yield* adapter
+        .sendTurn({ threadId, input: "exit now", attachments: [] })
+        .pipe(Effect.exit, Effect.timeout("5 seconds"));
+      const event = yield* Deferred.await(sessionExited).pipe(Effect.timeout("5 seconds"));
+
+      assert.equal(event.type, "session.exited");
+      if (event.type === "session.exited") {
+        assert.equal(event.payload.exitKind, "error");
+      }
+      assert.equal(yield* adapter.hasSession(threadId), false);
     }),
   );
   it.effect("stopping a session settles pending approval waits", () =>

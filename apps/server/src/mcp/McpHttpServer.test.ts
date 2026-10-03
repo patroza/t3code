@@ -11,6 +11,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { McpProtocol, McpSchema, McpServer } from "effect/unstable/ai";
 import { HttpBody, HttpClient, HttpRouter, HttpServerResponse } from "effect/unstable/http";
+import { vi } from "vite-plus/test";
 
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -49,6 +50,9 @@ const TestLayer = McpHttpServer.PreviewToolkitRegistrationLive.pipe(
   Layer.provideMerge(PreviewAutomationBroker.layer),
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-http-server-test-" })),
   Layer.provideMerge(NodeServices.layer),
+);
+const DiscordThreadToolTestLayer = McpHttpServer.DiscordThreadToolkitRegistrationLive.pipe(
+  Layer.provideMerge(McpServer.McpServer.layer),
 );
 const PullRequestsTestLayer = McpHttpServer.PullRequestsToolkitRegistrationLive.pipe(
   Layer.provideMerge(McpServer.McpServer.layer),
@@ -869,4 +873,96 @@ it.effect("registers annotated tools and preserves authenticated request context
       }
     }),
   ).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("renames the current thread through the Discord mirror tool", () => {
+  const dispatchCalls: Array<unknown> = [];
+  const dispatch = vi.fn((command: unknown) => {
+    dispatchCalls.push(command);
+    return Promise.resolve({ sequence: 1 });
+  });
+
+  return Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+
+    const renamed = yield* server
+      .callTool({ name: "discord_rename_thread", arguments: { title: "Review PR #428" } })
+      .pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+
+    expect(renamed.isError).toBe(false);
+    expect(renamed.structuredContent).toMatchObject({
+      threadId,
+      title: "Review PR #428",
+      discordMirrorRequested: true,
+    });
+    expect(dispatchCalls).toHaveLength(1);
+    expect(dispatchCalls[0]).toMatchObject({
+      type: "thread.meta.update",
+      threadId,
+      title: "Review PR #428",
+    });
+  }).pipe(
+    Effect.provide(
+      DiscordThreadToolTestLayer.pipe(
+        Layer.provideMerge(
+          Layer.succeed(OrchestrationEngineService, {
+            readEvents: () => Stream.empty,
+            readThreadEvents: () => Stream.empty,
+            getThreadReplayStats: () =>
+              Effect.succeed({
+                eventCount: 0,
+                payloadBytes: 0,
+                hasCreateEvent: false,
+              }),
+            dispatch: (command) => Effect.promise(() => dispatch(command)),
+            streamDomainEvents: Stream.empty,
+            subscribeDomainEvents: Effect.succeed(Stream.empty),
+            latestSequence: Effect.succeed(0),
+          }),
+        ),
+      ),
+    ),
+  );
+});
+
+it.effect("rejects empty Discord mirror thread titles", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+
+    const result = yield* server
+      .callTool({ name: "discord_rename_thread", arguments: { title: "   " } })
+      .pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toEqual({
+      error: { _tag: "InvalidTitle", message: "Title cannot be empty." },
+    });
+  }).pipe(
+    Effect.provide(
+      DiscordThreadToolTestLayer.pipe(
+        Layer.provideMerge(
+          Layer.succeed(OrchestrationEngineService, {
+            readEvents: () => Stream.empty,
+            readThreadEvents: () => Stream.empty,
+            getThreadReplayStats: () =>
+              Effect.succeed({
+                eventCount: 0,
+                payloadBytes: 0,
+                hasCreateEvent: false,
+              }),
+            dispatch: () => Effect.die("unused"),
+            streamDomainEvents: Stream.empty,
+            subscribeDomainEvents: Effect.succeed(Stream.empty),
+            latestSequence: Effect.succeed(0),
+          }),
+        ),
+      ),
+    ),
+  ),
 );

@@ -9,6 +9,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
+import { fromWireReadModel } from "./commandReadModel.ts";
 import { decideOrchestrationCommand } from "./decider.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
@@ -44,6 +45,8 @@ function makeReadModel(input: {
         proposedPlans: [],
         activities: [],
         checkpoints: [],
+        queuedMessages: [],
+        pendingTurnStart: null,
         session: null,
       },
     ],
@@ -65,7 +68,7 @@ it.layer(NodeServices.layer)("thread.auto-settle.set decider", (it) => {
             threadId: ThreadId.make("thread-1"),
             enabled: false,
           },
-          readModel: makeReadModel({}),
+          readModel: fromWireReadModel(makeReadModel({})),
         }),
       );
       expect(event?.type).toBe("thread.auto-settle-set");
@@ -86,7 +89,7 @@ it.layer(NodeServices.layer)("thread.auto-settle.set decider", (it) => {
             threadId: ThreadId.make("thread-1"),
             enabled: false,
           },
-          readModel: makeReadModel({ autoSettleDisabledAt: DISABLED_AT }),
+          readModel: fromWireReadModel(makeReadModel({ autoSettleDisabledAt: DISABLED_AT })),
         }),
       );
       expect(event?.type).toBe("thread.auto-settle-set");
@@ -107,7 +110,7 @@ it.layer(NodeServices.layer)("thread.auto-settle.set decider", (it) => {
             threadId: ThreadId.make("thread-1"),
             enabled: true,
           },
-          readModel: makeReadModel({ autoSettleDisabledAt: DISABLED_AT }),
+          readModel: fromWireReadModel(makeReadModel({ autoSettleDisabledAt: DISABLED_AT })),
         }),
       );
       expect(event?.type).toBe("thread.auto-settle-set");
@@ -129,7 +132,7 @@ it.layer(NodeServices.layer)("thread.auto-settle.set decider", (it) => {
             snapshotSequence: 0,
             settledAt: NOW,
           },
-          readModel: makeReadModel({ autoSettleDisabledAt: DISABLED_AT }),
+          readModel: fromWireReadModel(makeReadModel({ autoSettleDisabledAt: DISABLED_AT })),
         }),
       );
       expect(result._tag).toBe("Failure");
@@ -145,7 +148,7 @@ it.layer(NodeServices.layer)("thread.auto-settle.set decider", (it) => {
             commandId: CommandId.make("cmd-manual"),
             threadId: ThreadId.make("thread-1"),
           },
-          readModel: makeReadModel({ autoSettleDisabledAt: DISABLED_AT }),
+          readModel: fromWireReadModel(makeReadModel({ autoSettleDisabledAt: DISABLED_AT })),
         }),
       );
       expect(event?.type).toBe("thread.settled");

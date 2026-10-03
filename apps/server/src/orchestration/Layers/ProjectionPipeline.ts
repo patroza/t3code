@@ -1,6 +1,9 @@
 import {
   ApprovalRequestId,
+  IdentityUsername,
   isImportedAgentSessionMessageId,
+  PersonId,
+  type SourceRef,
   UserInputAttachmentAnswerPayload,
   type ChatAttachment,
   type OrchestrationEvent,
@@ -8,6 +11,8 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
+import { parseDiscordConversationActor, withMappedPerson } from "@t3tools/shared/sourceAttribution";
+import { readIdentityMapPeopleFromEnv } from "../../identity/IdentityService.ts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -36,6 +41,7 @@ import {
   type ProjectionThreadProposedPlan,
   ProjectionThreadProposedPlanRepository,
 } from "../../persistence/Services/ProjectionThreadProposedPlans.ts";
+import { ProjectionQueuedMessageRepository } from "../../persistence/Services/ProjectionQueuedMessages.ts";
 import * as ProjectionThreadPullRequests from "../../persistence/ProjectionThreadPullRequests.ts";
 import { ProjectionThreadSessionRepository } from "../../persistence/Services/ProjectionThreadSessions.ts";
 import {
@@ -49,10 +55,12 @@ import { ProjectionStateRepositoryLive } from "../../persistence/Layers/Projecti
 import { ProjectionThreadActivityRepositoryLive } from "../../persistence/Layers/ProjectionThreadActivities.ts";
 import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
 import { ProjectionThreadProposedPlanRepositoryLive } from "../../persistence/Layers/ProjectionThreadProposedPlans.ts";
+import { ProjectionQueuedMessageRepositoryLive } from "../../persistence/Layers/ProjectionQueuedMessages.ts";
 import { ProjectionThreadSessionRepositoryLive } from "../../persistence/Layers/ProjectionThreadSessions.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { ProjectionThreadRepositoryLive } from "../../persistence/Layers/ProjectionThreads.ts";
 import { ServerConfig } from "../../config.ts";
+import * as PrLookupFreeze from "../../git/PrLookupFreeze.ts";
 import {
   OrchestrationProjectionPipeline,
   type OrchestrationProjectionPipelineShape,
@@ -68,6 +76,7 @@ export const ORCHESTRATION_PROJECTOR_NAMES = {
   projects: "projection.projects",
   threads: "projection.threads",
   threadMessages: "projection.thread-messages",
+  queuedMessages: "projection.queued-messages",
   threadProposedPlans: "projection.thread-proposed-plans",
   threadActivities: "projection.thread-activities",
   threadSessions: "projection.thread-sessions",
@@ -338,7 +347,7 @@ const decodeQuestionAttachmentAnswer = Schema.decodeUnknownOption(UserInputAttac
 
 function collectThreadAttachmentRelativePaths(
   threadId: string,
-  messages: ReadonlyArray<ProjectionThreadMessage>,
+  messages: ReadonlyArray<Pick<ProjectionThreadMessage, "attachments">>,
 ): Set<string> {
   const threadSegment = toSafeThreadAttachmentSegment(threadId);
   if (!threadSegment) {
@@ -485,6 +494,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const projectionThreadRepository = yield* ProjectionThreadRepository;
     const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
     const projectionThreadProposedPlanRepository = yield* ProjectionThreadProposedPlanRepository;
+    const projectionQueuedMessageRepository = yield* ProjectionQueuedMessageRepository;
     const projectionThreadPullRequestRepository =
       yield* ProjectionThreadPullRequests.ProjectionThreadPullRequestRepository;
     const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
@@ -495,6 +505,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const serverConfig = yield* ServerConfig;
+    const prLookupFreeze = yield* PrLookupFreeze.PrLookupFreeze;
 
     const applyProjectsProjection: ProjectorDefinition["apply"] = Effect.fn(
       "applyProjectsProjection",
@@ -579,16 +590,96 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         return;
       }
 
-      const [latestUserMessageAt, hasActionableProposedPlan, activities, pendingApprovalCount] =
-        yield* Effect.all([
-          projectionThreadMessageRepository.getLatestUserMessageAt({ threadId }),
-          projectionThreadProposedPlanRepository.hasActionableByThreadId({
-            threadId,
-            latestTurnId: existingRow.value.latestTurnId,
-          }),
-          projectionThreadActivityRepository.listUserInputLifecycleByThreadId({ threadId }),
-          projectionPendingApprovalRepository.countPendingByThreadId({ threadId }),
-        ]);
+      // Keep origin/participants rebuild from user messages (fork). Activities
+      // and pending approvals use the cheaper SQLite-filtered queries from
+      // upstream so a long-running thread's tool payloads stay off the heap.
+      // latestUserMessageAt is a dedicated query so summary refresh does not
+      // decode message bodies (#9662). If attachments_json is corrupt, keep
+      // the existing origin/participants instead of failing the refresh.
+      const [
+        latestUserMessageAt,
+        hasActionableProposedPlan,
+        activities,
+        pendingApprovalCount,
+        messages,
+      ] = yield* Effect.all([
+        projectionThreadMessageRepository.getLatestUserMessageAt({ threadId }),
+        projectionThreadProposedPlanRepository.hasActionableByThreadId({
+          threadId,
+          latestTurnId: existingRow.value.latestTurnId,
+        }),
+        projectionThreadActivityRepository.listUserInputLifecycleByThreadId({ threadId }),
+        projectionPendingApprovalRepository.countPendingByThreadId({ threadId }),
+        projectionThreadMessageRepository
+          .listByThreadId({ threadId })
+          .pipe(Effect.orElseSucceed(() => [] as const)),
+      ]);
+
+      // Rebuild origin + participants from projected user messages so shell stays
+      // consistent after resync/replay (not only first-write stamps). Map Discord
+      // actor.platformId → personId when the identity map knows the snowflake —
+      // otherwise Mine keeps these threads as unattributed.
+      const identityPeople = readIdentityMapPeopleFromEnv();
+      type ParticipantRow = NonNullable<(typeof existingRow.value)["participantSummaries"]>[number];
+      const rebuiltParticipants: Array<ParticipantRow> = [];
+      let rebuiltOrigin = existingRow.value.originSource
+        ? withMappedPerson(existingRow.value.originSource, identityPeople)
+        : null;
+      for (const message of messages) {
+        if (message.role !== "user") {
+          continue;
+        }
+        let rawSource = message.source;
+        if (rawSource === undefined) {
+          const actor = parseDiscordConversationActor(message.text);
+          if (actor === null) continue;
+          rawSource = { channel: "discord", actor };
+        }
+        const messageSource = withMappedPerson(rawSource, identityPeople);
+        if (rebuiltOrigin === null || rebuiltOrigin === undefined) {
+          rebuiltOrigin = messageSource;
+        }
+        if (messageSource.personId !== undefined && messageSource.username !== undefined) {
+          const personId = messageSource.personId;
+          const existingParticipantIndex = rebuiltParticipants.findIndex(
+            (entry) => entry.personId === personId,
+          );
+          if (existingParticipantIndex === -1) {
+            rebuiltParticipants.push({
+              personId: PersonId.make(personId),
+              username: IdentityUsername.make(messageSource.username),
+              firstChannel: messageSource.channel,
+              channels: [messageSource.channel],
+              firstParticipatedAt: message.createdAt,
+            });
+          } else {
+            const existingParticipant = rebuiltParticipants[existingParticipantIndex]!;
+            if (!existingParticipant.channels?.includes(messageSource.channel)) {
+              rebuiltParticipants[existingParticipantIndex] = {
+                ...existingParticipant,
+                channels: [
+                  ...(existingParticipant.channels ??
+                    (existingParticipant.firstChannel === undefined
+                      ? []
+                      : [existingParticipant.firstChannel])),
+                  messageSource.channel,
+                ],
+              };
+            }
+          }
+        }
+      }
+      // Origin person first when present.
+      if (rebuiltOrigin?.personId !== undefined) {
+        const originId = rebuiltOrigin.personId;
+        rebuiltParticipants.sort((left, right) => {
+          if (left.personId === originId) return -1;
+          if (right.personId === originId) return 1;
+          return left.firstParticipatedAt.localeCompare(right.firstParticipatedAt);
+        });
+      }
+      const originSource = rebuiltOrigin;
+      const participantSummaries = rebuiltParticipants;
 
       const pendingUserInputCount = derivePendingUserInputCountFromActivities(activities);
 
@@ -598,6 +689,19 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         pendingApprovalCount,
         pendingUserInputCount,
         hasActionableProposedPlan: hasActionableProposedPlan ? 1 : 0,
+        originSource:
+          originSource === null
+            ? null
+            : ({
+                ...originSource,
+                ...(originSource.personId !== undefined
+                  ? { personId: PersonId.make(originSource.personId) }
+                  : {}),
+                ...(originSource.username !== undefined
+                  ? { username: IdentityUsername.make(originSource.username) }
+                  : {}),
+              } as SourceRef),
+        participantSummaries,
       });
     });
 
@@ -683,6 +787,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           if (Option.isNone(existingRow)) {
             return;
           }
+          const wasSettled = existingRow.value.settledOverride === "settled";
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             settledOverride: "settled",
@@ -691,6 +796,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             activeOrderKey: null,
             updatedAt: event.payload.updatedAt,
           });
+          // Idempotent re-settles must not double-count freeze interest.
+          if (!wasSettled) {
+            yield* prLookupFreeze.noteWorktreeSettled(existingRow.value.worktreePath);
+          }
           return;
         }
 
@@ -701,6 +810,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           if (Option.isNone(existingRow)) {
             return;
           }
+          const wasSettled = existingRow.value.settledOverride === "settled";
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             settledOverride: event.payload.reason === "user" ? "active" : null,
@@ -714,6 +824,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
                 : event.payload.updatedAt,
             updatedAt: event.payload.updatedAt,
           });
+          if (wasSettled) {
+            yield* prLookupFreeze.noteWorktreeUnsettled(existingRow.value.worktreePath);
+          }
           return;
         }
 
@@ -1034,6 +1147,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
 
+        case "thread.message-queued":
+        case "thread.queued-message-removed":
         case "thread.proposed-plan-upserted":
         case "thread.activity-appended":
         case "thread.approval-response-requested":
@@ -1061,10 +1176,15 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           if (Option.isNone(existingRow)) {
             return;
           }
+          // Keep the completed turn pointer when the session clears activeTurnId
+          // (ready/idle/interrupted). Wiping latest_turn_id made response bridges
+          // that key off latestTurn miss already-finished turns after restart.
+          const nextLatestTurnId =
+            event.payload.session.activeTurnId ?? existingRow.value.latestTurnId;
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             // activeTurnId describes current work; a terminal session must not erase history.
-            latestTurnId: event.payload.session.activeTurnId ?? existingRow.value.latestTurnId,
+            latestTurnId: nextLatestTurnId,
             updatedAt: event.occurredAt,
           });
           yield* refreshThreadShellSummary(event.payload.threadId);
@@ -1191,9 +1311,66 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               ? { context: event.payload.context ?? previousMessage?.context }
               : {}),
             isStreaming: false,
+            ...(event.payload.source !== undefined
+              ? { source: event.payload.source }
+              : previousMessage?.source !== undefined
+                ? { source: previousMessage.source }
+                : {}),
             createdAt: previousMessage?.createdAt ?? event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
           });
+          return;
+        }
+
+        case "thread.messages-resynced": {
+          // Rebuild the transcript tail from an authoritative external source.
+          // Everything up to and including `afterMessageId` is known-good and is
+          // kept as-is; only what follows is replaced.
+          const existingRows = yield* projectionThreadMessageRepository.listByThreadId({
+            threadId: event.payload.threadId,
+          });
+          const anchorIndex =
+            event.payload.afterMessageId === null
+              ? -1
+              : existingRows.findIndex((row) => row.messageId === event.payload.afterMessageId);
+          if (event.payload.afterMessageId !== null && anchorIndex === -1) {
+            // Anchor is gone (already reverted/pruned): applying the tail would
+            // graft it onto an unknown prefix, so leave the projection alone.
+            yield* Effect.logWarning(
+              "Skipping thread.messages-resynced: anchor message is not in the projection.",
+              {
+                threadId: event.payload.threadId,
+                afterMessageId: event.payload.afterMessageId,
+                reason: event.payload.reason,
+              },
+            );
+            return;
+          }
+          const keptRows = existingRows.slice(0, anchorIndex + 1);
+          const tailRows = event.payload.messages.map(
+            (message) =>
+              ({
+                messageId: message.id,
+                threadId: event.payload.threadId,
+                turnId: message.turnId,
+                role: message.role,
+                text: message.text,
+                ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+                isStreaming: message.streaming,
+                createdAt: message.createdAt,
+                updatedAt: message.updatedAt,
+              }) satisfies ProjectionThreadMessage,
+          );
+          yield* projectionThreadMessageRepository.deleteByThreadId({
+            threadId: event.payload.threadId,
+          });
+          yield* Effect.forEach(
+            [...keptRows, ...tailRows],
+            projectionThreadMessageRepository.upsert,
+            {
+              concurrency: 1,
+            },
+          ).pipe(Effect.asVoid);
           return;
         }
 
@@ -1223,12 +1400,81 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* Effect.forEach(keptRows, projectionThreadMessageRepository.upsert, {
             concurrency: 1,
           }).pipe(Effect.asVoid);
+          // Queued messages survive a revert (they are not part of the
+          // timeline), so their attachment files must survive pruning too.
+          const queuedRows = yield* projectionQueuedMessageRepository.listByThreadId({
+            threadId: event.payload.threadId,
+          });
           attachmentSideEffects.prunedThreadRelativePaths.set(
             event.payload.threadId,
-            collectThreadAttachmentRelativePaths(event.payload.threadId, keptRows),
+            collectThreadAttachmentRelativePaths(event.payload.threadId, [
+              ...keptRows,
+              ...queuedRows,
+            ]),
           );
           return;
         }
+
+        default:
+          return;
+      }
+    });
+
+    const applyQueuedMessagesProjection: ProjectorDefinition["apply"] = Effect.fn(
+      "applyQueuedMessagesProjection",
+    )(function* (event, attachmentSideEffects) {
+      switch (event.type) {
+        case "thread.message-queued":
+          yield* projectionQueuedMessageRepository.upsert({
+            messageId: event.payload.messageId,
+            threadId: event.payload.threadId,
+            text: event.payload.text,
+            attachments: event.payload.attachments,
+            modelSelection: event.payload.modelSelection ?? null,
+            sourceProposedPlanThreadId: event.payload.sourceProposedPlan?.threadId ?? null,
+            sourceProposedPlanId: event.payload.sourceProposedPlan?.planId ?? null,
+            queuedAt: event.payload.queuedAt,
+          });
+          return;
+
+        case "thread.queued-message-removed": {
+          // A user removal orphans the removed message's attachment files —
+          // prune to what the timeline and remaining queue still reference.
+          // Dispatch removals keep everything: the same attachments re-enter
+          // the timeline via the paired thread.message-sent.
+          const removedQueuedMessage =
+            event.payload.reason === "user"
+              ? (yield* projectionQueuedMessageRepository.listByThreadId({
+                  threadId: event.payload.threadId,
+                })).find((entry) => entry.messageId === event.payload.messageId)
+              : undefined;
+          yield* projectionQueuedMessageRepository.deleteByMessageId({
+            threadId: event.payload.threadId,
+            messageId: event.payload.messageId,
+          });
+          if (removedQueuedMessage && (removedQueuedMessage.attachments?.length ?? 0) > 0) {
+            const retainedMessageRows = yield* projectionThreadMessageRepository.listByThreadId({
+              threadId: event.payload.threadId,
+            });
+            const retainedQueuedRows = yield* projectionQueuedMessageRepository.listByThreadId({
+              threadId: event.payload.threadId,
+            });
+            attachmentSideEffects.prunedThreadRelativePaths.set(
+              event.payload.threadId,
+              collectThreadAttachmentRelativePaths(event.payload.threadId, [
+                ...retainedMessageRows,
+                ...retainedQueuedRows,
+              ]),
+            );
+          }
+          return;
+        }
+
+        case "thread.deleted":
+          yield* projectionQueuedMessageRepository.deleteByThreadId({
+            threadId: event.payload.threadId,
+          });
+          return;
 
         default:
           return;
@@ -1460,6 +1706,18 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             // settle still-running turns so their duration reflects the whole
             // turn rather than the last assistant message.
             const settledTurnState = settledTurnStateForSessionStatus(event.payload.session.status);
+            // Any settled status abandons an unadopted pending turn start —
+            // including "ready": a mid-turn steer re-arms the pending row
+            // without a fresh adoption, and a stale row would block queue
+            // drains (and re-arm the read model's pendingTurnStart flag on
+            // restart hydration). Ready-with-genuinely-pending starts never
+            // reach this projection: ingestion maps that shape to
+            // "starting" before dispatching the session set.
+            if (settledTurnState !== null) {
+              yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
+                threadId: event.payload.threadId,
+              });
+            }
             if (settledTurnState === null) {
               return;
             }
@@ -1955,6 +2213,14 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         name: ORCHESTRATION_PROJECTOR_NAMES.projects,
         apply: applyProjectsProjection,
       },
+      // queuedMessages must bootstrap before threadMessages: the revert
+      // handler in threadMessages reads the queued-message projection to
+      // retain queued attachments, so on replay that table has to be
+      // populated first or the prune deletes files still referenced.
+      {
+        name: ORCHESTRATION_PROJECTOR_NAMES.queuedMessages,
+        apply: applyQueuedMessagesProjection,
+      },
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
         apply: applyThreadMessagesProjection,
@@ -2213,10 +2479,14 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
   Layer.provideMerge(ProjectionThreadRepositoryLive),
   Layer.provideMerge(ProjectionThreadMessageRepositoryLive),
   Layer.provideMerge(ProjectionThreadProposedPlanRepositoryLive),
+  Layer.provideMerge(ProjectionQueuedMessageRepositoryLive),
   Layer.provideMerge(ProjectionThreadPullRequests.layer),
   Layer.provideMerge(ProjectionThreadActivityRepositoryLive),
   Layer.provideMerge(ProjectionThreadSessionRepositoryLive),
   Layer.provideMerge(ProjectionTurnRepositoryLive),
   Layer.provideMerge(ProjectionPendingApprovalRepositoryLive),
   Layer.provideMerge(ProjectionStateRepositoryLive),
+  // Shared with GitManager via the same layer value at the server root
+  // (PrLookupFreezeLive). Tests that mount this layer alone provide their own.
+  Layer.provide(PrLookupFreeze.layer),
 );

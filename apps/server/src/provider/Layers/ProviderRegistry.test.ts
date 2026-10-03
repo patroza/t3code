@@ -44,6 +44,7 @@ import { AntigravityInstallation } from "../AntigravityInstallation.ts";
 import * as ModelManifest from "../ModelManifest.ts";
 import { applyProviderCompatibility } from "../providerCompatibility.ts";
 import * as ResetCreditCoordinator from "./resetCreditCoordinator.ts";
+import * as DirenvEnvironment from "../DirenvEnvironment.ts";
 import * as OpenCodeRuntime from "../opencodeRuntime.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import { ProviderInstanceRegistryHydrationLive } from "./ProviderInstanceRegistryHydration.ts";
@@ -375,6 +376,7 @@ const awaitPersistedProvider = (
 
 const TestNodeServices = Layer.mergeAll(
   NodeServices.layer,
+  DirenvEnvironment.layerNoop,
   Layer.mock(CodexInstallation)({ managedDirectory: "unused-managed-installation" }),
   Layer.mock(ServerSecretStore)({}),
   Layer.succeed(ServerEnvironmentIdentity, {
@@ -2345,6 +2347,7 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
                   claudeAgent: { enabled: false },
                   cursor: { enabled: false },
                   grok: { enabled: false },
+                  kimi: { enabled: false },
                   opencode: { enabled: false },
                 },
                 // `providerInstances` keys are branded `ProviderInstanceId`;
@@ -2455,6 +2458,7 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
                   claudeAgent: { enabled: false },
                   cursor: { enabled: false },
                   grok: { enabled: false },
+                  kimi: { enabled: false },
                   opencode: { enabled: false },
                 },
               }),
@@ -2571,6 +2575,7 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
                   claudeAgent: { enabled: false },
                   cursor: { enabled: false },
                   grok: { enabled: false },
+                  kimi: { enabled: false },
                   opencode: { enabled: false },
                 },
                 providerInstances: {
@@ -2714,6 +2719,7 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
                 "codex",
                 "cursor",
                 "grok",
+                "kimi",
                 "opencode",
               ]);
               assert.strictEqual(cursorProvider?.enabled, false);

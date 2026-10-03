@@ -89,6 +89,7 @@ const CodexUserInputAnswerObject = Schema.Struct({
 });
 const isCodexResumeCursorSchema = Schema.is(CodexResumeCursorSchema);
 const isCodexUserInputAnswerObject = Schema.is(CodexUserInputAnswerObject);
+const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
 const NullableMcpElicitationString = Schema.NullOr(Schema.String);
 const McpElicitationMetadata = Schema.Struct({
   app: Schema.optionalKey(NullableMcpElicitationString),
@@ -219,6 +220,7 @@ export interface CodexSessionRuntimeShape {
   ) => Effect.Effect<ProviderTurnStartResult, CodexSessionRuntimeError>;
   readonly compactThread: Effect.Effect<void, CodexSessionRuntimeError>;
   readonly interruptTurn: (turnId?: TurnId) => Effect.Effect<void, CodexSessionRuntimeError>;
+  readonly compactSession: Effect.Effect<void, CodexSessionRuntimeError>;
   readonly readThread: Effect.Effect<CodexThreadSnapshot, CodexSessionRuntimeError>;
   readonly rollbackThread: (
     numTurns: number,
@@ -700,6 +702,14 @@ function classifyCodexStderrLine(rawLine: string): { readonly message: string } 
 }
 
 export function isRecoverableThreadResumeError(error: unknown): boolean {
+  if (
+    isCodexAppServerRequestError(error) &&
+    error.code === -32602 &&
+    error.errorMessage.toLowerCase() === "invalid params"
+  ) {
+    return true;
+  }
+
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
   if (!message.includes("thread")) {
     return false;
@@ -2583,6 +2593,52 @@ export const makeCodexSessionRuntime = (
             ),
           });
           yield* Ref.set(lastAdditionalContextRef, params.additionalContext);
+
+          // Steer the active turn via the protocol-native `turn/steer` —
+          // appending input mid-turn instead of opening a second provider
+          // turn while the first is still settling. The `expectedTurnId`
+          // precondition fails when the turn just ended or is not steerable
+          // (e.g. review/compact); only a server rejection of the request
+          // itself (operation "receive-response" — the steer was NOT
+          // applied) falls back to a fresh `turn/start`. Decode failures on
+          // an accepted steer's response, and transport/protocol failures,
+          // propagate: the input may already be appended, and retrying via
+          // turn/start would duplicate it.
+          const activeSession = yield* Ref.get(sessionRef);
+          if (activeSession.status === "running" && activeSession.activeTurnId !== undefined) {
+            const steeredTurnId = yield* client
+              .request("turn/steer", {
+                threadId: providerThreadId,
+                expectedTurnId: activeSession.activeTurnId,
+                input: params.input,
+              })
+              .pipe(
+                Effect.map((steerResponse) => TurnId.make(steerResponse.turnId)),
+                Effect.catchIf(
+                  (cause): cause is CodexErrors.CodexAppServerRequestError =>
+                    cause._tag === "CodexAppServerRequestError" &&
+                    cause.operation === "receive-response",
+                  (cause) =>
+                    Effect.as(
+                      Effect.logDebug("Codex turn/steer rejected; falling back to turn/start.", {
+                        cause,
+                      }),
+                      null,
+                    ),
+                ),
+              );
+            if (steeredTurnId !== null) {
+              const steeredProviderThreadId = currentProviderThreadId(yield* Ref.get(sessionRef));
+              return {
+                threadId: options.threadId,
+                turnId: steeredTurnId,
+                ...(steeredProviderThreadId
+                  ? { resumeCursor: { threadId: steeredProviderThreadId } }
+                  : {}),
+              } satisfies ProviderTurnStartResult;
+            }
+          }
+
           const rawResponse = yield* client.raw.request("turn/start", params);
           const response = yield* decodeV2TurnStartResponse(rawResponse).pipe(
             Effect.mapError((error) =>
@@ -2654,6 +2710,12 @@ export const makeCodexSessionRuntime = (
             turnId: effectiveTurnId,
           });
         }),
+      compactSession: Effect.gen(function* () {
+        const providerThreadId = yield* readProviderThreadId;
+        yield* client.request("thread/compact/start", {
+          threadId: providerThreadId,
+        });
+      }),
       readThread: Effect.gen(function* () {
         const providerThreadId = yield* readProviderThreadId;
         return yield* readCodexThread(client, providerThreadId);

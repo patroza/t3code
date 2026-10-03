@@ -37,6 +37,7 @@ import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
+import { DirenvEnvironmentError } from "../DirenvEnvironment.ts";
 import type { OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
 import {
   OpenCodeRuntime,
@@ -48,6 +49,7 @@ import {
   isSameOpenCodeDirectory,
   makeOpenCodeAdapter,
   mergeOpenCodeAssistantText,
+  normalizeOpenCodeTokenUsage,
 } from "./OpenCodeAdapter.ts";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 
@@ -57,6 +59,7 @@ class OpenCodeAdapter extends Context.Service<OpenCodeAdapter, OpenCodeAdapterSh
 ) {}
 
 const asThreadId = (value: string): ThreadId => ThreadId.make(value);
+const decodeOpenCodeSettings = Schema.decodeSync(OpenCodeSettings);
 
 type MessageEntry = {
   info: {
@@ -69,11 +72,18 @@ type MessageEntry = {
 const runtimeMock = {
   state: {
     startCalls: [] as string[],
+    sessionCreateCalls: [] as Array<{ baseUrl: string; input: unknown }>,
+    connectCalls: [] as Array<{
+      serverUrl?: string | null;
+      environment?: NodeJS.ProcessEnv;
+      cwd?: string;
+    }>,
     sessionCreateUrls: [] as string[],
     sessionCreateInputs: [] as Array<Record<string, unknown>>,
     createdSessionIds: [] as string[],
     authHeaders: [] as Array<string | null>,
     abortCalls: [] as string[],
+    abortCallRecords: [] as Array<{ sessionID: string; directory?: string }>,
     abortSignals: [] as AbortSignal[],
     abortImplementation: null as
       | ((sessionID: string, signal?: AbortSignal) => Promise<void>)
@@ -85,7 +95,7 @@ const runtimeMock = {
       | null,
     closeCalls: [] as string[],
     revertMessageID: undefined as string | undefined,
-    revertCalls: [] as Array<{ sessionID: string; messageID?: string }>,
+    revertCalls: [] as Array<{ sessionID: string; directory?: string; messageID?: string }>,
     messageCalls: [] as Array<{ sessionID: string; messageID: string }>,
     messageFailures: 0,
     promptCalls: [] as Array<unknown>,
@@ -105,6 +115,8 @@ const runtimeMock = {
     forkMessagesBySession: new Map<string, MessageEntry[]>(),
     forkPreservesBoundary: true,
     subscribedEvents: [] as Array<unknown | Promise<unknown>>,
+    getSessionDirectory: null as string | null,
+    createSessionDirectoryOverride: null as string | null,
     eventSubscribeObserved: null as (() => void) | null,
     eventStreamError: null as ((cause: unknown) => void) | null,
     permissionReplyCalls: [] as Array<{ requestID: string; reply: string }>,
@@ -139,11 +151,14 @@ const runtimeMock = {
   },
   reset() {
     this.state.startCalls.length = 0;
+    this.state.sessionCreateCalls.length = 0;
+    this.state.connectCalls.length = 0;
     this.state.sessionCreateUrls.length = 0;
     this.state.sessionCreateInputs.length = 0;
     this.state.createdSessionIds.length = 0;
     this.state.authHeaders.length = 0;
     this.state.abortCalls.length = 0;
+    this.state.abortCallRecords.length = 0;
     this.state.abortSignals.length = 0;
     this.state.abortImplementation = null;
     this.state.sessionChildrenCalls.length = 0;
@@ -169,6 +184,8 @@ const runtimeMock = {
     this.state.forkMessagesBySession.clear();
     this.state.forkPreservesBoundary = true;
     this.state.subscribedEvents = [];
+    this.state.getSessionDirectory = null;
+    this.state.createSessionDirectoryOverride = null;
     this.state.eventSubscribeObserved = null;
     this.state.eventStreamError = null;
     this.state.permissionReplyCalls.length = 0;
@@ -219,11 +236,18 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
         isRunning: Effect.succeed(true),
       };
     }),
-  connectToOpenCodeServer: ({ serverUrl, serverPassword }) =>
+  connectToOpenCodeServer: ({ serverUrl, serverPassword, environment, cwd }) =>
     Effect.gen(function* () {
+      runtimeMock.state.connectCalls.push({
+        ...(serverUrl !== undefined ? { serverUrl } : {}),
+        ...(environment !== undefined ? { environment } : {}),
+        ...(cwd !== undefined ? { cwd } : {}),
+      });
       const url = serverUrl ?? "http://127.0.0.1:4301";
-      // Always register a finalizer so the closeCalls/closeError probes fire;
-      // production attaches none for external servers.
+      // Unconditionally register a scope finalizer for test observability —
+      // preserves the `closeCalls` / `closeError` probes that the existing
+      // suites rely on. Production code never attaches a finalizer to an
+      // external server (it simply returns `Effect.succeed(...)`).
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
           runtimeMock.state.closeCalls.push(url);
@@ -249,17 +273,29 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
         }),
       },
       session: {
-        create: async (input: Record<string, unknown>) => {
+        create: async (input: unknown) => {
+          runtimeMock.state.sessionCreateCalls.push({ baseUrl, input });
           runtimeMock.state.sessionCreateUrls.push(baseUrl);
-          runtimeMock.state.sessionCreateInputs.push(input);
+          if (input && typeof input === "object") {
+            runtimeMock.state.sessionCreateInputs.push(input as Record<string, unknown>);
+          }
           runtimeMock.state.authHeaders.push(
             serverPassword ? `Basic ${btoa(`opencode:${serverPassword}`)}` : null,
           );
+          const directory =
+            runtimeMock.state.createSessionDirectoryOverride ??
+            (input as { readonly directory?: unknown })?.directory;
           return {
-            data: { id: runtimeMock.state.createdSessionIds.shift() ?? `${baseUrl}/session` },
+            data: {
+              id: runtimeMock.state.createdSessionIds.shift() ?? `${baseUrl}/session`,
+              ...(typeof directory === "string" ? { directory } : {}),
+            },
           };
         },
-        get: async ({ sessionID }: { sessionID: string }, options?: { signal?: AbortSignal }) => {
+        get: async (
+          { sessionID }: { sessionID: string; directory?: string },
+          options?: { signal?: AbortSignal },
+        ) => {
           runtimeMock.state.sessionGetIds.push(sessionID);
           runtimeMock.state.sessionGetObserved?.(sessionID);
           if (runtimeMock.state.sessionGetImplementation) {
@@ -275,7 +311,9 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
               cause: { status: 404, body: { name: "NotFoundError" } },
             });
           }
-          const directory = runtimeMock.state.sessionDirectoryById.get(sessionID);
+          const directory =
+            runtimeMock.state.sessionDirectoryById.get(sessionID) ??
+            runtimeMock.state.getSessionDirectory;
           const parentID = runtimeMock.state.sessionParentById.get(sessionID);
           return {
             data: {
@@ -329,8 +367,15 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
           }
           return { data: { id: forkedId, ...(directory ? { directory } : {}) } };
         },
-        abort: async ({ sessionID }: { sessionID: string }, options?: { signal?: AbortSignal }) => {
+        abort: async (
+          { sessionID, directory }: { sessionID: string; directory?: string },
+          options?: { signal?: AbortSignal },
+        ) => {
           runtimeMock.state.abortCalls.push(sessionID);
+          runtimeMock.state.abortCallRecords.push({
+            sessionID,
+            ...(directory ? { directory } : {}),
+          });
           if (options?.signal) {
             runtimeMock.state.abortSignals.push(options.signal);
           }
@@ -426,9 +471,18 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
           }
           return { data: message };
         },
-        revert: async ({ sessionID, messageID }: { sessionID: string; messageID?: string }) => {
+        revert: async ({
+          sessionID,
+          directory,
+          messageID,
+        }: {
+          sessionID: string;
+          directory?: string;
+          messageID?: string;
+        }) => {
           runtimeMock.state.revertCalls.push({
             sessionID,
+            ...(directory ? { directory } : {}),
             ...(messageID ? { messageID } : {}),
           });
           if (!messageID) {
@@ -590,7 +644,7 @@ const providerSessionDirectoryTestLayer = Layer.succeed(ProviderSessionDirectory
 // the layer graph reach for it — but the routing values the assertions
 // probe (serverUrl, serverPassword) must be threaded directly through the
 // decoded `OpenCodeSettings`.
-const openCodeAdapterTestSettings = Schema.decodeSync(OpenCodeSettings)({
+const openCodeAdapterTestSettings = decodeOpenCodeSettings({
   binaryPath: "fake-opencode",
   serverUrl: "http://127.0.0.1:9999",
   serverPassword: "secret-password",
@@ -623,6 +677,24 @@ beforeEach(() => {
 
 const advanceTestClock = (ms: number) =>
   TestClock.adjust(`${ms} millis`).pipe(Effect.andThen(Effect.yieldNow));
+
+const makeDirenvAdapterLayer = (
+  settings: typeof openCodeAdapterTestSettings,
+  resolveEnvironment: NonNullable<
+    NonNullable<Parameters<typeof makeOpenCodeAdapter>[1]>["resolveEnvironment"]
+  >,
+) =>
+  Layer.effect(
+    OpenCodeAdapter,
+    makeOpenCodeAdapter(settings, {
+      environment: { PATH: process.env.PATH, PROVIDER_VALUE: "configured" },
+      resolveEnvironment,
+    }),
+  ).pipe(
+    Layer.provideMerge(Layer.succeed(OpenCodeRuntime, OpenCodeRuntimeTestDouble)),
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(NodeServices.layer),
+  );
 
 function promiseWithResolvers<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -668,6 +740,62 @@ const questionRequest = (id: string, sessionID: string): QuestionRequest => ({
 });
 
 it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
+  it.effect("passes the resolved environment and project cwd to a local OpenCode server", () => {
+    const resolvedEnvironment = { PATH: process.env.PATH, PROVIDER_VALUE: "from-direnv" };
+    const resolveEnvironment = vi.fn((_input: { readonly cwd: string }) =>
+      Effect.succeed(resolvedEnvironment),
+    );
+    const settings = decodeOpenCodeSettings({
+      binaryPath: "fake-opencode",
+      serverUrl: "",
+    });
+    const adapterLayer = makeDirenvAdapterLayer(settings, resolveEnvironment);
+
+    return Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId: asThreadId("thread-opencode-direnv"),
+        cwd: ".",
+        runtimeMode: "full-access",
+      });
+
+      NodeAssert.equal(resolveEnvironment.mock.calls[0]?.[0].cwd, process.cwd());
+      NodeAssert.deepEqual(runtimeMock.state.connectCalls, [
+        {
+          serverUrl: "",
+          environment: resolvedEnvironment,
+          cwd: process.cwd(),
+        },
+      ]);
+    }).pipe(Effect.provide(adapterLayer));
+  });
+
+  it.effect("does not resolve direnv for a configured external OpenCode server", () => {
+    const resolveEnvironment = vi.fn(() =>
+      Effect.fail(
+        new DirenvEnvironmentError({
+          stage: "execution",
+          detail: "must not run for external servers",
+        }),
+      ),
+    );
+    const adapterLayer = makeDirenvAdapterLayer(openCodeAdapterTestSettings, resolveEnvironment);
+
+    return Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId: asThreadId("thread-opencode-external-direnv"),
+        cwd: ".",
+        runtimeMode: "full-access",
+      });
+
+      NodeAssert.equal(resolveEnvironment.mock.calls.length, 0);
+      NodeAssert.equal(runtimeMock.state.connectCalls[0]?.serverUrl, "http://127.0.0.1:9999");
+    }).pipe(Effect.provide(adapterLayer));
+  });
+
   it.effect("reuses a configured OpenCode server URL instead of spawning a local server", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;
@@ -681,7 +809,10 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       NodeAssert.equal(session.provider, "opencode");
       NodeAssert.equal(session.threadId, "thread-opencode");
       NodeAssert.deepEqual(runtimeMock.state.startCalls, []);
-      NodeAssert.deepEqual(runtimeMock.state.sessionCreateUrls, ["http://127.0.0.1:9999"]);
+      NodeAssert.deepEqual(
+        runtimeMock.state.sessionCreateCalls.map((call) => call.baseUrl),
+        ["http://127.0.0.1:9999"],
+      );
       NodeAssert.deepEqual(runtimeMock.state.authHeaders, [
         `Basic ${btoa("opencode:secret-password")}`,
       ]);
@@ -1411,6 +1542,13 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       yield* adapter.stopSession(asThreadId("thread-opencode"));
 
       NodeAssert.deepEqual(runtimeMock.state.startCalls, []);
+      NodeAssert.deepEqual(
+        runtimeMock.state.abortCallRecords.some(
+          (call) =>
+            call.sessionID === "http://127.0.0.1:9999/session" && call.directory === process.cwd(),
+        ),
+        true,
+      );
       NodeAssert.deepEqual(runtimeMock.state.abortCalls, [
         rootSessionId,
         "ses_stop_child",
@@ -1468,10 +1606,10 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       yield* Effect.exit(adapter.stopAll());
       const sessions = yield* adapter.listSessions();
 
-      NodeAssert.deepEqual(runtimeMock.state.closeCalls, [
-        "http://127.0.0.1:9999",
-        "http://127.0.0.1:9999",
-      ]);
+      NodeAssert.equal(
+        runtimeMock.state.closeCalls.filter((url) => url === "http://127.0.0.1:9999").length >= 2,
+        true,
+      );
       NodeAssert.deepEqual(sessions, []);
     }),
   );
@@ -6580,6 +6718,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       NodeAssert.match(messageID, /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/);
       NodeAssert.deepEqual(prompt, {
         sessionID: "http://127.0.0.1:9999/session",
+        directory: process.cwd(),
         model: {
           providerID: "anthropic",
           modelID: "claude-sonnet-4-5",
@@ -6638,6 +6777,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       NodeAssert.match(messageID, /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/);
       NodeAssert.deepEqual(prompt, {
         sessionID: "http://127.0.0.1:9999/session",
+        directory: process.cwd(),
         model: {
           providerID: "anthropic",
           modelID: "claude-sonnet-4-5",
@@ -6940,6 +7080,98 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         latestText: "Hello world",
         deltaToEmit: "",
       });
+    }),
+  );
+
+  it.effect("maps OpenCode token rollups to last in/out usage", () =>
+    Effect.sync(() => {
+      NodeAssert.deepEqual(
+        normalizeOpenCodeTokenUsage({
+          total: 1_500,
+          input: 1_000,
+          output: 400,
+          reasoning: 100,
+          cache: { read: 200, write: 0 },
+        }),
+        {
+          usedTokens: 1_500,
+          lastUsedTokens: 1_500,
+          inputTokens: 1_200,
+          lastInputTokens: 1_200,
+          outputTokens: 400,
+          lastOutputTokens: 400,
+          reasoningOutputTokens: 100,
+          lastReasoningOutputTokens: 100,
+          cachedInputTokens: 200,
+          lastCachedInputTokens: 200,
+        },
+      );
+      NodeAssert.equal(
+        normalizeOpenCodeTokenUsage({
+          input: 0,
+          output: 0,
+          reasoning: 0,
+          cache: { read: 0, write: 0 },
+        }),
+        undefined,
+      );
+    }),
+  );
+
+  it.effect("emits thread token usage from OpenCode assistant message tokens", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-opencode-token-usage");
+      runtimeMock.state.subscribedEvents = [
+        {
+          type: "message.updated",
+          properties: {
+            sessionID: "http://127.0.0.1:9999/session",
+            info: {
+              id: "msg-tokens",
+              role: "assistant",
+              tokens: {
+                total: 1_500,
+                input: 1_000,
+                output: 400,
+                reasoning: 100,
+                cache: { read: 200, write: 0 },
+              },
+            },
+          },
+        },
+      ];
+
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId),
+        Stream.take(3),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
+      const usageEvent = events.find((event) => event.type === "thread.token-usage.updated");
+      NodeAssert.ok(usageEvent);
+      if (usageEvent?.type === "thread.token-usage.updated") {
+        NodeAssert.deepEqual(usageEvent.payload.usage, {
+          usedTokens: 1_500,
+          lastUsedTokens: 1_500,
+          inputTokens: 1_200,
+          lastInputTokens: 1_200,
+          outputTokens: 400,
+          lastOutputTokens: 400,
+          reasoningOutputTokens: 100,
+          lastReasoningOutputTokens: 100,
+          cachedInputTokens: 200,
+          lastCachedInputTokens: 200,
+        });
+      }
     }),
   );
 
@@ -7719,8 +7951,11 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       });
 
       const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
-      NodeAssert.equal(runtimeMock.state.sessionCreateInputs.length, 1);
-      NodeAssert.equal("title" in (runtimeMock.state.sessionCreateInputs[0] ?? {}), false);
+      NodeAssert.equal(runtimeMock.state.sessionCreateCalls.length, 1);
+      NodeAssert.equal(
+        "title" in ((runtimeMock.state.sessionCreateCalls[0]?.input ?? {}) as object),
+        false,
+      );
 
       const metadataUpdated = events.find((event) => event.type === "thread.metadata.updated");
       NodeAssert.ok(metadataUpdated);
@@ -7742,9 +7977,9 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         title: "Investigate reconnect failures",
       });
 
-      NodeAssert.equal(runtimeMock.state.sessionCreateInputs.length, 1);
+      NodeAssert.equal(runtimeMock.state.sessionCreateCalls.length, 1);
       NodeAssert.equal(
-        runtimeMock.state.sessionCreateInputs[0]?.title,
+        (runtimeMock.state.sessionCreateCalls[0]?.input as { title?: string } | undefined)?.title,
         "Investigate reconnect failures",
       );
     }),

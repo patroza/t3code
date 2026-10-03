@@ -1,0 +1,86 @@
+import { MessageId } from "@t3tools/contracts";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it } from "vite-plus/test";
+
+import { QueuedMessageChips, type DisplayQueuedMessage } from "./QueuedMessageChips";
+
+function makeQueued(overrides: Partial<DisplayQueuedMessage> = {}): DisplayQueuedMessage {
+  return {
+    messageId: MessageId.make("msg-queued-1"),
+    text: "follow up after this turn",
+    attachmentCount: 0,
+    pending: false,
+    ...overrides,
+  };
+}
+
+describe("QueuedMessageChips", () => {
+  it("renders nothing when the queue is empty", () => {
+    expect(
+      renderToStaticMarkup(
+        <QueuedMessageChips queuedMessages={[]} onSteer={() => {}} onEdit={() => {}} />,
+      ),
+    ).toBe("");
+  });
+
+  it("shows queued text plus Send now and dequeue-to-edit affordances", () => {
+    const html = renderToStaticMarkup(
+      <QueuedMessageChips queuedMessages={[makeQueued()]} onSteer={() => {}} onEdit={() => {}} />,
+    );
+
+    expect(html).toContain("follow up after this turn");
+    expect(html).toContain('aria-label="Edit queued message"');
+    expect(html).toContain('aria-label="Send queued message now"');
+    expect(html).toContain("Send now");
+    expect(html).toContain("Remove from queue and edit in composer");
+    expect(html).toContain('data-queued-message-pending="false"');
+    expect(html).not.toContain('disabled=""');
+  });
+
+  it("labels Send now on the oldest ready chip with the steer shortcut", () => {
+    const html = renderToStaticMarkup(
+      <QueuedMessageChips
+        queuedMessages={[
+          makeQueued({ pending: true, text: "still landing" }),
+          makeQueued({ messageId: MessageId.make("msg-queued-2"), text: "oldest ready" }),
+          makeQueued({ messageId: MessageId.make("msg-queued-3"), text: "later" }),
+        ]}
+        steerShortcutLabel="⌘⇧Enter"
+        onSteer={() => {}}
+        onEdit={() => {}}
+      />,
+    );
+
+    expect(html).toContain("Send now (⌘⇧Enter)");
+    expect(html).toContain("Send now, interrupting the current step (⌘⇧Enter)");
+    expect(html.match(/Send now \(⌘⇧Enter\)/g)).toHaveLength(1);
+  });
+
+  it("labels attachment-only queued messages", () => {
+    const html = renderToStaticMarkup(
+      <QueuedMessageChips
+        queuedMessages={[makeQueued({ text: "", attachmentCount: 1 })]}
+        onSteer={() => {}}
+        onEdit={() => {}}
+      />,
+    );
+
+    expect(html).toContain("1 attachment(s)");
+  });
+
+  it("renders an unacknowledged send as an inert pending chip", () => {
+    const html = renderToStaticMarkup(
+      <QueuedMessageChips
+        queuedMessages={[makeQueued({ text: "queued optimistically", pending: true })]}
+        onSteer={() => {}}
+        onEdit={() => {}}
+      />,
+    );
+
+    // The text is visible immediately; Steer/Edit stay inert until the server
+    // knows about the message.
+    expect(html).toContain("queued optimistically");
+    expect(html).toContain('data-queued-message-pending="true"');
+    expect(html.match(/disabled=""/g)).toHaveLength(2);
+  });
+});

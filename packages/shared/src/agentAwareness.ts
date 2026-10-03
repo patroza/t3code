@@ -43,7 +43,7 @@ export interface ProjectThreadAwarenessInput {
   >;
 }
 
-function buildAgentAwarenessDeepLink(input: {
+export function buildAgentAwarenessDeepLink(input: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
 }): string {

@@ -411,6 +411,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Prefer non-empty planContent from the extension request; otherwise undefined. */
+export function extractXAiExitPlanModePlanMarkdown(
+  params: XAiExitPlanModeRequest,
+): string | undefined {
+  const planContent = unwrapExitPlanModeParams(params).planContent;
+  if (typeof planContent !== "string") {
+    return undefined;
+  }
+  const trimmedContent = planContent.trim();
+  return trimmedContent.length > 0 ? planContent : undefined;
+}
+
 /**
  * Adds Grok's private prompt-completion fallback around a standards-only ACP runtime.
  * The underlying runtime remains unaware of xAI methods and metadata.
@@ -462,6 +474,16 @@ export const makeXAiPromptCompletionRuntime = Effect.fn("makeXAiPromptCompletion
               ...payload._meta,
               promptId: fallback.promptId,
               requestId: fallback.promptId,
+              // Grok's "send now": cancel whatever the agent is still doing and
+              // take this prompt as the next turn, keeping background tasks and
+              // the queue alive. Without it the agent queues the prompt behind
+              // the running turn and answers it only once that turn finishes.
+              //
+              // Sent on every prompt, not just steers: it is a no-op on an idle
+              // session, and it also covers the windows where the agent is busy
+              // but T3 believes otherwise — a Stop whose cancellation is still
+              // winding down, or a resumed/reconnected session.
+              sendNow: true,
             },
           } satisfies Omit<EffectAcpSchema.PromptRequest, "sessionId">;
 

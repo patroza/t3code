@@ -31,6 +31,7 @@ import * as Keybindings from "../src/keybindings.ts";
 import { OrchestrationLayerLive } from "../src/orchestration/runtimeLayer.ts";
 import * as OrchestrationEngine from "../src/orchestration/Services/OrchestrationEngine.ts";
 import * as OrchestrationReactor from "../src/orchestration/Services/OrchestrationReactor.ts";
+import { OrphanSessionRecovery } from "../src/orchestration/Services/OrphanSessionRecovery.ts";
 import * as ProjectionSnapshotQuery from "../src/orchestration/Services/ProjectionSnapshotQuery.ts";
 import { makeSqlitePersistenceLive } from "../src/persistence/Layers/Sqlite.ts";
 import * as ProviderSessionRuntime from "../src/persistence/ProviderSessionRuntime.ts";
@@ -110,12 +111,19 @@ const startupDependencies = Layer.mergeAll(
     }),
   ),
   AnalyticsService.layerTest,
+  Layer.mock(OrphanSessionRecovery)({
+    hasLiveProcess: () => Effect.succeed(false),
+    settleThread: () => Effect.void,
+    settleIfOrphan: () => Effect.succeed(false),
+    settleAllAfterServerRestart: () => Effect.succeed({ settledSessions: 0, settledRuntimes: 0 }),
+  }),
   Layer.mock(GitVcsDriver.GitVcsDriver)({}),
   Layer.succeed(ProviderService.ProviderService, {
     startSession: () => Effect.die("unused"),
     sendTurn: () => Effect.die("unused"),
     compactThread: () => Effect.die("unused"),
     interruptTurn: () => Effect.die("unused"),
+    compactSession: () => Effect.die("unused"),
     respondToRequest: () => Effect.die("unused"),
     respondToUserInput: () => Effect.die("unused"),
     stopSession: () => Effect.die("unused"),

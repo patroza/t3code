@@ -115,6 +115,7 @@ import {
   type ProviderAdapterError,
 } from "../Errors.ts";
 import { type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
+import { type DirenvEnvironment, resolveProviderSessionEnvironment } from "../DirenvEnvironment.ts";
 import { spawnAndCollect } from "../providerSnapshot.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
@@ -479,6 +480,7 @@ interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
 export interface ClaudeAdapterLiveOptions {
   readonly instanceId?: ProviderInstanceId;
   readonly environment?: NodeJS.ProcessEnv;
+  readonly resolveEnvironment?: DirenvEnvironment["Service"]["resolve"];
   readonly createQuery?: (input: {
     readonly prompt: AsyncIterable<SDKUserMessage>;
     readonly options: ClaudeQueryOptions;
@@ -783,8 +785,12 @@ function makeClaudeTokenUsageSnapshot(input: {
     ...(totalProcessedTokens !== undefined && totalProcessedTokens > usedTokens
       ? { totalProcessedTokens }
       : {}),
-    ...(inputTokens !== undefined && inputTokens > 0 ? { inputTokens } : {}),
-    ...(outputTokens !== undefined && outputTokens > 0 ? { outputTokens } : {}),
+    ...(inputTokens !== undefined && inputTokens > 0
+      ? { inputTokens, lastInputTokens: inputTokens }
+      : {}),
+    ...(outputTokens !== undefined && outputTokens > 0
+      ? { outputTokens, lastOutputTokens: outputTokens }
+      : {}),
     ...(maxTokens !== undefined ? { maxTokens } : {}),
     ...(input.compactsAutomatically !== undefined
       ? { compactsAutomatically: input.compactsAutomatically }
@@ -2110,8 +2116,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const path = yield* Path.Path;
   const serverConfig = yield* ServerConfig;
   const crypto = yield* Crypto.Crypto;
+  const baseEnvironment = options?.environment ?? process.env;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const claudeEnvironment = yield* makeClaudeEnvironment(claudeSettings, options?.environment).pipe(
+  const claudeEnvironment = yield* makeClaudeEnvironment(claudeSettings, baseEnvironment).pipe(
     Effect.provideService(Path.Path, path),
   );
   const claudeSdkExecutablePath = yield* resolveClaudeSdkExecutablePath(
@@ -4474,6 +4481,28 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         });
       }
 
+      if (input.cwd !== undefined && !input.cwd.trim()) {
+        return yield* new ProviderAdapterValidationError({
+          provider: PROVIDER,
+          operation: "startSession",
+          issue: "cwd must be non-empty when provided.",
+        });
+      }
+      const cwd = input.cwd === undefined ? undefined : path.resolve(input.cwd.trim());
+      const sessionEnvironment =
+        cwd === undefined
+          ? claudeEnvironment
+          : yield* resolveProviderSessionEnvironment({
+              resolve: options?.resolveEnvironment,
+              provider: PROVIDER,
+              threadId: input.threadId,
+              cwd,
+              environment: baseEnvironment,
+            }).pipe(
+              Effect.flatMap((environment) => makeClaudeEnvironment(claudeSettings, environment)),
+              Effect.provideService(Path.Path, path),
+            );
+
       const existingContext = sessions.get(input.threadId);
       if (existingContext) {
         yield* Effect.logWarning("claude.session.replacing", {
@@ -4979,12 +5008,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       // the paths ProviderService injects into the turn text, without an
       // approval prompt. It is a leaf directory holding only attachment
       // files; siblings like secrets/ and state.sqlite stay ungranted.
-      const additionalDirectories = [
-        ...(input.cwd ? [input.cwd] : []),
-        serverConfig.attachmentsDir,
-      ];
+      // `cwd` (resolved/trimmed), not the raw `input.cwd`: the grant has to
+      // name the same path the query actually runs in.
+      const additionalDirectories = [...(cwd ? [cwd] : []), serverConfig.attachmentsDir];
       const queryOptions: ClaudeQueryOptions = {
-        ...(input.cwd ? { cwd: input.cwd } : {}),
+        ...(cwd ? { cwd } : {}),
         ...(apiModelId ? { model: apiModelId } : {}),
         pathToClaudeCodeExecutable: claudeBinaryPath,
         systemPrompt: {
@@ -5020,7 +5048,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         canUseTool,
         onUserDialog,
         supportedDialogKinds: ["resume_return"],
-        env: McpProviderSession.withAgentDeviceEnvironment(claudeEnvironment, mcpSession),
+        env: McpProviderSession.withAgentDeviceEnvironment(sessionEnvironment, mcpSession),
         additionalDirectories,
         ...(Object.keys(extraArgs).length > 0 ? { extraArgs } : {}),
         ...(mcpSession
@@ -5048,7 +5076,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         "claude.resume.session_id": existingResumeSessionId ?? "",
         "claude.resume.session_at": resumeState?.resumeSessionAt ?? "",
         "claude.resume.turn_count": resumeState?.turnCount ?? -1,
-        "claude.query.cwd": input.cwd ?? "",
+        "claude.query.cwd": cwd ?? "",
         "claude.query.model": apiModelId ?? "",
         "claude.query.effort": effectiveEffort ?? "",
         "claude.query.permission_mode": permissionMode ?? "",
@@ -5084,7 +5112,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         providerInstanceId: boundInstanceId,
         status: "ready",
         runtimeMode: input.runtimeMode,
-        ...(input.cwd ? { cwd: input.cwd } : {}),
+        ...(cwd ? { cwd } : {}),
         ...(modelSelection?.model ? { model: modelSelection.model } : {}),
         ...(threadId ? { threadId } : {}),
         resumeCursor: {
@@ -5390,6 +5418,27 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     context.interruptedTurnSettled = undefined;
   });
 
+  /**
+   * Manual compact: enqueue the `/compact` local command on the live SDK
+   * session. Claude emits `compact_boundary` + token-usage updates when done.
+   */
+  const compactSession: ClaudeAdapterShape["compactSession"] = Effect.fn("compactSession")(
+    function* (threadId) {
+      const context = yield* requireSession(threadId);
+      // Close a stale synthetic turn so compact is not blocked behind one.
+      if (context.turnState?.synthetic === true) {
+        yield* completeTurn(context, "completed");
+      }
+      const message = buildUserMessage({
+        sdkContent: [{ type: "text", text: "/compact" }],
+      });
+      yield* Queue.offer(context.promptQueue, {
+        type: "message",
+        message,
+      }).pipe(Effect.mapError((cause) => toRequestError(threadId, "compact/start", cause)));
+    },
+  );
+
   const readThread: ClaudeAdapterShape["readThread"] = Effect.fn("readThread")(
     function* (threadId) {
       const context = yield* requireSession(threadId);
@@ -5669,6 +5718,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     startSession,
     sendTurn,
     interruptTurn,
+    compactSession,
     readThread,
     rollbackThread,
     respondToRequest,
