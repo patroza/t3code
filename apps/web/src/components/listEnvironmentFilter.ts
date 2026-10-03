@@ -161,7 +161,7 @@ export type ListProjectFilterStored = typeof ListProjectFilterSchema.Type;
 export const ListHideSettledSchema = Schema.Boolean;
 
 /** Accepts legacy `recent` / `projects` and maps them to the combined Threads surface. */
-const WebListModeStored = Schema.Literals(["threads", "board", "recent", "projects"]);
+const WebListModeStored = Schema.Literals(["threads", "recent", "projects"]);
 export const WebListModeSchema = WebListModeStored.pipe(
   Schema.decodeTo(
     Schema.Literals(["threads"]),

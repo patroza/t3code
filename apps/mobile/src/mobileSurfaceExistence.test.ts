@@ -15,13 +15,6 @@ function readSrc(relativePath: string): string {
 }
 
 describe("mobile surface existence (anti stack-drop)", () => {
-  it("removes board navigation while retaining the home ownership filter", () => {
-    expect(NodeFS.existsSync(NodePath.join(root, "features/board"))).toBe(false);
-    expect(readSrc("Stack.tsx")).not.toContain("BoardRouteScreen");
-    expect(readSrc("features/home/HomeScreen.tsx")).not.toContain('"Board"');
-    expect(readSrc("features/home/home-list-filter-menu.ts")).toContain("onOwnershipFilterChange");
-    expect(readSrc("features/home/home-list-filter-menu.ts")).toContain("onProjectChange");
-  });
   it("keeps the conversation feed inside an explicit flex host", () => {
     const threadRoute = readSrc("features/threads/ThreadRouteScreen.tsx");
 

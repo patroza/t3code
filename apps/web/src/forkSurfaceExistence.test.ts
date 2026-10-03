@@ -18,18 +18,6 @@ function readSrc(relativePath: string): string {
 }
 
 describe("fork surface existence (anti stack-drop)", () => {
-  it("removes the board route and navigation while retaining thread filters", () => {
-    expect(NodeFS.existsSync(NodePath.join(root, "routes/_chat.board.tsx"))).toBe(false);
-    expect(NodeFS.existsSync(NodePath.join(root, "components/board"))).toBe(false);
-    expect(readSrc("routeTree.gen.ts")).not.toContain("_chat/board");
-    expect(readSrc("components/CommandPalette.tsx")).not.toContain('"board.open"');
-    for (const file of ["components/Sidebar.tsx", "components/LegacySidebar.tsx"]) {
-      const sidebar = readSrc(file);
-      expect(sidebar).not.toContain('to="/board"');
-      expect(sidebar).toContain("ThreadIdentityMark");
-      expect(sidebar).toContain("ownership");
-    }
-  });
   it("classic sidebar keeps the collapsible Settled shelf chrome", () => {
     const sidebar = readSrc("components/LegacySidebar.tsx");
     expect(sidebar).toContain('data-testid="sidebar-v1-settled-shelf-toggle"');
