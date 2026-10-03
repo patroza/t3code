@@ -12,6 +12,7 @@ import {
   type MessageId,
   type ModelSelection,
   type ProviderInteractionMode,
+  type ProviderDriverKind,
   type RuntimeMode,
   type ServerConfig as T3ServerConfig,
   type UsageLimitsReport,
@@ -76,7 +77,10 @@ import {
   ComposerInlineControl,
   ComposerToolbarRow,
 } from "../../components/ComposerToolbar";
-import { ProviderIcon } from "../../components/ProviderIcon";
+import { ProviderUsageIcon } from "../../components/ProviderUsageIcon";
+import { resolveDriverUsage } from "@t3tools/client-runtime/state/aiUsagePresentation";
+import { useAiUsageSnapshot } from "../../state/useAiUsageSnapshot";
+import { parseStandaloneComposerSlashCommand } from "@t3tools/shared/composerTrigger";
 import {
   composerStripAttachments,
   type DraftComposerAttachment,
@@ -599,6 +603,22 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         if (openUsageLimits()) onChangeDraftMessage("");
         return;
       }
+      if (
+        parseStandaloneComposerSlashCommand(props.draftMessage) === "new" &&
+        props.draftAttachments.length === 0
+      ) {
+        onChangeDraftMessage("");
+        navigation.navigate("NewTaskSheet", {
+          screen: "NewTaskDraft",
+          params: {
+            environmentId: String(props.environmentId),
+            projectId: String(props.selectedThread.projectId),
+            branch: props.selectedThread.branch,
+            worktreePath: props.selectedThread.worktreePath,
+          },
+        });
+        return;
+      }
       const threadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
       if (inFlightThreadIdsRef.current.has(threadKey)) return;
       inFlightThreadIdsRef.current.add(threadKey);
@@ -630,6 +650,10 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       props.environmentId,
       props.environmentLabel,
       props.selectedThread.id,
+      props.selectedThread.projectId,
+      props.selectedThread.branch,
+      props.selectedThread.worktreePath,
+      navigation,
       props.selectedThread.title,
       voiceInput.blocksSubmission,
     ],
@@ -652,6 +676,18 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         option.selection.instanceId === currentModelSelection.instanceId &&
         option.selection.model === currentModelSelection.model,
     ) ?? null;
+  const aiUsageSnapshot = useAiUsageSnapshot(props.environmentId);
+  const threadUsage = useMemo(
+    () =>
+      currentModelOption
+        ? resolveDriverUsage(
+            aiUsageSnapshot,
+            currentModelOption.providerDriver as ProviderDriverKind,
+            currentModelSelection.model,
+          )
+        : null,
+    [aiUsageSnapshot, currentModelOption, currentModelSelection.model],
+  );
   const providerOptionDescriptors = useMemo(
     () =>
       resolveProviderOptionDescriptors({
@@ -1117,7 +1153,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                         accessibilityLabel="Model and reasoning settings"
                         emphasized
                         renderIcon={(size) => (
-                          <ProviderIcon
+                          <ProviderUsageIcon
+                            marker={threadUsage?.marker ?? null}
                             iconUrl={currentModelOption?.providerIconUrl}
                             provider={currentModelOption?.providerDriver}
                             size={size}

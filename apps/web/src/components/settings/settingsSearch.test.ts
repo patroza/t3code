@@ -59,6 +59,32 @@ describe("searchSettings", () => {
 
   it("matches normalized title substrings", () => {
     expect(searchSettings("  WORD   WRAP  ", ITEMS).map((item) => item.id)).toEqual(["word-wrap"]);
+    // "work" is not a substring of "word wrap". The full catalog matches the
+    // fork's "Worktree remove confirmation" (and not Word wrap). Upstream's
+    // project workspace setting left this catalog with #5923, which moved
+    // project settings onto contextual project routes.
+    expect(
+      searchSettings("work", [{ id: "word-wrap", title: "Word wrap", to: "/settings/appearance" }]),
+    ).toEqual([]);
+    expect(searchSettings("work").map((item) => item.id)).toEqual([
+      "storage-worktrees",
+      "working-shelf",
+      "worktree-remove-confirmation",
+      "worktree-branch-naming",
+      "network-access",
+      "project-defaults",
+      "environment-identification",
+      "continue-threads-after-server-update",
+      "new-threads",
+      "worktree-submodules",
+      "start-from-origin",
+      "project-actions",
+      "keybinding-composer.previousWorktree",
+      "keybinding-composer.workspace",
+    ]);
+    expect(searchSettings("deploy").map((item) => item.id)).toContain(
+      "continue-threads-after-server-update",
+    );
     expect(searchSettings("glass").map((item) => item.id)).toEqual(["setting-glass-opacity"]);
     expect(searchSettings("panel animations").map((item) => item.id)).toEqual(["panel-animations"]);
     expect(searchSettings("thè\u{1ab0}mes")[0]?.id).toBe("theme");
@@ -107,6 +133,7 @@ describe("searchSettings", () => {
       "unpin-confirmation",
       "archive-confirmation",
       "delete-confirmation",
+      "worktree-remove-confirmation",
     ]);
   });
 

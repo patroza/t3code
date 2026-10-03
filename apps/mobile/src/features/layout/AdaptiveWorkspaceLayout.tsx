@@ -3,7 +3,7 @@ import type {
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
 import { EnvironmentId, ThreadId, type SidebarProjectGroupingMode } from "@t3tools/contracts";
-import { useAtomValue } from "@effect/atom-react";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { useFocusEffect } from "@react-navigation/native";
 import {
   CommonActions,
@@ -45,7 +45,8 @@ import {
   resolveThreadSelectionOverlayState,
 } from "../../lib/adaptive-navigation";
 import { scopedThreadKey } from "../../lib/scopedEntities";
-import { mobilePreferencesAtom } from "../../state/preferences";
+import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
+import { prefetchEnvironmentThread, warmSelectedEnvironmentThread } from "../../state/threads";
 import {
   DEFAULT_MOBILE_PROJECT_GROUPING_SETTINGS,
   resolveMobileProjectGroupingSettings,
@@ -54,8 +55,22 @@ import {
   parseActiveThreadPath,
   useHardwareKeyboardCommand,
 } from "../keyboard/hardwareKeyboardCommands";
+import {
+  resolveOwnershipFilter,
+  resolveOwnershipRelation,
+} from "../../persistence/mobile-preferences";
 import { AndroidHomeFabLayout } from "../home/AndroidHomeFab";
-import { HomeListOptionsProvider } from "../home/home-list-options";
+import {
+  HomeListOptionsProvider,
+  resolveProjectGroupingMode,
+  type OwnershipFilter,
+  type OwnershipRelation,
+} from "../home/home-list-options";
+import {
+  DEFAULT_HOME_THREAD_GROUPING,
+  resolveHomeThreadGrouping,
+  type HomeThreadGrouping,
+} from "../home/homeListMode";
 import { ThreadNavigationSidebar } from "../threads/ThreadNavigationSidebar";
 import { RenderErrorBoundary, RenderFailureView } from "../../components/RenderErrorBoundary";
 import { WORKSPACE_PANE_TIMING } from "./workspace-pane-animation";
@@ -207,19 +222,70 @@ export function AdaptiveWorkspaceLayout(props: {
   readonly workspaceRouteKey: string | undefined;
 }) {
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const storeEnvironmentIds = useCallback(
+    (ids: readonly EnvironmentId[]) => {
+      savePreferences({ selectedEnvironmentIds: [...ids] });
+    },
+    [savePreferences],
+  );
+  const storeThreadGrouping = useCallback(
+    (grouping: HomeThreadGrouping) => {
+      savePreferences({ threadGrouping: grouping });
+    },
+    [savePreferences],
+  );
+  const storeOwnershipFilter = useCallback(
+    (filter: OwnershipFilter) => {
+      savePreferences({ ownershipFilter: filter });
+    },
+    [savePreferences],
+  );
+  const storeOwnershipRelation = useCallback(
+    (relation: OwnershipRelation) => {
+      savePreferences({ ownershipRelation: relation });
+    },
+    [savePreferences],
+  );
+
   if (!AsyncResult.isSuccess(preferencesResult)) {
     return AsyncResult.isFailure(preferencesResult) ? (
       <AdaptiveWorkspaceLayoutContent
         {...props}
         projectGroupingMode={DEFAULT_MOBILE_PROJECT_GROUPING_SETTINGS.sidebarProjectGroupingMode}
+        storedEnvironmentIds={[]}
+        onStoreEnvironmentIds={storeEnvironmentIds}
+        storedThreadGrouping={DEFAULT_HOME_THREAD_GROUPING}
+        onStoreThreadGrouping={storeThreadGrouping}
+        storedOwnershipFilter="any"
+        onStoreOwnershipFilter={storeOwnershipFilter}
+        storedOwnershipRelation="both"
+        onStoreOwnershipRelation={storeOwnershipRelation}
       />
     ) : null;
   }
-  const groupingSettings = resolveMobileProjectGroupingSettings(preferencesResult.value);
+
+  const storedEnvironmentIds = (preferencesResult.value.selectedEnvironmentIds ??
+    []) as readonly EnvironmentId[];
+  const storedThreadGrouping = resolveHomeThreadGrouping(preferencesResult.value.threadGrouping);
+  const storedOwnershipFilter = resolveOwnershipFilter(preferencesResult.value);
+  const storedOwnershipRelation = resolveOwnershipRelation(preferencesResult.value);
+
   return (
     <AdaptiveWorkspaceLayoutContent
       {...props}
-      projectGroupingMode={groupingSettings.sidebarProjectGroupingMode}
+      projectGroupingMode={
+        resolveMobileProjectGroupingSettings(preferencesResult.value).sidebarProjectGroupingMode ??
+        resolveProjectGroupingMode(preferencesResult.value.projectGroupingEnabled)
+      }
+      storedEnvironmentIds={storedEnvironmentIds}
+      onStoreEnvironmentIds={storeEnvironmentIds}
+      storedThreadGrouping={storedThreadGrouping}
+      onStoreThreadGrouping={storeThreadGrouping}
+      storedOwnershipFilter={storedOwnershipFilter}
+      onStoreOwnershipFilter={storeOwnershipFilter}
+      storedOwnershipRelation={storedOwnershipRelation}
+      onStoreOwnershipRelation={storeOwnershipRelation}
     />
   );
 }
@@ -231,6 +297,14 @@ function AdaptiveWorkspaceLayoutContent(
     readonly workspaceRouteKey: string | undefined;
   } & {
     readonly projectGroupingMode: SidebarProjectGroupingMode;
+    readonly storedEnvironmentIds: readonly EnvironmentId[];
+    readonly onStoreEnvironmentIds: (ids: readonly EnvironmentId[]) => void;
+    readonly storedThreadGrouping: HomeThreadGrouping;
+    readonly onStoreThreadGrouping: (grouping: HomeThreadGrouping) => void;
+    readonly storedOwnershipFilter: OwnershipFilter;
+    readonly onStoreOwnershipFilter: (filter: OwnershipFilter) => void;
+    readonly storedOwnershipRelation: OwnershipRelation;
+    readonly onStoreOwnershipRelation: (relation: OwnershipRelation) => void;
   },
 ) {
   const projectGroupingMode = props.projectGroupingMode;
@@ -500,6 +574,9 @@ function AdaptiveWorkspaceLayoutContent(
         environmentId: String(thread.environmentId),
         threadId: String(thread.id),
       };
+      // Overlap SQLite/HTTP detail hydrate with navigation / setParams.
+      prefetchEnvironmentThread(thread.environmentId, thread.id);
+      warmSelectedEnvironmentThread(thread.environmentId, thread.id);
       const navigationAction = resolveThreadSelectionNavigationAction({
         usesSplitView: layout.usesSplitView,
         pathname,
@@ -566,7 +643,17 @@ function AdaptiveWorkspaceLayoutContent(
   );
 
   return (
-    <HomeListOptionsProvider projectGroupingMode={projectGroupingMode}>
+    <HomeListOptionsProvider
+      projectGroupingMode={projectGroupingMode}
+      storedEnvironmentIds={props.storedEnvironmentIds}
+      onStoreEnvironmentIds={props.onStoreEnvironmentIds}
+      storedThreadGrouping={props.storedThreadGrouping}
+      onStoreThreadGrouping={props.onStoreThreadGrouping}
+      storedOwnershipFilter={props.storedOwnershipFilter}
+      onStoreOwnershipFilter={props.onStoreOwnershipFilter}
+      storedOwnershipRelation={props.storedOwnershipRelation}
+      onStoreOwnershipRelation={props.onStoreOwnershipRelation}
+    >
       <AdaptiveWorkspaceContext.Provider value={contextValue}>
         <View testID="adaptive-workspace-layout" className="flex-1 flex-row">
           {shouldRenderPrimarySidebar && layout.listPaneWidth !== null ? (

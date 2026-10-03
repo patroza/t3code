@@ -8,6 +8,7 @@ import {
 } from "@t3tools/contracts";
 import { filterFilesystemBrowseEntries } from "@t3tools/client-runtime/state/filesystem";
 import type { SidebarThreadSortOrder } from "@t3tools/contracts/settings";
+import { buildThreadAttributeSearchTerms } from "@t3tools/shared/threadAttributeSearch";
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
 import { type ReactNode } from "react";
@@ -186,6 +187,38 @@ export function enumerateCommandPaletteItems(
 
 export type CommandPaletteMode = "root" | "root-browse" | "submenu" | "submenu-browse";
 
+export function filterBrowseEntries(input: {
+  browseEntries: ReadonlyArray<FilesystemBrowseEntry>;
+  browseFilterQuery: string;
+  highlightedItemValue: string | null;
+}): {
+  filteredEntries: FilesystemBrowseEntry[];
+  highlightedEntry: FilesystemBrowseEntry | null;
+  exactEntry: FilesystemBrowseEntry | null;
+} {
+  const lowerFilter = input.browseFilterQuery.toLowerCase();
+  const showHidden = input.browseFilterQuery.startsWith(".");
+
+  const filteredEntries = input.browseEntries.filter(
+    (entry) =>
+      entry.name.toLowerCase().startsWith(lowerFilter) &&
+      (showHidden || !entry.name.startsWith(".")),
+  );
+
+  let highlightedEntry: FilesystemBrowseEntry | null = null;
+  if (input.highlightedItemValue?.startsWith("browse:")) {
+    const highlightedPath = input.highlightedItemValue.slice("browse:".length);
+    highlightedEntry = filteredEntries.find((entry) => entry.fullPath === highlightedPath) ?? null;
+  }
+
+  const exactEntry =
+    input.browseFilterQuery.length > 0
+      ? (filteredEntries.find((entry) => entry.name === input.browseFilterQuery) ?? null)
+      : null;
+
+  return { filteredEntries, highlightedEntry, exactEntry };
+}
+
 // A project as the palette shows it. `displayName` is the grouped label (for
 // example "owner/repo" when projects are merged across machines). Keep `title`
 // as the real project title: the automatic project icon is derived from it, and
@@ -244,6 +277,8 @@ export type BuildThreadActionItemsThread = Pick<
   | "environmentId"
   | "id"
   | "modelSelection"
+  | "originSource"
+  | "participantSummaries"
   | "projectId"
   | "runtime"
   | "title"
@@ -269,9 +304,17 @@ export function buildThreadActionItems<TThread extends BuildThreadActionItemsThr
   getContentMatch?: (thread: TThread) => CommandPaletteThreadContentMatch | undefined;
   runThread: (thread: Pick<SidebarThreadSummary, "environmentId" | "id">) => Promise<void>;
   limit?: number;
+  /**
+   * When true, archived threads are kept instead of filtered out. Used by the
+   * command palette's "include archived" search, which merges in archived
+   * threads from a separate snapshot query.
+   */
+  includeArchived?: boolean;
 }): CommandPaletteActionItem[] {
   const sortedThreads = sortThreads(
-    input.threads.filter((thread) => thread.archivedAt === null),
+    input.includeArchived === true
+      ? input.threads
+      : input.threads.filter((thread) => thread.archivedAt === null),
     input.sortOrder,
   );
   const visibleThreads =
@@ -298,15 +341,25 @@ export function buildThreadActionItems<TThread extends BuildThreadActionItemsThr
       ? input.renderDescription(thread, { projectTitle })
       : descriptionParts.join(` · `);
 
+    const attributeTerms = buildThreadAttributeSearchTerms({
+      title: thread.title,
+      branch: thread.branch,
+      originSource: thread.originSource ?? null,
+      participantSummaries: thread.participantSummaries ?? [],
+      extraTerms: [projectTitle],
+    });
+
     return Object.assign(
       {
         kind: "action" as const,
         value: `thread:${thread.id}`,
+        // Title/project first so rankCommandPaletteItemMatch still prefers title hits.
         searchTerms: [
           thread.title,
           ...threadPullRequestSearchTerms(thread),
           projectTitle ?? ``,
           thread.branch ?? ``,
+          ...attributeTerms,
           contentMatch?.snippet ?? ``,
           // Last so pasted IDs never outrank title matches for shared substrings.
           thread.id,

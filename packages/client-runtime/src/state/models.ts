@@ -138,6 +138,8 @@ export interface EnvironmentThreadShell {
   /** Pending title regeneration marker; null when no request is in flight. */
   readonly titleRegeneration?: { readonly requestId: string; readonly startedAt: string } | null;
   readonly deletedAt: string | null;
+  readonly originSource?: OrchestrationV2ThreadShell["originSource"];
+  readonly participantSummaries?: OrchestrationV2ThreadShell["participantSummaries"];
   readonly source: OrchestrationV2ThreadShell;
 }
 
@@ -215,6 +217,8 @@ export function presentThreadShell(
         } satisfies ThreadRunSummary);
   return {
     environmentId,
+    originSource: thread.originSource,
+    participantSummaries: thread.participantSummaries,
     id: thread.id,
     projectId: thread.projectId,
     title:

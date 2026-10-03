@@ -1357,3 +1357,12 @@ export function restorePlanFollowUpComposer(input: {
     detectTrigger: true,
   });
 }
+
+export function isVideoPreviewRequestCurrent(
+  requestThreadKey: string,
+  currentThreadKey: string | null,
+  requestId: number,
+  currentRequestId: number,
+): boolean {
+  return requestThreadKey === currentThreadKey && requestId === currentRequestId;
+}

@@ -36,6 +36,22 @@ describe("ThreadWorktreeIndicator", () => {
 
     expect(markup).toBe("");
   });
+
+  it("renders a new-worktree action when requested without an existing worktree", () => {
+    const markup = renderToStaticMarkup(
+      <ThreadWorktreeIndicator
+        thread={{
+          id: ThreadId.make("thread-1"),
+          branch: "feature/recent-action",
+          worktreePath: null,
+        }}
+        onCreateSession={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain('aria-label="New worktree from feature/recent-action"');
+    expect(markup).toContain('data-testid="thread-worktree-new-session-thread-1"');
+  });
 });
 
 describe("linked pull request snapshots", () => {

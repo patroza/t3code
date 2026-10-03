@@ -11,7 +11,11 @@ import {
 import { ChevronDownIcon, DownloadIcon, PlusIcon, SettingsIcon, WrenchIcon } from "lucide-react";
 import React, { useCallback, useMemo, useState } from "react";
 
-import { commandForProjectScript, primaryProjectScript } from "~/projectScripts";
+import {
+  commandForProjectScript,
+  primaryProjectScript,
+  projectScriptMenuLabel,
+} from "~/projectScripts";
 import { shortcutLabelForCommand } from "~/keybindings";
 import {
   EMPTY_PROJECT_SCRIPT_INPUT,
@@ -137,6 +141,8 @@ export default function ProjectScriptsControl({
       command: fileScript.command,
       icon: fileScript.icon ?? "play",
       runOnWorktreeCreate: fileScript.runOnWorktreeCreate ?? false,
+      runOnWorktreeRemove: fileScript.runOnWorktreeRemove ?? false,
+      runOnPrMerged: fileScript.runOnPrMerged ?? false,
       waitForSetup: fileScript.runOnWorktreeCreate === true && fileScript.async === false,
       keybinding: null,
       previewUrl: fileScript.previewUrl ?? null,
@@ -192,9 +198,7 @@ export default function ProjectScriptsControl({
             onClick={() => onRunScript(script)}
           >
             <ScriptIcon icon={script.icon} className="size-4" />
-            <MenuItemLabel>
-              {script.runOnWorktreeCreate ? `${script.name} (setup)` : script.name}
-            </MenuItemLabel>
+            <MenuItemLabel>{projectScriptMenuLabel(script)}</MenuItemLabel>
             <span className="relative ms-auto flex h-6 min-w-6 items-center justify-end">
               {shortcutLabel &&
                 (presentation === "menu" ? (

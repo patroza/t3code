@@ -1,11 +1,20 @@
-import { type EnvironmentId, type ThreadId } from "@t3tools/contracts";
+import {
+  type EnvironmentId,
+  type EditorId,
+  type ProjectScript,
+  type ProviderDriverKind,
+  type ResolvedKeybindingsConfig,
+  type ThreadId,
+} from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import type { ConnectionCatalogEntry } from "@t3tools/client-runtime/connection";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
+import * as Option from "effect/Option";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { ChevronDownIcon } from "lucide-react";
+import { ChevronDownIcon, EllipsisIcon } from "lucide-react";
 import {
   memo,
   useCallback,
@@ -16,13 +25,26 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
+import { createPortal } from "react-dom";
+import GitActionsControl from "../GitActionsControl";
 import { isTrailingDoubleClick } from "../Sidebar.logic";
+import { type DraftId } from "~/composerDraftStore";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
+import { AiUsageStats } from "./AiUsageStats";
+import ProjectScriptsControl, {
+  type NewProjectScriptInput,
+  type ProjectScriptActionResult,
+} from "../ProjectScriptsControl";
+import { OpenInPicker } from "./OpenInPicker";
+import { useRemoteOpenState, type RemoteOpenMode } from "../../remoteOpen";
+import { useEnvironment, usePrimaryEnvironmentId } from "../../state/environments";
+import { useT3ProjectFileScripts } from "~/hooks/useT3ProjectFileScripts";
 import { useThreadActionMenu } from "~/hooks/useThreadActionMenu";
 import { readLocalApi } from "~/localApi";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { observeResponsiveBreakpointFade, usePanelAnimationSettings } from "../../panelAnimations";
 import { ProjectFavicon } from "../ProjectFavicon";
 import {
   WorkspaceBreadcrumb,
@@ -31,17 +53,44 @@ import {
   WorkspaceBreadcrumbText,
 } from "../WorkspaceBreadcrumb";
 import { cn } from "~/lib/utils";
+import { useIsMobile } from "~/hooks/useMediaQuery";
+import { Button } from "../ui/button";
+import { Menu, MenuItem, MenuItemLabel, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
+import { VisualStudioCode } from "../Icons";
+import { useAiUsageSnapshot } from "../../hooks/useAiUsageSnapshot";
+import { resolveDriverUsage, usageDotFillClass, usageDotRingColor } from "../../aiUsageState";
+import { HostResourceStatus } from "../HostResourceStatus";
+import { isLocalConnectionTarget } from "~/connection/desktopLocal";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
   activeThreadId: ThreadId;
+  draftId?: DraftId;
   activeThreadTitle: string;
   /** Drafts have no server thread yet, so the title carries no action menu. */
   isServerThread: boolean;
   activeProject: EnvironmentProject | null;
+  openInCwd: string | null;
+  activeProjectScripts: ReadonlyArray<ProjectScript> | undefined;
+  preferredScriptId: string | null;
+  keybindings: ResolvedKeybindingsConfig;
+  availableEditors: ReadonlyArray<EditorId>;
   rightPanelOpen: boolean;
+  gitCwd: string | null;
+  isPreparingWorktree?: boolean;
+  /** For showing usage dot on the active thread's model at conversation level. */
+  activeThreadDriverKind?: ProviderDriverKind | null;
+  activeThreadModel?: string | null;
+  readonly onOpenPullRequest?: ((number: number, repository?: string | null) => void) | undefined;
   onNewThreadInProject: () => void;
   onOpenProjectSettings?: (() => void) | undefined;
+  onRunProjectScript: (script: ProjectScript) => void;
+  onAddProjectScript: (input: NewProjectScriptInput) => Promise<ProjectScriptActionResult>;
+  onUpdateProjectScript: (
+    scriptId: string,
+    input: NewProjectScriptInput,
+  ) => Promise<ProjectScriptActionResult>;
+  onDeleteProjectScript: (scriptId: string) => Promise<ProjectScriptActionResult>;
 }
 
 /**
@@ -65,18 +114,195 @@ export function resolveRenameCommit(input: {
 // events (the second click dismisses it and dblclick still fires), so it
 // opens immediately.
 const TITLE_MENU_OPEN_DELAY_MS = 500;
+// Matches the @3xl/header-actions container breakpoint owned by this header.
+const HEADER_ACTIONS_EXPANDED_BREAKPOINT_REM = 48;
+
+export function shouldShowOpenInPicker(input: {
+  readonly activeProjectName: string | undefined;
+  readonly activeThreadEnvironmentId: EnvironmentId;
+  readonly primaryEnvironmentId: EnvironmentId | null;
+  readonly remoteOpenMode: RemoteOpenMode;
+}): boolean {
+  if (!input.activeProjectName) return false;
+  if (
+    input.primaryEnvironmentId !== null &&
+    input.activeThreadEnvironmentId === input.primaryEnvironmentId
+  ) {
+    return true;
+  }
+  // Remote environments get the picker in deep-link mode (or its explicit
+  // "no SSH route" state). Non-primary local backends (e.g. WSL) keep it
+  // hidden, matching pre-remote behavior.
+  return input.remoteOpenMode !== "local-exec";
+}
+
+/**
+ * Remote Open-in-VS-Code is mutually exclusive with the local OpenInPicker:
+ * only offer it for a named project when the local picker is hidden (non-primary
+ * environments). Pure gate so stack recovery cannot keep the URI helper while
+ * dropping the product surface without a failing unit test.
+ */
+export function shouldOfferRemoteVscodeOpen(input: {
+  readonly activeProjectName: string | undefined;
+  readonly showOpenInPicker: boolean;
+}): boolean {
+  return Boolean(input.activeProjectName) && !input.showOpenInPicker;
+}
+
+function encodeRemotePath(path: string): string {
+  return path.split("/").map(encodeURIComponent).join("/");
+}
+
+export function resolveRemoteVscodeOpenTarget(input: {
+  readonly entry: ConnectionCatalogEntry | null;
+  readonly cwd: string | null;
+}): { readonly authority: string; readonly uri: string } | null {
+  if (!input.cwd || !input.cwd.startsWith("/")) return null;
+  const entry = input.entry;
+  if (!entry) return null;
+
+  let hostname: string | null = null;
+  let username: string | null = null;
+
+  if (
+    entry.target._tag === "SshConnectionTarget" &&
+    Option.isSome(entry.profile) &&
+    entry.profile.value._tag === "SshConnectionProfile"
+  ) {
+    hostname = entry.profile.value.target.hostname;
+    username = entry.profile.value.target.username ?? username;
+  } else if (
+    entry.target._tag === "BearerConnectionTarget" &&
+    Option.isSome(entry.profile) &&
+    entry.profile.value._tag === "BearerConnectionProfile"
+  ) {
+    // The HTTP endpoint may be a gateway on a different machine. Remote-SSH must target
+    // the environment itself, not the transport endpoint used to reach its T3 server.
+    hostname = entry.profile.value.label.trim() || entry.target.label.trim() || null;
+  }
+
+  if (!hostname) return null;
+  const authority = username ? `${username}@${hostname}` : hostname;
+  // `windowId=_blank` focuses the window that already has this remote folder open, otherwise opens a
+  // new one — instead of replacing whatever window is currently focused.
+  const uri = `vscode://vscode-remote/ssh-remote+${encodeURIComponent(authority)}${encodeRemotePath(
+    input.cwd,
+  )}?windowId=_blank`;
+  return { authority, uri };
+}
+
 export const ChatHeader = memo(function ChatHeader({
   activeThreadEnvironmentId,
   activeThreadId,
+  draftId,
   activeThreadTitle,
   isServerThread,
   activeProject,
+  openInCwd,
+  activeProjectScripts,
+  preferredScriptId,
+  keybindings,
+  availableEditors,
   rightPanelOpen,
+  gitCwd,
+  isPreparingWorktree = false,
+  activeThreadDriverKind = null,
+  activeThreadModel = null,
+  onOpenPullRequest,
   onNewThreadInProject,
   onOpenProjectSettings,
+  onRunProjectScript,
+  onAddProjectScript,
+  onUpdateProjectScript,
+  onDeleteProjectScript,
 }: ChatHeaderProps) {
+  const { active: panelAnimationsActive, durationMs: panelAnimationDurationMs } =
+    usePanelAnimationSettings();
+  const headerActionsRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const actions = headerActionsRef.current;
+    const container = actions?.parentElement;
+    if (!actions || !container) return;
+    return observeResponsiveBreakpointFade({
+      target: actions,
+      container,
+      active: panelAnimationsActive,
+      durationMs: panelAnimationDurationMs,
+      breakpoint: { value: HEADER_ACTIONS_EXPANDED_BREAKPOINT_REM, unit: "rem" },
+    });
+  }, [panelAnimationDurationMs, panelAnimationsActive]);
+  const isMobile = useIsMobile();
+  // Side panels can leave a desktop header narrower than a phone.
+  const [isNarrowHeader, setIsNarrowHeader] = useState(false);
+  useEffect(() => {
+    const container = headerActionsRef.current?.parentElement;
+    if (!container) return;
+    const update = () => setIsNarrowHeader(container.clientWidth < 512);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+  const actionsCollapsed = isMobile || isNarrowHeader;
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const [actionsContainer] = useState(() => {
+    const container = document.createElement("div");
+    container.className = "contents";
+    return container;
+  });
+  // Reparent the DOM host, not the React controls: rotating a phone or resizing
+  // a window must not discard an unsaved script or Git dialog.
+  const mountInlineActions = useCallback(
+    (node: HTMLDivElement | null) => {
+      if (node && !actionsCollapsed) node.appendChild(actionsContainer);
+    },
+    [actionsContainer, actionsCollapsed],
+  );
+  const mountMenuActions = useCallback(
+    (node: HTMLDivElement | null) => {
+      if (node && actionsCollapsed) node.appendChild(actionsContainer);
+    },
+    [actionsContainer, actionsCollapsed],
+  );
+  if (!actionsCollapsed && actionsOpen) setActionsOpen(false);
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const activeEnvironment = useEnvironment(activeThreadEnvironmentId);
   const activeProjectName = activeProject?.title;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
+  const fileScripts = useT3ProjectFileScripts(
+    activeThreadEnvironmentId,
+    activeProjectScripts ? activeProjectCwd : null,
+  );
+  const remoteOpenState = useRemoteOpenState(activeThreadEnvironmentId);
+  const showOpenInPicker = shouldShowOpenInPicker({
+    activeProjectName,
+    activeThreadEnvironmentId,
+    primaryEnvironmentId,
+    remoteOpenMode: remoteOpenState.mode,
+  });
+  const remoteVscodeTarget = useMemo(
+    () =>
+      shouldOfferRemoteVscodeOpen({ activeProjectName, showOpenInPicker })
+        ? resolveRemoteVscodeOpenTarget({
+            entry: activeEnvironment?.entry ?? null,
+            cwd: openInCwd,
+          })
+        : null,
+    [activeEnvironment?.entry, activeProjectName, openInCwd, showOpenInPicker],
+  );
+  const openRemoteVscode = useCallback(() => {
+    if (!remoteVscodeTarget) return;
+    void readLocalApi()?.shell.openExternal(remoteVscodeTarget.uri);
+  }, [remoteVscodeTarget]);
+
+  const aiUsageSnapshot = useAiUsageSnapshot(activeThreadEnvironmentId);
+  const headerUsage = useMemo(
+    () => resolveDriverUsage(aiUsageSnapshot, activeThreadDriverKind, activeThreadModel),
+    [aiUsageSnapshot, activeThreadDriverKind, activeThreadModel],
+  );
+  const headerDotClass = headerUsage ? usageDotFillClass(headerUsage.marker) : undefined;
+  const headerRingColor = headerUsage ? usageDotRingColor(headerUsage.marker) : undefined;
+
   const activeThreadRef = useMemo(
     () => scopeThreadRef(activeThreadEnvironmentId, activeThreadId),
     [activeThreadEnvironmentId, activeThreadId],
@@ -87,27 +313,16 @@ export const ChatHeader = memo(function ChatHeader({
   // Inline rename, keyed by thread: navigating away drops an in-progress
   // rename instead of committing stale text. Cleared on thread change (not
   // just hidden) so returning to the thread doesn't revive the old draft.
-  const [renaming, setRenaming] = useState<{
-    threadId: ThreadId;
-    environmentId: EnvironmentId;
-    title: string;
-  } | null>(null);
-  if (
-    renaming !== null &&
-    (renaming.threadId !== activeThreadId || renaming.environmentId !== activeThreadEnvironmentId)
-  ) {
+  const [renaming, setRenaming] = useState<{ threadId: ThreadId; title: string } | null>(null);
+  if (renaming !== null && renaming.threadId !== activeThreadId) {
     setRenaming(null);
   }
   const renamingTitle = renaming?.threadId === activeThreadId ? renaming.title : null;
   const renameCommittedRef = useRef(false);
   const startRename = useCallback(() => {
     renameCommittedRef.current = false;
-    setRenaming({
-      threadId: activeThreadId,
-      environmentId: activeThreadEnvironmentId,
-      title: activeThreadTitle,
-    });
-  }, [activeThreadEnvironmentId, activeThreadId, activeThreadTitle]);
+    setRenaming({ threadId: activeThreadId, title: activeThreadTitle });
+  }, [activeThreadId, activeThreadTitle]);
   const commitRename = useCallback(
     (title: string) => {
       setRenaming(null);
@@ -151,7 +366,7 @@ export const ChatHeader = memo(function ChatHeader({
     () => () => {
       cancelPendingTitleMenu();
     },
-    [activeThreadEnvironmentId, activeThreadId, cancelPendingTitleMenu],
+    [activeThreadId, cancelPendingTitleMenu],
   );
   const openTitleMenuNow = useCallback(() => {
     cancelPendingTitleMenu();
@@ -195,6 +410,9 @@ export const ChatHeader = memo(function ChatHeader({
   const handleHeaderContextMenu = useCallback(
     (event: ReactMouseEvent) => {
       if (renamingTitle !== null) return;
+      // The right-side controls (git, scripts, open-in) keep their own
+      // behavior; only the breadcrumb area opens the thread menu.
+      if ((event.target as HTMLElement).closest("[data-chat-header-actions]")) return;
       if (!isServerThread && onOpenProjectSettings === undefined) return;
       cancelPendingTitleMenu();
       event.preventDefault();
@@ -228,12 +446,93 @@ export const ChatHeader = memo(function ChatHeader({
     },
     [commitRename],
   );
+  const headerActions = (
+    <>
+      {activeProjectScripts && (
+        <>
+          <ProjectScriptsControl
+            onRequestMenuClose={() => setActionsOpen(false)}
+            presentation={actionsCollapsed ? "menu" : "toolbar"}
+            scripts={activeProjectScripts}
+            fileScripts={fileScripts}
+            keybindings={keybindings}
+            preferredScriptId={preferredScriptId}
+            onRunScript={onRunProjectScript}
+            onAddScript={onAddProjectScript}
+            onUpdateScript={onUpdateProjectScript}
+            onDeleteScript={onDeleteProjectScript}
+          />
+        </>
+      )}
+      {showOpenInPicker && (
+        <>
+          {actionsCollapsed && activeProjectScripts && <MenuSeparator />}
+          <OpenInPicker
+            presentation={actionsCollapsed ? "menu" : "toolbar"}
+            environmentId={activeThreadEnvironmentId}
+            keybindings={keybindings}
+            availableEditors={availableEditors}
+            openInCwd={openInCwd}
+          />
+        </>
+      )}
+      {activeProjectName && gitCwd && (
+        <>
+          {actionsCollapsed && (activeProjectScripts || showOpenInPicker) && <MenuSeparator />}
+          <GitActionsControl
+            presentation={actionsCollapsed ? "menu" : "toolbar"}
+            gitCwd={gitCwd}
+            activeThreadRef={scopeThreadRef(activeThreadEnvironmentId, activeThreadId)}
+            isPreparingWorktree={isPreparingWorktree}
+            onOpenPullRequest={onOpenPullRequest}
+            {...(draftId ? { draftId } : {})}
+          />
+        </>
+      )}
+      {remoteVscodeTarget && (
+        <>
+          {actionsCollapsed &&
+            (activeProjectScripts || showOpenInPicker || (activeProjectName && gitCwd)) && (
+              <MenuSeparator />
+            )}
+          {actionsCollapsed ? (
+            <MenuItem
+              density="touch"
+              aria-label={`Open in VS Code Remote SSH on ${remoteVscodeTarget.authority}`}
+              onClick={openRemoteVscode}
+            >
+              <VisualStudioCode aria-hidden="true" className="size-4" />
+              <MenuItemLabel>Open VS Code Remote SSH</MenuItemLabel>
+            </MenuItem>
+          ) : (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    aria-label={`Open in VS Code Remote SSH on ${remoteVscodeTarget.authority}`}
+                    size="xs"
+                    variant="outline"
+                    onClick={openRemoteVscode}
+                  >
+                    <VisualStudioCode aria-hidden="true" className="size-3.5" />
+                    <span className="sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5">
+                      Open
+                    </span>
+                  </Button>
+                }
+              />
+              <TooltipPopup side="bottom">
+                Open VS Code Remote SSH: {remoteVscodeTarget.authority}
+              </TooltipPopup>
+            </Tooltip>
+          )}
+        </>
+      )}
+    </>
+  );
   return (
     <div
-      className={cn(
-        "flex min-w-0 flex-1 items-center gap-2 sm:gap-3",
-        rightPanelOpen ? "pr-10" : "pr-24",
-      )}
+      className="@container/header-actions flex min-w-0 flex-1 items-center gap-2 sm:gap-3"
       onContextMenu={handleHeaderContextMenu}
     >
       <WorkspaceBreadcrumb
@@ -279,15 +578,6 @@ export const ChatHeader = memo(function ChatHeader({
               defaultValue={renamingTitle}
               onBlur={(event) => {
                 if (renameCommittedRef.current) return;
-                // Focus landing on a navigation button means the rename was
-                // abandoned — discard it rather than persisting a half-draft.
-                if (
-                  event.relatedTarget instanceof HTMLElement &&
-                  event.relatedTarget.closest("button")
-                ) {
-                  setRenaming(null);
-                  return;
-                }
                 commitRename(event.currentTarget.value);
               }}
               onFocus={(event) => event.currentTarget.select()}
@@ -332,6 +622,86 @@ export const ChatHeader = memo(function ChatHeader({
           )}
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
+      {headerDotClass && headerUsage ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <span
+                className={`inline-block size-2 shrink-0 rounded-full ${headerDotClass} cursor-help`}
+                style={
+                  headerRingColor
+                    ? { boxShadow: `0 0 0 1.5px ${headerRingColor}, 0 0 0 3px var(--card)` }
+                    : undefined
+                }
+                aria-label="provider usage status"
+              />
+            }
+          />
+          <TooltipPopup side="bottom">
+            <AiUsageStats item={headerUsage.item} />
+          </TooltipPopup>
+        </Tooltip>
+      ) : headerDotClass ? (
+        <span
+          className={`inline-block size-2 shrink-0 rounded-full ${headerDotClass}`}
+          style={
+            headerRingColor
+              ? { boxShadow: `0 0 0 1.5px ${headerRingColor}, 0 0 0 3px var(--card)` }
+              : undefined
+          }
+          aria-label="provider usage status"
+        />
+      ) : null}
+      <HostResourceStatus
+        environmentId={activeThreadEnvironmentId}
+        environmentLabel={activeEnvironment?.label ?? "Active environment"}
+        connected={activeEnvironment?.connection.phase === "connected"}
+        remote={
+          activeEnvironment ? !isLocalConnectionTarget(activeEnvironment.entry.target) : false
+        }
+        className="hidden @2xl/header-actions:flex"
+      />
+      <div
+        ref={headerActionsRef}
+        data-chat-header-actions
+        className={cn(
+          "flex shrink-0 items-center justify-end gap-2 @3xl/header-actions:gap-3",
+          // Reserve two panel toggles (32px, 28px at sm) with their 4px gap and 1px edge inset,
+          // plus the same gap the actions keep between themselves (gap-2, gap-3 at @3xl) so the
+          // terminal toggle does not sit against the last action. The page header adds 8px more
+          // right padding at sm.
+          rightPanelOpen ? "pr-0" : "pr-19.25 sm:pr-15.25 @3xl/header-actions:pr-16.25",
+          "[[data-panel-animations=true]_&]:motion-safe:transition-[padding-right] [[data-panel-animations=true]_&]:motion-safe:duration-(--panel-animation-duration) [[data-panel-animations=true]_&]:motion-safe:ease-out",
+        )}
+      >
+        <Menu open={actionsCollapsed && actionsOpen} onOpenChange={setActionsOpen}>
+          <MenuTrigger
+            className={
+              actionsCollapsed &&
+              (activeProjectScripts ||
+                showOpenInPicker ||
+                (activeProjectName && gitCwd) ||
+                remoteVscodeTarget)
+                ? undefined
+                : "hidden"
+            }
+            render={<Button size="icon-sm" variant="ghost" aria-label="More header actions" />}
+          >
+            <EllipsisIcon className="size-4" />
+          </MenuTrigger>
+          <div ref={mountInlineActions} className="contents" />
+          <MenuPopup
+            data-chat-header-actions
+            keepMounted
+            aria-label="Header actions"
+            align="end"
+            finalFocus={actionsCollapsed ? undefined : false}
+          >
+            <div ref={mountMenuActions} className="contents" />
+            {createPortal(headerActions, actionsContainer)}
+          </MenuPopup>
+        </Menu>
+      </div>
     </div>
   );
 });

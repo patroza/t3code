@@ -85,6 +85,8 @@ export interface NewProjectScriptInput {
   command: string;
   icon: ProjectScriptIcon;
   runOnWorktreeCreate: boolean;
+  runOnWorktreeRemove: boolean;
+  runOnPrMerged: boolean;
   /** Setup scripts only: hold the agent until the script exits. */
   waitForSetup: boolean;
   keybinding: string | null;
@@ -101,6 +103,8 @@ export const EMPTY_PROJECT_SCRIPT_INPUT: NewProjectScriptInput = {
   command: "",
   icon: "play",
   runOnWorktreeCreate: false,
+  runOnWorktreeRemove: false,
+  runOnPrMerged: false,
   waitForSetup: false,
   keybinding: null,
   previewUrl: null,
@@ -126,6 +130,8 @@ export function editorRequestForScript(
       command: script.command,
       icon: script.icon,
       runOnWorktreeCreate: script.runOnWorktreeCreate,
+      runOnWorktreeRemove: script.runOnWorktreeRemove === true,
+      runOnPrMerged: script.runOnPrMerged === true,
       waitForSetup: script.runOnWorktreeCreate && script.async === false,
       keybinding: keybindingValueForCommand(keybindings, commandForProjectScript(script.id)),
       previewUrl: script.previewUrl ?? null,
@@ -162,6 +168,8 @@ export function ProjectScriptEditorDialog({
   const [icon, setIcon] = useState<ProjectScriptIcon>("play");
   const [iconPickerOpen, setIconPickerOpen] = useState(false);
   const [runOnWorktreeCreate, setRunOnWorktreeCreate] = useState(false);
+  const [runOnWorktreeRemove, setRunOnWorktreeRemove] = useState(false);
+  const [runOnPrMerged, setRunOnPrMerged] = useState(false);
   const [waitForSetup, setWaitForSetup] = useState(false);
   const [keybinding, setKeybinding] = useState("");
   const [previewUrl, setPreviewUrl] = useState("");
@@ -192,7 +200,12 @@ export function ProjectScriptEditorDialog({
     setCommand(request.initial.command);
     setIcon(request.initial.icon);
     setIconPickerOpen(false);
+    // A confirm left open from the previous request would name that script
+    // while deleting this one.
+    setDeleteConfirmOpen(false);
     setRunOnWorktreeCreate(request.initial.runOnWorktreeCreate);
+    setRunOnWorktreeRemove(request.initial.runOnWorktreeRemove);
+    setRunOnPrMerged(request.initial.runOnPrMerged);
     setWaitForSetup(request.initial.waitForSetup);
     setKeybinding(request.initial.keybinding ?? "");
     setPreviewUrl(request.initial.previewUrl ?? "");
@@ -253,6 +266,8 @@ export function ProjectScriptEditorDialog({
         command: trimmedCommand,
         icon,
         runOnWorktreeCreate,
+        runOnWorktreeRemove,
+        runOnPrMerged,
         waitForSetup: runOnWorktreeCreate && waitForSetup,
         keybinding: keybindingRule?.key ?? null,
         previewUrl: trimmedPreviewUrl.length > 0 ? trimmedPreviewUrl : null,
@@ -401,6 +416,20 @@ export function ProjectScriptEditorDialog({
                   <Switch
                     checked={runOnWorktreeCreate}
                     onCheckedChange={(checked) => setRunOnWorktreeCreate(Boolean(checked))}
+                  />
+                </label>
+                <label className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-sm dark:border-transparent dark:bg-white/[0.035]">
+                  <span>Run automatically before worktree removal (waits for exit)</span>
+                  <Switch
+                    checked={runOnWorktreeRemove}
+                    onCheckedChange={(checked) => setRunOnWorktreeRemove(Boolean(checked))}
+                  />
+                </label>
+                <label className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-sm dark:border-transparent dark:bg-white/[0.035]">
+                  <span>Run automatically when the PR/MR merges</span>
+                  <Switch
+                    checked={runOnPrMerged}
+                    onCheckedChange={(checked) => setRunOnPrMerged(Boolean(checked))}
                   />
                 </label>
                 <label
