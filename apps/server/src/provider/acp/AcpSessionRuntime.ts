@@ -1120,6 +1120,10 @@ function isAcpAuthenticationRequired(error: EffectAcpErrors.AcpError): boolean {
 }
 
 export interface AcpSessionRuntimeStartResult {
+  readonly rejectedResume?: {
+    readonly sessionId: string;
+    readonly error: EffectAcpErrors.AcpRequestError;
+  };
   readonly sessionId: string;
   readonly initializeResult: EffectAcpSchema.InitializeResponse;
   readonly sessionSetupResult:
@@ -2296,6 +2300,7 @@ export const make = (
           );
         });
 
+      let rejectedResume: AcpSessionRuntimeStartResult["rejectedResume"];
       const createFreshSession = Effect.gen(function* () {
         const createPayload = {
           cwd: options.cwd,
@@ -2340,7 +2345,14 @@ export const make = (
                   : Effect.logWarning("ACP saved session was rejected; starting a fresh session.", {
                       resumeSessionId: sessionId,
                       code: error.code,
-                    }).pipe(Effect.andThen(createFreshSession)),
+                    }).pipe(
+                      Effect.andThen(
+                        Effect.sync(() => {
+                          rejectedResume = { sessionId, error };
+                        }),
+                      ),
+                      Effect.andThen(createFreshSession),
+                    ),
               ),
             );
             sessionId = loaded.sessionId;
@@ -2394,6 +2406,7 @@ export const make = (
       yield* Ref.set(configOptionsRef, sessionConfigOptionsFromSetup(sessionSetupResult));
 
       const nextState = {
+        ...(rejectedResume === undefined ? {} : { rejectedResume }),
         sessionId,
         initializeResult,
         sessionSetupResult,

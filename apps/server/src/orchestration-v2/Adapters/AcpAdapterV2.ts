@@ -6080,6 +6080,12 @@ export function makeAcpAdapterV2(
               prepareClaimableTerminalEnvironment(input.threadId);
               return yield* startAcpRuntime(input.threadId);
             });
+        if (started.rejectedResume !== undefined) {
+          yield* Ref.set(initialSessionActivationFailure, started.rejectedResume);
+          itemIdentityVersion = 2;
+          yield* Ref.set(runtimeRestartRequired, false);
+          prepareClaimableTerminalEnvironment(input.threadId);
+        }
         yield* Ref.set(activeSessionId, started.sessionId);
         yield* Ref.set(activeSessionSetup, started);
         rememberTerminalEnvironment(started.sessionId, input.threadId);
