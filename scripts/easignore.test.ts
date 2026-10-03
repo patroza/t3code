@@ -39,14 +39,16 @@ describe("EAS archive ignore rules", () => {
       );
 
       const rootNativeFile = "native/host.swift";
+      const mobileLicense = "native/libghostty-vt/LICENSE";
       const mobileNativeFile = "apps/mobile/src/native/native-glass.ts";
-      for (const path of [rootNativeFile, mobileNativeFile]) {
+      for (const path of [rootNativeFile, mobileNativeFile, mobileLicense]) {
         NodeFS.mkdirSync(NodePath.dirname(NodePath.join(fixtureRoot, path)), { recursive: true });
         NodeFS.writeFileSync(NodePath.join(fixtureRoot, path), "fixture\n");
       }
 
       expect(isIgnored(fixtureRoot, rootNativeFile)).toBe(true);
       expect(isIgnored(fixtureRoot, mobileNativeFile)).toBe(false);
+      expect(isIgnored(fixtureRoot, mobileLicense)).toBe(false);
     } finally {
       NodeFS.rmSync(fixtureRoot, { force: true, recursive: true });
     }
