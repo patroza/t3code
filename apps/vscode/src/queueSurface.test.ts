@@ -31,7 +31,9 @@ describe("VS Code queue / steer surface (align with web/mobile)", () => {
     expect(providerSource).toContain(
       "supportsQueuedMessages: this.client.serverCapabilities.queuedMessages",
     );
-    expect(providerSource).toContain("hasPendingTurnStart: thread.pendingTurnStart !== null");
+    expect(providerSource).toContain(
+      "hasPendingTurnStart: hasPendingConversationStart(this.client.nativeProjection)",
+    );
     expect(clientSource).toContain("input.messageId ?? newMessageId()");
   });
 });

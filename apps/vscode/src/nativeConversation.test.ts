@@ -10,6 +10,7 @@ import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 import {
   activeConversationRun,
+  hasPendingConversationStart,
   canPromoteQueuedConversation,
   steeringCapabilitiesAllowPromotion,
   decodeShellSnapshotText,
@@ -183,4 +184,25 @@ it("retains VS Code queued work controls and the held queue resume surface", () 
   expect(source).toContain('requiredElement<HTMLElement>("queued-messages")');
   expect(source).toContain('resume.textContent = "Resume queued messages"');
   expect(source).toContain('steer.textContent = "Send now"');
+});
+
+it.each(["preparing", "starting"] as const)(
+  "keeps composer sends queued while native run is %s",
+  (status) => {
+    const startingProjection = {
+      ...projection,
+      runs: projection.runs.map((run) => (run.id === "active" ? { ...run, status } : run)),
+    };
+    expect(hasPendingConversationStart(startingProjection)).toBe(true);
+  },
+);
+it("does not treat held queues or completed starts as pending preparation", () => {
+  expect(hasPendingConversationStart(projection)).toBe(false);
+  expect(
+    hasPendingConversationStart({
+      ...projection,
+      runs: projection.runs.filter((run) => run.status === "queued"),
+    }),
+  ).toBe(false);
+  expect(hasPendingConversationStart(null)).toBe(false);
 });

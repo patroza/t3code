@@ -1,3 +1,4 @@
+import { hasPendingConversationStart } from "./nativeConversation.ts";
 import type {
   IntegrationThreadView as OrchestrationThread,
   IntegrationThreadShellView as OrchestrationThreadShell,
@@ -853,10 +854,7 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
         queuedAt: message.queuedAt,
       })),
       sessionStatus: thread.session?.status ?? null,
-      hasPendingTurnStart:
-        this.client.nativeProjection?.runs.some(
-          (run) => run.status === "preparing" || run.status === "starting",
-        ) ?? false,
+      hasPendingTurnStart: hasPendingConversationStart(this.client.nativeProjection),
       proposedPlans: proposedPlans.map((plan) => ({
         id: plan.id,
         planMarkdown: plan.planMarkdown,

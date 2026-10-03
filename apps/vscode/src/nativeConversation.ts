@@ -72,3 +72,9 @@ export function canPromoteQueuedConversation(projection: OrchestrationV2ThreadPr
   );
   return run !== undefined && steeringCapabilitiesAllowPromotion(session?.capabilities.turns);
 }
+
+export function hasPendingConversationStart(projection: OrchestrationV2ThreadProjection | null) {
+  return (
+    projection?.runs.some((run) => run.status === "preparing" || run.status === "starting") ?? false
+  );
+}
