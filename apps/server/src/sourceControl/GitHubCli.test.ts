@@ -1,4 +1,4 @@
-import { assert, it, afterEach, describe, expect, vi } from "@effect/vitest";
+import { assert, it, beforeEach, afterEach, describe, expect, vi } from "@effect/vitest";
 import * as Cache from "effect/Cache";
 import * as TestClock from "effect/testing/TestClock";
 import * as Clock from "effect/Clock";
@@ -48,7 +48,12 @@ const layer = GitHubCli.layer.pipe(
   ),
 );
 
+beforeEach(() => {
+  vi.stubEnv("GH_REPO", undefined);
+});
+
 afterEach(() => {
+  vi.unstubAllEnvs();
   mockRun.mockReset();
 });
 
@@ -567,6 +572,29 @@ describe("GitHubCli.layer", () => {
     assert.notProperty(commandFailure, "operation");
   });
 
+  it("surfaces guest App-wrapper diagnostics instead of the generic command-failed line", () => {
+    const context = { command: "gh", cwd: "/repo" } as const;
+    const cause = new VcsProcessExitError({
+      operation: "GitHubCli.execute",
+      command: "gh",
+      cwd: context.cwd,
+      exitCode: 1,
+      failureKind: "command-failed",
+      detail: "Process exited with a non-zero status.",
+      publicDiagnostic:
+        "t3-github-app-token: app is not installed on pingdotgg/t3code (or repo does not exist)",
+    });
+
+    const error = GitHubCli.fromVcsError(context, cause);
+
+    assert.equal(error._tag, "GitHubCliCommandError");
+    assert.equal(
+      error.detail,
+      "t3-github-app-token: app is not installed on pingdotgg/t3code (or repo does not exist)",
+    );
+    assert.equal(error.message.includes("app is not installed"), true);
+  });
+
   it.effect("parses pull request view output", () =>
     Effect.gen(function* () {
       mockRun.mockReturnValueOnce(
@@ -676,6 +704,38 @@ describe("GitHubCli.layer", () => {
         isCrossRepository: true,
         headRepositoryNameWithOwner: "octocat/codething-mvp",
         headRepositoryOwnerLogin: "octocat",
+      });
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("detects failing pull request checks from gh pr checks json", () =>
+    Effect.gen(function* () {
+      mockRun.mockReturnValueOnce(
+        Effect.succeed(
+          processOutput(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify([
+              { bucket: "pass", state: "SUCCESS" },
+              { bucket: "fail", state: "FAILURE" },
+            ]),
+          ),
+        ),
+      );
+
+      const gh = yield* GitHubCli.GitHubCli;
+      const result = yield* gh.getPullRequestHasFailingChecks({
+        cwd: "/repo",
+        reference: "#42",
+      });
+
+      assert.strictEqual(result, true);
+      expect(mockRun).toHaveBeenCalledWith({
+        operation: "GitHubCli.getPullRequestHasFailingChecks",
+        command: "gh",
+        args: ["pr", "checks", "#42", "--json", "bucket,state"],
+        cwd: "/repo",
+        timeoutMs: 30_000,
+        allowNonZeroExit: true,
       });
     }).pipe(Effect.provide(layer)),
   );
