@@ -1,0 +1,19 @@
+diff --git a/build/ExpoConfigLoader.js b/build/ExpoConfigLoader.js
+--- a/build/ExpoConfigLoader.js
++++ b/build/ExpoConfigLoader.js
+@@ -157,13 +157,13 @@
+     const moduleProto = _module().default.prototype;
+     const capturedModules = [];
+     const originalCompile = moduleProto._compile;
+-    moduleProto._compile = function(content, filename) {
++    moduleProto._compile = function(content, filename, ...args) {
+         capturedModules.push({
+             id: this.id ?? filename,
+             filename,
+             content
+         });
+-        return originalCompile.call(this, content, filename);
++        return originalCompile.call(this, content, filename, ...args);
+     };
+     return {
+         getCapturedModules: ()=>capturedModules,

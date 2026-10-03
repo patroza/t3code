@@ -149,6 +149,24 @@ server, but the host's own site will not show them, and the count reads **viewed
 The **Code** tab is a web and desktop surface. The mobile app reports a pull request's status but
 does not show its diff, so marks are made and read on web and desktop.
 
+## Worktree lifecycle scripts
+
+Project scripts can run around git worktrees and pull requests. Configure them in the project
+scripts menu, or check them into the project's `t3.json`.
+
+- **Run on worktree creation** starts after a new worktree thread is created.
+- **Run before worktree removal** runs before the worktree is removed. T3 Code waits for the script
+  to exit; a non-zero exit blocks removal.
+- **Run when the pull request merges** runs in that workspace when the branch's review moves from
+  open to merged. Failures are logged and do not block other work.
+
+Scripts receive `T3CODE_PROJECT_ROOT`, `T3CODE_WORKTREE_PATH`, and `T3CODE_LIFECYCLE`
+(`worktree-remove` or `pr-merged`). When a linked pull request is known, they also receive
+`T3CODE_PR`, `T3CODE_PR_NUMBER`, `T3CODE_PR_URL`, `T3CODE_PR_TITLE`, `T3CODE_PR_BASE_REF`,
+`T3CODE_PR_HEAD_REF`, and `T3CODE_PR_STATE`.
+
+Use these to stop dev servers or drop temporary databases before a worktree goes away.
+
 ## Troubleshooting
 
 - **Not authenticated:** run the provider's login command on the server, then rescan. For Bitbucket,

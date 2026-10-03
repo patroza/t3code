@@ -6,6 +6,7 @@ node_modules
 *.tsbuildinfo
 apps/*/dist
 apps/*/dist-exe
+apps/vscode/*.vsix
 infra/*/dist
 .astro
 packages/*/dist
@@ -30,6 +31,9 @@ squashfs-root/
 /audits/
 dist-electron/
 .electron-runtime/
+
+# Local dir-deploy version counter (see scripts/build-and-deploy-dir.sh)
+.dir-deploy-n
 .showcase/
 apps/mobile/.showcase/
 apps/mobile/.generated/
@@ -42,6 +46,12 @@ node_modules/
 *.log
 .env*
 !.env.example
+!.envrc
+# direnv
+.direnv
+# agent gh shim + local run state (ship-gate cache, etc.)
+.tools/
+.run/
 
 # pnpm content-addressable store; never belongs in the repo.
 .pnpm-store/

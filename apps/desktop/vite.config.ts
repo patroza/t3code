@@ -1,8 +1,54 @@
 import "vite-plus/test/config";
 import { defineConfig } from "vite-plus";
+import { defineProject } from "vite-plus/test/config";
 
 import { isDesktopRuntimeExternalDependency } from "../../scripts/lib/desktop-external-packages.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
+
+const isolatedDesktopTestFiles = [
+  "src/app/DesktopClerk.test.ts",
+  "src/app/DesktopPreReadyPlatform.test.ts",
+  "src/backend/DesktopNetworkInterfaces.test.ts",
+  "src/electron/ElectronApp.test.ts",
+  "src/electron/ElectronDialog.test.ts",
+  "src/electron/ElectronMenu.test.ts",
+  "src/electron/ElectronProtocol.test.ts",
+  "src/electron/ElectronShell.test.ts",
+  "src/electron/ElectronTheme.test.ts",
+  "src/electron/ElectronUpdater.test.ts",
+  "src/electron/ElectronWindow.test.ts",
+  "src/electron/WindowsForegroundFocusThread.test.ts",
+  "src/electron/MacApplicationIcon.test.ts",
+  "src/ipc/methods/notificationBadge.test.ts",
+  "src/ipc/methods/preview.test.ts",
+  "src/ipc/methods/window.test.ts",
+  "src/permissions/MacPermissionHelper.test.ts",
+  "src/permissions/MacSettingsWindow.test.ts",
+  "src/preview/BrowserSession.test.ts",
+  "src/preview/Manager.test.ts",
+  // Window-capture tests mock electron/nativeImage/child_process. Under
+  // isolate:false those mocks leak and later files see a half-applied vi.mock.
+  "src/snapShot/ActiveWindow.test.ts",
+  "src/snapShot/CaptureShortcutConfig.test.ts",
+  "src/snapShot/DesktopSnapShot.test.ts",
+  "src/snapShot/GnomeCaptureSetup.test.ts",
+  "src/snapShot/HyprlandSnapShot.test.ts",
+  "src/snapShot/KdeSnapShot.test.ts",
+  "src/snapShot/LinuxSnapShot.dbus.test.ts",
+  "src/snapShot/LinuxSnapShot.test.ts",
+  "src/snapShot/MacModifierPairShortcutProcess.test.ts",
+  "src/snapShot/MacSnapShot.test.ts",
+  "src/snapShot/NativeCaptureFeedback.test.ts",
+  "src/snapShot/NiriSnapShot.test.ts",
+  "src/snapShot/PortalCaptureShortcut.dbus.test.ts",
+  "src/snapShot/PortalCaptureShortcut.test.ts",
+  "src/snapShot/RegionSnapShot.test.ts",
+  "src/snapShot/SnapShotAccessibilityProcess.test.ts",
+  "src/snapShot/WindowsCaptureFeedback.test.ts",
+  "src/snapShot/captureConfigEdit.test.ts",
+  "src/snapShot/snapShot.test.ts",
+  "src/window/DesktopWindow.test.ts",
+] as const;
 
 const repoEnv = loadRepoEnv();
 
@@ -21,6 +67,39 @@ const publicConfigDefine = {
 };
 
 export default defineConfig({
+  test: {
+    projects: [
+      defineProject({
+        test: {
+          name: "desktop",
+          environment: "node",
+          include: ["src/**/*.test.ts"],
+          exclude: [...isolatedDesktopTestFiles],
+          isolate: false,
+          fileParallelism: true,
+          maxWorkers: 4,
+          hookTimeout: 60_000,
+          testTimeout: 60_000,
+        },
+      }),
+      defineProject({
+        test: {
+          name: "desktop-isolated-module-mocks",
+          environment: "node",
+          include: [...isolatedDesktopTestFiles],
+          isolate: true,
+          fileParallelism: true,
+          maxWorkers: 1,
+          hookTimeout: 60_000,
+          testTimeout: 60_000,
+        },
+      }),
+    ],
+    // The Windows lane runs workspace suites concurrently; filesystem-heavy
+    // desktop integration tests can exceed Vitest's 5 second default there.
+    testTimeout: 15_000,
+    setupFiles: ["../../packages/shared/src/testing/longTempDir.ts"],
+  },
   run: {
     tasks: {
       build: {
@@ -142,10 +221,4 @@ export default defineConfig({
       entry: ["src/mac-permission-preload.ts"],
     },
   ],
-  test: {
-    // The Windows lane runs workspace suites concurrently; filesystem-heavy
-    // desktop integration tests can exceed Vitest's 5 second default there.
-    testTimeout: 15_000,
-    setupFiles: ["../../packages/shared/src/testing/longTempDir.ts"],
-  },
 });

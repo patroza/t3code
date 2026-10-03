@@ -47,6 +47,22 @@ export class ServerCliBuildAssetMissingError extends Schema.TaggedError<ServerCl
   }
 }
 
+/**
+ * Server packaging without a web client leaves desktop/browser on a raw
+ * "Not Found" shell after deploy. Fail closed at build time instead of
+ * warning and shipping an empty `dist/client`.
+ */
+export class ServerCliWebClientBundleMissingError extends Schema.TaggedError<ServerCliWebClientBundleMissingError>()(
+  "ServerCliWebClientBundleMissingError",
+  {
+    webDistPath: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Web client dist is missing at ${this.webDistPath}. Build apps/web before packaging the server so deploys cannot ship an empty UI.`;
+  }
+}
+
 export class ServerCliExecutableImportError extends Schema.TaggedError<ServerCliExecutableImportError>()(
   "ServerCliExecutableImportError",
   {

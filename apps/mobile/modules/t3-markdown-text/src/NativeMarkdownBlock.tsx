@@ -4,11 +4,8 @@ import type { MarkdownNode } from "react-native-nitro-markdown/headless";
 
 import { CopyTextButton } from "./CopyTextButton";
 import { MarkdownTextPrimitive } from "./MarkdownTextPrimitive";
-import {
-  nativeMarkdownDocumentRuns,
-  nativeMarkdownListItemBlocks,
-  nativeMarkdownNodePosition,
-} from "./nativeMarkdownText";
+import { markdownNodeKey, markdownTableCellKey, markdownTableRowKey } from "./markdownNodeKey";
+import { nativeMarkdownDocumentRuns, nativeMarkdownListItemBlocks } from "./nativeMarkdownText";
 import { NativeMarkdownSelectableText } from "./NativeMarkdownSelectableText";
 import type {
   MarkdownCodeHighlighter,
@@ -29,7 +26,7 @@ const MONO_FONT_FAMILY = Platform.select({
 });
 
 function nodeKey(node: MarkdownNode, index: number): string {
-  return `${node.type}:${nativeMarkdownNodePosition(node, index)}`;
+  return markdownNodeKey(node, index);
 }
 
 /** Code inside markdown scales with the base text size (12pt at the default 15pt body). */
@@ -261,7 +258,7 @@ function NativeTable(props: {
       >
         {rows.map((row, rowIndex) => (
           <View
-            key={nodeKey(row, rowIndex)}
+            key={markdownTableRowKey(rowIndex)}
             style={{
               flexDirection: "row",
               backgroundColor: rowIndex === 0 ? props.textStyle.codeBackgroundColor : "transparent",
@@ -271,7 +268,7 @@ function NativeTable(props: {
           >
             {(row.children ?? []).map((cell, cellIndex) => (
               <View
-                key={nodeKey(cell, cellIndex)}
+                key={markdownTableCellKey(rowIndex, cellIndex)}
                 style={{
                   width: 160,
                   borderLeftColor: props.textStyle.dividerColor,
