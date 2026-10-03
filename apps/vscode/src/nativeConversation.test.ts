@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
 import { expect, it } from "vite-plus/test";
 import {
   MessageId,
@@ -8,6 +10,8 @@ import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 import {
   activeConversationRun,
+  canPromoteQueuedConversation,
+  steeringCapabilitiesAllowPromotion,
   decodeShellSnapshotText,
   decodeThreadSnapshotText,
   queuedConversationMessages,
@@ -148,4 +152,35 @@ it("loads native HTTP codecs into projections with native timestamps and queued 
     projects: [],
   });
   expect(decodeShellSnapshotText(shellText).snapshotSequence).toBe(4);
+});
+
+it("offers promotion for native steering and interrupt restart providers", () => {
+  expect(
+    steeringCapabilitiesAllowPromotion({
+      supportsActiveSteering: true,
+      supportsInterrupt: false,
+      supportsSteeringByInterruptRestart: false,
+    }),
+  ).toBe(true);
+  expect(
+    steeringCapabilitiesAllowPromotion({
+      supportsActiveSteering: false,
+      supportsInterrupt: true,
+      supportsSteeringByInterruptRestart: true,
+    }),
+  ).toBe(true);
+  expect(
+    steeringCapabilitiesAllowPromotion({
+      supportsActiveSteering: false,
+      supportsInterrupt: false,
+      supportsSteeringByInterruptRestart: true,
+    }),
+  ).toBe(false);
+  expect(canPromoteQueuedConversation(projection)).toBe(false);
+});
+it("retains VS Code queued work controls and the held queue resume surface", () => {
+  const source = NodeFS.readFileSync(new URL("./webview.ts", import.meta.url), "utf8");
+  expect(source).toContain('requiredElement<HTMLElement>("queued-messages")');
+  expect(source).toContain('resume.textContent = "Resume queued messages"');
+  expect(source).toContain('steer.textContent = "Send now"');
 });

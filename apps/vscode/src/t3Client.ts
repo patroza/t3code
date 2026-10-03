@@ -4,6 +4,7 @@ import {
   queuedRunForMessage,
   activeConversationRun,
   queuedConversationMessages,
+  canPromoteQueuedConversation,
 } from "./nativeConversation.ts";
 import {
   integrationThreadView,
@@ -926,6 +927,9 @@ export class T3Client {
     this.#emitThread();
   }
 
+  get canPromoteQueuedMessages() {
+    return canPromoteQueuedConversation(this.#projection);
+  }
   get queuedMessages() {
     return queuedConversationMessages(this.#projection);
   }

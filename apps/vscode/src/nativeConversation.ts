@@ -48,3 +48,27 @@ export function queuedConversationMessages(projection: OrchestrationV2ThreadProj
         : [];
     });
 }
+export function steeringCapabilitiesAllowPromotion(
+  turns:
+    | {
+        readonly supportsActiveSteering: boolean;
+        readonly supportsInterrupt: boolean;
+        readonly supportsSteeringByInterruptRestart: boolean;
+      }
+    | undefined,
+) {
+  return (
+    turns?.supportsActiveSteering === true ||
+    (turns?.supportsInterrupt === true && turns.supportsSteeringByInterruptRestart)
+  );
+}
+export function canPromoteQueuedConversation(projection: OrchestrationV2ThreadProjection | null) {
+  const run = projection?.runs.find((run) => run.status === "running" || run.status === "waiting");
+  const providerThread = projection?.providerThreads.find(
+    (thread) => thread.id === run?.providerThreadId,
+  );
+  const session = projection?.providerSessions.find(
+    (session) => session.id === providerThread?.providerSessionId,
+  );
+  return run !== undefined && steeringCapabilitiesAllowPromotion(session?.capabilities.turns);
+}

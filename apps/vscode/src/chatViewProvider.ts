@@ -841,6 +841,7 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
             createdAt: activeProposedPlan.createdAt,
           }
         : null,
+      canPromoteQueuedMessages: this.client.canPromoteQueuedMessages,
       queueHeld:
         this.client.nativeProjection?.runs.some(
           (run) => run.status === "queued" && run.queueHeld,

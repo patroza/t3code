@@ -162,6 +162,7 @@ interface ViewState {
     readonly pendingInteractions: ReadonlyArray<ViewPendingApproval | ViewPendingUserInput>;
     readonly showPlanFollowUp: boolean;
     readonly activeProposedPlan: ViewActiveProposedPlan | null;
+    readonly canPromoteQueuedMessages?: boolean;
     readonly queueHeld?: boolean;
     readonly queuedMessages: ReadonlyArray<ViewQueuedMessage>;
     /** Provider session status for queue-by-default prediction (running/starting/…). */
@@ -1341,7 +1342,10 @@ function renderQueuedMessages(state: ViewState): void {
     steer.ariaLabel = "Send queued message now";
     // Pending local chips wait for server ack; in-flight steers are already
     // out of this list. Don't blanket-disable on global busy (web/mobile).
-    steer.disabled = message.pending === true || steeringQueuedMessageIds.has(message.messageId);
+    steer.disabled =
+      state.activeThread?.canPromoteQueuedMessages !== true ||
+      message.pending === true ||
+      steeringQueuedMessageIds.has(message.messageId);
     steer.addEventListener("click", () => {
       if (message.pending || steeringQueuedMessageIds.has(message.messageId)) return;
       const steeredAt = new Date().toISOString();
