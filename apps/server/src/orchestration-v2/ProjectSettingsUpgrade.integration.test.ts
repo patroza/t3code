@@ -1,3 +1,4 @@
+import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { ProjectId } from "@t3tools/contracts";
@@ -26,7 +27,16 @@ import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
-import { OrchestrationV2LayerLive, ProjectServiceLayerLive } from "./runtimeLayer.ts";
+import {
+  OrchestrationV2LayerLive as RawOrchestrationV2LayerLive,
+  ProjectServiceLayerLive,
+} from "./runtimeLayer.ts";
+
+const OrchestrationV2LayerLive = RawOrchestrationV2LayerLive.pipe(
+  Layer.provide(
+    Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({ get: () => Effect.succeed(null) }),
+  ),
+);
 
 const projectId = ProjectId.make("project:upgrade");
 const icon = { kind: "emoji", emoji: "🦊" } as const;

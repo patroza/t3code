@@ -26,9 +26,12 @@ import {
   type VcsStatusLocalResult,
   type VcsStatusRemoteResult,
   type VcsStatusResult,
+  type VcsResolveBranchChangeRequestInput,
+  type VcsResolveBranchChangeRequestResult,
 } from "@t3tools/contracts";
 
 import * as GitManager from "./GitManager.ts";
+import * as ProjectLifecycleScriptRunner from "../project/ProjectLifecycleScriptRunner.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 
@@ -61,6 +64,9 @@ export class GitWorkflowService extends Context.Service<
     readonly resolvePullRequest: (
       input: GitPullRequestRefInput,
     ) => Effect.Effect<GitResolvePullRequestResult, GitManagerServiceError>;
+    readonly resolveBranchChangeRequest: (
+      input: VcsResolveBranchChangeRequestInput,
+    ) => Effect.Effect<VcsResolveBranchChangeRequestResult, GitManagerServiceError>;
     readonly preparePullRequestThread: (
       input: GitPreparePullRequestThreadInput,
     ) => Effect.Effect<GitPreparePullRequestThreadResult, GitManagerServiceError>;
@@ -154,15 +160,58 @@ function nonRepositoryListRefs(): VcsListRefsResult {
   };
 }
 
+function lifecycleScriptToGitCommandError(
+  operation: string,
+  input: VcsRemoveWorktreeInput,
+  error: ProjectLifecycleScriptRunner.ProjectLifecycleScriptRunnerError,
+): GitCommandError {
+  if (error._tag === "ProjectLifecycleScriptFailedError") {
+    const detailParts = [
+      error.message,
+      error.stderr.trim().length > 0 ? error.stderr.trim() : null,
+      error.stdout.trim().length > 0 ? error.stdout.trim() : null,
+    ].filter((part): part is string => part !== null);
+    return new GitCommandError({
+      operation,
+      command: `lifecycle:${error.lifecycle}`,
+      cwd: input.path,
+      exitCode: error.exitCode ?? undefined,
+      failureKind: "unknown",
+      detail: detailParts.join("\n"),
+      cause: error,
+    });
+  }
+  return new GitCommandError({
+    operation,
+    command: `lifecycle:${error.lifecycle}`,
+    cwd: input.path,
+    failureKind: "unknown",
+    detail: error.message,
+    cause: error,
+  });
+}
+
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const registry = yield* VcsDriverRegistry.VcsDriverRegistry;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const gitManager = yield* GitManager.GitManager;
+  const lifecycleScriptRunner = yield* ProjectLifecycleScriptRunner.ProjectLifecycleScriptRunner;
+
+  /**
+   * Bare repositories have no checkout, but stay valid sources for ref, fetch,
+   * and `worktree add` plumbing — which is exactly what starting a thread needs,
+   * since the thread then runs in the worktree it just created. Such routes opt
+   * in with `allowBare: true`; everything that touches a checkout keeps the
+   * default and reports this reason instead of a blanket routing failure.
+   */
+  const bareRepositoryDetail = (operation: string, cwd: string) =>
+    `The ${operation} operation needs a working tree, but ${cwd} is a bare Git repository (no checkout of its own). Run it inside a worktree, or give the project a checkout.`;
 
   const ensureGit = Effect.fn("GitWorkflowService.ensureGit")(function* (
     operation: string,
     cwd: string,
+    options?: { readonly allowBare?: boolean },
   ) {
     const handle = yield* registry.resolve({ cwd }).pipe(
       Effect.mapError(
@@ -182,11 +231,19 @@ export const make = Effect.gen(function* () {
         detail: `The ${operation} workflow currently supports Git repositories only; detected ${handle.kind}. (${cwd})`,
       });
     }
+    if (handle.repository.bare && options?.allowBare !== true) {
+      return yield* new GitManagerError({
+        operation,
+        cwd,
+        detail: bareRepositoryDetail(operation, cwd),
+      });
+    }
   });
 
   const ensureGitCommand = Effect.fn("GitWorkflowService.ensureGitCommand")(function* (
     operation: string,
     cwd: string,
+    options?: { readonly allowBare?: boolean },
   ) {
     const handle = yield* registry.resolve({ cwd }).pipe(
       Effect.mapError(
@@ -195,6 +252,7 @@ export const make = Effect.gen(function* () {
             operation,
             command: "vcs-route",
             cwd,
+            failureKind: "unknown",
             detail: "Failed to resolve the VCS driver for this Git command.",
             cause,
           }),
@@ -205,7 +263,17 @@ export const make = Effect.gen(function* () {
         operation,
         command: "vcs-route",
         cwd,
+        failureKind: "unknown",
         detail: `The ${operation} command currently supports Git repositories only; detected ${handle.kind}.`,
+      });
+    }
+    if (handle.repository.bare && options?.allowBare !== true) {
+      return yield* new GitCommandError({
+        operation,
+        command: "vcs-route",
+        cwd,
+        failureKind: "unknown",
+        detail: bareRepositoryDetail(operation, cwd),
       });
     }
   });
@@ -233,6 +301,12 @@ export const make = Effect.gen(function* () {
           detail: `The ${operation} workflow currently supports Git repositories only; detected ${handle.kind}. (${cwd})`,
         });
       }
+      // Status describes a working tree, and a bare repository has none. These
+      // paths are polled continuously, so report "no workspace here" instead of
+      // failing every poll with an error nobody can act on.
+      if (handle.repository.bare) {
+        return false;
+      }
       return true;
     },
   );
@@ -247,6 +321,7 @@ export const make = Effect.gen(function* () {
             operation,
             command: "vcs-route",
             cwd,
+            failureKind: "unknown",
             detail: "Failed to detect a VCS repository for this Git command.",
             cause,
           }),
@@ -260,6 +335,7 @@ export const make = Effect.gen(function* () {
         operation,
         command: "vcs-route",
         cwd,
+        failureKind: "unknown",
         detail: `The ${operation} command currently supports Git repositories only; detected ${handle.kind}.`,
       });
     }
@@ -335,6 +411,10 @@ export const make = Effect.gen(function* () {
       "GitWorkflowService.resolvePullRequest",
       gitManager.resolvePullRequest,
     ),
+    resolveBranchChangeRequest: routeGitManager(
+      "GitWorkflowService.resolveBranchChangeRequest",
+      gitManager.resolveBranchChangeRequest,
+    ),
     preparePullRequestThread: routeGitManager(
       "GitWorkflowService.preparePullRequestThread",
       gitManager.preparePullRequestThread,
@@ -345,8 +425,10 @@ export const make = Effect.gen(function* () {
           isGitRepository ? git.listRefs(input) : Effect.succeed(nonRepositoryListRefs()),
         ),
       ),
+    // `git worktree add` is the whole point of a bare source repository: the
+    // thread gets its own checkout, so the source never needs one.
     createWorktree: (input, options) =>
-      ensureGitCommand("GitWorkflowService.createWorktree", input.cwd).pipe(
+      ensureGitCommand("GitWorkflowService.createWorktree", input.cwd, { allowBare: true }).pipe(
         Effect.andThen(git.createWorktree(input, options)),
       ),
     listLocalBranchNames: (cwd) =>
@@ -354,27 +436,64 @@ export const make = Effect.gen(function* () {
         Effect.andThen(git.listLocalBranchNames(cwd)),
       ),
     fetchRemote: (input) =>
-      ensureGitCommand("GitWorkflowService.fetchRemote", input.cwd).pipe(
+      ensureGitCommand("GitWorkflowService.fetchRemote", input.cwd, { allowBare: true }).pipe(
         Effect.andThen(git.fetchRemote(input)),
       ),
     remoteExists: (input) =>
-      ensureGitCommand("GitWorkflowService.remoteExists", input.cwd).pipe(
+      ensureGitCommand("GitWorkflowService.remoteExists", input.cwd, { allowBare: true }).pipe(
         Effect.andThen(git.remoteExists(input)),
       ),
     remoteBranchExists: (input) =>
-      ensureGitCommand("GitWorkflowService.remoteBranchExists", input.cwd).pipe(
-        Effect.andThen(git.remoteBranchExists(input)),
-      ),
+      ensureGitCommand("GitWorkflowService.remoteBranchExists", input.cwd, {
+        allowBare: true,
+      }).pipe(Effect.andThen(git.remoteBranchExists(input))),
     resolveRemoteTrackingCommit: (input) =>
-      ensureGitCommand("GitWorkflowService.resolveRemoteTrackingCommit", input.cwd).pipe(
-        Effect.andThen(git.resolveRemoteTrackingCommit(input)),
-      ),
+      ensureGitCommand("GitWorkflowService.resolveRemoteTrackingCommit", input.cwd, {
+        allowBare: true,
+      }).pipe(Effect.andThen(git.resolveRemoteTrackingCommit(input))),
     removeWorktree: (input) =>
-      ensureGitCommand("GitWorkflowService.removeWorktree", input.cwd).pipe(
-        Effect.andThen(git.removeWorktree(input)),
+      ensureGitCommand("GitWorkflowService.removeWorktree", input.cwd, { allowBare: true }).pipe(
+        Effect.andThen(
+          Effect.gen(function* () {
+            // Prefer the PR associated with the worktree branch (status cwd = worktree path).
+            const associatedPr = yield* gitManager.remoteStatus({ cwd: input.path }).pipe(
+              Effect.map((remote) => remote?.pr ?? null),
+              Effect.orElseSucceed(() => null),
+            );
+
+            // Teardown must finish successfully before the worktree directory is removed.
+            // PR-merged lifecycle is a separate trigger (status transition), not part of remove.
+            yield* lifecycleScriptRunner
+              .runWorktreeRemove({
+                projectCwd: input.cwd,
+                worktreePath: input.path,
+                pr: associatedPr
+                  ? {
+                      number: associatedPr.number,
+                      url: associatedPr.url,
+                      title: associatedPr.title,
+                      baseRef: associatedPr.baseRef,
+                      headRef: associatedPr.headRef,
+                      state: associatedPr.state,
+                    }
+                  : null,
+              })
+              .pipe(
+                Effect.mapError((error) =>
+                  lifecycleScriptToGitCommandError(
+                    "GitWorkflowService.removeWorktree",
+                    input,
+                    error,
+                  ),
+                ),
+              );
+
+            yield* git.removeWorktree(input);
+          }),
+        ),
       ),
     pruneWorktrees: (input) =>
-      ensureGitCommand("GitWorkflowService.pruneWorktrees", input.cwd).pipe(
+      ensureGitCommand("GitWorkflowService.pruneWorktrees", input.cwd, { allowBare: true }).pipe(
         Effect.andThen(git.pruneWorktrees(input)),
       ),
     deleteLocalBranch: (input) =>
@@ -382,15 +501,17 @@ export const make = Effect.gen(function* () {
         Effect.andThen(git.deleteLocalBranch(input)),
       ),
     createRef: (input) =>
-      ensureGitCommand("GitWorkflowService.createRef", input.cwd).pipe(
-        Effect.andThen(git.createRef(input)),
-      ),
+      ensureGitCommand("GitWorkflowService.createRef", input.cwd, {
+        // Creating the branch is pure ref plumbing; only checking it out after
+        // creation needs a working tree.
+        allowBare: input.switchRef !== true,
+      }).pipe(Effect.andThen(git.createRef(input))),
     switchRef: (input) =>
       ensureGitCommand("GitWorkflowService.switchRef", input.cwd).pipe(
         Effect.andThen(Effect.scoped(git.switchRef(input))),
       ),
     renameBranch: (input) =>
-      ensureGit("GitWorkflowService.renameBranch", input.cwd).pipe(
+      ensureGit("GitWorkflowService.renameBranch", input.cwd, { allowBare: true }).pipe(
         Effect.andThen(git.renameBranch(input)),
       ),
   });

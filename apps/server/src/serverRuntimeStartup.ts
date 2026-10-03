@@ -1,3 +1,9 @@
+import * as FileSystem from "effect/FileSystem";
+import * as Scope from "effect/Scope";
+import {
+  SERVER_RUNTIME_DESCRIPTOR_FILE,
+  ServerRuntimeDescriptor,
+} from "@t3tools/shared/serverRuntime";
 import {
   CommandId,
   DEFAULT_MODEL,
@@ -41,6 +47,7 @@ import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
+import { runWebVersionWatcher } from "./webVersionWatcher.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import { forkParked, forkParkedFiber } from "./serverActivation.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
@@ -182,6 +189,20 @@ interface AutoBootstrapWelcomeTargets {
   readonly bootstrapProjectId?: ProjectId;
   readonly bootstrapThreadId?: ThreadId;
 }
+
+const ServerRuntimeDescriptorJson = Schema.fromJsonString(ServerRuntimeDescriptor);
+const encodeServerRuntimeDescriptor = Schema.encodeEffect(ServerRuntimeDescriptorJson);
+const decodeServerRuntimeDescriptor = Schema.decodeEffect(ServerRuntimeDescriptorJson);
+
+/**
+ * Exact contents written to the runtime descriptor file. The desktop client
+ * reads this file back and decodes it with the same schema
+ * (`DesktopExistingBackend`), so the on-disk shape is a cross-process contract.
+ */
+export const encodeServerRuntimeDescriptorFile = (
+  descriptor: ServerRuntimeDescriptor,
+): Effect.Effect<string, Schema.SchemaError> =>
+  encodeServerRuntimeDescriptor(descriptor).pipe(Effect.map((json) => `${json}\n`));
 
 export const autoPullProjects = Effect.fn("autoPullProjects")(function* (
   projects: ReadonlyArray<Pick<Project, "id" | "workspaceRoot" | "autoPull">>,
@@ -410,12 +431,17 @@ export function runOrderedV2StartupPhases<
 const make = (options?: StartupOptions) =>
   Effect.gen(function* () {
     const serverConfig = yield* ServerConfig.ServerConfig;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
     const keybindings = yield* Keybindings.Keybindings;
     const legacyV1ThreadImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
     const providerRuntimeRecovery = yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService;
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
     const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
+    // Broadcast when the served web bundle is hot-swapped on disk so clients can
+    // offer a reload without a server restart.
+    yield* Effect.forkScoped(runWebVersionWatcher(lifecycleEvents));
     const serverSettings = yield* ServerSettings.ServerSettingsService;
     const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
     const crypto = yield* Crypto.Crypto;
@@ -589,6 +615,39 @@ const make = (options?: StartupOptions) =>
 
       yield* Effect.logDebug("startup phase: waiting for http listener");
       yield* runStartupPhase("http.wait", Deferred.await(httpListening));
+
+      const runtimeDescriptorPath = path.join(
+        serverConfig.stateDir,
+        SERVER_RUNTIME_DESCRIPTOR_FILE,
+      );
+      const descriptorHost =
+        serverConfig.host === undefined || isWildcardHost(serverConfig.host)
+          ? "127.0.0.1"
+          : serverConfig.host;
+      const runtimeStartedAt = DateTime.formatIso(yield* DateTime.now);
+      const runtimeDescriptorContents = yield* encodeServerRuntimeDescriptorFile({
+        version: 1,
+        pid: process.pid,
+        stateDir: serverConfig.stateDir,
+        httpBaseUrl: `http://${formatHostForUrl(descriptorHost)}:${serverConfig.port}`,
+        startedAt: runtimeStartedAt,
+      }).pipe(Effect.orDie);
+      yield* fileSystem
+        .writeFileString(runtimeDescriptorPath, runtimeDescriptorContents, { mode: 0o600 })
+        .pipe(Effect.orDie);
+      yield* Effect.addFinalizer(() =>
+        // Best-effort cleanup: only this process's own descriptor is removed,
+        // and a missing, unreadable, or malformed file must not fail shutdown.
+        fileSystem.readFileString(runtimeDescriptorPath).pipe(
+          Effect.flatMap(decodeServerRuntimeDescriptor),
+          Effect.flatMap((current) =>
+            current.pid === process.pid
+              ? fileSystem.remove(runtimeDescriptorPath, { force: true })
+              : Effect.void,
+          ),
+          Effect.ignore,
+        ),
+      );
       yield* runStartupPhase(
         "auxiliary-roots.parked",
         options?.awaitAuxiliaryParked ?? Effect.void,

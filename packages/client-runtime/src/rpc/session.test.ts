@@ -341,12 +341,63 @@ describe("RpcSessionFactory", () => {
       expect(error).toBeInstanceOf(ConnectionTransientError);
       expect(error).toMatchObject({
         reason: "transport",
-        message: "Test environment disconnected.",
+        message: "Test environment closed (1012 service restart).",
       });
       expect(configStreamError).toMatchObject({ _tag: "RpcClientError" });
       yield* Effect.yieldNow;
       expect(sockets).toHaveLength(1);
     }),
+  );
+
+  it.effect("reports ping timeout instead of a bare disconnected message", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { factory, sockets } = yield* makeFactory();
+        const session = yield* factory.connect(PREPARED);
+        const readyFiber = yield* Effect.forkChild(session.ready);
+        const socket = yield* awaitSocket(sockets);
+
+        socket.open();
+        yield* completeInitialConfig(socket);
+        yield* Fiber.join(readyFiber);
+
+        // Patched Effect RPC pinger: a ping every 5s, closing only once two
+        // pong windows have been missed (upstream #5561), so the latch opens
+        // in the fourth window rather than the second.
+        yield* TestClock.adjust("20 seconds");
+        const error = yield* Effect.flip(session.closed);
+
+        expect(error).toBeInstanceOf(ConnectionTransientError);
+        expect(error).toMatchObject({
+          reason: "timeout",
+          message: "Test environment ping timeout.",
+        });
+      }),
+    ),
+  );
+
+  it.effect("reports abnormal close codes from the socket failure path", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { factory, sockets } = yield* makeFactory();
+        const session = yield* factory.connect(PREPARED);
+        const readyFiber = yield* Effect.forkChild(session.ready);
+        const socket = yield* awaitSocket(sockets);
+
+        socket.open();
+        yield* completeInitialConfig(socket);
+        yield* Fiber.join(readyFiber);
+
+        socket.close(1006, "");
+        const error = yield* Effect.flip(session.closed);
+
+        expect(error).toBeInstanceOf(ConnectionTransientError);
+        expect(error).toMatchObject({
+          reason: "transport",
+          message: "Test environment closed (1006 abnormal).",
+        });
+      }),
+    ),
   );
 
   it.effect("closes the websocket when the session scope is released", () =>
@@ -1108,7 +1159,9 @@ describe("RpcSessionFactory", () => {
       yield* TestClock.adjust("5 seconds");
       const error = yield* Fiber.join(closedFiber);
       expect(error).toBeInstanceOf(ConnectionTransientError);
-      expect(error).toMatchObject({ reason: "transport" });
+      // Fork: a missed-pong close is reported as a labelled ping timeout, not
+      // a bare transport disconnect (see the ping-timeout test above).
+      expect(error).toMatchObject({ reason: "timeout" });
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );
 
@@ -1215,8 +1268,8 @@ describe("RpcSessionFactory", () => {
 
       expect(error).toBeInstanceOf(ConnectionTransientError);
       expect(error).toMatchObject({
-        reason: "transport",
-        message: `Test environment could not establish a WebSocket connection.${relay ? ` ${NETWORK_BLOCKING_HINT}` : ""}`,
+        reason: "timeout",
+        message: expect.stringContaining("could not open WebSocket"),
       });
       expect(sockets[0]?.readyState).toBe(TestWebSocket.CLOSED);
     }).pipe(Effect.provide(TestClock.layer())),

@@ -371,6 +371,12 @@ describe("ClientSettings composer context strip", () => {
 });
 
 describe("ClientSettings word wrap", () => {
+  it("defaults Open With settings for legacy documents", () => {
+    const settings = decodeClientSettings({});
+    expect(settings.openWithEntries).toEqual([]);
+    expect(settings.preferredOpenWith).toBeNull();
+  });
+
   it("defaults word wrap on", () => {
     expect(decodeClientSettings({}).wordWrap).toBe(true);
   });
@@ -384,6 +390,18 @@ describe("ClientSettings word wrap", () => {
     expect(decoded.wordWrap).toBe(true);
     expect(decoded).not.toHaveProperty("chatWordWrap");
     expect(decoded).not.toHaveProperty("diffWordWrap");
+  });
+});
+
+describe("ClientSettings sidebarHideProviderIcons", () => {
+  it("defaults to false", () => {
+    expect(decodeClientSettings({}).sidebarHideProviderIcons).toBe(false);
+  });
+
+  it("round-trips an explicit value", () => {
+    expect(decodeClientSettings({ sidebarHideProviderIcons: true }).sidebarHideProviderIcons).toBe(
+      true,
+    );
   });
 });
 
@@ -477,6 +495,18 @@ describe("ClientSettings proactive panels", () => {
     expect(decodeClientSettingsPatch({ proactivePanelsEnabled: true }).proactivePanelsEnabled).toBe(
       true,
     );
+  });
+});
+
+describe("ClientSettings worktree removal confirmation", () => {
+  it("defaults confirmation on for existing settings", () => {
+    expect(decodeClientSettings({}).confirmWorktreeRemoval).toBe(true);
+  });
+
+  it("accepts confirmation updates", () => {
+    expect(
+      decodeClientSettingsPatch({ confirmWorktreeRemoval: false }).confirmWorktreeRemoval,
+    ).toBe(false);
   });
 });
 
@@ -609,8 +639,10 @@ describe("ClientSettings environment identification", () => {
 });
 
 describe("ClientSettings sidebar", () => {
-  it("defaults to the current sidebar", () => {
-    expect(decodeClientSettings({}).legacySidebarEnabled).toBe(false);
+  it("defaults to the current sidebar with recent threads enabled", () => {
+    const settings = decodeClientSettings({});
+    expect(settings.legacySidebarEnabled).toBe(false);
+    expect(settings.sidebarRecentThreadsEnabled).toBe(true);
   });
 
   it("drops the retired sidebar v2 beta keys, resetting everyone to the default", () => {
@@ -636,6 +668,12 @@ describe("ClientSettings sidebar", () => {
     expect(decodeClientSettingsPatch({ legacySidebarEnabled: true }).legacySidebarEnabled).toBe(
       true,
     );
+  });
+
+  it("allows the recent work queue to be disabled", () => {
+    expect(
+      decodeClientSettings({ sidebarRecentThreadsEnabled: false }).sidebarRecentThreadsEnabled,
+    ).toBe(false);
   });
 
   it("keeps unpin confirmation opt-in and patchable", () => {

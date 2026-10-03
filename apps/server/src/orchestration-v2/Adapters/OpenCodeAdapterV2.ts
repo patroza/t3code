@@ -1,3 +1,4 @@
+import { resolveCurrentProviderEnvironment } from "../../provider/DirenvEnvironment.ts";
 import type {
   Event as OpenCodeEvent,
   Message as OpenCodeMessage,
@@ -958,7 +959,7 @@ export function makeOpenCodeAdapterV2(
           binaryPath: options.settings.binaryPath,
           directory: cwd,
           serverUrl: options.settings.serverUrl,
-          environment: options.environment,
+          environment: yield* resolveCurrentProviderEnvironment(cwd, options.environment),
         });
         const client = runtime.createOpenCodeSdkClient({
           baseUrl: connection.url,

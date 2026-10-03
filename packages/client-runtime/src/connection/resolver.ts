@@ -1,3 +1,4 @@
+import { appendOmegentT3ProductHandshake } from "@t3tools/shared/productFamily";
 import type {
   AuthClientPresentationMetadata,
   ExecutionEnvironmentDescriptor,
@@ -79,7 +80,7 @@ function primarySocketUrl(
     url.pathname = "/ws";
   }
   appendClientConnectionParams(url, clientMetadata, "direct");
-  return url.toString();
+  return appendOmegentT3ProductHandshake(url.toString());
 }
 
 const makePrimaryBroker = Effect.fn("clientRuntime.connection.broker.makePrimary")(function* () {

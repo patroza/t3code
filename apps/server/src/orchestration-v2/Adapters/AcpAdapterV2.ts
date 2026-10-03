@@ -1,3 +1,5 @@
+import { AcpSpawnError } from "effect-acp/errors";
+import { resolveCurrentProviderEnvironment } from "../../provider/DirenvEnvironment.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodePath from "node:path";
 
@@ -1419,6 +1421,17 @@ export function makeAcpAdapterV2(
   options: AcpAdapterV2Options,
 ): ProviderAdapter.ProviderAdapterV2Shape {
   const { flavor, fileSystem, idAllocator, serverConfig, selfInvocation: self } = options;
+  const makeRuntimeWithDirenv = Effect.fnUntraced(function* (input: AcpAdapterV2RuntimeInput) {
+    const base = { ...process.env, ...input.processEnvironment };
+    const resolved = yield* resolveCurrentProviderEnvironment(input.cwd, base).pipe(
+      Effect.mapError((cause) => new AcpSpawnError({ command: flavor.driver, cause })),
+    );
+    const patch: NodeJS.ProcessEnv = { ...input.processEnvironment };
+    for (const key of new Set([...Object.keys(base), ...Object.keys(resolved)])) {
+      if (base[key] !== resolved[key]) patch[key] = resolved[key];
+    }
+    return yield* flavor.makeRuntime({ ...input, processEnvironment: patch });
+  });
   const driver = flavor.driver;
   const continuationRequests = options.continuationRequests;
   const postSettleContinuationEnabled =
@@ -5857,12 +5870,12 @@ export function makeAcpAdapterV2(
           runtimeScope = yield* Scope.make();
           runtimeMcpBridge = yield* makeRuntimeMcpBridge(threadId, runtimeScope);
           const runtimeGeneration = yield* Ref.get(runtimeCallbackGeneration);
-          runtime = yield* flavor
-            .makeRuntime(makeRuntimeInput(runtimeGeneration, threadId, resumeSessionId))
-            .pipe(
-              Effect.provideService(Scope.Scope, runtimeScope),
-              Effect.provideService(Crypto.Crypto, options.crypto),
-            );
+          runtime = yield* makeRuntimeWithDirenv(
+            makeRuntimeInput(runtimeGeneration, threadId, resumeSessionId),
+          ).pipe(
+            Effect.provideService(Scope.Scope, runtimeScope),
+            Effect.provideService(Crypto.Crypto, options.crypto),
+          );
         });
 
         const startAcpRuntime = Effect.fnUntraced(function* (
@@ -5927,19 +5940,17 @@ export function makeAcpAdapterV2(
           let replacementMcpBridge: AcpMcpOverAcpBridge | undefined;
           const startup = Effect.gen(function* () {
             replacementMcpBridge = yield* makeRuntimeMcpBridge(threadId, replacementScope);
-            const replacementRuntime = yield* flavor
-              .makeRuntime(
-                makeRuntimeInput(
-                  replacementGeneration,
-                  threadId,
-                  undefined,
-                  handleCandidateTermination,
-                ),
-              )
-              .pipe(
-                Effect.provideService(Scope.Scope, replacementScope),
-                Effect.provideService(Crypto.Crypto, options.crypto),
-              );
+            const replacementRuntime = yield* makeRuntimeWithDirenv(
+              makeRuntimeInput(
+                replacementGeneration,
+                threadId,
+                undefined,
+                handleCandidateTermination,
+              ),
+            ).pipe(
+              Effect.provideService(Scope.Scope, replacementScope),
+              Effect.provideService(Crypto.Crypto, options.crypto),
+            );
             // Session setup may publish commands before it returns. Buffer those
             // notifications, but do not expose request or extension handlers
             // until the candidate generation has committed.
@@ -6069,6 +6080,12 @@ export function makeAcpAdapterV2(
               prepareClaimableTerminalEnvironment(input.threadId);
               return yield* startAcpRuntime(input.threadId);
             });
+        if (started.rejectedResume !== undefined) {
+          yield* Ref.set(initialSessionActivationFailure, started.rejectedResume);
+          itemIdentityVersion = 2;
+          yield* Ref.set(runtimeRestartRequired, false);
+          prepareClaimableTerminalEnvironment(input.threadId);
+        }
         yield* Ref.set(activeSessionId, started.sessionId);
         yield* Ref.set(activeSessionSetup, started);
         rememberTerminalEnvironment(started.sessionId, input.threadId);

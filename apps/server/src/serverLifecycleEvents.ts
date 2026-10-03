@@ -9,6 +9,7 @@ import * as Stream from "effect/Stream";
 type LifecycleEventInput =
   | Omit<Extract<ServerLifecycleStreamEvent, { type: "welcome" }>, "sequence">
   | Omit<Extract<ServerLifecycleStreamEvent, { type: "ready" }>, "sequence">
+  | Omit<Extract<ServerLifecycleStreamEvent, { type: "webVersionChanged" }>, "sequence">
   | Omit<Extract<ServerLifecycleStreamEvent, { type: "legacyThreadMigration" }>, "sequence">;
 
 interface SnapshotState {
@@ -40,6 +41,8 @@ const make = Effect.gen(function* () {
           ...event,
           sequence: nextSequence,
         } satisfies ServerLifecycleStreamEvent;
+        // Keep only the latest event of each type in the replay snapshot, so a
+        // connecting client sees the current welcome, ready, and web version.
         const nextEvents = [
           nextEvent,
           ...current.events.filter((entry) => entry.type !== nextEvent.type),
