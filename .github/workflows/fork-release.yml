@@ -1,0 +1,238 @@
+name: Fork Release
+
+# Release actions, split out of Fork CI on purpose.
+#
+# Fork CI answers exactly one question: "is this SHA valid?" Its conclusion is
+# what the deploy poller on the smart host promotes on, so a release action must
+# never be able to turn it red — a failed EAS dispatch would otherwise strand
+# server, Discord, desktop and VS Code deployment of a perfectly good commit.
+#
+# workflow_run gives the ordering for free: this only starts after Fork CI has
+# already concluded success for a push to fork/dev, so nothing is released from a
+# SHA that is not green, and a failure here is recorded against this run alone.
+#
+# NOTE: workflow_run only fires for workflow files present on the repository
+# default branch. Until fork/dev is the default branch this workflow will not
+# trigger, and mobile releases must be dispatched manually below.
+on:
+  workflow_run:
+    workflows: ["Fork CI"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Exact green fork/dev SHA to release"
+        required: true
+        type: string
+      release_branch:
+        description: "Branch that must contain the SHA"
+        required: false
+        type: string
+        default: fork/dev
+
+concurrency:
+  # Per branch, superseding: back-to-back merges should release once, for the
+  # tip, not once per commit. Coalescing here rather than in Fork CI keeps every
+  # commit individually validated, so a red build still names the commit that
+  # broke it.
+  #
+  # Cancelling can only ever over-scope a later release, never under-scope it: a
+  # cancelled run is not "successful", so the next release still measures from
+  # the last SHA that genuinely released. Releasing a superset is wasteful;
+  # missing a change is not recoverable.
+  group: fork-release-${{ github.event.workflow_run.head_branch || inputs.release_branch }}
+  cancel-in-progress: true
+
+jobs:
+  release:
+    name: Release
+    # Only a green push run on fork/dev. Pull-request and workflow_dispatch runs
+    # of Fork CI validate a tip that was never merged and must not release.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'fork/dev')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+    env:
+      RELEASE_SHA: ${{ github.event.workflow_run.head_sha || inputs.sha }}
+      RELEASE_REF: ${{ github.event.workflow_run.head_branch || inputs.release_branch }}
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || inputs.sha }}
+          fetch-depth: 0
+
+      - name: Cancel if superseded
+        # workflow_run ordering is not guaranteed, so an older release can still
+        # start after a newer one. Self-cancel rather than exit 0: a run that
+        # concludes success without dispatching would be picked up as the
+        # "previous released SHA" and silently shrink the next release's scope.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --quiet origin "${RELEASE_REF}"
+          tip="$(git rev-parse FETCH_HEAD)"
+          if [[ "${tip}" != "${RELEASE_SHA}" ]]; then
+            echo "Superseded: ${RELEASE_REF} is now at ${tip}, this run is for ${RELEASE_SHA}."
+            gh run cancel "${GITHUB_RUN_ID}"
+            # Cancellation is asynchronous. Block so nothing dispatches while it
+            # lands, and fail if it never does -- either conclusion keeps this
+            # run out of the successful-release history.
+            sleep 60
+            exit 1
+          fi
+          echo "${RELEASE_SHA} is the current ${RELEASE_REF} tip."
+
+      - name: Confirm the SHA is green
+        # workflow_dispatch bypasses the workflow_run gate, so re-check it here.
+        # Releasing an unvalidated SHA by hand is the one thing this split must
+        # not make easier.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          green="$(
+            gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/fork-ci.yml/runs" \
+              -f branch="${RELEASE_REF}" -f event=push -f status=success -f per_page=30 \
+              --jq "[.workflow_runs[] | select(.head_sha == \"${RELEASE_SHA}\")] | length"
+          )"
+          if [[ "${green}" -lt 1 ]]; then
+            echo "error: no successful Fork CI push run for ${RELEASE_SHA} on ${RELEASE_REF}" >&2
+            exit 1
+          fi
+          echo "Fork CI is green for ${RELEASE_SHA}."
+
+      - id: previous
+        name: Find previous released SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Compare against the last SHA this workflow released, not the last one
+          # that merely passed CI: a commit whose release was skipped must still
+          # be represented in the next release's scope.
+          previous_sha="$(
+            gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/fork-release.yml/runs" \
+              -f branch="${RELEASE_REF}" -f status=success -f per_page=30 \
+              --jq "[.workflow_runs[] | select(.head_sha != \"${RELEASE_SHA}\")] | first | .head_sha // \"\""
+          )"
+          echo "sha=${previous_sha}" >>"${GITHUB_OUTPUT}"
+
+      - id: classify
+        name: Classify release scope
+        env:
+          PREVIOUS_SHA: ${{ steps.previous.outputs.sha }}
+        run: |
+          # Same script the smart-host poller runs, so this report and the fleet
+          # promotion cannot disagree about what a diff means.
+          deploy=true server=true discord=true vscode=true mobile=true desktop=true
+          web_hot_swap=false
+          basis="no previous released SHA; assuming every target changed"
+          if [[ "${PREVIOUS_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            if ! git cat-file -e "${PREVIOUS_SHA}^{commit}" 2>/dev/null; then
+              git fetch --quiet origin "${PREVIOUS_SHA}" || true
+            fi
+            if git cat-file -e "${PREVIOUS_SHA}^{commit}" 2>/dev/null; then
+              classification="$(
+                scripts/classify-deployment-diff.sh "${PREVIOUS_SHA}" "${RELEASE_SHA}"
+              )"
+              printf '%s\n' "${classification}" >&2
+              for key in deploy server discord vscode mobile desktop web_hot_swap; do
+                value="$(sed -n "s/^${key}=//p" <<<"${classification}")"
+                [[ "${value}" =~ ^(true|false)$ ]] || continue
+                printf -v "${key}" '%s' "${value}"
+              done
+              basis="classified against the previous released SHA"
+            else
+              basis="previous released SHA unavailable; assuming every target changed"
+            fi
+          fi
+          # A non-runtime-only range promotes nothing, exactly as the poller
+          # decides, so report every target as held rather than as released.
+          if [[ "${deploy}" == "false" ]]; then
+            server=false; discord=false; vscode=false; desktop=false; mobile=false
+          fi
+          for key in deploy server discord vscode mobile desktop web_hot_swap; do
+            echo "${key}=${!key}" >>"${GITHUB_OUTPUT}"
+          done
+          echo "basis=${basis}" >>"${GITHUB_OUTPUT}"
+          {
+            echo "changed_files<<EOF"
+            if [[ "${PREVIOUS_SHA}" =~ ^[0-9a-f]{40}$ ]] && git cat-file -e "${PREVIOUS_SHA}^{commit}" 2>/dev/null; then
+              git diff --name-only "${PREVIOUS_SHA}" "${RELEASE_SHA}" | head -40
+            fi
+            echo "EOF"
+          } >>"${GITHUB_OUTPUT}"
+
+      - name: Dispatch mobile releases
+        if: steps.classify.outputs.mobile == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # mode=auto, not update: an OTA alone never reaches a phone when the
+          # native runtime changed, so the fingerprint decides between an update
+          # and a TestFlight build. iOS only, because Android has no keystore.
+          gh workflow run mobile-eas-production.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$RELEASE_REF" \
+            -f mode=auto \
+            -f platform=ios \
+            -f sha="$RELEASE_SHA" \
+            -f release_branch="$RELEASE_REF" \
+            -f message="${RELEASE_REF} ${RELEASE_SHA}"
+          gh workflow run mobile-eas-development.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$RELEASE_REF" \
+            -f platform=ios \
+            -f sha="$RELEASE_SHA" \
+            -f release_branch="$RELEASE_REF"
+
+      - name: Report
+        if: always()
+        env:
+          PREVIOUS_SHA: ${{ steps.previous.outputs.sha }}
+          BASIS: ${{ steps.classify.outputs.basis }}
+          DEPLOY: ${{ steps.classify.outputs.deploy }}
+          SERVER: ${{ steps.classify.outputs.server }}
+          DISCORD: ${{ steps.classify.outputs.discord }}
+          VSCODE: ${{ steps.classify.outputs.vscode }}
+          MOBILE: ${{ steps.classify.outputs.mobile }}
+          DESKTOP: ${{ steps.classify.outputs.desktop }}
+          WEB_HOT_SWAP: ${{ steps.classify.outputs.web_hot_swap }}
+          CHANGED_FILES: ${{ steps.classify.outputs.changed_files }}
+        run: |
+          mark() { [[ "$1" == "true" ]] && echo "**yes**" || echo "no"; }
+          server_note="restart"
+          [[ "${WEB_HOT_SWAP}" == "true" ]] && server_note="web hot-swap, no restart"
+          {
+            printf '### Fork Release — `%s`\n\n' "${RELEASE_SHA:0:12}"
+            printf 'Range: `%s` → `%s` on `%s`\n\n' \
+              "${PREVIOUS_SHA:0:12}" "${RELEASE_SHA:0:12}" "${RELEASE_REF}"
+            printf '_%s._\n\n' "${BASIS}"
+            if [[ "${DEPLOY}" == "false" ]]; then
+              printf '> Non-runtime-only range: the poller records it as evaluated and promotes nothing.\n\n'
+            fi
+            printf '| Target | Selected | Promoted by |\n'
+            printf '| --- | --- | --- |\n'
+            printf '| Server (%s) | %s | smart-host poller |\n' "${server_note}" "$(mark "${SERVER}")"
+            printf '| Discord bot | %s | smart-host poller |\n' "$(mark "${DISCORD}")"
+            printf '| Desktop | %s | smart-host poller |\n' "$(mark "${DESKTOP}")"
+            printf '| VS Code | %s | smart-host poller |\n' "$(mark "${VSCODE}")"
+            printf '| Mobile (EAS) | %s | this workflow |\n\n' "$(mark "${MOBILE}")"
+            printf 'Classified by `scripts/classify-deployment-diff.sh`, the same script the poller\n'
+            printf 'runs, so this report and the fleet cannot disagree about what a diff means.\n\n'
+            printf '**Caveat:** the poller diffs against the last SHA it actually *deployed*, which is\n'
+            printf 'not always the last released SHA — a promotion it skipped or that failed part-way\n'
+            printf 'leaves its baseline behind this one. When they diverge the poller selects a\n'
+            printf 'superset of the rows above, never a subset.\n'
+            if [[ -n "${CHANGED_FILES}" ]]; then
+              printf '\n<details><summary>Changed files</summary>\n\n```text\n%s\n```\n\n</details>\n' \
+                "${CHANGED_FILES}"
+            fi
+          } >>"${GITHUB_STEP_SUMMARY}"

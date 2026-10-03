@@ -22,6 +22,10 @@ repository root, retain its terminal session, and read the actual backend port
 from the dev-runner output. Use the worktree's ignored `.t3` state. Never run
 against `~/.t3/userdata`. The Browser panel is not required for this workflow.
 
+The worktree-local default deliberately outranks an ambient `T3CODE_HOME`. When
+testing web and mobile together, run `vp run dev --home-dir <base-dir> --host 127.0.0.1`
+instead and do not launch a second backend over the same base directory.
+
 Test with meaningful project and thread data. Read the shared
 [SQLite fixture reference](../test-t3-app/references/sqlite-fixtures.md) only
 when inspecting or seeding SQLite. Stop the test server before fixture writes.
@@ -36,6 +40,9 @@ node scripts/mobile-native-client.ts ensure <ios|android> <device-id>
 
 This reuses a matching native client or builds and installs one. Authorized
 mobile verification includes that build step unless the user prohibits it.
+The development identity is `T3 Code Dev`, bundle/package `com.t3tools.t3code.dev`,
+scheme `t3code-dev`. If a build fails, investigate the error and fix local
+prerequisites rather than reporting “no compatible client.”
 
 Start `vp run dev:client` from `apps/mobile`, or reuse a healthy Metro belonging
 to this checkout. Open its printed development-client URL with AgentDevice
@@ -61,6 +68,9 @@ It issues a fresh credential and opens T3 Code Dev's existing pairing route
 through AgentDevice. For a backend on the device host, use
 `http://127.0.0.1:<server-port>` on iOS or `http://10.0.2.2:<server-port>`
 on Android. For a remote backend, use its reachable origin.
+
+Always enter the complete `http://` origin; the mobile host field otherwise
+assumes HTTPS.
 
 Confirm the intended projects appear, exercise the affected flow, and capture
 evidence. Retain the app and environment while iterating. At teardown, remove

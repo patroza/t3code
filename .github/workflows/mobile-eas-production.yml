@@ -6,35 +6,31 @@ name: Mobile EAS Production
 # fingerprint (platform-specific deps + pnpm version) and errors. On this Linux
 # runner, with corepack pinning pnpm 10.24 in eas.json, local == build.
 #
-# Every merge to main that touches the mobile app reconciles, per platform:
-#   1. Store builds: if the latest production build's version differs from
-#      app.config.ts, cut a new build and submit it (TestFlight + Play internal
-#      track). Bumping `version` is therefore all it takes to
-#      start the next release train — the first build of a version enters
-#      external-TestFlight beta review immediately, and later builds of the
-#      same version auto-approve until that version is released. After App
-#      Store approval, Apple closes the release train and `version` must be
-#      bumped before another iOS build can be submitted. Releasing to the App
-#      Store stays a manual App Store Connect step.
-#   2. OTA: publish a production-channel update for each platform where at
-#      least one finished production build matches the current native
-#      fingerprint. Old-version binaries with a matching fingerprint receive
-#      it too. When native drift means no binary could install the update,
-#      it is skipped and flagged in the job summary instead of published
-#      into the void.
-# workflow_dispatch remains as a manual override for both modes (e.g. to
-# retry an errored build or force an OTA).
+# mode=auto uses apps/mobile/scripts/eas-continuous-deploy.sh (full logs). When a
+# native rebuild is needed but blocked (e.g. Expo Free plan monthly iOS quota),
+# it falls back to OTA against the latest finished production binary runtime so
+# pure-JS fixes still reach installed TestFlight clients.
+#
+# Manual store builds: if the latest production build's version differs from
+# app.config.ts, cut a new build and submit it (TestFlight + Play internal
+# track). Bumping `version` starts the next release train — the first build of
+# a version enters external-TestFlight beta review immediately, and later
+# builds of the same version auto-approve until that version is released.
+# After App Store approval, Apple closes the release train and `version` must
+# be bumped before another iOS build can be submitted. Releasing to the App
+# Store stays a manual App Store Connect step.
 # Manual v2-preview builds keep the production app identity and disable OTA.
 # Select the v2 branch when dispatching a preview build.
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "build (+ auto-submit to TestFlight) or update (OTA)"
+        description: "auto (fingerprint decides), build (+ auto-submit to TestFlight), or update (OTA)"
         required: true
         type: choice
-        default: build
+        default: auto
         options:
+          - auto
           - build
           - update
       profile:
@@ -59,39 +55,40 @@ on:
         required: false
         type: string
       message:
-        description: "OTA update message (mode=update only)"
+        description: "OTA update message (mode=update / auto)"
         required: false
         type: string
-  push:
-    branches: [main]
-    paths:
-      - apps/mobile/**
-      - packages/client-runtime/**
-      - packages/contracts/**
-      - packages/shared/**
-      - assets/**
-      - scripts/**
-      - patches/**
-      - pnpm-lock.yaml
-      - pnpm-workspace.yaml
-      - .github/workflows/mobile-eas-production.yml
+      runtime_version:
+        description: "Force OTA runtimeVersion (mode=update or auto). Blank = fingerprint / fallback"
+        required: false
+        type: string
+      sha:
+        description: "Exact release-branch SHA (blank uses that branch's current tip)"
+        required: false
+        type: string
+      release_branch:
+        description: "Release branch that must contain the SHA"
+        required: false
+        type: string
+        default: fork/integration
 
-# Serialize runs so OTAs publish in merge order. GitHub keeps at most one
-# queued run per group, so a burst of merges collapses into one run of the
-# newest commit — intermediate commits don't need their own OTA.
 concurrency:
   group: mobile-eas-production
   cancel-in-progress: false
 
 jobs:
   production:
-    name: EAS ${{ inputs.profile || 'production' }} ${{ github.event_name == 'push' && 'auto' || inputs.mode }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    name: EAS ${{ inputs.profile || 'production' }} ${{ inputs.mode }}
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     env:
       APP_VARIANT: production
       NODE_OPTIONS: --max-old-space-size=8192
+      T3CODE_MOBILE_EAS_PROJECT_ID: ${{ vars.T3CODE_MOBILE_EAS_PROJECT_ID }}
+      T3CODE_MOBILE_EXPO_OWNER: ${{ vars.T3CODE_MOBILE_EXPO_OWNER }}
+      T3CODE_MOBILE_IOS_BUNDLE_IDENTIFIER: ${{ vars.T3CODE_MOBILE_IOS_BUNDLE_IDENTIFIER }}
+      T3CODE_MOBILE_IOS_TEAM_ID: ${{ vars.T3CODE_MOBILE_IOS_TEAM_ID }}
     steps:
       - name: Reject preview OTA updates
         if: github.event_name == 'workflow_dispatch' && inputs.profile == 'v2-preview' && inputs.mode == 'update'
@@ -124,12 +121,53 @@ jobs:
         if: steps.expo-token.outputs.present == 'true'
         uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.release_branch }}
           fetch-depth: 0
           token: ${{ steps.version_app_token.outputs.token || github.token }}
           # No sparse-checkout here: it makes actions/checkout fetch with
           # --filter=blob:none, and eas-cli archives the project via
           # `git clone --depth 1 file://<workspace>`, which fails (exit 128)
           # when the partial clone can't serve the unfetched blobs.
+
+      - id: source
+        name: Resolve approved integration source
+        if: steps.expo-token.outputs.present == 'true'
+        env:
+          REQUESTED_SHA: ${{ inputs.sha }}
+        run: |
+          integration_sha="$(git rev-parse HEAD)"
+          target_sha="${REQUESTED_SHA:-$integration_sha}"
+          if [[ ! "$target_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "sha must be an exact 40-character commit SHA" >&2
+            exit 1
+          fi
+          git fetch origin "$target_sha"
+          git merge-base --is-ancestor "$target_sha" "$integration_sha"
+          git checkout --detach "$target_sha"
+          test "$(git rev-parse HEAD)" = "$target_sha"
+          echo "sha=$target_sha" >> "$GITHUB_OUTPUT"
+
+      # Workflow file may come from a feature branch (workflow_dispatch --ref)
+      # while product code is always the approved integration SHA above. Overlay
+      # the deploy script + app.config runtime override from the workflow ref so
+      # we can ship fixes without waiting for a full compose.
+      - name: Overlay deploy tooling from workflow ref
+        if: steps.expo-token.outputs.present == 'true' && github.ref_name != inputs.release_branch
+        env:
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          git fetch origin "$WORKFLOW_SHA"
+          for path in \
+            apps/mobile/scripts/eas-continuous-deploy.sh \
+            apps/mobile/scripts/lib \
+            apps/mobile/app.config.ts \
+            .easignore; do
+            if git cat-file -e "${WORKFLOW_SHA}:${path}" 2>/dev/null; then
+              git checkout "$WORKFLOW_SHA" -- "$path"
+              echo "overlaid $path from $WORKFLOW_SHA"
+            fi
+          done
+          chmod +x apps/mobile/scripts/eas-continuous-deploy.sh
 
       - name: Setup Vite+
         if: steps.expo-token.outputs.present == 'true'
@@ -238,82 +276,71 @@ jobs:
             echo "> Apple closes an iOS release train after App Store approval. Before building iOS, confirm \`$version\` is newer than the approved App Store version."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Build and submit (manual)
-        if: steps.expo-token.outputs.present == 'true' && github.event_name == 'workflow_dispatch' && inputs.mode == 'build'
+      - name: Deploy with fingerprint check (auto)
+        if: steps.expo-token.outputs.present == 'true' && inputs.mode == 'auto'
+        working-directory: apps/mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          GITHUB_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          chmod +x scripts/eas-continuous-deploy.sh
+          args=(
+            --profile production
+            --channel production
+            --environment production
+            --platform "${{ inputs.platform }}"
+            --auto-submit
+            --message "${{ inputs.message || format('Production auto ({0})', steps.source.outputs.sha) }}"
+          )
+          if [ -n "${{ inputs.runtime_version }}" ]; then
+            args+=(--runtime-version "${{ inputs.runtime_version }}")
+          fi
+          ./scripts/eas-continuous-deploy.sh "${args[@]}"
+
+      - name: Build and submit
+        if: steps.expo-token.outputs.present == 'true' && inputs.mode == 'build'
         working-directory: apps/mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
           MOBILE_BUILD_PROFILE: ${{ inputs.profile || 'production' }}
-        run: eas build --platform ${{ inputs.platform }} --profile "$MOBILE_BUILD_PROFILE" --auto-submit --non-interactive --no-wait
+        run: |
+          set -o pipefail
+          eas build --platform ${{ inputs.platform }} --profile "$MOBILE_BUILD_PROFILE" --auto-submit --non-interactive --no-wait 2>&1 | tee /tmp/eas-build.log
+          if grep -q 'used its iOS builds from the Free plan' /tmp/eas-build.log; then
+            echo "::error::Expo Free plan iOS build quota exhausted. Upgrade at https://expo.dev/accounts/patroza/settings/billing or wait for the monthly reset, then re-run mode=build. Pure-JS fixes can still ship via mode=auto (fallback OTA) or mode=update with runtime_version."
+          fi
 
       - name: Publish OTA update (manual)
         if: steps.expo-token.outputs.present == 'true' && github.event_name == 'workflow_dispatch' && inputs.mode == 'update'
         working-directory: apps/mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          GITHUB_SHA: ${{ steps.source.outputs.sha }}
+          RUNTIME_VERSION: ${{ inputs.runtime_version }}
         run: |
-          eas update \
-            --channel production \
-            --environment production \
-            --platform ${{ inputs.platform }} \
-            --message "${{ inputs.message || format('Production OTA ({0})', github.sha) }}" \
-            --non-interactive
-
-      # No --status filter on build:list: an in-queue/in-progress build must
-      # count as existing, or every merge during the build window would cut a
-      # duplicate. After an errored build, retry via workflow_dispatch
-      # mode=build — pushes won't re-trigger it until the app version changes.
-      - id: store_builds
-        name: Ensure store builds exist for the current app version
-        if: steps.expo-token.outputs.present == 'true' && github.event_name == 'push'
-        continue-on-error: true
-        working-directory: apps/mobile
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: |
-          failed=0
-          version="$(npx expo config --json --type public | jq -r '.version')"
-          for platform in ios android; do
-            latest="$(eas build:list --platform "$platform" --build-profile production --limit 1 --json --non-interactive | jq -r '.[0].appVersion // "none"')"
-            if [ "$latest" = "$version" ]; then
-              echo "$platform: production build for $version already exists (or is in progress)"
-              continue
-            fi
-            echo "$platform: latest production build is $latest, app.config.ts says $version — building"
-            if eas build --platform "$platform" --profile production --auto-submit --non-interactive --no-wait; then
-              echo ":building_construction: $platform: scheduled production build and submission for $version" >> "$GITHUB_STEP_SUMMARY"
-            else
-              failed=1
-              echo ":x: $platform: production build or submission failed for $version" >> "$GITHUB_STEP_SUMMARY"
-            fi
-          done
-          exit "$failed"
-
-      - name: Publish fingerprint-gated OTA
-        if: steps.expo-token.outputs.present == 'true' && github.event_name == 'push'
-        working-directory: apps/mobile
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: |
-          message="$(git log -1 --pretty=%s | head -c 120) ($(git rev-parse --short=9 HEAD))"
-          for platform in ios android; do
-            # eas-cli prints an environment-loaded notice to stdout before the
-            # JSON even with --json, so discard everything before the document.
-            hash="$(eas fingerprint:generate --platform "$platform" --environment production --json --non-interactive | sed -n '/^{/,$p' | jq -er '.hash | select(type == "string" and length > 0)')"
-            matching="$(eas build:list --platform "$platform" --build-profile production --status finished --fingerprint-hash "$hash" --limit 1 --json --non-interactive | jq 'length')"
-            if [ "$matching" -gt 0 ]; then
-              eas update \
-                --channel production \
-                --environment production \
-                --platform "$platform" \
-                --message "$message" \
-                --non-interactive
-              echo ":white_check_mark: $platform: OTA published to production (fingerprint \`$hash\`)" >> "$GITHUB_STEP_SUMMARY"
-            else
-              echo ":warning: $platform: no finished production build matches fingerprint \`$hash\` — OTA skipped; JS changes reach $platform only once a matching build ships" >> "$GITHUB_STEP_SUMMARY"
-            fi
-          done
-
-      - name: Propagate store build failure
-        if: steps.store_builds.outcome == 'failure'
-        run: exit 1
+          chmod +x scripts/eas-continuous-deploy.sh
+          args=(
+            --profile production
+            --channel production
+            --environment production
+            --platform "${{ inputs.platform }}"
+            --message "${{ inputs.message || format('Production OTA ({0})', steps.source.outputs.sha) }}"
+          )
+          if [ -n "$RUNTIME_VERSION" ]; then
+            args+=(--runtime-version "$RUNTIME_VERSION")
+          else
+            # mode=update without runtime: publish under fingerprint policy only
+            # (no native rebuild attempt). Use --runtime-version to target an
+            # installed binary when fingerprints drifted.
+            :
+          fi
+          if [ -n "$RUNTIME_VERSION" ]; then
+            ./scripts/eas-continuous-deploy.sh "${args[@]}"
+          else
+            eas update \
+              --channel production \
+              --environment production \
+              --platform ${{ inputs.platform }} \
+              --message "${{ inputs.message || format('Production OTA ({0})', steps.source.outputs.sha) }}" \
+              --non-interactive
+          fi

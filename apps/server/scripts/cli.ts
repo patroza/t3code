@@ -17,9 +17,11 @@ import {
   ServerCliCommandExitError,
   ServerCliDevelopmentIconSourceMissingError,
   ServerCliDevelopmentIconTargetMissingError,
+  ServerCliWebClientBundleMissingError,
   ServerCliExecutableImportError,
 } from "./cliErrors.ts";
 import { publishPlatformsThenLauncher } from "./publishOrder.ts";
+import { shouldPreserveServerDistEntry } from "./serverDistClean.ts";
 
 const RepoRoot = Effect.service(Path.Path).pipe(
   Effect.flatMap((path) => path.fromFileUrl(new URL("../../..", import.meta.url))),
@@ -68,6 +70,96 @@ const applyDevelopmentIconOverrides = Effect.fn("applyDevelopmentIconOverrides")
 // build subcommand
 // ---------------------------------------------------------------------------
 
+/**
+ * Remove pack outputs under dist/ while leaving the live web client tree alone.
+ * Deploy rebuilds the server with the process still serving dist/client; a
+ * full `vp pack --clean` wipe is what left desktop on an empty "Not Found"
+ * shell until someone re-ran `pnpm build` by hand.
+ */
+const cleanServerDistPreservingClient = Effect.fn("cleanServerDistPreservingClient")(function* (
+  distDir: string,
+) {
+  const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
+  if (!(yield* fs.exists(distDir))) {
+    return;
+  }
+  const entries = yield* fs.readDirectory(distDir);
+  for (const entry of entries) {
+    if (shouldPreserveServerDistEntry(entry)) {
+      continue;
+    }
+    yield* fs.remove(path.join(distDir, entry), { recursive: true, force: true });
+  }
+});
+
+const promoteWebClientBundle = Effect.fn("promoteWebClientBundle")(function* (input: {
+  readonly repoRoot: string;
+  readonly serverDir: string;
+}) {
+  const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
+  const webDist = path.join(input.repoRoot, "apps/web/dist");
+  const webIndex = path.join(webDist, "index.html");
+  const distDir = path.join(input.serverDir, "dist");
+  const clientTarget = path.join(distDir, "client");
+  const previousDir = path.join(distDir, "client.prev");
+
+  // Fail closed: soft-skipping shipped empty client trees that surface as
+  // desktop "Not Found" after deploy.
+  if (!(yield* fs.exists(webIndex))) {
+    return yield* new ServerCliWebClientBundleMissingError({ webDistPath: webDist });
+  }
+
+  yield* fs.makeDirectory(distDir, { recursive: true });
+  const stagingDir = yield* fs.makeTempDirectory({
+    directory: distDir,
+    prefix: "client.next.",
+  });
+
+  yield* Effect.gen(function* () {
+    yield* fs.copy(webDist, stagingDir);
+    if (!(yield* fs.exists(path.join(stagingDir, "index.html")))) {
+      return yield* new ServerCliWebClientBundleMissingError({ webDistPath: stagingDir });
+    }
+
+    if (yield* fs.exists(previousDir)) {
+      yield* fs.remove(previousDir, { recursive: true, force: true });
+    }
+    if (yield* fs.exists(clientTarget)) {
+      yield* fs.rename(clientTarget, previousDir);
+    }
+    yield* fs.rename(stagingDir, clientTarget).pipe(
+      Effect.catch((cause) =>
+        // If promote fails after the live tree was moved aside, put the
+        // previous client back so the process never stays empty.
+        Effect.gen(function* () {
+          if ((yield* fs.exists(previousDir)) && !(yield* fs.exists(clientTarget))) {
+            yield* fs.rename(previousDir, clientTarget).pipe(Effect.ignore);
+          }
+          return yield* Effect.fail(cause);
+        }),
+      ),
+    );
+    if (yield* fs.exists(previousDir)) {
+      yield* fs.remove(previousDir, { recursive: true, force: true }).pipe(Effect.ignore);
+    }
+
+    yield* applyDevelopmentIconOverrides(input.repoRoot, input.serverDir);
+
+    if (!(yield* fs.exists(path.join(clientTarget, "index.html")))) {
+      return yield* new ServerCliWebClientBundleMissingError({ webDistPath: clientTarget });
+    }
+    yield* Effect.log("[cli] Bundled web app into dist/client");
+  }).pipe(
+    Effect.ensuring(
+      // Staging only remains if promote failed before rename; force so a
+      // successful promote (path gone) is a no-op.
+      fs.remove(stagingDir, { recursive: true, force: true }).pipe(Effect.ignore),
+    ),
+  );
+});
+
 const buildCmd = Command.make(
   "build",
   {
@@ -79,6 +171,18 @@ const buildCmd = Command.make(
       const fs = yield* FileSystem.FileSystem;
       const repoRoot = yield* RepoRoot;
       const serverDir = path.join(repoRoot, "apps/server");
+      const distDir = path.join(serverDir, "dist");
+
+      // Prefer a complete client tree *before* packing when web dist is already
+      // present (dependsOn web#build). That way a live server keeps serving
+      // through the JS rebuild window instead of losing index.html at pack clean.
+      const webIndex = path.join(repoRoot, "apps/web/dist", "index.html");
+      if (yield* fs.exists(webIndex)) {
+        yield* promoteWebClientBundle({ repoRoot, serverDir });
+      }
+
+      yield* Effect.log("[cli] Cleaning server dist (preserving dist/client)...");
+      yield* cleanServerDistPreservingClient(distDir);
 
       yield* Effect.log("[cli] Running tsdown...");
       yield* runCommand(
@@ -90,16 +194,9 @@ const buildCmd = Command.make(
         }),
       );
 
-      const webDist = path.join(repoRoot, "apps/web/dist");
-      const clientTarget = path.join(serverDir, "dist/client");
-
-      if (yield* fs.exists(webDist)) {
-        yield* fs.copy(webDist, clientTarget);
-        yield* applyDevelopmentIconOverrides(repoRoot, serverDir);
-        yield* Effect.log("[cli] Bundled web app into dist/client");
-      } else {
-        yield* Effect.logWarning("[cli] Web dist not found — skipping client bundle.");
-      }
+      // Always re-promote after pack so the served tree matches the web build
+      // that this package depends on (and fail closed if it is missing).
+      yield* promoteWebClientBundle({ repoRoot, serverDir });
     }),
 ).pipe(Command.withDescription("Build the server package (tsdown + bundle web client)."));
 

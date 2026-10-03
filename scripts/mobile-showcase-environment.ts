@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalDate:off - This host-side fixture creates an isolated local T3 environment.
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off - This host-side fixture creates an isolated local T3 environment.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
@@ -491,7 +491,17 @@ function seedDatabase(
   const database = new NodeSqlite.DatabaseSync(dbPath, { timeout: 30_000 });
   try {
     database.exec("BEGIN IMMEDIATE");
-    for (const table of SEEDED_PROJECTION_TABLES) {
+    for (const table of [
+      "projection_pending_approvals",
+      "projection_thread_proposed_plans",
+      "projection_thread_activities",
+      "projection_thread_messages",
+      "projection_thread_sessions",
+      "projection_turns",
+      "projection_threads",
+      "projection_projects",
+      "projection_state",
+    ]) {
       database.exec(`DELETE FROM ${table}`);
     }
     const insertProject = database.prepare(

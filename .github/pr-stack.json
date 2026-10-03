@@ -1,0 +1,18 @@
+{
+  "_comment": "Allowlist for .github/workflows/managed-pr-draft-lock.yml only. The stack tooling that consumed the rest was removed; upstream is merged directly into fork/dev. These three PRs stay draft so the provenance layers can never be merged into the upstream mirror by accident.",
+  "pullRequests": [
+    {
+      "number": 255,
+      "branch": "fork/base"
+    },
+    {
+      "number": 1,
+      "branch": "fork/tim"
+    },
+    {
+      "number": 27,
+      "branch": "fork/candidates"
+    }
+  ],
+  "integrationOverlays": []
+}
