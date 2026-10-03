@@ -95,6 +95,7 @@ packageExtensionsChecksum: sha256-34mvKz5PLlrn2Tt9jUJC1SbK5hRE+oxwqyC1J6r09oE=
 patchedDependencies:
   '@clerk/expo@4.6.8': b8b22ab733de5bea846ad9e88046c10582352fe9ad86f314f368b2a823f0f281
   '@effect/vitest@4.0.0-rc.115': 172bd95ef73a13d322888984415d5d18d9d2aa8e13fa529eac235efac837e902
+  '@expo/fingerprint@0.21.2': d37e5bb602bf4152b239eca01facac8b09ba00650689005ebfd9493dac282d8d
   '@expo/metro-config@58.0.6': 90fa980e8b6480631fb2fbb04559834e3c612db40c550cd828f11be297d8d760
   '@ff-labs/fff-node@0.9.4': c4e3cc2420ceb9dc650f9d189e9c24baf7e83f342998bacda5f459a4ce7927a8
   '@legendapp/list@3.3.5': 680cc6a5c5b4a4032e467e7b3fde22f89a84c0ee2e6eac6fda737d6277cc0806
@@ -13216,7 +13217,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@expo/fingerprint@0.21.2':
+  '@expo/fingerprint@0.21.2(patch_hash=d37e5bb602bf4152b239eca01facac8b09ba00650689005ebfd9493dac282d8d)':
     dependencies:
       '@expo/env': 2.5.1
       '@expo/spawn-async': 1.8.0
@@ -17806,7 +17807,7 @@ snapshots:
       '@expo/config': 58.0.1(typescript@7.0.2)
       '@expo/config-plugins': 58.0.4(typescript@7.0.2)
       '@expo/devtools': 58.0.2(expo@58.0.2)(react-native@0.88.0-rc.3(@babel/core@7.29.7)(@react-native/metro-config@0.88.0-rc.3(@babel/core@7.29.7)(bufferutil@4.1.0)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(utf-8-validate@6.0.6))(react@19.3.0)
-      '@expo/fingerprint': 0.21.2
+      '@expo/fingerprint': 0.21.2(patch_hash=d37e5bb602bf4152b239eca01facac8b09ba00650689005ebfd9493dac282d8d)
       '@expo/local-build-cache-provider': 58.0.1(typescript@7.0.2)
       '@expo/log-box': 58.0.8(@expo/dom-webview@58.0.2)(expo@58.0.2)(react-native@0.88.0-rc.3(@babel/core@7.29.7)(@react-native/metro-config@0.88.0-rc.3(@babel/core@7.29.7)(bufferutil@4.1.0)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(utf-8-validate@6.0.6))(react@19.3.0)
       '@expo/log-box-utils': 58.0.1
