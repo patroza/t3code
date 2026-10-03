@@ -4,14 +4,16 @@ import {
   ProjectId,
   ThreadId,
   type OrchestrationEvent,
-  type OrchestrationReadModel,
   type RepositoryIdentity,
   type ThreadPullRequestLink,
   type ThreadPullRequestSnapshot,
 } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
+import * as Option from "effect/Option";
 
+import { type CommandReadModel } from "./commandReadModel.ts";
 import { createEmptyReadModel, projectEvent } from "./projector.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
@@ -63,7 +65,11 @@ const snapshot: ThreadPullRequestSnapshot = {
   syncedAt: LATER,
 };
 
-const createThread = (model: OrchestrationReadModel) =>
+function threadOf(model: CommandReadModel) {
+  return Option.getOrThrow(HashMap.get(model.threads, THREAD_ID));
+}
+
+const createThread = (model: CommandReadModel) =>
   projectEvent(
     model,
     makeEvent({
@@ -84,7 +90,7 @@ const createThread = (model: OrchestrationReadModel) =>
     }),
   );
 
-const createProject = (model: OrchestrationReadModel, repositoryIdentity: RepositoryIdentity) =>
+const createProject = (model: CommandReadModel, repositoryIdentity: RepositoryIdentity) =>
   projectEvent(model, {
     ...makeEvent({
       sequence: model.snapshotSequence + 1,
@@ -104,17 +110,18 @@ const createProject = (model: OrchestrationReadModel, repositoryIdentity: Reposi
   }).pipe(
     Effect.map((next) => ({
       ...next,
-      projects: next.projects.map((project) =>
-        project.id === PROJECT_ID ? { ...project, repositoryIdentity } : project,
-      ),
+      projects: HashMap.set(next.projects, PROJECT_ID, {
+        ...Option.getOrThrow(HashMap.get(next.projects, PROJECT_ID)),
+        repositoryIdentity,
+      }),
     })),
   );
 
 it.effect("seeds threads with no pull requests", () =>
   Effect.gen(function* () {
     const created = yield* createThread(createEmptyReadModel(NOW));
-    expect(created.threads[0]?.pullRequests).toEqual([]);
-    expect(created.threads[0]?.linkedPullRequest ?? null).toBeNull();
+    expect(threadOf(created)?.pullRequests).toEqual([]);
+    expect(threadOf(created)?.linkedPullRequest ?? null).toBeNull();
   }),
 );
 
@@ -142,10 +149,10 @@ it.effect("projects link, sync, and unlink onto the thread", () =>
         payload: { threadId: THREAD_ID, link, updatedAt: LATER },
       }),
     );
-    expect(linked.threads[0]?.pullRequests).toEqual([link]);
-    expect(linked.threads[0]?.updatedAt).toBe(LATER);
+    expect(threadOf(linked)?.pullRequests).toEqual([link]);
+    expect(threadOf(linked)?.updatedAt).toBe(LATER);
     // The legacy field is derived from the array so old clients keep working.
-    expect(linked.threads[0]?.linkedPullRequest).toEqual({
+    expect(threadOf(linked)?.linkedPullRequest).toEqual({
       projectId: PROJECT_ID,
       repository: "t3tools/t3code",
       number: 42,
@@ -166,8 +173,8 @@ it.effect("projects link, sync, and unlink onto the thread", () =>
         },
       }),
     );
-    expect(relinked.threads[0]?.pullRequests).toHaveLength(1);
-    expect(relinked.threads[0]?.pullRequests[0]?.source).toBe("agent");
+    expect(threadOf(relinked)?.pullRequests).toHaveLength(1);
+    expect(threadOf(relinked)?.pullRequests[0]?.source).toBe("agent");
 
     const synced = yield* projectEvent(
       relinked,
@@ -185,7 +192,7 @@ it.effect("projects link, sync, and unlink onto the thread", () =>
         },
       }),
     );
-    expect(synced.threads[0]?.pullRequests[0]?.snapshot).toEqual(snapshot);
+    expect(threadOf(synced)?.pullRequests[0]?.snapshot).toEqual(snapshot);
 
     const unlinked = yield* projectEvent(
       synced,
@@ -201,8 +208,8 @@ it.effect("projects link, sync, and unlink onto the thread", () =>
         },
       }),
     );
-    expect(unlinked.threads[0]?.pullRequests).toEqual([]);
-    expect(unlinked.threads[0]?.linkedPullRequest).toBeNull();
+    expect(threadOf(unlinked)?.pullRequests).toEqual([]);
+    expect(threadOf(unlinked)?.linkedPullRequest).toBeNull();
   }),
 );
 
@@ -234,8 +241,8 @@ it.effect("ignores a sync for a pull request that is no longer linked", () =>
         },
       }),
     );
-    expect(synced.threads[0]?.pullRequests).toEqual([other]);
-    expect(synced.threads[0]?.updatedAt).toBe(NOW);
+    expect(threadOf(synced)?.pullRequests).toEqual([other]);
+    expect(threadOf(synced)?.updatedAt).toBe(NOW);
   }),
 );
 
@@ -283,7 +290,7 @@ it.effect("mirrors legacy meta-updated links into pullRequests using the project
         },
       }),
     );
-    expect(legacyLinked.threads[0]?.pullRequests).toEqual([
+    expect(threadOf(legacyLinked)?.pullRequests).toEqual([
       agentLink,
       {
         host: "github.com",
@@ -297,7 +304,7 @@ it.effect("mirrors legacy meta-updated links into pullRequests using the project
       },
     ]);
     // Two open links read as a stack; the derived field points at the top.
-    expect(legacyLinked.threads[0]?.linkedPullRequest).toEqual({
+    expect(threadOf(legacyLinked)?.linkedPullRequest).toEqual({
       projectId: PROJECT_ID,
       repository: "t3tools/t3code",
       number: 42,
@@ -313,8 +320,8 @@ it.effect("mirrors legacy meta-updated links into pullRequests using the project
         payload: { threadId: THREAD_ID, linkedPullRequest: null, updatedAt: LATER },
       }),
     );
-    expect(legacyCleared.threads[0]?.pullRequests).toEqual([agentLink]);
-    expect(legacyCleared.threads[0]?.linkedPullRequest).toEqual({
+    expect(threadOf(legacyCleared)?.pullRequests).toEqual([agentLink]);
+    expect(threadOf(legacyCleared)?.linkedPullRequest).toEqual({
       projectId: PROJECT_ID,
       repository: "t3tools/t3code",
       number: 7,
@@ -343,7 +350,7 @@ it.effect("falls back to the link URL host when the project has no repository id
         },
       }),
     );
-    expect(legacyLinked.threads[0]?.pullRequests[0]?.host).toBe("gitlab.example.com");
+    expect(threadOf(legacyLinked)?.pullRequests[0]?.host).toBe("gitlab.example.com");
   }),
 );
 
@@ -367,8 +374,8 @@ it.effect("leaves pullRequests alone when meta-updated carries no legacy link", 
         payload: { threadId: THREAD_ID, title: "Renamed", updatedAt: LATER },
       }),
     );
-    expect(retitled.threads[0]?.title).toBe("Renamed");
-    expect(retitled.threads[0]?.pullRequests).toEqual([link]);
+    expect(threadOf(retitled)?.title).toBe("Renamed");
+    expect(threadOf(retitled)?.pullRequests).toEqual([link]);
   }),
 );
 
@@ -400,7 +407,7 @@ it.effect("replays Azure legacy selectors as full repository keys", () =>
         payload: { threadId: THREAD_ID, linkedPullRequest: legacy, updatedAt: LATER },
       }),
     );
-    expect(model.threads[0]?.pullRequests).toEqual([
+    expect(threadOf(model)?.pullRequests).toEqual([
       {
         host: "dev.azure.com",
         repository: "org-a/project/_git/web",
@@ -412,6 +419,6 @@ it.effect("replays Azure legacy selectors as full repository keys", () =>
         stack: null,
       },
     ]);
-    expect(model.threads[0]?.linkedPullRequest).toEqual(legacy);
+    expect(threadOf(model)?.linkedPullRequest).toEqual(legacy);
   }),
 );

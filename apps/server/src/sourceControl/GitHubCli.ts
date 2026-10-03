@@ -138,10 +138,13 @@ export class GitHubPullRequestNotFoundError extends Schema.TaggedError<GitHubPul
 
 export class GitHubCliCommandError extends Schema.TaggedError<GitHubCliCommandError>()(
   "GitHubCliCommandError",
-  gitHubCliFailureFields,
+  {
+    ...gitHubCliFailureFields,
+    publicDiagnostic: Schema.optional(Schema.String),
+  },
 ) {
   get detail(): string {
-    return "GitHub CLI command failed.";
+    return this.publicDiagnostic ?? "GitHub CLI command failed.";
   }
 
   override get message(): string {
@@ -249,6 +252,13 @@ export function fromVcsError(
     if (error.failureKind === "not-found") {
       return new GitHubPullRequestNotFoundError({ ...context, cause: error });
     }
+    if (error.publicDiagnostic !== undefined) {
+      return new GitHubCliCommandError({
+        ...context,
+        cause: error,
+        publicDiagnostic: error.publicDiagnostic,
+      });
+    }
   }
 
   return new GitHubCliCommandError({ ...context, cause: error });
@@ -261,6 +271,7 @@ export interface GitHubPullRequestSummary {
   readonly baseRefName: string;
   readonly headRefName: string;
   readonly state?: "open" | "closed" | "merged";
+  readonly hasFailingChecks?: boolean;
   readonly isDraft?: boolean;
   readonly closedAt?: string | null;
   readonly mergedAt?: string | null;
@@ -325,6 +336,10 @@ export class GitHubCli extends Context.Service<
       readonly reference: string;
       readonly rateLimitHost?: string;
     }) => Effect.Effect<GitHubPullRequestSummary, GitHubCliError>;
+    readonly getPullRequestHasFailingChecks: (input: {
+      readonly cwd: string;
+      readonly reference: string;
+    }) => Effect.Effect<boolean, GitHubCliError>;
 
     readonly getRepositoryCloneUrls: (input: {
       readonly cwd: string;
@@ -982,6 +997,38 @@ export const make = Effect.gen(function* () {
           ),
         ),
       ),
+    getPullRequestHasFailingChecks: (input) =>
+      process
+        .run({
+          operation: "GitHubCli.getPullRequestHasFailingChecks",
+          command: "gh",
+          args: ["pr", "checks", input.reference, "--json", "bucket,state"],
+          cwd: input.cwd,
+          timeoutMs: DEFAULT_TIMEOUT_MS,
+          allowNonZeroExit: true,
+        })
+        .pipe(
+          Effect.mapError((error) => fromVcsError({ command: "gh", cwd: input.cwd }, error)),
+          Effect.map((result) => {
+            const raw = result.stdout.trim();
+            if (raw.length === 0) return false;
+            try {
+              const parsed = JSON.parse(raw) as ReadonlyArray<{
+                readonly bucket?: string | null;
+                readonly state?: string | null;
+              }>;
+              return parsed.some((check) => {
+                const bucket = check.bucket?.trim().toLowerCase();
+                const state = check.state?.trim().toLowerCase();
+                return (
+                  bucket === "fail" || state === "fail" || state === "failure" || state === "error"
+                );
+              });
+            } catch {
+              return false;
+            }
+          }),
+        ),
     getRepositoryCloneUrls: (input) =>
       execute({
         cwd: input.cwd,
