@@ -2549,6 +2549,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
               cwd,
               command: "git diff",
               detail: "Could not prepare the review index.",
+              failureKind: "unknown",
               cause,
             }),
           ),
@@ -2610,6 +2611,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         command: "git ls-files",
         cwd,
         detail: "Too many untracked files to count.",
+        failureKind: "unknown",
       });
     }
     const readNumstat = (ref: string) =>
@@ -2633,6 +2635,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         command: "git diff --numstat",
         cwd,
         detail: "Could not read Changes totals.",
+        failureKind: "unknown",
         exitCode: result.exitCode,
       });
     }
