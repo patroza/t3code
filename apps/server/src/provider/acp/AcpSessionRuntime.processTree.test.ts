@@ -4,7 +4,7 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
-import { describe, expect, it, vi } from "@effect/vitest";
+import { describe, expect, it } from "@effect/vitest";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -262,7 +262,6 @@ describe("terminatePosixOwnedProcessTree", () => {
       populated: () => false,
       remove: () => undefined,
     };
-    const packagedExecPath = vi.spyOn(process, "execPath", "get").mockReturnValue("/bin/sh");
     try {
       const wrapped = wrapCommandForLinuxCgroup(lease, "/bin/sh", [
         "-c",
@@ -309,9 +308,9 @@ describe("terminatePosixOwnedProcessTree", () => {
           encoding: "utf8",
         },
       );
-      expect(missingTargetResult.status, missingTargetResult.stderr).toBe(125);
+      // The native shell reports a missing executable with the standard exec failure status.
+      expect(missingTargetResult.status, missingTargetResult.stderr).toBe(127);
     } finally {
-      packagedExecPath.mockRestore();
       NodeFS.rmSync(scratch, { recursive: true, force: true });
     }
   });

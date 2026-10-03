@@ -161,6 +161,8 @@ export default mergeConfig(
               "src/provider/Layers/ClaudeCapabilitiesProbe.test.ts",
               "src/provider/Layers/GrokAdapter.test.ts",
               "src/provider/Layers/ProviderRegistry.test.ts",
+              "src/orchestration-v2/Adapters/CursorAgentSdk.test.ts",
+              "src/textGeneration/CursorTextGeneration.test.ts",
               "src/terminal/NodePtyAdapter.test.ts",
               "src/vcs/GitVcsDriverCore.test.ts",
               "src/workspace/WorkspaceEntries.test.ts",
@@ -205,6 +207,10 @@ export default mergeConfig(
               // through TestClock. Under isolate:false a sibling file in
               // the same worker can swallow the second binaryPath probe.
               "src/provider/Layers/ProviderRegistry.test.ts",
+              // These install different mocks for the same Cursor SDK wrapper.
+              // Isolate them from real SDK bindings and each other's fake agent.
+              "src/orchestration-v2/Adapters/CursorAgentSdk.test.ts",
+              "src/textGeneration/CursorTextGeneration.test.ts",
               "src/terminal/NodePtyAdapter.test.ts",
               "src/workspace/WorkspaceEntries.test.ts",
             ],
