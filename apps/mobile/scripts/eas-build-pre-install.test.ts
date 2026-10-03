@@ -66,3 +66,15 @@ it("runs the hook before EAS installs dependencies", () => {
   );
   expect(manifest.scripts["eas-build-pre-install"]).toBe("node scripts/eas-build-pre-install.mjs");
 });
+
+it("uses the same development runtime policy in CI and the remote build profile", () => {
+  const profiles = JSON.parse(
+    NodeFS.readFileSync(NodePath.join(repositoryRoot, "apps/mobile/eas.json"), "utf8"),
+  );
+  const workflow = NodeFS.readFileSync(
+    NodePath.join(repositoryRoot, ".github/workflows/mobile-eas-development.yml"),
+    "utf8",
+  );
+  expect(workflow).toMatch(/MOBILE_VERSION_POLICY: fingerprint/);
+  expect(profiles.build.development.env.MOBILE_VERSION_POLICY).toBe("fingerprint");
+});
