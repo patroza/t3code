@@ -8,7 +8,7 @@ import { sessionNeedsWakeUp } from "@t3tools/shared/sessionWake";
 import { effectiveSnoozed } from "./threadSettled.ts";
 import { getThreadSortTimestamp } from "./threadSort.ts";
 
-/** Status labels aligned with web `resolveThreadStatusPill` / board derivation. */
+/** Status labels aligned with web `resolveThreadStatusPill`. */
 export type NeedsAttentionStatusLabel =
   | "Working"
   | "Connecting"
@@ -37,7 +37,7 @@ export type NeedsAttentionThreadInput = OrchestrationThreadShell & {
 };
 
 /**
- * Resolves a board/sidebar-compatible status label for attention classification.
+ * Resolves a sidebar-compatible status label for attention classification.
  * Mirrors web `resolveThreadStatusPill` priority (without last-visited Completed
  * when callers do not pass `hasUnseenCompletion`).
  */
@@ -90,8 +90,8 @@ export function resolveNeedsAttentionStatusLabel(
 /**
  * Classifies a live thread for Needs attention strips (web sidebar + mobile home).
  *
- * Tighter than the full board **Review** column: idle threads with no status
- * are excluded. Working + clear human-attention signals only.
+ * Includes working threads and clear human-attention signals. Idle threads
+ * with no status are excluded.
  */
 export function classifyNeedsAttention(
   thread: Pick<
@@ -148,7 +148,7 @@ export interface NeedsAttentionEntry<TThread extends NeedsAttentionThreadInput, 
 }
 
 /**
- * Builds Needs attention entries: board Working ∪ blocked Review signals,
+ * Builds Needs attention entries from working and blocked threads,
  * attention-first sort. Shared by web classic sidebar and mobile home list.
  *
  * Callers must pass `now` (ISO) so this stays pure and free of wall-clock

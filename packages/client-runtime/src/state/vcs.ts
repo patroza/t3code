@@ -307,7 +307,7 @@ export function createVcsEnvironmentAtoms<R, E>(
     /**
      * List/badge VCS status: shared budgeted remote refresh on the server (keeps PR
      * state fresh without per-row pollers). Shorter idle TTL so off-screen rows drop.
-     * Prefer for sidebar/board/thread rows; use `status` for active git chrome.
+     * Prefer for sidebar/thread rows; use `status` for active git chrome.
      */
     listStatus: createEnvironmentSubscriptionAtomFamily(runtime, {
       label: "environment-data:vcs:status-list",
