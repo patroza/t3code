@@ -175,23 +175,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # mode=auto, not update: an OTA alone never reaches a phone when the
-          # native runtime changed, so the fingerprint decides between an update
-          # and a TestFlight build. iOS only, because Android has no keystore.
-          gh workflow run mobile-eas-production.yml \
-            --repo "$GITHUB_REPOSITORY" \
-            --ref "$RELEASE_REF" \
-            -f mode=auto \
-            -f platform=ios \
-            -f sha="$RELEASE_SHA" \
-            -f release_branch="$RELEASE_REF" \
-            -f message="${RELEASE_REF} ${RELEASE_SHA}"
-          gh workflow run mobile-eas-development.yml \
-            --repo "$GITHUB_REPOSITORY" \
-            --ref "$RELEASE_REF" \
-            -f platform=ios \
-            -f sha="$RELEASE_SHA" \
-            -f release_branch="$RELEASE_REF"
+          # Respect disabled workflows without preventing other release destinations.
+          bash scripts/dispatch-mobile-releases.sh
 
       - name: Report
         if: always()
