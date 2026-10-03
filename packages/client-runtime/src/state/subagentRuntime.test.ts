@@ -868,7 +868,7 @@ describe("task type classification is a denylist", () => {
       }),
       activity("task.started", { taskId: "a2", taskType: "some_future_agent_kind", title: "X" }),
     ]);
-    expect(agents.map((agent) => agent.id).toSorted()).toEqual(["a1", "a2"]);
+    expect(agents.map((agent) => agent.id).sort()).toEqual(["a1", "a2"]);
   });
 });
 

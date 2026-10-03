@@ -6,6 +6,7 @@ import {
   CursorIcon,
   GrokIcon,
   type Icon,
+  KimiIcon,
   OpenAI,
   OpenCodeIcon,
 } from "../Icons";
@@ -18,8 +19,11 @@ type UsageProviderPresentation = {
 
 /**
  * Exhaustive presentation for providers supported by the usage contract.
- * Declaration order is reused by every chart and table, so adding a provider
- * only requires its contract support and one entry here.
+ * Declaration order is reused by every chart, table, legend, and skeleton, so
+ * adding a provider only requires its contract support and one entry here.
+ *
+ * Stacked bands have to stay distinguishable side by side, so Kimi's warmer
+ * orange is kept clear of Claude's.
  */
 export const PROVIDER_PRESENTATION = {
   codex: {
@@ -37,6 +41,11 @@ export const PROVIDER_PRESENTATION = {
     // Contrast-aware neutral between the Codex series and muted chart chrome.
     color: "color-mix(in oklab, var(--contrast-foreground) 72%, var(--background))",
     mark: GrokIcon,
+  },
+  kimi: {
+    label: "Kimi",
+    color: "#ff6a3d",
+    mark: KimiIcon,
   },
   cursor: { label: "Cursor", color: "#8b8b8b", mark: CursorIcon },
   opencode: { label: "OpenCode", color: "#5b9bbd", mark: OpenCodeIcon },

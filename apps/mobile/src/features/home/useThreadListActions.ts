@@ -1,6 +1,7 @@
 import type { ThreadMoveDestination } from "../threads/threadOrder";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
+import { runArchiveWithWorktreeCleanup } from "@t3tools/client-runtime/state/worktreeCleanup";
 import * as Cause from "effect/Cause";
 import * as Haptics from "expo-haptics";
 import { useCallback, useRef } from "react";
@@ -21,6 +22,7 @@ import {
   getPendingThreadOrder,
   threadDropBusyAtom,
 } from "../../state/thread-order";
+import { vcsEnvironment } from "../../state/vcs";
 import {
   createPendingThreadOrder,
   createThreadMovePlanner,
@@ -28,6 +30,12 @@ import {
 } from "../threads/threadOrder";
 import { getThreadListV2OrderedSection } from "../threads/threadListV2";
 import { resolveThreadTitleRename } from "../threads/thread-title-rename";
+import {
+  actionFailureMessage,
+  actionFailureTitle,
+  type ThreadListAction,
+} from "./threadActionMessages";
+import { presentWorktreeCleanupConfirmation } from "./worktreeCleanupPrompt";
 
 /** Version skew: never send settle/unsettle to a server that predates them
     (capability defaults false on decode for older servers). */
@@ -77,34 +85,8 @@ function environmentSupportsTitleRegeneration(
   );
 }
 
-type ThreadListAction = "archive" | "unarchive" | "delete" | "settle" | "unsettle";
-
-const ACTION_VERBS: Record<ThreadListAction, string> = {
-  archive: "archived",
-  unarchive: "unarchived",
-  delete: "deleted",
-  settle: "settled",
-  unsettle: "un-settled",
-};
-
-function actionFailureMessage(action: ThreadListAction, cause: Cause.Cause<unknown>): string {
-  const error = Cause.squash(cause);
-  if (error instanceof Error && error.message.trim().length > 0) {
-    return error.message;
-  }
-  return `The thread could not be ${ACTION_VERBS[action]}.`;
-}
-
 function selectionHaptic(): void {
   void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-}
-
-function actionFailureTitle(action: ThreadListAction): string {
-  if (action === "archive") return "Could not archive thread";
-  if (action === "unarchive") return "Could not unarchive thread";
-  if (action === "settle") return "Could not settle thread";
-  if (action === "unsettle") return "Could not un-settle thread";
-  return "Could not delete thread";
 }
 
 /** Resolves to true iff the action was dispatched and succeeded. */
@@ -270,13 +252,90 @@ export function useThreadListActions(): {
     reportFailure: false,
   });
   const snoozeInFlightThreadKeys = useRef(new Set<string>());
+  const previewWorktreeCleanup = useAtomCommand(vcsEnvironment.previewWorktreeCleanup, {
+    reportFailure: false,
+  });
+  const cleanupThreadWorktree = useAtomCommand(vcsEnvironment.cleanupThreadWorktree, {
+    reportFailure: false,
+  });
   const titleRegenerationInFlightThreadKeys = useRef(new Set<string>());
 
   const archiveThread = useCallback(
     (thread: EnvironmentThreadShell) => {
-      void executeAction("archive", thread);
+      void runArchiveWithWorktreeCleanup({
+        // Server-authoritative preview; a failure (old server, transient
+        // error) degrades to a plain archive without a prompt. A thread
+        // mid-turn keeps the original archive guard: executeAction re-checks
+        // and surfaces the alert, so it must not be prompted for cleanup.
+        previewCandidate: async () => {
+          if (thread.session?.status === "running" && thread.session.activeTurnId != null) {
+            return null;
+          }
+          const preview = await previewWorktreeCleanup({
+            environmentId: thread.environmentId,
+            input: { threadId: thread.id },
+          });
+          return preview._tag === "Success" ? preview.value.candidate : null;
+        },
+        removalPolicy: "confirm",
+        confirmRemoval: ({ displayWorktreePath }) =>
+          presentWorktreeCleanupConfirmation({
+            isIos: process.env.EXPO_OS === "ios",
+            displayWorktreePath,
+            presentAlert: (buttons) => {
+              Alert.alert(buttons.title, buttons.message, [
+                { text: "Keep", style: "cancel", onPress: buttons.onKeep },
+                { text: "Remove", style: "destructive", onPress: buttons.onRemove },
+              ]);
+            },
+            presentConfirmDialog: (buttons) => {
+              showConfirmDialog({
+                title: buttons.title,
+                message: buttons.message,
+                cancelText: "Keep",
+                confirmText: "Remove",
+                destructive: true,
+                onConfirm: buttons.onRemove,
+                onCancel: buttons.onKeep,
+              });
+            },
+          }),
+        archive: () => executeAction("archive", thread),
+        isArchiveSuccess: (archived) => archived,
+        cleanup: async () => {
+          const result = await cleanupThreadWorktree({
+            environmentId: thread.environmentId,
+            input: { threadId: thread.id },
+          });
+          if (result._tag === "Failure") {
+            const error = Cause.squash(result.cause);
+            return {
+              kind: "failed",
+              message:
+                error instanceof Error && error.message.trim().length > 0
+                  ? error.message
+                  : "The worktree could not be removed.",
+            } as const;
+          }
+          return { kind: "done", status: result.value.status } as const;
+        },
+        // Cleanup problems are nonfatal: the archive itself already
+        // succeeded.
+        onCleanupFailed: (displayWorktreePath, message) => {
+          Alert.alert(
+            "Thread archived, but worktree removal failed",
+            `Could not remove ${displayWorktreePath}. ${message}`,
+          );
+        },
+        onCleanupRetained: (displayWorktreePath) => {
+          Alert.alert(
+            "Worktree kept",
+            `${displayWorktreePath} is still used by another active thread.`,
+          );
+        },
+      });
     },
-    [executeAction],
+    [cleanupThreadWorktree, executeAction, previewWorktreeCleanup],
   );
   const settleThread = useCallback(
     async (thread: EnvironmentThreadShell) => (await executeAction("settle", thread)) === true,

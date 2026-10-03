@@ -34,6 +34,14 @@ interface ComposerPrimaryActionsProps {
   onImplementPlanInNewThread: () => void;
 }
 
+export const shouldDisableCollapsedComposerSubmitAction = (input: {
+  isRunning: boolean;
+  isSendBusy: boolean;
+  isConnecting: boolean;
+  hasSendableContent: boolean;
+}): boolean =>
+  input.isRunning || input.isSendBusy || input.isConnecting || !input.hasSendableContent;
+
 const formatPendingPrimaryActionLabel = (input: {
   compact: boolean;
   isLastQuestion: boolean;
@@ -269,8 +277,8 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     return sendButton;
   }
 
-  // While a turn runs, a sendable draft queues for the next tool boundary, so
-  // the send button stays next to Stop on every viewport.
+  // While a turn runs, sending queues the message on the server, so the send
+  // button stays next to Stop on every viewport.
   return (
     <>
       {renderStopGenerationButton(false)}

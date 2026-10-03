@@ -19,6 +19,7 @@ vi.mock("@legendapp/list/react", async () => {
 
   const LegendList = (props: {
     data: Array<{ id: string }>;
+    extraData?: unknown;
     keyExtractor: (item: { id: string }) => string;
     renderItem: (args: { item: { id: string } }) => ReactNode;
     ListHeaderComponent?: ReactNode;
@@ -47,7 +48,13 @@ vi.mock("@legendapp/list/react", async () => {
     return (
       <div
         data-testid={legendListTestId}
+        data-extra-data-matches-rows={props.extraData === props.data}
         data-anchor-index={props.anchoredEndSpace?.anchorIndex}
+        data-maintain-visible-content-position={
+          props.maintainVisibleContentPosition
+            ? typeof props.maintainVisibleContentPosition
+            : undefined
+        }
         data-anchor-max-size={props.anchoredEndSpace?.anchorMaxSize}
         data-anchor-offset={props.anchoredEndSpace?.anchorOffset}
         data-anchor-on-ready={Boolean(props.anchoredEndSpace?.onReady)}
@@ -78,11 +85,6 @@ vi.mock("@legendapp/list/react", async () => {
           typeof props.maintainScrollAtEnd === "object"
             ? props.maintainScrollAtEnd.on?.layout
             : undefined
-        }
-        data-maintain-visible-content-position={
-          typeof props.maintainVisibleContentPosition === "object"
-            ? "object"
-            : props.maintainVisibleContentPosition
         }
         data-maintain-visible-content-position-data={
           typeof props.maintainVisibleContentPosition === "object"
@@ -1180,7 +1182,22 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-user-message-footer="true"');
   });
 
-  it("does not render collapse controls for short user messages", () => {
+  it("disables end maintenance after the user scrolls away", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        liveFollowEnabled={false}
+        timelineEntries={[buildUserTimelineEntry("Earlier prompt.")]}
+      />,
+    );
+
+    expect(markup).not.toContain('data-maintain-scroll-at-end="enabled"');
+    expect(markup).toContain('data-maintain-visible-content-position="object"');
+  });
+
+  it("does not render collapse controls for short user messages", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
@@ -1415,6 +1432,89 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Compacted context 899K → 19K tokens");
+  });
+
+  it("renders a clarifying question with the answer it received", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            id: "entry-1",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-1",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "Question: Approach",
+              tone: "info",
+              userInput: {
+                requestId: "req-1",
+                answered: true,
+                questions: [
+                  {
+                    id: "How should we proceed?",
+                    header: "Approach",
+                    question: "How should we proceed?",
+                    multiSelect: false,
+                    options: [
+                      { label: "Ship it", description: "Merge as-is" },
+                      { label: "Iterate", description: "Another review round" },
+                    ],
+                    selectedLabels: ["Iterate"],
+                  },
+                ],
+              },
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("Approach");
+    expect(markup).toContain("How should we proceed?");
+    expect(markup).toContain("Iterate");
+    expect(markup).toContain("Show options");
+    // The chosen answer reads on its own; alternatives stay behind the toggle.
+    expect(markup).not.toContain("Another review round");
+  });
+
+  it("marks an unanswered clarifying question as awaiting a reply", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            id: "entry-1",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-1",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "Question: Approach",
+              tone: "info",
+              userInput: {
+                requestId: "req-1",
+                answered: false,
+                questions: [
+                  {
+                    id: "How should we proceed?",
+                    header: "Approach",
+                    question: "How should we proceed?",
+                    multiSelect: false,
+                    options: [{ label: "Ship it", description: "Merge as-is" }],
+                    selectedLabels: [],
+                  },
+                ],
+              },
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("Awaiting your answer");
+    expect(markup).not.toContain("Work Log");
   });
 
   it("summarizes changed files in one line", () => {
@@ -2230,6 +2330,35 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain("lucide-circle-alert");
     expect(markup).toContain("text-destructive");
+  });
+
+  it("renders no load-earlier control when no older turns remain", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline {...buildProps()} timelineEntries={[buildUserTimelineEntry("Hi")]} />,
+    );
+    expect(markup).not.toContain("Load earlier turns");
+  });
+
+  it("renders the load-earlier header when older turns exist", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[buildUserTimelineEntry("Hi")]}
+        loadEarlier={{ loading: false, onLoadEarlier: () => {} }}
+      />,
+    );
+    expect(markup).toContain("Load earlier turns");
+
+    const loadingMarkup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[buildUserTimelineEntry("Hi")]}
+        loadEarlier={{ loading: true, onLoadEarlier: () => {} }}
+      />,
+    );
+    expect(loadingMarkup).toContain("Loading earlier turns");
   });
 
   it("only withholds an expanded tool-call label click while text is selected", async () => {

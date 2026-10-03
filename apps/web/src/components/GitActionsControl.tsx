@@ -4,6 +4,10 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
+import {
+  buildUnsignedCommitRetryInput,
+  isCommitSigningFailure,
+} from "@t3tools/client-runtime/state/vcs";
 import type {
   GitActionProgressEvent,
   GitRunStackedActionResult,
@@ -32,6 +36,7 @@ import {
   ChevronDownIcon,
   CloudDownloadIcon,
   CloudUploadIcon,
+  ExternalLinkIcon,
   GitBranchPlusIcon,
   GitCommitIcon,
   InfoIcon,
@@ -46,10 +51,12 @@ import {
   GitLabIcon,
   ForgejoIcon,
 } from "~/components/Icons";
+import { repositoryFromChangeRequestUrl } from "~/components/pullRequest/pullRequestDetail.logic";
 import { RadioGroup } from "~/components/ui/radio-group";
 import { Spinner } from "~/components/ui/spinner";
 import { Toggle, ToggleGroup } from "~/components/ui/toggle-group";
 import { cn } from "~/lib/utils";
+import { readLocalApi } from "~/localApi";
 import {
   buildGitActionProgressStages,
   buildMenuItems,
@@ -121,11 +128,12 @@ interface GitActionsControlProps {
   gitCwd: string | null;
   activeThreadRef: ScopedThreadRef | null;
   draftId?: DraftId;
+  isPreparingWorktree?: boolean;
   /**
    * Opens the thread's own change request beside it. Absent when the thread has no project to
    * place it against, in which case it still opens in the browser.
    */
-  onOpenPullRequest?: ((number: number) => void) | undefined;
+  onOpenPullRequest?: ((number: number, repository?: string | null) => void) | undefined;
 }
 
 interface PendingDefaultBranchAction {
@@ -134,7 +142,7 @@ interface PendingDefaultBranchAction {
   includesCommit: boolean;
   commitMessage?: string;
   onConfirmed?: () => void;
-  filePaths?: string[];
+  filePaths?: ReadonlyArray<string>;
 }
 
 type PublishProviderKind = Extract<
@@ -163,8 +171,9 @@ interface RunGitActionWithToastInput {
   skipDefaultBranchPrompt?: boolean;
   statusOverride?: VcsStatusResult | null;
   featureBranch?: boolean;
+  disableCommitSigning?: boolean;
   progressToastId?: GitActionToastId;
-  filePaths?: string[];
+  filePaths?: ReadonlyArray<string>;
 }
 
 const GIT_STATUS_WINDOW_REFRESH_DEBOUNCE_MS = 250;
@@ -947,6 +956,7 @@ export default function GitActionsControl({
   gitCwd,
   activeThreadRef,
   draftId,
+  isPreparingWorktree = false,
   onOpenPullRequest,
 }: GitActionsControlProps) {
   const updateThreadMetadata = useAtomCommand(
@@ -998,6 +1008,7 @@ export default function GitActionsControl({
       title: progress.title,
       description: resolveProgressDescription(progress),
       timeout: 0,
+      actionProps: undefined,
       data: progress.toastData,
     });
   }, []);
@@ -1100,7 +1111,12 @@ export default function GitActionsControl({
     activeDraftThread.worktreePath === null;
 
   useEffect(() => {
-    if (isGitActionRunning || isSelectingWorktreeBase || activeServerThread) {
+    if (
+      isGitActionRunning ||
+      isSelectingWorktreeBase ||
+      isPreparingWorktree ||
+      activeServerThread
+    ) {
       return;
     }
 
@@ -1118,6 +1134,7 @@ export default function GitActionsControl({
     activeDraftThread?.branch,
     gitStatusForActions,
     isGitActionRunning,
+    isPreparingWorktree,
     isSelectingWorktreeBase,
     persistThreadBranchSync,
   ]);
@@ -1198,7 +1215,7 @@ export default function GitActionsControl({
     // Beside the thread where it was made, the way the browser opens beside it. Checked before
     // the shell, which opening in the app does not need.
     if (openPr && onOpenPullRequest) {
-      onOpenPullRequest(openPr.number);
+      onOpenPullRequest(openPr.number, repositoryFromChangeRequestUrl(openPr.url));
       return;
     }
     const prUrl = openPr?.url ?? null;
@@ -1223,6 +1240,30 @@ export default function GitActionsControl({
     });
   }, [gitStatusForActions, onOpenPullRequest, openLink, threadToastData]);
 
+  const openPullRequestList = useCallback(() => {
+    const api = readLocalApi();
+    const repositoryUrl = gitStatusForActions?.sourceControlProvider?.repositoryUrl;
+    if (!api || !repositoryUrl) {
+      toastManager.add({
+        type: "error",
+        title: "Pull request list is unavailable.",
+        data: threadToastData,
+      });
+      return;
+    }
+    void api.shell.openExternal(`${repositoryUrl}/pulls`).catch((err: unknown) => {
+      console.error(err);
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Unable to open pull request list",
+          description: err instanceof Error ? err.message : "An error occurred.",
+          ...(threadToastData !== undefined ? { data: threadToastData } : {}),
+        }),
+      );
+    });
+  }, [gitStatusForActions?.sourceControlProvider?.repositoryUrl, threadToastData]);
+
   runGitActionWithToast = useEffectEvent(
     async ({
       action,
@@ -1231,6 +1272,7 @@ export default function GitActionsControl({
       skipDefaultBranchPrompt = false,
       statusOverride,
       featureBranch = false,
+      disableCommitSigning = false,
       progressToastId,
       filePaths,
     }: RunGitActionWithToastInput) => {
@@ -1307,6 +1349,7 @@ export default function GitActionsControl({
           title: progressStages[0] ?? "Running git action...",
           description: "Waiting for Git...",
           timeout: 0,
+          actionProps: undefined,
           data: scopedToastData,
         });
       }
@@ -1372,6 +1415,7 @@ export default function GitActionsControl({
         action,
         ...(commitMessage ? { commitMessage } : {}),
         ...(featureBranch ? { featureBranch } : {}),
+        ...(disableCommitSigning ? { disableCommitSigning: true } : {}),
         ...(filePaths ? { filePaths } : {}),
         // A pull request the action opens is linked to the thread it ran beside. Drafts
         // have no server thread yet, so there is nothing to link to.
@@ -1387,6 +1431,42 @@ export default function GitActionsControl({
         }
 
         const error = squashAtomCommandFailure(result);
+        if (!disableCommitSigning && isCommitSigningFailure(error)) {
+          const retryInput = buildUnsignedCommitRetryInput({
+            action,
+            ...(commitMessage ? { commitMessage } : {}),
+            ...(featureBranch ? { featureBranch: true } : {}),
+            ...(filePaths ? { filePaths } : {}),
+          });
+          toastManager.update(
+            resolvedProgressToastId,
+            stackedThreadToast({
+              type: "error",
+              title: "Commit signing failed",
+              description: "Git couldn’t sign the commit. Retry this commit without signing?",
+              timeout: 0,
+              actionProps: {
+                children: "Retry without signing",
+                onClick: () => {
+                  void runGitActionWithToast({
+                    action: retryInput.action,
+                    ...(retryInput.commitMessage !== undefined
+                      ? { commitMessage: retryInput.commitMessage }
+                      : {}),
+                    ...(retryInput.filePaths !== undefined
+                      ? { filePaths: retryInput.filePaths }
+                      : {}),
+                    disableCommitSigning: true,
+                    skipDefaultBranchPrompt: true,
+                    progressToastId: resolvedProgressToastId,
+                  });
+                },
+              },
+              ...(scopedToastData !== undefined ? { data: scopedToastData } : {}),
+            }),
+          );
+          return;
+        }
         toastManager.update(
           resolvedProgressToastId,
           stackedThreadToast({
@@ -1717,6 +1797,18 @@ export default function GitActionsControl({
         >
           <CloudUploadIcon />
           <MenuItemLabel>Publish repository...</MenuItemLabel>
+        </MenuItem>
+      ) : null}
+      {gitStatusForActions?.sourceControlProvider?.kind === "github" &&
+      gitStatusForActions.sourceControlProvider.repositoryUrl ? (
+        <MenuItem
+          density={presentation === "menu" ? "touch" : "default"}
+          aria-label="View GitHub pull requests"
+          onClick={openPullRequestList}
+        >
+          <GitHubIcon />
+          <MenuItemLabel>View PRs</MenuItemLabel>
+          <ExternalLinkIcon aria-hidden="true" className="ml-auto size-3.5 opacity-60" />
         </MenuItem>
       ) : null}
       {gitStatusForActions?.refName === null && (

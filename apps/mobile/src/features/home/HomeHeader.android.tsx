@@ -1,7 +1,24 @@
+import type { EnvironmentId } from "@t3tools/contracts";
 import type { MenuAction } from "@react-native-menu/menu";
 import { useCallback, useMemo } from "react";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { MaterialThreadListToolbar } from "./MaterialThreadListToolbar";
+import {
+  DEFAULT_OWNERSHIP_FILTER,
+  OWNERSHIP_FILTER_LABELS,
+  OWNERSHIP_FILTERS,
+  OWNERSHIP_RELATION_LABELS,
+  OWNERSHIP_RELATIONS,
+} from "./home-list-options";
+import { isAllEnvironmentsSelected, isEnvironmentSelected } from "./homeEnvironmentFilter";
+import {
+  HOME_LIST_MODE_LABELS,
+  HOME_LIST_MODES,
+  HOME_THREAD_GROUPING_LABELS,
+  HOME_THREAD_GROUPINGS,
+  usesProjectThreadGrouping,
+  type HomeThreadGrouping,
+} from "./homeListMode";
 import type { HomeHeaderProps } from "./HomeHeader.types";
 
 export type { HomeHeaderEnvironment } from "./HomeHeader.types";
@@ -10,14 +27,32 @@ function checkedMenuState(checked: boolean) {
   return checked ? ("on" as const) : undefined;
 }
 
+function defaultHideSettledForGrouping(threadGrouping: HomeThreadGrouping): boolean {
+  return !usesProjectThreadGrouping(threadGrouping);
+}
+
 export function HomeHeader(props: HomeHeaderProps) {
-  // The list uses a fixed creation order and ignores sort/group options, so
-  // the filter menu only carries the filters and the "customized" icon state
-  // keys off those alone.
+  // v2 is the only Threads list. Sort/group-by-project menus would be ignored,
+  // so the customized icon keys off filters that still apply.
   const hasCustomListOptions =
-    props.selectedEnvironmentId !== null || props.selectedProjectKey !== null;
+    props.selectedEnvironmentIds.length > 0 ||
+    props.ownershipFilter !== DEFAULT_OWNERSHIP_FILTER ||
+    props.ownershipRelation !== "both" ||
+    props.selectedProjectKey !== null ||
+    (props.listMode === "threads" &&
+      props.hideSettledThreads !== defaultHideSettledForGrouping(props.threadGrouping)) ||
+    props.threadGrouping !== "project";
   const menuActions = useMemo<MenuAction[]>(
     () => [
+      {
+        id: "list-mode",
+        title: "View",
+        subactions: HOME_LIST_MODES.map((mode) => ({
+          id: `list-mode:${mode}`,
+          title: HOME_LIST_MODE_LABELS[mode],
+          state: checkedMenuState(mode === props.listMode),
+        })),
+      },
       {
         id: "environment",
         title: "Environment",
@@ -25,15 +60,39 @@ export function HomeHeader(props: HomeHeaderProps) {
           {
             id: "environment:all",
             title: "All environments",
-            state: checkedMenuState(props.selectedEnvironmentId === null),
+            state: checkedMenuState(isAllEnvironmentsSelected(props.selectedEnvironmentIds)),
           },
           ...props.environments.map((environment) => ({
             id: `environment:${environment.environmentId}`,
             title: environment.label,
-            state: checkedMenuState(props.selectedEnvironmentId === environment.environmentId),
+            state: checkedMenuState(
+              isEnvironmentSelected(props.selectedEnvironmentIds, environment.environmentId),
+            ),
           })),
         ],
       },
+      {
+        id: "ownership",
+        title: "Ownership",
+        subactions: OWNERSHIP_FILTERS.map((value) => ({
+          id: `ownership:${value}`,
+          title: OWNERSHIP_FILTER_LABELS[value],
+          state: checkedMenuState(value === props.ownershipFilter),
+        })),
+      },
+      ...(props.ownershipFilter === "mine" || props.ownershipFilter === "theirs"
+        ? ([
+            {
+              id: "ownership-relation",
+              title: props.ownershipFilter === "mine" ? "Mine includes" : "Theirs includes",
+              subactions: OWNERSHIP_RELATIONS.map((value) => ({
+                id: `ownership-relation:${value}`,
+                title: OWNERSHIP_RELATION_LABELS[value],
+                state: checkedMenuState(value === props.ownershipRelation),
+              })),
+            },
+          ] satisfies MenuAction[])
+        : []),
       ...(props.projects.length === 0
         ? []
         : ([
@@ -54,30 +113,77 @@ export function HomeHeader(props: HomeHeaderProps) {
               ],
             },
           ] satisfies MenuAction[])),
+      ...(props.listMode === "threads"
+        ? ([
+            {
+              id: "grouping",
+              title: "Group threads",
+              subactions: HOME_THREAD_GROUPINGS.map((grouping) => ({
+                id: `grouping:${grouping}`,
+                title: HOME_THREAD_GROUPING_LABELS[grouping],
+                state: checkedMenuState(props.threadGrouping === grouping),
+              })),
+            },
+            {
+              id: "hide-settled",
+              title: "Hide settled",
+              state: checkedMenuState(props.hideSettledThreads),
+            },
+          ] satisfies MenuAction[])
+        : []),
     ],
-    [props.environments, props.projects, props.selectedEnvironmentId, props.selectedProjectKey],
+    [
+      props.environments,
+      props.hideSettledThreads,
+      props.listMode,
+      props.ownershipFilter,
+      props.ownershipRelation,
+      props.projects,
+      props.selectedEnvironmentIds,
+      props.selectedProjectKey,
+      props.threadGrouping,
+    ],
   );
   const handleMenuAction = useCallback(
     (event: { nativeEvent: { event: string } }) => {
       const id = event.nativeEvent.event;
+      if (id.startsWith("list-mode:")) {
+        const mode = id.slice("list-mode:".length);
+        if (mode === "threads") {
+          props.onListModeChange(mode);
+        }
+        return;
+      }
+
       if (id === "environment:all") {
-        props.onEnvironmentChange(null);
+        props.onClearEnvironments();
         return;
       }
 
       if (id.startsWith("environment:")) {
-        const environmentId = id.slice("environment:".length);
-        const environment = props.environments.find(
-          (candidate) => candidate.environmentId === environmentId,
-        );
-        if (environment) {
-          props.onEnvironmentChange(environment.environmentId);
-        }
+        const environmentId = id.slice("environment:".length) as EnvironmentId;
+        props.onToggleEnvironment(environmentId);
         return;
       }
 
       if (id === "project:all") {
         props.onProjectChange(null);
+        return;
+      }
+
+      if (id.startsWith("ownership-relation:")) {
+        const relation = id.slice("ownership-relation:".length);
+        if (relation === "created" || relation === "participated" || relation === "both") {
+          props.onOwnershipRelationChange(relation);
+        }
+        return;
+      }
+
+      if (id.startsWith("ownership:")) {
+        const ownership = id.slice("ownership:".length);
+        if (ownership === "any" || ownership === "mine" || ownership === "theirs") {
+          props.onOwnershipFilterChange(ownership);
+        }
         return;
       }
 
@@ -87,6 +193,18 @@ export function HomeHeader(props: HomeHeaderProps) {
           props.onProjectChange(projectKey);
         }
         return;
+      }
+
+      if (id.startsWith("grouping:")) {
+        const grouping = id.slice("grouping:".length);
+        if (grouping === "recency" || grouping === "project" || grouping === "none") {
+          props.onThreadGroupingChange(grouping);
+        }
+        return;
+      }
+
+      if (id === "hide-settled") {
+        props.onHideSettledThreadsChange(!props.hideSettledThreads);
       }
     },
     [props],

@@ -468,6 +468,24 @@ function ThreadRouteContent(
     [knownTerminalSessions, selectedThreadProject?.workspaceRoot],
   );
   const selectedThreadDetailWorktreePath = selectedThreadDetail?.worktreePath ?? null;
+  const handleStartNewThread = useCallback(() => {
+    if (!selectedThread || !selectedThreadProject) return;
+    const worktreePath = resolvePreferredThreadWorktreePath({
+      threadShellWorktreePath: selectedThread.worktreePath ?? null,
+      threadDetailWorktreePath: selectedThreadDetailWorktreePath,
+    });
+    navigation.navigate("NewTaskSheet", {
+      screen: "NewTaskDraft",
+      params: {
+        environmentId: String(selectedThread.environmentId),
+        projectId: String(selectedThread.projectId),
+        title: selectedThreadProject.title,
+        workspaceMode: "local",
+        branch: selectedThread.branch ?? undefined,
+        worktreePath: worktreePath ?? undefined,
+      },
+    });
+  }, [navigation, selectedThread, selectedThreadDetailWorktreePath, selectedThreadProject]);
   const handleReconnectEnvironment = useCallback(() => {
     if (!environmentId) {
       return;
@@ -953,16 +971,31 @@ function ThreadRouteContent(
         });
   const serverConfig = routeEnvironmentRuntime?.serverConfig ?? null;
   const renderThreadRouteBody = () => (
-    <>
+    // A real flex host (not a fragment) keeps the thread body filling the
+    // screen so the absolute composer overlay anchors to the true bottom.
+    <View testID="thread-conversation-surface" className="flex-1 bg-screen" style={{ flex: 1 }}>
       <GitActionProgressOverlay progress={gitActionProgress} onDismiss={dismissGitActionResult} />
 
-      <View className="flex-1 bg-screen android:overflow-hidden android:rounded-t-[28px] android:bg-thread-canvas">
+      <View
+        className={Platform.OS === "android" ? "flex-1 bg-thread-canvas" : "flex-1"}
+        style={
+          Platform.OS === "android"
+            ? {
+                flex: 1,
+                borderTopLeftRadius: 28,
+                borderTopRightRadius: 28,
+                overflow: "hidden",
+              }
+            : { flex: 1 }
+        }
+      >
         <ThreadDetailScreen
           selectedThread={selectedThreadWithDraftSettings ?? selectedThread}
           contentPresentation={contentPresentation}
           screenTone={connectionTone(routeConnectionState)}
           connectionError={routeConnectionError}
           environmentLabel={selectedEnvironmentConnection?.environmentLabel ?? null}
+          selectedThreadQueueCount={composer.selectedThreadQueueCount}
           feedbackSubmissions={composer.feedbackSubmissions}
           onDismissFeedback={composer.dismissFeedback}
           selectedThreadFeed={composer.selectedThreadFeed}
@@ -1006,10 +1039,11 @@ function ThreadRouteContent(
           connectionStateLabel={routeConnectionState}
           threadSyncStatus={selectedThreadDetailState.status}
           loadEarlier={loadEarlierTurns}
+          sendEntersQueue={composer.sendEntersQueue}
+          composerQueueItems={composer.composerQueueItems}
           environmentId={selectedThread.environmentId}
           projectWorkspaceRoot={selectedThreadProject?.workspaceRoot ?? null}
           threadCwd={selectedThreadCwd}
-          selectedThreadQueueCount={composer.selectedThreadQueueCount}
           queuedMessages={composer.selectedThreadQueuedMessages}
           dispatchingMessageId={composer.dispatchingQueuedMessageId}
           layoutVariant={layout.variant}
@@ -1024,6 +1058,9 @@ function ThreadRouteContent(
           serverConfig={serverConfig}
           onStopThread={awaitingBootstrapTurn ? handleCancelWorktreeSetup : handleStopThread}
           onSendMessage={composer.onSendMessage}
+          onSteerQueuedMessage={composer.onSteerQueuedMessage}
+          onEditQueuedMessage={composer.onEditQueuedMessage}
+          onStartNewThread={handleStartNewThread}
           onReconnectEnvironment={handleReconnectEnvironment}
           onUpdateThreadModelSelection={composer.onUpdateModelSelection}
           onUpdateThreadRuntimeMode={composer.onUpdateRuntimeMode}
@@ -1035,7 +1072,7 @@ function ThreadRouteContent(
           onDismissUserInput={requests.onDismissUserInput}
         />
       </View>
-    </>
+    </View>
   );
 
   return (

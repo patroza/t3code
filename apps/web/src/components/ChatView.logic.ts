@@ -5,8 +5,8 @@ import {
   type ChatFileAttachment,
   type EnvironmentId,
   isProviderDriverKind,
-  ProjectId,
   type MessageId,
+  ProjectId,
   type ModelSelection,
   type PreviewAnnotationPayload,
   type ProviderInteractionMode,
@@ -481,6 +481,8 @@ export function buildLocalDraftThread(
     interactionMode: draftThread.interactionMode,
     session: null,
     messages: [],
+    queuedMessages: [],
+    pendingTurnStart: null,
     createdAt: draftThread.createdAt,
     updatedAt: draftThread.createdAt,
     archivedAt: null,
@@ -501,11 +503,54 @@ export function buildLoadingThreadFromShell(shell: ThreadShell): Thread {
   return {
     ...shell,
     messages: [],
+    queuedMessages: [],
+    pendingTurnStart: null,
     proposedPlans: [],
     activities: [],
     checkpoints: [],
     deletedAt: null,
   };
+}
+
+/**
+ * The error to show for a server thread.
+ *
+ * Dismissing cannot be expressed by clearing the local error: the banner falls
+ * back to `session.lastError`, so `localError ?? serverError` resolves right
+ * back to the server's message and anything server-sourced (e.g. "Selected
+ * model is at capacity") can never be dismissed.
+ *
+ * A dismissal therefore records *which* message was dismissed, and only
+ * suppresses that one — a different server error still surfaces, rather than the
+ * thread latching quiet forever.
+ */
+export function resolveServerThreadError(input: {
+  /** An error set by this client (send failure, etc). */
+  readonly localError: string | null | undefined;
+  /** `session.lastError` from the server. */
+  readonly serverError: string | null | undefined;
+}): string | null {
+  if (input.localError !== null && input.localError !== undefined) {
+    return input.localError;
+  }
+  // Dismissal is no longer resolved here: upstream's session-scoped banner
+  // masking (#6123) survives reconnects and rerenders, which is exactly what
+  // the fork's dismissed-message comparison did not.
+  return input.serverError ?? null;
+}
+
+export function shouldTreatServerThreadAsActive(input: {
+  readonly hasServerThreadShell: boolean;
+  readonly hasServerThreadDetail: boolean;
+}): boolean {
+  return input.hasServerThreadShell && input.hasServerThreadDetail;
+}
+
+export function shouldRenderServerThreadRoute(input: {
+  readonly hasServerThreadShell: boolean;
+  readonly hasDraftThread: boolean;
+}): boolean {
+  return input.hasServerThreadShell || input.hasDraftThread;
 }
 
 export function shouldWriteThreadErrorToCurrentServerThread(input: {
@@ -536,6 +581,50 @@ export function buildThreadTurnInterruptInput(thread: Pick<Thread, "id" | "sessi
     threadId: thread.id,
     ...(runningTurnId !== null ? { turnId: runningTurnId } : {}),
   };
+}
+
+/**
+ * Drops resolved ids (acknowledged or rolled back) from the optimistic
+ * queue-bound set, returning the same reference when nothing changed so the
+ * chip list does not re-render on every unrelated thread update.
+ */
+export function pruneOptimisticQueuedMessageIds(
+  current: ReadonlySet<MessageId>,
+  resolvedIds: ReadonlySet<MessageId>,
+): ReadonlySet<MessageId> {
+  if (current.size === 0) {
+    return current;
+  }
+  const next = new Set<MessageId>();
+  for (const messageId of current) {
+    if (!resolvedIds.has(messageId)) {
+      next.add(messageId);
+    }
+  }
+  return next.size === current.size ? current : next;
+}
+
+/**
+ * Steered ids the server no longer holds in the queue. That is the settle
+ * signal for the optimistic overlay: either the dispatch landed (the message
+ * is a real timeline row now) or the message is gone. Both mean stop
+ * overlaying it — waiting on persistence alone would strand the marker.
+ */
+export function resolvedSteeredMessageIds(
+  steering: ReadonlySet<MessageId>,
+  queuedMessages: ReadonlyArray<{ readonly messageId: MessageId }>,
+): ReadonlySet<MessageId> {
+  if (steering.size === 0) {
+    return steering;
+  }
+  const stillQueued = new Set(queuedMessages.map((message) => message.messageId));
+  const resolved = new Set<MessageId>();
+  for (const messageId of steering) {
+    if (!stillQueued.has(messageId)) {
+      resolved.add(messageId);
+    }
+  }
+  return resolved;
 }
 
 /** Use the same enabled instance for the composer, provider status, and chat actions. */
@@ -720,6 +809,15 @@ export async function resolveFileAttachmentUrl(input: {
   const url = resolveAssetUrl(input.httpBaseUrl, result.value.relativeUrl);
   if (url === null) throw new Error("The environment returned an invalid attachment URL.");
   return url;
+}
+
+export function isVideoPreviewRequestCurrent(
+  requestThreadKey: string,
+  currentThreadKey: string | null,
+  requestId: number,
+  currentRequestId: number,
+): boolean {
+  return requestThreadKey === currentThreadKey && requestId === currentRequestId;
 }
 
 export async function prepareRevertedMessageAttachments(input: {
@@ -1200,6 +1298,13 @@ export async function waitForRevertedMessage(
 export interface LocalDispatchSnapshot {
   startedAt: string;
   preparingWorktree: boolean;
+  /**
+   * The messageId of the send this dispatch is waiting on, when the send
+   * path knows it. Acknowledgment then correlates with this exact message
+   * being projected (timeline or queue) instead of global tail heuristics
+   * that other clients' activity could satisfy.
+   */
+  expectedMessageId: ChatMessage["id"] | null;
   submissionIntent: ComposerSubmissionIntent;
   latestUserMessageId: ChatMessage["id"] | null;
   latestTurnTurnId: TurnId | null;
@@ -1232,6 +1337,7 @@ export function createLocalDispatchSnapshot(
   activeThread: Thread | undefined,
   options?: {
     preparingWorktree?: boolean;
+    messageId?: ChatMessage["id"];
     submissionIntent?: ComposerSubmissionIntent;
   },
 ): LocalDispatchSnapshot {
@@ -1241,6 +1347,7 @@ export function createLocalDispatchSnapshot(
   return {
     startedAt: new Date().toISOString(),
     preparingWorktree: Boolean(options?.preparingWorktree),
+    expectedMessageId: options?.messageId ?? null,
     submissionIntent: options?.submissionIntent ?? "foreground",
     latestUserMessageId: latestUserMessage?.id ?? null,
     latestTurnTurnId: latestTurn?.turnId ?? null,
@@ -1258,6 +1365,7 @@ export function hasServerAcknowledgedLocalDispatch(input: {
   phase: SessionPhase;
   latestTurn: Thread["latestTurn"] | null;
   latestUserMessageId: ChatMessage["id"] | null;
+  projectedMessageIds: ReadonlySet<string>;
   session: Thread["session"] | null;
   hasPendingApproval: boolean;
   hasPendingUserInput: boolean;
@@ -1283,6 +1391,7 @@ export function hasServerAcknowledgedLocalDispatch(input: {
 
   const latestTurn = input.latestTurn ?? null;
   const session = input.session ?? null;
+  const expectedMessageId = input.localDispatch.expectedMessageId;
   const latestUserMessageChanged =
     input.localDispatch.latestUserMessageId !== input.latestUserMessageId;
   const latestTurnChanged =
@@ -1291,12 +1400,18 @@ export function hasServerAcknowledgedLocalDispatch(input: {
     input.localDispatch.latestTurnStartedAt !== (latestTurn?.startedAt ?? null) ||
     input.localDispatch.latestTurnCompletedAt !== (latestTurn?.completedAt ?? null);
 
+  // The dispatched message being projected (timeline or queue) is the
+  // strongest acknowledgment in every phase: the server also queues sends
+  // while a session is starting ("connecting" phase), where neither turn
+  // nor session fields necessarily change.
+  if (expectedMessageId !== null && input.projectedMessageIds.has(expectedMessageId)) {
+    return true;
+  }
+
   if (input.phase === "running") {
-    // Steering adds a user message to the current running turn without
-    // necessarily changing any of the turn timestamps. Treat that projected
-    // message as the server acknowledgment so the composer does not remain
-    // stuck in its local "Sending" state until the turn settles.
-    if (latestUserMessageChanged) {
+    // Dispatches without a known messageId (e.g. plan-implementation flows)
+    // keep the legacy latest-user-message heuristic.
+    if (expectedMessageId === null && latestUserMessageChanged) {
       return true;
     }
     if (!latestTurnChanged) {

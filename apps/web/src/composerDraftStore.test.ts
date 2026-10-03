@@ -329,6 +329,17 @@ describe("composerDraftStore addImages", () => {
     expect(revokeSpy).toHaveBeenCalledWith("blob:b");
   });
 
+  it("adds one image to a new-thread draft before it has a server thread mapping", () => {
+    const draftId = DraftId.make("draft-single-image");
+    const image = makeImage({
+      id: "img-draft",
+      previewUrl: "blob:draft",
+    });
+
+    expect(useComposerDraftStore.getState().addImage(draftId, image)).toBe(true);
+    expect(useComposerDraftStore.getState().getComposerDraft(draftId)?.images).toEqual([image]);
+  });
+
   it("returns false when addImage receives an existing image id", () => {
     const first = makeImage({ id: "img-same", previewUrl: "blob:first" });
     const duplicate = makeImage({

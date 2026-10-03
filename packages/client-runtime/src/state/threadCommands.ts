@@ -20,6 +20,8 @@ import {
   type DeleteThreadInput,
   type InterruptThreadTurnInput,
   type LinkThreadPullRequestInput,
+  type RemoveQueuedMessageInput,
+  type UpdateQueuedMessageInput,
   type RespondToThreadApprovalInput,
   type RespondToThreadUserInputInput,
   type DismissThreadUserInputInput,
@@ -33,6 +35,7 @@ import {
   type SettleThreadInput,
   type SnoozeThreadInput,
   type StartThreadTurnInput,
+  type SteerQueuedMessageInput,
   type StopThreadSessionInput,
   type UnarchiveThreadInput,
   type UnlinkThreadPullRequestInput,
@@ -45,6 +48,8 @@ import {
   deleteThread,
   interruptThreadTurn,
   linkThreadPullRequest,
+  removeQueuedMessage,
+  updateQueuedMessage,
   respondToThreadApproval,
   respondToThreadUserInput,
   dismissThreadUserInput,
@@ -58,6 +63,7 @@ import {
   settleThread,
   snoozeThread,
   startThreadTurn,
+  steerQueuedMessage,
   stopThreadSession,
   unarchiveThread,
   unlinkThreadPullRequest,
@@ -74,6 +80,8 @@ export type {
   DeleteThreadInput,
   InterruptThreadTurnInput,
   LinkThreadPullRequestInput,
+  RemoveQueuedMessageInput,
+  UpdateQueuedMessageInput,
   RespondToThreadApprovalInput,
   RespondToThreadUserInputInput,
   DismissThreadUserInputInput,
@@ -87,6 +95,7 @@ export type {
   SettleThreadInput,
   SnoozeThreadInput,
   StartThreadTurnInput,
+  SteerQueuedMessageInput,
   StopThreadSessionInput,
   UnarchiveThreadInput,
   UnlinkThreadPullRequestInput,
@@ -101,6 +110,7 @@ export function createThreadEnvironmentAtoms<R, E>(
   snapshotAtom: (environmentId: EnvironmentId) => Atom.Atom<OrchestrationShellSnapshot | null>,
 ) {
   const scheduler = createAtomCommandScheduler();
+  const urgentScheduler = createAtomCommandScheduler();
   const concurrency = {
     mode: "serial" as const,
     key: ({ environmentId, input }: { environmentId: string; input: { threadId: string } }) =>
@@ -224,6 +234,24 @@ export function createThreadEnvironmentAtoms<R, E>(
     interruptTurn: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:interrupt-turn",
       execute: (input: InterruptThreadTurnInput) => interruptThreadTurn(input),
+      scheduler: urgentScheduler,
+      concurrency,
+    }),
+    steerQueuedMessage: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:steer-queued-message",
+      execute: (input: SteerQueuedMessageInput) => steerQueuedMessage(input),
+      scheduler,
+      concurrency,
+    }),
+    removeQueuedMessage: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:remove-queued-message",
+      execute: (input: RemoveQueuedMessageInput) => removeQueuedMessage(input),
+      scheduler,
+      concurrency,
+    }),
+    updateQueuedMessage: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:update-queued-message",
+      execute: (input: UpdateQueuedMessageInput) => updateQueuedMessage(input),
       scheduler,
       concurrency,
     }),
@@ -254,7 +282,7 @@ export function createThreadEnvironmentAtoms<R, E>(
     stopSession: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:stop-session",
       execute: (input: StopThreadSessionInput) => stopThreadSession(input),
-      scheduler,
+      scheduler: urgentScheduler,
       concurrency,
     }),
     uploadFeedback: createEnvironmentRpcCommand(runtime, {

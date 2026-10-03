@@ -48,6 +48,7 @@ describe("KeybindingsSettings.logic", () => {
   );
   it("orders Usage bindings and command choices like the page", () => {
     const expected = [
+      "usage.open",
       "usage.cost",
       "usage.tokens",
       "usage.limits",
@@ -55,7 +56,6 @@ describe("KeybindingsSettings.logic", () => {
       "usage.period.week",
       "usage.period.month",
       "usage.period.quarter",
-      "usage.open",
     ];
     const bindings = DEFAULT_RESOLVED_KEYBINDINGS.toReversed();
     expect(buildKeybindingRows(bindings, "usage").map((row) => row.command)).toEqual(expected);
@@ -245,6 +245,7 @@ describe("KeybindingsSettings.logic", () => {
 
   it("formats static and project script command labels", () => {
     expect(commandLabel("commandPalette.toggle")).toBe("Command Palette: Toggle");
+    expect(commandLabel("editor.openFavorite")).toBe("Open in Preferred Application");
     expect(commandLabel("themeEditor.toggle")).toBe("Theme Editor: Toggle");
     expect(commandLabel("script.setup-db.run")).toBe("Run Script: Setup Db");
   });

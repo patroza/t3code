@@ -1,7 +1,8 @@
 import { ScreenScrollView as ScrollView } from "../../components/ScreenScrollView";
 import Constants from "expo-constants";
+import * as Updates from "expo-updates";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, Pressable, View } from "react-native";
+import { ActivityIndicator, Alert, Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/AppText";
@@ -45,12 +46,22 @@ function AppSettingsSection() {
   const variant = (Constants.expoConfig?.extra?.appVariant as string | undefined) ?? "production";
   const variantLabel = variant === "production" ? "" : capitalize(variant);
   const versionLabel = variantLabel ? `${version} · ${variantLabel}` : version;
+  // Which JS is actually running: the bundle shipped in the binary, or an OTA
+  // update downloaded on top of it. Surfacing this makes "am I even on the
+  // right build?" answerable at a glance.
+  const bundleLabel = Updates.isEnabled
+    ? Updates.isEmbeddedLaunch
+      ? "Embedded"
+      : Updates.updateId
+        ? `OTA ${Updates.updateId.slice(0, 7)}`
+        : null
+    : null;
   const updateCheckAvailable = isAppUpdateCheckAvailable();
   const busy =
     updateState === "checking" || updateState === "downloading" || updateState === "restarting";
 
   // "Up to date" is a transient acknowledgement, not a state worth persisting —
-  // return the version row to its normal, deliberately quiet state.
+  // drop back to the bundle label so the row keeps answering "what am I running?".
   useEffect(() => {
     if (updateState !== "current") return;
     const timer = setTimeout(() => setUpdateState("idle"), 3000);
@@ -97,7 +108,7 @@ function AppSettingsSection() {
             ? "Restarting…"
             : updateState === "current"
               ? "Up to date"
-              : null;
+              : bundleLabel;
 
   const versionRow = (
     <View className="flex-row items-center gap-4 p-4">
@@ -115,6 +126,21 @@ function AppSettingsSection() {
           <Text className="text-xs text-foreground-muted/70">{statusLabel}</Text>
         ) : null}
       </View>
+      {Updates.isEnabled ? (
+        <View className="w-[22px] items-center">
+          {busy ? (
+            <ActivityIndicator colorClassName="accent-icon" size="small" />
+          ) : (
+            <SymbolView
+              name="arrow.clockwise"
+              size={18}
+              tintColorClassName="accent-icon"
+              type="monochrome"
+              weight="semibold"
+            />
+          )}
+        </View>
+      ) : null}
     </View>
   );
 

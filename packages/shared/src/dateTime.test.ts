@@ -86,7 +86,7 @@ describe("compareDateTimeStrings", () => {
     ];
 
     for (const values of permutations) {
-      expect(values.toSorted(compareDateTimeStrings)).toEqual(expected);
+      expect([...values].sort(compareDateTimeStrings)).toEqual(expected);
     }
   });
 });

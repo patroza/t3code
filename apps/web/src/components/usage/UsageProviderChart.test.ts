@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import { PROVIDER_ORDER } from "./usageProviders";
 import { buildPeriodColumns, niceScale } from "./UsageProviderChart";
 import { providersWithUsage } from "./usageProviders";
 
@@ -85,14 +86,16 @@ describe("buildPeriodColumns", () => {
     // permanently above Codex regardless of which provider spent more.
     const [first] = buildPeriodColumns(days, byDay, "cost");
 
-    expect(first?.bands).toEqual([
+    // Only the providers this fixture has data for; asserting the full band
+    // list would re-break every time a provider joins PROVIDER_ORDER, which
+    // says nothing about whether the values are absolute.
+    expect(first?.bands.filter((band) => band.value !== 0)).toEqual([
       { provider: "codex", value: 10 },
       { provider: "claude", value: 20 },
-      { provider: "grok", value: 0 },
-      { provider: "cursor", value: 0 },
-      { provider: "opencode", value: 0 },
-      { provider: "antigravity", value: 0 },
     ]);
+    // Absolute, not cumulative: a stack offset would make the second band the
+    // running total (30) rather than its own value.
+    expect(first?.bands.map((band) => band.provider)).toEqual([...PROVIDER_ORDER]);
   });
 
   it("reports the total as the sum of its bands", () => {

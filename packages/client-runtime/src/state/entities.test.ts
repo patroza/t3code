@@ -217,6 +217,8 @@ describe("environment entity projections", () => {
       unsettledAt: "2026-03-09T10:00:00.000Z",
       deletedAt: null,
       messages,
+      queuedMessages: [],
+      pendingTurnStart: null,
       proposedPlans: [],
       activities: [],
       checkpoints: [],
@@ -410,7 +412,7 @@ describe("environment entity projections", () => {
 
       harness.registry.set(
         harness.shellStateAtomForEnvironment(remoteEnvironmentId),
-        AsyncResult.success(shellState({ ...SNAPSHOT, threads: SNAPSHOT.threads.toReversed() })),
+        AsyncResult.success(shellState({ ...SNAPSHOT, threads: [...SNAPSHOT.threads].reverse() })),
       );
       expect([
         ...harness.registry
@@ -462,7 +464,7 @@ describe("environment entity projections", () => {
       const catalog = harness.registry.get(harness.catalogValueAtom);
       harness.registry.set(harness.catalogValueAtom, {
         ...catalog,
-        entries: new Map([...catalog.entries].toReversed()),
+        entries: new Map([...catalog.entries].reverse()),
       });
       expect(harness.registry.get(listAtom)).toEqual([remote, original[3], moved, created]);
       harness.registry.set(harness.catalogValueAtom, {
@@ -503,6 +505,8 @@ describe("environment entity projections", () => {
       ...THREAD_SHELL,
       deletedAt: null,
       messages: [],
+      queuedMessages: [],
+      pendingTurnStart: null,
       proposedPlans: [],
       activities: [],
       checkpoints: [],

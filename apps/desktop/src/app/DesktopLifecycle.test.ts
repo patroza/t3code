@@ -42,6 +42,7 @@ function makeElectronAppLayer(
     setName: () => Effect.void,
     setAboutPanelOptions: () => Effect.void,
     setAppUserModelId: () => Effect.void,
+    requestSingleInstanceLock: Effect.succeed(true),
     getAppMetrics: Effect.succeed([]),
     setAsDefaultProtocolClient: () => Effect.succeed(true),
     setDesktopName: () => Effect.void,
@@ -97,6 +98,8 @@ function makeDesktopWindowLayer(
     dispatchSnapShotEvent: () => Effect.void,
     zoomMain: () => Effect.void,
     syncAppearance: Effect.void,
+    navigateToThread: () => Effect.void,
+    navigateToProject: () => Effect.void,
   });
 }
 

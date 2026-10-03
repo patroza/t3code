@@ -1,4 +1,22 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, SidebarThreadSortOrder } from "@t3tools/contracts";
+
+import { isAllEnvironmentsSelected, isEnvironmentSelected } from "./homeEnvironmentFilter";
+import {
+  HOME_THREAD_GROUPING_LABELS,
+  HOME_THREAD_GROUPINGS,
+  type HomeThreadGrouping,
+} from "./homeListMode";
+import type { HomeProjectSortOrder } from "./homeThreadList";
+import {
+  OWNERSHIP_FILTER_LABELS,
+  OWNERSHIP_FILTERS,
+  OWNERSHIP_RELATION_LABELS,
+  OWNERSHIP_RELATIONS,
+  PROJECT_SORT_OPTIONS,
+  THREAD_SORT_OPTIONS,
+  type OwnershipFilter,
+  type OwnershipRelation,
+} from "./home-list-options";
 
 export interface HomeListFilterMenuEnvironment {
   readonly environmentId: EnvironmentId;
@@ -32,10 +50,35 @@ export interface HomeListFilterMenu {
 export function buildHomeListFilterMenu(props: {
   readonly environments: ReadonlyArray<HomeListFilterMenuEnvironment>;
   readonly projects: ReadonlyArray<HomeListFilterMenuProject>;
-  readonly selectedEnvironmentId: EnvironmentId | null;
+  readonly selectedEnvironmentIds: readonly EnvironmentId[];
   readonly selectedProjectKey: string | null;
-  readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
+  readonly ownershipFilter: OwnershipFilter;
+  readonly ownershipRelation: OwnershipRelation;
+  readonly projectSortOrder?: HomeProjectSortOrder;
+  readonly threadSortOrder?: SidebarThreadSortOrder;
+  readonly onClearEnvironments: () => void;
+  readonly onToggleEnvironment: (environmentId: EnvironmentId) => void;
   readonly onProjectChange: (projectKey: string | null) => void;
+  readonly onOwnershipFilterChange: (filter: OwnershipFilter) => void;
+  readonly onOwnershipRelationChange: (relation: OwnershipRelation) => void;
+  readonly onProjectSortOrderChange?: (sortOrder: HomeProjectSortOrder) => void;
+  readonly onThreadSortOrderChange?: (sortOrder: SidebarThreadSortOrder) => void;
+  /**
+   * True shows project/thread sort submenus (classic grouped list). v2 Home
+   * never sets this — its layout ignores those controls.
+   */
+  readonly listOrganization?: boolean;
+  /** When false, hide the project scope submenu (Board uses its own control). */
+  readonly showProjectFilter?: boolean;
+  /**
+   * Threads surface: hide settled threads. When provided, the menu offers a
+   * toggle (recency/none default on; project defaults off at the call site).
+   */
+  readonly hideSettledThreads?: boolean;
+  readonly onHideSettledThreadsChange?: (hide: boolean) => void;
+  /** When set, offers Group by recency / project / nothing. */
+  readonly threadGrouping?: HomeThreadGrouping;
+  readonly onThreadGroupingChange?: (grouping: HomeThreadGrouping) => void;
 }): HomeListFilterMenu {
   const items: Array<HomeListFilterMenuAction | HomeListFilterMenuSubmenu> = [];
 
@@ -47,22 +90,47 @@ export function buildHomeListFilterMenu(props: {
         type: "action",
         title: "All environments",
         subtitle: "Show threads from every environment",
-        state: props.selectedEnvironmentId === null ? "on" : "off",
-        onPress: () => props.onEnvironmentChange(null),
+        state: isAllEnvironmentsSelected(props.selectedEnvironmentIds) ? "on" : "off",
+        onPress: () => props.onClearEnvironments(),
       },
       ...props.environments.map((environment) => ({
         type: "action" as const,
         title: environment.label,
-        state:
-          props.selectedEnvironmentId === environment.environmentId
-            ? ("on" as const)
-            : ("off" as const),
-        onPress: () => props.onEnvironmentChange(environment.environmentId),
+        // When "all" is selected every row is visually on so multi-toggle is clear;
+        // pressing one leaves "all" and keeps only that environment.
+        state: isEnvironmentSelected(props.selectedEnvironmentIds, environment.environmentId)
+          ? ("on" as const)
+          : ("off" as const),
+        onPress: () => props.onToggleEnvironment(environment.environmentId),
       })),
     ],
   });
 
-  if (props.projects.length > 0) {
+  items.push({
+    type: "submenu",
+    title: "Ownership",
+    items: OWNERSHIP_FILTERS.map((value) => ({
+      type: "action" as const,
+      title: OWNERSHIP_FILTER_LABELS[value],
+      state: props.ownershipFilter === value ? ("on" as const) : ("off" as const),
+      onPress: () => props.onOwnershipFilterChange(value),
+    })),
+  });
+
+  if (props.ownershipFilter === "mine" || props.ownershipFilter === "theirs") {
+    items.push({
+      type: "submenu",
+      title: props.ownershipFilter === "mine" ? "Mine includes" : "Theirs includes",
+      items: OWNERSHIP_RELATIONS.map((value) => ({
+        type: "action" as const,
+        title: OWNERSHIP_RELATION_LABELS[value],
+        state: props.ownershipRelation === value ? ("on" as const) : ("off" as const),
+        onPress: () => props.onOwnershipRelationChange(value),
+      })),
+    });
+  }
+
+  if (props.showProjectFilter !== false && props.projects.length > 0) {
     items.push({
       type: "submenu",
       title: "Project",
@@ -82,6 +150,64 @@ export function buildHomeListFilterMenu(props: {
         })),
       ],
     });
+  }
+
+  if (props.threadGrouping !== undefined && props.onThreadGroupingChange !== undefined) {
+    items.push({
+      type: "submenu",
+      title: "Group threads",
+      items: HOME_THREAD_GROUPINGS.map((grouping) => ({
+        type: "action" as const,
+        title: HOME_THREAD_GROUPING_LABELS[grouping],
+        state: props.threadGrouping === grouping ? ("on" as const) : ("off" as const),
+        onPress: () => props.onThreadGroupingChange?.(grouping),
+      })),
+    });
+  }
+
+  if (props.onHideSettledThreadsChange !== undefined && props.hideSettledThreads !== undefined) {
+    items.push({
+      type: "action",
+      title: "Hide settled",
+      subtitle: "Move settled threads out of the main list",
+      state: props.hideSettledThreads ? "on" : "off",
+      onPress: () => props.onHideSettledThreadsChange?.(!props.hideSettledThreads),
+    });
+  }
+
+  if (
+    props.listOrganization === true &&
+    props.projectSortOrder !== undefined &&
+    props.threadSortOrder !== undefined &&
+    props.onProjectSortOrderChange !== undefined &&
+    props.onThreadSortOrderChange !== undefined
+  ) {
+    const projectSortOrder = props.projectSortOrder;
+    const threadSortOrder = props.threadSortOrder;
+    const onProjectSortOrderChange = props.onProjectSortOrderChange;
+    const onThreadSortOrderChange = props.onThreadSortOrderChange;
+    items.push(
+      {
+        type: "submenu",
+        title: "Sort projects",
+        items: PROJECT_SORT_OPTIONS.map((option) => ({
+          type: "action",
+          title: option.label,
+          state: projectSortOrder === option.value ? "on" : "off",
+          onPress: () => onProjectSortOrderChange(option.value),
+        })),
+      },
+      {
+        type: "submenu",
+        title: "Sort threads",
+        items: THREAD_SORT_OPTIONS.map((option) => ({
+          type: "action",
+          title: option.label,
+          state: threadSortOrder === option.value ? "on" : "off",
+          onPress: () => onThreadSortOrderChange(option.value),
+        })),
+      },
+    );
   }
 
   return {

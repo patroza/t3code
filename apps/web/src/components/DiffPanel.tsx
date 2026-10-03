@@ -32,6 +32,9 @@ import { openDiffFilePrimaryAction } from "../diffFileActions";
 import { useCheckpointDiff } from "~/lib/checkpointDiffState";
 import { cn } from "~/lib/utils";
 import { selectThreadDiffPanelSelection, useDiffPanelStore } from "../diffPanelStore";
+import { useUiStateStore } from "~/uiStateStore";
+import { scopedThreadKey } from "@t3tools/client-runtime/environment";
+import { ChangedFilesCard } from "./chat/ChangedFilesTree";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useTheme } from "../hooks/useTheme";
 import {
@@ -228,6 +231,22 @@ export default function DiffPanel({
   const selectedCheckpointTurnCount =
     selectedTurn &&
     (selectedTurn.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[selectedTurn.turnId]);
+
+  // For embedding the changed files tree (moved out of chat history into this panel, like Plan/Tasks).
+  const threadRefForKey =
+    routeThreadRef?.environmentId && routeThreadRef?.threadId
+      ? {
+          environmentId: routeThreadRef.environmentId as any,
+          threadId: routeThreadRef.threadId as any,
+        }
+      : null;
+  const routeThreadKey = threadRefForKey ? scopedThreadKey(threadRefForKey) : "";
+  const allDirectoriesExpanded = useUiStateStore((store) =>
+    routeThreadKey && selectedTurn
+      ? (store.threadChangedFilesExpandedById[routeThreadKey]?.[selectedTurn.turnId] ?? false)
+      : false,
+  );
+  const setThreadChangedFilesExpanded = useUiStateStore((s) => s.setThreadChangedFilesExpanded);
   const latestTurn = orderedTurnDiffSummaries[0];
   const selectedScopeLabel =
     selectedTurnId === null
@@ -996,6 +1015,29 @@ export default function DiffPanel({
                 This preview exceeds the size limit. Changes shown are incomplete.
                 {selectedGitSource?.files ? " Totals include all changes." : ""}
               </p>
+            )}
+
+            {selectedTurn && selectedTurn.files.length > 0 && (
+              <ChangedFilesCard
+                turnId={selectedTurn.turnId}
+                files={selectedTurn.files}
+                allDirectoriesExpanded={allDirectoriesExpanded}
+                resolvedTheme={resolvedTheme}
+                className="mt-0 shrink-0 rounded-none"
+                onToggleAllDirectories={() =>
+                  setThreadChangedFilesExpanded(
+                    routeThreadKey,
+                    selectedTurn.turnId,
+                    !allDirectoriesExpanded,
+                  )
+                }
+                onOpenTurnDiff={(_turnId, filePath) => {
+                  if (filePath) {
+                    // Reveal the file inside the current diff view (best effort via primary action)
+                    openDiffFile(filePath);
+                  }
+                }}
+              />
             )}
             {selectedPatchError && !renderablePatch && (
               <div className="px-3">

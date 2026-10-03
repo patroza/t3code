@@ -480,6 +480,7 @@ function poolWindows(accounts: readonly LimitAccount[], now: number): readonly L
               },
             ];
       })
+      .slice()
       .sort((left, right) => left.at - right.at);
     return {
       id: first.id,
@@ -495,7 +496,17 @@ function poolWindows(accounts: readonly LimitAccount[], now: number): readonly L
       resets,
     };
   });
-  return pools.sort((left, right) => WINDOW_KIND_ORDER[left.kind] - WINDOW_KIND_ORDER[right.kind]);
+  return [...pools].sort(
+    (left, right) => WINDOW_KIND_ORDER[left.kind] - WINDOW_KIND_ORDER[right.kind],
+  );
+}
+
+/** The instance's configured name, else the driver's, else its raw kind. */
+export function providerLimitsLabel(
+  provider: Pick<ServerProvider, "driver" | "displayName">,
+  driverLabel: (driver: ServerProvider["driver"]) => string | undefined,
+): string {
+  return provider.displayName?.trim() || driverLabel(provider.driver) || String(provider.driver);
 }
 
 /** The one-line status under a provider heading when there are no bars to draw. */

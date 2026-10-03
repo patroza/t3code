@@ -8,11 +8,12 @@ import {
   createAssetEnvironmentAtoms,
   createProjectFaviconUrlAtomFamily,
   EMPTY_ASSET_URL_ATOM,
+  resolveAssetUrl,
 } from "@t3tools/client-runtime/state/assets";
 import type { AssetResource, EnvironmentId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 
 import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
@@ -33,6 +34,10 @@ export const projectFaviconUrlAtom = createProjectFaviconUrlAtomFamily({
 
 const EMPTY_CONNECTION_STATE_ATOM = Atom.make(AsyncResult.initial<never, never>(false)).pipe(
   Atom.withLabel("mobile-asset-connection-state:empty"),
+);
+
+const EMPTY_ASSET_URLS_ATOM = Atom.make([] as Array<AsyncResult.AsyncResult<never, never>>).pipe(
+  Atom.withLabel("mobile-asset-urls:empty"),
 );
 
 function useConnectionPhase(environmentId: EnvironmentId | null): EnvironmentConnectionPhase {
@@ -75,6 +80,34 @@ export function useAssetUrl(
 ): string | null {
   const state = useAssetUrlState(environmentId, resource);
   return state._tag === "Success" ? state.url : null;
+}
+
+/**
+ * Batch sibling of {@link useAssetUrl}, for a set of resources whose size is
+ * only known at render time (a thread's attachments, say) and so cannot be
+ * resolved with one hook call each.
+ */
+export function useAssetUrls(
+  environmentId: EnvironmentId | null,
+  resources: ReadonlyArray<AssetResource>,
+): ReadonlyArray<string | null> {
+  const preparedConnection = usePreparedConnection(environmentId);
+  const results = useAtomValue(
+    environmentId === null || resources.length === 0
+      ? EMPTY_ASSET_URLS_ATOM
+      : assetEnvironment.createUrls({ environmentId, resources }),
+  );
+  return useMemo(
+    () =>
+      preparedConnection._tag === "None"
+        ? resources.map(() => null)
+        : results.map((result) =>
+            AsyncResult.isSuccess(result)
+              ? resolveAssetUrl(preparedConnection.value.httpBaseUrl, result.value.relativeUrl)
+              : null,
+          ),
+    [preparedConnection, resources, results],
+  );
 }
 
 /** Explicit playback and sharing must reauthorize files that may have been replaced on disk. */

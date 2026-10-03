@@ -15,6 +15,12 @@ const mocks = vi.hoisted(() => ({
   navigate: vi.fn(async (_tabId: string, _url: string): Promise<void> => undefined),
   rememberPreviewUrl: vi.fn(),
   readPreparedConnection: vi.fn(() => ({ httpBaseUrl: "http://172.25.85.75:3773" })),
+  // Reachability is the resolver's job and is covered by its own tests; here it
+  // stands in for "whatever the environment says is reachable".
+  resolveNavigableUrl: vi.fn(
+    async (_environmentId: string, target: { readonly url?: string }): Promise<string> =>
+      (target.url ?? "").replace("localhost", "172.25.85.75"),
+  ),
   submittedUrl: null as ((url: string) => void) | null,
   emptyStateUrl: null as ((url: string) => void) | null,
   togglePictureInPicture: null as (() => void) | null,
@@ -254,6 +260,10 @@ vi.mock("./AgentBrowserCursor", () => ({
 vi.mock("~/browser/BrowserSurfaceSlot", () => ({ BrowserSurfaceSlot: () => null }));
 vi.mock("./usePreviewSession", () => ({ usePreviewSession: vi.fn() }));
 
+vi.mock("~/browser/browserTargetResolver", () => ({
+  resolveNavigableUrl: mocks.resolveNavigableUrl,
+}));
+
 import { PreviewView } from "./PreviewView";
 import { toastManager } from "~/components/ui/toast";
 import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
@@ -331,6 +341,7 @@ describe("PreviewView navigation", () => {
     mocks.navigate.mockClear();
     mocks.rememberPreviewUrl.mockClear();
     mocks.readPreparedConnection.mockClear();
+    mocks.resolveNavigableUrl.mockClear();
     mocks.submittedUrl = null;
     mocks.emptyStateUrl = null;
     mocks.togglePictureInPicture = null;
@@ -410,13 +421,16 @@ describe("PreviewView navigation", () => {
     }
   });
 
+  // A typed localhost URL means "the dev server on the environment host", so it
+  // goes through the same reachability resolution as a clicked port. Typing it
+  // used to navigate verbatim, which cannot work from a remote client.
   it.each([
     [
       "https://localhost:8000/dashboard?mode=test#top",
-      "https://localhost:8000/dashboard?mode=test#top",
+      "https://172.25.85.75:8000/dashboard?mode=test#top",
     ],
-    ["localhost:5173/app", "http://localhost:5173/app"],
-  ])("preserves a direct localhost URL in a WSL environment", async (submitted, expected) => {
+    ["localhost:5173/app", "http://172.25.85.75:5173/app"],
+  ])("resolves a submitted localhost URL against the environment", async (submitted, expected) => {
     renderToStaticMarkup(
       <PreviewView
         threadRef={{
@@ -440,6 +454,37 @@ describe("PreviewView navigation", () => {
         threadId: "thread-1",
       },
       expected,
+    );
+  });
+
+  it("resolves an empty-state localhost server against the environment", async () => {
+    mocks.showEmptyState = true;
+    renderToStaticMarkup(
+      <PreviewView
+        threadRef={{
+          environmentId: EnvironmentId.make("environment-1"),
+          threadId: ThreadId.make("thread-1"),
+        }}
+        tabId="tab-1"
+        visible
+      />,
+    );
+
+    expect(mocks.emptyStateUrl).not.toBeNull();
+    mocks.emptyStateUrl?.("http://localhost:5173/app?mode=test#top");
+
+    await vi.waitFor(() =>
+      expect(mocks.navigate).toHaveBeenCalledWith(
+        TEST_RUNTIME_TAB_ID,
+        "http://172.25.85.75:5173/app?mode=test#top",
+      ),
+    );
+    expect(mocks.rememberPreviewUrl).toHaveBeenCalledWith(
+      {
+        environmentId: "environment-1",
+        threadId: "thread-1",
+      },
+      "http://172.25.85.75:5173/app?mode=test#top",
     );
   });
 

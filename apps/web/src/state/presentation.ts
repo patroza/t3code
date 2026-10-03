@@ -25,7 +25,7 @@ export function useEnvironmentPresentation(environmentId: EnvironmentId | null) 
       : environmentPresentations.presentationAtom(environmentId),
   );
   return {
-    isReady: catalog.isReady,
+    isReady: catalog?.isReady ?? false,
     presentation,
   };
 }

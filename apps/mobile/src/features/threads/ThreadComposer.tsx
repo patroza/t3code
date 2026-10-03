@@ -11,11 +11,17 @@ import {
   type MessageId,
   type ModelSelection,
   type OrchestrationThreadShell,
+  type ProviderDriverKind,
   type ProviderInteractionMode,
   type RuntimeMode,
   type ServerConfig as T3ServerConfig,
   type UsageLimitsReport,
 } from "@t3tools/contracts";
+import { resolveDriverUsage } from "@t3tools/client-runtime/state/aiUsagePresentation";
+import {
+  parseStandaloneComposerSlashCommand,
+  replaceTextRange,
+} from "@t3tools/shared/composerTrigger";
 import {
   collectProviderUsageLimits,
   hasProviderUsageLimits,
@@ -76,7 +82,8 @@ import {
   ComposerInlineControl,
   ComposerToolbarRow,
 } from "../../components/ComposerToolbar";
-import { ProviderIcon } from "../../components/ProviderIcon";
+import { ProviderUsageIcon } from "../../components/ProviderUsageIcon";
+import { useAiUsageSnapshot } from "../../state/useAiUsageSnapshot";
 import {
   composerStripAttachments,
   type DraftComposerAttachment,
@@ -90,7 +97,7 @@ import {
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import type { RemoteClientConnectionState } from "../../lib/connection";
 import { resolveProviderOptionDescriptors } from "../../lib/providerOptions";
-import { ComposerCommandPopover } from "./ComposerCommandPopover";
+import { ComposerCommandPopover, type ComposerCommandItem } from "./ComposerCommandPopover";
 import { useComposerCommandMenu } from "./use-composer-command-menu";
 import {
   ComposerDictationCancelAction,
@@ -130,11 +137,11 @@ export interface ThreadComposerProps {
   readonly contentMaxWidth?: number;
   readonly bottomInset?: number;
   readonly connectionState: RemoteClientConnectionState;
+  readonly queueCount: number;
   readonly environmentLabel: string | null;
   readonly selectedThread: OrchestrationThreadShell;
   readonly hasCompactableConversation: boolean;
   readonly serverConfig: T3ServerConfig | null;
-  readonly queueCount: number;
   readonly environmentId: EnvironmentId;
   readonly projectCwd: string | null;
   /** Why sending is blocked right now (shown as the send button's label), or null. */
@@ -148,6 +155,7 @@ export interface ThreadComposerProps {
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
   readonly onSendMessage: () => Promise<MessageId | null>;
+  readonly onStartNewThread: () => void;
   /** `/usage-limits` resolves locally; the host decides where the report shows. Null clears it. */
   readonly onShowUsageLimits: (report: UsageLimitsReport | null) => void;
   readonly onUpdateModelSelection: (modelSelection: ModelSelection) => void;
@@ -344,7 +352,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       draftKey: composerOwnerKey,
     });
   };
-  const { onSendMessage, onChangeDraftMessage, onShowUsageLimits } = props;
+  const { onSendMessage, onChangeDraftMessage, onShowUsageLimits, onStartNewThread, draftMessage } =
+    props;
   // T3 owns /usage-limits only where Limits has data for the selected provider;
   // elsewhere the name stays the provider's own and is sent through untouched.
   const usageLimitsOffered =
@@ -391,6 +400,41 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     onUsageLimits:
       usageLimitsOffered && props.draftAttachments.length === 0 ? openUsageLimits : undefined,
   });
+  const composerMenuItems = useMemo(() => {
+    const trigger = composerMenu.trigger;
+    if (trigger?.kind !== "slash-command") {
+      return composerMenu.items;
+    }
+    const q = trigger.query.toLowerCase();
+    if (!"new".includes(q)) {
+      return composerMenu.items;
+    }
+    const newItem: ComposerCommandItem = {
+      id: "cmd:new",
+      type: "slash-command",
+      command: "new",
+      label: "/new",
+      description: "Start a new thread here",
+    };
+    return [newItem, ...composerMenu.items.filter((item) => item.id !== "cmd:new")];
+  }, [composerMenu.items, composerMenu.trigger]);
+
+  const handleCommandSelect = useCallback(
+    (item: ComposerCommandItem) => {
+      const trigger = composerMenu.trigger;
+      if (!trigger) return;
+      if (item.type === "slash-command" && item.command === "new") {
+        const result = replaceTextRange(draftMessage, trigger.rangeStart, trigger.rangeEnd, "");
+        composerMenu.onSelectionChange({ start: result.cursor, end: result.cursor });
+        onChangeDraftMessage(result.text);
+        onStartNewThread();
+        return;
+      }
+      composerMenu.onSelect(item);
+    },
+    [composerMenu, draftMessage, onChangeDraftMessage, onStartNewThread],
+  );
+
   const voiceInput = useVoiceInputController({
     ownerKey: composerOwnerKey,
     draftMessage: props.draftMessage,
@@ -485,6 +529,11 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       if (openUsageLimits()) onChangeDraftMessage("");
       return;
     }
+    if (parseStandaloneComposerSlashCommand(draftMessage) === "new") {
+      onChangeDraftMessage("");
+      onStartNewThread();
+      return;
+    }
     const threadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
     if (inFlightThreadIdsRef.current.has(threadKey)) return;
     inFlightThreadIdsRef.current.add(threadKey);
@@ -508,10 +557,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   }, [
     props.draftMessage,
     props.draftAttachments.length,
+    draftMessage,
     onChangeDraftMessage,
     openUsageLimits,
     usageLimitsOffered,
     onSendMessage,
+    onStartNewThread,
     props.environmentId,
     props.environmentLabel,
     props.selectedThread.id,
@@ -537,6 +588,24 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         option.selection.instanceId === currentModelSelection.instanceId &&
         option.selection.model === currentModelSelection.model,
     ) ?? null;
+
+  const aiUsageSnapshot = useAiUsageSnapshot(props.environmentId);
+  const threadUsage = useMemo(
+    () =>
+      currentModelOption
+        ? resolveDriverUsage(
+            aiUsageSnapshot,
+            currentModelOption.providerDriver as ProviderDriverKind,
+            currentModelSelection.model,
+          )
+        : null,
+    [aiUsageSnapshot, currentModelOption, currentModelSelection.model],
+  );
+  const currentUsageNote = threadUsage
+    ? (threadUsage.item.windows
+        .map((w) => (typeof w.percent === "number" ? `${w.percent}%` : null))
+        .find(Boolean) ?? null)
+    : null;
   const providerOptionDescriptors = useMemo(
     () =>
       resolveProviderOptionDescriptors({
@@ -647,11 +716,11 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         (composerMenu.items.length > 0 || composerMenu.trigger.kind === "pull-request") ? (
           <View className="absolute inset-x-0 bottom-full z-10 mb-2">
             <ComposerCommandPopover
-              items={composerMenu.items}
+              items={composerMenuItems}
               triggerKind={composerMenu.trigger.kind}
               isLoading={composerMenu.isLoading}
               error={composerMenu.error}
-              onSelect={composerMenu.onSelect}
+              onSelect={handleCommandSelect}
             />
           </View>
         ) : null}
@@ -971,9 +1040,17 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                         accessibilityLabel="Model and reasoning settings"
                         emphasized
                         renderIcon={(size) => (
-                          <ProviderIcon provider={currentModelOption?.providerDriver} size={size} />
+                          <ProviderUsageIcon
+                            provider={currentModelOption?.providerDriver}
+                            size={size}
+                            marker={threadUsage?.marker ?? null}
+                          />
                         )}
-                        label={currentModelOption?.label ?? currentModelSelection.model}
+                        label={
+                          currentUsageNote
+                            ? `${currentModelOption?.label ?? currentModelSelection.model} · ${currentUsageNote}`
+                            : (currentModelOption?.label ?? currentModelSelection.model)
+                        }
                         maxWidth="100%"
                         onPress={openSettings}
                       />

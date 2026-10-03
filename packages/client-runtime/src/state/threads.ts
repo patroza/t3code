@@ -1,6 +1,7 @@
 import {
   ORCHESTRATION_WS_METHODS,
   type EnvironmentId as EnvironmentIdType,
+  type OrchestrationGetSnapshotError,
   type OrchestrationThread,
   type OrchestrationThreadDetailPage,
   type OrchestrationThreadDetailSnapshot,
@@ -127,6 +128,33 @@ function formatThreadError(cause: Cause.Cause<unknown>): string {
 }
 
 /**
+ * Extract a permanent snapshot-unavailable reason from a subscription failure.
+ * "thread-missing" is intentionally not returned: the projection row may just
+ * not be written yet (a freshly created thread), so it stays retriable.
+ */
+function terminalSnapshotReason(
+  cause: Cause.Cause<unknown>,
+): "thread-deleted" | "thread-archived" | undefined {
+  for (const reason of cause.reasons) {
+    if (reason._tag !== "Fail") {
+      continue;
+    }
+    const error: unknown = reason.error;
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      (error as { readonly _tag?: unknown })._tag === "OrchestrationGetSnapshotError"
+    ) {
+      const snapshotReason = (error as OrchestrationGetSnapshotError).reason;
+      if (snapshotReason === "thread-deleted" || snapshotReason === "thread-archived") {
+        return snapshotReason;
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
  * A starting or running session is mid-turn. Its detail can change many times
  * per second, so the disk cache waits for it to settle.
  */
@@ -234,6 +262,10 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   };
   if (resumeCache?.owner === owner) resumeCache.snapshot = committed;
   const awaitingCompletion = yield* Ref.make(false);
+  // One HTTP fallback per state machine: a missing snapshot must not produce a
+  // fresh 404 on every 250ms socket retry (fork behaviour, covered by
+  // threads-sync.test.ts).
+  const httpSnapshotLoadAttempted = yield* Ref.make(false);
   // Bumped whenever loaded history may have been rewritten out from under an
   // in-flight older-page fetch (snapshot replacement, revert, deletion). A
   // page response captured under an older epoch is discarded, not merged.
@@ -412,6 +444,9 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     }
   });
 
+  // A terminal `thread-deleted` subscription failure never reaches the item
+  // stream, so that path publishes the deleted state itself instead of going
+  // through applyItem. Callers outside applyItemLocked must hold applyLock.
   const setDeleted = Effect.fn("EnvironmentThreadState.setDeleted")(function* () {
     yield* Ref.set(awaitingCompletion, false);
     yield* Ref.update(historyEpoch, (epoch) => epoch + 1);
@@ -814,12 +849,18 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
               }),
             ),
           );
-          const httpSnapshot = yield* snapshotLoader.load(
-            prepared,
-            threadId,
-            supportsPagination ? { turnLimit: INITIAL_THREAD_USER_TURN_LIMIT } : undefined,
-            supportsReasoningMessages,
+          const alreadyAttemptedHttpSnapshotLoad = yield* Ref.getAndSet(
+            httpSnapshotLoadAttempted,
+            true,
           );
+          const httpSnapshot = alreadyAttemptedHttpSnapshotLoad
+            ? Option.none<OrchestrationThreadDetailSnapshot>()
+            : yield* snapshotLoader.load(
+                prepared,
+                threadId,
+                supportsPagination ? { turnLimit: INITIAL_THREAD_USER_TURN_LIMIT } : undefined,
+                supportsReasoningMessages,
+              );
           if (Option.isSome(httpSnapshot)) {
             yield* applyItem({ kind: "snapshot", snapshot: httpSnapshot.value });
             current = yield* SubscriptionRef.get(state);
@@ -849,8 +890,18 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       }),
       {
         onDefect: () => setStreamError("Could not synchronize the thread."),
-        onExpectedFailure: (cause) => setStreamError(formatThreadError(cause)),
+        // A permanently unavailable thread must not keep resubscribing: the
+        // server can never satisfy it, and the 250ms retry would hammer the
+        // socket until the state's idle TTL expires.
+        // setDeleted under applyLock: every other history rewrite (snapshot
+        // apply, older-page merge, delta-driven deletion) is serialized by it,
+        // and this path must not race a mergeOlderPage commit.
+        onExpectedFailure: (cause) =>
+          terminalSnapshotReason(cause) === "thread-deleted"
+            ? applyLock.withPermits(1)(setDeleted())
+            : setStreamError(formatThreadError(cause)),
         retryExpectedFailureAfter: "250 millis",
+        isExpectedFailureTerminal: (cause) => terminalSnapshotReason(cause) !== undefined,
         resubscribe: foregroundResubscriptions,
       },
     ).pipe(

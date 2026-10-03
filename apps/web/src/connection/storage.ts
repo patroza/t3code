@@ -60,7 +60,10 @@ const StoredShellSnapshot = Schema.Struct({
   snapshot: OrchestrationShellSnapshot,
 });
 const StoredShellSnapshotJson = Schema.fromJsonString(StoredShellSnapshot);
-// v2 stores the snapshot sequence alongside the thread so a warm cache can
+// v3 invalidates pre-pagination warm caches: v2 entries may still hold the full
+// unbounded activity history and would rehydrate multi-MB threads into the
+// renderer heap. Older v1/v2 entries fail to decode and are treated as cold.
+// v2 stored the snapshot sequence alongside the thread so a warm cache can
 // resume via `afterSequence` instead of re-downloading the full thread body.
 // v3 adds windowed (paginated) snapshots carrying `page` metadata. The bump
 // exists for rollback safety: a pre-pagination client would decode a windowed

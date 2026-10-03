@@ -48,7 +48,7 @@ export function useEnvironments() {
   );
 
   return {
-    isReady: catalog.isReady,
+    isReady: catalog?.isReady ?? false,
     networkStatus,
     environments,
     presentationById,

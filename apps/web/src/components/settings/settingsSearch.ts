@@ -390,7 +390,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
     scope: "project-defaults",
     searchTerms: [
-      "resume running active interrupted work restart reboot machine crash desktop update automatically",
+      "resume running active interrupted work restart reboot machine crash desktop update automatically deploy",
     ],
   },
   {
@@ -447,6 +447,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Delete confirmation",
     to: "/settings/general",
     searchTerms: ["ask before thread chat history"],
+  },
+  {
+    id: "worktree-remove-confirmation",
+    title: "Worktree remove confirmation",
+    to: "/settings/general",
   },
   {
     id: "quit-confirmation",

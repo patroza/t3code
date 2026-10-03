@@ -2,12 +2,14 @@ import {
   EnvironmentId,
   EventId,
   ORCHESTRATION_WS_METHODS,
+  OrchestrationGetSnapshotError,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
   TurnId,
   type OrchestrationThread,
   type OrchestrationThreadDetailSnapshot,
+  type OrchestrationSession,
   type OrchestrationThreadStreamItem,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
@@ -78,6 +80,8 @@ const BASE_THREAD: OrchestrationThread = {
   pullRequests: [],
   deletedAt: null,
   messages: [],
+  queuedMessages: [],
+  pendingTurnStart: null,
   proposedPlans: [],
   activities: [],
   checkpoints: [],
@@ -298,6 +302,44 @@ const snapshot = (thread: OrchestrationThread): OrchestrationThreadStreamItem =>
 });
 
 const synchronized = (): OrchestrationThreadStreamItem => ({ kind: "synchronized" });
+
+const sessionUpdated = (
+  status: OrchestrationSession["status"],
+  sequence: number,
+  activeTurnId: TurnId | null,
+): OrchestrationThreadStreamItem => ({
+  kind: "event",
+  event: {
+    eventId: EventId.make(`event-session-${sequence}`),
+    sequence,
+    occurredAt:
+      sequence === CACHED_SNAPSHOT_SEQUENCE + 1
+        ? "2026-04-01T08:00:00.000Z"
+        : "2026-04-01T09:00:00.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    aggregateKind: "thread",
+    aggregateId: THREAD_ID,
+    type: "thread.session-set",
+    payload: {
+      threadId: THREAD_ID,
+      session: {
+        threadId: THREAD_ID,
+        status,
+        providerName: "codex",
+        runtimeMode: "full-access",
+        activeTurnId,
+        lastError: null,
+        updatedAt:
+          sequence === CACHED_SNAPSHOT_SEQUENCE + 1
+            ? "2026-04-01T08:00:00.000Z"
+            : "2026-04-01T09:00:00.000Z",
+      },
+    },
+  },
+});
 
 const titleUpdated = (title: string, sequence = 2): OrchestrationThreadStreamItem => ({
   kind: "event",
@@ -743,6 +785,26 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
+  it.effect("does not reload a missing HTTP snapshot when the socket subscription retries", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      yield* Queue.offer(harness.inputs, new Error("Thread was not found"));
+      yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.error));
+
+      expect(yield* Ref.get(harness.loaderCalls)).toBe(1);
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(1);
+
+      yield* TestClock.adjust("250 millis");
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        if ((yield* Ref.get(harness.subscriptionCount)) >= 2) break;
+        yield* Effect.yieldNow;
+      }
+
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(2);
+      expect(yield* Ref.get(harness.loaderCalls)).toBe(1);
+    }),
+  );
+
   it.effect("ignores replayed thread events at or below the snapshot sequence", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ cached: BASE_THREAD });
@@ -885,6 +947,84 @@ describe("EnvironmentThreads", () => {
       expect(Option.isNone(recovered.error)).toBe(true);
       expect(yield* Ref.get(harness.subscriptionCount)).toBe(2);
       expect(yield* Ref.get(harness.retryCount)).toBe(0);
+    }),
+  );
+
+  it.effect("marks the thread deleted and stops retrying on a permanent deleted failure", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ cached: BASE_THREAD });
+      yield* Queue.offer(
+        harness.inputs,
+        new OrchestrationGetSnapshotError({
+          message: "Thread thread-1 was deleted",
+          reason: "thread-deleted",
+        }),
+      );
+
+      const state = yield* awaitThreadState(
+        harness.observed,
+        (value) => value.status === "deleted",
+      );
+      expect(Option.isNone(state.data)).toBe(true);
+      expect(yield* Ref.get(harness.removedThreads)).toEqual([THREAD_ID]);
+
+      yield* TestClock.adjust("2 seconds");
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        yield* Effect.yieldNow;
+      }
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(1);
+    }),
+  );
+
+  it.effect("keeps cached data and stops retrying when the thread is archived", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ cached: BASE_THREAD });
+      yield* Queue.offer(
+        harness.inputs,
+        new OrchestrationGetSnapshotError({
+          message: "Thread thread-1 is archived",
+          reason: "thread-archived",
+        }),
+      );
+
+      const state = yield* awaitThreadState(harness.observed, (value) =>
+        Option.isSome(value.error),
+      );
+      expect(Option.getOrThrow(state.data)).toEqual(BASE_THREAD);
+      expect(state.status).toBe("cached");
+      expect(Option.getOrThrow(state.error)).toBe("Thread thread-1 is archived");
+      expect(yield* Ref.get(harness.removedThreads)).toEqual([]);
+
+      yield* TestClock.adjust("2 seconds");
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        yield* Effect.yieldNow;
+      }
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(1);
+    }),
+  );
+
+  it.effect("keeps retrying when the thread row is missing but not permanently gone", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      yield* Queue.offer(
+        harness.inputs,
+        new OrchestrationGetSnapshotError({
+          message: "Thread thread-1 was not found",
+          reason: "thread-missing",
+        }),
+      );
+
+      yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.error));
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(1);
+
+      yield* TestClock.adjust("250 millis");
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        if ((yield* Ref.get(harness.subscriptionCount)) >= 2) {
+          break;
+        }
+        yield* Effect.yieldNow;
+      }
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(2);
     }),
   );
 

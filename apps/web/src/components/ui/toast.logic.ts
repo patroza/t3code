@@ -19,7 +19,10 @@ export function hasVisibleToastAction(actionProps: unknown): boolean {
 export function shouldHideCollapsedToastContent(
   visibleToastIndex: number,
   visibleToastCount: number,
+  toastType?: string,
 ): boolean {
+  // Errors must stay legible even when they are not the front-most toast in the stack.
+  if (toastType === "error") return false;
   // Keep the front-most toast readable even if Base UI marks it as "behind"
   // due to toasts hidden by thread filtering.
   if (visibleToastCount <= 1) return false;

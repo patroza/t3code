@@ -18,6 +18,7 @@ import * as Order from "effect/Order";
 
 import { scopedProjectKey } from "../../lib/scopedEntities";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
+import { matchesEnvironmentFilter } from "./homeEnvironmentFilter";
 
 export type HomeProjectSortOrder = Exclude<SidebarProjectSortOrder, "manual">;
 
@@ -42,11 +43,17 @@ function getProjectSortTimestamp(
 
 export function buildHomeProjectScopes(input: {
   readonly projects: ReadonlyArray<EnvironmentProject>;
-  readonly environmentId: EnvironmentId | null;
+  /** Empty = all environments. Prefer this over the legacy single-id field. */
+  readonly selectedEnvironmentIds?: readonly EnvironmentId[];
+  /** @deprecated Use selectedEnvironmentIds. Kept for call-site migration. */
+  readonly environmentId?: EnvironmentId | null;
   readonly projectGroupingMode: SidebarProjectGroupingMode;
 }): ReadonlyArray<HomeProjectScope> {
-  const projects = input.projects.filter(
-    (project) => input.environmentId === null || project.environmentId === input.environmentId,
+  const selectedEnvironmentIds =
+    input.selectedEnvironmentIds ??
+    (input.environmentId != null && input.environmentId !== undefined ? [input.environmentId] : []);
+  const projects = input.projects.filter((project) =>
+    matchesEnvironmentFilter(project.environmentId, selectedEnvironmentIds),
   );
   return buildProjectGroups({
     projects,

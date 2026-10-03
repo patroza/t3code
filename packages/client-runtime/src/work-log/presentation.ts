@@ -668,7 +668,6 @@ export function omitSupersededLifecycleMarkers<T>(
   }
 
   // Hermes lacks toReversed; this array is local, so reversing it cannot mutate the input.
-  // oxlint-disable-next-line unicorn/no-array-reverse
   return reversedEntries.reverse();
 }
 
