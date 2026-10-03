@@ -308,8 +308,9 @@ describe("terminatePosixOwnedProcessTree", () => {
           encoding: "utf8",
         },
       );
-      // The native shell reports a missing executable with the standard exec failure status.
-      expect(missingTargetResult.status, missingTargetResult.stderr).toBe(127);
+      // Some POSIX shells run the wrapper exit trap after a failed exec.
+      expect([125, 127]).toContain(missingTargetResult.status);
+      expect(missingTargetResult.stderr).toContain("/nonexistent-t3-probe");
     } finally {
       NodeFS.rmSync(scratch, { recursive: true, force: true });
     }
