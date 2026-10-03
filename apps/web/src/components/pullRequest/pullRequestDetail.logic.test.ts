@@ -38,6 +38,7 @@ import {
   latestPullRequestReviewOutcomes,
   newestPullRequestCommitAt,
   mergePullRequestThreadComments,
+  repositoryFromChangeRequestUrl,
   orderPullRequestComments,
   pullRequestActionMenuHasGroup,
   pullRequestActionNeedsHostRefresh,
@@ -1534,6 +1535,27 @@ describe("pull request panel context beside a thread", () => {
       "page",
     );
     expect(pullRequestPanelContext({ projectId: null }, surface(3))).toBe("page");
+  });
+});
+
+describe("repositoryFromChangeRequestUrl", () => {
+  it("reads owner/name from a GitHub pull request URL", () => {
+    expect(repositoryFromChangeRequestUrl("https://github.com/patroza/t3code/pull/410")).toBe(
+      "patroza/t3code",
+    );
+    expect(
+      repositoryFromChangeRequestUrl("https://github.com/pingdotgg/t3code/pull/6613/files"),
+    ).toBe("pingdotgg/t3code");
+  });
+
+  it("reads a nested GitLab path", () => {
+    expect(
+      repositoryFromChangeRequestUrl("https://gitlab.com/group/sub/service/-/merge_requests/12"),
+    ).toBe("group/sub/service");
+  });
+
+  it("returns null when the URL is not a change request", () => {
+    expect(repositoryFromChangeRequestUrl("https://github.com/patroza/t3code")).toBeNull();
   });
 });
 

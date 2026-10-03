@@ -1,3 +1,5 @@
+import { ThreadParticipantSummary } from "@t3tools/contracts";
+import { mergeParticipantSummaries } from "@t3tools/shared/sourceAttribution";
 import {
   latestExecutedRun,
   latestRootProviderFailure,
@@ -1511,6 +1513,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           status: "completed",
           title: null,
           type: "user_message",
+          ...(queuedMessage.source === undefined ? {} : { source: queuedMessage.source }),
           messageId: queuedMessage.id,
           text: queuedMessage.text,
           attachments: queuedMessage.attachments,
@@ -2075,6 +2078,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const now = yield* DateTime.now;
     const emitEvent = emit(events, command);
     const thread: OrchestrationV2AppThread = {
+      ...(command.originSource === undefined ? {} : { originSource: command.originSource }),
       createdBy: command.createdBy,
       creationSource: command.creationSource,
       id: command.threadId,
@@ -4138,6 +4142,44 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   ) =>
     Effect.gen(function* () {
       let projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+      if (command.source !== undefined) {
+        const source = command.source;
+        const now = yield* DateTime.now;
+        const participantSummaries = yield* Schema.decodeUnknownEffect(
+          Schema.Array(ThreadParticipantSummary),
+        )(
+          mergeParticipantSummaries({
+            existing: projection.thread.participantSummaries ?? [],
+            source,
+            participatedAt: DateTime.formatIso(now),
+            originPersonId: projection.thread.originSource?.personId,
+          }),
+        ).pipe(
+          Effect.mapError(
+            (cause) =>
+              new OrchestratorDispatchError({
+                commandId: command.commandId,
+                commandType: command.type,
+                cause,
+              }),
+          ),
+        );
+        const thread = {
+          ...projection.thread,
+          originSource: projection.thread.originSource ?? source,
+          participantSummaries,
+        };
+        yield* emit(
+          events,
+          command,
+        )({
+          type: "thread.metadata-updated",
+          threadId: command.threadId,
+          occurredAt: now,
+          payload: thread,
+        });
+        projection = { ...projection, thread };
+      }
       if (command.manualContinuationOfRunId !== undefined) {
         const source = projection.runs.find((run) => run.id === command.manualContinuationOfRunId);
         const limited = latestRootProviderFailure(source ?? null, projection.turnItems);
@@ -4692,6 +4734,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           runId,
           nodeId: rootNodeId,
           role: "user",
+          ...(command.source === undefined ? {} : { source: command.source }),
           text: dispatchText,
           ...(command.context ? { context: command.context } : {}),
           attachments: command.attachments,
@@ -5032,6 +5075,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           runId,
           nodeId: rootNodeId,
           role: "user",
+          ...(command.source === undefined ? {} : { source: command.source }),
           text: dispatchText,
           ...(command.context ? { context: command.context } : {}),
           attachments: command.attachments,
@@ -5724,6 +5768,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         runId,
         nodeId: rootNodeId,
         role: "user",
+        ...(command.source === undefined ? {} : { source: command.source }),
         text: dispatchText,
         ...(command.context ? { context: command.context } : {}),
         attachments: command.attachments,
@@ -7016,6 +7061,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         projection,
         modelSelection: projection.thread.modelSelection,
         targetRunId: command.targetRunId,
+        ...(queuedMessage.source === undefined ? {} : { source: queuedMessage.source }),
         messageId: queuedMessage.id,
         text: queuedMessage.text,
         attachments: queuedMessage.attachments,

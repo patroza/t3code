@@ -187,6 +187,16 @@ export function editPullRequestThreadComment<
 
 type LegacyLinkedPullRequest = Pick<ThreadLinkedPullRequest, "repository" | "number">;
 
+/** Owner/name from a change-request URL, so a fork PR is not opened against upstream. */
+export function repositoryFromChangeRequestUrl(url: string): string | null {
+  const trimmed = url.trim();
+  const github = /^https:\/\/[^/\s]+\/([^/\s]+\/[^/\s]+)\/pull\/\d+(?:[/?#].*)?$/i.exec(trimmed);
+  if (github?.[1]) return github[1];
+  const gitlab = /^https:\/\/[^/\s]+\/(.+)\/-\/merge_requests\/\d+(?:[/?#].*)?$/i.exec(trimmed);
+  if (gitlab?.[1]) return gitlab[1];
+  return null;
+}
+
 /**
  * How the detail panel behaves beside a thread: "thread" for a pull request the thread itself
  * is linked to (any layer of its stack), "page" for any other one the reader opened there.
