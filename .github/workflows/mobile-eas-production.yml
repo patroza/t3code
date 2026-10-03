@@ -89,6 +89,7 @@ jobs:
   production:
     name: EAS ${{ inputs.profile || 'production' }} ${{ inputs.mode }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 150
     permissions:
       contents: read
     env:
@@ -314,7 +315,7 @@ jobs:
           MOBILE_BUILD_PROFILE: ${{ inputs.profile || 'production' }}
         run: |
           set -o pipefail
-          eas build --platform ${{ inputs.platform }} --profile "$MOBILE_BUILD_PROFILE" --auto-submit --non-interactive --no-wait 2>&1 | tee /tmp/eas-build.log
+          eas build --platform ${{ inputs.platform }} --profile "$MOBILE_BUILD_PROFILE" --auto-submit --non-interactive --wait 2>&1 | tee /tmp/eas-build.log
           if grep -q 'used its iOS builds from the Free plan' /tmp/eas-build.log; then
             echo "::error::Expo Free plan iOS build quota exhausted. Upgrade at https://expo.dev/accounts/patroza/settings/billing or wait for the monthly reset, then re-run mode=build. Pure-JS fixes can still ship via mode=auto (fallback OTA) or mode=update with runtime_version."
           fi

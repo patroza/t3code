@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - Verifies the dependency-free EAS hook in isolated archives.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
+import * as NodeModule from "node:module";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
@@ -65,4 +66,52 @@ it("runs the hook before EAS installs dependencies", () => {
     NodeFS.readFileSync(NodePath.join(repositoryRoot, "apps/mobile/package.json"), "utf8"),
   );
   expect(manifest.scripts["eas-build-pre-install"]).toBe("node scripts/eas-build-pre-install.mjs");
+});
+
+it("uses the same development runtime policy in CI and the remote build profile", () => {
+  const profiles = JSON.parse(
+    NodeFS.readFileSync(NodePath.join(repositoryRoot, "apps/mobile/eas.json"), "utf8"),
+  );
+  const workflow = NodeFS.readFileSync(
+    NodePath.join(repositoryRoot, ".github/workflows/mobile-eas-development.yml"),
+    "utf8",
+  );
+  expect(workflow).toMatch(/MOBILE_VERSION_POLICY: fingerprint/);
+  expect(profiles.build.development.env.MOBILE_VERSION_POLICY).toBe("fingerprint");
+});
+
+it("loads native TypeScript modules while collecting Expo config fingerprint sources", () => {
+  const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-expo-loader-"));
+  try {
+    NodeFS.writeFileSync(NodePath.join(root, "package.json"), '{"type":"module"}');
+    const modulePath = NodePath.join(root, "runtime-policy.ts");
+    NodeFS.writeFileSync(modulePath, 'export const runtimePolicy = "fingerprint" as const;');
+    const mobileRequire = NodeModule.createRequire(
+      NodePath.join(repositoryRoot, "apps/mobile/package.json"),
+    );
+    const updatesRequire = NodeModule.createRequire(
+      mobileRequire.resolve("expo-updates/package.json"),
+    );
+    const loaderPath = updatesRequire.resolve("@expo/fingerprint/build/ExpoConfigLoader.js");
+    const output = NodeChildProcess.execFileSync(
+      process.execPath,
+      [
+        "-e",
+        `
+      const { installModuleCaptureHook } = require(process.argv[1]);
+      const hook = installModuleCaptureHook();
+      try {
+        const config = require(process.argv[2]);
+        console.log(JSON.stringify({ runtimePolicy: config.runtimePolicy, captured: hook.getCapturedModules().some(module => module.filename === process.argv[2]) }));
+      } finally { hook.uninstall(); }
+    `,
+        loaderPath,
+        modulePath,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(JSON.parse(output)).toEqual({ runtimePolicy: "fingerprint", captured: true });
+  } finally {
+    NodeFS.rmSync(root, { recursive: true, force: true });
+  }
 });

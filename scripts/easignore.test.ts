@@ -38,6 +38,13 @@ describe("EAS archive ignore rules", () => {
         NodePath.join(fixtureRoot, ".gitignore"),
       );
 
+      // EAS filters directory paths without trailing slashes before descending.
+      const vendorDirectory = NodePath.join(fixtureRoot, "native/libghostty-vt");
+      NodeFS.mkdirSync(NodePath.dirname(vendorDirectory), { recursive: true });
+      NodeFS.writeFileSync(vendorDirectory, "directory path fixture");
+      expect(isIgnored(fixtureRoot, "native/libghostty-vt")).toBe(false);
+      NodeFS.unlinkSync(vendorDirectory);
+
       const rootNativeFile = "native/host.swift";
       const mobileLicense = "native/libghostty-vt/LICENSE";
       const mobileNativeFile = "apps/mobile/src/native/native-glass.ts";

@@ -9,7 +9,7 @@ apps/desktop/
 apps/vscode/
 apps/discord-bot/
 /native/*
-!/native/libghostty-vt/
+!/native/libghostty-vt
 /native/libghostty-vt/*
 !/native/libghostty-vt/LICENSE
 release/
