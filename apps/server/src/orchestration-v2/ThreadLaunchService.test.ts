@@ -114,7 +114,12 @@ function makeHarness(options: HarnessOptions = {}) {
     registry,
     { databaseLayer: database, runEffectWorker: false },
   );
-  const threadManagement = ThreadManagement.layer.pipe(Layer.provide(orchestrator));
+  const threadManagement = ThreadManagement.layer.pipe(
+    Layer.provide(
+      Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({ get: () => Effect.succeed(null) }),
+    ),
+    Layer.provide(orchestrator),
+  );
   const receipts = CommandReceiptStore.layer.pipe(Layer.provide(database));
   const outbox = EffectOutbox.layer.pipe(Layer.provide(database));
   const createWorktree = vi.fn(

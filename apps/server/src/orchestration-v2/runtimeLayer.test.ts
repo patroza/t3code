@@ -1,3 +1,4 @@
+import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import { limitRecoveryCommand } from "./UsageLimitRecoveryWorker.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -64,13 +65,19 @@ import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import {
   OrchestrationEventInfrastructureLayerLive,
   OrchestrationV2EventSinkLayerLive,
-  OrchestrationV2LayerLive,
+  OrchestrationV2LayerLive as RawOrchestrationV2LayerLive,
   ProjectServiceLayerLive,
 } from "./runtimeLayer.ts";
 import { shellStreamItemFromThreadShell } from "./ShellStream.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
+
+const OrchestrationV2LayerLive = RawOrchestrationV2LayerLive.pipe(
+  Layer.provide(
+    Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({ get: () => Effect.succeed(null) }),
+  ),
+);
 
 const PlatformTestLayer = Layer.merge(
   NodeServices.layer,

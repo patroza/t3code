@@ -7,6 +7,7 @@ import {
   type ChatAttachment,
   type CommandId,
   MessageId,
+  OrchestrationDispatchCommandError,
   type ModelSelection,
   type OrchestrationV2Actor,
   type OrchestrationV2Command,
@@ -23,6 +24,7 @@ import {
   type ScheduledTaskId,
   ThreadId,
 } from "@t3tools/contracts";
+import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -254,6 +256,7 @@ export class ThreadManagementDurableRunProjectionError extends Schema.TaggedErro
 }
 
 export const ThreadManagementError = Schema.Union([
+  OrchestrationDispatchCommandError,
   ThreadManagementThreadNotFoundError,
   ThreadManagementRunNotFoundError,
   ThreadManagementThreadArchivedError,
@@ -268,6 +271,9 @@ export type ThreadManagementError = typeof ThreadManagementError.Type;
 type ThreadManagementFailure = ThreadManagementError | Orchestrator.OrchestratorV2Error;
 
 export interface ThreadManagementServiceShape {
+  readonly assertCommandReady: (
+    command: OrchestrationV2ServerCommand,
+  ) => Effect.Effect<void, Orchestrator.OrchestratorV2Error | OrchestrationDispatchCommandError>;
   readonly ensureLegacyTranscript: (
     threadId: ThreadId,
   ) => Effect.Effect<void, LegacyV1ThreadImporter.LegacyV1ThreadImportError>;
@@ -375,6 +381,7 @@ function latestSteerableRun(
 
 const make = Effect.gen(function* () {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const cloneTracker = yield* ProjectCloneTracker.ProjectCloneTracker;
   const legacyImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
 
   const ensureLegacyTranscript = Effect.fn(
@@ -442,8 +449,35 @@ const make = Effect.gen(function* () {
       Effect.andThen(orchestrator.getThreadSnapshotWindow(threadId, options)),
     );
 
+  const assertCommandReady: ThreadManagementServiceShape["assertCommandReady"] = Effect.fn(
+    "ThreadManagementService.assertCommandReady",
+  )(function* (command) {
+    if (command.type === "thread.create") {
+      return yield* ProjectCloneTracker.rejectCommandsDuringClone(cloneTracker, command);
+    }
+    if (command.type === "message.dispatch") {
+      const shell = yield* orchestrator.getThreadShell(command.threadId);
+      if (shell !== null)
+        yield* ProjectCloneTracker.rejectCommandsDuringClone(cloneTracker, {
+          type: command.type,
+          projectId: shell.projectId,
+        });
+    }
+  });
   const dispatch: ThreadManagementServiceShape["dispatch"] = (command) =>
-    ensureCommandTranscripts(command).pipe(Effect.andThen(orchestrator.dispatch(command)));
+    assertCommandReady(command).pipe(
+      Effect.mapError((cause) =>
+        cause._tag === "OrchestrationDispatchCommandError"
+          ? new Orchestrator.OrchestratorCommandRejectedError({
+              commandId: command.commandId,
+              commandType: command.type,
+              cause,
+            })
+          : cause,
+      ),
+      Effect.andThen(() => ensureCommandTranscripts(command)),
+      Effect.andThen(() => orchestrator.dispatch(command)),
+    );
 
   const getProjectThread: ThreadManagementServiceShape["getProjectThread"] = (input) =>
     getThreadProjection(input.threadId).pipe(
@@ -528,6 +562,10 @@ const make = Effect.gen(function* () {
         });
       }
 
+      yield* ProjectCloneTracker.rejectCommandsDuringClone(cloneTracker, {
+        type: "message.dispatch",
+        projectId: target.thread.projectId,
+      });
       const steerableRun = latestSteerableRun(target);
       let dispatchMode: Extract<
         OrchestrationV2Command,
@@ -709,6 +747,7 @@ const make = Effect.gen(function* () {
     });
 
   return ThreadManagementService.of({
+    assertCommandReady,
     ensureLegacyTranscript,
     dispatch,
     getTimelinePage: (threadId, options) =>
@@ -752,11 +791,18 @@ const legacyV1ThreadImporterNoopLayer = Layer.succeed(
   }),
 );
 
-export const layer: Layer.Layer<ThreadManagementService, never, Orchestrator.OrchestratorV2> =
-  Layer.effect(ThreadManagementService, make).pipe(Layer.provide(legacyV1ThreadImporterNoopLayer));
+export const layer: Layer.Layer<
+  ThreadManagementService,
+  never,
+  Orchestrator.OrchestratorV2 | ProjectCloneTracker.ProjectCloneTracker
+> = Layer.effect(ThreadManagementService, make).pipe(
+  Layer.provide(legacyV1ThreadImporterNoopLayer),
+);
 
 export const layerWithLegacyImporter: Layer.Layer<
   ThreadManagementService,
   never,
-  LegacyV1ThreadImporter.LegacyV1ThreadImporter | Orchestrator.OrchestratorV2
+  | LegacyV1ThreadImporter.LegacyV1ThreadImporter
+  | Orchestrator.OrchestratorV2
+  | ProjectCloneTracker.ProjectCloneTracker
 > = Layer.effect(ThreadManagementService, make);

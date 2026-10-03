@@ -1,3 +1,4 @@
+import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import { assert, describe, it, vi } from "@effect/vitest";
 import {
   type ChatAttachment,
@@ -54,7 +55,12 @@ function makeHarness(
     registry,
     { databaseLayer: database, runEffectWorker: false },
   );
-  const threadManagement = ThreadManagement.layer.pipe(Layer.provide(orchestrator));
+  const threadManagement = ThreadManagement.layer.pipe(
+    Layer.provide(
+      Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({ get: () => Effect.succeed(null) }),
+    ),
+    Layer.provide(orchestrator),
+  );
   const outbox = EffectOutbox.layer.pipe(Layer.provide(database));
   const generateThreadTitle = vi.fn(
     options.generateTitle ?? (() => Effect.succeed({ title: "Generated title" })),

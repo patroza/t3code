@@ -1817,28 +1817,9 @@ const makeWsRpcLayer = (
             creationSource: "creationSource" in stamped ? stamped.creationSource : "web",
           }),
         ).pipe(Effect.provide(intakeContext));
-        const cloneGuard =
-          stamped.type === "thread.create"
-            ? ProjectCloneTracker.rejectCommandsDuringClone(projectCloneTracker, stamped)
-            : stamped.type === "message.dispatch"
-              ? threadManagement.getThreadShell(stamped.threadId).pipe(
-                  Effect.flatMap((shell) =>
-                    shell === null
-                      ? Effect.void
-                      : ProjectCloneTracker.rejectCommandsDuringClone(projectCloneTracker, {
-                          type: stamped.type,
-                          projectId: shell.projectId,
-                        }),
-                  ),
-                )
-              : Effect.void;
-        return cloneGuard.pipe(
-          Effect.andThen(
-            stamped.type === "thread.unarchive"
-              ? worktreeLifecycle.restoreThreadWorktree({ threadId: stamped.threadId }, dispatch)
-              : dispatch,
-          ),
-        );
+        return stamped.type === "thread.unarchive"
+          ? worktreeLifecycle.restoreThreadWorktree({ threadId: stamped.threadId }, dispatch)
+          : dispatch;
       };
       const handlers = ServerWsRpcGroup.of({
         [WS_METHODS.identityGetSnapshot]: () =>
