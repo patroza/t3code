@@ -93,7 +93,7 @@ export function HomeHeader(props: HomeHeaderProps) {
             },
           ] satisfies MenuAction[])
         : []),
-      ...(props.projects.length === 0
+      ...(props.projects.length === 0 || props.listMode === "board"
         ? []
         : ([
             {
@@ -149,7 +149,7 @@ export function HomeHeader(props: HomeHeaderProps) {
       const id = event.nativeEvent.event;
       if (id.startsWith("list-mode:")) {
         const mode = id.slice("list-mode:".length);
-        if (mode === "threads") {
+        if (mode === "threads" || mode === "board") {
           props.onListModeChange(mode);
         }
         return;

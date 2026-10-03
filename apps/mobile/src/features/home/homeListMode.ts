@@ -5,25 +5,28 @@
  * Threads replaces the former Recent + Projects modes with a single list
  * controlled by {@link HomeThreadGrouping}.
  */
-export type HomeListMode = "threads";
+export type HomeListMode = "threads" | "board";
 
-export const HOME_LIST_MODES = ["threads"] as const satisfies readonly HomeListMode[];
+export const HOME_LIST_MODES = ["threads", "board"] as const satisfies readonly HomeListMode[];
 
 export const HOME_LIST_MODE_LABELS: Record<HomeListMode, string> = {
   threads: "Threads",
+  board: "Board",
 };
 
 /** SF Symbol names for header mode buttons (AppSymbol / native bar items). */
 export const HOME_LIST_MODE_ICONS: Record<HomeListMode, string> = {
   threads: "list.bullet",
+  board: "square.split.2x1",
 };
 
 export const HOME_LIST_MODE_TITLES: Record<HomeListMode, string> = {
   threads: "Threads",
+  board: "Board",
 };
 
 export function isHomeListMode(value: unknown): value is HomeListMode {
-  return value === "threads";
+  return value === "threads" || value === "board";
 }
 
 /** Modes the user can switch to from the current one. */

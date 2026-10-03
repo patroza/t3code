@@ -50,7 +50,13 @@ export function HomeHeader(props: HomeHeaderProps) {
   const { width: headerWidth } = useWindowDimensions();
   const theme = useUniwindTheme();
   const iconColor = theme["--color-icon"];
+  const sheetBackground = theme["--color-sheet"];
   const alternateModes = otherHomeListModes(props.listMode);
+  const isBoardMode = props.listMode === "board";
+  // Board columns are nested horizontal/vertical lists — not one UIKit scroll
+  // view that glass can sample / auto-inset. Use a solid bar so cards never
+  // paint under the status/nav chrome (same as the dedicated Board route).
+  const useSolidBoardHeader = isBoardMode && NATIVE_LIQUID_GLASS_SUPPORTED;
   const hasCustomListOptions =
     props.selectedEnvironmentIds.length > 0 ||
     props.ownershipFilter !== DEFAULT_OWNERSHIP_FILTER ||
@@ -77,7 +83,7 @@ export function HomeHeader(props: HomeHeaderProps) {
     onOwnershipFilterChange: props.onOwnershipFilterChange,
     onOwnershipRelationChange: props.onOwnershipRelationChange,
     listOrganization: false,
-    showProjectFilter: true,
+    showProjectFilter: props.listMode !== "board",
     threadGrouping: props.listMode === "threads" ? props.threadGrouping : undefined,
     onThreadGroupingChange: props.listMode === "threads" ? props.onThreadGroupingChange : undefined,
     ...(props.listMode === "threads"
@@ -97,6 +103,7 @@ export function HomeHeader(props: HomeHeaderProps) {
           filterMenu.items,
           props.listMode,
           headerTitle,
+          useSolidBoardHeader,
           headerWidth,
         ]}
         options={{
@@ -115,8 +122,19 @@ export function HomeHeader(props: HomeHeaderProps) {
             ),
           }),
           headerTintColor: iconColor,
+          // Explicitly toggle glass ↔ solid when switching modes so board
+          // underlap does not stick after leaving Board, and vice versa.
           ...(NATIVE_LIQUID_GLASS_SUPPORTED
-            ? {
+            ? useSolidBoardHeader
+              ? {
+                  headerTransparent: false,
+                  // native-stack types backgroundColor as string; ColorValue is fine at runtime.
+                  headerStyle: {
+                    backgroundColor: sheetBackground as unknown as string,
+                  },
+                  scrollEdgeEffects: undefined,
+                }
+              : {
                   headerTransparent: true,
                   headerStyle: { backgroundColor: "transparent" },
                   scrollEdgeEffects: HEADER_SCROLL_EDGE_EFFECTS,
@@ -142,12 +160,14 @@ export function HomeHeader(props: HomeHeaderProps) {
               type: "button",
             }),
           ],
-          // Mail-search toolbar is iOS 26+ only;
+          // Board has no thread search. Mail-search toolbar is iOS 26+ only;
           // pre-Liquid-Glass falls back to the standard nav search field.
           // Keys are omitted (not `undefined`) on the NativeHeaderToolbar
           // fallback so a reapply cannot clobber options that toolbar owns.
           ...(NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED
-            ? {
+            ? isBoardMode
+              ? { unstable_headerToolbarItems: undefined }
+              : {
                   unstable_headerToolbarItems: () => [
                     createNativeMailSearchToolbarItem({
                       composeButtonId: "home-new-task",
@@ -165,7 +185,9 @@ export function HomeHeader(props: HomeHeaderProps) {
                     }),
                   ],
                 }
-            : {
+            : isBoardMode
+              ? {}
+              : {
                   headerSearchBarOptions: {
                     ref: searchBarRef,
                     autoCapitalize: "none" as const,
@@ -182,7 +204,7 @@ export function HomeHeader(props: HomeHeaderProps) {
         }}
       />
 
-      {NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED ? null : (
+      {NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED || isBoardMode ? null : (
         <NativeHeaderToolbar placement="bottom">
           <NativeHeaderToolbar.Menu
             accessibilityLabel="Filter threads"
