@@ -234,6 +234,10 @@ const isolatedUnitTestFiles = [
   "src/components/pullRequest/PullRequestDetailPanel.test.tsx",
   "src/components/pullRequest/PullRequestSummaryTab.test.tsx",
   "src/components/ThreadNotificationCoordinator.test.tsx",
+  // Uses the real atom registry; shared-worker mocks omit RegistryContext.
+  "src/components/ThreadStatusIndicators.subscriptions.test.tsx",
+  // Queue presentation mocks must not replace stores used by draft recovery tests.
+  "src/components/chat/QueuedRunsControl.test.tsx",
   // Mocks `./vendor/ghostty-vt.wasm?url`; under isolate:false runtime.ts is
   // already bound to the real asset URL and fetch('/src/...wasm') is invalid.
   "src/terminal/ghostty/core.test.ts",
