@@ -72,6 +72,17 @@ const buildSourcemap: boolean | "hidden" =
       : true;
 
 const isolatedUnitTestFiles = [
+  // Direct hook harnesses replace React hooks and compiler caches, requiring fresh module binding.
+  "src/hooks/useThreadActions.undo.test.ts",
+  "src/components/settings/ProjectFaviconPickerDialog.test.tsx",
+  "src/components/settings/ThemeEditorHost.test.tsx",
+  "src/components/settings/AcpSessionManagementSection.test.tsx",
+  "src/components/settings/AcpRegistrySearchStep.test.tsx",
+  "src/components/settings/SettingsPanels.restore.test.tsx",
+  "src/components/settings/ProviderSetupSection.test.tsx",
+
+  // Its direct component hook harness mocks React; real React from siblings must not bind first.
+  "src/components/settings/AcpRegistryIcon.test.ts",
   // These exercise the real live-refresh hook; sibling presentation tests mock it.
   "src/hooks/usePullRequestChecksRefresh.test.ts",
   "src/authBootstrap.test.ts",
