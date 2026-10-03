@@ -1,4 +1,5 @@
-import type { OrchestrationThreadActivity } from "@t3tools/contracts";
+import type { IntegrationActivity as OrchestrationThreadActivity } from "@t3tools/shared/integrationThreadView";
+
 import { describe, expect, it } from "vite-plus/test";
 
 import { derivePendingInteractions } from "./pendingInteractions.ts";

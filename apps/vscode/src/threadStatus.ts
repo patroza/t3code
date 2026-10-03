@@ -1,4 +1,9 @@
-import type { OrchestrationLatestTurnState, OrchestrationSessionStatus } from "@t3tools/contracts";
+import type {
+  IntegrationLatestTurn,
+  IntegrationSession,
+} from "@t3tools/shared/integrationThreadView";
+type OrchestrationLatestTurnState = IntegrationLatestTurn["state"];
+type OrchestrationSessionStatus = IntegrationSession["status"];
 import { shouldShowPlanReadyStatus } from "@t3tools/shared/proposedPlan";
 import { sessionNeedsWakeUp } from "@t3tools/shared/sessionWake";
 
@@ -26,8 +31,8 @@ export interface ThreadStatusSource {
     readonly status: OrchestrationSessionStatus;
     readonly activeTurnId?: string | null;
   };
-  readonly hasPendingApprovals?: boolean;
-  readonly hasPendingUserInput?: boolean;
+  readonly hasPendingApprovals?: boolean | undefined;
+  readonly hasPendingUserInput?: boolean | undefined;
   readonly interactionMode?: string | null;
   readonly hasActionableProposedPlan?: boolean;
 }
@@ -46,6 +51,7 @@ export function resolveThreadDisplayStatus(source: ThreadStatusSource): ThreadDi
     return { kind: "plan-ready", label: "Plan Ready" };
   }
   if (
+    (source.session?.status === "stopped" && source.latestTurn?.state === "running") ||
     sessionNeedsWakeUp({
       sessionStatus: source.session?.status ?? null,
       activeTurnId: source.session?.activeTurnId ?? null,

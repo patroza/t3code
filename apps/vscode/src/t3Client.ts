@@ -1,19 +1,35 @@
+import {
+  decodeShellSnapshotText,
+  decodeThreadSnapshotText,
+  queuedRunForMessage,
+  activeConversationRun,
+  queuedConversationMessages,
+} from "./nativeConversation.ts";
+import {
+  integrationThreadView,
+  integrationThreadShellView,
+  type IntegrationThreadView as OrchestrationThread,
+  type IntegrationThreadShellView as OrchestrationThreadShell,
+} from "@t3tools/shared/integrationThreadView";
+import { applyOrchestrationV2ProjectionEvent } from "@t3tools/client-runtime/state/orchestration-v2-projection";
 // @effect-diagnostics globalDate:off globalFetch:off
 import {
+  ORCHESTRATION_PROTOCOL_HEADER,
+  ORCHESTRATION_PROTOCOL_VERSION_TEXT,
   DEFAULT_MODEL,
   DEFAULT_RUNTIME_MODE,
   type AiUsageSnapshot,
   EnvironmentId,
-  ORCHESTRATION_WS_METHODS,
+  ORCHESTRATION_V2_WS_METHODS,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
   ProviderInstanceId,
-  type ClientOrchestrationCommand,
+  type OrchestrationV2Command,
   type ModelSelection,
   type OrchestrationProjectShell,
-  OrchestrationShellSnapshot,
-  OrchestrationThreadDetailSnapshot,
-  type OrchestrationThread,
-  type OrchestrationThreadShell,
+  OrchestrationV2ShellSnapshot,
+  type OrchestrationV2ThreadProjection,
+  RuntimeRequestId,
+  PlanId,
   type MessageId,
   type RuntimeMode,
   type ProviderInteractionMode,
@@ -43,14 +59,13 @@ import { resolveRemoteWebSocketConnectionUrl } from "@t3tools/client-runtime/aut
 import { bootstrapRemoteBearerSession } from "@t3tools/client-runtime/authorization";
 import { fetchRemoteEnvironmentDescriptor } from "@t3tools/client-runtime/environment";
 import { applyShellStreamEvent } from "@t3tools/client-runtime/state/shell";
-import { applyThreadDetailEvent } from "@t3tools/client-runtime/state/threads";
+
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Scope from "effect/Scope";
-import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Socket from "effect/unstable/socket/Socket";
 
@@ -63,6 +78,10 @@ import {
 } from "./serverCompatibility.ts";
 
 type ThreadListener = (thread: OrchestrationThread | null) => void;
+type OrchestrationShellSnapshot = Omit<
+  OrchestrationV2ShellSnapshot,
+  "threads" | "archivedThreads"
+> & { readonly threads: ReadonlyArray<OrchestrationThreadShell> };
 type ShellListener = (shell: OrchestrationShellSnapshot) => void;
 type ConnectionListener = (connected: boolean) => void;
 type VcsStatusListener = (status: VcsStatusResult | null) => void;
@@ -99,7 +118,7 @@ export class T3Client {
   readonly #log: (message: string) => void;
   readonly #runtime = ManagedRuntime.make(
     Layer.merge(
-      rpcSessionFactoryLayer.pipe(Layer.provide(Socket.layerWebSocketConstructorGlobal)),
+      rpcSessionFactoryLayer({}).pipe(Layer.provide(Socket.layerWebSocketConstructorGlobal)),
       remoteHttpClientLayer((input, init) => globalThis.fetch(input, init)),
     ),
   );
@@ -112,7 +131,8 @@ export class T3Client {
   #closedFiber: Fiber.Fiber<void, never> | null = null;
   #vcsStatus: VcsStatusResult | null = null;
   #vcsStatusCwd: string | null = null;
-  #shell: OrchestrationShellSnapshot | null = null;
+  #shell: OrchestrationV2ShellSnapshot | null = null;
+  #projection: OrchestrationV2ThreadProjection | null = null;
   #activeThread: OrchestrationThread | null = null;
   #activeThreadSequence: number | null = null;
   #activeThreadId: ThreadId | null = null;
@@ -135,7 +155,9 @@ export class T3Client {
   }
 
   get shell(): OrchestrationShellSnapshot | null {
-    return this.#shell;
+    return this.#shell === null
+      ? null
+      : { ...this.#shell, threads: this.#shell.threads.map(integrationThreadShellView) };
   }
 
   get activeThread(): OrchestrationThread | null {
@@ -151,7 +173,7 @@ export class T3Client {
   }
 
   get serverCapabilities(): ServerCapabilities {
-    return this.#serverCapabilities;
+    return { ...this.#serverCapabilities, queuedMessages: true };
   }
 
   onThreadChanged(listener: ThreadListener): { dispose(): void } {
@@ -209,7 +231,7 @@ export class T3Client {
   }
 
   async waitForShell(): Promise<OrchestrationShellSnapshot> {
-    if (this.#shell !== null) return this.#shell;
+    if (this.#shell !== null) return this.shell!;
     return new Promise((resolve) => this.#shellWaiters.add(resolve));
   }
 
@@ -416,6 +438,7 @@ export class T3Client {
         const project = shell.projects.find((candidate) => candidate.id === thread.projectId);
         return normalizedPath(thread.worktreePath ?? project?.workspaceRoot ?? "") === target;
       })
+      .map(integrationThreadShellView)
       .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 
@@ -423,6 +446,7 @@ export class T3Client {
     const session = this.#requireSession();
     this.#activeThreadId = threadId;
     this.#activeThread = null;
+    this.#projection = null;
     this.#activeThreadSequence = null;
     this.#emitThread();
     await this.#stopThreadSubscription();
@@ -443,15 +467,16 @@ export class T3Client {
     if (project === undefined) {
       const projectId = newProjectId();
       const modelSelection = input.modelSelection ?? this.#defaultModelSelection();
-      await this.#dispatch({
-        type: "project.create",
-        commandId: newCommandId(),
-        projectId,
-        title: input.worktreePath.split(/[\\/]/u).at(-1) ?? "Workspace",
-        workspaceRoot: input.worktreePath,
-        defaultModelSelection: modelSelection,
-        createdAt,
-      });
+      await this.#runtime.runPromise(
+        session.client[WS_METHODS.projectsMutate]({
+          type: "project.create",
+          commandId: newCommandId(),
+          projectId,
+          title: input.worktreePath.split(/[\\/]/u).at(-1) ?? "Workspace",
+          workspaceRoot: input.worktreePath,
+          defaultModelSelection: modelSelection,
+        }),
+      );
       project = {
         id: projectId,
         title: input.worktreePath.split(/[\\/]/u).at(-1) ?? "Workspace",
@@ -478,10 +503,12 @@ export class T3Client {
       interactionMode: input.interactionMode ?? "default",
       branch: null,
       worktreePath: isProjectRoot ? null : input.worktreePath,
-      createdAt,
+      createdBy: "user",
+      creationSource: "server",
     });
     this.#activeThreadId = threadId;
     this.#activeThread = null;
+    this.#projection = null;
     this.#activeThreadSequence = null;
     await this.#stopThreadSubscription();
     this.#startThreadSubscription(session, threadId);
@@ -504,68 +531,104 @@ export class T3Client {
       input.modelSelection ?? thread?.modelSelection ?? this.#defaultModelSelection();
     const interactionMode =
       input.interactionMode ?? thread?.interactionMode ?? ("default" as const);
+    if (interactionMode !== thread?.interactionMode)
+      await this.#dispatch({
+        type: "thread.interaction-mode.set",
+        commandId: newCommandId(),
+        threadId: input.threadId,
+        interactionMode,
+      });
+    if (input.runtimeMode !== undefined && input.runtimeMode !== thread?.runtimeMode)
+      await this.#dispatch({
+        type: "thread.runtime-mode.set",
+        commandId: newCommandId(),
+        threadId: input.threadId,
+        runtimeMode: input.runtimeMode,
+      });
+    const messageId = input.messageId ?? newMessageId();
+    const session = this.#requireSession();
+    const attachments = input.attachments?.length
+      ? (
+          await this.#runtime.runPromise(
+            session.client[WS_METHODS.assetsPersistChatAttachments]({
+              threadId: input.threadId,
+              messageId,
+              attachments: input.attachments,
+            }),
+          )
+        ).attachments
+      : [];
     await this.#dispatch({
-      type: "thread.turn.start",
+      type: "message.dispatch",
       commandId: newCommandId(),
       threadId: input.threadId,
-      message: {
-        messageId: input.messageId ?? newMessageId(),
-        role: "user",
-        text: input.prompt,
-        attachments: input.attachments ?? [],
-      },
+      messageId,
+      text: input.prompt,
+      attachments,
       modelSelection,
       titleSeed: input.prompt.trim().slice(0, 80) || "New thread",
-      runtimeMode: input.runtimeMode ?? thread?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
-      interactionMode,
+      createdBy: "user",
+      creationSource: "server",
       sourceHint: { channel: "vscode" },
-      ...(input.sourceProposedPlan === undefined
-        ? {}
-        : { sourceProposedPlan: input.sourceProposedPlan }),
-      createdAt: new Date().toISOString(),
-    } as ClientOrchestrationCommand);
+      dispatchMode: { type: "queue_after_active" },
+      ...(input.sourceProposedPlan
+        ? {
+            sourcePlanRef: {
+              threadId: input.sourceProposedPlan.threadId,
+              planId: PlanId.make(input.sourceProposedPlan.planId),
+            },
+          }
+        : {}),
+    });
+  }
+
+  async resumeQueue(): Promise<void> {
+    if (!this.#activeThreadId) throw new Error("Select a thread first.");
+    await this.#dispatch({
+      type: "queue.resume",
+      commandId: newCommandId(),
+      threadId: this.#activeThreadId,
+    });
   }
 
   async steerQueuedMessage(messageId: MessageId): Promise<void> {
-    if (!this.#serverCapabilities.queuedMessages)
+    if (!this.serverCapabilities.queuedMessages)
       throw new Error("Queued follow-ups require the T3 Code fork server.");
     const thread = this.#activeThread;
     if (thread === null) throw new Error("Select a T3 Code thread before steering its queue.");
     await this.#dispatch({
-      type: "thread.queue.steer",
+      type: "queued-message.promote-to-steer",
       commandId: newCommandId(),
       threadId: thread.id,
-      messageId,
-      createdAt: new Date().toISOString(),
+      queuedRunId: this.#queuedRun(messageId).id,
+      targetRunId: this.#activeRun().id,
     });
   }
 
   async removeQueuedMessage(messageId: MessageId): Promise<void> {
-    if (!this.#serverCapabilities.queuedMessages)
+    if (!this.serverCapabilities.queuedMessages)
       throw new Error("Queued follow-ups require the T3 Code fork server.");
     const thread = this.#activeThread;
     if (thread === null) throw new Error("Select a T3 Code thread before changing its queue.");
     await this.#dispatch({
-      type: "thread.queue.remove",
+      type: "queued-run.cancel",
       commandId: newCommandId(),
       threadId: thread.id,
-      messageId,
-      createdAt: new Date().toISOString(),
+      runId: this.#queuedRun(messageId).id,
     });
   }
 
   async updateQueuedMessage(messageId: MessageId, text: string): Promise<void> {
-    if (!this.#serverCapabilities.queuedMessages)
+    if (!this.serverCapabilities.queuedMessages)
       throw new Error("Queued follow-ups require the T3 Code fork server.");
     const thread = this.#activeThread;
     if (thread === null) throw new Error("Select a T3 Code thread before changing its queue.");
     await this.#dispatch({
-      type: "thread.queue.update",
+      type: "queued-run.edit",
       commandId: newCommandId(),
       threadId: thread.id,
-      messageId,
+      runId: this.#queuedRun(messageId).id,
       text,
-      createdAt: new Date().toISOString(),
     });
   }
 
@@ -579,7 +642,6 @@ export class T3Client {
       commandId: newCommandId(),
       threadId: thread.id,
       interactionMode,
-      createdAt: new Date().toISOString(),
     });
   }
 
@@ -587,7 +649,7 @@ export class T3Client {
     const thread = this.#activeThread;
     if (thread === null) throw new Error("Select a T3 Code thread before changing models.");
     await this.#dispatch({
-      type: "thread.meta.update",
+      type: "thread.model-selection.set",
       commandId: newCommandId(),
       threadId: thread.id,
       modelSelection,
@@ -619,6 +681,7 @@ export class T3Client {
       await this.#stopThreadSubscription();
       this.#activeThreadId = null;
       this.#activeThread = null;
+      this.#projection = null;
       this.#activeThreadSequence = null;
       this.#emitThread();
     }
@@ -640,11 +703,11 @@ export class T3Client {
     const thread = this.#activeThread;
     if (thread === null) return;
     await this.#dispatch({
-      type: "thread.turn.interrupt",
+      type: "run.interrupt",
+      holdQueue: true,
       commandId: newCommandId(),
       threadId: thread.id,
-      ...(thread.latestTurn?.turnId === undefined ? {} : { turnId: thread.latestTurn.turnId }),
-      createdAt: new Date().toISOString(),
+      runId: this.#activeRun().id,
     });
   }
 
@@ -655,12 +718,11 @@ export class T3Client {
     const thread = this.#activeThread;
     if (thread === null) throw new Error("Select a T3 Code thread before responding.");
     await this.#dispatch({
-      type: "thread.approval.respond",
+      type: "runtime-request.respond",
       commandId: newCommandId(),
       threadId: thread.id,
-      requestId,
+      requestId: RuntimeRequestId.make(requestId),
       decision,
-      createdAt: new Date().toISOString(),
     });
   }
 
@@ -671,12 +733,11 @@ export class T3Client {
     const thread = this.#activeThread;
     if (thread === null) throw new Error("Select a T3 Code thread before responding.");
     await this.#dispatch({
-      type: "thread.user-input.respond",
+      type: "runtime-request.respond",
       commandId: newCommandId(),
       threadId: thread.id,
-      requestId,
+      requestId: RuntimeRequestId.make(requestId),
       answers,
-      createdAt: new Date().toISOString(),
     });
   }
 
@@ -703,15 +764,15 @@ export class T3Client {
     };
   }
 
-  async #dispatch(command: ClientOrchestrationCommand): Promise<void> {
+  async #dispatch(command: OrchestrationV2Command): Promise<void> {
     const session = this.#requireSession();
     await this.#runtime.runPromise(
-      session.client[ORCHESTRATION_WS_METHODS.dispatchCommand](command),
+      session.client[ORCHESTRATION_V2_WS_METHODS.dispatchCommand](command),
     );
   }
 
   #startShellSubscription(session: RpcSession): void {
-    const stream = session.client[ORCHESTRATION_WS_METHODS.subscribeShell](
+    const stream = session.client[ORCHESTRATION_V2_WS_METHODS.subscribeShell](
       this.#shell === null ? {} : { afterSequence: this.#shell.snapshotSequence },
     ).pipe(
       Stream.runForEach((item) =>
@@ -721,9 +782,9 @@ export class T3Client {
             // Status-only marker (parity with EnvironmentShellState.applyItem); no shell mutation.
           } else if (this.#shell !== null) this.#shell = applyShellStreamEvent(this.#shell, item);
           if (this.#shell !== null) {
-            for (const resolve of this.#shellWaiters) resolve(this.#shell);
+            for (const resolve of this.#shellWaiters) resolve(this.shell!);
             this.#shellWaiters.clear();
-            for (const listener of this.#shellListeners) listener(this.#shell);
+            for (const listener of this.#shellListeners) listener(this.shell!);
           }
         }),
       ),
@@ -739,18 +800,20 @@ export class T3Client {
       bearerToken === undefined || bearerToken === ""
         ? {}
         : { authorization: `Bearer ${bearerToken}` };
-    const response = await globalThis.fetch(url, { headers });
+    const response = await globalThis.fetch(url, {
+      headers: { ...headers, [ORCHESTRATION_PROTOCOL_HEADER]: ORCHESTRATION_PROTOCOL_VERSION_TEXT },
+    });
     if (!response.ok) {
       throw new Error(`Could not load T3 Code threads (HTTP ${response.status}).`);
     }
-    const decode = Schema.decodeUnknownSync(Schema.fromJsonString(OrchestrationShellSnapshot));
+    const decode = decodeShellSnapshotText;
     this.#shell = decode(await response.text());
     this.#log(
       `shell HTTP complete in ${Date.now() - startedAt}ms projects=${this.#shell.projects.length} threads=${this.#shell.threads.length} sequence=${this.#shell.snapshotSequence}`,
     );
-    for (const resolve of this.#shellWaiters) resolve(this.#shell);
+    for (const resolve of this.#shellWaiters) resolve(this.shell!);
     this.#shellWaiters.clear();
-    for (const listener of this.#shellListeners) listener(this.#shell);
+    for (const listener of this.#shellListeners) listener(this.shell!);
   }
 
   #startUsageSubscription(session: RpcSession): void {
@@ -806,27 +869,21 @@ export class T3Client {
   }
 
   #startThreadSubscription(session: RpcSession, threadId: ThreadId): void {
-    const stream = session.client[ORCHESTRATION_WS_METHODS.subscribeThread]({
+    const stream = session.client[ORCHESTRATION_V2_WS_METHODS.subscribeThread]({
       threadId,
       ...(this.#activeThreadSequence === null ? {} : { afterSequence: this.#activeThreadSequence }),
     }).pipe(
       Stream.runForEach((item) =>
         Effect.sync(() => {
           if (item.kind === "snapshot") {
-            this.#activeThread = item.snapshot.thread;
-            this.#activeThreadSequence = item.snapshot.snapshotSequence;
-          } else if (item.kind === "synchronized") {
-            // Status-only marker (parity with EnvironmentThreadState.applyItem); no event to apply.
-          } else if (this.#activeThread !== null) {
-            const result = applyThreadDetailEvent(this.#activeThread, item.event);
-            this.#activeThread =
-              result.kind === "updated"
-                ? result.thread
-                : result.kind === "deleted"
-                  ? null
-                  : this.#activeThread;
-            this.#activeThreadSequence = item.event.sequence;
+            this.#projection = item.projection;
+            this.#activeThreadSequence = item.snapshotSequence;
+          } else if (item.kind === "event") {
+            this.#projection = applyOrchestrationV2ProjectionEvent(this.#projection, item.event);
+            this.#activeThreadSequence = item.sequence;
           }
+          this.#activeThread =
+            this.#projection === null ? null : integrationThreadView(this.#projection);
           if (this.#activeThread !== null) {
             for (const resolve of this.#threadWaiters) resolve(this.#activeThread);
             this.#threadWaiters.clear();
@@ -850,22 +907,36 @@ export class T3Client {
     );
     const headers =
       this.#bearerToken === null ? {} : { authorization: `Bearer ${this.#bearerToken}` };
-    const response = await globalThis.fetch(url, { headers });
+    const response = await globalThis.fetch(url, {
+      headers: { ...headers, [ORCHESTRATION_PROTOCOL_HEADER]: ORCHESTRATION_PROTOCOL_VERSION_TEXT },
+    });
     if (!response.ok) {
       throw new Error(`Could not load the T3 Code thread (HTTP ${response.status}).`);
     }
-    const decode = Schema.decodeUnknownSync(
-      Schema.fromJsonString(OrchestrationThreadDetailSnapshot),
-    );
+    const decode = decodeThreadSnapshotText;
     const snapshot = decode(await response.text());
-    this.#activeThread = snapshot.thread;
+    this.#projection = snapshot.projection;
+    this.#activeThread = integrationThreadView(snapshot.projection);
     this.#activeThreadSequence = snapshot.snapshotSequence;
     this.#log(
-      `thread HTTP complete in ${Date.now() - startedAt}ms id=${threadId} messages=${snapshot.thread.messages.length} sequence=${snapshot.snapshotSequence}`,
+      `thread HTTP complete in ${Date.now() - startedAt}ms id=${threadId} messages=${snapshot.projection.messages.length} sequence=${snapshot.snapshotSequence}`,
     );
     for (const resolve of this.#threadWaiters) resolve(this.#activeThread);
     this.#threadWaiters.clear();
     this.#emitThread();
+  }
+
+  get queuedMessages() {
+    return queuedConversationMessages(this.#projection);
+  }
+  #queuedRun(messageId: MessageId) {
+    return queuedRunForMessage(this.#projection, messageId);
+  }
+  #activeRun() {
+    return activeConversationRun(this.#projection);
+  }
+  get nativeProjection() {
+    return this.#projection;
   }
 
   #emitThread(): void {
@@ -905,6 +976,7 @@ export class T3Client {
     }
     this.#session = null;
     this.#activeThread = null;
+    this.#projection = null;
     this.#activeThreadSequence = null;
     this.#shell = null;
     this.#serverConfig = null;

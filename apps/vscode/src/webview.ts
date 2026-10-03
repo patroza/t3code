@@ -162,6 +162,7 @@ interface ViewState {
     readonly pendingInteractions: ReadonlyArray<ViewPendingApproval | ViewPendingUserInput>;
     readonly showPlanFollowUp: boolean;
     readonly activeProposedPlan: ViewActiveProposedPlan | null;
+    readonly queueHeld?: boolean;
     readonly queuedMessages: ReadonlyArray<ViewQueuedMessage>;
     /** Provider session status for queue-by-default prediction (running/starting/…). */
     readonly sessionStatus: string | null;
@@ -1312,6 +1313,12 @@ function render(next: ViewState): void {
 function renderQueuedMessages(state: ViewState): void {
   settleQueueOverlays(state);
   queuedMessages.replaceChildren();
+  if (state.activeThread?.queueHeld) {
+    const resume = document.createElement("button");
+    resume.textContent = "Resume queued messages";
+    resume.addEventListener("click", () => vscode.postMessage({ type: "resumeQueue" }));
+    queuedMessages.append(resume);
+  }
   for (const message of displayQueuedMessages(state)) {
     const row = document.createElement("div");
     row.className = message.pending ? "queued-message queued-message-pending" : "queued-message";

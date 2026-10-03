@@ -1,9 +1,11 @@
+import type {
+  IntegrationThreadView as OrchestrationThread,
+  IntegrationThreadShellView as OrchestrationThreadShell,
+} from "@t3tools/shared/integrationThreadView";
 /* oxlint-disable unicorn/require-post-message-target-origin -- VS Code Webview.postMessage is not Window.postMessage. */
 // @effect-diagnostics globalTimers:off globalDate:off cryptoRandomUUID:off
 import type {
   ModelSelection,
-  OrchestrationThread,
-  OrchestrationThreadShell,
   RuntimeMode,
   ThreadId,
   UploadChatAttachment,
@@ -90,6 +92,7 @@ type WebviewRequest =
     }
   | { readonly type: "toggleProviderFavorite"; readonly instanceId: string }
   | { readonly type: "toggleModelFavorite"; readonly modelKey: string }
+  | { readonly type: "resumeQueue" }
   | { readonly type: "steerQueuedMessage"; readonly messageId: string }
   | { readonly type: "removeQueuedMessage"; readonly messageId: string }
   | { readonly type: "updateQueuedMessage"; readonly messageId: string; readonly text: string }
@@ -153,6 +156,7 @@ function isRequest(value: unknown): value is WebviewRequest {
     type === "ready" ||
     type === "refresh" ||
     type === "stop" ||
+    type === "resumeQueue" ||
     type === "toggleContext" ||
     type === "archiveThread" ||
     type === "visitT3"
@@ -554,6 +558,9 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
             await this.client.setInteractionMode(message.interactionMode);
           });
           return;
+        case "resumeQueue":
+          await this.#run(() => this.client.resumeQueue());
+          break;
         case "steerQueuedMessage":
           await this.#run(() => this.client.steerQueuedMessage(MessageId.make(message.messageId)));
           return;
@@ -581,9 +588,9 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
                     createdAt: plan.createdAt,
                     updatedAt: plan.updatedAt,
                     turnId: plan.turnId,
-                    planMarkdown: plan.planMarkdown,
-                    implementedAt: plan.implementedAt,
-                    implementationThreadId: plan.implementationThreadId,
+                    planMarkdown: plan.text,
+                    implementedAt: plan.implementedAt ?? null,
+                    implementationThreadId: null,
                   })),
                   thread.latestTurn?.turnId ?? null,
                 )
@@ -787,9 +794,9 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
       createdAt: plan.createdAt,
       updatedAt: plan.updatedAt,
       turnId: plan.turnId,
-      planMarkdown: plan.planMarkdown,
-      implementedAt: plan.implementedAt,
-      implementationThreadId: plan.implementationThreadId,
+      planMarkdown: plan.text,
+      implementedAt: plan.implementedAt ?? null,
+      implementationThreadId: null,
     }));
     const activeProposedPlan = findLatestProposedPlan(
       proposedPlans,
@@ -834,26 +841,38 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
             createdAt: activeProposedPlan.createdAt,
           }
         : null,
-      queuedMessages: thread.queuedMessages.map((message) => ({
+      queueHeld:
+        this.client.nativeProjection?.runs.some(
+          (run) => run.status === "queued" && run.queueHeld,
+        ) ?? false,
+      queuedMessages: this.client.queuedMessages.map((message) => ({
         messageId: message.messageId,
         text: message.text,
         attachmentCount: message.attachments.length,
         queuedAt: message.queuedAt,
       })),
       sessionStatus: thread.session?.status ?? null,
-      hasPendingTurnStart: thread.pendingTurnStart !== null,
+      hasPendingTurnStart:
+        this.client.nativeProjection?.runs.some(
+          (run) => run.status === "preparing" || run.status === "starting",
+        ) ?? false,
       proposedPlans: proposedPlans.map((plan) => ({
         id: plan.id,
         planMarkdown: plan.planMarkdown,
         createdAt: plan.createdAt,
-        implementedAt: plan.implementedAt,
+        implementedAt: plan.implementedAt ?? null,
       })),
       tasks: presentTasks(thread.activities, thread.latestTurn?.turnId ?? null),
       toolCalls: presentToolCalls(thread.activities, {
         latestTurn: thread.latestTurn,
         session: thread.session,
       }),
-      resolvedUserInputs: presentResolvedUserInputs(thread.activities),
+      resolvedUserInputs: presentResolvedUserInputs(
+        thread.activities.map((activity, sequence) => ({
+          ...activity,
+          sequence: activity.sequence ?? sequence,
+        })),
+      ),
       messages: thread.messages.map((message) => ({
         id: message.id,
         role: message.role,

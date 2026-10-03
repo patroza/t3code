@@ -1,12 +1,10 @@
-// @effect-diagnostics globalDate:off
 import type {
-  ModelSelection,
-  OrchestrationMessage,
-  OrchestrationThread,
-  OrchestrationThreadShell,
-  RuntimeMode,
-  ThreadId,
-} from "@t3tools/contracts";
+  IntegrationThreadView as OrchestrationThread,
+  IntegrationThreadShellView as OrchestrationThreadShell,
+  IntegrationMessage as OrchestrationMessage,
+} from "@t3tools/shared/integrationThreadView";
+// @effect-diagnostics globalDate:off
+import type { ModelSelection, RuntimeMode, ThreadId } from "@t3tools/contracts";
 import { resolveRemotePairingTarget } from "@t3tools/shared/remote";
 import * as vscode from "vscode";
 

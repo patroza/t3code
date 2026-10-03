@@ -16,7 +16,7 @@ describe("resolveThreadDisplayStatus", () => {
     expect(
       resolveThreadDisplayStatus({
         latestTurn: { state: "running" },
-        session: { status: "interrupted" },
+        session: { status: "stopped" },
       }),
     ).toEqual({ kind: "needs-wake-up", label: "Needs wake up" });
   });
@@ -25,7 +25,7 @@ describe("resolveThreadDisplayStatus", () => {
     expect(
       resolveThreadDisplayStatus({
         latestTurn: { state: "completed", completedAt: "2026-07-01T00:00:00.000Z" },
-        session: { status: "interrupted", activeTurnId: null },
+        session: { status: "stopped", activeTurnId: null },
       }),
     ).toEqual({ kind: "completed", label: "Completed" });
   });
