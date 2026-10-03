@@ -196,6 +196,8 @@ overrides:
   "@effect/atom-react": "catalog:"
   "@effect/platform-node": "catalog:"
   "@effect/platform-node-shared": "catalog:"
+  "@effect/sql-d1": 4.0.0-rc.115
+  "@effect/sql-sqlite-do": 4.0.0-rc.115
   "@effect/sql-pg": "catalog:"
   "@effect/vitest": "catalog:"
   "@effect/vitest>vitest": "-"
