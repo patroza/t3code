@@ -3,13 +3,13 @@
 #
 # For each platform:
 #   1. Compute fingerprint
-#   2. If a finished/in-progress build exists for that runtime → OTA only
-#   3. Else try `eas build --no-wait` (+ optional --auto-submit)
+#   2. If a matching build exists, wait for native completion before OTA
+#   3. Else try `eas build --wait` (+ optional --auto-submit)
 #   4. Always publish an OTA for the current fingerprint after a successful
-#      build queue so the binary picks it up when it finishes
+#      build so the binary can pick it up
 #   5. If build fails (e.g. Expo Free plan monthly iOS quota), fall back to OTA
 #      against the latest *finished* production binary's runtime so pure-JS
-#      fixes still reach installed TestFlight clients
+#      fixes still reach installed TestFlight clients; native deployment stays failed
 #
 # Usage (from apps/mobile):
 #   ./scripts/eas-continuous-deploy.sh \
@@ -108,6 +108,28 @@ find_matching_build() {
     | node "$EAS_JSON" usable-build-id
 }
 
+wait_for_build() {
+  local id="$1"
+  local deadline=$((SECONDS + ${EAS_BUILD_WAIT_SECONDS:-7200}))
+  local result status
+  while (( SECONDS < deadline )); do
+    result="$(eas build:view "$id" --json | node "$EAS_JSON" build-status)" || return 1
+    if [[ "$result" != "$id:"* ]]; then
+      echo "ERROR: build response does not match requested ID $id" >&2
+      return 1
+    fi
+    status="${result#*:}"
+    echo "Build $id: $status"
+    case "$status" in
+      FINISHED) return 0 ;;
+      NEW|IN_QUEUE|IN_PROGRESS) sleep "${EAS_BUILD_POLL_SECONDS:-30}" ;;
+      *) echo "ERROR: native build $id did not finish successfully ($status)" >&2; return 1 ;;
+    esac
+  done
+  echo "ERROR: timed out waiting for native build $id" >&2
+  return 1
+}
+
 latest_finished_runtime() {
   local platform="$1"
   eas build:list \
@@ -155,7 +177,7 @@ try_build() {
     --platform "$platform"
     --profile "$PROFILE"
     --non-interactive
-    --no-wait
+    --wait
   )
   if [[ "$AUTO_SUBMIT" -eq 1 ]]; then
     args+=(--auto-submit)
@@ -183,14 +205,17 @@ for platform in "${platforms[@]}"; do
   echo "Looking for builds with runtimeVersion=$fingerprint ..."
   build_id="$(find_matching_build "$platform" "$fingerprint" || true)"
   if [[ -n "$build_id" ]]; then
-    echo "Existing build found: $build_id — publishing OTA only"
-    publish_update "$platform" "" "$MESSAGE"
-    continue
+    echo "Existing build found: $build_id — waiting for native completion"
+    if wait_for_build "$build_id"; then
+      publish_update "$platform" "" "$MESSAGE"
+      continue
+    fi
+    echo "ERROR: existing required native build failed; attempting fallback OTA" >&2
   fi
 
-  echo "No matching build for fingerprint $fingerprint — attempting native build"
-  if try_build "$platform"; then
-    echo "Native build queued; publishing OTA for current fingerprint so it is ready when the binary finishes"
+  [[ -n "$build_id" ]] || echo "No matching build for fingerprint $fingerprint — attempting native build"
+  if [[ -z "$build_id" ]] && try_build "$platform"; then
+    echo "Native build completed; publishing OTA for current fingerprint"
     publish_update "$platform" "" "$MESSAGE"
     continue
   fi
@@ -210,6 +235,8 @@ for platform in "${platforms[@]}"; do
     echo "NOTE: native-input changes in this tip will not land until a new binary is built for $fingerprint"
     publish_update "$platform" "$fallback" "$MESSAGE (fallback runtime $fallback; tip fingerprint $fingerprint)"
   fi
+  echo "ERROR: fallback OTA published, but required native build did not complete" >&2
+  exit 1
 done
 
 echo "eas-continuous-deploy finished successfully"

@@ -9,6 +9,7 @@
       "corepack": true,
       "env": {
         "APP_VARIANT": "development",
+        "MOBILE_VERSION_POLICY": "fingerprint",
         "NODE_OPTIONS": "--max-old-space-size=4096"
       },
       "channel": "development",
