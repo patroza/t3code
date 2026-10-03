@@ -39,6 +39,7 @@ const electronAppLayer = Layer.succeed(ElectronApp.ElectronApp, {
   setName: () => Effect.void,
   setAboutPanelOptions: () => Effect.void,
   setAppUserModelId: () => Effect.void,
+  requestSingleInstanceLock: Effect.succeed(true),
   getAppMetrics: Effect.succeed([]),
   setAsDefaultProtocolClient: () => Effect.succeed(true),
   setDesktopName: () => Effect.void,
@@ -51,6 +52,7 @@ const electronAppLayer = Layer.succeed(ElectronApp.ElectronApp, {
 
 const electronDialogLayer = Layer.succeed(ElectronDialog.ElectronDialog, {
   pickFolder: () => Effect.succeedNone,
+  pickApplication: () => Effect.succeedNone,
   pickFiles: () => Effect.succeed([]),
   showMessageBox: () => Effect.succeed({ response: 0, checkboxChecked: false }),
   showErrorBox: () => Effect.void,
@@ -88,6 +90,8 @@ const makeDesktopWindowLayer = (selectedAction: Deferred.Deferred<string>) =>
     zoomMain: (direction) =>
       Deferred.succeed(selectedAction, `zoom-${direction}`).pipe(Effect.asVoid),
     syncAppearance: Effect.void,
+    navigateToThread: () => Effect.void,
+    navigateToProject: () => Effect.void,
   } satisfies DesktopWindow.DesktopWindow["Service"]);
 
 const makeElectronMenuLayer = (

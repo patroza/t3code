@@ -1,3 +1,16 @@
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
+import {
+  claimPersonIdForEnvironment,
+  threadMatchesMine,
+} from "@t3tools/client-runtime/state/identity";
+import { AsyncResult } from "effect/unstable/reactivity";
+import {
+  resolveHideSettledOnProjects,
+  resolveHideSettledOnRecent,
+} from "../../persistence/mobile-preferences";
+import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
+import { prefetchEnvironmentThread, warmSelectedEnvironmentThread } from "../../state/threads";
+import { identityClaimPersonIdByEnvironmentAtom } from "../../state/identity";
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 import { useNavigation } from "@react-navigation/native";
@@ -23,7 +36,6 @@ import { useHomeThreadSelection } from "./home-thread-navigation";
 import { buildHomeProjectScopes } from "./homeThreadList";
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useThreadListActions } from "./useThreadListActions";
-import { getConnectionAwareBrandHeaderOptions } from "./WorkspaceConnectionTitle";
 
 /* ─── Route screen ───────────────────────────────────────────────────── */
 
@@ -93,21 +105,73 @@ export function HomeRouteScreen() {
     () => new Set(environments.map((environment) => environment.environmentId)),
     [environments],
   );
-  const { options: listOptions, setSelectedEnvironmentId } =
-    useHomeListOptions(availableEnvironmentIds);
-  const selectedEnvironmentId = listOptions.selectedEnvironmentId;
+  const {
+    options: listOptions,
+    toggleSelectedEnvironmentId,
+    clearSelectedEnvironments,
+    setOwnershipFilter,
+    setOwnershipRelation,
+    setListMode,
+    setThreadGrouping,
+  } = useHomeListOptions(availableEnvironmentIds);
+  const selectedEnvironmentIds = listOptions.selectedEnvironmentIds;
+  const claimPersonIdByEnvironment = useAtomValue(identityClaimPersonIdByEnvironmentAtom);
+  const ownershipFilteredThreads = useMemo(
+    () =>
+      threads.filter((thread) =>
+        threadMatchesMine({
+          claimPersonId: claimPersonIdForEnvironment(
+            claimPersonIdByEnvironment,
+            thread.environmentId,
+          ),
+          originPersonId: thread.originSource?.personId ?? null,
+          participantPersonIds: (thread.participantSummaries ?? []).map(
+            (participant) => participant.personId,
+          ),
+          mode: listOptions.ownershipFilter,
+          relation: listOptions.ownershipRelation,
+        }),
+      ),
+    [
+      claimPersonIdByEnvironment,
+      listOptions.ownershipFilter,
+      listOptions.ownershipRelation,
+      threads,
+    ],
+  );
+  const preferencesResult = useAtomValue(mobilePreferencesAtom);
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  // Recency/none default to hide settled; default/project grouping defaults to show.
+  const hideSettledOnRecent = AsyncResult.isSuccess(preferencesResult)
+    ? resolveHideSettledOnRecent(preferencesResult.value)
+    : true;
+  const hideSettledOnProjects = AsyncResult.isSuccess(preferencesResult)
+    ? resolveHideSettledOnProjects(preferencesResult.value)
+    : false;
+  const hideSettledThreads =
+    listOptions.threadGrouping === "project" ? hideSettledOnProjects : hideSettledOnRecent;
+  const setHideSettledThreads = useCallback(
+    (hide: boolean) => {
+      if (listOptions.threadGrouping === "project") {
+        savePreferences({ hideSettledOnProjects: hide });
+        return;
+      }
+      savePreferences({ hideSettledOnRecent: hide });
+    },
+    [listOptions.threadGrouping, savePreferences],
+  );
   const [selectedProjectKey, setSelectedProjectKey] = useState<string | null>(null);
   const projectFilterOptions = useMemo(
     () =>
       buildHomeProjectScopes({
         projects,
-        environmentId: selectedEnvironmentId,
+        selectedEnvironmentIds,
         projectGroupingMode: listOptions.projectGroupingMode,
       }).map((scope) => ({
         key: scope.key,
         label: scope.title,
       })),
-    [listOptions.projectGroupingMode, projects, selectedEnvironmentId],
+    [listOptions.projectGroupingMode, projects, selectedEnvironmentIds],
   );
   useEffect(() => {
     if (
@@ -166,19 +230,11 @@ export function HomeRouteScreen() {
     >
       <>
         {/* Restore the header after leaving split view; screen options are
-            shallow-merged. The brand slot also doubles as the connection
-            status surface while an environment reconnects. */}
+            shallow-merged. Title/brand stay on HomeHeader (list-mode title +
+            connection-aware slot) so we do not paint the status twice. */}
         <NativeStackScreenOptions
           optionsVersion={windowWidth}
           options={{
-            ...getConnectionAwareBrandHeaderOptions({
-              headerWidth: windowWidth,
-              onOpenEnvironments: () =>
-                navigation.navigate("SettingsSheet", {
-                  screen: "SettingsContent",
-                  params: { screen: "SettingsEnvironments" },
-                }),
-            }),
             headerShown: true,
           }}
         />
@@ -186,10 +242,21 @@ export function HomeRouteScreen() {
           environments={environments}
           projects={projectFilterOptions}
           searchQuery={searchQuery}
-          selectedEnvironmentId={selectedEnvironmentId}
+          listMode={listOptions.listMode}
+          threadGrouping={listOptions.threadGrouping}
+          selectedEnvironmentIds={selectedEnvironmentIds}
           selectedProjectKey={selectedProjectKey}
-          onEnvironmentChange={setSelectedEnvironmentId}
+          ownershipFilter={listOptions.ownershipFilter}
+          ownershipRelation={listOptions.ownershipRelation}
+          hideSettledThreads={hideSettledThreads}
+          onListModeChange={setListMode}
+          onThreadGroupingChange={setThreadGrouping}
+          onClearEnvironments={clearSelectedEnvironments}
+          onToggleEnvironment={toggleSelectedEnvironmentId}
           onProjectChange={setSelectedProjectKey}
+          onOwnershipFilterChange={setOwnershipFilter}
+          onOwnershipRelationChange={setOwnershipRelation}
+          onHideSettledThreadsChange={setHideSettledThreads}
           onOpenEnvironments={() =>
             navigation.navigate("SettingsSheet", {
               screen: "SettingsContent",
@@ -209,6 +276,8 @@ export function HomeRouteScreen() {
         <HomeScreen
           catalogState={catalogState}
           environments={environments}
+          listMode={listOptions.listMode}
+          threadGrouping={listOptions.threadGrouping}
           onAddConnection={() =>
             navigation.navigate("SettingsSheet", {
               screen: "SettingsContent",
@@ -223,11 +292,12 @@ export function HomeRouteScreen() {
           onUnsettleThread={unsettleThread}
           onPinThread={pinThread}
           onUnpinThread={unpinThread}
+          onClearEnvironments={clearSelectedEnvironments}
+          onToggleEnvironment={toggleSelectedEnvironmentId}
           onSetThreadAutoSettle={setThreadAutoSettle}
           onMoveThread={moveThread}
           onRenameThread={renameThread}
           onRegenerateThreadTitle={regenerateThreadTitle}
-          onEnvironmentChange={setSelectedEnvironmentId}
           onProjectChange={setSelectedProjectKey}
           onOpenSettings={() =>
             navigation.navigate("SettingsSheet", {
@@ -236,7 +306,15 @@ export function HomeRouteScreen() {
             })
           }
           onSearchQueryChange={setSearchQuery}
-          onSelectThread={handleSelectThread}
+          onSelectThread={(thread) => {
+            // Settled threads are live shells: opening one is plain
+            // navigation, and sending a message un-settles server-side.
+            // Warm detail (SQLite/HTTP) before the route mounts so open
+            // latency overlaps the stack transition.
+            prefetchEnvironmentThread(thread.environmentId, thread.id);
+            warmSelectedEnvironmentThread(thread.environmentId, thread.id);
+            handleSelectThread(thread);
+          }}
           onSelectPendingTask={openPendingTask}
           onDeletePendingTask={confirmDeletePendingTask}
           onNewThreadOnBranch={handleNewThreadOnBranch}
@@ -257,9 +335,9 @@ export function HomeRouteScreen() {
           projectSortOrder={listOptions.projectSortOrder}
           savedConnectionsById={savedConnectionsById}
           searchQuery={searchQuery}
-          selectedEnvironmentId={selectedEnvironmentId}
+          selectedEnvironmentIds={selectedEnvironmentIds}
           selectedProjectKey={selectedProjectKey}
-          threads={threads}
+          threads={ownershipFilteredThreads}
         />
       </>
     </AndroidHomeFabLayout>

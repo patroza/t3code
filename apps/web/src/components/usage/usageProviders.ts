@@ -36,6 +36,7 @@ export const PROVIDER_PRESENTATION = {
     color: "#5b9bbd",
     driverKind: ProviderDriverKind.make("opencode"),
   },
+  kimi: { label: "Kimi", color: "#ff6a3d", driverKind: ProviderDriverKind.make("kimi") },
   antigravity: {
     label: "Antigravity",
     color: "#8c7bd1",

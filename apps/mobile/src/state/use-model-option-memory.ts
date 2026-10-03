@@ -19,7 +19,7 @@ function recordModelOptionsInState(
   return {
     ...state,
     [instanceId]: {
-      ...(state[instanceId] ?? {}),
+      ...state[instanceId],
       [model]: options,
     },
   };

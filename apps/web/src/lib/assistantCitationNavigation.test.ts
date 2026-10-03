@@ -30,12 +30,15 @@ function createCitationRouter(initialEntry = "/environment-one/thread-one") {
   return createRouter({
     routeTree: root.addChildren([thread]),
     history: createMemoryHistory({ initialEntries: [initialEntry] }),
+    isServer: false,
+    origin: "http://localhost",
   });
 }
 
 describe("assistant citation navigation", () => {
   it("preserves encoded quote whitespace through router navigation and reload", async () => {
     const router = createCitationRouter();
+    await router.load();
     await router.navigate(assistantCitationNavigation(citation));
 
     expect(assistantCitationFromLocation(router.state.location.href)).toEqual(citation);
@@ -57,6 +60,7 @@ describe("assistant citation navigation", () => {
 
   it("reactivates an identical citation instead of deduplicating its navigation", async () => {
     const router = createCitationRouter();
+    await router.load();
     await router.navigate(assistantCitationNavigation(citation));
     const previous = router.state.location;
     await router.navigate(assistantCitationNavigation(citation));

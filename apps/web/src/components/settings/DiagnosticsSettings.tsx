@@ -29,6 +29,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { shellEnvironment } from "../../state/shell";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
+import { HostResourceStatus } from "../HostResourceStatus";
 import { Button } from "../ui/button";
 import { ScrollArea } from "../ui/scroll-area";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
@@ -897,7 +898,7 @@ export function DiagnosticsSettingsPanel() {
         clearSignaling();
       }
     },
-    [refreshProcesses, signalServerProcess],
+    [environmentId, refreshProcesses, signalServerProcess],
   );
 
   const processDiagnosticsError = processData ? Option.getOrNull(processData.error) : null;
@@ -911,6 +912,23 @@ export function DiagnosticsSettingsPanel() {
     <SettingsPageContainer width="expanded" className="gap-10">
       <ResourceTelemetryDiagnostics environmentId={environmentId} />
 
+      {environment ? (
+        <SettingsSection title="Host Resources">
+          <div className="space-y-2 px-4 py-3 sm:px-5">
+            <HostResourceStatus
+              environmentId={environment.environmentId}
+              environmentLabel={environment.label}
+              connected={environment.connection.phase === "connected"}
+              showRefresh
+              unavailableLabel
+            />
+            <p className="text-xs text-muted-foreground">
+              Advisory system-wide metrics from the host running this T3 server. They do not affect
+              connection or provider readiness.
+            </p>
+          </div>
+        </SettingsSection>
+      ) : null}
       <SettingsSection
         title="Live Processes"
         headerAction={

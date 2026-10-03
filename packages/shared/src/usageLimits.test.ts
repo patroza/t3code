@@ -711,7 +711,7 @@ describe("pooled account columns", () => {
     ]);
     expect(pool!.windows[1]!.resets.map((reset) => reset.member.account.key)).toEqual(["a", "b"]);
     expect(pool!.windows[1]!.remainingPercent).toBe(50);
-    expect(keys(collectLimitPools(accounts.toReversed(), now)[0]!)).toEqual(keys(pool!));
+    expect(keys(collectLimitPools([...accounts].reverse(), now)[0]!)).toEqual(keys(pool!));
   });
 
   it("preserves gaps without counting missing windows toward pooled quota", () => {
@@ -754,7 +754,9 @@ describe("pooled account columns", () => {
       account("y", [{ ...window, resetsAt: "invalid" }]),
     ];
     expect(keys(collectLimitPools(accounts, now)[0]!)).toEqual([["a", "b", "y", "z"]]);
-    expect(keys(collectLimitPools(accounts.toReversed(), now)[0]!)).toEqual([["a", "b", "y", "z"]]);
+    expect(keys(collectLimitPools([...accounts].reverse(), now)[0]!)).toEqual([
+      ["a", "b", "y", "z"],
+    ]);
   });
 });
 

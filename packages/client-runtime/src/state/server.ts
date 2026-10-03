@@ -484,7 +484,7 @@ export function applyServerWelcomeEvent(
   current: EnvironmentServerWelcomeState,
   session: RpcSession,
   event: {
-    readonly type: "welcome" | "ready" | "legacyThreadMigration";
+    readonly type: string;
     readonly payload: unknown;
   },
 ): EnvironmentServerWelcomeState {
@@ -593,6 +593,25 @@ function serverWelcomeStateChanges(environmentId: EnvironmentId) {
       ),
     ),
   );
+}
+
+/**
+ * Accumulates the latest served web-bundle version from the lifecycle stream.
+ * The first value a client observes is the version it is running; a later,
+ * different value means the server hot-swapped its web assets.
+ */
+export function projectServerWebVersion(
+  current: Option.Option<string>,
+  event: {
+    readonly type: "welcome" | "ready" | "webVersionChanged" | "legacyThreadMigration";
+    readonly payload: unknown;
+  },
+): readonly [Option.Option<string>, ReadonlyArray<string>] {
+  if (event.type !== "webVersionChanged") {
+    return [current, []];
+  }
+  const { webVersion } = event.payload as { readonly webVersion: string };
+  return [Option.some(webVersion), [webVersion]];
 }
 
 export function resolveServerConfigValue(
@@ -1060,6 +1079,10 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:process-diagnostics",
       tag: WS_METHODS.serverGetProcessDiagnostics,
     }),
+    hostResourceSnapshot: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:host-resource-snapshot",
+      tag: WS_METHODS.serverGetHostResourceSnapshot,
+    }),
     hostResources: createEnvironmentQueryAtomFamily(runtime, {
       label: "environment-data:server:host-resources",
       idleTtlMs: 0,
@@ -1104,6 +1127,12 @@ export function createServerEnvironmentAtoms<R, E>(
     }),
     configProjection,
     welcome,
+    webVersion: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:web-version",
+      tag: WS_METHODS.subscribeServerLifecycle,
+      transform: (stream) =>
+        stream.pipe(Stream.mapAccum(Option.none<string>, projectServerWebVersion)),
+    }),
     legacyThreadMigration: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:legacy-thread-migration",
       tag: WS_METHODS.subscribeServerLifecycle,

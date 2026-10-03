@@ -340,3 +340,11 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     </Tooltip>
   );
 });
+
+export const shouldDisableCollapsedComposerSubmitAction = (input: {
+  isRunning: boolean;
+  isSendBusy: boolean;
+  isConnecting: boolean;
+  hasSendableContent: boolean;
+}): boolean =>
+  input.isRunning || input.isSendBusy || input.isConnecting || !input.hasSendableContent;

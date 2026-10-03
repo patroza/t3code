@@ -26,6 +26,7 @@ describe("buildT3ProjectFileJsonSchema", () => {
         {
           description?: string;
           items?: { properties: Record<string, unknown>; required: ReadonlyArray<string> };
+          properties?: Record<string, { description?: string }>;
         }
       >;
       required?: ReadonlyArray<string>;
@@ -34,12 +35,19 @@ describe("buildT3ProjectFileJsonSchema", () => {
     expect(Object.keys(schema.properties).sort()).toEqual([
       "$schema",
       "defaultThreadEnvMode",
+      "devStacks",
       "iconPath",
       "scripts",
       "worktreeSubmodules",
     ]);
     expect(schema.required).toBeUndefined();
     expect(schema.properties.iconPath?.description).toContain("Workspace-relative path");
+    expect(schema.properties.devStacks?.description).toContain("supervising the dev stacks");
+    expect(Object.keys(schema.properties.devStacks?.properties ?? {}).sort()).toEqual([
+      "consumers",
+      "entryRoles",
+      "idleMinutes",
+    ]);
     expect(schema.properties.defaultThreadEnvMode?.description).toContain("new threads start");
 
     const script = schema.properties.scripts?.items;
@@ -51,7 +59,9 @@ describe("buildT3ProjectFileJsonSchema", () => {
       "icon",
       "name",
       "previewUrl",
+      "runOnPrMerged",
       "runOnWorktreeCreate",
+      "runOnWorktreeRemove",
     ]);
   });
 

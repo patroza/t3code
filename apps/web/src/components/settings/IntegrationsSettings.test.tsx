@@ -74,6 +74,8 @@ async function openSettings() {
   const router = createRouter({
     routeTree: createRootRoute({ component: IntegrationsSettingsPanel }),
     history: createMemoryHistory(),
+    isServer: false,
+    origin: "http://localhost",
   });
   await router.load();
   await act(() => {

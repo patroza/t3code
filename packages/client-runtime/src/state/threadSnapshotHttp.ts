@@ -13,13 +13,7 @@ import {
   withOrchestrationProtocolHeader,
 } from "./environmentHttpAuth.ts";
 
-// Long enough for a slow but alive server to finish. On a cold open a timeout
-// makes the socket ask the same server for the same snapshot again, and older
-// turn pages have no fallback, so a short deadline only drops work. The socket
-// fallback is for setups where /api fails but /ws works, such as a proxy that
-// blocks /api. A dead server drops the socket session, which interrupts a
-// cold-open load. Older turn pages wait for this deadline.
-const DEFAULT_THREAD_SNAPSHOT_TIMEOUT_MS = 20_000;
+import { SNAPSHOT_HTTP_TIMEOUT_MS } from "./snapshotHttpPolicy.ts";
 
 /** Progressive history metadata returned by a bounded snapshot loader. */
 export type ThreadSnapshotHistoryMeta = {
@@ -67,7 +61,7 @@ export const fetchEnvironmentThreadSnapshot = Effect.fn(
     method: "GET",
     url: (httpBaseUrl) =>
       environmentEndpointUrl(httpBaseUrl, `/api/orchestration/threads/${input.threadId}`),
-    timeoutMs: input.timeoutMs ?? DEFAULT_THREAD_SNAPSHOT_TIMEOUT_MS,
+    timeoutMs: input.timeoutMs ?? SNAPSHOT_HTTP_TIMEOUT_MS,
     request: ({ client, headers }) =>
       client.threadSnapshot({
         params: { threadId: input.threadId },

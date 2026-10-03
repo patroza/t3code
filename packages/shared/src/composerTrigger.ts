@@ -4,7 +4,7 @@ export type ComposerTriggerKind =
   | "slash-command"
   | "slash-model"
   | "skill";
-export type ComposerSlashCommand = "model" | "plan" | "default";
+export type ComposerSlashCommand = "new" | "model" | "plan" | "default";
 
 export interface ComposerTrigger {
   kind: ComposerTriggerKind;
@@ -127,6 +127,19 @@ export function detectComposerTrigger(
     rangeStart: tokenStart,
     rangeEnd: cursor,
   };
+}
+
+export function parseStandaloneComposerSlashCommand(
+  text: string,
+): Exclude<ComposerSlashCommand, "model"> | null {
+  const match = /^\/(new|plan|default)\s*$/i.exec(text.trim());
+  if (!match) {
+    return null;
+  }
+  const command = match[1]?.toLowerCase();
+  if (command === "new") return "new";
+  if (command === "plan") return "plan";
+  return "default";
 }
 
 export function replaceTextRange(

@@ -12,28 +12,34 @@ import { useWorkspaceState } from "../../state/workspace";
 import { vcsEnvironment } from "../../state/vcs";
 import { checkoutNewTaskBranch } from "./checkout-new-task-branch";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
+import type { ComposerDraftWorkspaceSelection } from "../../state/use-composer-drafts";
 
 import { NewTaskDraftScreen } from "./NewTaskDraftScreen";
 
 type NewTaskDraftRouteParams = {
   readonly environmentId?: string | string[];
   readonly projectId?: string | string[];
-  readonly branch?: string | null;
-  readonly worktreePath?: string | null;
   readonly title?: string | string[];
   /** Set by Add Project when this draft opens while the project's clone runs. */
   readonly cloning?: string | string[];
   readonly pendingTaskId?: string | string[];
   readonly draftId?: string | string[];
   readonly incomingShareId?: string | string[];
+  readonly workspaceMode?: string | string[];
+  readonly branch?: string | string[] | null;
+  readonly worktreePath?: string | string[] | null;
 };
+
+function firstParam(value: string | string[] | null | undefined): string | undefined {
+  if (value == null) return undefined;
+  return Array.isArray(value) ? value[0] : value;
+}
 
 export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraftRouteParams>) {
   const params = useMemo(() => route.params ?? {}, [route.params]);
-  const pendingTaskId = Array.isArray(params.pendingTaskId)
-    ? params.pendingTaskId[0]
-    : params.pendingTaskId;
-  const draftId = Array.isArray(params.draftId) ? params.draftId[0] : params.draftId;
+  const pendingTaskId = firstParam(params.pendingTaskId);
+  const draftId = firstParam(params.draftId);
+  const workspaceMode = firstParam(params.workspaceMode);
   const projects = useProjects();
   const { state: catalogState } = useWorkspaceState();
   const navigation = useNavigation();
@@ -42,18 +48,28 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
   // Keyed on the params object so a fresh navigation to this (already
   // mounted) screen produces a new reference, letting the draft screen
   // re-apply the requested project.
-  const initialProjectRef = useMemo(
-    () => ({
-      environmentId: Array.isArray(params.environmentId)
-        ? params.environmentId[0]
-        : params.environmentId,
-      projectId: Array.isArray(params.projectId) ? params.projectId[0] : params.projectId,
-      branch: params.branch,
-      worktreePath: params.worktreePath,
-      cloning: (Array.isArray(params.cloning) ? params.cloning[0] : params.cloning) === "1",
-    }),
-    [params],
-  );
+  const initialProjectRef = useMemo(() => {
+    const environmentId = firstParam(params.environmentId);
+    const projectId = firstParam(params.projectId);
+    // Workspace-picker routes own branch via initialWorkspaceSelection. Putting
+    // it on initialProjectRef would force local mode and fight a worktree pick.
+    const workspacePicker = workspaceMode === "local" || workspaceMode === "worktree";
+    return {
+      environmentId,
+      projectId,
+      branch: workspacePicker ? null : (firstParam(params.branch) ?? null),
+      worktreePath: workspacePicker ? null : (firstParam(params.worktreePath) ?? null),
+      cloning: firstParam(params.cloning) === "1",
+    };
+  }, [params, workspaceMode]);
+  const initialWorkspaceSelection = useMemo<ComposerDraftWorkspaceSelection | undefined>(() => {
+    if (workspaceMode !== "local" && workspaceMode !== "worktree") return undefined;
+    return {
+      mode: workspaceMode,
+      branch: firstParam(params.branch) ?? null,
+      worktreePath: firstParam(params.worktreePath) ?? null,
+    };
+  }, [params.branch, params.worktreePath, workspaceMode]);
 
   const [preparation, setPreparation] = useState<{
     request: typeof initialProjectRef;
@@ -151,7 +167,7 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
     <>
       <NativeStackScreenOptions
         options={{
-          title: Array.isArray(params.title) ? params.title[0] : (params.title ?? "New task"),
+          title: firstParam(params.title) ?? "New task",
         }}
       />
       {preparingBranch ? (
@@ -161,11 +177,8 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
       ) : (
         <NewTaskDraftScreen
           initialProjectRef={preparedProjectRef}
-          incomingShareId={
-            Array.isArray(params.incomingShareId)
-              ? params.incomingShareId[0]
-              : params.incomingShareId
-          }
+          initialWorkspaceSelection={initialWorkspaceSelection}
+          incomingShareId={firstParam(params.incomingShareId)}
           pendingTaskId={pendingTaskId}
           draftId={draftId}
         />

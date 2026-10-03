@@ -221,7 +221,7 @@ describe("mergeUsage", () => {
       }),
     ];
 
-    for (const ordered of [environments, environments.toReversed()]) {
+    for (const ordered of [environments, [...environments].reverse()]) {
       const merged = mergeUsage(ordered, USAGE_CONTRACT_VERSION);
       expect(merged.costUsd).toBe(10);
       expect(merged.records).toBe(5);

@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  IdentityUsername,
+  PersonId,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 import type { Project, Thread } from "../types";
 import { makeThreadFixture } from "../test-fixtures";
 import {
@@ -438,6 +445,54 @@ describe("buildThreadActionItems", () => {
     ]);
   });
 
+  it("matches identity handles, PR numbers, and Jira keys in thread search", () => {
+    const threadItems = buildThreadActionItems({
+      threads: [
+        makeThread({
+          id: ThreadId.make("thread-attributed"),
+          title: "Harden claim gate SA-49",
+          branch: "pr/9001-claim-gate",
+          originSource: {
+            channel: "desktop",
+            personId: PersonId.make("patroza"),
+            username: IdentityUsername.make("patroza"),
+            location: { issueKey: "SA-49", number: 9001, kind: "pr" },
+          },
+          participantSummaries: [
+            {
+              personId: PersonId.make("patroza"),
+              username: IdentityUsername.make("patroza"),
+              firstChannel: "desktop",
+              firstParticipatedAt: "2026-03-20T00:00:00.000Z",
+            },
+          ],
+        }),
+        makeThread({
+          id: ThreadId.make("thread-other"),
+          title: "Unrelated cleanup",
+        }),
+      ],
+      projectTitleById: new Map([[PROJECT_ID, "Project"]]),
+      sortOrder: "updated_at",
+      icon: null,
+      runThread: async (_thread) => undefined,
+    });
+
+    for (const query of ["@patroza", "patroza@desktop", "@desktop", "#9001", "SA-49"]) {
+      const groups = filterCommandPaletteGroups({
+        activeGroups: [],
+        query,
+        isInSubmenu: false,
+        projectSearchItems: [],
+        threadSearchItems: threadItems,
+      });
+      expect(
+        groups[0]?.items.map((item) => item.value),
+        query,
+      ).toEqual(["thread:thread-attributed"]);
+    }
+  });
+
   it("orders title matches by recent activity before older prefix matches", () => {
     const threads = [
       makeThread({
@@ -701,6 +756,35 @@ describe("buildThreadActionItems", () => {
     });
 
     expect(items.map((item) => item.value)).toEqual(["thread:thread-active"]);
+  });
+
+  it("keeps archived threads when includeArchived is set", () => {
+    const items = buildThreadActionItems({
+      threads: [
+        makeThread({
+          id: ThreadId.make("thread-active"),
+          title: "Active thread",
+          createdAt: "2026-03-02T00:00:00.000Z",
+          updatedAt: "2026-03-19T00:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("thread-archived"),
+          title: "Archived thread",
+          archivedAt: "2026-03-20T00:00:00.000Z",
+          updatedAt: "2026-03-20T00:00:00.000Z",
+        }),
+      ],
+      projectTitleById: new Map([[PROJECT_ID, "Project"]]),
+      sortOrder: "updated_at",
+      icon: null,
+      includeArchived: true,
+      runThread: async (_thread) => undefined,
+    });
+
+    expect(items.map((item) => item.value)).toEqual([
+      "thread:thread-archived",
+      "thread:thread-active",
+    ]);
   });
 });
 
