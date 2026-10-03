@@ -233,7 +233,7 @@ describe("ssh tunnel scripts", () => {
   });
 
   it("prepends user-local bins before accepting an existing node", () => {
-    const script = buildRemoteT3RunnerScript({
+    const script = SshTunnel.buildRemoteT3RunnerScript({
       ...NODE_SCRIPT,
       nodeEngineRange: TEST_NODE_ENGINE_RANGE,
     });
