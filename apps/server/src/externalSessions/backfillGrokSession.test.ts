@@ -349,7 +349,7 @@ describe("legacy Grok repair boundary", () => {
         "CREATE TABLE orchestration_v2_projection_threads (thread_id TEXT); CREATE TABLE orchestration_events (event_id TEXT);",
       );
       assert.throws(
-        () => runGrokBackfill({ dbPath, threadId: "thread:test", force: true }),
+        () => runGrokBackfill({ dbPath, threadId: "thread:test", force: true, dryRun: false }),
         "only supports legacy V1 databases",
       );
       assert.deepStrictEqual(sqliteJson(dbPath, "SELECT * FROM orchestration_events"), []);
