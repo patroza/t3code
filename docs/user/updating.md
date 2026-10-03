@@ -16,8 +16,10 @@ restart. Changes are saved to connected environments that support this setting;
 update older servers first. If a supported environment was offline or has a
 different value, use **Apply to all** in Settings after it connects.
 T3 Code must start again on that machine;
-the setting does not enable automatic startup. Terminal commands may still be
-interrupted, and threads without saved provider resume state need a new message.
+the setting does not enable automatic startup. A graceful server restart,
+including a deploy that stops and starts the service, still resumes supported
+threads that were actively working. Terminal commands may still be interrupted,
+and threads without saved provider resume state need a new message.
 If you previously enabled continuation for updates, enable this setting once
 to allow recovery without a connected client.
 

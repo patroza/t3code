@@ -1,15 +1,18 @@
 // @effect-diagnostics nodeBuiltinImport:off - Tests use Node's glob matcher to verify electron-builder exclusions.
 import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
-import * as FileSystem from "effect/FileSystem";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
+import { fromYaml } from "@t3tools/shared/schemaYaml";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
@@ -40,6 +43,7 @@ import {
   MacPasskeySigningConfigurationResolutionError,
   MissingMacPasskeyProvisioningProfileError,
   packWindowsServerAsar,
+  promoteDesktopBuildArtifacts,
   preflightLinuxDesktopBuild,
   preflightMacDesktopBuild,
   preflightWindowsDesktopBuild,
@@ -258,6 +262,40 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
 });
 
 it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
+  it.effect("promotes unpacked desktop directories recursively", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({
+        prefix: "desktop-artifact-promotion-",
+      });
+      const stageDist = path.join(root, "stage-dist");
+      const output = path.join(root, "release");
+      const executable = path.join(stageDist, "linux-unpacked", "t3code");
+      const resource = path.join(stageDist, "linux-unpacked", "resources", "app.asar");
+
+      yield* fs.makeDirectory(path.dirname(resource), { recursive: true });
+      yield* fs.writeFileString(executable, "binary");
+      yield* fs.writeFileString(resource, "asar");
+      yield* fs.writeFileString(path.join(stageDist, "builder-debug.yml"), "debug");
+
+      const artifacts = yield* promoteDesktopBuildArtifacts(stageDist, output, "linux", "x64");
+
+      assert.deepStrictEqual(artifacts.map((artifact) => path.basename(artifact)).sort(), [
+        "builder-debug.yml",
+        "linux-unpacked",
+      ]);
+      assert.equal(
+        yield* fs.readFileString(path.join(output, "linux-unpacked", "t3code")),
+        "binary",
+      );
+      assert.equal(
+        yield* fs.readFileString(path.join(output, "linux-unpacked", "resources", "app.asar")),
+        "asar",
+      );
+    }),
+  );
+
   it("resolves the dedicated nightly updater channel from nightly versions", () => {
     assert.equal(resolveDesktopUpdateChannel("0.0.17-nightly.20260413.42"), "nightly");
     assert.equal(resolveDesktopUpdateChannel("0.0.17"), "latest");
@@ -484,6 +522,23 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     });
   });
 
+  it("keeps repo allowBuilds entries as booleans", () => {
+    const text = NodeFS.readFileSync(
+      NodePath.join(import.meta.dirname, "..", "pnpm-workspace.yaml"),
+      "utf8",
+    );
+    const decoded = Schema.decodeUnknownSync(
+      fromYaml(
+        Schema.Struct({
+          allowBuilds: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)),
+        }),
+      ),
+    )(text);
+    const allowBuilds = decoded.allowBuilds ?? {};
+    assert.ok(Object.keys(allowBuilds).length > 0);
+    assert.strictEqual(allowBuilds["msgpackr-extract"], true);
+  });
+
   it("stages pnpm 11 allowBuilds and patchedDependencies in the workspace yaml", () => {
     assert.deepStrictEqual(
       createStageWorkspaceConfig({
@@ -656,7 +711,14 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         ...WINDOWS_SERVER_EXTRA_RESOURCES,
       ]);
       assert.deepStrictEqual(win.nsis, { differentialPackage: true });
-      // The Claude SDK platform packages and .bin shims never ship.
+      // Native binaries and helper executables cannot load from inside an
+      // asar; everything else stays packed. The Claude SDK platform packages
+      // and .bin shims never ship.
+      assert.equal(
+        WINDOWS_NATIVE_ASAR_UNPACK_GLOB,
+        "{*.node,**/*.node,*.dll,**/*.dll,*.exe,**/*.exe,*.so,**/*.so,*.so.*,**/*.so.*,*.dylib,**/*.dylib}",
+      );
+
       assert.deepStrictEqual(WINDOWS_SERVER_ASAR_IGNORE_GLOBS, [
         "**/node_modules/@cursor/sdk-*",
         "**/node_modules/@cursor/sdk-*/**",

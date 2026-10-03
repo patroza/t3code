@@ -35,6 +35,10 @@
       "types": "./src/model.ts",
       "import": "./src/model.ts"
     },
+    "./providerModelSelection": {
+      "types": "./src/providerModelSelection.ts",
+      "import": "./src/providerModelSelection.ts"
+    },
     "./advertisedEndpoint": {
       "types": "./src/advertisedEndpoint.ts",
       "import": "./src/advertisedEndpoint.ts"
@@ -42,6 +46,14 @@
     "./agentAwareness": {
       "types": "./src/agentAwareness.ts",
       "import": "./src/agentAwareness.ts"
+    },
+    "./agentRulesPointer": {
+      "types": "./src/agentRulesPointer.ts",
+      "import": "./src/agentRulesPointer.ts"
+    },
+    "./sessionWake": {
+      "types": "./src/sessionWake.ts",
+      "import": "./src/sessionWake.ts"
     },
     "./git": {
       "types": "./src/git.ts",
@@ -95,6 +107,10 @@
       "types": "./src/KeyedCoalescingWorker.ts",
       "import": "./src/KeyedCoalescingWorker.ts"
     },
+    "./KeyedDrainableWorker": {
+      "types": "./src/KeyedDrainableWorker.ts",
+      "import": "./src/KeyedDrainableWorker.ts"
+    },
     "./schemaJson": {
       "types": "./src/schemaJson.ts",
       "import": "./src/schemaJson.ts"
@@ -127,9 +143,29 @@
       "types": "./src/backgroundActivitySettings.ts",
       "import": "./src/backgroundActivitySettings.ts"
     },
+    "./serverRuntime": {
+      "types": "./src/serverRuntime.ts",
+      "import": "./src/serverRuntime.ts"
+    },
     "./String": {
       "types": "./src/String.ts",
       "import": "./src/String.ts"
+    },
+    "./identityAvatar": {
+      "types": "./src/identityAvatar.ts",
+      "import": "./src/identityAvatar.ts"
+    },
+    "./identityMap": {
+      "types": "./src/identityMap.ts",
+      "import": "./src/identityMap.ts"
+    },
+    "./sourceAttribution": {
+      "types": "./src/sourceAttribution.ts",
+      "import": "./src/sourceAttribution.ts"
+    },
+    "./threadAttributeSearch": {
+      "types": "./src/threadAttributeSearch.ts",
+      "import": "./src/threadAttributeSearch.ts"
     },
     "./projectScripts": {
       "types": "./src/projectScripts.ts",
@@ -223,6 +259,10 @@
       "types": "./src/composerInlineTokens.ts",
       "import": "./src/composerInlineTokens.ts"
     },
+    "./composerInputHistory": {
+      "types": "./src/composerInputHistory.ts",
+      "import": "./src/composerInputHistory.ts"
+    },
     "./assistantCitations": {
       "types": "./src/assistantCitations.ts",
       "import": "./src/assistantCitations.ts"
@@ -246,6 +286,10 @@
     "./terminalLabels": {
       "types": "./src/terminalLabels.ts",
       "import": "./src/terminalLabels.ts"
+    },
+    "./threadTitle": {
+      "types": "./src/threadTitle.ts",
+      "import": "./src/threadTitle.ts"
     },
     "./relayClient": {
       "types": "./src/relayClient.ts",
@@ -283,6 +327,10 @@
       "types": "./src/chatList.ts",
       "import": "./src/chatList.ts"
     },
+    "./userInputTranscript": {
+      "types": "./src/userInputTranscript.ts",
+      "import": "./src/userInputTranscript.ts"
+    },
     "./nodeRuntime": {
       "types": "./src/nodeRuntime.ts",
       "import": "./src/nodeRuntime.ts"
@@ -310,6 +358,22 @@
     "./devProxy": {
       "types": "./src/devProxy.ts",
       "import": "./src/devProxy.ts"
+    },
+    "./steerTimeline": {
+      "types": "./src/steerTimeline.ts",
+      "import": "./src/steerTimeline.ts"
+    },
+    "./proposedPlan": {
+      "types": "./src/proposedPlan.ts",
+      "import": "./src/proposedPlan.ts"
+    },
+    "./turnResponseStats": {
+      "types": "./src/turnResponseStats.ts",
+      "import": "./src/turnResponseStats.ts"
+    },
+    "./productFamily": {
+      "types": "./src/productFamily.ts",
+      "import": "./src/productFamily.ts"
     },
     "./usageMerge": {
       "types": "./src/usageMerge.ts",
@@ -382,6 +446,10 @@
     "./codexAuthHandoff": {
       "types": "./src/codexAuthHandoff.ts",
       "import": "./src/codexAuthHandoff.ts"
+    },
+    "./integrationThreadView": {
+      "types": "./src/integrationThreadView.ts",
+      "import": "./src/integrationThreadView.ts"
     }
   },
   "scripts": {

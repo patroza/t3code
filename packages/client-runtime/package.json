@@ -115,6 +115,18 @@
       "types": "./src/relay/index.ts",
       "default": "./src/relay/index.ts"
     },
+    "./state/ai-usage": {
+      "types": "./src/state/aiUsage.ts",
+      "default": "./src/state/aiUsage.ts"
+    },
+    "./state/aiUsagePresentation": {
+      "types": "./src/state/aiUsagePresentation.ts",
+      "default": "./src/state/aiUsagePresentation.ts"
+    },
+    "./state/identity": {
+      "types": "./src/state/identity.ts",
+      "default": "./src/state/identity.ts"
+    },
     "./state/auth": {
       "types": "./src/state/auth.ts",
       "default": "./src/state/auth.ts"
@@ -255,6 +267,14 @@
       "types": "./src/state/subagentRuntime.ts",
       "default": "./src/state/subagentRuntime.ts"
     },
+    "./state/thread-reducer": {
+      "types": "./src/state/threadReducer.ts",
+      "default": "./src/state/threadReducer.ts"
+    },
+    "./state/older-thread-activities": {
+      "types": "./src/state/olderThreadActivities.ts",
+      "default": "./src/state/olderThreadActivities.ts"
+    },
     "./state/thread-sort": {
       "types": "./src/state/threadSort.ts",
       "default": "./src/state/threadSort.ts"
@@ -302,6 +322,10 @@
     "./state/vcs": {
       "types": "./src/state/vcs.ts",
       "default": "./src/state/vcs.ts"
+    },
+    "./state/worktreeCleanup": {
+      "types": "./src/state/worktreeCleanup.ts",
+      "default": "./src/state/worktreeCleanup.ts"
     },
     "./work-log/user-input": {
       "types": "./src/work-log/userInput.ts",
@@ -362,6 +386,14 @@
     "./device/duo-control": {
       "types": "./src/device/duoControl.ts",
       "default": "./src/device/duoControl.ts"
+    },
+    "./state/hostResourcePresentation": {
+      "types": "./src/state/hostResourcePresentation.ts",
+      "default": "./src/state/hostResourcePresentation.ts"
+    },
+    "./state/thread-recency-groups": {
+      "types": "./src/state/threadRecencyGroups.ts",
+      "default": "./src/state/threadRecencyGroups.ts"
     }
   },
   "scripts": {
@@ -381,8 +413,18 @@
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
+    "@types/react": "~19.2.14",
     "@types/three": "0.180.0",
     "micromark-util-types": "^2.0.2",
+    "react": "19.2.6",
     "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
   }
 }

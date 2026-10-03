@@ -9,6 +9,10 @@ A driver kind identifies an integration; an instance identifies one configuratio
 lifecycle. Route work by instance, so two accounts using the same driver do not share mutable
 session or catalog state.
 
+Provider command work is FIFO within a thread and concurrent across threads. Lanes are lazy and
+ephemeral: they exist only while a thread has queued or active work, and deleting a thread
+interrupts its lane. A stalled provider must not block unrelated conversations.
+
 ## Process and account isolation
 
 The `opencode` driver probes the installed version and runs the 1.x or 2.x runtime. OpenCode's MCP
@@ -53,7 +57,10 @@ and removal must respect those leases instead of replacing executables under a r
 
 Opening a provider session can start MCP servers, run hooks, or launch a login browser.
 [Grok probes](../../apps/server/src/provider/Layers/GrokProvider.ts) avoid authentication and
-session creation for this reason. Antigravity likewise reserves authenticated catalog sessions for
+session creation for this reason. The built-in `grok-build` slug is the CLI product name, not an ACP
+model id; treat it as "keep the session's current model" and never send it in `session/set_model`.
+A failed `initialize` during a probe should degrade to a warning with the CLI model list, not persist
+`error` over a working install. Antigravity likewise reserves authenticated catalog sessions for
 explicit setup or model refresh; background checks use initialization only.
 
 [Antigravity sign-in](../../apps/server/src/provider/AntigravityAuth.ts) belongs to the initiating
