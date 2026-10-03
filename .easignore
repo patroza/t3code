@@ -8,7 +8,10 @@
 apps/desktop/
 apps/vscode/
 apps/discord-bot/
-/native/
+/native/*
+!/native/libghostty-vt/
+/native/libghostty-vt/*
+!/native/libghostty-vt/LICENSE
 release/
 release-mock/
 dist-electron/
