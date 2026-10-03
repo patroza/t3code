@@ -1,4 +1,4 @@
-import type { OrchestrationThreadActivity } from "@t3tools/contracts";
+import type { IntegrationActivity as OrchestrationThreadActivity } from "@t3tools/shared/integrationThreadView";
 
 export interface PresentedToolCall {
   readonly id: string;

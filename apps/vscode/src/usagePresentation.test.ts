@@ -1,4 +1,5 @@
-import type { AiUsageSnapshot, OrchestrationThreadActivity } from "@t3tools/contracts";
+import type { IntegrationActivity as OrchestrationThreadActivity } from "@t3tools/shared/integrationThreadView";
+import type { AiUsageSnapshot } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {

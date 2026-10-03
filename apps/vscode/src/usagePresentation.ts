@@ -1,9 +1,5 @@
-import type {
-  AiUsageProviderStatus,
-  AiUsageSnapshot,
-  AiUsageWindow,
-  OrchestrationThreadActivity,
-} from "@t3tools/contracts";
+import type { IntegrationActivity as OrchestrationThreadActivity } from "@t3tools/shared/integrationThreadView";
+import type { AiUsageProviderStatus, AiUsageSnapshot, AiUsageWindow } from "@t3tools/contracts";
 
 export interface ContextWindowUsage {
   readonly usedTokens: number;
