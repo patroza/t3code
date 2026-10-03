@@ -8804,6 +8804,11 @@ export default function ChatView(props: ChatViewProps) {
             setComposerDraftThreadContexts(composerDraftTarget, [...records]),
           resetCursor: (options) => composerRef.current?.resetCursorState(options),
         });
+      } else if (
+        submissionIntent === "background" &&
+        currentRouteThreadKeyRef.current === routeThreadKey
+      ) {
+        handleNewThreadInActiveProject();
       }
       return;
     }
@@ -9040,7 +9045,9 @@ export default function ChatView(props: ChatViewProps) {
     }
     beginLocalDispatch({
       preparingWorktree: multipleModelSelections !== null || Boolean(baseBranchForWorktree),
-      submissionIntent,
+      // Only a draft has a background submission to hide behind its hero.
+      submissionIntent:
+        submissionIntent === "background" && !isLocalDraftThread ? "foreground" : submissionIntent,
     });
     setWorktreeSetupRef(
       multipleModelSelections === null && baseBranchForWorktree
@@ -9613,6 +9620,12 @@ export default function ChatView(props: ChatViewProps) {
               }),
             );
           }
+        } else if (
+          submissionIntent === "background" &&
+          currentRouteThreadKeyRef.current === routeThreadKey
+        ) {
+          // An existing thread keeps running; open a fresh composer like a draft does.
+          handleNewThreadInActiveProject();
         }
       }
     }
