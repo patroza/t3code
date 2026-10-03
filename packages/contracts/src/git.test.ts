@@ -3,14 +3,18 @@ import * as Schema from "effect/Schema";
 
 import {
   VcsCreateWorktreeInput,
+  VcsStatusInput,
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
   GitRunStackedActionResult,
   GitRunStackedActionInput,
+  GitActionProgressEvent,
+  GitCommandError,
   GitResolvePullRequestResult,
 } from "./git.ts";
 
 const decodeCreateWorktreeInput = Schema.decodeUnknownSync(VcsCreateWorktreeInput);
+const decodeVcsStatusInput = Schema.decodeUnknownSync(VcsStatusInput);
 const decodePreparePullRequestThreadInput = Schema.decodeUnknownSync(
   GitPreparePullRequestThreadInput,
 );
@@ -19,7 +23,22 @@ const decodePreparePullRequestThreadResult = Schema.decodeUnknownSync(
 );
 const decodeRunStackedActionInput = Schema.decodeUnknownSync(GitRunStackedActionInput);
 const decodeRunStackedActionResult = Schema.decodeUnknownSync(GitRunStackedActionResult);
+const decodeActionProgressEvent = Schema.decodeUnknownSync(GitActionProgressEvent);
+const decodeGitCommandError = Schema.decodeUnknownSync(GitCommandError);
 const decodeResolvePullRequestResult = Schema.decodeUnknownSync(GitResolvePullRequestResult);
+
+describe("VcsStatusInput", () => {
+  it("accepts cwd-only input as full-mode compatible", () => {
+    const parsed = decodeVcsStatusInput({ cwd: "/repo" });
+    expect(parsed.cwd).toBe("/repo");
+    expect(parsed.mode).toBeUndefined();
+  });
+
+  it("accepts list mode for high-cardinality list subscriptions", () => {
+    const parsed = decodeVcsStatusInput({ cwd: "/repo/worktree", mode: "list" });
+    expect(parsed.mode).toBe("list");
+  });
+});
 
 describe("VcsCreateWorktreeInput", () => {
   it("accepts omitted newRefName for existing-refName worktrees", () => {
@@ -43,6 +62,17 @@ describe("VcsCreateWorktreeInput", () => {
     });
 
     expect(parsed.baseRefName).toBe("origin/main");
+  });
+
+  it("accepts deferring dependency installation to asynchronous project setup", () => {
+    const parsed = decodeCreateWorktreeInput({
+      cwd: "/repo",
+      refName: "main",
+      deferDependencyInstall: true,
+      path: "/tmp/worktree",
+    });
+
+    expect(parsed.deferDependencyInstall).toBe(true);
   });
 });
 
@@ -124,6 +154,102 @@ describe("GitRunStackedActionInput", () => {
 
     expect(parsed.actionId).toBe("action-1");
     expect(parsed.action).toBe("create_pr");
+    expect(parsed.disableCommitSigning).toBeUndefined();
+  });
+
+  it("accepts a per-attempt commit-signing override", () => {
+    const parsed = decodeRunStackedActionInput({
+      actionId: "action-2",
+      cwd: "/repo",
+      action: "commit",
+      disableCommitSigning: true,
+    });
+
+    expect(parsed.disableCommitSigning).toBe(true);
+  });
+});
+
+describe("GitActionProgressEvent", () => {
+  it("defaults omitted failure classifications for older action-failure payloads", () => {
+    const parsed = decodeActionProgressEvent({
+      actionId: "action-1",
+      cwd: "/repo",
+      action: "commit",
+      kind: "action_failed",
+      phase: "commit",
+      message: "Commit failed.",
+    });
+
+    expect(parsed).toMatchObject({
+      kind: "action_failed",
+      failureKind: "unknown",
+    });
+  });
+
+  it("accepts action failures with an unknown classification", () => {
+    const parsed = decodeActionProgressEvent({
+      actionId: "action-1",
+      cwd: "/repo",
+      action: "commit",
+      kind: "action_failed",
+      phase: "commit",
+      message: "Commit failed.",
+      failureKind: "unknown",
+    });
+
+    expect(parsed.kind).toBe("action_failed");
+    if (parsed.kind === "action_failed") {
+      expect(parsed.failureKind).toBe("unknown");
+    }
+  });
+
+  it("accepts classified commit-signing failures", () => {
+    const parsed = decodeActionProgressEvent({
+      actionId: "action-2",
+      cwd: "/repo",
+      action: "commit_push",
+      kind: "action_failed",
+      phase: "commit",
+      message: "Commit failed.",
+      failureKind: "commit_signing_failed",
+    });
+
+    expect(parsed).toMatchObject({
+      kind: "action_failed",
+      failureKind: "commit_signing_failed",
+    });
+  });
+});
+
+describe("GitCommandError", () => {
+  const baseError = {
+    _tag: "GitCommandError",
+    operation: "GitVcsDriver.commit.commit",
+    command: "git",
+    cwd: "/repo",
+    detail: "Git command exited with a non-zero status.",
+  } as const;
+
+  it("defaults omitted failure classifications for older command-error payloads", () => {
+    expect(decodeGitCommandError(baseError).failureKind).toBe("unknown");
+  });
+
+  it("accepts errors with an unknown classification", () => {
+    expect(
+      decodeGitCommandError({
+        ...baseError,
+        failureKind: "unknown",
+      }).failureKind,
+    ).toBe("unknown");
+  });
+
+  it("accepts classified commit-signing errors", () => {
+    expect(
+      decodeGitCommandError({
+        ...baseError,
+        failureKind: "commit_signing_failed",
+      }).failureKind,
+    ).toBe("commit_signing_failed");
   });
 });
 

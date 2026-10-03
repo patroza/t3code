@@ -35,6 +35,11 @@ export const GitActionProgressKind = Schema.Literals([
   "action_failed",
 ]);
 export type GitActionProgressKind = typeof GitActionProgressKind.Type;
+export const GitActionFailureKind = Schema.Literals(["unknown", "commit_signing_failed"]);
+export type GitActionFailureKind = typeof GitActionFailureKind.Type;
+const GitActionFailureKindWithDefault = GitActionFailureKind.pipe(
+  Schema.withDecodingDefaultKey(Effect.succeed("unknown" as const)),
+);
 export const GitActionProgressStream = Schema.Literals(["stdout", "stderr"]);
 export type GitActionProgressStream = typeof GitActionProgressStream.Type;
 const GitCommitStepStatus = Schema.Literals([
@@ -106,10 +111,30 @@ export type GitResolvedPullRequest = typeof GitResolvedPullRequest.Type;
 
 // RPC Inputs
 
+/**
+ * How the server should refresh remote VCS status for a subscription.
+ *
+ * - `full` (default): dedicated per-cwd remote poller (automatic git fetch interval) —
+ *   for the active thread / git chrome.
+ * - `list`: still keeps remote/PR state **up to date** via a **shared budgeted**
+ *   refresher for all list-interested worktrees (not one poller fiber per row).
+ *   Use for sidebar/list PR badges.
+ */
+export const VcsStatusSubscribeMode = Schema.Literals(["full", "list"]);
+export type VcsStatusSubscribeMode = typeof VcsStatusSubscribeMode.Type;
+
 export const VcsStatusInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
+  /** Omit or `full` for active surfaces; use `list` for high-cardinality list UIs. */
+  mode: Schema.optionalKey(VcsStatusSubscribeMode),
 });
 export type VcsStatusInput = typeof VcsStatusInput.Type;
+
+export const VcsResolveBranchChangeRequestInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  refName: TrimmedNonEmptyStringSchema,
+});
+export type VcsResolveBranchChangeRequestInput = typeof VcsResolveBranchChangeRequestInput.Type;
 
 export const VcsPullInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
@@ -122,6 +147,7 @@ export const GitRunStackedActionInput = Schema.Struct({
   action: GitStackedAction,
   commitMessage: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(10_000))),
   featureBranch: Schema.optional(Schema.Boolean),
+  disableCommitSigning: Schema.optional(Schema.Boolean),
   filePaths: Schema.optional(
     Schema.Array(TrimmedNonEmptyStringSchema).check(Schema.isMinLength(1)),
   ),
@@ -149,6 +175,7 @@ export const VcsCreateWorktreeInput = Schema.Struct({
   refName: TrimmedNonEmptyStringSchema,
   newRefName: Schema.optional(TrimmedNonEmptyStringSchema),
   baseRefName: Schema.optional(TrimmedNonEmptyStringSchema),
+  deferDependencyInstall: Schema.optional(Schema.Boolean),
   path: Schema.NullOr(TrimmedNonEmptyStringSchema),
 });
 export type VcsCreateWorktreeInput = typeof VcsCreateWorktreeInput.Type;
@@ -173,6 +200,46 @@ export const VcsRemoveWorktreeInput = Schema.Struct({
   force: Schema.optional(Schema.Boolean),
 });
 export type VcsRemoveWorktreeInput = typeof VcsRemoveWorktreeInput.Type;
+
+// Worktree lifecycle (thread-scoped cleanup)
+//
+// These inputs are keyed by thread id instead of a client-provided repository
+// root and path so the server stays authoritative over which worktree (if
+// any) is safe to remove or must be restored.
+
+export const WorktreeCleanupPreviewInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type WorktreeCleanupPreviewInput = typeof WorktreeCleanupPreviewInput.Type;
+
+export const WorktreeCleanupCandidate = Schema.Struct({
+  worktreePath: TrimmedNonEmptyStringSchema,
+  branch: TrimmedNonEmptyStringSchema,
+});
+export type WorktreeCleanupCandidate = typeof WorktreeCleanupCandidate.Type;
+
+export const WorktreeCleanupPreviewResult = Schema.Struct({
+  candidate: Schema.NullOr(WorktreeCleanupCandidate),
+});
+export type WorktreeCleanupPreviewResult = typeof WorktreeCleanupPreviewResult.Type;
+
+export const WorktreeCleanupInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type WorktreeCleanupInput = typeof WorktreeCleanupInput.Type;
+
+export const WorktreeCleanupStatus = Schema.Literals([
+  "removed",
+  "retained-active",
+  "already-missing",
+]);
+export type WorktreeCleanupStatus = typeof WorktreeCleanupStatus.Type;
+
+export const WorktreeCleanupResult = Schema.Struct({
+  status: WorktreeCleanupStatus,
+  worktreePath: TrimmedNonEmptyStringSchema,
+});
+export type WorktreeCleanupResult = typeof WorktreeCleanupResult.Type;
 
 export const VcsCreateRefInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
@@ -200,13 +267,14 @@ export type VcsInitInput = typeof VcsInitInput.Type;
 
 // RPC Results
 
-const VcsStatusChangeRequest = Schema.Struct({
+export const VcsStatusChangeRequest = Schema.Struct({
   number: PositiveInt,
   title: TrimmedNonEmptyStringSchema,
   url: Schema.String,
   baseRef: TrimmedNonEmptyStringSchema,
   headRef: TrimmedNonEmptyStringSchema,
   state: VcsStatusChangeRequestState,
+  hasFailingChecks: Schema.optional(Schema.Boolean),
   /** Optional for compatibility with older servers and providers. */
   isDraft: Schema.optional(Schema.Boolean),
   /**
@@ -216,6 +284,13 @@ const VcsStatusChangeRequest = Schema.Struct({
    */
   updatedAt: Schema.optional(Schema.NullOr(Schema.String)),
 });
+export type VcsStatusChangeRequest = typeof VcsStatusChangeRequest.Type;
+
+export const VcsResolveBranchChangeRequestResult = Schema.Struct({
+  sourceControlProvider: Schema.optional(SourceControlProviderInfo),
+  pr: Schema.NullOr(VcsStatusChangeRequest),
+});
+export type VcsResolveBranchChangeRequestResult = typeof VcsResolveBranchChangeRequestResult.Type;
 
 const VcsStatusLocalShape = {
   isRepo: Schema.Boolean,
@@ -291,8 +366,22 @@ export const VcsListRefsResult = Schema.Struct({
 });
 export type VcsListRefsResult = typeof VcsListRefsResult.Type;
 
+export const VcsWorktreePreparation = Schema.Union([
+  Schema.TaggedStruct("ready", {
+    attempts: NonNegativeInt,
+  }),
+  Schema.TaggedStruct("degraded", {
+    attempts: NonNegativeInt,
+    command: Schema.String,
+    detail: Schema.String,
+    exitCode: Schema.optional(Schema.Number),
+  }),
+]);
+export type VcsWorktreePreparation = typeof VcsWorktreePreparation.Type;
+
 export const VcsCreateWorktreeResult = Schema.Struct({
   worktree: VcsWorktree,
+  preparation: Schema.optional(VcsWorktreePreparation),
 });
 export type VcsCreateWorktreeResult = typeof VcsCreateWorktreeResult.Type;
 
@@ -365,11 +454,26 @@ export class GitCommandError extends Schema.TaggedError<GitCommandError>()("GitC
   stdoutLength: Schema.optional(Schema.Number),
   stderrLength: Schema.optional(Schema.Number),
   outputLength: Schema.optional(Schema.Number),
+  failureKind: GitActionFailureKindWithDefault,
   detail: Schema.String,
   cause: Schema.optional(Schema.Defect()),
 }) {
   override get message(): string {
     return `Git command failed in ${this.operation} (${this.cwd}): ${this.detail}`;
+  }
+}
+
+export class WorktreeLifecycleError extends Schema.TaggedError<WorktreeLifecycleError>()(
+  "WorktreeLifecycleError",
+  {
+    operation: Schema.String,
+    threadId: ThreadId,
+    detail: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return `Worktree ${this.operation} failed: ${this.detail}`;
   }
 }
 
@@ -468,6 +572,7 @@ const GitActionFailedEvent = Schema.Struct({
   kind: Schema.Literal("action_failed"),
   phase: Schema.NullOr(GitActionProgressPhase),
   message: TrimmedNonEmptyStringSchema,
+  failureKind: GitActionFailureKindWithDefault,
 });
 
 export const GitActionProgressEvent = Schema.Union([

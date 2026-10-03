@@ -1,7 +1,8 @@
 import { assert, it } from "@effect/vitest";
-import { EventId, ThreadId } from "@t3tools/contracts";
+import { EventId, ThreadId, SourceRef, ThreadParticipantSummary } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as Layer from "effect/Layer";
 import * as Tracer from "effect/Tracer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -13,6 +14,25 @@ import * as EventStore from "../EventStore.ts";
 import * as LegacyV1ThreadImporter from "./LegacyV1ThreadImporter.ts";
 import * as ProjectionMaintenance from "../ProjectionMaintenance.ts";
 import * as ProjectionStore from "../ProjectionStore.ts";
+
+const originSource = Schema.decodeSync(SourceRef)({
+  channel: "discord",
+  personId: "legacy-person",
+  username: "legacy",
+});
+const participantSummaries = Schema.decodeSync(Schema.Array(ThreadParticipantSummary))([
+  {
+    personId: "legacy-person",
+    username: "legacy",
+    firstChannel: "discord",
+    channels: ["discord"],
+    firstParticipatedAt: "2026-01-01T00:00:00.000Z",
+  },
+]);
+const originSourceJson = Schema.encodeSync(Schema.fromJsonString(SourceRef))(originSource);
+const participantSummariesJson = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Array(ThreadParticipantSummary)),
+)(participantSummaries);
 
 const databaseLayer = SqlitePersistenceMemory;
 const eventStoreProvided = EventStore.layer.pipe(Layer.provideMerge(databaseLayer));
@@ -223,7 +243,21 @@ it.layer(TestLayer)("LegacyV1ThreadImporter", (it) => {
             '2026-01-04T00:00:00.000Z', NULL)
       `;
 
+      yield* sql`UPDATE projection_threads SET origin_source_json = ${originSourceJson}, participant_summaries_json = ${participantSummariesJson} WHERE thread_id = ${threadId}`;
+      yield* sql`UPDATE projection_thread_messages SET source_json = ${originSourceJson} WHERE thread_id = ${threadId} AND role = 'user'`;
+
       assert.equal(yield* importer.pendingThreadCount, 1);
+      yield* sql`
+        INSERT INTO projection_queued_messages (
+          message_id, thread_id, text, attachments_json, model_selection_json,
+          source_proposed_plan_thread_id, source_proposed_plan_id, queued_at
+        ) VALUES
+          ('queue:legacy:1', ${threadId}, 'First queued request', '[{"type":"image","id":"legacy-image","name":"reference.png","mimeType":"image/png","sizeBytes":4}]',
+           '{"instanceId":"codex","model":"gpt-5.4","options":{"reasoningEffort":"high"}}',
+           ${threadId}, 'plan:legacy', '2026-01-06T00:00:00.000Z'),
+          ('queue:legacy:2', ${threadId}, 'Second queued request', '[]', NULL,
+           NULL, NULL, '2026-01-05T00:00:00.000Z')
+      `;
       const shellImport = yield* importer.reconcileShells;
       assert.equal(yield* importer.pendingThreadCount, 1);
       assert.deepStrictEqual(shellImport, {
@@ -237,11 +271,57 @@ it.layer(TestLayer)("LegacyV1ThreadImporter", (it) => {
           AND aggregate_kind = 'thread'
           AND stream_id = ${threadId}
       `;
-      assert.equal(shellEventCount[0]?.count, 6);
+      assert.equal(shellEventCount[0]?.count, 12);
 
       assert.isTrue((yield* maintenance.verify).valid);
       const shellProjection = yield* projections.getThreadProjection(threadId);
       assert.equal(shellProjection.thread.historyOrigin, "v1_import");
+      assert.deepStrictEqual(
+        shellProjection.runs.map((run) => [
+          String(run.userMessageId),
+          run.status,
+          run.queuePosition,
+          run.queueHeld,
+        ]),
+        [
+          ["queue:legacy:1", "queued", 1, true],
+          ["queue:legacy:2", "queued", 2, true],
+        ],
+      );
+      assert.deepStrictEqual(shellProjection.runs[0]?.modelSelection.options, [
+        { id: "reasoningEffort", value: "high" },
+      ]);
+      assert.deepStrictEqual(shellProjection.runs[0]?.sourcePlanRef, {
+        threadId,
+        planId: "plan:legacy",
+      });
+      assert.equal(
+        shellProjection.messages.find((message) => message.id === "queue:legacy:1")?.runId,
+        shellProjection.runs[0]?.id,
+      );
+      assert.equal(
+        shellProjection.messages.find((message) => message.id === "queue:legacy:1")?.source,
+        undefined,
+      );
+      assert.deepStrictEqual(
+        shellProjection.messages.find((message) => message.id === "queue:legacy:1")?.attachments,
+        [
+          {
+            type: "image",
+            id: "legacy-image",
+            name: "reference.png",
+            mimeType: "image/png",
+            sizeBytes: 4,
+          },
+        ],
+      );
+
+      assert.deepStrictEqual(shellProjection.thread.originSource, originSource);
+      assert.deepStrictEqual(shellProjection.thread.participantSummaries, participantSummaries);
+      assert.deepStrictEqual(
+        shellProjection.messages.find((message) => message.role === "user")?.source,
+        originSource,
+      );
       assert.equal(shellProjection.thread.branch, "main");
       assert.equal(shellProjection.thread.worktreePath, "/tmp/legacy-project");
       assert.deepEqual(
@@ -277,7 +357,9 @@ it.layer(TestLayer)("LegacyV1ThreadImporter", (it) => {
         "v1_import",
       );
       assert.deepStrictEqual(
-        shellProjection.messages.map((message) => message.id),
+        shellProjection.messages
+          .filter((message) => !message.id.startsWith("queue:"))
+          .map((message) => message.id),
         ["message:legacy:3", "message:legacy:4"],
       );
 
@@ -318,7 +400,9 @@ it.layer(TestLayer)("LegacyV1ThreadImporter", (it) => {
       assert.equal(projection.thread.settledOverride, "settled");
       assert.deepEqual(projection.thread.settledAt, renamedAt);
       assert.deepStrictEqual(
-        projection.messages.map((message) => message.id),
+        projection.messages
+          .filter((message) => !message.id.startsWith("queue:"))
+          .map((message) => message.id),
         ["message:legacy:1", "message:legacy:2", "message:legacy:3", "message:legacy:4"],
       );
       assert.deepStrictEqual(
@@ -329,7 +413,9 @@ it.layer(TestLayer)("LegacyV1ThreadImporter", (it) => {
             ): item is Extract<
               (typeof projection.turnItems)[number],
               { readonly type: "user_message" | "assistant_message" }
-            > => item.type === "user_message" || item.type === "assistant_message",
+            > =>
+              (item.type === "user_message" || item.type === "assistant_message") &&
+              !item.messageId.startsWith("queue:"),
           )
           .map((item) => [item.messageId, item.ordinal, item.status]),
         [

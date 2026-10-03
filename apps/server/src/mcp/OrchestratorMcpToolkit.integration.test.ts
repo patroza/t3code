@@ -1,3 +1,4 @@
+import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import {
@@ -565,7 +566,14 @@ describe("orchestrator MCP toolkit", () => {
           ).pipe(Layer.provide(continuationProbeLayer));
           const orchestrationLayer = Layer.merge(
             orchestratorLayer,
-            ThreadManagementService.layer.pipe(Layer.provide(orchestratorLayer)),
+            ThreadManagementService.layer.pipe(
+              Layer.provide(
+                Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({
+                  get: () => Effect.succeed(null),
+                }),
+              ),
+              Layer.provide(orchestratorLayer),
+            ),
           );
           const providerRegistryLayer = makeProviderRegistryLayer([
             makeProviderSnapshot({
@@ -3523,7 +3531,14 @@ describe("orchestrator MCP toolkit", () => {
         );
         const orchestrationLayer = Layer.merge(
           orchestratorLayer,
-          ThreadManagementService.layer.pipe(Layer.provide(orchestratorLayer)),
+          ThreadManagementService.layer.pipe(
+            Layer.provide(
+              Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({
+                get: () => Effect.succeed(null),
+              }),
+            ),
+            Layer.provide(orchestratorLayer),
+          ),
         );
         const providerRegistryLayer = makeProviderRegistryLayer([
           makeProviderSnapshot({

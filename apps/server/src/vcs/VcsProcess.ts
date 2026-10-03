@@ -108,6 +108,21 @@ const classifyNonZeroExit = (command: string, stderr: string): VcsProcessExitFai
   return "command-failed";
 };
 
+/** Guest App-wrapper lines are written for operators; they do not carry tokens. */
+const WRAPPER_DIAGNOSTIC = /^(?:t3-github-app-token|gh-app-wrapper):.+/i;
+const PUBLIC_DIAGNOSTIC_MAX = 240;
+
+export function publicDiagnosticFromStderr(stderr: string): string | undefined {
+  for (const line of stderr.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!WRAPPER_DIAGNOSTIC.test(trimmed)) continue;
+    return trimmed.length > PUBLIC_DIAGNOSTIC_MAX
+      ? `${trimmed.slice(0, PUBLIC_DIAGNOSTIC_MAX - 1)}…`
+      : trimmed;
+  }
+  return undefined;
+}
+
 // Classify before discarding stderr; keep paths and process output out of errors.
 const isTransientGitExit = (stderr: string) =>
   /unable to create [^\n]*\.lock['"]?: file exists/i.test(stderr) ||
@@ -126,7 +141,7 @@ export const make = Effect.gen(function* () {
       argumentCount: input.args.length,
     };
 
-    const result = yield* processRunner
+    const runProcess = processRunner
       .run({
         command: input.command,
         args: input.args,
@@ -171,6 +186,8 @@ export const make = Effect.gen(function* () {
         ),
       );
 
+    const result = yield* runProcess;
+
     if (result.code === null) {
       return yield* new VcsProcessMissingExitCodeError(baseError);
     }
@@ -185,6 +202,7 @@ export const make = Effect.gen(function* () {
           stderrTruncated: result.stderrTruncated,
         },
         failureKind,
+        publicDiagnosticFromStderr(result.stderr),
         input.command === "git" &&
           failureKind === "command-failed" &&
           isTransientGitExit(result.stderr),

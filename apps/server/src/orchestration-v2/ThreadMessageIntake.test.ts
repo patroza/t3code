@@ -7,6 +7,8 @@ import {
   ChatAttachmentId,
   CommandId,
   EventId,
+  MessageId,
+  OrchestrationDispatchCommandError,
   RuntimeRequestId,
   ThreadId,
   TurnItemId,
@@ -762,5 +764,45 @@ it.effect("applies the image budget across all questions before dispatch", () =>
     expect(result._tag).toBe("Failure");
     if (result._tag === "Failure") expect(String(result.cause)).toContain("80 MiB");
     expect(captured).toEqual([]);
+  }).pipe(Effect.provide(intakeTestLayer)),
+);
+
+it.effect("refuses a cloning project before claiming pending message attachments", () =>
+  Effect.gen(function* () {
+    const command: OrchestrationV2Command = {
+      type: "message.dispatch",
+      commandId: CommandId.make("clone:attachment"),
+      threadId: ThreadId.make("clone:thread"),
+      messageId: MessageId.make("clone:message"),
+      text: "Start work",
+      attachments: [
+        {
+          type: "image",
+          id: ChatAttachmentId.make(createPendingAttachmentId()!),
+          name: "reference.png",
+          mimeType: "image/png",
+          sizeBytes: 4,
+        },
+      ],
+      dispatchMode: { type: "start_immediately" },
+      createdBy: "user",
+      creationSource: "web",
+    };
+    const error = yield* dispatchCommand(command).pipe(
+      Effect.provide(
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          assertCommandReady: () =>
+            Effect.fail(
+              new OrchestrationDispatchCommandError({
+                message: "The repository is still being cloned.",
+              }),
+            ),
+        }),
+      ),
+      Effect.flip,
+    );
+    // The attachment has no pending file: reaching claims would fail with a
+    // missing attachment instead of returning the readiness error.
+    expect(error.message).toBe("The repository is still being cloned.");
   }).pipe(Effect.provide(intakeTestLayer)),
 );

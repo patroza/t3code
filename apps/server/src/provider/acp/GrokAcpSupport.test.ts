@@ -10,6 +10,8 @@ import {
   grokAcpSpawnArgs,
   isValidGrokReasoningEffortToken,
   resolveGrokAcpBaseModelId,
+  resolveGrokReasoningEffortSelection,
+  resolveGrokRequestedModeId,
 } from "./GrokAcpSupport.ts";
 
 describe("grokAcpRuntimeProcessOwnership", () => {
@@ -37,8 +39,8 @@ describe("grokAcpRuntimeProcessOwnership", () => {
 
 describe("resolveGrokAcpBaseModelId", () => {
   it("normalizes empty and custom Grok model ids", () => {
-    expect(resolveGrokAcpBaseModelId(undefined)).toBe("grok-build");
-    expect(resolveGrokAcpBaseModelId("   ")).toBe("grok-build");
+    expect(resolveGrokAcpBaseModelId(undefined)).toBe("grok-4.6");
+    expect(resolveGrokAcpBaseModelId("   ")).toBe("grok-4.6");
     expect(resolveGrokAcpBaseModelId("  grok-test-custom-model  ")).toBe("grok-test-custom-model");
   });
 });
@@ -87,7 +89,34 @@ describe("buildGrokAcpSpawnInput", () => {
         XAI_API_KEY: "secret",
         GROK_OAUTH2_REFERRER: "t3code",
       },
+      extendEnv: false,
     });
+  });
+
+  it("forwards reasoning effort as a process-level agent flag", () => {
+    const spawn = buildGrokAcpSpawnInput(
+      { binaryPath: "grok" },
+      "/tmp/project",
+      undefined,
+      undefined,
+      {
+        reasoningEffort: "medium",
+      },
+    );
+    expect(spawn.args).toEqual(["agent", "--reasoning-effort", "medium", "stdio"]);
+  });
+
+  it("ignores unknown effort values on spawn", () => {
+    const spawn = buildGrokAcpSpawnInput(
+      { binaryPath: "grok" },
+      "/tmp/project",
+      undefined,
+      undefined,
+      {
+        reasoningEffort: "turbo",
+      },
+    );
+    expect(spawn.args).toEqual(["agent", "stdio"]);
   });
 
   it("puts Supervised on the Grok argv so config always-approve cannot win", () => {
@@ -262,4 +291,24 @@ describe("applyGrokAcpModelSelection", () => {
       expect(error).toBe(failure.message);
     }),
   );
+});
+
+describe("resolveGrokReasoningEffortSelection", () => {
+  it("reads reasoningEffort and effort option ids", () => {
+    expect(resolveGrokReasoningEffortSelection([{ id: "reasoningEffort", value: "High" }])).toBe(
+      "high",
+    );
+    expect(resolveGrokReasoningEffortSelection([{ id: "effort", value: "low" }])).toBe("low");
+    expect(resolveGrokReasoningEffortSelection([{ id: "reasoningEffort", value: "nope" }])).toBe(
+      undefined,
+    );
+  });
+});
+
+describe("resolveGrokRequestedModeId", () => {
+  it("pins Build and unset to agent; Plan to plan; never ask", () => {
+    expect(resolveGrokRequestedModeId("plan")).toBe("plan");
+    expect(resolveGrokRequestedModeId("default")).toBe("agent");
+    expect(resolveGrokRequestedModeId(undefined)).toBe("agent");
+  });
 });

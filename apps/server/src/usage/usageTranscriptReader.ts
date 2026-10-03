@@ -25,6 +25,7 @@ import { createTranscriptJsonReader } from "../project/AgentSessionJson.ts";
 
 import {
   initialCodexScanState,
+  initialKimiScanState,
   mightCarryUsage,
   parseClaudeLine,
   parseClaudeRecord,
@@ -32,6 +33,7 @@ import {
   parseCodexRecord,
   parseGrokLine,
   parseGrokRecord,
+  parseKimiLine,
   type CodexScanState,
   type UsageRecord,
 } from "./usageTranscripts.ts";
@@ -278,6 +280,9 @@ export async function readTranscriptRecords(
       resumed = true;
     }
 
+    // Kimi names no session on any record; the wire log's own directory is the
+    // session, which is what `distinctSessions` counts.
+    const kimiState = initialKimiScanState(NodePath.basename(NodePath.dirname(filePath)));
     const parseLine = (line: string, state: CodexScanState, out: UsageRecord[]): void => {
       if (provider === "codex") {
         if (
@@ -294,6 +299,11 @@ export async function readTranscriptRecords(
       if (!mightCarryUsage(line, provider)) return;
       if (provider === "grok") {
         for (const grokRecord of parseGrokLine(line)) out.push(grokRecord);
+        return;
+      }
+      if (provider === "kimi") {
+        const record = parseKimiLine(line, kimiState);
+        if (record !== null) out.push(record);
         return;
       }
       const record = parseClaudeLine(line);

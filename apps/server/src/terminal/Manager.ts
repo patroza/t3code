@@ -60,6 +60,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
+import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "../config.ts";
 import { mergeProviderInstanceEnvironment } from "../provider/ProviderInstanceEnvironment.ts";
@@ -1430,8 +1431,29 @@ export const make = Effect.fn("TerminalManager.make")(function* () {
   const { terminalLogsDir, providerStatusCacheDir, baseDir } = yield* ServerConfig.ServerConfig;
   const ptyAdapter = yield* PtyAdapter.PtyAdapter;
   const portDiscovery = yield* PortScanner.PortDiscovery;
+  const platform = yield* HostProcessPlatform;
   const nativeTelemetry = yield* NativeTelemetryClient.NativeTelemetryClient;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
+
+  // Preferred terminal shell, sourced live from `settings.terminalShell`.
+  // Held in a plain closure variable so the synchronous `shellResolver`
+  // (invoked per spawn) can read it without an Effect. This value is consumed
+  // only by the terminal PTY path; agent providers spawn on a separate path
+  // with their own environment and never see it, so a configured terminal
+  // shell cannot leak into providers.
+  let terminalShellOverride = yield* serverSettings.getSettings.pipe(
+    Effect.map((settings) => settings.terminalShell.trim()),
+    Effect.orElseSucceed(() => ""),
+  );
+  yield* serverSettings.streamChanges.pipe(
+    Stream.runForEach((next) =>
+      Effect.sync(() => {
+        terminalShellOverride = next.terminalShell.trim();
+      }),
+    ),
+    Effect.forkScoped,
+  );
+
   const path = yield* Path.Path;
   const resolveProviderInstanceEnvironment = Effect.fn(
     "terminal.resolveProviderInstanceEnvironment",
@@ -1446,6 +1468,10 @@ export const make = Effect.fn("TerminalManager.make")(function* () {
   return yield* makeWithOptions({
     logsDir: terminalLogsDir,
     ptyAdapter,
+    shellResolver: () =>
+      terminalShellOverride.length > 0
+        ? terminalShellOverride
+        : defaultShellResolver(platform, process.env),
     processTable: nativeTelemetry.processTable.pipe(
       Effect.mapError(
         (cause) => new TerminalSubprocessCheckError({ cause, command: "resource-monitor" }),
@@ -2198,7 +2224,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         cwd: session.cwd,
         cols: session.cols,
         rows: session.rows,
-        env: spawnEnv,
+        // Point the terminal's own $SHELL at the shell that actually starts
+        // (including any configured override) so tools launched inside the
+        // terminal agree with it. Scoped to this PTY's env only — never the
+        // shared process env, so agent providers are unaffected.
+        env: platform === "win32" ? spawnEnv : { ...spawnEnv, SHELL: candidate.shell },
       }),
     );
 

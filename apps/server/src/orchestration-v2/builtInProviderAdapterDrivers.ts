@@ -1,3 +1,4 @@
+import { KimiAdapterV2Driver, type KimiAdapterV2DriverEnv } from "./Adapters/KimiAdapterV2.ts";
 import type { ProviderDriverKind } from "@t3tools/contracts";
 
 import {
@@ -22,6 +23,7 @@ import { PiAdapterV2Driver, type PiAdapterV2DriverEnv } from "./Adapters/PiAdapt
 import type { AnyProviderAdapterDriver } from "./ProviderAdapterDriver.ts";
 
 export type BuiltInProviderAdapterDriversV2Env =
+  | KimiAdapterV2DriverEnv
   | AcpRegistryAdapterV2DriverEnv
   | ClaudeAdapterV2DriverEnv
   | CodexAdapterV2DriverEnv
@@ -38,6 +40,7 @@ const BUILT_IN_PROVIDER_ADAPTER_DRIVERS_V2: ReadonlyArray<
   CursorAdapterV2Driver,
   OpenCodeAdapterV2Driver,
   GrokAdapterV2Driver,
+  KimiAdapterV2Driver,
   PiAdapterV2Driver,
   AcpRegistryAdapterV2Driver,
 ];

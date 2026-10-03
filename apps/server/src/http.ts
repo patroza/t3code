@@ -550,6 +550,9 @@ const handleStaticAndDevRequest = Effect.fn("handleStaticAndDevRequest")(
       });
     }
 
+    // Prefer the boot-time path, but re-resolve when it is empty so a mid-deploy
+    // rebuild that wiped dist/client can fall back to monorepo apps/web/dist
+    // (or a newly promoted client) without restarting the process.
     const staticDir =
       config.staticDir ?? (config.devUrl ? yield* ServerConfig.resolveStaticDir() : undefined);
     if (!staticDir) {
@@ -559,7 +562,7 @@ const handleStaticAndDevRequest = Effect.fn("handleStaticAndDevRequest")(
     }
 
     const path = yield* Path.Path;
-    const staticRoot = path.resolve(staticDir);
+    let staticRoot = path.resolve(staticDir);
     const staticRequestPath = url.value.pathname === "/" ? "/index.html" : url.value.pathname;
     const rawStaticRelativePath = staticRequestPath.replace(/^[/\\]+/, "");
     const hasRawLeadingParentSegment = rawStaticRelativePath.startsWith("..");
@@ -596,7 +599,33 @@ const handleStaticAndDevRequest = Effect.fn("handleStaticAndDevRequest")(
       filePath = path.resolve(staticRoot, "index.html");
       opened = yield* openStaticFile(filePath);
       if (!opened) {
-        return HttpServerResponse.text("Not Found", { status: 404 });
+        const recovered = yield* ServerConfig.resolveStaticDir();
+        if (recovered !== undefined) {
+          const recoveredRoot = path.resolve(recovered);
+          if (recoveredRoot !== staticRoot) {
+            staticRoot = recoveredRoot;
+            const recoveredFilePath = path.resolve(staticRoot, staticRelativePath);
+            if (isWithinStaticRoot(recoveredFilePath)) {
+              opened = yield* openStaticFile(recoveredFilePath);
+              if (opened) {
+                filePath = recoveredFilePath;
+              }
+            }
+            if (!opened) {
+              filePath = path.resolve(staticRoot, "index.html");
+              opened = yield* openStaticFile(filePath);
+            }
+          }
+        }
+      }
+      if (!opened) {
+        // Missing index during atomic client promote (or a broken package) is
+        // temporary/operational — not a permanent missing route. 503 lets
+        // desktop retry instead of painting a permanent "Not Found" shell.
+        return HttpServerResponse.text("Web assets unavailable", {
+          status: 503,
+          headers: { "Retry-After": "1" },
+        });
       }
     }
     const fileInfo = opened.info;
