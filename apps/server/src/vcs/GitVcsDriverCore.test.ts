@@ -1549,6 +1549,12 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           yield* writeTextFile(cwd, "tab\tand\nnewline.txt", "unusual path\n");
         }
         yield* git(cwd, ["add", "."]);
+        if ((yield* HostProcessPlatform) !== "win32") {
+          const fileSystem = yield* FileSystem.FileSystem;
+          yield* fileSystem.chmod(`${cwd}/mode-only.sh`, 0o755);
+        } else {
+          yield* git(cwd, ["config", "core.filemode", "false"]);
+        }
         yield* git(cwd, ["update-index", "--chmod=+x", "mode-only.sh"]);
         yield* git(cwd, ["commit", "-m", "rename and add files"]);
         const preview = yield* driver.getReviewDiffPreview({
