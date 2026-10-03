@@ -28,6 +28,9 @@ layer("055_OrchestrationV2", (it) => {
         [54, "ProjectionThreadsAutoSettleDisabledAt"],
         [55, "OrchestrationV2"],
         [56, "RemoveRedundantProjectionIndexes"],
+        [1, "ProjectionQueuedMessages"],
+        [2, "SessionIdentityClaims"],
+        [3, "ProjectionThreadSourceAttribution"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
 

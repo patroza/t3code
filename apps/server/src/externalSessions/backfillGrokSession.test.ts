@@ -3,6 +3,7 @@ import { assert, describe, it } from "@effect/vitest";
 
 import {
   planGrokBackfill,
+  runGrokBackfill,
   readGrokDisplayMessages,
   readGrokDisplayMessagesTail,
   resolveGrokChatHistoryPath,
@@ -12,6 +13,8 @@ import {
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+
+import { sqliteExec, sqliteJson } from "./sqlite.ts";
 
 const SESSION_ID = "session-abc";
 
@@ -333,5 +336,25 @@ describe("resolveGrokChatHistoryPath", () => {
         ),
       ),
     );
+  });
+});
+
+describe("legacy Grok repair boundary", () => {
+  it("rejects a migrated database before forced transcript writes", () => {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "grok-v2-boundary-"));
+    const dbPath = NodePath.join(dir, "state.sqlite");
+    try {
+      sqliteExec(
+        dbPath,
+        "CREATE TABLE orchestration_v2_projection_threads (thread_id TEXT); CREATE TABLE orchestration_events (event_id TEXT);",
+      );
+      assert.throws(
+        () => runGrokBackfill({ dbPath, threadId: "thread:test", force: true }),
+        "only supports legacy V1 databases",
+      );
+      assert.deepStrictEqual(sqliteJson(dbPath, "SELECT * FROM orchestration_events"), []);
+    } finally {
+      NodeFS.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

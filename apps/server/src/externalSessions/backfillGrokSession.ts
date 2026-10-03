@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off preferSchemaOverJson:off
 // Backfill missing user + assistant messages from a grok CLI session into an
-// existing T3 thread.
+// existing legacy V1 T3 thread. Migrated V2 databases are rejected.
 //
 // When a grok ACP session gets wedged (see effect-acp Interrupt-frame leak), or
 // the conversation continues outside T3, T3 stops ingesting grok's
@@ -494,6 +494,16 @@ COMMIT;`,
 export function runGrokBackfill(options: RunGrokBackfillOptions): GrokBackfillResult {
   const baseDir = homePath(options.baseDir ?? process.env.T3CODE_HOME ?? "~/.t3");
   const dbPath = options.dbPath ?? NodePath.join(baseDir, "userdata", "state.sqlite");
+
+  const migrated = sqliteJson(
+    dbPath,
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'orchestration_v2_projection_threads'",
+  );
+  if (migrated.length > 0) {
+    throw new Error(
+      "backfill-grok only supports legacy V1 databases; V2 transcripts cannot be repaired with this command.",
+    );
+  }
 
   const meta = resolveGrokSessionMeta(dbPath, options.threadId);
   const sessionId = options.sessionId ?? meta.sessionId;

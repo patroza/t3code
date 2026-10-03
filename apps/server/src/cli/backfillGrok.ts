@@ -64,7 +64,7 @@ export const backfillGrokCommand = Command.make("backfill-grok", {
   json: jsonFlag,
 }).pipe(
   Command.withDescription(
-    "Backfill missing user + grok messages from a grok CLI session into an existing T3 thread.",
+    "Backfill missing user + grok messages into a legacy V1 T3 thread (not supported after V2 migration).",
   ),
   Command.withHandler((flags) =>
     Effect.sync(() =>
