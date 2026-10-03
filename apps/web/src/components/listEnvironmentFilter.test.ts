@@ -54,7 +54,7 @@ describe("list environment multi-select", () => {
 describe("threads list mode and grouping prefs", () => {
   it("maps legacy recent/projects mode values onto the combined Threads surface", () => {
     expect(decodeListMode("threads")).toBe("threads");
-    expect(decodeListMode("board")).toBe("threads");
+    expect(decodeListMode("board")).toBe("board");
     expect(decodeListMode("recent")).toBe("threads");
     expect(decodeListMode("projects")).toBe("threads");
     expect(DEFAULT_WEB_LIST_MODE).toBe("threads");

@@ -60,6 +60,7 @@ import {
   PaletteIcon,
   RotateCcwIcon,
   SettingsIcon,
+  SquareKanbanIcon,
   SquarePenIcon,
   SunIcon,
   TextSearchIcon,
@@ -2214,6 +2215,17 @@ function OpenCommandPaletteDialog(props: {
     });
   }, [browseNavigation, clearOpenIntent, openIntent, pushPaletteView]);
 
+  actionItems.push({
+    kind: "action",
+    value: "action:board",
+    searchTerms: ["board", "kanban", "overview", "dashboard"],
+    title: "Open board",
+    icon: <SquareKanbanIcon className={ITEM_ICON_CLASS} />,
+    shortcutCommand: "board.open",
+    run: async () => {
+      await navigate({ to: "/board" });
+    },
+  });
 
   actionItems.push({
     kind: "action",

@@ -92,7 +92,7 @@ import {
   settlePromise,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { useNavigate, useParams, useRouter } from "@tanstack/react-router";
+import { useLocation, useNavigate, useParams, useRouter } from "@tanstack/react-router";
 import {
   MAX_SIDEBAR_THREAD_PREVIEW_COUNT,
   MIN_SIDEBAR_THREAD_PREVIEW_COUNT,
@@ -5202,11 +5202,19 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
           ) : null}
         </SidebarGroup>
       ) : null}
+      {listMode === "board" ? (
+        <SidebarGroup>
+          <div className="px-2 text-center text-xs text-muted-foreground/60">
+            Board view is open in the main panel
+          </div>
+        </SidebarGroup>
+      ) : null}
     </SidebarContent>
   );
 });
 
 export default function LegacySidebar() {
+  const pathname = useLocation({ select: (loc) => loc.pathname });
   const projects = useProjects();
   const sidebarThreads = useThreadShells();
   const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
@@ -5372,8 +5380,18 @@ export default function LegacySidebar() {
   const handleListModeChange = useCallback(
     (mode: WebListMode) => {
       setStoredListMode(mode);
+      if (mode === "board") {
+        if (isMobile) {
+          setOpenMobile(false);
+        }
+        void navigate({ to: "/board" });
+        return;
+      }
+      if (pathname === "/board") {
+        void navigate({ to: "/" });
+      }
     },
-    [setStoredListMode],
+    [isMobile, navigate, pathname, setOpenMobile, setStoredListMode],
   );
   const handleSelectedEnvironmentIdsChange = useCallback(
     (next: readonly EnvironmentId[]) => {
@@ -5948,6 +5966,16 @@ export default function LegacySidebar() {
         platform,
         context: shortcutContext,
       });
+      if (command === "board.open") {
+        event.preventDefault();
+        event.stopPropagation();
+        setStoredListMode("board");
+        if (isMobile) {
+          setOpenMobile(false);
+        }
+        void navigate({ to: "/board" });
+        return;
+      }
 
       const traversalDirection = threadTraversalDirectionFromCommand(command);
       if (traversalDirection !== null) {

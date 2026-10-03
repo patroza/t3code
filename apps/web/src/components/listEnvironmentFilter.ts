@@ -49,16 +49,17 @@ export function resolveSelectedEnvironmentIds(
 }
 
 /** Main list surface: combined thread list vs Board. */
-export type WebListMode = "threads";
+export type WebListMode = "threads" | "board";
 
-export const WEB_LIST_MODES = ["threads"] as const satisfies readonly WebListMode[];
+export const WEB_LIST_MODES = ["threads", "board"] as const satisfies readonly WebListMode[];
 
 export const WEB_LIST_MODE_LABELS: Record<WebListMode, string> = {
   threads: "Threads",
+  board: "Board",
 };
 
 export function isWebListMode(value: unknown): value is WebListMode {
-  return value === "threads";
+  return value === "threads" || value === "board";
 }
 
 /**
@@ -164,9 +165,9 @@ export const ListHideSettledSchema = Schema.Boolean;
 const WebListModeStored = Schema.Literals(["threads", "board", "recent", "projects"]);
 export const WebListModeSchema = WebListModeStored.pipe(
   Schema.decodeTo(
-    Schema.Literals(["threads"]),
-    SchemaTransformation.transform<WebListMode, typeof WebListModeStored.Type>({
-      decode: () => "threads",
+    Schema.Literals(["threads", "board"]),
+    SchemaTransformation.transform({
+      decode: (value) => (value === "board" ? ("board" as const) : ("threads" as const)),
       encode: (value) => value,
     }),
   ),

@@ -250,6 +250,9 @@ describe("fork surface existence (anti stack-drop)", () => {
     const chat = readSrc("components/ChatView.tsx");
     expect(chat).toContain("requestIdentityClaimGate");
     expect(sidebarV2).toContain("ThreadIdentityMark");
+    // The board is a thread surface too: a card has to say where a thread came
+    // from, the same as a sidebar row and the mobile board card.
+    expect(readSrc("components/board/BoardCard.tsx")).toContain("ThreadIdentityMark");
     expect(sidebarV2).toContain("sidebar-ownership-filter-");
     expect(sidebarV1).toContain("ThreadIdentityMark");
     expect(sidebarV1).not.toContain("ThreadIdentityLeading");
@@ -261,8 +264,9 @@ describe("fork surface existence (anti stack-drop)", () => {
     // applying the ownership filter, so a sidebar filtered to Mine sat beside
     // a board showing everyone's threads. Both must go through the one
     // predicate rather than each re-deriving the call.
+    const board = readSrc("components/board/BoardView.tsx");
     const sidebar = readSrc("components/Sidebar.tsx");
-    for (const source of [sidebar]) {
+    for (const source of [board, sidebar]) {
       expect(source).toContain("useOwnershipFilter()");
       expect(source).toContain("buildOwnershipPredicate({");
       expect(source).toContain("ownershipPredicate(thread)");

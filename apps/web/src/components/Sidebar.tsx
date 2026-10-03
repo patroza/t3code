@@ -67,6 +67,7 @@ import {
   PinIcon,
   PinOffIcon,
   PlusIcon,
+  SquareKanbanIcon,
   SettingsIcon,
   ShieldQuestionIcon,
   SquarePenIcon,
@@ -87,7 +88,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
-import { useParams, useRouter } from "@tanstack/react-router";
+import { useLocation, useParams, useRouter } from "@tanstack/react-router";
 
 import { useRightPanelStore } from "../rightPanelStore";
 import {
@@ -4557,6 +4558,13 @@ export default function Sidebar() {
           modelPickerOpen: isModelPickerOpen(),
         },
       });
+      if (command === "board.open") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (isMobile) setOpenMobile(false);
+        void router.navigate({ to: "/board" });
+        return;
+      }
       const navigateToThreadKey = (targetThreadKey: string | null) => {
         if (!targetThreadKey) return false;
         const targetThread = threadByKey.get(targetThreadKey);
@@ -4641,8 +4649,15 @@ export default function Sidebar() {
     [isMobile, newThreadContext, projectGroups.length, setOpenMobile],
   );
 
+  const pathname = useLocation({ select: (l) => l.pathname });
+  const isBoardActive = pathname === "/board";
+  const handleBoardClick = useCallback(() => {
+    if (isMobile) setOpenMobile(false);
+    void router.navigate({ to: "/board" });
+  }, [isMobile, router, setOpenMobile]);
 
   const commandPaletteShortcutLabel = shortcutLabelForCommand(keybindings, "commandPalette.toggle");
+  const boardShortcutLabel = shortcutLabelForCommand(keybindings, "board.open");
   // The button mirrors chat.new: in multi-project setups both route through
   // the command palette's "New thread in..." picker, and in single-project
   // setups both create immediately. In multi-project setups the label is only
@@ -4818,6 +4833,33 @@ export default function Sidebar() {
               onClearSearch={clearThreadSearch}
             />
             <div className="flex items-center gap-1">
+              <div className="shrink-0">
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <SidebarMenuButton
+                        size="icon"
+                        type="button"
+                        className="relative"
+                        isActive={isBoardActive}
+                        onClick={handleBoardClick}
+                        aria-label="Board"
+                        aria-current={isBoardActive ? "page" : undefined}
+                        data-testid="sidebar-board-link"
+                      />
+                    }
+                  >
+                    <SquareKanbanIcon />
+                    <span
+                      className="pointer-events-none absolute left-1/2 top-1/2 size-[max(100%,3rem)] -translate-1/2 pointer-fine:hidden"
+                      aria-hidden="true"
+                    />
+                  </TooltipTrigger>
+                  <TooltipPopup side="right">
+                    {boardShortcutLabel ? `Board (${boardShortcutLabel})` : "Board"}
+                  </TooltipPopup>
+                </Tooltip>
+              </div>
               {projectGroups.length > 0 ? (
                 <>
                   <Menu>
