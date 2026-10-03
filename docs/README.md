@@ -26,7 +26,8 @@
 ## Working on T3 Code
 
 Start with the [development runbook](./operations/development.md) and
-[contribution policy](../CONTRIBUTING.md).
+[contribution policy](../CONTRIBUTING.md). Fork branch model, agent rules, and the ship gate live in
+[AGENTS.md](../AGENTS.md).
 
 Internal notes preserve architectural decisions, constraints, and implementation traps that the
 source alone does not explain. Most code changes do not need an internal documentation update. Follow the
@@ -55,6 +56,7 @@ source alone does not explain. Most code changes do not need an internal documen
 
 - [Development and local builds](./operations/development.md)
 - [T3 Connect setup](./operations/connect-setup.md)
+- [CI quality gates](./operations/ci.md)
 - [Release](./operations/release.md)
 - [Observability](./operations/observability.md)
 - [Relay observability](./operations/relay-observability.md)

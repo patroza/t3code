@@ -15,6 +15,26 @@ reproduction steps or environment where relevant. -->
 <!-- Explain how this fixes the problem. If it spans components or clients,
 explain why those changes are needed for the same fix. Split independent fixes. -->
 
+## Downstream Fork Relationship
+
+<!--
+For downstream-fork work, name the base branch, affected areas, and whether this depends on another
+open PR. Delete this section for upstream contributions.
+-->
+
+## External-Fork Provenance
+
+<!--
+For an external-fork import, list what was imported unchanged, adapted locally, intentionally
+excluded, and the fully qualified source links. Delete this section for original work.
+-->
+
+## UI Changes
+
+<!-- If this PR changes UI, include clear before/after screenshots.
+     If the change involves motion or interaction, include a short video.
+     Delete this section if not applicable. -->
+
 ## Scope and approval
 
 <!-- Link the triaged bug issue or the discussion with explicit maintainer approval
@@ -37,3 +57,10 @@ when motion, timing, transitions, or interaction details are needed to demonstra
 the change. Upload evidence to GitHub and embed or link it here. Never commit PR-only assets. -->
 
 <!-- If you used an agent, end with the model and harness that did the work. -->
+
+## Checklist
+
+- [ ] This PR is small and focused
+- [ ] I explained what changed and why
+- [ ] I included before/after screenshots for any UI changes
+- [ ] I included a video for animation/interaction changes

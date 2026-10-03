@@ -86,6 +86,9 @@ must reject that operation before changing the filesystem.
 Tests use [drainable workers](../../packages/shared/src/DrainableWorker.ts) to wait until both the
 queue and its current item have finished. An empty queue alone does not prove the worker is idle.
 
+Provider command dispatch is keyed by thread: FIFO within a thread, concurrent across threads, with
+lazy ephemeral lanes so only threads with work consume one.
+
 Runtime receipts mark specific test milestones. Their
 [production layer](../../apps/server/src/orchestration/Layers/RuntimeReceiptBus.ts) is a no-op;
 production behavior must use persisted state and events. These test signals are separate from the
