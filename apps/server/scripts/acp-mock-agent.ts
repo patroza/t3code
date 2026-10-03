@@ -641,7 +641,10 @@ const program = Effect.gen(function* () {
     Effect.gen(function* () {
       const requestedSessionId = String(request.sessionId ?? sessionId);
       if (failLoadSession) {
-        return yield* AcpError.AcpRequestError.internalError("Mock load session failure");
+        return yield* new AcpError.AcpRequestError({
+          code: Number(process.env.T3_ACP_FAIL_LOAD_SESSION_CODE ?? -32603),
+          errorMessage: "Mock load session failure",
+        });
       }
       if (failLoadSessionAfterConfigReplay) {
         yield* agent.client.sessionUpdate({

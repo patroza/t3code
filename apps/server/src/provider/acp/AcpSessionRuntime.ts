@@ -2296,6 +2296,21 @@ export const make = (
           );
         });
 
+      const createFreshSession = Effect.gen(function* () {
+        const createPayload = {
+          cwd: options.cwd,
+          mcpServers: sessionMcpServers(initializeResult),
+          ...(options.additionalDirectories?.length
+            ? { additionalDirectories: options.additionalDirectories }
+            : {}),
+        } satisfies EffectAcpSchema.NewSessionRequest;
+        const created = yield* runLoggedRequest(
+          "session/new",
+          createPayload,
+          acp.agent.createSession(createPayload),
+        );
+        return { sessionId: created.sessionId, sessionSetupResult: created };
+      });
       const setupSession = Effect.gen(function* () {
         let sessionId: string;
         let sessionSetupResult:
@@ -2317,7 +2332,19 @@ export const make = (
               ...additionalDirectories,
               mcpServers: sessionMcpServers(initializeResult),
             } satisfies EffectAcpSchema.LoadSessionRequest;
-            sessionSetupResult = yield* runLoadSessionWithReplayIdle(loadPayload, initializeResult);
+            const loaded = yield* runLoadSessionWithReplayIdle(loadPayload, initializeResult).pipe(
+              Effect.map((result) => ({ sessionId, sessionSetupResult: result })),
+              Effect.catchTag("AcpRequestError", (error) =>
+                isAcpAuthenticationRequired(error) || ![-32601, -32602, -32603].includes(error.code)
+                  ? Effect.fail(error)
+                  : Effect.logWarning("ACP saved session was rejected; starting a fresh session.", {
+                      resumeSessionId: sessionId,
+                      code: error.code,
+                    }).pipe(Effect.andThen(createFreshSession)),
+              ),
+            );
+            sessionId = loaded.sessionId;
+            sessionSetupResult = loaded.sessionSetupResult;
           } else if (initializeResult.agentCapabilities?.sessionCapabilities?.resume != null) {
             const resumePayload = {
               sessionId,
@@ -2337,18 +2364,7 @@ export const make = (
             });
           }
         } else {
-          const createPayload = {
-            cwd: options.cwd,
-            mcpServers: sessionMcpServers(initializeResult),
-            ...additionalDirectories,
-          } satisfies EffectAcpSchema.NewSessionRequest;
-          const created = yield* runLoggedRequest(
-            "session/new",
-            createPayload,
-            acp.agent.createSession(createPayload),
-          );
-          sessionId = created.sessionId;
-          sessionSetupResult = created;
+          return yield* createFreshSession;
         }
 
         return { sessionId, sessionSetupResult };

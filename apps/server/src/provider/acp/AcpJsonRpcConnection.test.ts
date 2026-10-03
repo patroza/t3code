@@ -1474,7 +1474,7 @@ describe("AcpSessionRuntime", () => {
           authMethodId: "test",
           spawn: {
             command: mockAgentCommand,
-            args: mockAgentArgs,
+            args: [NodePath.join(__dirname, "../../../scripts/acp-legacy-mode-mock-agent.cjs")],
           },
           cwd: process.cwd(),
           clientInfo: { name: "t3-test", version: "0.0.0" },
@@ -1536,16 +1536,23 @@ describe("AcpSessionRuntime", () => {
     );
   });
 
-  it.effect("falls back to a fresh session when session/load fails", () =>
-    Effect.gen(function* () {
+  it.effect("falls back to a fresh session when session/load fails", () => {
+    const requests: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
+    return Effect.gen(function* () {
       const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
       const started = yield* runtime.start();
 
       // session/load fails, but the resume is best-effort: startup recovers via
       // session/new and yields the mock agent's fresh sessionId. This holds for
-      // any load failure (typed JSON-RPC errors and decode defects alike),
+      // a rejected saved session (without hiding transport or decode failures),
       // matching how real agents reject a stale resume sessionId.
       expect(started.sessionId).toBe("mock-session-1");
+      expect(
+        requests.filter((event) => event.method === "session/load" && event.status === "failed"),
+      ).toHaveLength(1);
+      expect(
+        requests.filter((event) => event.method === "session/new" && event.status === "succeeded"),
+      ).toHaveLength(1);
     }).pipe(
       Effect.provide(
         AcpSessionRuntime.layer({
@@ -1554,18 +1561,52 @@ describe("AcpSessionRuntime", () => {
             command: mockAgentCommand,
             args: mockAgentArgs,
             env: {
-              T3_ACP_FAIL_LOAD_SESSION_INVALID_PARAMS: "1",
+              T3_ACP_FAIL_LOAD_SESSION: "1",
             },
           },
           cwd: process.cwd(),
+          requestLogger: (event) =>
+            Effect.sync(() => {
+              requests.push(event);
+            }),
           resumeSessionId: "stale-session-id",
           clientInfo: { name: "t3-test", version: "0.0.0" },
         }),
       ),
       Effect.scoped,
       Effect.provide(NodeServices.layer),
-    ),
-  );
+    );
+  });
+
+  it.effect("preserves operational load failures without starting a duplicate session", () => {
+    const requests: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
+    return Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
+      const outcome = yield* runtime.start().pipe(Effect.result);
+      expect(Result.isFailure(outcome)).toBe(true);
+      if (Result.isFailure(outcome)) {
+        expect(outcome.failure).toMatchObject({ _tag: "AcpRequestError", code: -32099 });
+      }
+      expect(requests.filter((event) => event.method === "session/new")).toHaveLength(0);
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          ...mockRuntimeOptions,
+          spawn: {
+            ...mockRuntimeOptions.spawn,
+            env: { T3_ACP_FAIL_LOAD_SESSION: "1", T3_ACP_FAIL_LOAD_SESSION_CODE: "-32099" },
+          },
+          resumeSessionId: "stale-session-id",
+          requestLogger: (event) =>
+            Effect.sync(() => {
+              requests.push(event);
+            }),
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    );
+  });
 
   it.effect("keeps active configuration after a candidate session load fails", () =>
     Effect.gen(function* () {
