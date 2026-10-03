@@ -1,4 +1,4 @@
-import { assert, it, afterEach, describe, expect, vi } from "@effect/vitest";
+import { assert, it, beforeEach, afterEach, describe, expect, vi } from "@effect/vitest";
 import * as Cache from "effect/Cache";
 import * as TestClock from "effect/testing/TestClock";
 import * as Clock from "effect/Clock";
@@ -48,7 +48,12 @@ const layer = GitHubCli.layer.pipe(
   ),
 );
 
+beforeEach(() => {
+  vi.stubEnv("GH_REPO", undefined);
+});
+
 afterEach(() => {
+  vi.unstubAllEnvs();
   mockRun.mockReset();
 });
 
