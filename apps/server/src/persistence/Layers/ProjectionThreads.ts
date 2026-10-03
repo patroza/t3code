@@ -2,26 +2,83 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
 
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
+  DeleteProjectionThreadInput,
   GetProjectionThreadInput,
+  ListProjectionThreadsByProjectInput,
   ProjectionThread,
   ProjectionThreadRepository,
+  ProjectionThreadWorktreeReference,
   type ProjectionThreadRepositoryShape,
 } from "../Services/ProjectionThreads.ts";
-import { ModelSelection, ThreadLinkedPullRequest, ThreadTitleState } from "@t3tools/contracts";
+import {
+  ModelSelection,
+  SourceRef,
+  ThreadLinkedPullRequest,
+  ThreadParticipantSummary,
+  ThreadTitleState,
+} from "@t3tools/contracts";
 
+// JSON columns may be SQL NULL or the string "null" (from JSON.stringify(null)).
+// Decode with NullOr inside fromJsonString so both forms become null.
 const ProjectionThreadDbRow = ProjectionThread.mapFields(
   Struct.assign({
     modelSelection: Schema.fromJsonString(ModelSelection),
     titleState: Schema.NullOr(Schema.fromJsonString(ThreadTitleState)),
+    originSource: Schema.NullOr(Schema.fromJsonString(Schema.NullOr(SourceRef))),
+    participantSummaries: Schema.NullOr(
+      Schema.fromJsonString(Schema.NullOr(Schema.Array(ThreadParticipantSummary))),
+    ),
     linkedPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
     branchPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
   }),
 );
+
+function toProjectionThread(row: typeof ProjectionThreadDbRow.Type): ProjectionThread {
+  return {
+    threadId: row.threadId,
+    projectId: row.projectId,
+    title: row.title,
+    titleState: row.titleState,
+    modelSelection: row.modelSelection,
+    runtimeMode: row.runtimeMode,
+    interactionMode: row.interactionMode,
+    branch: row.branch,
+    worktreePath: row.worktreePath,
+    linkedPullRequest: row.linkedPullRequest ?? null,
+    branchPullRequest: row.branchPullRequest ?? null,
+    latestTurnId: row.latestTurnId,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    archivedAt: row.archivedAt,
+    settledOverride: row.settledOverride,
+    settledAt: row.settledAt,
+    unsettledAt: row.unsettledAt,
+    snoozedUntil: row.snoozedUntil,
+    snoozedAt: row.snoozedAt,
+    pinnedAt: row.pinnedAt,
+    pinOrderKey: row.pinOrderKey ?? null,
+    activeOrderKey: row.activeOrderKey ?? null,
+    titleRegenerationRequestId: row.titleRegenerationRequestId ?? null,
+    titleRegenerationStartedAt: row.titleRegenerationStartedAt ?? null,
+    latestUserMessageAt: row.latestUserMessageAt,
+    pendingApprovalCount: row.pendingApprovalCount,
+    pendingUserInputCount: row.pendingUserInputCount,
+    hasActionableProposedPlan: row.hasActionableProposedPlan,
+    deletedAt: row.deletedAt,
+    ...(row.originSource !== null && row.originSource !== undefined
+      ? { originSource: row.originSource }
+      : {}),
+    ...(row.participantSummaries !== null && row.participantSummaries !== undefined
+      ? { participantSummaries: row.participantSummaries }
+      : {}),
+  };
+}
 
 const makeProjectionThreadRepository = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -61,7 +118,9 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pending_approval_count,
           pending_user_input_count,
           has_actionable_proposed_plan,
-          deleted_at
+          deleted_at,
+          origin_source_json,
+          participant_summaries_json
         )
         VALUES (
           ${row.threadId},
@@ -94,7 +153,9 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.pendingApprovalCount},
           ${row.pendingUserInputCount},
           ${row.hasActionableProposedPlan},
-          ${row.deletedAt}
+          ${row.deletedAt},
+          ${row.originSource != null ? JSON.stringify(row.originSource) : null},
+          ${row.participantSummaries != null ? JSON.stringify(row.participantSummaries) : null}
         )
         ON CONFLICT (thread_id)
         DO UPDATE SET
@@ -127,7 +188,15 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pending_approval_count = excluded.pending_approval_count,
           pending_user_input_count = excluded.pending_user_input_count,
           has_actionable_proposed_plan = excluded.has_actionable_proposed_plan,
-          deleted_at = excluded.deleted_at
+          deleted_at = excluded.deleted_at,
+          origin_source_json = COALESCE(
+            excluded.origin_source_json,
+            projection_threads.origin_source_json
+          ),
+          participant_summaries_json = COALESCE(
+            excluded.participant_summaries_json,
+            projection_threads.participant_summaries_json
+          )
       `,
   });
 
@@ -167,8 +236,80 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
-          deleted_at AS "deletedAt"
+          deleted_at AS "deletedAt",
+          origin_source_json AS "originSource",
+          participant_summaries_json AS "participantSummaries"
         FROM projection_threads
+        WHERE thread_id = ${threadId}
+      `,
+  });
+
+  const listProjectionThreadRows = SqlSchema.findAll({
+    Request: ListProjectionThreadsByProjectInput,
+    Result: ProjectionThreadDbRow,
+    execute: ({ projectId }) =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          project_id AS "projectId",
+          title,
+          title_state_json AS "titleState",
+          model_selection_json AS "modelSelection",
+          runtime_mode AS "runtimeMode",
+          interaction_mode AS "interactionMode",
+          branch,
+          worktree_path AS "worktreePath",
+          linked_pull_request_json AS "linkedPullRequest",
+          branch_pull_request_json AS "branchPullRequest",
+          latest_turn_id AS "latestTurnId",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt",
+          archived_at AS "archivedAt",
+          settled_override AS "settledOverride",
+          settled_at AS "settledAt",
+          unsettled_at AS "unsettledAt",
+          snoozed_until AS "snoozedUntil",
+          snoozed_at AS "snoozedAt",
+          pinned_at AS "pinnedAt",
+          pin_order_key AS "pinOrderKey",
+          active_order_key AS "activeOrderKey",
+          title_regeneration_request_id AS "titleRegenerationRequestId",
+          title_regeneration_started_at AS "titleRegenerationStartedAt",
+          latest_user_message_at AS "latestUserMessageAt",
+          pending_approval_count AS "pendingApprovalCount",
+          pending_user_input_count AS "pendingUserInputCount",
+          has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          deleted_at AS "deletedAt",
+          origin_source_json AS "originSource",
+          participant_summaries_json AS "participantSummaries"
+        FROM projection_threads
+        WHERE project_id = ${projectId}
+        ORDER BY created_at ASC, thread_id ASC
+      `,
+  });
+
+  const listProjectionThreadWorktreeReferenceRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionThreadWorktreeReference,
+    execute: () =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          project_id AS "projectId",
+          worktree_path AS "worktreePath",
+          archived_at AS "archivedAt"
+        FROM projection_threads
+        WHERE deleted_at IS NULL
+          AND worktree_path IS NOT NULL
+        ORDER BY created_at ASC, thread_id ASC
+      `,
+  });
+
+  const deleteProjectionThreadRow = SqlSchema.void({
+    Request: DeleteProjectionThreadInput,
+    execute: ({ threadId }) =>
+      sql`
+        DELETE FROM projection_threads
         WHERE thread_id = ${threadId}
       `,
   });
@@ -181,11 +322,35 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
   const getById: ProjectionThreadRepositoryShape["getById"] = (input) =>
     getProjectionThreadRow(input).pipe(
       Effect.mapError(toPersistenceSqlError("ProjectionThreadRepository.getById:query")),
+      Effect.map((row) =>
+        Option.isNone(row) ? Option.none() : Option.some(toProjectionThread(row.value)),
+      ),
+    );
+
+  const listByProjectId: ProjectionThreadRepositoryShape["listByProjectId"] = (input) =>
+    listProjectionThreadRows(input).pipe(
+      Effect.mapError(toPersistenceSqlError("ProjectionThreadRepository.listByProjectId:query")),
+      Effect.map((rows) => rows.map(toProjectionThread)),
+    );
+
+  const deleteById: ProjectionThreadRepositoryShape["deleteById"] = (input) =>
+    deleteProjectionThreadRow(input).pipe(
+      Effect.mapError(toPersistenceSqlError("ProjectionThreadRepository.deleteById:query")),
+    );
+
+  const listWorktreeReferences: ProjectionThreadRepositoryShape["listWorktreeReferences"] = () =>
+    listProjectionThreadWorktreeReferenceRows(undefined).pipe(
+      Effect.mapError(
+        toPersistenceSqlError("ProjectionThreadRepository.listWorktreeReferences:query"),
+      ),
     );
 
   return {
     upsert,
     getById,
+    listByProjectId,
+    deleteById,
+    listWorktreeReferences,
   } satisfies ProjectionThreadRepositoryShape;
 });
 

@@ -24,7 +24,7 @@ import {
   ProviderInstanceId,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
-import { assert, describe, it } from "@effect/vitest";
+import { assert, describe, it, vi } from "@effect/vitest";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -171,6 +171,7 @@ function makeHarness(config?: {
   readonly baseDir?: string;
   readonly claudeConfig?: Partial<ClaudeSettings>;
   readonly instanceId?: ProviderInstanceId;
+  readonly resolveEnvironment?: ClaudeAdapterLiveOptions["resolveEnvironment"];
   readonly scopedLimitNames?: ClaudeAdapterLiveOptions["scopedLimitNames"];
   readonly environment?: ClaudeAdapterLiveOptions["environment"];
   readonly getSessionMessages?: ClaudeAdapterLiveOptions["getSessionMessages"];
@@ -188,6 +189,8 @@ function makeHarness(config?: {
   const adapterOptions: ClaudeAdapterLiveOptions = {
     ...(config?.environment ? { environment: config.environment } : {}),
     ...(config?.instanceId ? { instanceId: config.instanceId } : {}),
+    ...(config?.environment ? { environment: config.environment } : {}),
+    ...(config?.resolveEnvironment ? { resolveEnvironment: config.resolveEnvironment } : {}),
     ...(config?.scopedLimitNames ? { scopedLimitNames: config.scopedLimitNames } : {}),
     modelCatalog: Effect.succeed(SYNTHETIC_CLAUDE_MODEL_CATALOG),
     ...(config?.getSessionMessages ? { getSessionMessages: config.getSessionMessages } : {}),
@@ -371,6 +374,42 @@ const sendCompletedClaudeTurn = (
   });
 
 describe("ClaudeAdapterLive", () => {
+  it.effect("passes the resolved environment to the SDK after applying Claude invariants", () => {
+    const claudeConfigDir = "/tmp/t3-claude-direnv-home";
+    const resolveEnvironment = vi.fn((_input: { readonly cwd: string }) =>
+      Effect.succeed({
+        PATH: process.env.PATH,
+        PROVIDER_VALUE: "from-direnv",
+        CLAUDE_CONFIG_DIR: "/tmp/direnv-must-not-win",
+      }),
+    );
+    const harness = makeHarness({
+      claudeConfig: { homePath: claudeConfigDir },
+      environment: { PATH: process.env.PATH, PROVIDER_VALUE: "configured" },
+      resolveEnvironment,
+    });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: ThreadId.make("thread-claude-direnv"),
+        provider: ProviderDriverKind.make("claudeAgent"),
+        cwd: ".",
+        runtimeMode: "full-access",
+      });
+
+      assert.equal(resolveEnvironment.mock.calls[0]?.[0].cwd, process.cwd());
+      assert.deepEqual(harness.getLastCreateQueryInput()?.options.env, {
+        PATH: process.env.PATH,
+        PROVIDER_VALUE: "from-direnv",
+        CLAUDE_CONFIG_DIR: claudeConfigDir,
+      });
+      assert.equal(harness.getLastCreateQueryInput()?.options.cwd, process.cwd());
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("returns validation error for non-claude provider on startSession", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -3585,6 +3624,8 @@ describe("ClaudeAdapterLive", () => {
           totalProcessedTokens: 550,
           inputTokens: 180,
           outputTokens: 20,
+          lastInputTokens: 180,
+          lastOutputTokens: 20,
           maxTokens: 200000,
         });
       }
@@ -5387,7 +5428,9 @@ describe("ClaudeAdapterLive", () => {
             usedTokens: 24542,
             lastUsedTokens: 24542,
             inputTokens: 23863,
+            lastInputTokens: 23863,
             outputTokens: 679,
+            lastOutputTokens: 679,
             maxTokens: 200000,
           },
         });

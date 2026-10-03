@@ -15,12 +15,14 @@ import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { NoOpProviderEventLoggers, ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
+import * as DirenvEnvironment from "../DirenvEnvironment.ts";
 import { CursorDriver } from "./CursorDriver.ts";
 
 const testLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-cursor-driver-copy-command-",
 }).pipe(
   Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(DirenvEnvironment.layerNoop),
   Layer.provideMerge(ServerSettingsService.layerTest()),
   Layer.provideMerge(
     Layer.mock(BackgroundPolicy.BackgroundPolicy)({

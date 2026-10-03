@@ -14,9 +14,11 @@ import {
   ProjectId,
   ProviderInteractionMode,
   RuntimeMode,
+  SourceRef,
   ThreadLinkedPullRequest,
   ThreadTitleState,
   ThreadId,
+  ThreadParticipantSummary,
   TurnId,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
@@ -58,6 +60,10 @@ export const ProjectionThread = Schema.Struct({
   pendingUserInputCount: NonNegativeInt,
   hasActionableProposedPlan: NonNegativeInt,
   deletedAt: Schema.NullOr(IsoDateTime),
+  /** First user-message SourceRef; null/absent on legacy threads. */
+  originSource: Schema.optional(Schema.NullOr(SourceRef)),
+  /** Ordered participant stack data for list UI. */
+  participantSummaries: Schema.optional(Schema.Array(ThreadParticipantSummary)),
 });
 export type ProjectionThread = typeof ProjectionThread.Type;
 
@@ -65,6 +71,24 @@ export const GetProjectionThreadInput = Schema.Struct({
   threadId: ThreadId,
 });
 export type GetProjectionThreadInput = typeof GetProjectionThreadInput.Type;
+
+export const DeleteProjectionThreadInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type DeleteProjectionThreadInput = typeof DeleteProjectionThreadInput.Type;
+
+export const ListProjectionThreadsByProjectInput = Schema.Struct({
+  projectId: ProjectId,
+});
+export type ListProjectionThreadsByProjectInput = typeof ListProjectionThreadsByProjectInput.Type;
+
+export const ProjectionThreadWorktreeReference = Schema.Struct({
+  threadId: ThreadId,
+  projectId: ProjectId,
+  worktreePath: Schema.String,
+  archivedAt: Schema.NullOr(IsoDateTime),
+});
+export type ProjectionThreadWorktreeReference = typeof ProjectionThreadWorktreeReference.Type;
 
 /**
  * ProjectionThreadRepositoryShape - Service API for projected thread records.
@@ -83,6 +107,35 @@ export interface ProjectionThreadRepositoryShape {
   readonly getById: (
     input: GetProjectionThreadInput,
   ) => Effect.Effect<Option.Option<ProjectionThread>, ProjectionRepositoryError>;
+
+  /**
+   * List projected threads for a project.
+   *
+   * Returned in deterministic creation order.
+   */
+  readonly listByProjectId: (
+    input: ListProjectionThreadsByProjectInput,
+  ) => Effect.Effect<ReadonlyArray<ProjectionThread>, ProjectionRepositoryError>;
+
+  /**
+   * Soft-delete a projected thread row by id.
+   */
+  readonly deleteById: (
+    input: DeleteProjectionThreadInput,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  /**
+   * List every nondeleted thread row that references a worktree path.
+   *
+   * Soft-deleted rows are excluded so they never count as worktree
+   * references; archived rows are included so callers can distinguish
+   * archived from active references. Path comparison is left to callers so
+   * they can apply the shared normalization helper.
+   */
+  readonly listWorktreeReferences: () => Effect.Effect<
+    ReadonlyArray<ProjectionThreadWorktreeReference>,
+    ProjectionRepositoryError
+  >;
 }
 
 /**

@@ -79,6 +79,8 @@ describe("CheckpointDiffQuery.layer", () => {
             listActivitiesByKind: () => Effect.die("unused"),
             getCommandReadModel: () =>
               Effect.die("CheckpointDiffQuery should not request the command read model"),
+            getThreadActivitiesPage: () =>
+              Effect.die("CheckpointDiffQuery should not request thread activities"),
             getSnapshot: () =>
               Effect.die("CheckpointDiffQuery should not request the full orchestration snapshot"),
             getShellSnapshot: () =>
@@ -115,9 +117,11 @@ describe("CheckpointDiffQuery.layer", () => {
             getThreadRuntimeContext: () => Effect.die("unused"),
             getTurnStartMessage: () => Effect.die("unused"),
             getThreadShellById: () => Effect.succeedNone,
+            getSessionStopContextById: () => Effect.succeedNone,
             getThreadDetailById: () => Effect.succeedNone,
             getThreadDetailSnapshot: () => Effect.succeedNone,
             searchThreads: () => Effect.succeed({ matches: [] }),
+            getThreadLifecycleById: () => Effect.succeed(Option.none()),
           }),
         ),
       );
@@ -197,6 +201,8 @@ describe("CheckpointDiffQuery.layer", () => {
             listActivitiesByKind: () => Effect.die("unused"),
             getCommandReadModel: () =>
               Effect.die("CheckpointDiffQuery should not request the command read model"),
+            getThreadActivitiesPage: () =>
+              Effect.die("CheckpointDiffQuery should not request thread activities"),
             getSnapshot: () =>
               Effect.die("CheckpointDiffQuery should not request the full orchestration snapshot"),
             getShellSnapshot: () =>
@@ -218,9 +224,11 @@ describe("CheckpointDiffQuery.layer", () => {
             getThreadRuntimeContext: () => Effect.die("unused"),
             getTurnStartMessage: () => Effect.die("unused"),
             getThreadShellById: () => Effect.succeedNone,
+            getSessionStopContextById: () => Effect.succeedNone,
             getThreadDetailById: () => Effect.succeedNone,
             getThreadDetailSnapshot: () => Effect.succeedNone,
             searchThreads: () => Effect.succeed({ matches: [] }),
+            getThreadLifecycleById: () => Effect.succeed(Option.none()),
           }),
         ),
       );
@@ -290,6 +298,8 @@ describe("CheckpointDiffQuery.layer", () => {
             listActivitiesByKind: () => Effect.die("unused"),
             getCommandReadModel: () =>
               Effect.die("CheckpointDiffQuery should not request the command read model"),
+            getThreadActivitiesPage: () =>
+              Effect.die("CheckpointDiffQuery should not request thread activities"),
             getSnapshot: () =>
               Effect.die("CheckpointDiffQuery should not request the full orchestration snapshot"),
             getShellSnapshot: () =>
@@ -311,9 +321,11 @@ describe("CheckpointDiffQuery.layer", () => {
             getThreadRuntimeContext: () => Effect.die("unused"),
             getTurnStartMessage: () => Effect.die("unused"),
             getThreadShellById: () => Effect.succeedNone,
+            getSessionStopContextById: () => Effect.succeedNone,
             getThreadDetailById: () => Effect.succeedNone,
             getThreadDetailSnapshot: () => Effect.succeedNone,
             searchThreads: () => Effect.succeed({ matches: [] }),
+            getThreadLifecycleById: () => Effect.succeed(Option.none()),
           }),
         ),
       );
@@ -368,6 +380,8 @@ describe("CheckpointDiffQuery.layer", () => {
             listActivitiesByKind: () => Effect.die("unused"),
             getCommandReadModel: () =>
               Effect.die("CheckpointDiffQuery should not request the command read model"),
+            getThreadActivitiesPage: () =>
+              Effect.die("CheckpointDiffQuery should not request thread activities"),
             getSnapshot: () =>
               Effect.die("CheckpointDiffQuery should not request the full orchestration snapshot"),
             getShellSnapshot: () =>
@@ -389,9 +403,11 @@ describe("CheckpointDiffQuery.layer", () => {
             getThreadRuntimeContext: () => Effect.die("unused"),
             getTurnStartMessage: () => Effect.die("unused"),
             getThreadShellById: () => Effect.succeedNone,
+            getSessionStopContextById: () => Effect.succeedNone,
             getThreadDetailById: () => Effect.succeedNone,
             getThreadDetailSnapshot: () => Effect.succeedNone,
             searchThreads: () => Effect.succeed({ matches: [] }),
+            getThreadLifecycleById: () => Effect.succeed(Option.none()),
           }),
         ),
       );
@@ -431,6 +447,8 @@ describe("CheckpointDiffQuery.layer", () => {
             listActivitiesByKind: () => Effect.die("unused"),
             getCommandReadModel: () =>
               Effect.die("CheckpointDiffQuery should not request the command read model"),
+            getThreadActivitiesPage: () =>
+              Effect.die("CheckpointDiffQuery should not request thread activities"),
             getSnapshot: () =>
               Effect.die("CheckpointDiffQuery should not request the full orchestration snapshot"),
             getShellSnapshot: () =>
@@ -452,9 +470,11 @@ describe("CheckpointDiffQuery.layer", () => {
             getThreadRuntimeContext: () => Effect.die("unused"),
             getTurnStartMessage: () => Effect.die("unused"),
             getThreadShellById: () => Effect.succeedNone,
+            getSessionStopContextById: () => Effect.succeedNone,
             getThreadDetailById: () => Effect.succeedNone,
             getThreadDetailSnapshot: () => Effect.succeedNone,
             searchThreads: () => Effect.succeed({ matches: [] }),
+            getThreadLifecycleById: () => Effect.succeed(Option.none()),
           }),
         ),
       );

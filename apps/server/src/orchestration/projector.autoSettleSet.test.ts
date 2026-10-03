@@ -8,6 +8,7 @@ import {
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
+import { findThreadById } from "./commandReadModel.ts";
 import { createEmptyReadModel, projectEvent } from "./projector.ts";
 
 function makeEvent(input: {
@@ -53,7 +54,9 @@ it.effect("projects auto-settle opt-out and survives a manual settle", () =>
         },
       }),
     );
-    expect(created.threads[0]?.autoSettleDisabledAt ?? null).toBeNull();
+    expect(
+      findThreadById(created, ThreadId.make("thread-1"))?.autoSettleDisabledAt ?? null,
+    ).toBeNull();
 
     const disabled = yield* projectEvent(
       created,
@@ -63,7 +66,7 @@ it.effect("projects auto-settle opt-out and survives a manual settle", () =>
         payload: { threadId: ThreadId.make("thread-1"), autoSettleDisabledAt: now, updatedAt: now },
       }),
     );
-    expect(disabled.threads[0]?.autoSettleDisabledAt).toBe(now);
+    expect(findThreadById(disabled, ThreadId.make("thread-1"))?.autoSettleDisabledAt).toBe(now);
 
     // The flag is independent of the settled lifecycle: settling by hand and
     // un-settling later must not clear it.
@@ -75,8 +78,8 @@ it.effect("projects auto-settle opt-out and survives a manual settle", () =>
         payload: { threadId: ThreadId.make("thread-1"), settledAt: later, updatedAt: later },
       }),
     );
-    expect(settled.threads[0]?.settledOverride).toBe("settled");
-    expect(settled.threads[0]?.autoSettleDisabledAt).toBe(now);
+    expect(findThreadById(settled, ThreadId.make("thread-1"))?.settledOverride).toBe("settled");
+    expect(findThreadById(settled, ThreadId.make("thread-1"))?.autoSettleDisabledAt).toBe(now);
 
     const unsettled = yield* projectEvent(
       settled,
@@ -86,7 +89,7 @@ it.effect("projects auto-settle opt-out and survives a manual settle", () =>
         payload: { threadId: ThreadId.make("thread-1"), reason: "user", updatedAt: later },
       }),
     );
-    expect(unsettled.threads[0]?.autoSettleDisabledAt).toBe(now);
+    expect(findThreadById(unsettled, ThreadId.make("thread-1"))?.autoSettleDisabledAt).toBe(now);
 
     const enabled = yield* projectEvent(
       unsettled,
@@ -100,6 +103,6 @@ it.effect("projects auto-settle opt-out and survives a manual settle", () =>
         },
       }),
     );
-    expect(enabled.threads[0]?.autoSettleDisabledAt).toBeNull();
+    expect(findThreadById(enabled, ThreadId.make("thread-1"))?.autoSettleDisabledAt).toBeNull();
   }),
 );

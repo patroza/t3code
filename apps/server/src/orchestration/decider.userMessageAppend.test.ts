@@ -3,7 +3,9 @@ import { expect, it } from "@effect/vitest";
 import {
   CommandId,
   EventId,
+  IdentityUsername,
   MessageId,
+  PersonId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -93,6 +95,32 @@ it.layer(NodeServices.layer)("thread.message.user.append", (it) => {
       expect(events.map((event) => event.type)).toEqual(["thread.message-sent"]);
       expect(events[0]?.metadata.deferredTurn).toBe(true);
       expect(events[0]?.payload).toMatchObject({ messageId, role: "user", turnId: null });
+    }),
+  );
+
+  it.effect("copies the bootstrap source onto the persisted user message", () =>
+    Effect.gen(function* () {
+      const readModel = yield* readModelWithThread;
+      const planned = yield* decideOrchestrationCommand({
+        command: {
+          ...appendCommand,
+          source: {
+            channel: "discord" as const,
+            personId: PersonId.make("enricopolanski"),
+            username: IdentityUsername.make("enricopolanski"),
+            actor: { platformId: "147977704522645504", displayName: "enricopolanski" },
+          },
+        },
+        readModel,
+      });
+      const events = Array.isArray(planned) ? planned : [planned];
+      expect(events[0]?.payload).toMatchObject({
+        source: {
+          channel: "discord",
+          personId: "enricopolanski",
+          username: "enricopolanski",
+        },
+      });
     }),
   );
 

@@ -14,7 +14,9 @@ import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as ServerRuntime from "@t3tools/shared/serverRuntime";
 
 import * as ServerConfig from "./config.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
@@ -22,6 +24,83 @@ import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSna
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
+
+it("marks a running session with an active turn as interrupted after a server restart", () => {
+  const updatedAt = "2026-07-10T12:00:00.000Z";
+  assert.deepStrictEqual(
+    ServerRuntimeStartup.interruptSessionAfterServerRestart(
+      {
+        threadId: ThreadId.make("thread-running-at-restart"),
+        status: "running",
+        providerName: "Codex",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        runtimeMode: "full-access",
+        activeTurnId: "turn-running-at-restart" as never,
+        lastError: null,
+        updatedAt: "2026-07-10T11:59:00.000Z",
+      },
+      updatedAt,
+    ),
+    {
+      threadId: ThreadId.make("thread-running-at-restart"),
+      status: "interrupted",
+      providerName: "Codex",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      runtimeMode: "full-access",
+      activeTurnId: null,
+      lastError: "Server restarted while the agent was working. Send a follow-up to resume it.",
+      updatedAt,
+    },
+  );
+});
+
+it("settles a zombie running session without an active turn to ready (no Wake Required)", () => {
+  const updatedAt = "2026-07-10T12:00:00.000Z";
+  assert.deepStrictEqual(
+    ServerRuntimeStartup.interruptSessionAfterServerRestart(
+      {
+        threadId: ThreadId.make("thread-zombie-running"),
+        status: "running",
+        providerName: "Codex",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        runtimeMode: "full-access",
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: "2026-07-10T11:59:00.000Z",
+      },
+      updatedAt,
+    ),
+    {
+      threadId: ThreadId.make("thread-zombie-running"),
+      status: "ready",
+      providerName: "Codex",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      runtimeMode: "full-access",
+      activeTurnId: null,
+      lastError: null,
+      updatedAt,
+    },
+  );
+});
+
+it("does not mark an already idle session as interrupted after restart", () => {
+  assert.equal(
+    ServerRuntimeStartup.interruptSessionAfterServerRestart(
+      {
+        threadId: ThreadId.make("thread-idle-at-restart"),
+        status: "ready",
+        providerName: "Codex",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        runtimeMode: "full-access",
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: "2026-07-10T11:59:00.000Z",
+      },
+      "2026-07-10T12:00:00.000Z",
+    ),
+    null,
+  );
+});
 
 it.effect("automatic pull only updates enabled, behind, clean default-branch checkouts", () =>
   Effect.gen(function* () {
@@ -194,12 +273,15 @@ it.effect("resolveAutoBootstrapWelcomeTargets returns existing project and threa
         getImportedAgentSessionSources: () => Effect.die("unused"),
         getThreadCheckpointContext: () => Effect.succeedNone,
         getFullThreadDiffContext: () => Effect.succeedNone,
+        getSessionStopContextById: () => Effect.die("unused"),
         getThreadRuntimeContext: () => Effect.die("unused"),
         getTurnStartMessage: () => Effect.die("unused"),
         getThreadShellById: () => Effect.die("unused"),
         getThreadDetailById: () => Effect.die("unused"),
         getThreadDetailSnapshot: () => Effect.die("unused"),
         searchThreads: () => Effect.succeed({ matches: [] }),
+        getThreadActivitiesPage: () => Effect.die("unused"),
+        getThreadLifecycleById: () => Effect.die("unused"),
       }),
       Effect.provideService(OrchestrationEngine.OrchestrationEngineService, {
         readEvents: () => Stream.empty,
@@ -325,12 +407,15 @@ it.effect.each([
         getImportedAgentSessionSources: () => Effect.die("unused"),
         getThreadCheckpointContext: () => Effect.succeedNone,
         getFullThreadDiffContext: () => Effect.succeedNone,
+        getSessionStopContextById: () => Effect.die("unused"),
         getThreadRuntimeContext: () => Effect.die("unused"),
         getTurnStartMessage: () => Effect.die("unused"),
         getThreadShellById: () => Effect.die("unused"),
         getThreadDetailById: () => Effect.die("unused"),
         getThreadDetailSnapshot: () => Effect.die("unused"),
         searchThreads: () => Effect.succeed({ matches: [] }),
+        getThreadActivitiesPage: () => Effect.die("unused"),
+        getThreadLifecycleById: () => Effect.die("unused"),
       }),
       Effect.provideService(OrchestrationEngine.OrchestrationEngineService, {
         readEvents: () => Stream.empty,
@@ -399,12 +484,15 @@ it.effect(
           getImportedAgentSessionSources: () => Effect.die("unused"),
           getThreadCheckpointContext: () => Effect.succeedNone,
           getFullThreadDiffContext: () => Effect.succeedNone,
+          getSessionStopContextById: () => Effect.die("unused"),
           getThreadRuntimeContext: () => Effect.die("unused"),
           getTurnStartMessage: () => Effect.die("unused"),
           getThreadShellById: () => Effect.die("unused"),
           getThreadDetailById: () => Effect.die("unused"),
           getThreadDetailSnapshot: () => Effect.die("unused"),
           searchThreads: () => Effect.succeed({ matches: [] }),
+          getThreadActivitiesPage: () => Effect.die("unused"),
+          getThreadLifecycleById: () => Effect.die("unused"),
         }),
         Effect.provideService(OrchestrationEngine.OrchestrationEngineService, {
           readEvents: () => Stream.empty,
@@ -465,12 +553,15 @@ it.effect("resolveAutoBootstrapWelcomeTargets preserves typed UUID generation fa
         getImportedAgentSessionSources: () => Effect.die("unused"),
         getThreadCheckpointContext: () => Effect.succeedNone,
         getFullThreadDiffContext: () => Effect.succeedNone,
+        getSessionStopContextById: () => Effect.die("unused"),
         getThreadRuntimeContext: () => Effect.die("unused"),
         getTurnStartMessage: () => Effect.die("unused"),
         getThreadShellById: () => Effect.die("unused"),
         getThreadDetailById: () => Effect.die("unused"),
         getThreadDetailSnapshot: () => Effect.die("unused"),
         searchThreads: () => Effect.succeed({ matches: [] }),
+        getThreadActivitiesPage: () => Effect.die("unused"),
+        getThreadLifecycleById: () => Effect.die("unused"),
       }),
       Effect.provideService(OrchestrationEngine.OrchestrationEngineService, {
         readEvents: () => Stream.empty,
@@ -494,6 +585,32 @@ it.effect("resolveAutoBootstrapWelcomeTargets preserves typed UUID generation fa
     assert.strictEqual(error, uuidError);
     assert.deepStrictEqual(yield* Ref.get(dispatchCalls), []);
   }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("writes a runtime descriptor the desktop client can decode", () =>
+  Effect.gen(function* () {
+    const descriptor = {
+      version: 1 as const,
+      pid: 4242,
+      stateDir: "/state",
+      httpBaseUrl: "http://127.0.0.1:3773",
+      startedAt: "2026-08-04T10:00:00.000Z",
+    };
+
+    const contents = yield* ServerRuntimeStartup.encodeServerRuntimeDescriptorFile(descriptor);
+
+    // The file is newline-terminated and holds a single JSON document.
+    assert.isTrue(contents.endsWith("\n"));
+    assert.equal(contents.trimEnd().split("\n").length, 1);
+
+    // DesktopExistingBackend decodes the file with this same shared schema, so
+    // the round trip through it is the cross-process contract.
+    const decoded = Schema.decodeUnknownExit(
+      Schema.fromJsonString(ServerRuntime.ServerRuntimeDescriptor),
+    )(contents);
+    assert.equal(decoded._tag, "Success");
+    assert.deepStrictEqual(decoded._tag === "Success" ? decoded.value : null, descriptor);
+  }),
 );
 
 it.effect("completeAutoBootstrapWelcome settles failures without bootstrap targets", () =>

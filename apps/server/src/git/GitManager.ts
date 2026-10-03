@@ -29,6 +29,8 @@ import {
   type VcsStatusLocalResult,
   type VcsStatusRemoteResult,
   VcsStatusResult,
+  VcsResolveBranchChangeRequestInput,
+  VcsResolveBranchChangeRequestResult,
   ModelSelection,
   type ProjectId,
   SourceControlProviderError,
@@ -71,6 +73,7 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import { detectPrTemplate } from "../sourceControl/PrTemplateDetection.ts";
 import type { ChangeRequest } from "@t3tools/contracts";
+import { PrLookupFreeze } from "./PrLookupFreeze.ts";
 
 export interface GitActionProgressReporter {
   readonly publish: (event: GitActionProgressEvent) => Effect.Effect<void, never>;
@@ -122,6 +125,9 @@ export class GitManager extends Context.Service<
     readonly resolvePullRequest: (
       input: GitPullRequestRefInput,
     ) => Effect.Effect<GitResolvePullRequestResult, GitManagerServiceError>;
+    readonly resolveBranchChangeRequest: (
+      input: VcsResolveBranchChangeRequestInput,
+    ) => Effect.Effect<VcsResolveBranchChangeRequestResult, GitManagerServiceError>;
     readonly preparePullRequestThread: (
       input: GitPreparePullRequestThreadInput,
     ) => Effect.Effect<GitPreparePullRequestThreadResult, GitManagerServiceError>;
@@ -136,7 +142,17 @@ const COMMIT_TIMEOUT_MS = 10 * 60_000;
 const MAX_PROGRESS_TEXT_LENGTH = 500;
 const SHORT_SHA_LENGTH = 7;
 const TOAST_DESCRIPTION_MAX = 72;
-const STATUS_RESULT_CACHE_TTL = Duration.seconds(1);
+/**
+ * Local status is multi-process but still cheaper than remote. Coalesce reconnect
+ * storms and near-simultaneous sidebar subscribers for the same worktree.
+ */
+const STATUS_RESULT_CACHE_TTL = Duration.seconds(5);
+/**
+ * Remote status (PR list/view/checks via `gh`) is expensive. Keep TTL **≥** the
+ * default 30s poll/list cadence so concurrent subscribers still coalesce, but short
+ * enough that PR number/state badges update within about one refresh cycle.
+ */
+const REMOTE_STATUS_RESULT_CACHE_TTL = Duration.seconds(35);
 const STATUS_RESULT_CACHE_CAPACITY = 2_048;
 // Matches the automatic settlement sweep cadence so every background sweep
 // reads fresh branch state: an external merge settles within about a minute
@@ -171,6 +187,13 @@ export function prLookupFailureTtl(consecutiveFailures: number): Duration.Durati
   const backoffMs = Duration.toMillis(PR_LOOKUP_FAILURE_BASE_TTL) * Math.pow(2, exponent);
   return Duration.min(Duration.millis(backoffMs), PR_LOOKUP_FAILURE_MAX_TTL);
 }
+
+/** Merged/closed last-known badges do not re-hit the hosting provider until invalidateStatus. */
+export function isTerminalStatusPrState(
+  state: "open" | "closed" | "merged" | null | undefined,
+): boolean {
+  return state === "merged" || state === "closed";
+}
 type StripProgressContext<T> = T extends any ? Omit<T, "actionId" | "cwd" | "action"> : never;
 type GitActionProgressPayload = StripProgressContext<GitActionProgressEvent>;
 type GitActionProgressEmitter = (event: GitActionProgressPayload) => Effect.Effect<void, never>;
@@ -193,6 +216,7 @@ interface PullRequestInfo extends OpenPrInfo, PullRequestHeadRemoteInfo {
   closedAt?: string | null;
   mergedAt?: string | null;
   updatedAt: Option.Option<DateTime.Utc>;
+  hasFailingChecks?: boolean;
 }
 
 const pullRequestUpdatedAtDescOrder: Order.Order<PullRequestInfo> = Order.mapInput(
@@ -207,6 +231,7 @@ interface ResolvedPullRequest {
   baseBranch: string;
   headBranch: string;
   state: "open" | "closed" | "merged";
+  hasFailingChecks?: boolean;
 }
 
 interface PullRequestHeadRemoteInfo {
@@ -466,6 +491,9 @@ function toPullRequestInfo(summary: ChangeRequest): PullRequestInfo {
     ...(summary.headRepositoryOwnerLogin !== undefined
       ? { headRepositoryOwnerLogin: summary.headRepositoryOwnerLogin }
       : {}),
+    ...(summary.hasFailingChecks !== undefined
+      ? { hasFailingChecks: summary.hasFailingChecks }
+      : {}),
   };
 }
 
@@ -630,6 +658,7 @@ function toStatusPr(pr: PullRequestInfo): {
   baseRef: string;
   headRef: string;
   state: "open" | "closed" | "merged";
+  hasFailingChecks?: boolean;
   isDraft?: boolean;
   updatedAt: string | null;
 } {
@@ -640,6 +669,7 @@ function toStatusPr(pr: PullRequestInfo): {
     baseRef: pr.baseRefName,
     headRef: pr.headRefName,
     state: pr.state,
+    ...(pr.hasFailingChecks !== undefined ? { hasFailingChecks: pr.hasFailingChecks } : {}),
     ...(pr.isDraft === true ? { isDraft: true } : {}),
     updatedAt: Option.match(pr.updatedAt, {
       onNone: () => null,
@@ -661,6 +691,7 @@ function toResolvedPullRequest(pr: {
   baseRefName: string;
   headRefName: string;
   state?: "open" | "closed" | "merged";
+  hasFailingChecks?: boolean | undefined;
 }): ResolvedPullRequest {
   return {
     number: pr.number,
@@ -669,6 +700,7 @@ function toResolvedPullRequest(pr: {
     baseBranch: pr.baseRefName,
     headBranch: pr.headRefName,
     state: pr.state ?? "open",
+    ...(pr.hasFailingChecks !== undefined ? { hasFailingChecks: pr.hasFailingChecks } : {}),
   };
 }
 
@@ -1144,12 +1176,14 @@ export const make = Effect.gen(function* () {
   // already-known PR badge, so the last successful answer per branch sticks
   // around as the fallback. Keep the resolved head context with it so a
   // branch retargeted to another remote/fork cannot inherit the old badge.
+  // `epoch` ties the entry to invalidateStatus so terminal freeze can re-open.
   interface LastKnownPr {
     readonly pr: ReturnType<typeof toStatusPr> | null;
     readonly upstreamRef: string | null;
     readonly headBranch: string;
     readonly remoteName: string | null;
     readonly headRemoteUrlKey: string | null;
+    readonly epoch: number;
   }
   const lastKnownPrByBranchKey = new Map<string, LastKnownPr>();
   const rememberLastKnownPr = (branchKey: string, entry: LastKnownPr) => {
@@ -1198,6 +1232,7 @@ export const make = Effect.gen(function* () {
     }
     return lastKnown.pr;
   };
+  const prLookupFreeze = yield* PrLookupFreeze;
   const lookupStatusPr = Effect.fn("lookupStatusPr")(function* (
     cwd: string,
     details: {
@@ -1211,6 +1246,43 @@ export const make = Effect.gen(function* () {
     // Keyed by (cwd, branch) only: the upstream ref changing (e.g. a first
     // `push -u`) must not orphan the fallback value for the same branch.
     const branchKey = `${cwd}\u0000${details.branch}`;
+    const epoch = prLookupEpoch(cwd);
+
+    // Durable settle freeze: skip hosting-provider calls while every thread on
+    // this worktree is settled. Resume when the last settled interest drops
+    // (unsettle / activity) — next poll hits the live path again.
+    if (yield* prLookupFreeze.isWorktreeSettledFrozen(cwd)) {
+      const headContext = yield* resolveBranchHeadContext(cwd, details);
+      return resolveLastKnownPr(branchKey, {
+        upstreamRef: details.upstreamRef,
+        headBranch: headContext.headBranch,
+        remoteName: headContext.remoteName,
+        headRemoteUrlKey: headContext.headRemoteUrlKey,
+      });
+    }
+
+    // Terminal freeze: once we have observed merged/closed for this head under
+    // the current invalidate epoch, do not re-list PRs on every poll (Discord
+    // bridges + sidebar list mode otherwise re-hit gh forever).
+    const prior = lastKnownPrByBranchKey.get(branchKey);
+    if (
+      prior !== undefined &&
+      prior.epoch === epoch &&
+      prior.pr !== null &&
+      isTerminalStatusPrState(prior.pr.state)
+    ) {
+      const headContext = yield* resolveBranchHeadContext(cwd, details);
+      const frozen = resolveLastKnownPr(branchKey, {
+        upstreamRef: details.upstreamRef,
+        headBranch: headContext.headBranch,
+        remoteName: headContext.remoteName,
+        headRemoteUrlKey: headContext.headRemoteUrlKey,
+      });
+      if (frozen !== null && isTerminalStatusPrState(frozen.state)) {
+        return frozen;
+      }
+    }
+
     const cacheKey = prLookupCacheKey(cwd, details);
     if (refreshMissingPullRequest) {
       const cached = yield* Cache.getOption(prLookupCache, cacheKey).pipe(
@@ -1238,6 +1310,7 @@ export const make = Effect.gen(function* () {
             headBranch: headContext.headBranch,
             remoteName: headContext.remoteName,
             headRemoteUrlKey: headContext.headRemoteUrlKey,
+            epoch,
           }),
         ),
       ),
@@ -1308,7 +1381,7 @@ export const make = Effect.gen(function* () {
   });
   const remoteStatusResultCache = yield* Cache.makeWith((cwd: string) => readRemoteStatus(cwd), {
     capacity: STATUS_RESULT_CACHE_CAPACITY,
-    timeToLive: (exit) => (Exit.isSuccess(exit) ? STATUS_RESULT_CACHE_TTL : Duration.zero),
+    timeToLive: (exit) => (Exit.isSuccess(exit) ? REMOTE_STATUS_RESULT_CACHE_TTL : Duration.zero),
   });
   const invalidateRemoteStatusResultCache = (cwd: string) =>
     normalizeStatusCacheKey(cwd).pipe(
@@ -1330,15 +1403,29 @@ export const make = Effect.gen(function* () {
       (yield* readConfigValueNullable(cwd, `remote.${preferredRemoteName}.url`)) ??
       (yield* readConfigValueNullable(cwd, "remote.origin.url"));
 
-    const provider = remoteUrl ? detectSourceControlProviderFromGitRemoteUrl(remoteUrl) : null;
-    if (!remoteUrl || provider?.kind !== "unknown") return provider;
-    const handle = yield* sourceControlProviders
-      .resolveHandle({
-        cwd,
-        context: { provider, remoteName: preferredRemoteName, remoteUrl },
-      })
-      .pipe(Effect.orElseSucceed(() => null));
-    return handle?.context?.provider ?? provider;
+    if (!remoteUrl) {
+      return null;
+    }
+
+    const detected = detectSourceControlProviderFromGitRemoteUrl(remoteUrl);
+    if (!detected) {
+      return null;
+    }
+
+    const provider =
+      detected.kind === "unknown"
+        ? ((yield* sourceControlProviders
+            .resolveHandle({
+              cwd,
+              context: { provider: detected, remoteName: preferredRemoteName, remoteUrl },
+            })
+            .pipe(Effect.orElseSucceed(() => null)))?.context?.provider ?? detected)
+        : detected;
+
+    const repositoryNameWithOwner = parseRepositoryNameWithOwnerFromRemoteUrl(remoteUrl);
+    return repositoryNameWithOwner
+      ? { ...provider, repositoryUrl: `${provider.baseUrl}/${repositoryNameWithOwner}` }
+      : provider;
   });
 
   const resolveRemoteRepositoryContext = Effect.fn("resolveRemoteRepositoryContext")(function* (
@@ -1682,6 +1769,54 @@ export const make = Effect.gen(function* () {
     }
     return parsed[0] ?? null;
   });
+  const findLatestPrByHeadSelectorDirect = Effect.fn("findLatestPrByHeadSelectorDirect")(function* (
+    cwd: string,
+    branch: string,
+  ) {
+    const pullRequests = yield* (yield* sourceControlProvider(cwd)).listChangeRequests({
+      cwd,
+      headSelector: branch,
+      state: "all",
+      limit: 20,
+    });
+
+    const parsed = Arr.sort(
+      pullRequests
+        .map(toPullRequestInfo)
+        .filter((pullRequest) => pullRequest.headRefName === branch),
+      pullRequestUpdatedAtDescOrder,
+    );
+    const latestOpenPr = parsed.find((pr) => pr.state === "open");
+    if (latestOpenPr) {
+      return latestOpenPr;
+    }
+    return parsed[0] ?? null;
+  });
+
+  const hydrateOpenPrChecks = Effect.fn("hydrateOpenPrChecks")(function* (
+    cwd: string,
+    pullRequest: PullRequestInfo | null,
+  ) {
+    if (pullRequest === null || pullRequest.state !== "open") {
+      return pullRequest;
+    }
+
+    return yield* (yield* sourceControlProvider(cwd))
+      .getChangeRequest({
+        cwd,
+        reference: String(pullRequest.number),
+      })
+      .pipe(
+        Effect.map((changeRequest) => ({
+          ...pullRequest,
+          ...(changeRequest.hasFailingChecks !== undefined
+            ? { hasFailingChecks: changeRequest.hasFailingChecks }
+            : {}),
+        })),
+        Effect.orElseSucceed(() => pullRequest),
+      );
+  });
+
   const buildCompletionToast = Effect.fn("buildCompletionToast")(function* (
     cwd: string,
     result: Pick<GitRunStackedActionResult, "action" | "branch" | "commit" | "push" | "pr">,
@@ -1896,6 +2031,7 @@ export const make = Effect.gen(function* () {
     commitMessage?: string,
     preResolvedSuggestion?: CommitAndBranchSuggestion,
     filePaths?: readonly string[],
+    disableSigning?: boolean,
     progressReporter?: GitActionProgressReporter,
     actionId?: string,
   ) {
@@ -1938,28 +2074,52 @@ export const make = Effect.gen(function* () {
     });
 
     let currentHookName: string | null = null;
+    let sawCommitHook = false;
+    let pendingUnattributedOutput: Array<{ stream: "stdout" | "stderr"; text: string }> = [];
+    const emitHookOutput = (
+      hookName: string | null,
+      { stream, text }: { stream: "stdout" | "stderr"; text: string },
+    ) => {
+      const sanitized = sanitizeProgressText(text);
+      if (!sanitized) {
+        return Effect.void;
+      }
+      return emit({
+        kind: "hook_output",
+        hookName,
+        stream,
+        text: sanitized,
+      });
+    };
+    const finalizeUnattributedOutput = (shouldEmit: boolean) =>
+      Effect.suspend(() => {
+        const pending = pendingUnattributedOutput;
+        pendingUnattributedOutput = [];
+        return shouldEmit
+          ? Effect.forEach(pending, (output) => emitHookOutput(null, output), { discard: true })
+          : Effect.void;
+      });
     const commitProgress =
       progressReporter && actionId
         ? {
-            onOutputLine: ({ stream, text }: { stream: "stdout" | "stderr"; text: string }) => {
-              const sanitized = sanitizeProgressText(text);
-              if (!sanitized) {
+            onOutputLine: (output: { stream: "stdout" | "stderr"; text: string }) =>
+              Effect.suspend(() => {
+                // Trace2 hook lifecycle events and child-process output arrive over
+                // independent streams, so their relative delivery order cannot
+                // safely identify which hook produced a line. Buffer output and
+                // emit it without attribution once Git confirms that hooks ran.
+                pendingUnattributedOutput.push(output);
                 return Effect.void;
-              }
-              return emit({
-                kind: "hook_output",
-                hookName: currentHookName,
-                stream,
-                text: sanitized,
-              });
-            },
-            onHookStarted: (hookName: string) => {
-              currentHookName = hookName;
-              return emit({
-                kind: "hook_started",
-                hookName,
-              });
-            },
+              }),
+            onHookStarted: (hookName: string) =>
+              Effect.suspend(() => {
+                sawCommitHook = true;
+                currentHookName = hookName;
+                return emit({
+                  kind: "hook_started",
+                  hookName,
+                });
+              }),
             onHookFinished: ({
               hookName,
               exitCode,
@@ -1981,10 +2141,19 @@ export const make = Effect.gen(function* () {
             },
           }
         : null;
-    const { commitSha } = yield* gitCore.commit(cwd, suggestion.subject, suggestion.body, {
-      timeoutMs: COMMIT_TIMEOUT_MS,
-      ...(commitProgress ? { progress: commitProgress } : {}),
-    });
+    const { commitSha } = yield* gitCore
+      .commit(cwd, suggestion.subject, suggestion.body, {
+        timeoutMs: COMMIT_TIMEOUT_MS,
+        ...(disableSigning ? { disableSigning: true } : {}),
+        ...(commitProgress ? { progress: commitProgress } : {}),
+      })
+      .pipe(
+        Effect.tapError((error) =>
+          finalizeUnattributedOutput(
+            sawCommitHook && error.failureKind !== "commit_signing_failed",
+          ),
+        ),
+      );
     if (currentHookName !== null) {
       yield* emit({
         kind: "hook_finished",
@@ -1994,6 +2163,7 @@ export const make = Effect.gen(function* () {
       });
       currentHookName = null;
     }
+    yield* finalizeUnattributedOutput(sawCommitHook);
     return {
       status: "created" as const,
       commitSha,
@@ -2325,6 +2495,42 @@ export const make = Effect.gen(function* () {
       .pipe(Effect.map((resolved) => toResolvedPullRequest(resolved)));
 
     return { pullRequest };
+  });
+
+  const resolveBranchChangeRequest: GitManager["Service"]["resolveBranchChangeRequest"] = Effect.fn(
+    "resolveBranchChangeRequest",
+  )(function* (input) {
+    const details = yield* gitCore
+      .statusDetailsLocal(input.cwd)
+      .pipe(
+        Effect.catchIf(isNotGitRepositoryError, () => Effect.succeed(nonRepositoryStatusDetails)),
+      );
+    if (!details.isRepo) {
+      return { pr: null };
+    }
+
+    const upstreamRef = yield* readConfigValueNullable(input.cwd, `branch.${input.refName}.merge`);
+    const hostingProvider = yield* resolveHostingProvider(input.cwd, input.refName);
+    const latestPr = yield* resolveBranchHeadContext(input.cwd, {
+      branch: input.refName,
+      upstreamRef,
+    }).pipe(
+      Effect.flatMap((headContext) => findLatestPrForHeadContext(input.cwd, headContext)),
+      Effect.orElseSucceed(() => null),
+    );
+    const fallbackPr =
+      latestPr === null && hostingProvider?.kind === "github"
+        ? yield* findLatestPrByHeadSelectorDirect(input.cwd, input.refName).pipe(
+            Effect.orElseSucceed(() => null),
+          )
+        : null;
+    const resolvedPr = yield* hydrateOpenPrChecks(input.cwd, latestPr ?? fallbackPr);
+    const pr = resolvedPr ? toStatusPr(resolvedPr) : null;
+
+    return {
+      pr,
+      ...(hostingProvider ? { sourceControlProvider: hostingProvider } : {}),
+    };
   });
 
   const preparePullRequestThread: GitManager["Service"]["preparePullRequestThread"] = Effect.fn(
@@ -2772,6 +2978,7 @@ export const make = Effect.gen(function* () {
                   commitMessageForStep,
                   preResolvedCommitSuggestion,
                   input.filePaths,
+                  input.disableCommitSigning,
                   options?.progressReporter,
                   progress.actionId,
                 ),
@@ -2838,6 +3045,10 @@ export const make = Effect.gen(function* () {
               kind: "action_failed",
               phase: Option.getOrNull(phase),
               message: error.message,
+              failureKind:
+                !input.disableCommitSigning && error._tag === "GitCommandError"
+                  ? error.failureKind
+                  : "unknown",
             }),
           ),
         ),
@@ -2854,6 +3065,7 @@ export const make = Effect.gen(function* () {
     invalidateRemoteStatus,
     invalidateStatus,
     resolvePullRequest,
+    resolveBranchChangeRequest,
     preparePullRequestThread,
     runStackedAction,
   });

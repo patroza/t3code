@@ -28,6 +28,7 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import * as ResetCreditCoordinator from "../Layers/resetCreditCoordinator.ts";
 import { NoOpProviderEventLoggers, ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import * as ModelManifest from "../ModelManifest.ts";
+import * as DirenvEnvironment from "../DirenvEnvironment.ts";
 import {
   createProviderVersionAdvisory,
   ProviderVersionCache,
@@ -40,6 +41,7 @@ const testLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-codex-driver-maintenance-",
 }).pipe(
   Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(DirenvEnvironment.layerNoop),
   Layer.provideMerge(
     Layer.mock(CodexInstallation)({ managedDirectory: "unused-managed-installation" }),
   ),

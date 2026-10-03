@@ -10,10 +10,13 @@ import * as ConnectionResolver from "./resolver.ts";
 import * as ConnectionDriver from "./driver.ts";
 import * as EnvironmentRegistry from "./registry.ts";
 import * as ConnectionOnboarding from "./onboarding.ts";
+import * as ConnectionDiagnosticsLog from "./diagnosticsLog.ts";
 import * as PlatformConnectionSource from "../platform/source.ts";
 import * as RelayEnvironmentDiscovery from "../relay/discovery.ts";
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import * as RpcSession from "../rpc/session.ts";
+
+const diagnosticsLogLayer = ConnectionDiagnosticsLog.layer;
 
 export const watchDiscoveredCompatibility = Effect.fn("connection.watchDiscoveredCompatibility")(
   function* () {
@@ -67,14 +70,23 @@ export const watchDiscoveredCompatibility = Effect.fn("connection.watchDiscovere
 
 export function layerWithOptions(options: RpcSession.RpcSessionOptions) {
   const driverLayer = ConnectionDriver.layer.pipe(
-    Layer.provide(Layer.mergeAll(ConnectionResolver.layer, RpcSession.layerWithOptions(options))),
+    Layer.provide(
+      Layer.mergeAll(
+        ConnectionResolver.layer,
+        RpcSession.layerWithOptions(options),
+        diagnosticsLogLayer,
+      ),
+    ),
   );
-  const registryLayer = EnvironmentRegistry.layer.pipe(Layer.provide(driverLayer));
+  const registryLayer = EnvironmentRegistry.layer.pipe(
+    Layer.provide(Layer.mergeAll(driverLayer, diagnosticsLogLayer)),
+  );
   const onboardingLayer = ConnectionOnboarding.layer.pipe(Layer.provide(registryLayer));
   const connectionServicesLayer = Layer.mergeAll(
     registryLayer,
     RelayEnvironmentDiscovery.layer,
     onboardingLayer,
+    diagnosticsLogLayer,
   );
   const connectionStartupLayer = Layer.effectDiscard(
     Effect.gen(function* () {

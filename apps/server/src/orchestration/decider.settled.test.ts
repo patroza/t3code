@@ -6,7 +6,6 @@ import {
   ProviderInstanceId,
   ThreadId,
   type OrchestrationEvent,
-  type OrchestrationReadModel,
   type OrchestrationSession,
   type OrchestrationThread,
 } from "@t3tools/contracts";
@@ -15,6 +14,7 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import { decideOrchestrationCommand } from "./decider.ts";
+import { findThreadById, fromWireReadModel, type CommandReadModel } from "./commandReadModel.ts";
 import { projectEvent } from "./projector.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
@@ -33,8 +33,8 @@ function makeReadModel(
     readonly snoozedUntil?: string | null;
     readonly snoozedAt?: string | null;
   } = {},
-): OrchestrationReadModel {
-  return {
+): CommandReadModel {
+  return fromWireReadModel({
     snapshotSequence: 0,
     projects: [],
     threads: [
@@ -59,6 +59,8 @@ function makeReadModel(
         pinnedAt: lifecycle.pinnedAt ?? null,
         deletedAt: null,
         messages,
+        queuedMessages: [],
+        pendingTurnStart: null,
         proposedPlans: [],
         activities,
         checkpoints: [],
@@ -66,7 +68,7 @@ function makeReadModel(
       },
     ],
     updatedAt: NOW,
-  };
+  });
 }
 
 function makeSession(status: OrchestrationSession["status"]): OrchestrationSession {
@@ -371,8 +373,8 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
       for (const [index, event] of events.entries()) {
         projected = yield* projectEvent(projected, { ...event, sequence: index + 1 });
       }
-      expect(projected.threads[0]?.settledOverride).toBe("settled");
-      expect(projected.threads[0]?.messages).toEqual([]);
+      expect(findThreadById(projected, command.threadId)?.settledOverride).toBe("settled");
+      expect(findThreadById(projected, command.threadId)?.messages).toEqual([]);
       const repeated = yield* decideOrchestrationCommand({ command, readModel: projected });
       expect(repeated).toMatchObject({ type: "thread.settled" });
     }),
@@ -621,7 +623,7 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
         ...unsettled,
         sequence: readModel.snapshotSequence + 1,
       } as OrchestrationEvent);
-      const thread = projected.threads[0]!;
+      const thread = findThreadById(projected, ThreadId.make("thread-1"))!;
       expect(thread.settledOverride).toBe("active");
       // The stamp is the decider's accept time: every thread created before
       // the un-settle anchors below it.

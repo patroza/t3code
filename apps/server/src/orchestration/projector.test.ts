@@ -5,12 +5,25 @@ import {
   ProviderDriverKind,
   ThreadId,
   type OrchestrationEvent,
+  type OrchestrationThread,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
 import { it as effectIt } from "@effect/vitest";
 import { describe, expect, it } from "vite-plus/test";
 
+import type { CommandReadModel } from "./commandReadModel.ts";
 import { createEmptyReadModel, projectEvent } from "./projector.ts";
+
+/** Thread list from the map, for assertions that previously used an array. */
+function threadsArray(model: CommandReadModel): ReadonlyArray<OrchestrationThread> {
+  return Array.from(HashMap.values(model.threads));
+}
+
+/** First thread in the map (insertion-order-independent tests use a single thread). */
+function firstThread(model: CommandReadModel): OrchestrationThread | undefined {
+  return threadsArray(model)[0];
+}
 
 function makeEvent(input: {
   sequence: number;
@@ -73,7 +86,7 @@ describe("orchestration projector", () => {
     );
 
     expect(next.snapshotSequence).toBe(1);
-    expect(next.threads).toEqual([
+    expect(threadsArray(next)).toEqual([
       {
         id: "thread-1",
         projectId: "project-1",
@@ -101,6 +114,8 @@ describe("orchestration projector", () => {
         snoozedAt: null,
         deletedAt: null,
         messages: [],
+        queuedMessages: [],
+        pendingTurnStart: null,
         proposedPlans: [],
         activities: [],
         checkpoints: [],
@@ -121,28 +136,31 @@ describe("orchestration projector", () => {
       let model = yield* projectEvent(
         {
           ...createEmptyReadModel(now),
-          projects: [
-            {
-              id: ProjectId.make("project-1"),
-              title: "T3 Code",
-              workspaceRoot: "/repo",
-              defaultModelSelection: null,
-              scripts: [],
-              createdAt: now,
-              updatedAt: now,
-              deletedAt: null,
-              repositoryIdentity: {
-                canonicalKey: "github.com/pingdotgg/t3code",
-                provider: "github",
-                displayName: "pingdotgg/t3code",
-                locator: {
-                  source: "git-remote",
-                  remoteName: "origin",
-                  remoteUrl: "https://github.com/pingdotgg/t3code.git",
+          projects: HashMap.fromIterable([
+            [
+              ProjectId.make("project-1"),
+              {
+                id: ProjectId.make("project-1"),
+                title: "T3 Code",
+                workspaceRoot: "/repo",
+                defaultModelSelection: null,
+                scripts: [],
+                createdAt: now,
+                updatedAt: now,
+                deletedAt: null,
+                repositoryIdentity: {
+                  canonicalKey: "github.com/pingdotgg/t3code",
+                  provider: "github",
+                  displayName: "pingdotgg/t3code",
+                  locator: {
+                    source: "git-remote",
+                    remoteName: "origin",
+                    remoteUrl: "https://github.com/pingdotgg/t3code.git",
+                  },
                 },
               },
-            },
-          ],
+            ],
+          ]),
         },
         makeEvent({
           ...eventFields,
@@ -188,8 +206,8 @@ describe("orchestration projector", () => {
             payload: { threadId: "thread-1", updatedAt: now, ...update.payload },
           }),
         );
-        expect(model.threads[0]?.branchPullRequest).toEqual(update.expected);
-        expect(model.threads[0]?.linkedPullRequest).toEqual(linkedPullRequest);
+        expect(firstThread(model)?.branchPullRequest).toEqual(update.expected);
+        expect(firstThread(model)?.linkedPullRequest).toEqual(linkedPullRequest);
       }
     }),
   );
@@ -278,7 +296,7 @@ describe("orchestration projector", () => {
         }),
       ),
     );
-    expect(archived.threads[0]?.archivedAt).toBe(later);
+    expect(firstThread(archived)?.archivedAt).toBe(later);
 
     const unarchived = await Effect.runPromise(
       projectEvent(
@@ -297,7 +315,7 @@ describe("orchestration projector", () => {
         }),
       ),
     );
-    expect(unarchived.threads[0]?.archivedAt).toBeNull();
+    expect(firstThread(unarchived)?.archivedAt).toBeNull();
   });
 
   it("keeps projector forward-compatible for unhandled event types", async () => {
@@ -326,7 +344,7 @@ describe("orchestration projector", () => {
 
     expect(next.snapshotSequence).toBe(7);
     expect(next.updatedAt).toBe("2026-01-01T00:00:00.000Z");
-    expect(next.threads).toEqual([]);
+    expect(threadsArray(next)).toEqual([]);
   });
 
   effectIt.effect.each([
@@ -424,13 +442,13 @@ describe("orchestration projector", () => {
             ),
         );
 
-        const thread = afterRunning.threads[0];
+        const thread = firstThread(afterRunning);
         expect(thread?.latestTurn?.turnId).toBe("turn-1");
         expect(thread?.session?.status).toBe("running");
 
         // Leaving the "running" session status settles the running turn with the
         // session timestamp as the turn end.
-        const settledThread = afterReady.threads[0];
+        const settledThread = firstThread(afterReady);
         expect(settledThread?.latestTurn?.turnId).toBe("turn-1");
         expect(settledThread?.latestTurn?.state).toBe(state);
         expect(settledThread?.latestTurn?.completedAt).toBe(settledAt);
@@ -456,8 +474,8 @@ describe("orchestration projector", () => {
             },
           }),
         );
-        expect(captured.threads[0]?.latestTurn?.state).toBe(state);
-        expect(captured.threads[0]?.checkpoints[0]?.status).toBe("ready");
+        expect(firstThread(captured)?.latestTurn?.state).toBe(state);
+        expect(firstThread(captured)?.checkpoints[0]?.status).toBe("ready");
       }),
   );
 
@@ -550,7 +568,7 @@ describe("orchestration projector", () => {
             checkpointRef: "refs/t3/checkpoints/thread-placeholder/turn/1",
           }),
         );
-        expect(model.threads[0]?.latestTurn?.state).toBe(
+        expect(firstThread(model)?.latestTurn?.state).toBe(
           sessionStatus === "interrupted" || sessionStatus === "stopped"
             ? "interrupted"
             : "completed",
@@ -610,8 +628,8 @@ describe("orchestration projector", () => {
       ),
     );
 
-    expect(afterUpdate.threads[0]?.runtimeMode).toBe("approval-required");
-    expect(afterUpdate.threads[0]?.updatedAt).toBe(updatedAt);
+    expect(firstThread(afterUpdate)?.runtimeMode).toBe("approval-required");
+    expect(firstThread(afterUpdate)?.updatedAt).toBe(updatedAt);
   });
 
   it("marks assistant messages completed with non-streaming updates", async () => {
@@ -696,11 +714,126 @@ describe("orchestration projector", () => {
       ),
     );
 
-    const message = afterComplete.threads[0]?.messages[0];
+    const message = firstThread(afterComplete)?.messages[0];
     expect(message?.id).toBe("assistant:msg-1");
     expect(message?.text).toBe("hello");
     expect(message?.streaming).toBe(false);
     expect(message?.updatedAt).toBe(completeAt);
+  });
+
+  it("does not rebind an assistant message turnId when a later complete races under the next turn", async () => {
+    // Production race (t3vm thread 16feaadd…): queue drain re-emits
+    // assistant.complete for the same segment id under the new turnId with empty
+    // text. The body must stay, and turnId must stay on the completed turn so
+    // Discord/web do not swallow the final under the next Working tip.
+    const createdAt = "2026-07-27T05:54:00.000Z";
+    const completeAt = "2026-07-27T05:57:21.174Z";
+    const restampAt = "2026-07-27T05:57:32.206Z";
+    const model = createEmptyReadModel(createdAt);
+
+    // Single runPromise so we stay within the file's LEGACY_BASELINE for
+    // t3code/no-manual-effect-runtime-in-tests.
+    const afterRestamp = await Effect.runPromise(
+      Effect.gen(function* () {
+        const afterCreate = yield* projectEvent(
+          model,
+          makeEvent({
+            sequence: 1,
+            type: "thread.created",
+            aggregateKind: "thread",
+            aggregateId: "thread-1",
+            occurredAt: createdAt,
+            commandId: "cmd-create",
+            payload: {
+              threadId: "thread-1",
+              projectId: "project-1",
+              title: "demo",
+              modelSelection: {
+                provider: ProviderDriverKind.make("codex"),
+                model: "gpt-5.3-codex",
+              },
+              runtimeMode: "full-access",
+              branch: null,
+              worktreePath: null,
+              createdAt,
+              updatedAt: createdAt,
+            },
+          }),
+        );
+
+        const afterFinal = yield* projectEvent(
+          afterCreate,
+          makeEvent({
+            sequence: 2,
+            type: "thread.message-sent",
+            aggregateKind: "thread",
+            aggregateId: "thread-1",
+            occurredAt: completeAt,
+            commandId: "cmd-final-delta",
+            payload: {
+              threadId: "thread-1",
+              messageId: "assistant:run:segment:5",
+              role: "assistant",
+              text: "**Yes — the bug is almost entirely a naming/dual-use problem.**",
+              turnId: "turn-prior",
+              streaming: true,
+              createdAt: completeAt,
+              updatedAt: completeAt,
+            },
+          }),
+        );
+
+        const afterComplete = yield* projectEvent(
+          afterFinal,
+          makeEvent({
+            sequence: 3,
+            type: "thread.message-sent",
+            aggregateKind: "thread",
+            aggregateId: "thread-1",
+            occurredAt: completeAt,
+            commandId: "cmd-final-complete",
+            payload: {
+              threadId: "thread-1",
+              messageId: "assistant:run:segment:5",
+              role: "assistant",
+              text: "",
+              turnId: "turn-prior",
+              streaming: false,
+              createdAt: completeAt,
+              updatedAt: completeAt,
+            },
+          }),
+        );
+
+        return yield* projectEvent(
+          afterComplete,
+          makeEvent({
+            sequence: 4,
+            type: "thread.message-sent",
+            aggregateKind: "thread",
+            aggregateId: "thread-1",
+            occurredAt: restampAt,
+            commandId: "cmd-restamp-complete",
+            payload: {
+              threadId: "thread-1",
+              messageId: "assistant:run:segment:5",
+              role: "assistant",
+              text: "",
+              turnId: "turn-next",
+              streaming: false,
+              createdAt: restampAt,
+              updatedAt: restampAt,
+            },
+          }),
+        );
+      }),
+    );
+
+    const message = firstThread(afterRestamp)?.messages[0];
+    expect(message?.id).toBe("assistant:run:segment:5");
+    expect(message?.text).toBe("**Yes — the bug is almost entirely a naming/dual-use problem.**");
+    expect(message?.turnId).toBe("turn-prior");
+    expect(message?.streaming).toBe(false);
   });
 
   it("prunes reverted turn messages from in-memory thread snapshot", async () => {
@@ -904,7 +1037,7 @@ describe("orchestration projector", () => {
       Promise.resolve(afterCreate),
     );
 
-    const thread = afterRevert.threads[0];
+    const thread = firstThread(afterRevert);
     expect(thread?.messages.map((message) => ({ role: message.role, text: message.text }))).toEqual(
       [
         { role: "user", text: "First edit" },
@@ -1061,7 +1194,7 @@ describe("orchestration projector", () => {
       Promise.resolve(afterCreate),
     );
 
-    const thread = afterRevert.threads[0];
+    const thread = firstThread(afterRevert);
     expect(
       thread?.messages.map((message) => ({
         id: message.id,
@@ -1074,34 +1207,6 @@ describe("orchestration projector", () => {
   it("caps message and checkpoint retention for long-lived threads", async () => {
     const createdAt = "2026-03-01T10:00:00.000Z";
     const model = createEmptyReadModel(createdAt);
-
-    const afterCreate = await Effect.runPromise(
-      projectEvent(
-        model,
-        makeEvent({
-          sequence: 1,
-          type: "thread.created",
-          aggregateKind: "thread",
-          aggregateId: "thread-capped",
-          occurredAt: createdAt,
-          commandId: "cmd-create-capped",
-          payload: {
-            threadId: "thread-capped",
-            projectId: "project-1",
-            title: "capped",
-            modelSelection: {
-              provider: ProviderDriverKind.make("codex"),
-              model: "gpt-5-codex",
-            },
-            runtimeMode: "full-access",
-            branch: null,
-            worktreePath: null,
-            createdAt,
-            updatedAt: createdAt,
-          },
-        }),
-      ),
-    );
 
     const messageEvents: ReadonlyArray<OrchestrationEvent> = Array.from(
       { length: 2_100 },
@@ -1125,14 +1230,6 @@ describe("orchestration projector", () => {
           },
         }),
     );
-    const afterMessages = await messageEvents.reduce<
-      Promise<ReturnType<typeof createEmptyReadModel>>
-    >(
-      (statePromise, event) =>
-        statePromise.then((state) => Effect.runPromise(projectEvent(state, event))),
-      Promise.resolve(afterCreate),
-    );
-
     const checkpointEvents: ReadonlyArray<OrchestrationEvent> = Array.from(
       { length: 600 },
       (_, index) =>
@@ -1155,15 +1252,44 @@ describe("orchestration projector", () => {
           },
         }),
     );
-    const finalState = await checkpointEvents.reduce<
-      Promise<ReturnType<typeof createEmptyReadModel>>
-    >(
-      (statePromise, event) =>
-        statePromise.then((state) => Effect.runPromise(projectEvent(state, event))),
-      Promise.resolve(afterMessages),
+    const finalState = await Effect.runPromise(
+      Effect.gen(function* () {
+        let state = yield* projectEvent(
+          model,
+          makeEvent({
+            sequence: 1,
+            type: "thread.created",
+            aggregateKind: "thread",
+            aggregateId: "thread-capped",
+            occurredAt: createdAt,
+            commandId: "cmd-create-capped",
+            payload: {
+              threadId: "thread-capped",
+              projectId: "project-1",
+              title: "capped",
+              modelSelection: {
+                provider: ProviderDriverKind.make("codex"),
+                model: "gpt-5-codex",
+              },
+              runtimeMode: "full-access",
+              branch: null,
+              worktreePath: null,
+              createdAt,
+              updatedAt: createdAt,
+            },
+          }),
+        );
+        for (const event of messageEvents) {
+          state = yield* projectEvent(state, event);
+        }
+        for (const event of checkpointEvents) {
+          state = yield* projectEvent(state, event);
+        }
+        return state;
+      }),
     );
 
-    const thread = finalState.threads[0];
+    const thread = firstThread(finalState);
     expect(thread?.messages).toHaveLength(2_000);
     expect(thread?.messages[0]?.id).toBe("msg-100");
     expect(thread?.messages.at(-1)?.id).toBe("msg-2099");
@@ -1232,7 +1358,7 @@ describe("orchestration projector", () => {
           activityEvent(3 + index, `tool-${index}`, "tool.completed"),
         );
       }
-      const thread = model.threads.find((entry) => entry.id === threadId);
+      const thread = firstThread(model);
       expect(thread?.activities).toHaveLength(501);
       expect(thread?.activities[0]?.id).toBe(`worktree-setup:${threadId}`);
     }),

@@ -14,6 +14,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
+import { findThreadById, fromWireReadModel } from "./commandReadModel.ts";
 import { decideOrchestrationCommand } from "./decider.ts";
 import { createEmptyReadModel, projectEvent } from "./projector.ts";
 
@@ -58,6 +59,8 @@ function makeReadModel(): OrchestrationReadModel {
         pinnedAt: null,
         deletedAt: null,
         messages: [],
+        queuedMessages: [],
+        pendingTurnStart: null,
         proposedPlans: [],
         activities: [],
         checkpoints: [],
@@ -101,7 +104,7 @@ it.layer(NodeServices.layer)("message context plumbing", (it) => {
           interactionMode: "default",
           createdAt: NOW,
         },
-        readModel: makeReadModel(),
+        readModel: fromWireReadModel(makeReadModel()),
       });
       const events = Array.isArray(result) ? result : [result];
       const sent = events.find((event) => event.type === "thread.message-sent");
@@ -142,7 +145,7 @@ it.layer(NodeServices.layer)("message context plumbing", (it) => {
           updatedAt: NOW,
         }),
       );
-      const message = afterMessage.threads[0]?.messages[0];
+      const message = findThreadById(afterMessage, ThreadId.make("thread-1"))?.messages[0];
       expect(message?.context).toEqual(context);
 
       // A later non-streaming update without context keeps the original records.
@@ -159,7 +162,9 @@ it.layer(NodeServices.layer)("message context plumbing", (it) => {
           updatedAt: NOW,
         }),
       );
-      expect(afterUpdate.threads[0]?.messages[0]?.context).toEqual(context);
+      expect(findThreadById(afterUpdate, ThreadId.make("thread-1"))?.messages[0]?.context).toEqual(
+        context,
+      );
     }),
   );
 });

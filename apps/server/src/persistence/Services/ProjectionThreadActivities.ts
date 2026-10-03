@@ -41,6 +41,13 @@ export const ListProjectionThreadActivitiesInput = Schema.Struct({
 });
 export type ListProjectionThreadActivitiesInput = typeof ListProjectionThreadActivitiesInput.Type;
 
+export const ListProjectionThreadActivitiesByKindInput = Schema.Struct({
+  threadId: ThreadId,
+  kinds: Schema.Array(Schema.String),
+});
+export type ListProjectionThreadActivitiesByKindInput =
+  typeof ListProjectionThreadActivitiesByKindInput.Type;
+
 export const GetLatestProjectionThreadTaskActivityInput = Schema.Struct({
   threadId: ThreadId,
   taskId: Schema.String,
@@ -75,6 +82,19 @@ export interface ProjectionThreadActivityRepositoryShape {
    */
   readonly listByThreadId: (
     input: ListProjectionThreadActivitiesInput,
+  ) => Effect.Effect<ReadonlyArray<ProjectionThreadActivity>, ProjectionRepositoryError>;
+
+  /**
+   * List projected thread activity rows for a thread, restricted to `kinds`.
+   *
+   * Same order as {@link listByThreadId}. Callers that derive a fact from a few
+   * activity kinds must use this: a thread's full activity list carries every
+   * tool payload it ever produced, which reaches hundreds of megabytes on a
+   * long-running thread, and reading it per event is what drove the server heap
+   * into its ceiling.
+   */
+  readonly listByThreadIdAndKinds: (
+    input: ListProjectionThreadActivitiesByKindInput,
   ) => Effect.Effect<ReadonlyArray<ProjectionThreadActivity>, ProjectionRepositoryError>;
 
   /**

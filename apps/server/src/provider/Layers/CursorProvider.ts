@@ -11,6 +11,7 @@ import type {
 import type * as EffectAcpSchema from "effect-acp/schema";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import * as Cache from "effect/Cache";
+import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -1206,8 +1207,39 @@ export const checkCursorProviderStatus = Effect.fn("checkCursorProviderStatus")(
       ).pipe(Effect.timeoutOption(CURSOR_ACP_MODEL_DISCOVERY_TIMEOUT_MS)),
     );
     if (Exit.isFailure(discoveryExit)) {
+      const _dumpCauseChain = (root: unknown): string => {
+        const seen = new Set<unknown>();
+        const parts: Array<string> = [];
+        let node: unknown = root;
+        let depth = 0;
+        while (node && typeof node === "object" && !seen.has(node) && depth < 12) {
+          seen.add(node);
+          const n = node as Record<string, unknown>;
+          const keys = [
+            "_tag",
+            "message",
+            "code",
+            "exitCode",
+            "operation",
+            "method",
+            "pid",
+            "reason",
+            "detail",
+          ];
+          const flat: Record<string, unknown> = {};
+          for (const k of keys) {
+            if (k in n && k !== "reason" && k !== "cause") flat[k] = n[k];
+          }
+          parts.push(JSON.stringify(flat));
+          node = n["reason"] ?? n["cause"];
+          depth++;
+        }
+        return parts.join(" -> ");
+      };
       yield* Effect.logWarning("Cursor ACP model discovery failed", {
         errorTag: causeErrorTag(discoveryExit.cause),
+        causeChain: _dumpCauseChain(Cause.squash(discoveryExit.cause)),
+        causeDetail: Cause.pretty(discoveryExit.cause),
       });
       discoveryWarning = CURSOR_ACP_MODEL_DISCOVERY_FAILED_MESSAGE;
     } else if (Option.isNone(discoveryExit.value)) {

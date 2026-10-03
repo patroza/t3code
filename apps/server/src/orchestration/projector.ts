@@ -13,8 +13,11 @@ import {
   OrchestrationMessage,
   OrchestrationSession,
   OrchestrationThread,
+  type SourceRef,
+  type ThreadParticipantSummary,
   WORKTREE_SETUP_ACTIVITY_KIND,
 } from "@t3tools/contracts";
+import { mergeParticipantSummaries, nextOriginSource } from "@t3tools/shared/sourceAttribution";
 import {
   legacyLinkedPullRequestOf,
   legacyThreadPullRequestKey,
@@ -22,12 +25,22 @@ import {
 } from "@t3tools/shared/threadPullRequests";
 import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
 import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
+import * as HashSet from "effect/HashSet";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Predicate from "effect/Predicate";
 
+import {
+  createEmptyCommandReadModel,
+  findThreadById,
+  type CommandReadModel,
+} from "./commandReadModel.ts";
 import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
 import {
   MessageSentPayloadSchema,
+  ThreadMessageQueuedPayload,
+  ThreadQueuedMessageRemovedPayload,
   ProjectCreatedPayload,
   ProjectDeletedPayload,
   ProjectMetaUpdatedPayload,
@@ -54,6 +67,7 @@ import {
   ThreadRevertedPayload,
   ThreadSessionSetPayload,
   ThreadTurnDiffCompletedPayload,
+  ThreadTurnStartRequestedPayload,
 } from "./Schemas.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
@@ -94,6 +108,20 @@ function checkpointStatusToLatestTurnState(status: "ready" | "missing" | "error"
   return "completed" as const;
 }
 
+function isPendingCompactTurnStart(thread: OrchestrationThread): boolean {
+  const pending = thread.pendingTurnStart;
+  if (pending === null) {
+    return false;
+  }
+  const message = thread.messages.find((entry) => entry.id === pending.messageId);
+  return (
+    message !== undefined &&
+    message.role === "user" &&
+    (message.attachments?.length ?? 0) === 0 &&
+    message.text.trim().toLowerCase() === "/compact"
+  );
+}
+
 /**
  * Turn state to settle a still-running latest turn with when its session
  * leaves the "running" status, or null while the session is (re)starting or
@@ -117,40 +145,55 @@ function settledTurnStateForSessionStatus(
   }
 }
 
-// Runs for every thread event (including streaming deltas) against every
-// thread the server has ever seen, so copy the array rather than map it.
+/**
+ * Apply a patch to a single thread, keyed by id. No-op if the thread is absent
+ * (mirrors the previous array-map behavior, which left the collection unchanged
+ * when no entry matched).
+ */
 function updateThread(
-  threads: ReadonlyArray<OrchestrationThread>,
+  threads: HashMap.HashMap<ThreadId, OrchestrationThread>,
   threadId: ThreadId,
   patch: ThreadPatch,
-): ReadonlyArray<OrchestrationThread> {
-  const index = threads.findIndex((thread) => thread.id === threadId);
-  return index === -1 ? threads : patchThreadAt(threads, index, patch);
+): HashMap.HashMap<ThreadId, OrchestrationThread> {
+  const existing = HashMap.get(threads, threadId);
+  if (Option.isNone(existing)) {
+    return threads;
+  }
+  return HashMap.set(threads, threadId, { ...existing.value, ...patch });
 }
 
-/** For callers that already located the thread and must not scan again. */
-function patchThreadAt(
-  threads: ReadonlyArray<OrchestrationThread>,
-  index: number,
-  patch: ThreadPatch,
-): ReadonlyArray<OrchestrationThread> {
-  const next = threads.slice();
-  next[index] = { ...threads[index]!, ...patch };
-  return next;
+/**
+ * Apply an update function to a single project in the model, keyed by id. No-op
+ * if the project is absent.
+ */
+function updateProject(
+  model: CommandReadModel,
+  projectId: OrchestrationProject["id"],
+  update: (project: OrchestrationProject) => OrchestrationProject,
+): CommandReadModel {
+  const existing = HashMap.get(model.projects, projectId);
+  if (Option.isNone(existing)) {
+    return model;
+  }
+  return {
+    ...model,
+    projects: HashMap.set(model.projects, projectId, update(existing.value)),
+  };
 }
 
 /** Patch that swaps a thread's links and re-derives the legacy single-PR field from them. */
 function pullRequestsPatch(
   thread: Pick<OrchestrationThread, "projectId">,
   pullRequests: ReadonlyArray<ThreadPullRequestLink>,
-  projects: OrchestrationReadModel["projects"],
+  projects: CommandReadModel["projects"],
 ): Pick<OrchestrationThread, "pullRequests" | "linkedPullRequest"> {
+  const project = Option.getOrUndefined(HashMap.get(projects, thread.projectId));
   return {
     pullRequests,
     linkedPullRequest: legacyLinkedPullRequestOf(
       pullRequests,
       thread.projectId,
-      projects.find((project) => project.id === thread.projectId)?.repositoryIdentity,
+      project?.repositoryIdentity,
     ),
   };
 }
@@ -327,20 +370,15 @@ function compareThreadActivities(
   return left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id);
 }
 
-export function createEmptyReadModel(nowIso: string): OrchestrationReadModel {
-  return {
-    snapshotSequence: 0,
-    projects: [],
-    threads: [],
-    updatedAt: nowIso,
-  };
+export function createEmptyReadModel(nowIso: string): CommandReadModel {
+  return createEmptyCommandReadModel(nowIso);
 }
 
 export function projectEvent(
-  model: OrchestrationReadModel,
+  model: CommandReadModel,
   event: OrchestrationEvent,
-): Effect.Effect<OrchestrationReadModel, OrchestrationProjectorDecodeError> {
-  const nextBase: OrchestrationReadModel = {
+): Effect.Effect<CommandReadModel, OrchestrationProjectorDecodeError> {
+  const nextBase: CommandReadModel = {
     ...model,
     snapshotSequence: event.sequence,
     updatedAt: event.occurredAt,
@@ -350,8 +388,7 @@ export function projectEvent(
     case "project.created":
       return decodeForEvent(ProjectCreatedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {
-          const existing = nextBase.projects.find((entry) => entry.id === payload.projectId);
-          const nextProject = {
+          const nextProject: OrchestrationProject = {
             id: payload.projectId,
             title: payload.title,
             workspaceRoot: payload.workspaceRoot,
@@ -368,62 +405,44 @@ export function projectEvent(
 
           return {
             ...nextBase,
-            projects: existing
-              ? nextBase.projects.map((entry) =>
-                  entry.id === payload.projectId ? nextProject : entry,
-                )
-              : [...nextBase.projects, nextProject],
+            projects: HashMap.set(nextBase.projects, payload.projectId, nextProject),
           };
         }),
       );
 
     case "project.meta-updated":
       return decodeForEvent(ProjectMetaUpdatedPayload, event.payload, event.type, "payload").pipe(
-        Effect.map((payload) => ({
-          ...nextBase,
-          projects: nextBase.projects.map((project) =>
-            project.id === payload.projectId
-              ? {
-                  ...project,
-                  ...(payload.title !== undefined ? { title: payload.title } : {}),
-                  ...(payload.workspaceRoot !== undefined
-                    ? { workspaceRoot: payload.workspaceRoot }
-                    : {}),
-                  ...(payload.defaultModelSelection !== undefined
-                    ? { defaultModelSelection: payload.defaultModelSelection }
-                    : {}),
-                  ...(payload.defaultThreadEnvMode !== undefined
-                    ? { defaultThreadEnvMode: payload.defaultThreadEnvMode }
-                    : {}),
-                  ...(payload.autoPull !== undefined ? { autoPull: payload.autoPull } : {}),
-                  ...(payload.faviconPath !== undefined
-                    ? { faviconPath: payload.faviconPath }
-                    : {}),
-                  ...(payload.projectIcon !== undefined
-                    ? { projectIcon: payload.projectIcon }
-                    : {}),
-                  ...(payload.scripts !== undefined ? { scripts: payload.scripts } : {}),
-                  updatedAt: payload.updatedAt,
-                }
-              : project,
-          ),
-        })),
+        Effect.map((payload) =>
+          updateProject(nextBase, payload.projectId, (project) => ({
+            ...project,
+            ...(payload.title !== undefined ? { title: payload.title } : {}),
+            ...(payload.workspaceRoot !== undefined
+              ? { workspaceRoot: payload.workspaceRoot }
+              : {}),
+            ...(payload.defaultModelSelection !== undefined
+              ? { defaultModelSelection: payload.defaultModelSelection }
+              : {}),
+            ...(payload.defaultThreadEnvMode !== undefined
+              ? { defaultThreadEnvMode: payload.defaultThreadEnvMode }
+              : {}),
+            ...(payload.autoPull !== undefined ? { autoPull: payload.autoPull } : {}),
+            ...(payload.faviconPath !== undefined ? { faviconPath: payload.faviconPath } : {}),
+            ...(payload.projectIcon !== undefined ? { projectIcon: payload.projectIcon } : {}),
+            ...(payload.scripts !== undefined ? { scripts: payload.scripts } : {}),
+            updatedAt: payload.updatedAt,
+          })),
+        ),
       );
 
     case "project.deleted":
       return decodeForEvent(ProjectDeletedPayload, event.payload, event.type, "payload").pipe(
-        Effect.map((payload) => ({
-          ...nextBase,
-          projects: nextBase.projects.map((project) =>
-            project.id === payload.projectId
-              ? {
-                  ...project,
-                  deletedAt: payload.deletedAt,
-                  updatedAt: payload.deletedAt,
-                }
-              : project,
-          ),
-        })),
+        Effect.map((payload) =>
+          updateProject(nextBase, payload.projectId, (project) => ({
+            ...project,
+            deletedAt: payload.deletedAt,
+            updatedAt: payload.deletedAt,
+          })),
+        ),
       );
 
     case "thread.created":
@@ -460,6 +479,8 @@ export function projectEvent(
             snoozedAt: null,
             deletedAt: null,
             messages: [],
+            queuedMessages: [],
+            pendingTurnStart: null,
             activities: [],
             checkpoints: [],
             session: null,
@@ -467,23 +488,27 @@ export function projectEvent(
           event.type,
           "thread",
         );
-        const existing = nextBase.threads.find((entry) => entry.id === thread.id);
         return {
           ...nextBase,
-          threads: existing
-            ? nextBase.threads.map((entry) => (entry.id === thread.id ? thread : entry))
-            : [...nextBase.threads, thread],
+          threads: HashMap.set(nextBase.threads, thread.id, thread),
         };
       });
 
     case "thread.deleted":
+      // Evict deleted threads from the in-memory model entirely rather than
+      // tombstoning them. The DB projection retains the row (it is the source
+      // of truth for downstream/HTTP reads and cleanup reactors consume the
+      // event stream, not this model), and no command legitimately targets an
+      // already-deleted thread. This is the primary fix for unbounded growth:
+      // a deleted thread's messages/activities/checkpoints are freed and it no
+      // longer costs anything on every subsequent event. The id is recorded in
+      // `deletedThreadIds` so `requireThreadAbsent` still rejects re-creating a
+      // thread with a previously-used id (the invariant the DB tombstone kept).
       return decodeForEvent(ThreadDeletedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => ({
           ...nextBase,
-          threads: updateThread(nextBase.threads, payload.threadId, {
-            deletedAt: payload.deletedAt,
-            updatedAt: payload.deletedAt,
-          }),
+          threads: HashMap.remove(nextBase.threads, payload.threadId),
+          deletedThreadIds: HashSet.add(nextBase.deletedThreadIds, payload.threadId),
         })),
       );
 
@@ -527,7 +552,7 @@ export function projectEvent(
     case "thread.unsettled":
       return decodeForEvent(ThreadUnsettledPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {
-          const existing = nextBase.threads.find((thread) => thread.id === payload.threadId);
+          const existing = findThreadById(nextBase, payload.threadId);
           return {
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
@@ -621,7 +646,7 @@ export function projectEvent(
     case "thread.meta-updated":
       return decodeForEvent(ThreadMetaUpdatedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {
-          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          const thread = findThreadById(nextBase, payload.threadId);
           // Legacy single-link events replay into the link array so the
           // derived linkedPullRequest and pullRequests never disagree.
           const legacyLinkPatch =
@@ -630,7 +655,7 @@ export function projectEvent(
                   thread,
                   legacyLinkToPullRequests(
                     thread,
-                    nextBase.projects.find((project) => project.id === thread.projectId),
+                    Option.getOrUndefined(HashMap.get(nextBase.projects, thread.projectId)),
                     payload.linkedPullRequest,
                     payload.updatedAt,
                   ),
@@ -671,7 +696,7 @@ export function projectEvent(
         "payload",
       ).pipe(
         Effect.map((payload) => {
-          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          const thread = findThreadById(nextBase, payload.threadId);
           if (!thread) {
             return nextBase;
           }
@@ -697,7 +722,7 @@ export function projectEvent(
         "payload",
       ).pipe(
         Effect.map((payload) => {
-          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          const thread = findThreadById(nextBase, payload.threadId);
           if (!thread) {
             return nextBase;
           }
@@ -723,7 +748,7 @@ export function projectEvent(
         "payload",
       ).pipe(
         Effect.map((payload) => {
-          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          const thread = findThreadById(nextBase, payload.threadId);
           // A sync for a link the user removed in the meantime is stale; drop it.
           if (
             !thread ||
@@ -781,8 +806,7 @@ export function projectEvent(
           event.type,
           "payload",
         );
-        const threadIndex = nextBase.threads.findIndex((entry) => entry.id === payload.threadId);
-        const thread = nextBase.threads[threadIndex];
+        const thread = findThreadById(nextBase, payload.threadId);
         if (!thread) {
           return nextBase;
         }
@@ -797,6 +821,7 @@ export function projectEvent(
             ...(payload.context !== undefined ? { context: payload.context } : {}),
             turnId: payload.turnId,
             streaming: payload.streaming,
+            ...(payload.source !== undefined ? { source: payload.source } : {}),
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
           },
@@ -817,9 +842,25 @@ export function projectEvent(
                         : entry.text,
                     streaming: message.streaming,
                     updatedAt: message.updatedAt,
-                    turnId: message.turnId,
+                    // Once an assistant bubble is bound to a turn, never rebind it
+                    // to a different turn. Queue drain races re-emit
+                    // assistant.complete for the same messageId under the next
+                    // activeTurnId (empty text + streaming:false), which would
+                    // otherwise orphan the real final from its completed turn and
+                    // hide it under the next Working tip (Discord/web fold).
+                    turnId:
+                      entry.role === "assistant" &&
+                      entry.turnId !== null &&
+                      message.turnId !== null &&
+                      entry.turnId !== message.turnId
+                        ? entry.turnId
+                        : message.turnId,
                     ...(message.attachments !== undefined
                       ? { attachments: message.attachments }
+                      : {}),
+                    // Preserve source on first write; streaming deltas don't re-stamp.
+                    ...(entry.source === undefined && message.source !== undefined
+                      ? { source: message.source }
                       : {}),
                     ...(message.context !== undefined ? { context: message.context } : {}),
                   }
@@ -828,14 +869,152 @@ export function projectEvent(
           : [...thread.messages, message];
         const cappedMessages = messages.slice(-MAX_THREAD_MESSAGES);
 
+        const messageSource: SourceRef | undefined =
+          existingMessage === undefined
+            ? message.source
+            : (existingMessage.source ?? message.source);
+        const nextOrigin = nextOriginSource({
+          current: thread.originSource ?? null,
+          messageSource,
+          role: message.role,
+        });
+        // Preserve branded SourceRef from the event when setting origin.
+        const originSource: SourceRef | null | undefined =
+          nextOrigin === null || nextOrigin === undefined
+            ? nextOrigin
+            : messageSource !== undefined &&
+                (thread.originSource === undefined || thread.originSource === null)
+              ? messageSource
+              : (thread.originSource ?? null);
+        const existingSummaries = thread.participantSummaries ?? [];
+        const participantSummaries: ReadonlyArray<ThreadParticipantSummary> =
+          message.role === "user" &&
+          messageSource?.personId !== undefined &&
+          messageSource.username !== undefined
+            ? (mergeParticipantSummaries({
+                existing: existingSummaries,
+                source: {
+                  personId: messageSource.personId,
+                  username: messageSource.username,
+                  channel: messageSource.channel,
+                },
+                participatedAt: message.createdAt,
+                originPersonId: originSource?.personId ?? null,
+              }).map((entry) => ({
+                personId: entry.personId as ThreadParticipantSummary["personId"],
+                username: entry.username as ThreadParticipantSummary["username"],
+                ...(entry.name !== undefined ? { name: entry.name } : {}),
+                ...(entry.firstChannel !== undefined ? { firstChannel: entry.firstChannel } : {}),
+                ...(entry.channels !== undefined ? { channels: [...entry.channels] } : {}),
+                firstParticipatedAt: entry.firstParticipatedAt,
+              })) as ReadonlyArray<ThreadParticipantSummary>)
+            : existingSummaries;
+
         return {
           ...nextBase,
-          threads: patchThreadAt(nextBase.threads, threadIndex, {
+          threads: updateThread(nextBase.threads, payload.threadId, {
             messages: cappedMessages,
             updatedAt: event.occurredAt,
+            ...(originSource !== undefined ? { originSource } : {}),
+            ...(participantSummaries.length > 0 ? { participantSummaries } : {}),
           }),
         };
       });
+
+    case "thread.message-queued":
+      return decodeForEvent(ThreadMessageQueuedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const thread = findThreadById(nextBase, payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+
+          // No cap here: the decider refuses to emit `thread.message-queued`
+          // past its queue limit, so replaying the event stream stays in
+          // lockstep with the persisted projection.
+          const queuedMessages = [
+            ...thread.queuedMessages.filter((entry) => entry.messageId !== payload.messageId),
+            {
+              messageId: payload.messageId,
+              text: payload.text,
+              attachments: payload.attachments,
+              ...(payload.modelSelection !== undefined
+                ? { modelSelection: payload.modelSelection }
+                : {}),
+              ...(payload.sourceProposedPlan !== undefined
+                ? { sourceProposedPlan: payload.sourceProposedPlan }
+                : {}),
+              ...(payload.source !== undefined ? { source: payload.source } : {}),
+              queuedAt: payload.queuedAt,
+            },
+          ];
+
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              queuedMessages,
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.queued-message-removed":
+      return decodeForEvent(
+        ThreadQueuedMessageRemovedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = findThreadById(nextBase, payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              queuedMessages: thread.queuedMessages.filter(
+                (entry) => entry.messageId !== payload.messageId,
+              ),
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.turn-start-requested":
+      return decodeForEvent(
+        ThreadTurnStartRequestedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = findThreadById(nextBase, payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          // Match ProjectionPipeline: a pending `/compact` occupies the
+          // pending-start slot until restore. Follow-ups stay as
+          // turn-start-requested so the reactor can hold them in memory
+          // instead of replacing this placeholder (or queue-by-default).
+          if (isPendingCompactTurnStart(thread)) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              pendingTurnStart: {
+                messageId: payload.messageId,
+                requestedAt: payload.createdAt,
+              },
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
 
     case "thread.session-set":
       return Effect.gen(function* () {
@@ -845,7 +1024,7 @@ export function projectEvent(
           event.type,
           "payload",
         );
-        const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+        const thread = findThreadById(nextBase, payload.threadId);
         if (!thread) {
           return nextBase;
         }
@@ -860,10 +1039,23 @@ export function projectEvent(
         // Leaving the "running" session status is the turn-end signal: settle
         // a still-running latest turn so its duration reflects the whole turn.
         const settledTurnState = settledTurnStateForSessionStatus(session.status);
+        // Mirrors the SQL pipeline's pending-turn-start clearing: a running
+        // session with an active turn adopts the pending start; every settled
+        // or terminal status (ready/idle/error/stopped/interrupted) clears it
+        // — a mid-turn steer re-arms the flag without any adopting session
+        // transition, so the turn-end ready must release it or drains would
+        // be rejected forever. Only "starting" (and running while waiting on
+        // a turn id) keeps it pending.
+        const pendingTurnStart =
+          (session.status === "running" && session.activeTurnId !== null) ||
+          settledTurnStateForSessionStatus(session.status) !== null
+            ? null
+            : thread.pendingTurnStart;
         return {
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             session,
+            pendingTurnStart,
             latestTurn:
               session.status === "running" && session.activeTurnId !== null
                 ? {
@@ -908,7 +1100,7 @@ export function projectEvent(
           event.type,
           "payload",
         );
-        const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+        const thread = findThreadById(nextBase, payload.threadId);
         if (!thread) {
           return nextBase;
         }
@@ -940,7 +1132,7 @@ export function projectEvent(
           event.type,
           "payload",
         );
-        const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+        const thread = findThreadById(nextBase, payload.threadId);
         if (!thread) {
           return nextBase;
         }
@@ -1014,7 +1206,7 @@ export function projectEvent(
     case "thread.reverted":
       return decodeForEvent(ThreadRevertedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {
-          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          const thread = findThreadById(nextBase, payload.threadId);
           if (!thread) {
             return nextBase;
           }
@@ -1070,8 +1262,7 @@ export function projectEvent(
         "payload",
       ).pipe(
         Effect.map((payload) => {
-          const threadIndex = nextBase.threads.findIndex((entry) => entry.id === payload.threadId);
-          const thread = nextBase.threads[threadIndex];
+          const thread = findThreadById(nextBase, payload.threadId);
           if (!thread) {
             return nextBase;
           }
@@ -1085,7 +1276,7 @@ export function projectEvent(
 
           return {
             ...nextBase,
-            threads: patchThreadAt(nextBase.threads, threadIndex, {
+            threads: updateThread(nextBase.threads, payload.threadId, {
               activities,
               updatedAt: event.occurredAt,
             }),

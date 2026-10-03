@@ -20,10 +20,37 @@ import type {
 } from "./browserImport.ts";
 import { AuthAccessTokenResult, AuthSessionState, AuthWebSocketTicketResult } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
+import { EditorId } from "./editor.ts";
+import type {
+  DesktopApplicationSelection,
+  DesktopOpenWithInput,
+  OpenWithEntryPresentation,
+} from "./openWith.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
-import { type ClientSettings, type QuitConfirmationMode, SnapShotShortcut } from "./settings.ts";
-import type { EditorId } from "./editor.ts";
-
+import type { ProviderInstanceId } from "./providerInstance.ts";
+import type {
+  ServerConfig,
+  ServerProcessDiagnosticsResult,
+  ServerProcessResourceHistoryInput,
+  ServerProcessResourceHistoryResult,
+  ServerProviderUpdateInput,
+  ServerProviderUpdatedPayload,
+  ServerRemoveKeybindingInput,
+  ServerRemoveKeybindingResult,
+  ServerSignalProcessInput,
+  ServerSignalProcessResult,
+  ServerTraceDiagnosticsResult,
+  ServerUpsertKeybindingInput,
+  ServerUpsertKeybindingResult,
+} from "./server.ts";
+import {
+  type ClientSettings,
+  type QuitConfirmationMode,
+  type ServerSettings,
+  type ServerSettingsPatch,
+  SnapShotShortcut,
+} from "./settings.ts";
+import type { SourceControlDiscoveryResult } from "./sourceControl.ts";
 import type {
   DesktopAppActivationRequest,
   DesktopAppActivationResponse,
@@ -1216,6 +1243,9 @@ export interface DesktopBridge {
   receiveProviderAuthCallback?: (authorizationUrl: string) => Promise<string>;
   cancelProviderAuthCallback?: (authorizationUrl: string) => Promise<void>;
   openExternal: (url: string) => Promise<boolean>;
+  pickOpenWithApplication: () => Promise<DesktopApplicationSelection | null>;
+  resolveOpenWithPresentations: () => Promise<readonly OpenWithEntryPresentation[]>;
+  openWith: (input: DesktopOpenWithInput) => Promise<void>;
   /**
    * Open a System Settings pane by identifier. Optional: older desktop builds
    * lack it, and callers no-op when it is missing.
@@ -1361,7 +1391,7 @@ export interface ConfirmDialogOptions {
  * APIs bound to the local app shell, not to any particular backend environment.
  *
  * These capabilities describe the desktop/browser host that the user is
- * currently running: dialogs, external-link opening, context menus, and
+ * currently running: dialogs, editor/external-link opening, context menus, and
  * app-level settings/config access. They must not be used as a proxy for
  * "whatever environment the user is targeting", because in a multi-environment
  * world the local shell and a selected backend environment are distinct
@@ -1371,9 +1401,13 @@ export interface LocalApi {
   dialogs: {
     pickFolder: (options?: PickFolderOptions) => Promise<string | null>;
     confirm: (message: string, options?: ConfirmDialogOptions) => Promise<boolean>;
+    pickOpenWithApplication: () => Promise<DesktopApplicationSelection | null>;
   };
   shell: {
+    openInEditor: (cwd: string, editor: EditorId) => Promise<void>;
     openExternal: (url: string) => Promise<void>;
+    resolveOpenWithPresentations: () => Promise<readonly OpenWithEntryPresentation[]>;
+    openWith: (input: DesktopOpenWithInput) => Promise<void>;
     /** Opens a known System Settings pane; no-ops outside the desktop app. */
     openSystemSettings: (pane: SystemSettingsPane) => Promise<void>;
   };
@@ -1387,5 +1421,28 @@ export interface LocalApi {
   persistence: {
     getClientSettings: () => Promise<ClientSettings | null>;
     setClientSettings: (settings: ClientSettings) => Promise<void>;
+  };
+  server: {
+    getConfig: () => Promise<ServerConfig>;
+    /**
+     * Refresh provider snapshots. When `input.instanceId` is supplied only that
+     * configured instance is probed; otherwise every configured instance is
+     * refreshed (legacy untargeted refresh).
+     */
+    refreshProviders: (input?: {
+      readonly instanceId?: ProviderInstanceId;
+    }) => Promise<ServerProviderUpdatedPayload>;
+    updateProvider: (input: ServerProviderUpdateInput) => Promise<ServerProviderUpdatedPayload>;
+    upsertKeybinding: (input: ServerUpsertKeybindingInput) => Promise<ServerUpsertKeybindingResult>;
+    removeKeybinding: (input: ServerRemoveKeybindingInput) => Promise<ServerRemoveKeybindingResult>;
+    getSettings: () => Promise<ServerSettings>;
+    updateSettings: (patch: ServerSettingsPatch) => Promise<ServerSettings>;
+    discoverSourceControl: () => Promise<SourceControlDiscoveryResult>;
+    getTraceDiagnostics: () => Promise<ServerTraceDiagnosticsResult>;
+    getProcessDiagnostics: () => Promise<ServerProcessDiagnosticsResult>;
+    getProcessResourceHistory: (
+      input: ServerProcessResourceHistoryInput,
+    ) => Promise<ServerProcessResourceHistoryResult>;
+    signalProcess: (input: ServerSignalProcessInput) => Promise<ServerSignalProcessResult>;
   };
 }

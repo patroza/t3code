@@ -9,6 +9,7 @@ import {
   RuntimeItemId,
   RuntimeRequestId,
   ThreadId,
+  type ThreadTokenUsageSnapshot,
   type ToolLifecycleItemType,
   type TurnTokenUsage,
   TurnId,
@@ -45,6 +46,7 @@ import {
 } from "../Errors.ts";
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
 import { type OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
+import { type DirenvEnvironment, resolveProviderSessionEnvironment } from "../DirenvEnvironment.ts";
 import {
   buildOpenCodePermissionRules,
   OpenCodeRuntime,
@@ -62,114 +64,6 @@ import {
 import * as Option from "effect/Option";
 
 const PROVIDER = ProviderDriverKind.make("opencode");
-
-/**
- * Version tag stamped into the OpenCode resume cursor. Bump if the cursor
- * shape changes so stale-shaped cursors written by older builds are ignored
- * rather than misread (mirrors GROK_RESUME_VERSION / CURSOR_RESUME_VERSION).
- */
-const OPENCODE_RESUME_VERSION = 1 as const;
-
-/**
- * Decode a persisted resume cursor into the upstream `ses_…` id. Anything
- * that isn't a current-version cursor with a non-empty id means "no resume"
- * rather than an error. Re-adopting the session id IS the resume mechanism —
- * OpenCode scopes a conversation's history by session id.
- */
-function parseOpenCodeResume(raw: unknown): { readonly sessionId: string } | undefined {
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-    return undefined;
-  }
-  const record = raw as Record<string, unknown>;
-  if (record.schemaVersion !== OPENCODE_RESUME_VERSION) {
-    return undefined;
-  }
-  if (typeof record.sessionId !== "string" || record.sessionId.trim().length === 0) {
-    return undefined;
-  }
-  return { sessionId: record.sessionId.trim() };
-}
-
-/**
- * Whether an error definitively reports a missing session. Only a confirmed
- * miss may silently start a fresh session; any other failure (the SDK client
- * is `throwOnError: true`, so `session.get` rejects on every non-2xx) must
- * propagate, or a transient blip resets a live thread to an empty one — the
- * #3604 silent context loss. Decides on structured signals only, never free
- * text: a numeric 404 or the exact `NotFoundError` name, found via a bounded walk
- * over `cause`/`body`/`error`/`data`. An explicit non-404 status seals its
- * subtree so a wrapped "NotFound" name can't reclassify a real failure.
- * Exported for unit testing.
- */
-export function isOpenCodeNotFound(cause: unknown): boolean {
-  const seen = new Set<unknown>();
-  const queue: Array<unknown> = [cause];
-  for (let steps = 0; queue.length > 0 && steps < 32; steps += 1) {
-    const node = queue.shift();
-    if (node === null || typeof node !== "object" || seen.has(node)) {
-      continue;
-    }
-    seen.add(node);
-    const record = node as Record<string, unknown>;
-
-    const response = record.response;
-    const statuses = [
-      record.status,
-      record.statusCode,
-      response !== null && typeof response === "object"
-        ? (response as { readonly status?: unknown }).status
-        : undefined,
-    ].filter((status): status is number => typeof status === "number");
-    if (statuses.includes(404)) {
-      return true;
-    }
-    if (statuses.length > 0) {
-      continue;
-    }
-
-    const name = record.name;
-    if (typeof name === "string" && name.toLowerCase() === "notfounderror") {
-      return true;
-    }
-
-    for (const key of ["cause", "body", "error", "data"] as const) {
-      if (record[key] !== undefined) {
-        queue.push(record[key]);
-      }
-    }
-  }
-  return false;
-}
-
-/**
- * Whether two directory spellings name the same location. Raw string
- * equality misreads a trailing slash, `.`/`..` segment, or symlinked cwd
- * (macOS `/tmp` → `/private/tmp`) as a cwd change, needlessly forking the
- * session on every resume. Lexically equal paths short-circuit; otherwise
- * both sides go through `realPath`, each falling back to its lexical form
- * on failure (deleted directory, external-server path) — so the probe can
- * only widen matches, never split them. Takes the services as arguments so
- * adapter methods stay service-free. Exported for unit testing.
- */
-export function isSameOpenCodeDirectory(
-  fileSystem: FileSystem.FileSystem,
-  path: Path.Path,
-  left: string,
-  right: string,
-): Effect.Effect<boolean> {
-  const lexicalLeft = path.resolve(left);
-  const lexicalRight = path.resolve(right);
-  if (lexicalLeft === lexicalRight) {
-    return Effect.succeed(true);
-  }
-  const canonicalize = (lexical: string) =>
-    fileSystem.realPath(lexical).pipe(Effect.orElseSucceed(() => lexical));
-  return Effect.zipWith(
-    canonicalize(lexicalLeft),
-    canonicalize(lexicalRight),
-    (canonicalLeft, canonicalRight) => canonicalLeft === canonicalRight,
-  );
-}
 
 interface OpenCodeTurnSnapshot {
   readonly id: TurnId;
@@ -279,6 +173,66 @@ function openCodeEventSessionId(event: OpenCodeSubscribedEvent): string | undefi
   return info && typeof info.id === "string" ? info.id : undefined;
 }
 
+type OpenCodeTokenCounts = {
+  readonly total?: number;
+  readonly input: number;
+  readonly output: number;
+  readonly reasoning: number;
+  readonly cache: {
+    readonly read: number;
+    readonly write: number;
+  };
+};
+
+function finiteNonNegativeInteger(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+  return Math.round(value);
+}
+
+/**
+ * Map OpenCode assistant/session/step token rollups onto T3's thread snapshot
+ * so Discord/GitHub footers can show in/out (and a used-total fallback).
+ */
+export function normalizeOpenCodeTokenUsage(
+  tokens: OpenCodeTokenCounts | null | undefined,
+): ThreadTokenUsageSnapshot | undefined {
+  if (tokens === null || tokens === undefined) {
+    return undefined;
+  }
+
+  const input = finiteNonNegativeInteger(tokens.input) ?? 0;
+  const cachedRead = finiteNonNegativeInteger(tokens.cache?.read) ?? 0;
+  const output = finiteNonNegativeInteger(tokens.output) ?? 0;
+  const reasoning = finiteNonNegativeInteger(tokens.reasoning) ?? 0;
+  const inputTokens = input + cachedRead;
+  const usedTokens = finiteNonNegativeInteger(tokens.total) ?? inputTokens + output + reasoning;
+  if (usedTokens <= 0) {
+    return undefined;
+  }
+
+  return {
+    usedTokens,
+    lastUsedTokens: usedTokens,
+    ...(inputTokens > 0 ? { inputTokens, lastInputTokens: inputTokens } : {}),
+    ...(output > 0 ? { outputTokens: output, lastOutputTokens: output } : {}),
+    ...(reasoning > 0
+      ? { reasoningOutputTokens: reasoning, lastReasoningOutputTokens: reasoning }
+      : {}),
+    ...(cachedRead > 0 ? { cachedInputTokens: cachedRead, lastCachedInputTokens: cachedRead } : {}),
+  };
+}
+
+function openCodeUsageFingerprint(usage: ThreadTokenUsageSnapshot): string {
+  return [
+    usage.usedTokens,
+    usage.lastInputTokens ?? usage.inputTokens ?? 0,
+    usage.lastOutputTokens ?? usage.outputTokens ?? 0,
+    usage.lastReasoningOutputTokens ?? usage.reasoningOutputTokens ?? 0,
+  ].join(":");
+}
+
 function openCodeEventSessionTitle(event: OpenCodeSubscribedEvent): string | undefined {
   if (event.type !== "session.updated") {
     return undefined;
@@ -353,6 +307,9 @@ interface OpenCodeSessionContext {
   // OpenCode permits edits to completed parts. Keep text for snapshot comparison
   // until native removal or session teardown, but do not retain other part payloads.
   readonly textPartsByMessageId: Map<string, Map<string, OpenCodeTextPartState>>;
+  readonly completedAssistantPartIds: Set<string>;
+  /** Last emitted usage fingerprint so repeated OpenCode token pings do not flood activities. */
+  lastEmittedUsageFingerprint: string | undefined;
   turnTokenUsage: OpenCodeTurnTokenUsageAccumulator | undefined;
   activeTurnId: TurnId | undefined;
   activeAgent: string | undefined;
@@ -460,6 +417,7 @@ function takeOpenCodeTurnTokenUsage(
 export interface OpenCodeAdapterLiveOptions {
   readonly instanceId?: ProviderInstanceId;
   readonly environment?: NodeJS.ProcessEnv;
+  readonly resolveEnvironment?: DirenvEnvironment["Service"]["resolve"];
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
 }
@@ -723,6 +681,133 @@ function sessionErrorMessage(error: unknown): string {
     : "OpenCode session failed.";
 }
 
+function isOpenCodeMessageAborted(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const record = error as {
+    readonly name?: unknown;
+    readonly message?: unknown;
+    readonly data?: { readonly message?: unknown };
+  };
+  return (
+    record.name === "MessageAbortedError" ||
+    record.message === "Aborted" ||
+    record.data?.message === "Aborted"
+  );
+}
+
+/**
+ * Whether an error definitively reports a missing session. Only a confirmed
+ * miss may silently start a fresh session; any other failure (the SDK client
+ * is `throwOnError: true`, so `session.get` rejects on every non-2xx) must
+ * propagate, or a transient blip resets a live thread to an empty one — the
+ * #3604 silent context loss. Decides on structured signals only, never free
+ * text: a numeric 404 or the exact `NotFoundError` name, found via a bounded walk
+ * over `cause`/`body`/`error`/`data`. An explicit non-404 status seals its
+ * subtree so a wrapped "NotFound" name can't reclassify a real failure.
+ * Exported for unit testing.
+ */
+export function isOpenCodeNotFound(cause: unknown): boolean {
+  const seen = new Set<unknown>();
+  const queue: Array<unknown> = [cause];
+  for (let steps = 0; queue.length > 0 && steps < 32; steps += 1) {
+    const node = queue.shift();
+    if (node === null || typeof node !== "object" || seen.has(node)) {
+      continue;
+    }
+    seen.add(node);
+    const record = node as Record<string, unknown>;
+
+    const response = record.response;
+    const statuses = [
+      record.status,
+      record.statusCode,
+      response !== null && typeof response === "object"
+        ? (response as { readonly status?: unknown }).status
+        : undefined,
+    ].filter((status): status is number => typeof status === "number");
+    if (statuses.includes(404)) {
+      return true;
+    }
+    if (statuses.length > 0) {
+      continue;
+    }
+
+    const name = record.name;
+    if (typeof name === "string" && name.toLowerCase() === "notfounderror") {
+      return true;
+    }
+
+    for (const key of ["cause", "body", "error", "data"] as const) {
+      if (record[key] !== undefined) {
+        queue.push(record[key]);
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Whether two directory spellings name the same location. Raw string
+ * equality misreads a trailing slash, `.`/`..` segment, or symlinked cwd
+ * (macOS `/tmp` → `/private/tmp`) as a cwd change, needlessly forking the
+ * session on every resume. Lexically equal paths short-circuit; otherwise
+ * both sides go through `realPath`, each falling back to its lexical form
+ * on failure (deleted directory, external-server path) — so the probe can
+ * only widen matches, never split them. Takes the services as arguments so
+ * adapter methods stay service-free. Exported for unit testing.
+ */
+export function isSameOpenCodeDirectory(
+  fileSystem: FileSystem.FileSystem,
+  path: Path.Path,
+  left: string,
+  right: string,
+): Effect.Effect<boolean> {
+  const lexicalLeft = path.resolve(left);
+  const lexicalRight = path.resolve(right);
+  if (lexicalLeft === lexicalRight) {
+    return Effect.succeed(true);
+  }
+  const canonicalize = (lexical: string) =>
+    fileSystem.realPath(lexical).pipe(Effect.orElseSucceed(() => lexical));
+  return Effect.zipWith(
+    canonicalize(lexicalLeft),
+    canonicalize(lexicalRight),
+    (canonicalLeft, canonicalRight) => canonicalLeft === canonicalRight,
+  );
+}
+
+/**
+ * Version tag stamped into the OpenCode resume cursor. Bump if the cursor
+ * shape changes so stale-shaped cursors written by older builds are ignored
+ * rather than misread (mirrors GROK_RESUME_VERSION / CURSOR_RESUME_VERSION).
+ */
+const OPENCODE_RESUME_VERSION = 1 as const;
+
+/**
+ * Decode a persisted resume cursor into the upstream `ses_…` id. Anything
+ * that isn't a current-version cursor with a non-empty id means "no resume"
+ * rather than an error. Also accepts the fork's unversioned `{ sessionId }`
+ * / `{ openCodeSessionId }` shape so existing sessions keep history.
+ */
+function readOpenCodeResumeSessionId(resumeCursor: unknown): string | undefined {
+  if (!resumeCursor || typeof resumeCursor !== "object" || Array.isArray(resumeCursor)) {
+    return undefined;
+  }
+  const record = resumeCursor as Record<string, unknown>;
+  if (record.schemaVersion !== undefined && record.schemaVersion !== OPENCODE_RESUME_VERSION) {
+    return undefined;
+  }
+  const sessionId =
+    typeof record.sessionId === "string"
+      ? record.sessionId
+      : typeof record.openCodeSessionId === "string"
+        ? record.openCodeSessionId
+        : undefined;
+  return sessionId && sessionId.trim().length > 0 ? sessionId : undefined;
+}
+
 function updateProviderSession(
   context: OpenCodeSessionContext,
   patch: Partial<ProviderSession>,
@@ -798,7 +883,10 @@ const abortOpenCodeDescendants = Effect.fn("abortOpenCodeDescendants")(function*
         const abortResult = yield* requestSemaphore
           .withPermit(
             runOpenCodeSdk("session.abort", (signal) =>
-              context.client.session.abort({ sessionID: sessionId }, { signal }),
+              context.client.session.abort(
+                { sessionID: sessionId, directory: context.directory },
+                { signal },
+              ),
             ),
           )
           .pipe(
@@ -857,7 +945,10 @@ const abortOpenCodeSessionForTeardown = Effect.fn("abortOpenCodeSessionForTeardo
   // Stop the parent before the snapshot so it cannot add another child after
   // the adapter reads the tree.
   yield* runOpenCodeSdk("session.abort", (signal) =>
-    context.client.session.abort({ sessionID: context.openCodeSessionId }, { signal }),
+    context.client.session.abort(
+      { sessionID: context.openCodeSessionId, directory: context.directory },
+      { signal },
+    ),
   ).pipe(Effect.timeout("1 second"), Effect.ignore({ log: true }));
   yield* abortOpenCodeDescendants(context).pipe(
     Effect.timeout("1 second"),
@@ -1078,6 +1169,32 @@ export function makeOpenCodeAdapter(
 
     const emit = (event: ProviderRuntimeEvent) =>
       Queue.offer(runtimeEvents, event).pipe(Effect.asVoid);
+    const emitOpenCodeTokenUsage = (
+      context: OpenCodeSessionContext,
+      tokens: OpenCodeTokenCounts | undefined,
+      raw: unknown,
+    ) =>
+      Effect.gen(function* () {
+        const usage = normalizeOpenCodeTokenUsage(tokens);
+        if (!usage) {
+          return;
+        }
+        const fingerprint = openCodeUsageFingerprint(usage);
+        if (fingerprint === context.lastEmittedUsageFingerprint) {
+          return;
+        }
+        context.lastEmittedUsageFingerprint = fingerprint;
+        yield* emit({
+          ...(yield* buildEventBase({
+            threadId: context.session.threadId,
+            turnId: context.activeTurnId,
+            raw,
+          })),
+          type: "thread.token-usage.updated",
+          payload: { usage },
+        });
+      });
+
     // Synchronous publish for callers that must not yield between a state
     // check and the enqueue, e.g. reopening an approval only if its terminal
     // event has not landed yet.
@@ -1289,7 +1406,10 @@ export function makeOpenCodeAdapter(
         "OpenCode accepted the prompt, but T3 Code could not confirm its message or session status.";
       const abortExit = yield* Effect.exit(
         runOpenCodeSdk("session.abort", (signal) =>
-          context.client.session.abort({ sessionID: context.openCodeSessionId }, { signal }),
+          context.client.session.abort(
+            { sessionID: context.openCodeSessionId, directory: context.directory },
+            { signal },
+          ),
         ).pipe(Effect.timeout("1 second")),
       );
       if (Exit.isFailure(abortExit)) {
@@ -2309,6 +2429,7 @@ export function makeOpenCodeAdapter(
               },
             });
           }
+          yield* emitOpenCodeTokenUsage(context, event.properties.info.tokens, event);
           break;
         }
         case "session.compacted": {
@@ -2352,6 +2473,9 @@ export function makeOpenCodeAdapter(
             context.textPartsByMessageId.delete(event.properties.info.id);
           }
           if (event.properties.info.role === "assistant") {
+            if (!context.turnTokenUsage) {
+              yield* emitOpenCodeTokenUsage(context, event.properties.info.tokens, event);
+            }
             const usage = context.turnTokenUsage;
             const parentMessageId =
               typeof event.properties.info.parentID === "string" &&
@@ -2480,6 +2604,10 @@ export function makeOpenCodeAdapter(
               // so a later text PATCH still emits only the changed suffix.
               previous.text = undefined;
             }
+          }
+
+          if (part.type === "step-finish" && !context.turnTokenUsage) {
+            yield* emitOpenCodeTokenUsage(context, part.tokens, event);
           }
 
           if (part.type === "tool") {
@@ -2676,6 +2804,29 @@ export function makeOpenCodeAdapter(
           context.activeAgent = undefined;
           context.activeVariant = undefined;
           context.reconcileIdleStatus = false;
+          if (isOpenCodeMessageAborted(event.properties.error)) {
+            yield* updateProviderSession(
+              context,
+              {
+                status: "ready",
+              },
+              { clearActiveTurnId: true, clearLastError: true },
+            );
+            if (activeTurnId) {
+              yield* emit({
+                ...(yield* buildEventBase({
+                  threadId: context.session.threadId,
+                  turnId: activeTurnId,
+                  raw: event,
+                })),
+                type: "turn.aborted",
+                payload: {
+                  reason: message,
+                },
+              });
+            }
+            break;
+          }
           yield* schedulePendingRequestRecovery(context);
           yield* updateProviderSession(
             context,
@@ -2833,8 +2984,36 @@ export function makeOpenCodeAdapter(
         const binaryPath = openCodeSettings.binaryPath;
         const serverUrl = openCodeSettings.serverUrl;
         const serverPassword = openCodeSettings.serverPassword;
-        const directory = input.cwd ?? serverConfig.cwd;
-        const resumeSessionId = parseOpenCodeResume(input.resumeCursor)?.sessionId;
+        if (input.cwd !== undefined && !input.cwd.trim()) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "startSession",
+            issue: "cwd must be non-empty when provided.",
+          });
+        }
+        const directory =
+          input.cwd === undefined ? serverConfig.cwd : path.resolve(input.cwd.trim());
+        const environment =
+          input.cwd === undefined || serverUrl?.trim()
+            ? options?.environment
+            : yield* resolveProviderSessionEnvironment({
+                resolve: options?.resolveEnvironment,
+                provider: PROVIDER,
+                threadId: input.threadId,
+                cwd: directory,
+                environment: options?.environment ?? process.env,
+              }).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderAdapterProcessError({
+                      provider: PROVIDER,
+                      threadId: input.threadId,
+                      detail: cause.message,
+                      cause,
+                    }),
+                ),
+              );
+        const resumeSessionId = readOpenCodeResumeSessionId(input.resumeCursor);
         const existing = sessions.get(input.threadId);
         if (existing) {
           if (existing.session.status === "connecting" && !(yield* Ref.get(existing.stopped))) {
@@ -2858,9 +3037,10 @@ export function makeOpenCodeAdapter(
                 serverUrl,
                 ...(serverPassword ? { serverPassword } : {}),
                 environment: McpProviderSession.withAgentDeviceEnvironment(
-                  options?.environment ?? process.env,
+                  environment ?? options?.environment ?? process.env,
                   mcpSession,
                 ),
+                cwd: directory,
               });
               const client = openCodeRuntime.createOpenCodeSdkClient({
                 baseUrl: server.url,
@@ -2889,7 +3069,7 @@ export function makeOpenCodeAdapter(
               const resolved = yield* Effect.gen(function* () {
                 const adopted = resumeSessionId
                   ? yield* runOpenCodeSdk("session.get", () =>
-                      client.session.get({ sessionID: resumeSessionId }),
+                      client.session.get({ sessionID: resumeSessionId, directory }),
                     ).pipe(
                       Effect.map((response) => response.data),
                       Effect.catchIf(
@@ -2954,6 +3134,7 @@ export function makeOpenCodeAdapter(
                 }
                 const createdSession = yield* runOpenCodeSdk("session.create", () =>
                   client.session.create({
+                    directory,
                     ...(input.title ? { title: input.title } : {}),
                     permission: buildOpenCodePermissionRules(input.runtimeMode),
                   }),
@@ -2992,9 +3173,6 @@ export function makeOpenCodeAdapter(
           cwd: directory,
           ...(input.modelSelection ? { model: input.modelSelection.model } : {}),
           threadId: input.threadId,
-          // ProviderService persists this cursor and feeds it back into
-          // `startSession` after the in-memory session is lost (reaper /
-          // restart), so follow-ups continue the same conversation (#3604).
           resumeCursor: {
             schemaVersion: OPENCODE_RESUME_VERSION,
             sessionId: started.openCodeSession.id,
@@ -3018,6 +3196,8 @@ export function makeOpenCodeAdapter(
           pendingQuestions: new Map(),
           textPartsByMessageId: new Map(),
           messageRoleById: new Map(),
+          completedAssistantPartIds: new Set(),
+          lastEmittedUsageFingerprint: undefined,
           turnTokenUsage: undefined,
           activeTurnId: undefined,
           activeAgent: undefined,
@@ -3277,6 +3457,7 @@ export function makeOpenCodeAdapter(
                   {
                     sessionID: context.openCodeSessionId,
                     messageID: messageId,
+                    directory: context.directory,
                     model: parsedModel,
                     ...(context.activeAgent ? { agent: context.activeAgent } : {}),
                     ...(context.activeVariant ? { variant: context.activeVariant } : {}),
@@ -3379,7 +3560,10 @@ export function makeOpenCodeAdapter(
                     const cleanupExit = yield* Effect.exit(
                       runOpenCodeSdk("session.abort", (signal) =>
                         context.client.session.abort(
-                          { sessionID: context.openCodeSessionId },
+                          {
+                            sessionID: context.openCodeSessionId,
+                            directory: context.directory,
+                          },
                           { signal },
                         ),
                       ).pipe(Effect.timeout("1 second")),
@@ -3647,7 +3831,10 @@ export function makeOpenCodeAdapter(
 
         const parentAbortOutcome = yield* Effect.raceFirst(
           runOpenCodeSdk("session.abort", (signal) =>
-            context.client.session.abort({ sessionID: context.openCodeSessionId }, { signal }),
+            context.client.session.abort(
+              { sessionID: context.openCodeSessionId, directory: context.directory },
+              { signal },
+            ),
           ).pipe(
             Effect.asVoid,
             Effect.timeout("10 seconds"),
@@ -3902,6 +4089,7 @@ export function makeOpenCodeAdapter(
         const messages = yield* runOpenCodeSdk("session.messages", () =>
           context.client.session.messages({
             sessionID: context.openCodeSessionId,
+            directory: context.directory,
           }),
         ).pipe(Effect.mapError(toRequestError));
 

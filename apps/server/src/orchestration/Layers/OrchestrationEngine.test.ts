@@ -130,6 +130,76 @@ const hasMetricSnapshot = (
   );
 
 describe("OrchestrationEngine", () => {
+  it("keeps a thread worktree path when stale metadata tries to clear it", async () => {
+    const system = await createOrchestrationSystem();
+    const projectId = asProjectId("project-worktree-sticky");
+    const threadId = ThreadId.make("thread-worktree-sticky");
+    const worktreePath = "/tmp/project-worktree/.t3/worktrees/demo";
+
+    await system.run(
+      system.engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-worktree-sticky-project"),
+        projectId,
+        title: "Worktree Sticky",
+        workspaceRoot: "/tmp/project-worktree",
+        defaultModelSelection: {
+          instanceId: ProviderInstanceId.make("opencode"),
+          model: "opencode-go/glm-5.2",
+        },
+        createdAt: now(),
+      }),
+    );
+    await system.run(
+      system.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-worktree-sticky-thread"),
+        threadId,
+        projectId,
+        title: "Worktree sticky thread",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("opencode"),
+          model: "opencode-go/glm-5.2",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "full-access",
+        branch: "t3code/demo",
+        worktreePath,
+        createdAt: now(),
+      }),
+    );
+    await system.run(
+      system.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-worktree-sticky-turn"),
+        threadId,
+        runtimeMode: "full-access",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        message: {
+          messageId: asMessageId("msg-worktree-sticky"),
+          role: "user",
+          text: "what directory are you in?",
+          attachments: [],
+        },
+        createdAt: now(),
+      }),
+    );
+    await system.run(
+      system.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.make("cmd-worktree-sticky-stale-clear"),
+        threadId,
+        branch: "main",
+        worktreePath: null,
+      }),
+    );
+
+    const thread = (await system.readModel()).threads.find((entry) => entry.id === threadId);
+    expect(thread?.branch).toBe("main");
+    expect(thread?.worktreePath).toBe(worktreePath);
+    await system.dispose();
+  });
+
   it.each(["running", "stopped"] as const)(
     "sends async answers with a %s session and rejects old duplicate replies",
     async (status) => {
@@ -397,6 +467,8 @@ describe("OrchestrationEngine", () => {
           settledAt: null,
           deletedAt: null,
           messages: [],
+          queuedMessages: [],
+          pendingTurnStart: null,
           proposedPlans: [],
           activities: [],
           checkpoints: [],
@@ -409,6 +481,8 @@ describe("OrchestrationEngine", () => {
       threads: projectionSnapshot.threads.map((thread) => ({
         ...thread,
         messages: [],
+        queuedMessages: [],
+        pendingTurnStart: null,
         proposedPlans: [],
         activities: [],
         checkpoints: [],
@@ -457,9 +531,12 @@ describe("OrchestrationEngine", () => {
           getThreadRuntimeContext: () => Effect.die("unused"),
           getTurnStartMessage: () => Effect.die("unused"),
           getThreadShellById: () => Effect.succeedNone,
+          getSessionStopContextById: () => Effect.succeedNone,
           getThreadDetailById: () => Effect.succeedNone,
           getThreadDetailSnapshot: () => Effect.succeedNone,
           searchThreads: () => Effect.succeed({ matches: [] }),
+          getThreadActivitiesPage: () => Effect.die("unused"),
+          getThreadLifecycleById: () => Effect.succeed(Option.none()),
         }),
       ),
       Layer.provide(
@@ -845,6 +922,7 @@ describe("OrchestrationEngine", () => {
         threadId: ThreadId.make("thread-archive"),
         requestId: CommandId.make("cmd-thread-archive-title-regeneration"),
         title: "Stale generated title",
+        createdAt: now(),
       }),
     );
     expect(

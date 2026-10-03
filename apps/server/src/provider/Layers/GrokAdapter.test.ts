@@ -326,13 +326,31 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
           [
             {
               prompt: [{ type: "text", text: "First prompt" }],
-              result: { stopReason: "end_turn" },
+              result: {
+                stopReason: "end_turn",
+                usage: {
+                  cachedReadTokens: 200,
+                  inputTokens: 1000,
+                  outputTokens: 400,
+                  thoughtTokens: 100,
+                  totalTokens: 1500,
+                },
+              },
             },
           ],
           [
             {
               prompt: [{ type: "text", text: "Second prompt" }],
-              result: { stopReason: "end_turn" },
+              result: {
+                stopReason: "end_turn",
+                usage: {
+                  cachedReadTokens: 200,
+                  inputTokens: 1000,
+                  outputTokens: 400,
+                  thoughtTokens: 100,
+                  totalTokens: 1500,
+                },
+              },
             },
           ],
         ],
@@ -673,8 +691,23 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
       });
 
       yield* Deferred.await(turnCompleted);
-      for (let yieldAttempt = 0; yieldAttempt < 8; yieldAttempt += 1) {
+      for (let yieldAttempt = 0; yieldAttempt < 32; yieldAttempt += 1) {
         yield* Effect.yieldNow;
+      }
+      // The mock writes "mock" after prompt_complete on the same stdout
+      // burst. Under CI load the JSON-RPC reader can lag the settlement
+      // fiber; poll live until that last chunk is applied.
+      const contentFromEvents = () =>
+        runtimeEvents
+          .filter(
+            (event): event is Extract<ProviderRuntimeEvent, { type: "content.delta" }> =>
+              event.type === "content.delta" && String(event.threadId) === String(threadId),
+          )
+          .map((event) => event.payload.delta)
+          .join("");
+      for (let pollAttempt = 0; pollAttempt < 100 && contentFromEvents() !== "hello from mock";) {
+        pollAttempt += 1;
+        yield* Effect.sleep("20 millis").pipe(TestClock.withLive);
       }
       const readySessions = yield* adapter.listSessions();
       const readySession = readySessions.find((session) => session.threadId === threadId);
@@ -1127,9 +1160,9 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
         }),
       );
       const adapter = yield* makeTestAdapter(wrapperPath);
-      const contentDelta = yield* Deferred.make<void>();
+      const turnCompleted = yield* Deferred.make<void>();
       const runtimeEventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
-        event.type === "content.delta" ? Deferred.succeed(contentDelta, undefined) : Effect.void,
+        event.type === "turn.completed" ? Deferred.succeed(turnCompleted, undefined) : Effect.void,
       ).pipe(Effect.forkChild);
 
       yield* adapter.startSession({
@@ -1148,10 +1181,11 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
         })
         .pipe(Effect.forkChild);
 
-      yield* Deferred.await(contentDelta);
-      for (let yieldAttempt = 0; yieldAttempt < 6; yieldAttempt += 1) {
-        yield* Effect.yieldNow;
-      }
+      // First content.delta is written before prompt_complete. Interrupting
+      // there races the fallback: under CI load the JSON-RPC reader can still
+      // be behind, promptRpcSucceeded is false, and the ensuring path drops
+      // the transcript. Wait for turn.completed — that is prompt success.
+      yield* Deferred.await(turnCompleted).pipe(Effect.timeout("2 seconds"), TestClock.withLive);
       yield* Fiber.interrupt(sendTurnFiber);
       for (let yieldAttempt = 0; yieldAttempt < 4; yieldAttempt += 1) {
         yield* Effect.yieldNow;

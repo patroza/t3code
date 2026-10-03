@@ -13,6 +13,7 @@ import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { NoOpProviderEventLoggers, ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
+import * as DirenvEnvironment from "../DirenvEnvironment.ts";
 import { GrokDriver } from "./GrokDriver.ts";
 
 const testLayer = ServerConfig.layerTest(process.cwd(), {
@@ -32,6 +33,7 @@ const testLayer = ServerConfig.layerTest(process.cwd(), {
       HttpClient.make(() => Effect.die("Disabled Grok must not make an HTTP request")),
     ),
   ),
+  Layer.provideMerge(DirenvEnvironment.layerNoop),
 );
 
 const noSpawner = ChildProcessSpawner.make(() =>

@@ -2,6 +2,7 @@ import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import type * as PlatformError from "effect/PlatformError";
@@ -515,7 +516,16 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
     Effect.forkScoped,
   );
 
-  yield* Stream.fromQueue(outgoing).pipe(Stream.run(options.stdio.stdout()), Effect.forkScoped);
+  const outgoingFiber = yield* Stream.fromQueue(outgoing).pipe(
+    Stream.run(options.stdio.stdout()),
+    Effect.forkScoped,
+  );
+  yield* Effect.addFinalizer(() =>
+    Fiber.interrupt(outgoingFiber).pipe(
+      Effect.andThen(Stream.run(Stream.empty, options.stdio.stdout())),
+      Effect.ignore,
+    ),
+  );
 
   const clientProtocol = RpcClient.Protocol.of({
     run: (_clientId, f) =>
@@ -524,17 +534,30 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
         Effect.forever,
       ),
     send: (_clientId, request) =>
-      offerOutgoing(request).pipe(
-        Effect.mapError(
-          (error) =>
-            new RpcClientError.RpcClientError({
-              reason: new RpcClientError.RpcClientDefect({
-                message: "Failed to send ACP protocol message.",
-                cause: error,
-              }),
-            }),
-        ),
-      ),
+      // Effect's RpcClient multiplexes real RPC requests with transport-level
+      // control frames: `Interrupt` (emitted when a request fiber is cancelled),
+      // `Ack` (chunk backpressure), and `Ping`/`Eof` (liveness). Those frames are
+      // an Effect-RPC transport concern with no meaning in ACP, whose wire is
+      // plain JSON-RPC. A spec-compliant agent (e.g. grok) cannot decode them and
+      // rejects the line with "Method not found", which wedges the session:
+      // interrupting an in-flight `session/prompt` (a turn Stop) would otherwise
+      // leak an `Interrupt` frame onto the agent's stdin and brick the thread.
+      // Agent-side cancellation is expressed via the `session/cancel`
+      // notification, so only real ACP messages (`Request`, including id:"" for
+      // notifications) belong on the wire; the control frames are dropped here.
+      request._tag === "Request"
+        ? offerOutgoing(request).pipe(
+            Effect.mapError(
+              (error) =>
+                new RpcClientError.RpcClientError({
+                  reason: new RpcClientError.RpcClientDefect({
+                    message: "Failed to send ACP protocol message.",
+                    cause: error,
+                  }),
+                }),
+            ),
+          )
+        : Effect.void,
     supportsAck: true,
     supportsTransferables: false,
     codecFor: parserFactory.codecFor,

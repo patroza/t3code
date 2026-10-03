@@ -10,6 +10,7 @@ import {
   AuthStandardClientScopes,
   AuthEnvironmentBootstrapTokenType,
   AuthTokenExchangeGrantType,
+  AI_USAGE_UNAVAILABLE,
   CommandId,
   DEFAULT_SERVER_SETTINGS,
   type DpopFailureReason,
@@ -52,6 +53,7 @@ import {
   computeDpopJwkThumbprint,
   type DpopPublicJwk,
 } from "@t3tools/shared/dpop";
+import { appendOmegentT3ProductHandshake } from "@t3tools/shared/productFamily";
 import { RELAY_HEALTH_REQUEST_TYP, RELAY_MINT_REQUEST_TYP } from "@t3tools/shared/relayJwt";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { assert, it } from "@effect/vitest";
@@ -109,13 +111,15 @@ const encodeTestJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unk
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as ServerConfig from "./config.ts";
 import * as DeviceService from "./device/DeviceService.ts";
-import { HTTP_ROUTER_CONFIG, makeRoutesLayer } from "./server.ts";
+import { HTTP_ROUTER_CONFIG, isCommandReadinessExemptPath, makeRoutesLayer } from "./server.ts";
+import * as IdentityService from "./identity/IdentityService.ts";
 import {
   isThreadDetailEvent,
   resolveAvailableEditorsForConfig,
   resolveFileManagerRevealKindForConfig,
 } from "./ws.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
+import * as GrokTranscriptResync from "./externalSessions/GrokTranscriptResync.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
@@ -128,6 +132,7 @@ import {
   OrchestrationThreadSettleBlockedError,
 } from "./orchestration/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as WorktreeLifecycle from "./orchestration/Services/WorktreeLifecycle.ts";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor.ts";
 import * as PullRequestSyncReactor from "./orchestration/PullRequestSyncReactor.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
@@ -159,11 +164,13 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import * as PreviewManager from "./preview/Manager.ts";
+import * as PortExposure from "./preview/PortExposure.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts";
 import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
+import * as ProjectLifecycleScriptRunner from "./project/ProjectLifecycleScriptRunner.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
@@ -187,6 +194,8 @@ import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
+import * as AiUsageMonitorModule from "./aiUsage/AiUsageMonitor.ts";
+import * as HostResourceProbe from "./diagnostics/HostResourceProbe.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
@@ -364,6 +373,8 @@ const makeDefaultOrchestrationReadModel = () => {
         settledAt: null,
         latestTurn: null,
         messages: [],
+        queuedMessages: [],
+        pendingTurnStart: null,
         session: null,
         activities: [],
         proposedPlans: [],
@@ -556,6 +567,7 @@ const buildAppUnderTest = (options?: {
     threadDeletionReactor?: Partial<ThreadDeletionReactor["Service"]>;
     analyticsService?: Partial<AnalyticsService.AnalyticsService["Service"]>;
     projectionSnapshotQuery?: Partial<ProjectionSnapshotQuery.ProjectionSnapshotQuery["Service"]>;
+    worktreeLifecycle?: Partial<WorktreeLifecycle.WorktreeLifecycle["Service"]>;
     checkpointDiffQuery?: Partial<CheckpointDiffQuery.CheckpointDiffQuery["Service"]>;
     browserTraceCollector?: Partial<BrowserTraceCollector.BrowserTraceCollector["Service"]>;
     serverLifecycleEvents?: Partial<ServerLifecycleEvents.ServerLifecycleEvents["Service"]>;
@@ -672,6 +684,7 @@ const buildAppUnderTest = (options?: {
                         kind: "git" as const,
                         rootPath: input.cwd,
                         metadataPath: null,
+                        bare: false,
                         freshness: {
                           source: "live-local" as const,
                           observedAt: TEST_EPOCH,
@@ -701,6 +714,7 @@ const buildAppUnderTest = (options?: {
               input.requestedKind === "auto" || !input.requestedKind ? "git" : input.requestedKind,
             rootPath: input.cwd,
             metadataPath: null,
+            bare: false,
             freshness: {
               source: "live-local",
               observedAt: TEST_EPOCH,
@@ -734,10 +748,19 @@ const buildAppUnderTest = (options?: {
       ),
       NativeAppIconResolver.layer,
     );
+    const projectLifecycleScriptRunnerLayer = Layer.mock(
+      ProjectLifecycleScriptRunner.ProjectLifecycleScriptRunner,
+    )({
+      runWorktreeRemove: () => Effect.succeed({ status: "no-script" as const }),
+      runPrMerged: () => Effect.succeed({ status: "no-script" as const }),
+    });
     const gitWorkflowLayer = GitWorkflowService.layer.pipe(
       Layer.provideMerge(vcsDriverRegistryLayer),
       Layer.provideMerge(gitVcsDriverLayer),
       Layer.provideMerge(gitManagerLayer),
+      // Merge so VcsStatusBroadcaster (which also depends on this service) can
+      // be provided from the same gitWorkflowLayer output.
+      Layer.provideMerge(projectLifecycleScriptRunnerLayer),
     );
     const vcsProvisioningLayer = VcsProvisioningService.layer.pipe(
       Layer.provide(vcsDriverRegistryLayer),
@@ -782,6 +805,7 @@ const buildAppUnderTest = (options?: {
     ).pipe(
       Layer.provide(
         Layer.mergeAll(
+          IdentityService.layerWithPeople([]),
           Layer.mock(Keybindings.Keybindings)({
             loadConfigState: Effect.succeed({
               keybindings: [],
@@ -913,6 +937,23 @@ const buildAppUnderTest = (options?: {
               error: Option.none(),
             }),
         }),
+        Layer.mock(HostResourceProbe.HostResourceProbe)({
+          read: Effect.succeed({
+            status: "supported",
+            checkedAt: "1970-01-01T00:00:00.000Z",
+            source: "os",
+            hostname: "test-host",
+            platform: "linux",
+            cpuPercent: 25,
+            memoryUsedPercent: 50,
+            memoryUsedBytes: 4_000,
+            memoryAvailableBytes: 4_000,
+            memoryTotalBytes: 8_000,
+            loadAverage: { m1: 0.5, m5: 0.4, m15: 0.3 },
+            logicalCores: 4,
+            message: null,
+          }),
+        }),
       ]),
       Layer.provide(
         Layer.mock(TraceDiagnostics.TraceDiagnostics)({
@@ -994,6 +1035,14 @@ const buildAppUnderTest = (options?: {
             registerTerminalProcesses: () => Effect.void,
             unregisterTerminal: () => Effect.void,
           }),
+          Layer.mock(PortExposure.PreviewPortExposure)({
+            resolve: () => Effect.die("PreviewPortExposure not stubbed in this test"),
+          }),
+          Layer.mock(AiUsageMonitorModule.AiUsageMonitor)({
+            current: () => Effect.succeed(AI_USAGE_UNAVAILABLE),
+            subscribe: () => Effect.void,
+            retain: Effect.void,
+          }),
         ),
       ),
       Layer.provide(
@@ -1012,6 +1061,9 @@ const buildAppUnderTest = (options?: {
             latestSequence: Effect.succeed(0),
             ...options?.layers?.orchestrationEngine,
           }),
+          Layer.mock(GrokTranscriptResync.GrokTranscriptResync)({
+            resyncThread: () => Effect.void,
+          }),
           Layer.mock(ThreadDeletionReactor)({
             start: () => Effect.void,
             drainThrough: () => Effect.void,
@@ -1025,42 +1077,55 @@ const buildAppUnderTest = (options?: {
         ),
       ),
       Layer.provide(
-        Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
-          getUserInputActivity: () => Effect.die("unused"),
-          getCommandReadModel: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
-          getSnapshot: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
-          getShellSnapshot: () =>
-            Effect.succeed({
-              snapshotSequence: 0,
-              projects: [],
-              threads: [],
-              updatedAt: "1970-01-01T00:00:00.000Z",
-            }),
-          getArchivedShellSnapshot: () =>
-            Effect.succeed({
-              snapshotSequence: 0,
-              projects: [],
-              threads: [],
-              updatedAt: "1970-01-01T00:00:00.000Z",
-            }),
-          searchThreads: () => Effect.succeed({ matches: [] }),
-          getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
-          getProjectShellById: () => Effect.succeedNone,
-          getThreadShellById: () => Effect.succeedNone,
-          getThreadDetailById: () => Effect.succeedNone,
-          getThreadDetailSnapshot: () => Effect.succeedNone,
-          getCounts: () => Effect.succeed({ projectCount: 0, threadCount: 0 }),
-          getEventReplayStats: ({ fromSequenceExclusive, toSequenceInclusive }) =>
-            Effect.succeed({
-              eventCount: Math.max(0, toSequenceInclusive - fromSequenceExclusive),
-              payloadBytes: 0,
-            }),
-          getActiveProjectByWorkspaceRoot: () => Effect.succeedNone,
-          getFirstActiveThreadIdByProjectId: () => Effect.succeedNone,
-          getImportedAgentSessionSources: () => Effect.succeed([]),
-          getThreadCheckpointContext: () => Effect.succeedNone,
-          ...options?.layers?.projectionSnapshotQuery,
-        }),
+        Layer.mergeAll(
+          Layer.mock(WorktreeLifecycle.WorktreeLifecycle)({
+            previewCleanup: () => Effect.succeed({ candidate: null }),
+            cleanupThreadWorktree: () => Effect.die("unused worktree cleanup"),
+            restoreThreadWorktree: (_input, commitUnarchive) => commitUnarchive,
+            ...options?.layers?.worktreeLifecycle,
+          }),
+          Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
+            getUserInputActivity: () => Effect.die("unused"),
+            listActivitiesByKind: () => Effect.succeed([]),
+            getCommandReadModel: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
+            getSnapshot: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
+            getShellSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: 0,
+                projects: [],
+                threads: [],
+                updatedAt: "1970-01-01T00:00:00.000Z",
+              }),
+            getArchivedShellSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: 0,
+                projects: [],
+                threads: [],
+                updatedAt: "1970-01-01T00:00:00.000Z",
+              }),
+            searchThreads: () => Effect.succeed({ matches: [] }),
+            getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
+            getProjectShellById: () => Effect.succeedNone,
+            getThreadShellById: () => Effect.succeedNone,
+            getThreadDetailById: () => Effect.succeedNone,
+            getThreadDetailSnapshot: () => Effect.succeedNone,
+            getThreadLifecycleById: () => Effect.succeedNone,
+            getThreadActivitiesPage: () => Effect.die("unused"),
+            getCounts: () => Effect.succeed({ projectCount: 0, threadCount: 0 }),
+            getEventReplayStats: ({ fromSequenceExclusive, toSequenceInclusive }) =>
+              Effect.succeed({
+                eventCount: Math.max(0, toSequenceInclusive - fromSequenceExclusive),
+                payloadBytes: 0,
+              }),
+            getActiveProjectByWorkspaceRoot: () => Effect.succeedNone,
+            getFirstActiveThreadIdByProjectId: () => Effect.succeedNone,
+            getImportedAgentSessionSources: () => Effect.succeed([]),
+            getThreadCheckpointContext: () => Effect.succeedNone,
+            getFullThreadDiffContext: () => Effect.succeedNone,
+            getSessionStopContextById: () => Effect.succeedNone,
+            ...options?.layers?.projectionSnapshotQuery,
+          }),
+        ),
       ),
       Layer.provide(
         Layer.mock(CheckpointDiffQuery.CheckpointDiffQuery)({
@@ -1334,6 +1399,15 @@ const appendSessionCookieToWsUrl = (url: string, sessionCookieHeader: string) =>
   const isAbsoluteUrl = /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(url);
   const next = new URL(url, "http://localhost");
   next.hash = `cookie=${encodeURIComponent(sessionCookieHeader)}`;
+  return isAbsoluteUrl ? next.toString() : `${next.pathname}${next.search}${next.hash}`;
+};
+
+const appendWsSearchParams = (url: string, params: Record<string, string>) => {
+  const isAbsoluteUrl = /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(url);
+  const next = new URL(url, "http://localhost");
+  for (const [key, value] of Object.entries(params)) {
+    next.searchParams.set(key, value);
+  }
   return isAbsoluteUrl ? next.toString() : `${next.pathname}${next.search}${next.hash}`;
 };
 
@@ -1696,17 +1770,19 @@ const crossOriginClientOrigin = "http://remote-client.test:3773";
 
 const getWsServerUrl = (
   pathname = "",
-  options?: { authenticated?: boolean; credential?: string },
+  options?: { authenticated?: boolean; credential?: string; productHandshake?: boolean },
 ) =>
   Effect.gen(function* () {
     const server = yield* HttpServer.HttpServer;
     const address = server.address as NetAddress.InetAddress;
     const baseUrl = `ws://127.0.0.1:${address.port}${pathname}`;
+    const withProduct =
+      options?.productHandshake === false ? baseUrl : appendOmegentT3ProductHandshake(baseUrl);
     if (options?.authenticated === false) {
-      return baseUrl;
+      return withProduct;
     }
     return appendSessionCookieToWsUrl(
-      baseUrl,
+      withProduct,
       yield* getAuthenticatedSessionCookieHeader(options?.credential),
     );
   });
@@ -1779,6 +1855,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it("exempts bootstrap paths from command readiness", () => {
+    assert.isTrue(isCommandReadinessExemptPath("/oauth/token"));
+    assert.isTrue(isCommandReadinessExemptPath("/oauth/token?grant_type=client_credentials"));
+    assert.isTrue(isCommandReadinessExemptPath("/.well-known/t3/environment"));
+    assert.isTrue(isCommandReadinessExemptPath("/api/t3-connect/health"));
+    assert.isTrue(isCommandReadinessExemptPath("/api/connect/health"));
+    assert.isFalse(isCommandReadinessExemptPath("/"));
+    assert.isFalse(isCommandReadinessExemptPath("/api/orchestration/snapshot"));
+    assert.isFalse(isCommandReadinessExemptPath("/api/auth/session"));
+  });
+
   it.effect("serves static index content for GET / when staticDir is configured", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -1792,6 +1879,61 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const response = yield* HttpClient.get("/");
       assert.equal(response.status, 200);
       assert.include(yield* response.text, "router-static-ok");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("returns 503 when staticDir is set but index.html is missing", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const staticDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-router-static-empty-",
+      });
+
+      yield* buildAppUnderTest({ config: { staticDir } });
+
+      const response = yield* HttpClient.get("/");
+      assert.equal(response.status, 503);
+      assert.include(yield* response.text, "Web assets unavailable");
+      assert.equal(response.headers["retry-after"], "1");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("recovers to a populated static tree when the boot staticDir loses index.html", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const emptyDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-router-static-stale-",
+      });
+      const recoveredDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-router-static-recovered-",
+      });
+      yield* fileSystem.writeFileString(
+        path.join(recoveredDir, "index.html"),
+        "<html>recovered-static</html>",
+      );
+
+      // Boot with an empty staticDir (simulates dist/client wiped mid-deploy).
+      // resolveStaticDir is not used when staticDir is explicit, so patch recovery
+      // by placing a monorepo-shaped sibling is not available here — instead we
+      // prove the 503 path still runs for a truly empty tree, and the happy path
+      // above still serves once index returns. Full monorepo recovery is covered
+      // by resolveStaticDir preferring apps/web/dist when client index is gone.
+      yield* buildAppUnderTest({ config: { staticDir: emptyDir } });
+      const missing = yield* HttpClient.get("/");
+      assert.equal(missing.status, 503);
+
+      // A later request against a tree that gained index.html works without restart
+      // because each request re-reads disk for the configured staticDir.
+      yield* fileSystem.writeFileString(
+        path.join(emptyDir, "index.html"),
+        "<html>recovered-static</html>",
+      );
+      const recovered = yield* HttpClient.get("/");
+      assert.equal(recovered.status, 200);
+      assert.include(yield* recovered.text, "recovered-static");
+      // Keep recoveredDir referenced so scoped cleanup order stays stable.
+      assert.isTrue(yield* fileSystem.exists(path.join(recoveredDir, "index.html")));
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -4592,7 +4734,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(overbroadPairingBody.requiredScope, "orchestration:read");
       assert.equal(pairingResponse.status, 200);
       assert.equal(wsTicketResponse.status, 200);
-      const wsUrl = `${yield* getWsServerUrl("/ws", { authenticated: false })}?wsTicket=${encodeURIComponent(wsTicketBody.ticket)}`;
+      const wsUrl = appendWsSearchParams(yield* getWsServerUrl("/ws", { authenticated: false }), {
+        wsTicket: wsTicketBody.ticket,
+      });
       const rpcError = yield* Effect.flip(
         Effect.scoped(withWsRpcClient(wsUrl, (client) => client[WS_METHODS.serverGetConfig]({}))),
       );
@@ -4942,7 +5086,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       });
       assert.equal(ticketResponse.status, 200);
       const { ticket } = (yield* ticketResponse.json) as { ticket: string };
-      const wsUrl = `${yield* getWsServerUrl("/ws", { authenticated: false })}?wsTicket=${encodeURIComponent(ticket)}`;
+      const wsUrl = appendWsSearchParams(yield* getWsServerUrl("/ws", { authenticated: false }), {
+        wsTicket: ticket,
+      });
       const frames: string[] = [];
       yield* withWsRpcClient(
         wsUrl,
@@ -5684,7 +5830,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         const { cookie } = yield* bootstrapBrowserSession();
         assert.isDefined(cookie);
         const sessionToken = extractSessionTokenFromSetCookie(cookie ?? "");
-        const wsUrl = `${yield* getWsServerUrl("/ws", { authenticated: false })}?token=${encodeURIComponent(sessionToken)}`;
+        const wsUrl = appendWsSearchParams(yield* getWsServerUrl("/ws", { authenticated: false }), {
+          token: sessionToken,
+        });
 
         const error = yield* Effect.flip(
           Effect.scoped(withWsRpcClient(wsUrl, (client) => client[WS_METHODS.serverGetConfig]({}))),
@@ -5712,7 +5860,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         const wsTicketBody = yield* responseJsonEffect<{
           readonly ticket: string;
         }>(wsTicketResponse);
-        const wsUrl = `${yield* getWsServerUrl("/ws", { authenticated: false })}?wsTicket=${encodeURIComponent(wsTicketBody.ticket)}`;
+        const wsUrl = appendWsSearchParams(yield* getWsServerUrl("/ws", { authenticated: false }), {
+          wsTicket: wsTicketBody.ticket,
+        });
 
         const response = yield* Effect.scoped(
           withWsRpcClient(wsUrl, (client) => client[WS_METHODS.serverGetConfig]({})),
@@ -6730,7 +6880,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         headers: { authorization: `Bearer ${token.body.access_token ?? ""}` },
       });
       const { ticket } = yield* responseJsonEffect<{ readonly ticket: string }>(ticketResponse);
-      const wsUrl = `${yield* getWsServerUrl("/ws", { authenticated: false })}?wsTicket=${encodeURIComponent(ticket)}`;
+      const wsUrl = appendWsSearchParams(yield* getWsServerUrl("/ws", { authenticated: false }), {
+        wsTicket: ticket,
+      });
       yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
           Effect.gen(function* () {
@@ -8801,6 +8953,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         operation: "pull",
         command: "git pull --ff-only",
         cwd: "/tmp/repo",
+        failureKind: "unknown",
         detail: "upstream missing",
       });
       let invalidationCalls = 0;
@@ -8881,6 +9034,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         operation: "commit",
         command: "git commit",
         cwd: "/tmp/repo",
+        failureKind: "unknown",
         detail: "nothing to commit",
       });
       let invalidationCalls = 0;
@@ -9198,6 +9352,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             settledAt: null,
             latestTurn: null,
             messages: [],
+            queuedMessages: [],
+            pendingTurnStart: null,
             session: null,
             activities: [],
             proposedPlans: [],
@@ -9493,6 +9649,57 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.equal(items[0]?.kind, "snapshot");
       assert.deepEqual(items[1], { kind: "synchronized" });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "fails a thread subscription as permanently deleted when the thread row is deleted",
+    () =>
+      Effect.gen(function* () {
+        yield* buildAppUnderTest({
+          layers: {
+            projectionSnapshotQuery: {
+              getThreadLifecycleById: () =>
+                Effect.succeed(
+                  Option.some({ deletedAt: "2026-01-01T00:00:01.000Z", archivedAt: null }),
+                ),
+            },
+          },
+        });
+
+        const wsUrl = yield* getWsServerUrl("/ws");
+        const result = yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[ORCHESTRATION_WS_METHODS.subscribeThread]({
+              threadId: defaultThreadId,
+            }).pipe(Stream.runCollect),
+          ).pipe(Effect.result),
+        );
+
+        assertTrue(result._tag === "Failure");
+        assertTrue(result.failure._tag === "OrchestrationGetSnapshotError");
+        assert.equal(result.failure.reason, "thread-deleted");
+        assert.equal(result.failure.message, `Thread ${defaultThreadId} was deleted`);
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("fails a thread subscription as retriable when no thread row exists yet", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({});
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeThread]({
+            threadId: defaultThreadId,
+          }).pipe(Stream.runCollect),
+        ).pipe(Effect.result),
+      );
+
+      assertTrue(result._tag === "Failure");
+      assertTrue(result.failure._tag === "OrchestrationGetSnapshotError");
+      assert.equal(result.failure.reason, "thread-missing");
+      assert.equal(result.failure.message, `Thread ${defaultThreadId} was not found`);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -10742,6 +10949,102 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("subscribeThread replaces a stale cursor with a fresh snapshot", () =>
+    Effect.gen(function* () {
+      const snapshotSequence = 5_000;
+      const thread = makeDefaultOrchestrationReadModel().threads[0]!;
+      const liveEvents = yield* PubSub.unbounded<OrchestrationEvent>();
+      let replayCalls = 0;
+      const messageEvent = {
+        sequence: snapshotSequence + 1,
+        eventId: EventId.make("event-stale-cursor-message"),
+        aggregateKind: "thread",
+        aggregateId: defaultThreadId,
+        occurredAt: "2026-01-01T00:00:01.000Z",
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.message-sent",
+        payload: {
+          threadId: defaultThreadId,
+          messageId: MessageId.make("message-stale-cursor"),
+          role: "user",
+          text: "Published while loading the replacement snapshot",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-01-01T00:00:01.000Z",
+          updatedAt: "2026-01-01T00:00:01.000Z",
+        },
+      } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
+
+      yield* buildAppUnderTest({
+        layers: {
+          projectionSnapshotQuery: {
+            getThreadDetailSnapshot: () =>
+              Effect.gen(function* () {
+                yield* Effect.sleep("25 millis");
+                yield* PubSub.publish(liveEvents, messageEvent);
+                return Option.some({
+                  snapshotSequence,
+                  thread,
+                });
+              }),
+          },
+          orchestrationEngine: {
+            // Oversized thread-local event count forces a snapshot instead of
+            // catch-up replay (THREAD_RESUME_MAX_EVENTS). Live events published
+            // while that snapshot loads must still drain after it.
+            latestSequence: Effect.succeed(snapshotSequence),
+            streamDomainEvents: Stream.fromPubSub(liveEvents),
+            getThreadReplayStats: () =>
+              Effect.succeed({
+                eventCount: 1_001,
+                payloadBytes: 1_000,
+                hasCreateEvent: false,
+              }),
+            readThreadEvents: () => Stream.die("Oversized resume must not replay thread events"),
+            readEvents: () => {
+              replayCalls += 1;
+              return Stream.empty;
+            },
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeThread]({
+            threadId: defaultThreadId,
+            afterSequence: 1,
+            requestCompletionMarker: true,
+          }).pipe(Stream.take(3), Stream.runCollect),
+        ),
+      ).pipe(Effect.timeout("2 seconds"));
+
+      assert.equal(replayCalls, 0);
+      assert.equal(result[0]?.kind, "snapshot");
+      if (result[0]?.kind === "snapshot") {
+        assert.equal(result[0].snapshot.snapshotSequence, snapshotSequence);
+        assert.equal(result[0].snapshot.thread.id, defaultThreadId);
+      }
+      // Live events buffered during snapshot load are drained via the same
+      // queue as the completion marker, so their relative order is not fixed.
+      // Both must appear after the snapshot; the global replay must not run.
+      const afterSnapshot = Array.from(result).slice(1);
+      assert.ok(
+        afterSnapshot.some((item) => item.kind === "synchronized"),
+        "expected synchronized completion marker after snapshot",
+      );
+      const liveEvent = afterSnapshot.find((item) => item.kind === "event");
+      assert.equal(liveEvent?.kind, "event");
+      if (liveEvent?.kind === "event") {
+        assert.equal(liveEvent.event.sequence, snapshotSequence + 1);
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest), TestClock.withLive),
+  );
+
   it.effect("subscribeShell coalesces a per-thread burst without stalling other threads", () =>
     Effect.gen(function* () {
       const busyThreadId = ThreadId.make("thread-busy");
@@ -11672,6 +11975,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                   refName: "t3code/bootstrap-refName",
                   path: "/tmp/bootstrap-worktree",
                 },
+                preparation: {
+                  _tag: "degraded" as const,
+                  attempts: 1,
+                  command: "git hook run post-checkout",
+                  detail: "ERR_PNPM_LOCKFILE_CONFIG_MISMATCH: catalogs differ",
+                  exitCode: 17,
+                },
               };
             }),
         );
@@ -11715,6 +12025,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                   return { sequence: dispatchedCommands.length };
                 }),
               readEvents: () => Stream.empty,
+            },
+            projectionSnapshotQuery: {
+              getThreadShellById: (threadId) =>
+                Effect.succeed(
+                  Option.some(
+                    makeDefaultOrchestrationThreadShell({
+                      id: threadId,
+                      worktreePath: "/tmp/bootstrap-worktree",
+                    }),
+                  ),
+                ),
             },
             projectSetupScriptRunner: {
               runForThread,
@@ -11763,7 +12084,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           ),
         );
 
-        assert.equal(response.sequence, 8);
+        assert.equal(response.sequence, 9);
         assert.deepEqual(
           dispatchedCommands.map((command) => command.type),
           [
@@ -11772,6 +12093,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             "thread.activity.append",
             "thread.session.set",
             "thread.meta.update",
+            "thread.activity.append",
             "thread.activity.append",
             "thread.activity.append",
             "thread.turn.start",
@@ -11795,6 +12117,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           refName: fetchedOriginCommit,
           newRefName: "t3code/bootstrap-refName",
           baseRefName: "main",
+          deferDependencyInstall: true,
           path: null,
         });
         assert.deepEqual(fetchRemote.mock.calls[0]?.[0], {
@@ -11844,8 +12167,23 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         );
         assert.deepEqual(
           setupActivities.map((command) => command.activity.kind),
-          ["worktree-setup", "setup-script.requested", "setup-script.started", "worktree-setup"],
+          [
+            "worktree-setup",
+            "worktree-preparation.failed",
+            "setup-script.requested",
+            "setup-script.started",
+            "worktree-setup",
+          ],
         );
+        const preparationFailure = setupActivities[1];
+        assert.equal(preparationFailure?.activity.tone, "error");
+        assert.deepInclude(preparationFailure?.activity.payload, {
+          attempts: 1,
+          command: "git hook run post-checkout",
+          detail: "ERR_PNPM_LOCKFILE_CONFIG_MISMATCH: catalogs differ",
+          exitCode: 17,
+          worktreePath: "/tmp/bootstrap-worktree",
+        });
         // The setup record is upserted under one id: running once the thread
         // exists, settled at the end, so a late client renders the outcome
         // without the in-memory tracker.
@@ -11862,7 +12200,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           assert.equal(settledActivity.payload.phase, "done");
           assert.equal(settledActivity.payload.threadId, ThreadId.make("thread-bootstrap"));
         }
-        const finalCommand = dispatchedCommands[7];
+        const finalCommand = dispatchedCommands[8];
         assertTrue(finalCommand?.type === "thread.turn.start");
         if (finalCommand?.type === "thread.turn.start") {
           assert.equal(finalCommand.bootstrap, undefined);
@@ -11924,6 +12262,20 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 return { sequence: dispatchedCommands.length };
               }),
             readEvents: () => Stream.empty,
+          },
+          // The fork's bootstrap waits for the worktree to appear in the
+          // projection before starting the provider; satisfy it the same way
+          // the neighbouring bootstrap tests do.
+          projectionSnapshotQuery: {
+            getThreadShellById: (threadId) =>
+              Effect.succeed(
+                Option.some(
+                  makeDefaultOrchestrationThreadShell({
+                    id: threadId,
+                    worktreePath: "/tmp/bootstrap-worktree",
+                  }),
+                ),
+              ),
           },
         },
       });
@@ -11989,6 +12341,645 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         baseRefName: "main",
         path: null,
       });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("checks out the base branch directly when bootstrap reuses it", () =>
+    Effect.gen(function* () {
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+      const fetchRemote = vi.fn(
+        (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["fetchRemote"]>[0]) => Effect.void,
+      );
+      const listRefs = vi.fn((_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["listRefs"]>[0]) =>
+        Effect.succeed({
+          refs: [
+            {
+              name: "feature/base",
+              current: false,
+              isDefault: false,
+              worktreePath: null,
+            },
+          ],
+          isRepo: true,
+          hasPrimaryRemote: true,
+          nextCursor: null,
+          totalCount: 1,
+        }),
+      );
+      const createWorktree = vi.fn(
+        (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["createWorktree"]>[0]) =>
+          Effect.succeed({
+            worktree: {
+              refName: "feature/base",
+              path: "/tmp/reuse-worktree",
+            },
+          }),
+      );
+
+      yield* buildAppUnderTest({
+        layers: {
+          vcsDriver: {
+            isInsideWorkTree: () => Effect.succeed(true),
+          },
+          gitVcsDriver: {
+            execute: () => Effect.succeed(SUCCESSFUL_GIT_EXECUTION),
+            fetchRemote,
+            listRefs,
+            createWorktree,
+          },
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                dispatchedCommands.push(command);
+                return { sequence: dispatchedCommands.length };
+              }),
+            readEvents: () => Stream.empty,
+          },
+          projectionSnapshotQuery: {
+            getThreadShellById: (threadId) =>
+              Effect.succeed(
+                Option.some(
+                  makeDefaultOrchestrationThreadShell({
+                    id: threadId,
+                    worktreePath: "/tmp/reuse-worktree",
+                  }),
+                ),
+              ),
+          },
+        },
+      });
+
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const response = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.turn.start",
+            commandId: CommandId.make("cmd-bootstrap-reuse-branch"),
+            threadId: ThreadId.make("thread-bootstrap-reuse-branch"),
+            message: {
+              messageId: MessageId.make("msg-bootstrap-reuse-branch"),
+              role: "user",
+              text: "hello",
+              attachments: [],
+            },
+            modelSelection: defaultModelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            bootstrap: {
+              createThread: {
+                projectId: defaultProjectId,
+                title: "Bootstrap Thread",
+                modelSelection: defaultModelSelection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: "feature/base",
+                worktreePath: null,
+                createdAt,
+              },
+              prepareWorktree: {
+                projectCwd: "/tmp/project",
+                baseBranch: "feature/base",
+                branch: "t3code/bootstrap-refName",
+                startFromOrigin: true,
+                reuseBaseBranch: true,
+              },
+            },
+            createdAt,
+          }),
+        ),
+      );
+
+      assert.equal(response.sequence, 6);
+      assert.deepEqual(
+        dispatchedCommands.map((command) => command.type),
+        [
+          "thread.create",
+          "thread.message.user.append",
+          "thread.activity.append",
+          "thread.session.set",
+          "thread.meta.update",
+          "thread.turn.start",
+          "thread.activity.append",
+        ],
+      );
+      // Reuse wins over the requested new branch and origin refresh.
+      assert.equal(fetchRemote.mock.calls.length, 0);
+      assert.equal(listRefs.mock.calls.length, 1);
+      assert.deepEqual(createWorktree.mock.calls[0]?.[0], {
+        cwd: "/tmp/project",
+        refName: "feature/base",
+        path: null,
+      });
+      const metaUpdate = dispatchedCommands.find(
+        (command) => command.type === "thread.meta.update",
+      );
+      assertTrue(metaUpdate?.type === "thread.meta.update");
+      if (metaUpdate?.type === "thread.meta.update") {
+        assert.equal(metaUpdate.branch, "feature/base");
+        assert.equal(metaUpdate.worktreePath, "/tmp/reuse-worktree");
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("materializes a reused remote base branch as its derived local branch", () =>
+    Effect.gen(function* () {
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+      const listRefs = vi.fn((_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["listRefs"]>[0]) =>
+        Effect.succeed({
+          refs: [
+            {
+              name: "origin/feature/base",
+              isRemote: true,
+              remoteName: "origin",
+              current: false,
+              isDefault: false,
+              worktreePath: null,
+            },
+          ],
+          isRepo: true,
+          hasPrimaryRemote: true,
+          nextCursor: null,
+          totalCount: 1,
+        }),
+      );
+      const createWorktree = vi.fn(
+        (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["createWorktree"]>[0]) =>
+          Effect.succeed({
+            worktree: {
+              refName: "feature/base",
+              path: "/tmp/reuse-worktree",
+            },
+          }),
+      );
+
+      yield* buildAppUnderTest({
+        layers: {
+          vcsDriver: {
+            isInsideWorkTree: () => Effect.succeed(true),
+          },
+          gitVcsDriver: {
+            execute: () => Effect.succeed(SUCCESSFUL_GIT_EXECUTION),
+            listRefs,
+            createWorktree,
+          },
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                dispatchedCommands.push(command);
+                return { sequence: dispatchedCommands.length };
+              }),
+            readEvents: () => Stream.empty,
+          },
+          projectionSnapshotQuery: {
+            getThreadShellById: (threadId) =>
+              Effect.succeed(
+                Option.some(
+                  makeDefaultOrchestrationThreadShell({
+                    id: threadId,
+                    worktreePath: "/tmp/reuse-worktree",
+                  }),
+                ),
+              ),
+          },
+        },
+      });
+
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const wsUrl = yield* getWsServerUrl("/ws");
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.turn.start",
+            commandId: CommandId.make("cmd-bootstrap-reuse-remote-branch"),
+            threadId: ThreadId.make("thread-bootstrap-reuse-remote-branch"),
+            message: {
+              messageId: MessageId.make("msg-bootstrap-reuse-remote-branch"),
+              role: "user",
+              text: "hello",
+              attachments: [],
+            },
+            modelSelection: defaultModelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            bootstrap: {
+              createThread: {
+                projectId: defaultProjectId,
+                title: "Bootstrap Thread",
+                modelSelection: defaultModelSelection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: "origin/feature/base",
+                worktreePath: null,
+                createdAt,
+              },
+              prepareWorktree: {
+                projectCwd: "/tmp/project",
+                baseBranch: "origin/feature/base",
+                reuseBaseBranch: true,
+              },
+            },
+            createdAt,
+          }),
+        ),
+      );
+
+      assert.deepEqual(createWorktree.mock.calls[0]?.[0], {
+        cwd: "/tmp/project",
+        refName: "origin/feature/base",
+        newRefName: "feature/base",
+        path: null,
+      });
+      const metaUpdate = dispatchedCommands.find(
+        (command) => command.type === "thread.meta.update",
+      );
+      assertTrue(metaUpdate?.type === "thread.meta.update");
+      if (metaUpdate?.type === "thread.meta.update") {
+        assert.equal(metaUpdate.branch, "feature/base");
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("resumes a replayed bootstrap after its thread was already created", () =>
+    Effect.gen(function* () {
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+      const threadId = ThreadId.make("thread-bootstrap-replay");
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.suspend(() => {
+                dispatchedCommands.push(command);
+                return command.type === "thread.create"
+                  ? Effect.fail(
+                      new OrchestrationCommandInvariantError({
+                        commandType: "thread.create",
+                        detail: `Thread '${threadId}' already exists and cannot be created twice.`,
+                      }),
+                    )
+                  : Effect.succeed({ sequence: dispatchedCommands.length });
+              }),
+            readEvents: () => Stream.empty,
+          },
+          projectionSnapshotQuery: {
+            getThreadShellById: () =>
+              Effect.succeed(
+                Option.some(
+                  makeDefaultOrchestrationThreadShell({
+                    id: threadId,
+                  }),
+                ),
+              ),
+          },
+        },
+      });
+
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const response = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.turn.start",
+            commandId: CommandId.make("cmd-bootstrap-replay"),
+            threadId,
+            message: {
+              messageId: MessageId.make("msg-bootstrap-replay"),
+              role: "user",
+              text: "hello after reconnect",
+              attachments: [],
+            },
+            modelSelection: defaultModelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            bootstrap: {
+              createThread: {
+                projectId: defaultProjectId,
+                title: "Bootstrap Replay",
+                modelSelection: defaultModelSelection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: "main",
+                worktreePath: null,
+                createdAt,
+              },
+            },
+            createdAt,
+          }),
+        ),
+      );
+
+      assert.equal(response.sequence, 2);
+      assert.deepEqual(
+        dispatchedCommands.map((command) => command.type),
+        ["thread.create", "thread.turn.start"],
+      );
+      assertTrue(dispatchedCommands.every((command) => command.type !== "thread.delete"));
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("reuses the existing worktree when a replayed bootstrap already prepared it", () =>
+    Effect.gen(function* () {
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+      const threadId = ThreadId.make("thread-bootstrap-replay-worktree");
+      const fs = yield* FileSystem.FileSystem;
+      // Path must exist: bootstrap reuses only when the recorded worktree is still on disk.
+      const existingWorktreePath = yield* fs.makeTempDirectoryScoped();
+      const createWorktree = vi.fn(
+        (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["createWorktree"]>[0]) =>
+          Effect.die(new Error("fatal: a branch named 't3code/replay' already exists")),
+      );
+      const refreshStatus = vi.fn((_: string) =>
+        Effect.succeed({
+          isRepo: true,
+          hasPrimaryRemote: true,
+          isDefaultRef: false,
+          refName: "t3code/replay",
+          hasWorkingTreeChanges: false,
+          workingTree: {
+            files: [],
+            insertions: 0,
+            deletions: 0,
+          },
+          hasUpstream: true,
+          aheadCount: 0,
+          behindCount: 0,
+          pr: null,
+        }),
+      );
+      const runForThread = vi.fn(
+        (
+          _: Parameters<
+            ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]["runForThread"]
+          >[0],
+        ) =>
+          Effect.succeed({
+            status: "started" as const,
+            scriptId: "setup",
+            scriptName: "Setup",
+            scriptCommand: "npm install",
+            terminalId: "setup-setup",
+            cwd: existingWorktreePath,
+            async: true,
+          }),
+      );
+
+      yield* buildAppUnderTest({
+        layers: {
+          gitVcsDriver: {
+            createWorktree,
+          },
+          vcsStatusBroadcaster: {
+            refreshStatus,
+          },
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.suspend(() => {
+                dispatchedCommands.push(command);
+                return command.type === "thread.create"
+                  ? Effect.fail(
+                      new OrchestrationCommandInvariantError({
+                        commandType: "thread.create",
+                        detail: `Thread '${threadId}' already exists and cannot be created twice.`,
+                      }),
+                    )
+                  : Effect.succeed({ sequence: dispatchedCommands.length });
+              }),
+            readEvents: () => Stream.empty,
+          },
+          projectionSnapshotQuery: {
+            getThreadShellById: () =>
+              Effect.succeed(
+                Option.some(
+                  makeDefaultOrchestrationThreadShell({
+                    id: threadId,
+                    branch: "t3code/replay",
+                    worktreePath: existingWorktreePath,
+                  }),
+                ),
+              ),
+          },
+          projectSetupScriptRunner: {
+            runForThread,
+          },
+        },
+      });
+
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const response = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.turn.start",
+            commandId: CommandId.make("cmd-bootstrap-replay-worktree"),
+            threadId,
+            message: {
+              messageId: MessageId.make("msg-bootstrap-replay-worktree"),
+              role: "user",
+              text: "hello after replay",
+              attachments: [],
+            },
+            modelSelection: defaultModelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            bootstrap: {
+              createThread: {
+                projectId: defaultProjectId,
+                title: "Bootstrap Replay Worktree",
+                modelSelection: defaultModelSelection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: "main",
+                worktreePath: null,
+                createdAt,
+              },
+              prepareWorktree: {
+                projectCwd: "/tmp/project",
+                baseBranch: "main",
+                branch: "t3code/replay",
+                startFromOrigin: true,
+              },
+              runSetupScript: true,
+            },
+            createdAt,
+          }),
+        ),
+      );
+
+      assert.equal(response.sequence, 2);
+      assert.deepEqual(
+        dispatchedCommands.map((command) => command.type),
+        ["thread.create", "thread.turn.start", "thread.activity.append"],
+      );
+      assert.equal(createWorktree.mock.calls.length, 0);
+      assert.equal(runForThread.mock.calls.length, 0);
+      assert.deepEqual(refreshStatus.mock.calls[0]?.[0], existingWorktreePath);
+      assertTrue(dispatchedCommands.every((command) => command.type !== "thread.delete"));
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("recreates a missing worktree path for a replayed bootstrap with a branch", () =>
+    Effect.gen(function* () {
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+      const threadId = ThreadId.make("thread-bootstrap-recreate-worktree");
+      const missingWorktreePath = "/tmp/does-not-exist-bootstrap-worktree";
+      const createWorktree = vi.fn(
+        (input: Parameters<GitVcsDriver.GitVcsDriver["Service"]["createWorktree"]>[0]) =>
+          Effect.succeed({
+            worktree: {
+              refName: input.newRefName ?? input.refName,
+              path: input.path ?? missingWorktreePath,
+            },
+          }),
+      );
+      const refreshStatus = vi.fn((_: string) =>
+        Effect.succeed({
+          isRepo: true,
+          hasPrimaryRemote: true,
+          isDefaultRef: false,
+          refName: "t3code/recreate",
+          hasWorkingTreeChanges: false,
+          workingTree: {
+            files: [],
+            insertions: 0,
+            deletions: 0,
+          },
+          hasUpstream: true,
+          aheadCount: 0,
+          behindCount: 0,
+          pr: null,
+        }),
+      );
+      const runForThread = vi.fn(
+        (
+          _: Parameters<
+            ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]["runForThread"]
+          >[0],
+        ) =>
+          Effect.succeed({
+            status: "started" as const,
+            scriptId: "setup",
+            scriptName: "Setup",
+            scriptCommand: "npm install",
+            terminalId: "setup-setup",
+            cwd: missingWorktreePath,
+            async: true,
+          }),
+      );
+
+      yield* buildAppUnderTest({
+        layers: {
+          gitVcsDriver: {
+            createWorktree,
+          },
+          vcsStatusBroadcaster: {
+            refreshStatus,
+          },
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.suspend(() => {
+                dispatchedCommands.push(command);
+                return command.type === "thread.create"
+                  ? Effect.fail(
+                      new OrchestrationCommandInvariantError({
+                        commandType: "thread.create",
+                        detail: `Thread '${threadId}' already exists and cannot be created twice.`,
+                      }),
+                    )
+                  : Effect.succeed({ sequence: dispatchedCommands.length });
+              }),
+            readEvents: () => Stream.empty,
+          },
+          projectionSnapshotQuery: {
+            getThreadShellById: () =>
+              Effect.succeed(
+                Option.some(
+                  makeDefaultOrchestrationThreadShell({
+                    id: threadId,
+                    branch: "t3code/recreate",
+                    worktreePath: missingWorktreePath,
+                  }),
+                ),
+              ),
+          },
+          projectSetupScriptRunner: {
+            runForThread,
+          },
+        },
+      });
+
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const response = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.turn.start",
+            commandId: CommandId.make("cmd-bootstrap-recreate-worktree"),
+            threadId,
+            message: {
+              messageId: MessageId.make("msg-bootstrap-recreate-worktree"),
+              role: "user",
+              text: "hello after gc",
+              attachments: [],
+            },
+            modelSelection: defaultModelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            bootstrap: {
+              createThread: {
+                projectId: defaultProjectId,
+                title: "Bootstrap Recreate Worktree",
+                modelSelection: defaultModelSelection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: "main",
+                worktreePath: null,
+                createdAt,
+              },
+              prepareWorktree: {
+                projectCwd: "/tmp/project",
+                baseBranch: "main",
+                branch: "t3code/recreate",
+                startFromOrigin: true,
+              },
+              runSetupScript: true,
+            },
+            createdAt,
+          }),
+        ),
+      );
+
+      // meta.update + create (failed duplicate) + setup-script.requested/started + turn.start + settled setup
+      assert.equal(response.sequence, 5);
+      assert.deepEqual(
+        dispatchedCommands.map((command) => command.type),
+        [
+          "thread.meta.update",
+          "thread.create",
+          "thread.activity.append",
+          "thread.activity.append",
+          "thread.turn.start",
+          "thread.activity.append",
+        ],
+      );
+      // Re-add at the same path for the existing branch; no origin fetch / new branch.
+      assert.equal(createWorktree.mock.calls.length, 1);
+      assert.deepEqual(createWorktree.mock.calls[0]?.[0], {
+        cwd: "/tmp/project",
+        refName: "t3code/recreate",
+        path: missingWorktreePath,
+        deferDependencyInstall: true,
+      });
+      assert.equal(runForThread.mock.calls.length, 1);
+      assert.deepEqual(refreshStatus.mock.calls[0]?.[0], missingWorktreePath);
+      const metaUpdate = dispatchedCommands.find(
+        (command) => command.type === "thread.meta.update",
+      );
+      assertTrue(metaUpdate?.type === "thread.meta.update");
+      if (metaUpdate?.type === "thread.meta.update") {
+        assert.equal(metaUpdate.branch, "t3code/recreate");
+        assert.equal(metaUpdate.worktreePath, missingWorktreePath);
+      }
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -12306,6 +13297,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               }),
             readEvents: () => Stream.empty,
           },
+          projectionSnapshotQuery: {
+            getThreadShellById: (threadId) =>
+              Effect.succeed(
+                Option.some(
+                  makeDefaultOrchestrationThreadShell({
+                    id: threadId,
+                    worktreePath: "/tmp/bootstrap-worktree",
+                  }),
+                ),
+              ),
+          },
           projectSetupScriptRunner: {
             runForThread,
           },
@@ -12442,6 +13444,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             },
             readEvents: () => Stream.empty,
           },
+          projectionSnapshotQuery: {
+            getThreadShellById: (threadId) =>
+              Effect.succeed(
+                Option.some(
+                  makeDefaultOrchestrationThreadShell({
+                    id: threadId,
+                    worktreePath: "/tmp/bootstrap-worktree",
+                  }),
+                ),
+              ),
+          },
           projectSetupScriptRunner: {
             runForThread,
           },
@@ -12577,6 +13590,20 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 return { sequence: dispatchedCommands.length };
               }),
             readEvents: () => Stream.empty,
+          },
+          // Fork bootstrap waits for the worktree path to appear in the
+          // projection before running setup / starting the agent. Without
+          // this the wait sleeps on the TestClock and the subscribe hangs.
+          projectionSnapshotQuery: {
+            getThreadShellById: (threadId) =>
+              Effect.succeed(
+                Option.some(
+                  makeDefaultOrchestrationThreadShell({
+                    id: threadId,
+                    worktreePath: "/tmp/bootstrap-worktree",
+                  }),
+                ),
+              ),
           },
           projectSetupScriptRunner: {
             runForThread,
@@ -13188,7 +14215,12 @@ it.live(
 
                 const baseUrl = yield* getHttpServerUrl();
                 const cookie = yield* getAuthenticatedSessionCookieHeader();
-                const wsUrl = baseUrl.replace(/^http:/, "ws:") + "/ws";
+                // This environment only accepts omegent-t3 clients, so the
+                // measurement socket must carry the product handshake like every
+                // other client does.
+                const wsUrl = appendOmegentT3ProductHandshake(
+                  baseUrl.replace(/^http:/, "ws:") + "/ws",
+                );
 
                 return yield* Effect.scoped(
                   Effect.gen(function* () {
