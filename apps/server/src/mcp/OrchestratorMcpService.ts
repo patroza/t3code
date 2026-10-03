@@ -1511,6 +1511,8 @@ const make = Effect.gen(function* () {
                     ),
                   ),
                 );
+        // Published task results stay terminal. Later child-thread messages do not
+        // reopen the task, so cancelling it must not interrupt those separate runs.
         if (isTerminalTaskStatus(current.status)) {
           yield* disposeCompletionDelivery;
           return {
