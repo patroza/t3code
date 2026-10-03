@@ -733,7 +733,7 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
       updated.delete(acknowledgement);
       return { ...state, outstandingAcknowledgements: updated };
     }).pipe(Effect.andThen(Deferred.succeed(acknowledgement, undefined)), Effect.asVoid);
-  yield* Stream.fromQueue(outgoing).pipe(
+  const outgoingFiber = yield* Stream.fromQueue(outgoing).pipe(
     Stream.flatMap((write) => {
       const acknowledgement = write.acknowledgement;
       const completion =
@@ -791,6 +791,15 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
       }),
     ),
     Effect.forkScoped,
+  );
+
+  // A child may wait for stdin EOF before exiting. Interrupt the queued writer
+  // first, then complete the sink so process-scope teardown can await exit.
+  yield* Effect.addFinalizer(() =>
+    Fiber.interrupt(outgoingFiber).pipe(
+      Effect.andThen(Stream.run(Stream.empty, options.stdio.stdout())),
+      Effect.ignore,
+    ),
   );
 
   const clientProtocol = RpcClient.Protocol.of({
