@@ -621,7 +621,7 @@ export function parseKimiLine(line: string, state: KimiScanState): UsageRecord |
     totals,
     // Kimi does not report cost in the wire log.
     reportedCostUsd: null,
-    fast: false,
+    speed: "standard",
     dedupeKey: typeof messageId === "string" && messageId.length > 0 ? messageId : null,
   };
 }

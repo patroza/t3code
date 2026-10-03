@@ -310,6 +310,7 @@ describe("parseKimiLine", () => {
 
     expect(record).not.toBeNull();
     expect(record?.provider).toBe("kimi");
+    expect(record?.speed).toBe("standard");
     expect(record?.sessionId).toBe("15f9b4f3-af5d-4939-9a82-c4ca191b5d58");
     expect(record?.totals.uncachedInputTokens).toBe(15296);
     expect(record?.totals.cachedInputTokens).toBe(2304);
