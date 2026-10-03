@@ -24,14 +24,16 @@ import { FirstRunGate } from "../components/onboarding/FirstRunGate";
 import { ConnectOnboardingDialog } from "../components/cloud/ConnectOnboardingDialog";
 import { RelayClientInstallDialog } from "../components/cloud/RelayClientInstallDialog";
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
+import { OmegentDeepLinkCoordinator } from "../components/OmegentDeepLinkCoordinator";
 import { SnapShotCoordinator } from "../components/desktop/SnapShotCoordinator";
 import { DesktopAppActivationCoordinator } from "../components/desktop/DesktopAppActivationCoordinator";
 import { RunningThreadKeepAlive } from "../components/desktop/RunningThreadKeepAlive";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
+import { IdentityClaimGate } from "../components/identity/IdentityClaimGate";
 import { ThreadNotificationCoordinator } from "../components/ThreadNotificationCoordinator";
-import { QueuedMessageSender } from "../components/QueuedMessageSender";
 import { ProjectCloneToastCoordinator } from "../components/ProjectCloneToastCoordinator";
 import { SlowRpcRequestToastCoordinator } from "../components/SlowRpcRequestToastCoordinator";
+import { hasThreadDeepLinkIntent } from "../deepLinkStore";
 import { ChatGptWelcomeCoordinator } from "../components/settings/ChatGptWelcomeCoordinator";
 import { ProviderAuthCallbackCoordinator } from "../components/settings/ProviderAuthCallbackCoordinator";
 import { ThemeEditorHost } from "../components/settings/ThemeEditorHost";
@@ -233,7 +235,6 @@ function RootRouteView() {
           <SshPasswordPromptDialog />
           <SnapShotCoordinator />
           <ThreadNotificationCoordinator />
-          <QueuedMessageSender />
           <ConfirmDialogHost />
           <CustomSnoozeDialogHost />
           <SlowRpcRequestToastCoordinator />
@@ -242,8 +243,12 @@ function RootRouteView() {
           {primaryEnvironmentAuthenticated ? (
             <EventRouter skipInitialBootstrapNavigation={returningFromWelcomeRef.current} />
           ) : null}
+          {primaryEnvironmentAuthenticated ? <OmegentDeepLinkCoordinator /> : null}
           {primaryEnvironmentAuthenticated ? <PlanAgentSelectionHeal /> : null}
           {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
+          {primaryEnvironmentAuthenticated || authGateState.status === "hosted-static" ? (
+            <IdentityClaimGate />
+          ) : null}
           {appShell}
           {/* Above the router: a theme draft is judged by walking the app, so the
               editor has to survive navigation away from settings. */}
@@ -529,6 +534,10 @@ function EventRouter({
       useUiStateStore.getState().setProjectExpanded(bootstrapProjectKey, true);
 
       if (readPathname() !== "/") {
+        return;
+      }
+      // Do not steal `/?thread=` landings for the server's bootstrap thread.
+      if (hasThreadDeepLinkIntent()) {
         return;
       }
       if (skipInitialBootstrapNavigationRef.current) {

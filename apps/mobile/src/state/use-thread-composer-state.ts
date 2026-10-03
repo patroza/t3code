@@ -17,12 +17,14 @@ import {
 } from "@t3tools/contracts";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
 import { clampFileAttachmentUploadBytes } from "@t3tools/client-runtime/state/attachments";
+import { isAtomCommandInterrupted } from "@t3tools/client-runtime/state/runtime";
 import { nextPastedTextFileName, pastedTextDisposition } from "@t3tools/client-runtime/text-paste";
 import {
   parseCodexFeedbackCommand,
   submitCodexFeedback,
   type CodexFeedbackSubmission,
 } from "@t3tools/client-runtime/state/threads";
+import { sendEntersSteeringQueue } from "@t3tools/shared/chatList";
 import { deriveActiveWorkStartedAt } from "@t3tools/shared/orchestrationTiming";
 import { upgradeLegacyContextMessage } from "@t3tools/shared/composerContextLegacy";
 import { composerContextSendBlockReason, reidentifyComposerContext } from "../lib/composerContext";
@@ -40,8 +42,14 @@ import {
   removePersistedComposerAttachmentFile,
 } from "../lib/composerImages";
 import type { DraftComposerImageAttachment } from "../lib/composerImages";
+import {
+  defaultFetchAttachmentDataUrl,
+  describeQueuedAttachmentCapacity,
+  formatMissingAttachmentsError,
+  recallQueuedAttachments,
+} from "../lib/queuedAttachmentRecall";
 import { scopedThreadKey } from "../lib/scopedEntities";
-import { buildThreadFeed } from "../lib/threadActivity";
+import { buildThreadFeed, promoteSteeredQueuedMessages } from "../lib/threadActivity";
 import { acknowledgedThreadMessagesAtom } from "./acknowledged-thread-messages";
 import { appendPendingThreadMessages } from "../features/threads/pending-thread-feed";
 import { appAtomRegistry } from "../state/atom-registry";
@@ -64,10 +72,15 @@ import {
   updateComposerDraftSettings,
   useComposerDraft,
 } from "./use-composer-drafts";
-import { setPendingConnectionError } from "../state/use-remote-environment-registry";
+import {
+  setPendingConnectionError,
+  useRemoteConnectionStatus,
+} from "../state/use-remote-environment-registry";
+import { useAssetUrls } from "../state/assets";
 import { useSelectedThreadDetail } from "../state/use-thread-detail";
 import { useThreadSelection } from "../state/use-thread-selection";
 import { enqueueThreadOutboxMessage } from "./thread-outbox";
+import { removeThreadOutboxMessage } from "./thread-outbox-removal";
 import { dispatchingQueuedMessageIdAtom, useThreadOutboxMessages } from "./use-thread-outbox";
 import { threadEnvironment } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
@@ -75,6 +88,46 @@ import {
   composerAttachmentUploadBlockReason,
   composerAttachmentUploadsAtom,
 } from "./composer-attachment-uploads";
+
+const EMPTY_MESSAGE_ID_SET: ReadonlySet<MessageId> = new Set();
+
+/** Set-minus that keeps the current reference when nothing was removed. */
+function pruneSteeringQueuedMessageIds(
+  current: ReadonlySet<MessageId>,
+  resolved: ReadonlySet<MessageId>,
+): ReadonlySet<MessageId> {
+  if (current.size === 0 || resolved.size === 0) {
+    return current;
+  }
+  const next = new Set<MessageId>();
+  for (const messageId of current) {
+    if (!resolved.has(messageId)) {
+      next.add(messageId);
+    }
+  }
+  return next.size === current.size ? current : next;
+}
+
+/**
+ * Steered ids the server no longer holds in the queue. That is the settle
+ * signal for the optimistic overlay: dispatched (now a real message) or gone.
+ */
+function resolvedSteeredMessageIds(
+  steering: ReadonlySet<MessageId>,
+  queuedMessages: ReadonlyArray<{ readonly messageId: MessageId }> | undefined,
+): ReadonlySet<MessageId> {
+  if (steering.size === 0) {
+    return EMPTY_MESSAGE_ID_SET;
+  }
+  const stillQueued = new Set((queuedMessages ?? []).map((message) => message.messageId));
+  const resolved = new Set<MessageId>();
+  for (const messageId of steering) {
+    if (!stillQueued.has(messageId)) {
+      resolved.add(messageId);
+    }
+  }
+  return resolved;
+}
 
 export function appendReviewCommentToDraft(input: {
   readonly environmentId: EnvironmentId;
@@ -133,6 +186,11 @@ export function useThreadComposerState() {
   const composerDrafts = useAtomValue(composerDraftsAtom);
   const acknowledgedMessages = useAtomValue(acknowledgedThreadMessagesAtom);
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
+  const { connectedEnvironments } = useRemoteConnectionStatus();
+  // Server-queued messages the user sent now, until the dispatch lands (or a
+  // failure puts them back in the queue).
+  const [steeringQueuedMessageIds, setSteeringQueuedMessageIds] =
+    useState<ReadonlySet<MessageId>>(EMPTY_MESSAGE_ID_SET);
   const dispatchingQueuedMessageId = useAtomValue(dispatchingQueuedMessageIdAtom);
   const [feedbackSubmissionsByThreadKey, setFeedbackSubmissionsByThreadKey] = useState<
     Record<string, ReadonlyArray<CodexFeedbackSubmission>>
@@ -167,6 +225,23 @@ export function useThreadComposerState() {
     : null;
   // The creation entry is the thread itself (rendered as the first message),
   // not a follow-up waiting behind it.
+
+  // Resolved once the server stops listing it as queued: the dispatch landed
+  // and it is a real timeline message from here on, so stop overlaying it.
+  const serverQueuedMessages = selectedThreadDetail?.queuedMessages;
+  useEffect(() => {
+    setSteeringQueuedMessageIds((existing) =>
+      pruneSteeringQueuedMessageIds(
+        existing,
+        resolvedSteeredMessageIds(existing, serverQueuedMessages),
+      ),
+    );
+  }, [serverQueuedMessages]);
+
+  // Optimistic overlays never survive a thread switch.
+  useEffect(() => {
+    setSteeringQueuedMessageIds(EMPTY_MESSAGE_ID_SET);
+  }, [selectedThreadKey]);
   const selectedThreadQueuedMessages = useMemo(
     () =>
       selectedThreadKey
@@ -176,6 +251,23 @@ export function useThreadComposerState() {
         : [],
     [queuedMessagesByThreadKey, selectedThreadKey],
   );
+  const steerQueuedMessage = useAtomCommand(threadEnvironment.steerQueuedMessage, {
+    label: "steer queued message",
+  });
+  const removeServerQueuedMessage = useAtomCommand(threadEnvironment.removeQueuedMessage, {
+    label: "remove queued message",
+  });
+  // "Send now" promotes a queued message into the conversation before the
+  // server confirms the dispatch; the chip goes with it. See
+  // promoteSteeredQueuedMessages.
+  const steeredDetail = useMemo(
+    () =>
+      selectedThreadDetail
+        ? promoteSteeredQueuedMessages(selectedThreadDetail, steeringQueuedMessageIds)
+        : selectedThreadDetail,
+    [selectedThreadDetail, steeringQueuedMessageIds],
+  );
+
   const feedbackSubmissions = useMemo(
     () => (selectedThreadKey ? (feedbackSubmissionsByThreadKey[selectedThreadKey] ?? []) : []),
     [feedbackSubmissionsByThreadKey, selectedThreadKey],
@@ -190,23 +282,27 @@ export function useThreadComposerState() {
     },
     [selectedThreadKey],
   );
-  const selectedThreadMessages = selectedThreadDetail?.messages;
-  const selectedThreadActivities = selectedThreadDetail?.activities;
+  const selectedThreadMessages = steeredDetail?.messages;
+  const selectedThreadActivities = steeredDetail?.activities;
   // A thread whose creation has not delivered its turn yet: the prompt only
   // exists in the outbox, so it is appended to whatever the server has. The
   // detail is usually present but empty during a worktree checkout, so this
   // cannot be an either/or with the loaded messages.
   const pendingCreationMessage = selectedThreadCreation?.message ?? null;
   const selectedThreadFeed = useMemo(() => {
-    const loadedMessages = selectedThreadMessages ?? [];
     const feed =
       (selectedThreadMessages && selectedThreadActivities) || pendingCreationMessage !== null
         ? buildThreadFeed({
-            messages:
-              pendingCreationMessage !== null &&
-              !loadedMessages.some((message) => message.id === pendingCreationMessage.messageId)
-                ? [...loadedMessages, pendingThreadCreationMessage(pendingCreationMessage)]
-                : loadedMessages,
+            messages: selectedThreadMessages
+              ? pendingCreationMessage !== null &&
+                !selectedThreadMessages.some(
+                  (message) => message.id === pendingCreationMessage.messageId,
+                )
+                ? [...selectedThreadMessages, pendingThreadCreationMessage(pendingCreationMessage)]
+                : selectedThreadMessages
+              : pendingCreationMessage !== null
+                ? [pendingThreadCreationMessage(pendingCreationMessage)]
+                : [],
             activities: selectedThreadActivities ?? [],
           })
         : [];
@@ -239,11 +335,59 @@ export function useThreadComposerState() {
     }
   }, [acknowledgedMessages, selectedThreadMessages]);
 
+  const composerQueueItems = useMemo(() => {
+    type QueueItem = {
+      readonly messageId: MessageId;
+      readonly text: string;
+      readonly attachmentCount: number;
+      readonly deliveryState: "waiting" | "sending" | "queued";
+      readonly queueSource: "local" | "server";
+      readonly sortAt: string;
+    };
+    const byId = new Map<MessageId, QueueItem>();
+    // Includes optimistically steered messages, so their chips go immediately.
+    const timelineIds = new Set(steeredDetail?.messages.map((message) => message.id) ?? []);
+
+    for (const message of steeredDetail?.queuedMessages ?? []) {
+      if (timelineIds.has(message.messageId)) continue;
+      byId.set(message.messageId, {
+        messageId: message.messageId,
+        text: message.text,
+        attachmentCount: message.attachments.length,
+        deliveryState: "queued",
+        queueSource: "server",
+        sortAt: message.queuedAt,
+      });
+    }
+
+    // Local outbox wins for the same id until the ack removes it (sending →
+    // queued transition without a double chip).
+    for (const message of selectedThreadQueuedMessages) {
+      if (timelineIds.has(message.messageId)) continue;
+      byId.set(message.messageId, {
+        messageId: message.messageId,
+        text: message.text,
+        attachmentCount: message.attachments.length,
+        queueSource: "local",
+        deliveryState: connectedEnvironments.some(
+          (environment) =>
+            environment.environmentId === message.environmentId &&
+            environment.connectionState === "connected",
+        )
+          ? "sending"
+          : "waiting",
+        sortAt: message.createdAt,
+      });
+    }
+
+    return Array.from(byId.values()).sort((left, right) => left.sortAt.localeCompare(right.sortAt));
+  }, [connectedEnvironments, steeredDetail, selectedThreadQueuedMessages]);
+
   const selectedDraft = selectedThreadKey ? composerDrafts[selectedThreadKey] : null;
   const draftMessage = selectedDraft?.text ?? "";
   const draftAttachments = selectedDraft?.attachments ?? [];
-  const selectedThreadQueueCount = selectedThreadQueuedMessages.length;
   const selectedThread = selectedThreadDetail ?? selectedThreadShell;
+  const selectedThreadQueueCount = selectedThreadQueuedMessages.length;
   const modelSelection = selectedDraft?.modelSelection ?? selectedThread?.modelSelection ?? null;
   const runtimeMode = selectedDraft?.runtimeMode ?? selectedThread?.runtimeMode ?? null;
   const selectedProvider = selectedEnvironmentRuntime?.serverConfig?.providers.find(
@@ -322,6 +466,15 @@ export function useThreadComposerState() {
       null,
     );
   }, [selectedThreadDetail, selectedThreadSessionActivity, selectedThreadShell]);
+
+  // A send made now would be held in the steering queue rather than opening a
+  // turn, so it becomes a composer chip and must not move the feed. Threads on
+  // this screen already exist server-side, so no send here is a bootstrap.
+  const sendEntersQueue = sendEntersSteeringQueue({
+    hasBootstrap: false,
+    sessionStatus: selectedThread?.session?.status,
+    hasPendingTurnStart: (selectedThreadDetail?.pendingTurnStart ?? null) !== null,
+  });
 
   const onSendMessage = useCallback(async () => {
     if (!selectedThreadShell) {
@@ -431,11 +584,9 @@ export function useThreadComposerState() {
 
     const metadata = makeQueuedMessageMetadata();
     const messageId = MessageId.make(metadata.messageId);
-    // Enqueue publishes the queued atom synchronously (the durable write
-    // happens behind it), so clearing the draft here gives send feedback on
-    // the tap frame instead of after file I/O. If the write fails the message
-    // is rolled out of the queue and the content is merged back into the
-    // draft, preserving anything typed since.
+    // Enqueue updates the in-memory outbox synchronously so the feed can paint
+    // "Sending" before disk I/O finishes. Clear the draft in the same turn and
+    // return immediately — durability trails off the critical path.
     const enqueuePromise = enqueueThreadOutboxMessage({
       environmentId: selectedThreadShell.environmentId,
       threadId: selectedThreadShell.id,
@@ -485,6 +636,141 @@ export function useThreadComposerState() {
     selectedThreadShell,
     uploadThreadFeedback,
   ]);
+
+  const onSteerQueuedMessage = useCallback(
+    async (messageId: MessageId) => {
+      if (!selectedThreadShell || steeringQueuedMessageIds.has(messageId)) {
+        return;
+      }
+      // Into the conversation up front; the chip goes with it.
+      setSteeringQueuedMessageIds((existing) => new Set(existing).add(messageId));
+      const result = await steerQueuedMessage({
+        environmentId: selectedThreadShell.environmentId,
+        input: { threadId: selectedThreadShell.id, messageId },
+      });
+      if (result._tag === "Success") {
+        return;
+      }
+      // Back to the queue. The decider rejects a steer that races a pending
+      // turn start, so this is a reachable path, not just transport failure.
+      // Interruption reverts too — a steer that did land re-settles on the
+      // next projection.
+      setSteeringQueuedMessageIds((existing) =>
+        pruneSteeringQueuedMessageIds(existing, new Set([messageId])),
+      );
+      if (!isAtomCommandInterrupted(result)) {
+        setPendingConnectionError("Failed to send the queued message now.");
+      }
+    },
+    [selectedThreadShell, steerQueuedMessage, steeringQueuedMessageIds],
+  );
+
+  // Server-queued attachments are resolved up front so editing one can put its
+  // pictures back in the composer; the bytes only exist behind a signed URL.
+  const serverQueuedAttachmentIds = useMemo(() => {
+    const attachmentIds = new Set<string>();
+    for (const queued of serverQueuedMessages ?? []) {
+      for (const attachment of queued.attachments) {
+        attachmentIds.add(attachment.id);
+      }
+    }
+    return [...attachmentIds];
+  }, [serverQueuedMessages]);
+  const serverQueuedAttachmentResources = useMemo(
+    () =>
+      serverQueuedAttachmentIds.map((attachmentId) => ({
+        _tag: "attachment" as const,
+        attachmentId,
+      })),
+    [serverQueuedAttachmentIds],
+  );
+  const serverQueuedAttachmentUrls = useAssetUrls(
+    selectedThreadShell?.environmentId ?? null,
+    serverQueuedAttachmentResources,
+  );
+  const serverQueuedAttachmentUrlById = useMemo(
+    () =>
+      new Map(
+        serverQueuedAttachmentIds.flatMap((attachmentId, index) => {
+          const url = serverQueuedAttachmentUrls[index];
+          return url ? [[attachmentId, url] as const] : [];
+        }),
+      ),
+    [serverQueuedAttachmentIds, serverQueuedAttachmentUrls],
+  );
+
+  const onEditQueuedMessage = useCallback(
+    async (messageId: MessageId, source: "local" | "server") => {
+      if (!selectedThreadShell) {
+        return;
+      }
+      const threadKey = scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id);
+      if (source === "local") {
+        const message = selectedThreadQueuedMessages.find(
+          (candidate) => candidate.messageId === messageId,
+        );
+        if (!message) return;
+        try {
+          await removeThreadOutboxMessage(message);
+        } catch (error) {
+          setPendingConnectionError(
+            error instanceof Error
+              ? error.message
+              : "Failed to remove the queued message for editing.",
+          );
+          return;
+        }
+        setComposerDraftText(threadKey, message.text);
+        if (message.attachments.length > 0) {
+          appendComposerDraftAttachments(threadKey, message.attachments);
+        }
+      } else {
+        const message = selectedThreadDetail?.queuedMessages.find(
+          (candidate) => candidate.messageId === messageId,
+        );
+        if (!message) return;
+        // Removing a queued message deletes its attachment files on the server,
+        // so everything that could lose a picture happens before the removal and
+        // backs out of the whole edit instead.
+        const capacityError = describeQueuedAttachmentCapacity(
+          message.attachments.length,
+          getComposerDraftSnapshot(threadKey).attachments.length,
+        );
+        if (capacityError !== null) {
+          setPendingConnectionError(capacityError);
+          return;
+        }
+        const recalled = await recallQueuedAttachments(message.attachments, {
+          urlById: serverQueuedAttachmentUrlById,
+          fetchDataUrl: defaultFetchAttachmentDataUrl,
+        });
+        // Signed URLs resolve asynchronously, so an edit tapped early — or one
+        // that hits a network blip — finds nothing to read. Leave the message
+        // queued: it and its pictures are intact, and the edit can be retried.
+        const missingError = formatMissingAttachmentsError(recalled.missing);
+        if (missingError !== null) {
+          setPendingConnectionError(missingError);
+          return;
+        }
+        const result = await removeServerQueuedMessage({
+          environmentId: selectedThreadShell.environmentId,
+          input: { threadId: selectedThreadShell.id, messageId },
+        });
+        if (result._tag !== "Success") return;
+        setComposerDraftText(threadKey, message.text);
+        if (recalled.images.length > 0) {
+          appendComposerDraftAttachments(threadKey, recalled.images);
+        }
+      }
+    },
+    [
+      removeServerQueuedMessage,
+      selectedThreadDetail,
+      selectedThreadQueuedMessages,
+      selectedThreadShell,
+      serverQueuedAttachmentUrlById,
+    ],
+  );
 
   const onChangeDraftMessage = useCallback(
     (value: string) => {
@@ -800,6 +1086,7 @@ export function useThreadComposerState() {
     dismissFeedback,
     selectedThreadFeed,
     selectedThreadQueueCount,
+    composerQueueItems,
     selectedThreadQueuedMessages,
     dispatchingQueuedMessageId,
     activeWorkStartedAt,
@@ -809,6 +1096,7 @@ export function useThreadComposerState() {
     modelSelection,
     runtimeMode,
     interactionMode,
+    sendEntersQueue,
     onChangeDraftMessage,
     onPickDraftMedia,
     onPickDraftFiles,
@@ -817,6 +1105,8 @@ export function useThreadComposerState() {
     onNativePasteText,
     onRemoveDraftImage,
     onSendMessage,
+    onSteerQueuedMessage,
+    onEditQueuedMessage,
     onUpdateModelSelection,
     onUpdateRuntimeMode,
     onUpdateInteractionMode,

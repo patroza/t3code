@@ -270,6 +270,8 @@ export interface ThreadFeedProps {
   readonly usesAutomaticContentInsets?: boolean;
   readonly onHeaderMaterialVisibilityChange?: (visible: boolean) => void;
   readonly onEndFollowEnabledChange?: (enabled: boolean) => void;
+  /** Fork: something arrived while the reader was away from the live edge. */
+  readonly onUnreadActivityChange?: (hasUnread: boolean) => void;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   readonly onUseArtifactTemplate?: (template: CodexArtifactTemplate) => void;
   /** Non-null when older turns exist beyond the loaded window. */
@@ -1519,6 +1521,7 @@ function renderFeedEntry(
     const styles = isUser ? markdownStyles.user : markdownStyles.assistant;
     const timestampLabel = formatMessageTime(isUser ? message.createdAt : message.updatedAt);
     const attachments = message.attachments ?? [];
+    const previewAttachments = entry.previewAttachments ?? [];
     const hasReviewCommentContext = message.text.includes("<review_comment");
     // A bubble that sizes itself from its content cannot lay out a block whose
     // intrinsic width overflows `maxWidth`: Android positions the bubble's
@@ -1634,6 +1637,14 @@ function renderFeedEntry(
                 />
               </MarkdownImageAvailableWidthContext>
             ) : null}
+            {previewAttachments.map((attachment) => (
+              <Image
+                key={attachment.id}
+                source={{ uri: attachment.previewUri }}
+                className="aspect-[1.3] w-full rounded-[14px] bg-white/15"
+                resizeMode="cover"
+              />
+            ))}
           </View>
           <View className="mt-1 flex-row items-center justify-end gap-1 pr-0.5">
             <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">
@@ -1989,8 +2000,17 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   // momentum; scroll events only break follow inside that session, so MVCP
   // compensations and programmatic scrolls never strand a follower.
   const userScrollSessionRef = useRef(false);
+  // Fork: the scroll-to-latest pill reports whether anything arrived while the
+  // reader was away, so returning to the live edge always clears it.
+  const hasUnreadActivityRef = useRef(false);
   const setEndFollow = useCallback(
     (enabled: boolean) => {
+      if (enabled) {
+        if (hasUnreadActivityRef.current) {
+          hasUnreadActivityRef.current = false;
+          props.onUnreadActivityChange?.(false);
+        }
+      }
       if (endFollowEnabledRef.current === enabled) {
         return;
       }
@@ -1998,7 +2018,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       setEndFollowEnabled(enabled);
       props.onEndFollowEnabledChange?.(enabled);
     },
-    [props.onEndFollowEnabledChange],
+    [props.onEndFollowEnabledChange, props.onUnreadActivityChange],
   );
   const transitionEndFollow = useCallback(
     (event: ThreadFeedLiveFollowEvent) => {
@@ -2439,6 +2459,23 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     }
   }, [clearUserScrollSettle, props.submittedMessageId, transitionEndFollow]);
 
+  // Mark unread only for activity that lands while follow is broken; a thread
+  // switch re-arms follow above and clears the flag through setEndFollow.
+  const observedActivityRef = useRef({ feed: props.feed, latestTurn: props.latestTurn });
+  useEffect(() => {
+    const previous = observedActivityRef.current;
+    observedActivityRef.current = { feed: props.feed, latestTurn: props.latestTurn };
+    if (
+      (previous.feed !== props.feed || previous.latestTurn !== props.latestTurn) &&
+      !endFollowEnabledRef.current
+    ) {
+      if (!hasUnreadActivityRef.current) {
+        hasUnreadActivityRef.current = true;
+        props.onUnreadActivityChange?.(true);
+      }
+    }
+  }, [props.feed, props.latestTurn]);
+
   const expandedWorkGroupIds = useMemo(() => {
     const ids = new Set<string>();
     for (const [groupId, expanded] of Object.entries(expandedWorkGroups)) {
@@ -2473,14 +2510,29 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const setupAnchorIndex = presentedFeed.findIndex(
     (entry) => entry.type === "message" && entry.message.role === "user",
   );
-  // The empty↔filled key below remounts the list and resets its imperative
-  // content-inset override. Seed the fresh instance synchronously with the
-  // current overlay height before the scroll integration's next reaction;
-  // on Android the declarative contentInset floor covers this same window.
+  // The empty↔filled key remounts the list and resets its imperative
+  // content-inset override. The key goes filled once per thread open and
+  // stays there. Toggling it back on a feed that briefly empties during
+  // sync remounts mid-read. Keyed on the environment-scoped key, not the
+  // bare thread id: two environments can hold the same id. Count presented
+  // rows (including pending outbox messages) so the first queued send is
+  // treated as a filled timeline.
   // The thinking row a running thread shows while its messages load is not
   // content: the list must still remount, and so open at the end, when they
   // arrive.
-  const listMountKey = `${feedThreadKey}:${presentedFeed.some((entry) => entry.type !== "thinking") ? "filled" : "empty"}`;
+  // Seed the fresh instance synchronously with the current overlay height
+  // before the scroll integration's next reaction; on Android the
+  // declarative contentInset floor covers this same window.
+  const feedHasContent = presentedFeed.some((entry) => entry.type !== "thinking");
+  const listMountThreadKeyRef = useRef(feedThreadKey);
+  const sawFilledFeedRef = useRef(feedHasContent);
+  if (listMountThreadKeyRef.current !== feedThreadKey) {
+    listMountThreadKeyRef.current = feedThreadKey;
+    sawFilledFeedRef.current = feedHasContent;
+  } else if (feedHasContent) {
+    sawFilledFeedRef.current = true;
+  }
+  const listMountKey = `${feedThreadKey}:${sawFilledFeedRef.current ? "filled" : "empty"}`;
   useLayoutEffect(() => {
     const bottom = props.contentInsetEndAdjustment.value;
     if (bottom > 0) {
@@ -2923,6 +2975,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
                     },
                   }
             }
+            // maintainVisibleContentPosition also keeps the viewport anchored
+            // when older history prepends at the top. Disable it while following
+            // the live edge so a pending-message insert does not fight end pinning.
             maintainVisibleContentPosition={
               endFollowEnabled && !disclosureToggleSettling ? false : maintainVisibleContentPosition
             }
@@ -2972,6 +3027,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             onMomentumScrollBegin={handleMomentumScrollBegin}
             onMomentumScrollEnd={handleMomentumScrollEnd}
             scrollEventThrottle={16}
+            // Under automatic insets the spacer is UIKit's job, but the
+            // older-history spinner still belongs at the top of the content.
             ListHeaderComponent={
               <>
                 {usesNativeAutomaticInsets ? null : <View style={{ height: topContentInset }} />}
@@ -2997,7 +3054,24 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             }}
           />
         </View>
+        {presentedFeed.length === 0 && props.loadEarlier != null ? (
+          // The window can derive zero visible entries while older history
+          // exists — give the user an explicit affordance instead of the
+          // empty-state placeholder.
+          <View style={StyleSheet.absoluteFill}>
+            <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+              {props.loadEarlier.loading ? (
+                <ActivityIndicator />
+              ) : (
+                <Pressable accessibilityRole="button" onPress={props.loadEarlier.onLoadEarlier}>
+                  <Text className="text-sm text-muted-foreground">Load earlier turns</Text>
+                </Pressable>
+              )}
+            </View>
+          </View>
+        ) : null}
         {presentedFeed.length === 0 &&
+        props.loadEarlier == null &&
         !props.worktreeSetup &&
         props.activeWorkStartedAt === null &&
         props.contentPresentation.kind === "ready" ? (

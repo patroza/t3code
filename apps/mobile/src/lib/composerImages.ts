@@ -434,6 +434,11 @@ export async function pickComposerMedia(input: {
     };
   }
 
+  // Do not call requestMediaLibraryPermissionsAsync(). The app ships with
+  // photosPermission: false (no NSPhotoLibraryUsageDescription), and modern
+  // system pickers (PHPicker / Android photo picker) do not need library
+  // access. Requesting permission without a usage string hard-crashes iOS.
+  //
   // The picker covers the Android activity, which reports the app as
   // backgrounded; the guard keeps background-triggered restarts away mid-pick.
   const endHandoff = beginForegroundHandoff();
@@ -453,7 +458,10 @@ export async function pickComposerMedia(input: {
   } catch (error) {
     return {
       attachments: [],
-      error: error instanceof Error ? error.message : "Could not open the photo library.",
+      error:
+        error instanceof Error
+          ? error.message
+          : "Could not open the photo library to attach images.",
     };
   } finally {
     endHandoff();

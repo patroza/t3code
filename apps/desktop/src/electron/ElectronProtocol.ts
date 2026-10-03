@@ -28,6 +28,34 @@ export function getDesktopUrl(isDevelopment: boolean): string {
   return `${getDesktopOrigin(isDevelopment)}/`;
 }
 
+/**
+ * Builds the desktop renderer URL for a canonical thread route.
+ *
+ * The Electron client uses hash history, so the path is carried after `#/`.
+ */
+export function buildDesktopThreadNavigationUrl(input: {
+  readonly isDevelopment: boolean;
+  readonly environmentId: string;
+  readonly threadId: string;
+}): string {
+  const origin = getDesktopOrigin(input.isDevelopment);
+  const environmentSegment = encodeURIComponent(input.environmentId);
+  const threadSegment = encodeURIComponent(input.threadId);
+  return `${origin}/#/${environmentSegment}/${threadSegment}`;
+}
+
+export function buildDesktopProjectNavigationUrl(input: {
+  readonly isDevelopment: boolean;
+  readonly project: string;
+  readonly action: "reveal" | "latest" | "new";
+}): string {
+  const search = new URLSearchParams({ project: input.project });
+  if (input.action !== "reveal") {
+    search.set("action", input.action);
+  }
+  return `${getDesktopOrigin(input.isDevelopment)}/#/jump?${search.toString()}`;
+}
+
 export class ElectronProtocolRegistrationError extends Schema.TaggedError<ElectronProtocolRegistrationError>()(
   "ElectronProtocolRegistrationError",
   {
@@ -195,7 +223,17 @@ async function proxyRequest(
   return withContentSecurityPolicy(response, contentSecurityPolicy);
 }
 
-const TRANSIENT_FETCH_RETRY_DELAYS_MS = [0, 50, 150] as const;
+const TRANSIENT_FETCH_RETRY_DELAYS_MS = [0, 50, 150, 400] as const;
+
+function isRetryableDocumentResponse(url: string, response: Response): boolean {
+  if (response.status !== 503 && response.status !== 404) {
+    return false;
+  }
+  // Only the app shell / SPA document — hashed assets should fail fast so
+  // preload recovery can run instead of masking a torn swap.
+  const pathname = new URL(url).pathname;
+  return pathname === "/" || pathname === "/index.html" || !pathname.includes(".");
+}
 
 // Serves the packaged web client without a backend: files resolve within the
 // asset directory, and any other path falls back to index.html so the SPA
@@ -240,6 +278,7 @@ const serveDesktopAsset = Effect.fn("desktop.protocol.serveAsset")(function* (
 
 async function fetchWithTransientRetry(url: string, init: RequestInit): Promise<Response> {
   let lastError: unknown;
+  let lastResponse: Response | null = null;
 
   for (const delayMs of TRANSIENT_FETCH_RETRY_DELAYS_MS) {
     if (delayMs > 0) {
@@ -247,10 +286,18 @@ async function fetchWithTransientRetry(url: string, init: RequestInit): Promise<
     }
 
     try {
-      return await Electron.net.fetch(url, init);
+      const response = await Electron.net.fetch(url, init);
+      if (!isRetryableDocumentResponse(url, response)) {
+        return response;
+      }
+      lastResponse = response;
     } catch (error) {
       lastError = error;
     }
+  }
+
+  if (lastResponse !== null) {
+    return lastResponse;
   }
 
   throw lastError;

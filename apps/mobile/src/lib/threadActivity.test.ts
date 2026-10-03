@@ -17,7 +17,9 @@ import {
   agentSpawnSummary,
   buildPendingUserInputAnswers,
   buildThreadFeed,
+  deriveQueuedMessageControls,
   deriveThreadFeedPresentation,
+  promoteSteeredQueuedMessages,
   isPendingUserInputOptionSelected,
   setPendingUserInputCustomAnswer,
   togglePendingUserInputOptionSelection,
@@ -26,6 +28,29 @@ import {
   type ThreadFeedEntry,
   type WorkLogEntry,
 } from "./threadActivity";
+
+describe("deriveQueuedMessageControls", () => {
+  it("allows steering or removing server-queued messages", () => {
+    expect(deriveQueuedMessageControls("queued", "server")).toEqual({
+      canSteer: true,
+      canEdit: true,
+    });
+  });
+
+  it("allows discarding an offline local-outbox message", () => {
+    expect(deriveQueuedMessageControls("waiting", "local")).toEqual({
+      canSteer: false,
+      canEdit: true,
+    });
+  });
+
+  it("does not claim an in-flight local send can still be cancelled", () => {
+    expect(deriveQueuedMessageControls("sending", "local")).toEqual({
+      canSteer: false,
+      canEdit: false,
+    });
+  });
+});
 
 // Match Hermes: these ES2023 array methods are absent on mobile.
 beforeEach(() => {
@@ -280,6 +305,8 @@ function makeThread(
     archivedAt: null,
     deletedAt: null,
     messages: [],
+    queuedMessages: [],
+    pendingTurnStart: null,
     proposedPlans: [],
     activities: [],
     checkpoints: [],
@@ -291,6 +318,40 @@ function makeThread(
 }
 
 describe("buildThreadFeed", () => {
+  it("shows submitted structured answers in the feed", () => {
+    const thread = makeThread({
+      id: ThreadId.make("thread-input"),
+      projectId: ProjectId.make("project-input"),
+      title: "Input thread",
+      activities: [
+        makeActivity({
+          id: EventId.make("input-requested"),
+          kind: "user-input.requested",
+          summary: "User input requested",
+          createdAt: "2026-04-01T00:00:01.000Z",
+          payload: {
+            requestId: "request-1",
+            questions: [{ id: "goal", header: "Goal", question: "What is the goal?", options: [] }],
+          },
+        }),
+        makeActivity({
+          id: EventId.make("input-resolved"),
+          kind: "user-input.resolved",
+          summary: "User input submitted",
+          createdAt: "2026-04-01T00:00:02.000Z",
+          payload: { requestId: "request-1", answers: { goal: "Make it sleep" } },
+        }),
+      ],
+    });
+
+    const requested = buildThreadFeed(thread)
+      .filter((entry) => entry.type === "activity-group")
+      .flatMap((entry) => entry.activities)
+      .find((entry) => entry.id === "input-requested");
+    expect(requested?.detail).toBe("Make it sleep");
+    expect(requested?.getFullDetail()).toContain("What is the goal?\nMake it sleep");
+  });
+
   it("reuses unchanged feed and presentation rows during an assistant text update", () => {
     const completedTurnId = TurnId.make("completed-turn");
     const activeTurnId = TurnId.make("active-turn");
@@ -1868,6 +1929,113 @@ describe("buildThreadFeed", () => {
     expect(collapsed[1]).toMatchObject({ type: "turn-fold", label: "Worked for 17s" });
   });
 
+  it("keeps a queue-drain final assistant answer below the fold when turnId is mis-stamped", () => {
+    // Mirrors production: previous turn's final lands with the *next* turn's id
+    // at the same timestamp as the queued user message (see Fix Mobile Thread
+    // Selection Hangs / turn 15c01839 vs segment:10).
+    const firstTurnId = TurnId.make("turn-1");
+    const secondTurnId = TurnId.make("turn-2");
+    const thread = makeThread({
+      id: ThreadId.make("thread-queue-drain-fold"),
+      projectId: ProjectId.make("project-1"),
+      title: "Queue drain fold",
+      latestTurn: {
+        turnId: secondTurnId,
+        state: "completed",
+        requestedAt: "2026-04-01T00:00:20.000Z",
+        startedAt: "2026-04-01T00:00:20.000Z",
+        completedAt: "2026-04-01T00:00:30.000Z",
+        assistantMessageId: MessageId.make("assistant-next-final"),
+      },
+      messages: [
+        {
+          id: MessageId.make("user-1"),
+          role: "user",
+          text: "Change the icons.",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-04-01T00:00:00.000Z",
+          updatedAt: "2026-04-01T00:00:00.000Z",
+        },
+        {
+          id: MessageId.make("assistant-status"),
+          role: "assistant",
+          text: "Replacing the segment bar…",
+          turnId: firstTurnId,
+          streaming: false,
+          createdAt: "2026-04-01T00:00:05.000Z",
+          updatedAt: "2026-04-01T00:00:05.000Z",
+        },
+        {
+          id: MessageId.make("assistant-final-misstamped"),
+          role: "assistant",
+          text: "Done. No more segment bar.",
+          // Wrong: stamped with the next turn at drain time.
+          turnId: secondTurnId,
+          streaming: false,
+          createdAt: "2026-04-01T00:00:20.000Z",
+          updatedAt: "2026-04-01T00:00:20.000Z",
+        },
+        {
+          id: MessageId.make("user-2"),
+          role: "user",
+          text: "Why is the queue in the timeline?",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-04-01T00:00:20.000Z",
+          updatedAt: "2026-04-01T00:00:20.000Z",
+        },
+        {
+          id: MessageId.make("assistant-next-final"),
+          role: "assistant",
+          text: "Because we used bubbles.",
+          turnId: secondTurnId,
+          streaming: false,
+          createdAt: "2026-04-01T00:00:28.000Z",
+          updatedAt: "2026-04-01T00:00:30.000Z",
+        },
+      ],
+      activities: [
+        makeActivity({
+          id: EventId.make("tool-1"),
+          kind: "tool.completed",
+          tone: "tool",
+          summary: "Changed files",
+          createdAt: "2026-04-01T00:00:10.000Z",
+          turnId: firstTurnId,
+          payload: {
+            title: "Changed files",
+            itemType: "file_change",
+            status: "completed",
+          },
+        }),
+      ],
+    });
+
+    const feed = buildThreadFeed(thread);
+    const collapsed = deriveThreadFeedPresentation(feed, thread.latestTurn, new Set());
+    const ids = collapsed.map((entry) => entry.id);
+    // Rehome keeps the mis-stamped final on turn-1; first+terminal fold keeps
+    // the first assistant visible (as the `::pre` preamble split) and hides
+    // tools in between.
+    expect(ids).toContain("assistant-status::pre");
+    expect(ids).toContain("assistant-final-misstamped");
+    expect(ids).toContain("turn-fold:turn-1");
+    expect(ids.indexOf("assistant-final-misstamped")).toBeGreaterThan(
+      ids.indexOf("turn-fold:turn-1"),
+    );
+    expect(ids).not.toContain("tool-1");
+
+    const expanded = deriveThreadFeedPresentation(feed, thread.latestTurn, new Set([firstTurnId]));
+    const expandedIds = expanded.map((entry) => entry.id);
+    expect(expandedIds).toContain("turn-fold:turn-1");
+    expect(expandedIds.some((id) => id.startsWith("assistant-status"))).toBe(true);
+    expect(expandedIds).toContain("work-toggle:work-group:tool-1");
+    expect(expandedIds).toContain("assistant-final-misstamped");
+    expect(expandedIds).toContain("user-2");
+    expect(expandedIds).toContain("assistant-next-final");
+  });
+
   it("folds assistant messages between the first and terminal messages", () => {
     const turnId = TurnId.make("turn-1");
     const thread = makeThread({
@@ -3025,6 +3193,71 @@ describe("buildThreadFeed", () => {
       id: "call-a-1",
       activities: [{ status: "failure", workEntry: { tone: "error" } }],
     });
+  });
+});
+
+describe("promoteSteeredQueuedMessages", () => {
+  const steeredId = MessageId.make("msg-steered");
+  const waitingId = MessageId.make("msg-waiting");
+
+  function makeQueuedThread() {
+    return makeThread({
+      id: ThreadId.make("thread-steer"),
+      projectId: ProjectId.make("project-steer"),
+      title: "Steer thread",
+      queuedMessages: [
+        {
+          messageId: steeredId,
+          text: "send this one now",
+          attachments: [],
+          queuedAt: "2026-04-01T00:00:05.000Z",
+        },
+        {
+          messageId: waitingId,
+          text: "this one waits",
+          attachments: [],
+          queuedAt: "2026-04-01T00:00:06.000Z",
+        },
+      ],
+    });
+  }
+
+  it("moves only the steered message into the conversation", () => {
+    const promoted = promoteSteeredQueuedMessages(makeQueuedThread(), new Set([steeredId]));
+
+    expect(promoted.messages.map((message) => message.id)).toEqual([steeredId]);
+    expect(promoted.messages[0]).toMatchObject({ role: "user", text: "send this one now" });
+    // Still server-queued until the dispatch lands — chip lists drop it because
+    // it is now in the timeline, not because the queue changed.
+    expect(promoted.queuedMessages.map((entry) => entry.messageId)).toEqual([steeredId, waitingId]);
+  });
+
+  it("reverts by dropping the id, restoring the queue-only view", () => {
+    const thread = makeQueuedThread();
+
+    expect(promoteSteeredQueuedMessages(thread, new Set())).toBe(thread);
+    expect(promoteSteeredQueuedMessages(thread, new Set([steeredId])).messages).toHaveLength(1);
+    expect(promoteSteeredQueuedMessages(thread, new Set()).messages).toHaveLength(0);
+  });
+
+  it("does not duplicate a message the server has already persisted", () => {
+    const thread = makeQueuedThread();
+    const persisted = {
+      ...thread,
+      messages: [
+        {
+          id: steeredId,
+          role: "user" as const,
+          text: "send this one now",
+          turnId: TurnId.make("turn-1"),
+          streaming: false,
+          createdAt: "2026-04-01T00:00:07.000Z",
+          updatedAt: "2026-04-01T00:00:07.000Z",
+        },
+      ],
+    };
+
+    expect(promoteSteeredQueuedMessages(persisted, new Set([steeredId])).messages).toHaveLength(1);
   });
 });
 

@@ -1,8 +1,8 @@
 import { memo } from "react";
 import { Alert, AlertAction, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
+import { ErrorDetailText } from "../ui/errorDetailText";
 import { CircleAlertIcon, XIcon } from "lucide-react";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { OpenAI } from "../Icons";
 import { ChatGptUsageButton } from "../settings/ChatGptUsageButton";
 
@@ -60,12 +60,7 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
               <p>Review your usage settings in ChatGPT to continue.</p>
             </div>
           ) : (
-            <Tooltip>
-              <TooltipTrigger render={<div className="line-clamp-3" />}>{error}</TooltipTrigger>
-              <TooltipPopup side="top" className="whitespace-pre-wrap">
-                {error}
-              </TooltipPopup>
-            </Tooltip>
+            <ErrorDetailText text={error} />
           )}
         </AlertDescription>
         {(chatGptUsageLimit || onDismiss) && (

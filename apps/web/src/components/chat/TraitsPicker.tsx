@@ -596,14 +596,7 @@ export const TraitsPicker = memo(function TraitsPicker({
       <ComposerControlIcon
         icon={speedIcon === "ultrafast" ? UltrafastIcon : ZapIcon}
         size={size}
-        className={cn(
-          "fill-current opacity-80",
-          size === "xs"
-            ? "text-current"
-            : provider === "claudeAgent"
-              ? "text-[#d97757]"
-              : "text-foreground",
-        )}
+        className={size === "xs" ? "text-current" : "text-foreground/80 opacity-100"}
       />
       <span className="sr-only">{speedLabel}</span>
     </>

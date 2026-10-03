@@ -65,9 +65,20 @@ const emptyPreviewStateAtom = Atom.make<ThreadPreviewState>(EMPTY_THREAD_PREVIEW
   Atom.withLabel("preview:empty-thread"),
 );
 
+// Previously `Atom.keepAlive`, which pinned one atom node per thread key ever
+// visited in the registry for the process lifetime — an unbounded leak in a
+// long-lived tab. Idle-TTL lets the registry evict a thread's preview atom once
+// nothing observes it, matching the pattern used for other per-resource atom
+// families (see browser/previewWebviewConfigState.ts). Threads with live
+// preview sessions stay resident because the observed aggregate
+// `activePreviewSessionsAtom` reads them, keeping them out of the idle state;
+// only closed/idle threads are collected. An evicted idle thread re-seeds from
+// EMPTY and is re-populated by the next server snapshot, so eviction is safe.
+const PREVIEW_STATE_IDLE_TTL_MS = 5 * 60_000;
+
 export const previewStateAtom = Atom.family((threadKey: string) =>
   Atom.make<ThreadPreviewState>(EMPTY_THREAD_PREVIEW_STATE).pipe(
-    Atom.keepAlive,
+    Atom.setIdleTTL(PREVIEW_STATE_IDLE_TTL_MS),
     Atom.withLabel(`preview:thread:${threadKey}`),
   ),
 );
@@ -457,6 +468,13 @@ export function rememberPreviewUrl(ref: ScopedThreadRef, url: string): void {
     ...current,
     recentlySeenUrls: dedupeRecentUrls(current.recentlySeenUrls, url),
   }));
+}
+
+export function removePreviewThread(ref: ScopedThreadRef): void {
+  const threadKey = scopedThreadKey(ref);
+  appAtomRegistry.set(previewStateAtom(threadKey), EMPTY_THREAD_PREVIEW_STATE);
+  syncActivePreviewThread(threadKey, EMPTY_THREAD_PREVIEW_STATE);
+  changedPreviewThreadKeys.delete(threadKey);
 }
 
 export function isPreviewSupportedInRuntime(): boolean {

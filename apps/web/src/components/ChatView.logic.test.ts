@@ -50,6 +50,9 @@ import {
   hasServerAcknowledgedLocalDispatch,
   shouldRefocusComposerOnWindowFocus,
   isBranchMismatchDismissedForSession,
+  isVideoPreviewRequestCurrent,
+  pruneOptimisticQueuedMessageIds,
+  resolvedSteeredMessageIds,
   reconcileMountedTerminalThreadIds,
   recallCheckoutIsRepo,
   rememberCheckoutIsRepo,
@@ -66,6 +69,9 @@ import {
   resolveSendEnvMode,
   threadShellHasStarted,
   resolveDraftHeroState,
+  resolveServerThreadError,
+  shouldRenderServerThreadRoute,
+  shouldTreatServerThreadAsActive,
   isPaintOnlyThreadTimeline,
   peekHeldThreadTimeline,
   peekRememberedThreadTimeline,
@@ -89,6 +95,20 @@ import {
   waitForRevertedMessage,
   prepareRevertedMessageAttachments,
 } from "./ChatView.logic";
+import {
+  dismissThreadErrorBannerForSession,
+  getThreadErrorBannerKey,
+  isThreadErrorBannerDismissedForSession,
+  shouldShowThreadErrorBanner,
+} from "./chat/ThreadErrorBanner";
+
+describe("isVideoPreviewRequestCurrent", () => {
+  it("rejects changed threads and replaced previews", () => {
+    expect(isVideoPreviewRequestCurrent("thread-1", "thread-2", 1, 1)).toBe(false);
+    expect(isVideoPreviewRequestCurrent("thread-1", "thread-1", 1, 2)).toBe(false);
+    expect(isVideoPreviewRequestCurrent("thread-1", "thread-1", 2, 2)).toBe(true);
+  });
+});
 
 describe("agent browser close confirmation", () => {
   const surfaces = [
@@ -853,6 +873,8 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     interactionMode: "default",
     session: null,
     messages: [],
+    queuedMessages: [],
+    pendingTurnStart: null,
     proposedPlans: [],
     activities: [],
     checkpoints: [],
@@ -1074,6 +1096,56 @@ describe("buildThreadTurnInterruptInput", () => {
         }),
       ),
     ).toEqual({ threadId });
+  });
+});
+
+describe("pruneOptimisticQueuedMessageIds", () => {
+  const first = MessageId.make("msg-queued-1");
+  const second = MessageId.make("msg-queued-2");
+
+  it("drops ids the server has acknowledged", () => {
+    expect(pruneOptimisticQueuedMessageIds(new Set([first, second]), new Set([first]))).toEqual(
+      new Set([second]),
+    );
+  });
+
+  it("keeps the same reference when nothing resolved", () => {
+    const current = new Set([first]);
+    expect(pruneOptimisticQueuedMessageIds(current, new Set([second]))).toBe(current);
+  });
+
+  it("keeps the same reference when already empty", () => {
+    const current: ReadonlySet<MessageId> = new Set();
+    expect(pruneOptimisticQueuedMessageIds(current, new Set([first]))).toBe(current);
+  });
+});
+
+describe("resolvedSteeredMessageIds", () => {
+  const steeredId = MessageId.make("msg-steered");
+  const otherId = MessageId.make("msg-other");
+
+  it("keeps a steer in flight while the server still holds it queued", () => {
+    expect(resolvedSteeredMessageIds(new Set([steeredId]), [{ messageId: steeredId }])).toEqual(
+      new Set(),
+    );
+  });
+
+  it("settles a steer once the server stops holding it queued", () => {
+    expect(resolvedSteeredMessageIds(new Set([steeredId]), [{ messageId: otherId }])).toEqual(
+      new Set([steeredId]),
+    );
+    expect(resolvedSteeredMessageIds(new Set([steeredId]), [])).toEqual(new Set([steeredId]));
+  });
+
+  it("settles each steer independently", () => {
+    expect(
+      resolvedSteeredMessageIds(new Set([steeredId, otherId]), [{ messageId: otherId }]),
+    ).toEqual(new Set([steeredId]));
+  });
+
+  it("short-circuits when nothing is steering", () => {
+    const empty: ReadonlySet<MessageId> = new Set();
+    expect(resolvedSteeredMessageIds(empty, [{ messageId: steeredId }])).toBe(empty);
   });
 });
 
@@ -1809,6 +1881,44 @@ describe("startNewThreadForProject", () => {
   });
 });
 
+describe("server thread liveness", () => {
+  it("requires shell and detail before treating a server thread as active", () => {
+    expect(
+      shouldTreatServerThreadAsActive({
+        hasServerThreadShell: true,
+        hasServerThreadDetail: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldTreatServerThreadAsActive({
+        hasServerThreadShell: false,
+        hasServerThreadDetail: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not keep server routes alive from stale cached detail alone", () => {
+    expect(
+      shouldRenderServerThreadRoute({
+        hasServerThreadShell: false,
+        hasDraftThread: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRenderServerThreadRoute({
+        hasServerThreadShell: false,
+        hasDraftThread: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldRenderServerThreadRoute({
+        hasServerThreadShell: true,
+        hasDraftThread: false,
+      }),
+    ).toBe(true);
+  });
+});
+
 describe("hasServerAcknowledgedLocalDispatch", () => {
   it("does not acknowledge unchanged server state", () => {
     const localDispatch = createLocalDispatchSnapshot(
@@ -1821,6 +1931,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
         phase: "ready",
         latestTurn: completedTurn,
         latestUserMessageId: localDispatch.latestUserMessageId,
+        projectedMessageIds: new Set<string>(),
         session: readySession,
         hasPendingApproval: false,
         hasPendingUserInput: false,
@@ -1840,6 +1951,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
         phase: "connecting",
         latestTurn: completedTurn,
         latestUserMessageId: MessageId.make("message-followup"),
+        projectedMessageIds: new Set<string>(),
         session: {
           ...readySession,
           status: "starting",
@@ -1870,6 +1982,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
         phase: "ready",
         latestTurn: newerTurn,
         latestUserMessageId: localDispatch.latestUserMessageId,
+        projectedMessageIds: new Set<string>(),
         session: { ...readySession, updatedAt: newerTurn.completedAt },
         hasPendingApproval: false,
         hasPendingUserInput: false,
@@ -1897,6 +2010,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
         phase: "running",
         latestTurn: runningTurn,
         latestUserMessageId: localDispatch.latestUserMessageId,
+        projectedMessageIds: new Set<string>(),
         session: {
           ...readySession,
           status: "running",
@@ -1913,6 +2027,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
         phase: "running",
         latestTurn: runningTurn,
         latestUserMessageId: localDispatch.latestUserMessageId,
+        projectedMessageIds: new Set<string>(),
         session: {
           ...readySession,
           status: "running",
@@ -1954,18 +2069,63 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
       }),
     );
 
+    // Dispatch without a known messageId keeps the legacy heuristic: a new
+    // latest user message acknowledges it.
     expect(
       hasServerAcknowledgedLocalDispatch({
         localDispatch,
         phase: "running",
         latestTurn: runningTurn,
         latestUserMessageId: MessageId.make("message-steer"),
+        projectedMessageIds: new Set<string>(),
         session: runningSession,
         hasPendingApproval: false,
         hasPendingUserInput: false,
         threadError: null,
       }),
     ).toBe(true);
+
+    const correlatedDispatch = createLocalDispatchSnapshot(
+      makeThread({ latestTurn: runningTurn, session: runningSession }),
+      { messageId: MessageId.make("message-mine") },
+    );
+
+    // A correlated dispatch acknowledges when its exact message appears in
+    // the timeline or the queue...
+    for (const projectedMessageIds of [
+      new Set(["message-mine"]),
+      new Set(["message-other", "message-mine"]),
+    ]) {
+      expect(
+        hasServerAcknowledgedLocalDispatch({
+          localDispatch: correlatedDispatch,
+          phase: "running",
+          latestTurn: runningTurn,
+          latestUserMessageId: correlatedDispatch.latestUserMessageId,
+          projectedMessageIds,
+          session: runningSession,
+          hasPendingApproval: false,
+          hasPendingUserInput: false,
+          threadError: null,
+        }),
+      ).toBe(true);
+    }
+
+    // ...but ignores unrelated queue/timeline changes (another client's
+    // queued message, or a different queued chip being steered/removed).
+    expect(
+      hasServerAcknowledgedLocalDispatch({
+        localDispatch: correlatedDispatch,
+        phase: "running",
+        latestTurn: runningTurn,
+        latestUserMessageId: MessageId.make("message-someone-else"),
+        projectedMessageIds: new Set(["message-someone-else"]),
+        session: runningSession,
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      }),
+    ).toBe(false);
   });
 
   it("acknowledges pending user interaction and errors immediately", () => {
@@ -1975,6 +2135,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
       phase: "ready" as const,
       latestTurn: null,
       latestUserMessageId: localDispatch.latestUserMessageId,
+      projectedMessageIds: new Set<string>(),
       session: null,
       hasPendingApproval: false,
       hasPendingUserInput: false,
@@ -1992,6 +2153,107 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
     expect(hasServerAcknowledgedLocalDispatch({ ...common, threadError: "failed" })).toBe(true);
   });
 
+  it("does not acknowledge a queued follow-up while the same turn is still running", () => {
+    const runningTurn = {
+      ...completedTurn,
+      turnId: TurnId.make("turn-2"),
+      state: "running" as const,
+      requestedAt: "2026-03-29T00:01:00.000Z",
+      startedAt: "2026-03-29T00:01:01.000Z",
+      completedAt: null,
+    };
+    const runningSession = {
+      ...readySession,
+      status: "running" as const,
+      activeTurnId: runningTurn.turnId,
+      updatedAt: runningTurn.startedAt,
+    };
+    const localDispatch = createLocalDispatchSnapshot(
+      makeThread({ latestTurn: runningTurn, session: runningSession }),
+    );
+
+    expect(
+      hasServerAcknowledgedLocalDispatch({
+        localDispatch,
+        phase: "running",
+        latestTurn: runningTurn,
+        latestUserMessageId: localDispatch.latestUserMessageId,
+        projectedMessageIds: new Set<string>(),
+        session: runningSession,
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("resolveServerThreadError", () => {
+  const CAPACITY = "Selected model is at capacity. Please try a different model.";
+
+  it("shows the server error", () => {
+    expect(resolveServerThreadError({ localError: undefined, serverError: CAPACITY })).toBe(
+      CAPACITY,
+    );
+  });
+
+  it("prefers a local error over the server error", () => {
+    expect(resolveServerThreadError({ localError: "Failed to send", serverError: CAPACITY })).toBe(
+      "Failed to send",
+    );
+  });
+
+  it("reports no error when neither side has one", () => {
+    expect(resolveServerThreadError({ localError: null, serverError: null })).toBeNull();
+  });
+});
+
+// Dismissal moved to the session-scoped banner helpers in #6123, which upstream
+// ships untested. These are the fork's dismissal cases retargeted at them, so
+// the behaviour keeps its coverage rather than losing it in the handover.
+describe("thread error banner dismissal", () => {
+  const CAPACITY = "Selected model is at capacity. Please try a different model.";
+  const threadKey = "environment-local:thread-1";
+
+  it("hides the banner for the message that was dismissed", () => {
+    const key = getThreadErrorBannerKey(threadKey, CAPACITY);
+    expect(shouldShowThreadErrorBanner(threadKey, CAPACITY, false)).toBe(true);
+
+    dismissThreadErrorBannerForSession(key);
+
+    expect(isThreadErrorBannerDismissedForSession(key)).toBe(true);
+    expect(
+      shouldShowThreadErrorBanner(threadKey, CAPACITY, isThreadErrorBannerDismissedForSession(key)),
+    ).toBe(false);
+  });
+
+  it("still surfaces a different error on the same thread after a dismissal", () => {
+    // A dismissal covers the message it dismissed, not the thread forever.
+    const other = "Provider crashed";
+    const key = getThreadErrorBannerKey(threadKey, other);
+    expect(
+      shouldShowThreadErrorBanner(threadKey, other, isThreadErrorBannerDismissedForSession(key)),
+    ).toBe(true);
+  });
+
+  it("keeps a dismissal scoped to its own thread", () => {
+    // The key pairs thread and message, so the same error on another thread is
+    // not silently suppressed.
+    const otherThread = "environment-local:thread-2";
+    const key = getThreadErrorBannerKey(otherThread, CAPACITY);
+    expect(
+      shouldShowThreadErrorBanner(
+        otherThread,
+        CAPACITY,
+        isThreadErrorBannerDismissedForSession(key),
+      ),
+    ).toBe(true);
+  });
+
+  it("has nothing to show when there is no error", () => {
+    expect(getThreadErrorBannerKey(threadKey, null)).toBeNull();
+    expect(shouldShowThreadErrorBanner(threadKey, null, false)).toBe(false);
+  });
   it("acknowledges only a new turn-start failure", () => {
     const localDispatch = {
       ...createLocalDispatchSnapshot(makeThread()),
@@ -2002,6 +2264,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
       phase: "ready" as const,
       latestTurn: null,
       latestUserMessageId: localDispatch.latestUserMessageId,
+      projectedMessageIds: new Set<string>(),
       session: null,
       hasPendingApproval: false,
       hasPendingUserInput: false,

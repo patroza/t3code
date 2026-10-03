@@ -9,12 +9,14 @@ import {
   PERSISTED_STATE_KEY,
   type PersistedUiState,
   persistState,
+  removeThreadUiState,
   reorderProjects,
   resolveProjectExpanded,
   setDefaultAdvertisedEndpointKey,
   setProjectExpanded,
   setSidebarProjectScopeKey,
   setThreadChangedFilesExpanded,
+  toggleThreadPinned,
   type UiState,
 } from "./uiStateStore";
 
@@ -24,12 +26,21 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     projectOrder: [],
     sidebarProjectScopeKey: null,
     threadLastVisitedAtById: {},
+    pinnedThreadKeys: [],
     threadChangedFilesExpandedById: {},
     defaultAdvertisedEndpointKey: null,
     pullRequestMergeMethod: "merge",
     ...overrides,
   };
 }
+
+describe("toggleThreadPinned", () => {
+  it("adds and removes a client-local scoped thread key", () => {
+    const pinned = toggleThreadPinned(makeUiState(), "environment-1:thread-1");
+    expect(pinned.pinnedThreadKeys).toEqual(["environment-1:thread-1"]);
+    expect(toggleThreadPinned(pinned, "environment-1:thread-1").pinnedThreadKeys).toEqual([]);
+  });
+});
 
 describe("uiStateStore pure functions", () => {
   it("stores server timestamps without moving visit state backwards", () => {
@@ -40,6 +51,27 @@ describe("uiStateStore pure functions", () => {
     expect(visited.threadLastVisitedAtById[threadId]).toBe("2026-02-25T12:30:00.700Z");
     expect(markThreadVisited(visited, threadId, "2026-02-25T12:30:00.000Z")).toBe(visited);
     expect(markThreadVisited(visited, threadId, "not-a-date")).toBe(visited);
+  });
+
+  it("removes all per-thread ui state for a deleted thread", () => {
+    const threadId = ThreadId.make("thread-1");
+    const otherId = ThreadId.make("thread-2");
+    const state = makeUiState({
+      threadLastVisitedAtById: {
+        [threadId]: "2026-02-25T12:30:00.000Z",
+        [otherId]: "2026-02-25T12:31:00.000Z",
+      },
+      threadChangedFilesExpandedById: {
+        [threadId]: { "turn-1": false },
+        [otherId]: { "turn-1": false },
+      },
+    });
+
+    const next = removeThreadUiState(state, threadId);
+    expect(next.threadLastVisitedAtById).toEqual({ [otherId]: "2026-02-25T12:31:00.000Z" });
+    expect(next.threadChangedFilesExpandedById).toEqual({ [otherId]: { "turn-1": false } });
+    // No-op (same reference) when the thread has no state.
+    expect(removeThreadUiState(next, threadId)).toBe(next);
   });
 
   it("marks a completed thread unread using the server completion timestamp", () => {
@@ -186,8 +218,8 @@ describe("parsePersistedState", () => {
       threadChangedFilesExpansionVersion: 2,
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
-          "turn-1": false,
-          "turn-2": true,
+          "turn-1": true,
+          "turn-2": false,
         },
       },
     });
@@ -200,13 +232,14 @@ describe("parsePersistedState", () => {
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
+      pinnedThreadKeys: [],
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
       sidebarProjectScopeKey: null,
       pullRequestMergeMethod: "merge",
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
-          "turn-1": false,
-          "turn-2": true,
+          "turn-1": true,
+          "turn-2": false,
         },
       },
     });
@@ -300,6 +333,7 @@ describe("uiStateStore persistence", () => {
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
+      pinnedThreadKeys: ["environment:thread-1"],
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
           "turn-1": false,
@@ -322,6 +356,7 @@ describe("uiStateStore persistence", () => {
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
+      pinnedThreadKeys: ["environment:thread-1"],
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
       sidebarProjectScopeKey: null,
       threadChangedFilesExpansionVersion: 2,

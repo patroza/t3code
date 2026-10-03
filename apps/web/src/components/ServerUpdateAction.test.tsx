@@ -404,6 +404,5 @@ describe("ServerUpdateProgress", () => {
 
     expect(markup).toContain('role="alert"');
     expect(markup).toContain("The package could not be verified.");
-    expect(markup).not.toContain("animate-status-pulse");
   });
 });

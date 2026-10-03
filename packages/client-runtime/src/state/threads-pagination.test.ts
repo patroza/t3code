@@ -87,6 +87,10 @@ function checkpoint(turnId: string, turnCount: number): OrchestrationThread["che
 }
 
 const BASE_THREAD: OrchestrationThread = {
+  // Fork-required fields absent from upstream's fixture: the fork added them to
+  // OrchestrationThread, so upstream's new test cannot construct one without them.
+  queuedMessages: [],
+  pendingTurnStart: null,
   id: THREAD_ID,
   projectId: ProjectId.make("project-1"),
   title: "Windowed thread",

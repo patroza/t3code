@@ -26,7 +26,11 @@ import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
 import { request, subscribe, type EnvironmentRpcInput } from "../rpc/client.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
-import { vcsCommandConcurrency, vcsCommandScheduler } from "./vcsCommandScheduler.ts";
+import {
+  vcsCommandConcurrency,
+  vcsCommandScheduler,
+  vcsThreadCommandConcurrency,
+} from "./vcsCommandScheduler.ts";
 import {
   invalidateCachedVcsRefs,
   vcsRefsCacheStateAtom,
@@ -278,21 +282,41 @@ export function createVcsEnvironmentAtoms<R, E>(
       cwd: target.input.cwd,
     });
 
+  const statusStream = (input: EnvironmentRpcInput<typeof WS_METHODS.subscribeVcsStatus>) =>
+    subscribe(WS_METHODS.subscribeVcsStatus, input).pipe(
+      Stream.mapAccum(
+        () => null as VcsStatusResult | null,
+        (current, event) => {
+          const next = applyGitStatusStreamEvent(current, event);
+          return [next, [next]] as const;
+        },
+      ),
+    );
+
   return {
     listRefs,
+    /**
+     * Full VCS status (includes server remote poller). Use for the active thread /
+     * git chrome only — not for high-cardinality lists.
+     */
     status: createEnvironmentSubscriptionAtomFamily(runtime, {
       label: "environment-data:vcs:status",
       idleTtlMs: VCS_STATUS_IDLE_TTL_MS,
+      subscribe: statusStream,
+    }),
+    /**
+     * List/badge VCS status: shared budgeted remote refresh on the server (keeps PR
+     * state fresh without per-row pollers). Shorter idle TTL so off-screen rows drop.
+     * Prefer for sidebar/board/thread rows; use `status` for active git chrome.
+     */
+    listStatus: createEnvironmentSubscriptionAtomFamily(runtime, {
+      label: "environment-data:vcs:status-list",
+      idleTtlMs: 60_000,
       subscribe: (input: EnvironmentRpcInput<typeof WS_METHODS.subscribeVcsStatus>) =>
-        subscribe(WS_METHODS.subscribeVcsStatus, input).pipe(
-          Stream.mapAccum(
-            () => null as VcsStatusResult | null,
-            (current, event) => {
-              const next = applyGitStatusStreamEvent(current, event);
-              return [next, [next]] as const;
-            },
-          ),
-        ),
+        statusStream({
+          ...input,
+          mode: "list",
+        }),
     }),
     pull: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:vcs:pull",
@@ -333,6 +357,18 @@ export function createVcsEnvironmentAtoms<R, E>(
       scheduler: vcsCommandScheduler,
       concurrency: vcsCommandConcurrency,
       onSettled: invalidateRefs,
+    }),
+    previewWorktreeCleanup: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:vcs:preview-worktree-cleanup",
+      tag: WS_METHODS.vcsPreviewWorktreeCleanup,
+      scheduler: vcsCommandScheduler,
+      concurrency: vcsThreadCommandConcurrency,
+    }),
+    cleanupThreadWorktree: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:vcs:cleanup-thread-worktree",
+      tag: WS_METHODS.vcsCleanupThreadWorktree,
+      scheduler: vcsCommandScheduler,
+      concurrency: vcsThreadCommandConcurrency,
     }),
     createRef: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:vcs:create-ref",

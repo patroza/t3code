@@ -2,6 +2,7 @@ import { InfoIcon } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
+import { ErrorDetailText } from "../ui/errorDetailText";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { ComposerBanner, type ComposerBannerVariant } from "./ComposerBanner";
@@ -355,7 +356,11 @@ function ComposerBannerStackAlert({
           <span className="min-w-0 truncate font-medium leading-7 sm:leading-6">{item.title}</span>
           {item.description ? (
             <NoticeDescription compact={item.compact ?? false}>
-              {item.description}
+              {item.variant === "error" && typeof item.description === "string" ? (
+                <ErrorDetailText text={item.description} />
+              ) : (
+                item.description
+              )}
             </NoticeDescription>
           ) : null}
         </ComposerBanner.Content>

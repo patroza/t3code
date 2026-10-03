@@ -3,6 +3,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   ClientSettingsSchema,
   DEFAULT_CLIENT_SETTINGS,
+  OpenWithEntryId,
   type ClientSettings,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -32,6 +33,7 @@ const clientSettings: ClientSettings = {
   confirmQuit: "double-click",
   confirmThreadArchive: true,
   confirmThreadDelete: false,
+  confirmWorktreeRemoval: true,
   confirmThreadUnpin: false,
   contextWindowMeterEnabled: false,
   composerCollapseOnScroll: true,
@@ -53,6 +55,18 @@ const clientSettings: ClientSettings = {
   glassOpacity: 80,
   onboardingCompletedAt: null,
   panelAnimationDurationMs: 0,
+  providerFavorites: [],
+  openWithEntries: [
+    {
+      id: OpenWithEntryId.make("terminal"),
+      name: "Terminal",
+      kind: "terminal",
+      invocation: { type: "mac-application", applicationPath: "/Applications/Terminal.app" },
+      directoryMode: "open-target",
+      arguments: [],
+    },
+  ],
+  preferredOpenWith: { type: "custom", id: OpenWithEntryId.make("terminal") },
   planModeEnabled: false,
   proactivePanelsEnabled: true,
   showSkillsInSlashMenu: false,
@@ -62,8 +76,10 @@ const clientSettings: ClientSettings = {
     "environment-1:/tmp/project-a": "separate",
   },
   sidebarProjectSortOrder: "manual",
+  sidebarRecentThreadsEnabled: true,
   sidebarThreadSortOrder: "created_at",
   sidebarThreadPreviewCount: 6,
+  sidebarHideProviderIcons: false,
   legacySidebarEnabled: false,
   sidebarWorkingShelfEnabled: false,
   loadBalancingEnabled: false,

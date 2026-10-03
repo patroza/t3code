@@ -22,6 +22,10 @@ import {
   threadWokeAt,
 } from "@t3tools/client-runtime/state/thread-settled";
 import {
+  groupSortedThreadsByRecency,
+  shouldShowRecencySectionHeaders,
+} from "@t3tools/client-runtime/state/thread-recency-groups";
+import {
   resolveSettledThreadTimestamp,
   sortSettledThreads,
 } from "@t3tools/client-runtime/state/thread-sort";
@@ -38,6 +42,7 @@ import {
 } from "@t3tools/client-runtime/environment";
 import {
   resolveEnvironmentMachineKind,
+  type EnvironmentId,
   type EnvironmentMachineKind,
   type ProjectIconOverride,
   type ScopedThreadRef,
@@ -56,6 +61,8 @@ import {
   EyeIcon,
   FolderIcon,
   GitBranchIcon,
+  ListIcon,
+  ListFilterIcon,
   MessageCircleQuestionIcon,
   PinIcon,
   PinOffIcon,
@@ -125,10 +132,10 @@ import {
 import { useThreadActions } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
+import { subscribeToProjectReveal } from "../projectJump";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
-import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import {
@@ -152,12 +159,24 @@ import { formatRelativeTimeLabel, parseTimestampDate } from "../timestampFormat"
 import type { SidebarThreadSummary } from "../types";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { cn } from "~/lib/utils";
+import { ThreadIdentityMark } from "./identity/ParticipantStack";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { ProjectEnvironmentBadge } from "./ProjectEnvironmentBadge";
 import { buildThreadActionMenuItems } from "./threadActionMenu.logic";
 import {
+  isIdentityClaimRequiredMessage,
+  requestIdentityClaimGate,
+} from "./identity/IdentityClaimGate";
+import {
+  DEFAULT_OWNERSHIP_RELATION,
+  isOwnershipRelation,
+} from "@t3tools/client-runtime/state/identity";
+import { identityClaimPersonIdByEnvironmentAtom } from "../state/identity";
+import {
   animateSidebarLayoutChanges,
   applySidebarThreadDrop,
+  SETTLED_TAIL_INITIAL_COUNT,
+  SETTLED_TAIL_PAGE_COUNT,
   buildBulkTitleRegenerationContextMenuItem,
   buildBulkUnpinContextMenuItem,
   deleteSelectedThreadEntries,
@@ -187,6 +206,7 @@ import {
   sortInboxThreadsByReturn,
   sortLogicalProjectsForSidebar,
   sortPinnedThreadsForSidebar,
+  sortSettledThreadsForSidebar,
   sortThreadsForSidebar,
   useRetainedValue,
   useSidebarRowSubscriptionLease,
@@ -216,10 +236,13 @@ import {
 } from "./ThreadStatusIndicators";
 import { resolveSnoozePresets, snoozeWakeLabel, type SnoozePreset } from "./Sidebar.snooze";
 import { ProjectFavicon, type ProjectFaviconProject } from "./ProjectFavicon";
+import { AiUsageStats } from "./chat/AiUsageStats";
 import { ThreadSearchMatchExcerpt } from "./ThreadSearchMatch";
 import { makeWorkspaceFileDropHandlers } from "./chat/workspaceFileDrop";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import { getTriggerDisplayModelLabel } from "./chat/providerIconUtils";
+import { resolveDriverUsage, usageDotFillClass, usageDotRingColor } from "../aiUsageState";
+import { useAiUsageSnapshot } from "../hooks/useAiUsageSnapshot";
 import {
   deriveProviderEntriesByEnvironment,
   shouldShowInstanceBadge,
@@ -228,6 +251,51 @@ import {
 import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Button, InlineButton } from "./ui/button";
+import {
+  Menu,
+  MenuCheckboxItem,
+  MenuGroup,
+  MenuItem,
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSeparator,
+  MenuShortcut,
+  MenuTrigger,
+} from "./ui/menu";
+import { useLocalStorage } from "~/hooks/useLocalStorage";
+import { buildOwnershipPredicate, useOwnershipFilter } from "./ownershipFilter";
+import {
+  DEFAULT_SIDEBAR_OWNERSHIP_FILTER,
+  DEFAULT_SIDEBAR_V2_SETTLED_SHELF_EXPANDED,
+  DEFAULT_WEB_THREAD_GROUPING,
+  EMPTY_LIST_ENVIRONMENT_FILTER,
+  LIST_ENVIRONMENT_FILTER_STORAGE_KEY,
+  LIST_MODE_STORAGE_KEY,
+  LIST_THREAD_GROUPING_STORAGE_KEY,
+  ListEnvironmentFilterSchema,
+  ListHideSettledSchema,
+  parseSidebarOwnershipFilter,
+  SIDEBAR_OWNERSHIP_FILTER_LABELS,
+  SIDEBAR_OWNERSHIP_FILTER_STORAGE_KEY,
+  SIDEBAR_OWNERSHIP_FILTERS,
+  SIDEBAR_OWNERSHIP_RELATION_LABELS,
+  SIDEBAR_OWNERSHIP_RELATION_STORAGE_KEY,
+  SIDEBAR_OWNERSHIP_RELATIONS,
+  SIDEBAR_V2_SETTLED_SHELF_EXPANDED_STORAGE_KEY,
+  WEB_THREAD_GROUPING_LABELS,
+  WEB_THREAD_GROUPINGS,
+  WebThreadGroupingSchema,
+  defaultThreadGroupingFromLegacyModeStorage,
+  isAllEnvironmentsSelected,
+  isEnvironmentSelected,
+  matchesEnvironmentFilter,
+  resolveSelectedEnvironmentIds,
+  toggleEnvironmentId,
+  usesFlatThreadGrouping,
+  type SidebarOwnershipFilter,
+  type WebThreadGrouping,
+} from "./listEnvironmentFilter";
 import {
   Combobox,
   ComboboxEmpty,
@@ -238,10 +306,9 @@ import {
   ComboboxTrigger,
   useComboboxFilter,
 } from "./ui/combobox";
-import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
+import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
-import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuShortcut, MenuTrigger } from "./ui/menu";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { MiddleTruncate } from "./ui/middle-truncate";
 import {
@@ -253,13 +320,8 @@ import {
   type DraftSessionState,
 } from "../composerDraftStore";
 
-// Settled-tail paging: recent history is the common lookup; the deep tail
-// stays behind an explicit Show more.
-const SETTLED_TAIL_INITIAL_COUNT = 10;
-const SETTLED_TAIL_PAGE_COUNT = 25;
-// Fresh keys deliberately reset both shelves to collapsed for existing users.
-const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar:settled-expanded";
-const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar:snoozed-expanded";
+// Preserve fork shelf preferences while adopting upstream Working shelf behavior.
+const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:snoozed-expanded";
 const WORKING_SHELF_EXPANDED_KEY = "t3code:sidebar:working-expanded";
 
 // Working beta: when this client saw each thread leave the Working shelf.
@@ -362,6 +424,9 @@ function SidebarThreadTooltip({
   modelInstanceId,
   modelLabel,
   branchMismatch,
+  usageDotClass,
+  usageRingColor,
+  threadUsage,
   terminalStatus,
   terminalProcessCount,
 }: {
@@ -378,6 +443,9 @@ function SidebarThreadTooltip({
     threadBranch: string;
     currentBranch: string;
   } | null;
+  usageDotClass?: string | undefined;
+  usageRingColor?: string | undefined;
+  threadUsage?: ReturnType<typeof resolveDriverUsage> | undefined;
   terminalStatus: TerminalStatusIndicator | null;
   terminalProcessCount: number;
 }) {
@@ -433,12 +501,19 @@ function SidebarThreadTooltip({
                 badgeContent="none"
                 badgeClassName="h-2 min-w-2 px-0"
                 iconClassName="size-3 shrink-0 grayscale opacity-60"
+                {...(usageDotClass ? { statusDotClassName: usageDotClass } : {})}
+                {...(usageRingColor ? { statusDotRingColor: usageRingColor } : {})}
               />
               <div className="min-w-0 truncate text-foreground/75">
                 {showInstanceBadge && providerEntry
                   ? `${modelLabel} · ${providerEntry.displayName}`
                   : modelLabel}
               </div>
+            </div>
+          ) : null}
+          {threadUsage ? (
+            <div className="min-w-0 text-foreground/75">
+              <AiUsageStats item={threadUsage.item} compact className="min-w-0" />
             </div>
           ) : null}
           {terminalStatus ? (
@@ -646,7 +721,9 @@ function SidebarDragBoundary(props: {
   return (
     <SortableSidebarMarker
       marker={props.marker}
-      data-testid={`sidebar-${props.marker}`}
+      data-testid={
+        props.marker === "pinned-divider" ? "sidebar-pinned-divider" : `sidebar-${props.marker}`
+      }
       className="pointer-events-none relative mx-0.5 -mb-px h-0"
     >
       {props.visible ? (
@@ -1098,7 +1175,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   );
   const threadKey = scopedThreadKey(threadRef);
   const { leaseLiveStatus, rowRef } = useSidebarRowSubscriptionLease(props.isActive);
-  const isRegeneratingTitle = thread.titleRegeneration != null;
   const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const isSelected = useThreadSelectionStore((state) => state.selectedThreadKeys.has(threadKey));
   const openPrLink = useOpenPrLink();
@@ -1122,6 +1198,22 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     [clearComposerContent, threadRef],
   );
 
+  // Same semantics as v1 (never-visited counts as read): flipping the beta
+  // flag must not light up every historical thread as unread.
+  const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
+  const status = resolveSidebarThreadStatus(thread);
+  // Screen-reader status for an in-flight title regeneration: the v2 rows are
+  // a fork rewrite of upstream's row, so this never came across with the rest
+  // of that surface even though the projection field did.
+  const isRegeneratingTitle = thread.titleRegeneration != null;
+  // A woken thread reappears at its original position (the sort is
+  // deliberately static), so the pill has to carry the weight. Snoozing is
+  // an explicit act, so the pill clears only when the user re-engages:
+  // reading a completion-triggered wake, clicking the pill, sending a
+  // message, settling, archiving — or finishing the work outright (merged
+  // or closed PR). Timer wakes survive a mere visit. An unparseable visit
+  // timestamp counts as never-visited — corrupt local data must not eat
+  // the wake signal.
   const gitCwd = thread.worktreePath ?? props.project?.workspaceRoot ?? null;
   const linkedPullRequestStatus = useLinkedThreadPullRequest(
     thread.environmentId,
@@ -1132,7 +1224,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   );
   const gitStatus = useEnvironmentQuery(
     leaseLiveStatus && (thread.branch != null || thread.worktreePath !== null) && gitCwd !== null
-      ? vcsEnvironment.status({
+      ? vcsEnvironment.listStatus({
           environmentId: thread.environmentId,
           input: { cwd: gitCwd },
         })
@@ -1148,17 +1240,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     ? resolveThreadCurrentPullRequestLink(thread.pullRequests)
     : null;
 
-  // Same semantics as the legacy sidebar (never-visited counts as read):
-  // switching sidebars must not light up every historical thread as unread.
-  const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
-  const status = resolveSidebarThreadStatus(thread);
-  // A woken thread reappears at its original position (the sort is
-  // deliberately static), so the pill has to carry the weight. Snoozing is
-  // an explicit act, so the pill clears only when the user re-engages:
-  // reading a completion-triggered wake, clicking the pill, sending a
-  // message, settling, archiving, or a change request state that settles the
-  // thread. Timer wakes survive a mere visit. An unparseable visit timestamp
-  // counts as never-visited, so corrupt local data cannot eat the wake signal.
   const lastVisitedDate = lastVisitedAt === undefined ? null : parseTimestampDate(lastVisitedAt);
   const wokeAtDate = props.wokeAt === null ? null : parseTimestampDate(props.wokeAt);
   const isWoke =
@@ -1248,6 +1329,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const modelLabel = selectedModel
     ? getTriggerDisplayModelLabel(selectedModel)
     : thread.modelSelection.model;
+  const aiUsageSnapshot = useAiUsageSnapshot(thread.environmentId);
+  const threadUsage = useMemo(
+    () => resolveDriverUsage(aiUsageSnapshot, driverKind, thread.modelSelection.model),
+    [aiUsageSnapshot, driverKind, thread.modelSelection.model],
+  );
+  const usageDotClass = threadUsage ? usageDotFillClass(threadUsage.marker) : undefined;
+  const usageRingColor = threadUsage ? usageDotRingColor(threadUsage.marker) : undefined;
 
   // The local environment is "this machine" and needs no marker; every other
   // one gets its machine glyph. With no local environment (the hosted app)
@@ -1267,6 +1355,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       modelInstanceId={modelInstanceId}
       modelLabel={modelLabel}
       branchMismatch={branchMismatch}
+      usageDotClass={usageDotClass}
+      usageRingColor={usageRingColor}
+      threadUsage={threadUsage}
       terminalStatus={terminalStatus}
       terminalProcessCount={terminalProcessCount}
     />
@@ -1500,6 +1591,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       </span>
     ) : null;
 
+  const participants = thread.participantSummaries ?? [];
+  const originChannel = thread.originSource?.channel ?? participants[0]?.firstChannel ?? null;
   const accessibility = resolveSidebarRowAccessibility({
     title: thread.title,
     statusLabel: topStatus?.label ?? null,
@@ -1507,51 +1600,62 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     isActive: props.isActive,
   });
 
-  const title = isRenaming ? (
-    <input
-      autoFocus
-      value={renamingTitle}
-      aria-label="Thread title"
-      onChange={(event) => onRenameTitleChange(event.target.value)}
-      onFocus={(event) => event.currentTarget.select()}
-      onKeyDown={handleRenameKeyDown}
-      onBlur={handleRenameBlur}
-      onClick={(event) => event.stopPropagation()}
-      onDoubleClick={(event) => event.stopPropagation()}
-      className="min-w-0 flex-1 rounded-sm border border-input bg-card px-1 text-sm font-medium text-card-foreground outline-none focus:border-foreground"
-    />
-  ) : (
-    <span
-      aria-hidden
-      className={cn(
-        "min-w-0 flex-1 text-sm transition-opacity motion-reduce:transition-none",
-        shouldRecede ? "font-normal" : "font-medium",
-        variant === "card"
-          ? cn(
-              "truncate",
-              shouldRecede
-                ? "text-secondary-label"
-                : isUnread || isWoke || status === "input"
-                  ? "text-foreground"
-                  : status === "failed"
-                    ? "text-foreground/95"
-                    : "text-foreground/90",
-            )
-          : cn(
-              "truncate group-focus-within/sidebar-row:text-foreground group-hover/sidebar-row:text-foreground",
-              shouldRecede
-                ? "text-secondary-label/70"
-                : props.isActive || isWoke || status === "input"
-                  ? "text-foreground"
-                  : isUnread
-                    ? "text-muted-foreground"
-                    : "text-secondary-label/70",
-            ),
-        isRegeneratingTitle && "opacity-55",
+  const title = (
+    <div className="flex min-w-0 flex-1 items-center gap-1.5">
+      {isRenaming ? (
+        <input
+          autoFocus
+          value={renamingTitle}
+          aria-label="Thread title"
+          onChange={(event) => onRenameTitleChange(event.target.value)}
+          onFocus={(event) => event.currentTarget.select()}
+          onKeyDown={handleRenameKeyDown}
+          onBlur={handleRenameBlur}
+          onClick={(event) => event.stopPropagation()}
+          onDoubleClick={(event) => event.stopPropagation()}
+          className="min-w-0 flex-1 rounded-sm border border-input bg-card px-1 text-sm font-medium text-card-foreground outline-none focus:border-foreground"
+        />
+      ) : (
+        <span
+          aria-hidden
+          className={cn(
+            "min-w-0 flex-1 text-sm transition-opacity motion-reduce:transition-none",
+            shouldRecede ? "font-normal" : "font-medium",
+            variant === "card"
+              ? cn(
+                  "truncate",
+                  shouldRecede
+                    ? "text-secondary-label"
+                    : isUnread || isWoke || status === "input"
+                      ? "text-foreground"
+                      : status === "failed"
+                        ? "text-foreground/95"
+                        : "text-foreground/90",
+                )
+              : cn(
+                  "truncate group-focus-within/sidebar-row:text-foreground group-hover/sidebar-row:text-foreground",
+                  shouldRecede
+                    ? "text-secondary-label/70"
+                    : props.isActive || isWoke || status === "input"
+                      ? "text-foreground"
+                      : isUnread
+                        ? "text-muted-foreground"
+                        : "text-secondary-label/70",
+                ),
+            isRegeneratingTitle && "opacity-55",
+          )}
+        >
+          {thread.title}
+        </span>
       )}
-    >
-      {thread.title}
-    </span>
+      {!isRenaming ? (
+        <ThreadIdentityMark
+          environmentId={thread.environmentId}
+          originChannel={originChannel}
+          participants={participants}
+        />
+      ) : null}
+    </div>
   );
   const accessibleTitle = isRenaming ? null : <span className="sr-only">{thread.title}</span>;
 
@@ -2024,7 +2128,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   </span>
                 ) : null}
                 {driverKind ? (
-                  <span className="inline-flex shrink-0 items-center">
+                  <span
+                    className="inline-flex shrink-0 items-center"
+                    {...(usageDotClass ? { "aria-label": "provider usage status" } : {})}
+                  >
                     <ProviderInstanceIcon
                       driverKind={driverKind}
                       displayName={
@@ -2037,6 +2144,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                       // Glyph dims, badge stays saturated; offset matches the composer trigger.
                       iconClassName="size-3.5 opacity-60"
                       badgeClassName="right-[-0.1875rem] bottom-[-0.1875rem] h-3 min-w-3 px-0.5 text-5xs"
+                      {...(usageDotClass ? { statusDotClassName: usageDotClass } : {})}
+                      {...(usageRingColor ? { statusDotRingColor: usageRingColor } : {})}
                     />
                   </span>
                 ) : null}
@@ -2095,7 +2204,7 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
   const gitCwd = thread.worktreePath ?? props.project?.workspaceRoot ?? null;
   const gitStatus = useEnvironmentQuery(
     leaseLiveStatus && (thread.branch != null || thread.worktreePath !== null) && gitCwd !== null
-      ? vcsEnvironment.status({
+      ? vcsEnvironment.listStatus({
           environmentId: thread.environmentId,
           input: { cwd: gitCwd },
         })
@@ -2227,6 +2336,11 @@ export default function Sidebar() {
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const workingShelfEnabled = useClientSettings((s) => s.sidebarWorkingShelfEnabled);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
+  const [threadGrouping, setThreadGrouping] = useLocalStorage(
+    LIST_THREAD_GROUPING_STORAGE_KEY,
+    DEFAULT_WEB_THREAD_GROUPING,
+    WebThreadGroupingSchema,
+  );
   const {
     settleThread,
     unsettleThread,
@@ -2345,6 +2459,57 @@ export default function Sidebar() {
       ),
     [environments],
   );
+  // Shared with the Board so the selection applies to both while they are on
+  // screen together, rather than being a sidebar-local view of the same data.
+  const {
+    mode: ownershipFilter,
+    relation: ownershipRelation,
+    setMode: setOwnershipFilter,
+    setRelation: setOwnershipRelation,
+  } = useOwnershipFilter();
+  // Per-environment claims (not primary-only): smart has no map while t3vm does.
+  const claimPersonIdByEnvironment = useAtomValue(identityClaimPersonIdByEnvironmentAtom);
+  const ownershipPredicate = useMemo(
+    () =>
+      buildOwnershipPredicate({
+        claimPersonIdByEnvironment,
+        mode: ownershipFilter,
+        relation: ownershipRelation,
+      }),
+    [claimPersonIdByEnvironment, ownershipFilter, ownershipRelation],
+  );
+
+  // Shared with classic list / Board so multi-env filters (e.g. hide t3vm) stick
+  // when switching sidebars.
+  const [storedEnvironmentFilter, setStoredEnvironmentFilter] = useLocalStorage(
+    LIST_ENVIRONMENT_FILTER_STORAGE_KEY,
+    EMPTY_LIST_ENVIRONMENT_FILTER,
+    ListEnvironmentFilterSchema,
+  );
+  const [settledShelfExpanded, setSettledShelfExpanded] = useLocalStorage(
+    SIDEBAR_V2_SETTLED_SHELF_EXPANDED_STORAGE_KEY,
+    DEFAULT_SIDEBAR_V2_SETTLED_SHELF_EXPANDED,
+    ListHideSettledSchema,
+  );
+  const availableEnvironmentIds = useMemo(
+    () => new Set(environments.map((environment) => environment.environmentId)),
+    [environments],
+  );
+  const selectedEnvironmentIds = useMemo(
+    () =>
+      resolveSelectedEnvironmentIds(
+        storedEnvironmentFilter as readonly EnvironmentId[],
+        availableEnvironmentIds,
+      ),
+    [availableEnvironmentIds, storedEnvironmentFilter],
+  );
+
+  const listOptionsActive =
+    ownershipFilter !== DEFAULT_SIDEBAR_OWNERSHIP_FILTER ||
+    ownershipRelation !== DEFAULT_OWNERSHIP_RELATION ||
+    !isAllEnvironmentsSelected(selectedEnvironmentIds) ||
+    settledShelfExpanded !== DEFAULT_SIDEBAR_V2_SETTLED_SHELF_EXPANDED;
+
   const environmentMachineById = useMemo(
     () =>
       new Map(
@@ -2424,6 +2589,20 @@ export default function Sidebar() {
       ),
     [projectGroups],
   );
+  const orderForThreadGrouping = useCallback(
+    (ordered: EnvironmentThreadShell[]) => {
+      if (threadGrouping !== "recency") return ordered;
+      return ordered
+        .slice()
+        .sort(
+          (left, right) =>
+            firstValidTimestampMs(right.latestUserMessageAt, right.updatedAt, right.createdAt) -
+              firstValidTimestampMs(left.latestUserMessageAt, left.updatedAt, left.createdAt) ||
+            left.id.localeCompare(right.id),
+        );
+    },
+    [threadGrouping],
+  );
 
   const nowMinute = useNowMinute();
   // Snooze wake times are second-precise, so classifying with the quantized
@@ -2440,6 +2619,20 @@ export default function Sidebar() {
   // app restarts keep it.
   const projectScopeKey = useUiStateStore((store) => store.sidebarProjectScopeKey);
   const setProjectScopeKey = useUiStateStore((store) => store.setSidebarProjectScopeKey);
+  useEffect(
+    () =>
+      subscribeToProjectReveal(({ environmentId, projectId }) => {
+        const projectGroup = projectGroups.find((project) =>
+          project.memberProjectRefs.some(
+            (ref) => ref.environmentId === environmentId && ref.projectId === projectId,
+          ),
+        );
+        if (projectGroup !== undefined) {
+          setProjectScopeKey(projectGroup.projectKey);
+        }
+      }),
+    [projectGroups, setProjectScopeKey],
+  );
   // {value, label} items let Base UI drive the combobox selection contract
   // while the popup search filters the same collection.
   const projectScopeItems = useMemo(
@@ -2611,14 +2804,18 @@ export default function Sidebar() {
     // Snooze classification uses a REAL clock, not the quantized minute:
     // wake times are second-precise and a woken thread must not linger on
     // the shelf for the rest of the minute. snoozeWakeTick re-runs this
-    // memo exactly at the next wake boundary.
+    // memo exactly at the next wake boundary. nowMinute also retriggers so
+    // recency grouping of the same visible set can move across buckets.
+    void nowMinute;
     void snoozeWakeTick;
     const preciseNow = new Date().toISOString();
     const visible = threads.filter(
       (thread) =>
         thread.archivedAt === null &&
+        matchesEnvironmentFilter(thread.environmentId, selectedEnvironmentIds) &&
         (scopedProjectKeys === null ||
-          scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
+          scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)) &&
+        ownershipPredicate(thread),
     );
     observeInboxReturns(workingShelfEnabled ? threads : null);
     const pinned: EnvironmentThreadShell[] = [];
@@ -2647,6 +2844,9 @@ export default function Sidebar() {
       if (capabilities?.threadPinning === true && capabilities.threadPinReorder === true) {
         draggable.add(threadKey);
       }
+      // Snooze outranks settlement and pinning until the thread wakes.
+      // Settlement outranks pinning so a pinned thread that has settled
+      // stays in the settled tail (#7969) instead of a separate pin bucket.
       if (optimisticDrop?.key === threadKey) {
         const projected = applySidebarThreadDrop(
           thread,
@@ -2665,7 +2865,6 @@ export default function Sidebar() {
             : { ...projected, snoozedAt: thread.snoozedAt, snoozedUntil: thread.snoozedUntil },
         );
       } else if (supportsSnooze && effectiveSnoozed(thread, { now: preciseNow })) {
-        // Snooze outranks settlement and pinning until the thread wakes.
         snoozed.push(thread);
       } else if (supportsSettlement && thread.settledOverride === "settled") {
         settled.push(thread);
@@ -2679,7 +2878,8 @@ export default function Sidebar() {
     // user-arranged keys first, keyless threads in creation order below.
     // Server capability only gates DRAGGING — it must not influence the
     // sort, or mixed-version fleets would render different pinned orders on
-    // web and mobile from the same data.
+    // web and mobile from the same data. The fork's grouping
+    // preference therefore applies to the active rows, not to pins.
     const sortedPinned = sortPinnedThreadsForSidebar(pinned);
     const sortedActive = workingShelfEnabled
       ? sortInboxThreadsByReturn(active, (thread) =>
@@ -2687,7 +2887,7 @@ export default function Sidebar() {
             scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
           ),
         )
-      : sortThreadsForSidebar(active);
+      : orderForThreadGrouping(sortThreadsForSidebar(active));
     return {
       pinnedThreads:
         optimisticDrop?.section !== "pinned" || optimisticDrop.order === null
@@ -2715,13 +2915,16 @@ export default function Sidebar() {
           firstValidTimestampMs(left.snoozedUntil ?? null) -
           firstValidTimestampMs(right.snoozedUntil ?? null),
       ),
-      settledThreads: sortSettledThreads(settled),
+      settledThreads: sortSettledThreadsForSidebar(settled),
       snoozeNow: preciseNow,
     };
   }, [
     nowMinute,
     optimisticDrop,
+    orderForThreadGrouping,
+    ownershipPredicate,
     scopedProjectKeys,
+    selectedEnvironmentIds,
     serverConfigs,
     snoozeWakeTick,
     threads,
@@ -2803,7 +3006,7 @@ export default function Sidebar() {
   // filter context changes so a scope/search flip never inherits a deep
   // page state.
   const [settledVisibleCount, setSettledVisibleCount] = useState(SETTLED_TAIL_INITIAL_COUNT);
-  const settledResetKey = projectScopeKey ?? "all";
+  const settledResetKey = `${projectScopeKey ?? "all"}:${selectedEnvironmentIds.join(",")}`;
   const lastSettledResetKeyRef = useRef(settledResetKey);
   if (lastSettledResetKeyRef.current !== settledResetKey) {
     lastSettledResetKeyRef.current = settledResetKey;
@@ -2831,11 +3034,7 @@ export default function Sidebar() {
     () => setSettledVisibleCount((count) => count + SETTLED_TAIL_PAGE_COUNT),
     [],
   );
-  const [settledShelfExpanded, setSettledShelfExpanded] = useLocalStorage(
-    SETTLED_SHELF_EXPANDED_KEY,
-    false,
-    Schema.Boolean,
-  );
+
   const toggleSettledShelf = useCallback(
     () => setSettledShelfExpanded((value) => !value),
     [setSettledShelfExpanded],
@@ -3214,11 +3413,15 @@ export default function Sidebar() {
             // Never navigate away from a thread that did not settle.
             if (!isAtomCommandInterrupted(result)) {
               const error = squashAtomCommandFailure(result);
+              const message = error instanceof Error ? error.message : "An error occurred.";
+              if (isIdentityClaimRequiredMessage(message)) {
+                requestIdentityClaimGate(threadRef.environmentId);
+              }
               toastManager.add(
                 stackedThreadToast({
                   type: "error",
                   title: "Failed to settle thread",
-                  description: error instanceof Error ? error.message : "An error occurred.",
+                  description: message,
                 }),
               );
             }
@@ -3958,7 +4161,7 @@ export default function Sidebar() {
       const count = threadKeys.length;
       // Snooze (N) is offered when every selected thread can actually take
       // it — a mixed selection with blocked-on-you work would half-apply.
-      const selectionNow = new Date();
+      const selectionNow = new Date().toISOString();
       const selectedThreads = threadKeys.flatMap((threadKey) => {
         const thread = threadByKeyRef.current.get(threadKey);
         return thread ? [thread] : [];
@@ -3966,7 +4169,7 @@ export default function Sidebar() {
       const canSnoozeSelection = selectedThreads.every(
         (thread) =>
           serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSnooze === true &&
-          canSnooze(thread, { now: selectionNow.toISOString() }),
+          canSnooze(thread, { now: selectionNow }),
       );
       const titleRegenerationThreads = selectedThreads.filter(
         (thread) =>
@@ -4330,7 +4533,7 @@ export default function Sidebar() {
             startThreadRename(threadRef, thread.title);
             return;
           case "regenerate-title": {
-            if (isRegeneratingTitle) return;
+            if (!supportsTitleRegeneration || isRegeneratingTitle) return;
             const result = await updateThreadMetadata({
               environmentId: threadRef.environmentId,
               input: { threadId: threadRef.threadId, regenerateTitle: true },
@@ -4506,11 +4709,14 @@ export default function Sidebar() {
     window.addEventListener("keydown", onWindowKeyDown);
     return () => window.removeEventListener("keydown", onWindowKeyDown);
   }, [
+    isMobile,
     keybindings,
     navigateToThread,
     orderedThreadKeys,
     routeTerminalOpen,
     routeThreadKey,
+    router,
+    setOpenMobile,
     threadByKey,
   ]);
 
@@ -4560,6 +4766,7 @@ export default function Sidebar() {
     [isMobile, newThreadContext, projectGroups.length, setOpenMobile],
   );
 
+  const commandPaletteShortcutLabel = shortcutLabelForCommand(keybindings, "commandPalette.toggle");
   // The button mirrors chat.new: in multi-project setups both route through
   // the command palette's "New thread in..." picker, and in single-project
   // setups both create immediately. In multi-project setups the label is only
@@ -4734,6 +4941,181 @@ export default function Sidebar() {
               activeSearchResultIndex={activeSearchResultIndex}
               onClearSearch={clearThreadSearch}
             />
+            <div className="flex items-center gap-1">
+              {projectGroups.length > 0 ? (
+                <>
+                  <Menu>
+                    <MenuTrigger
+                      render={
+                        <SidebarMenuButton
+                          size="icon"
+                          type="button"
+                          aria-label={`Thread ordering: ${WEB_THREAD_GROUPING_LABELS[threadGrouping]}`}
+                          data-testid="sidebar-thread-grouping"
+                        />
+                      }
+                    >
+                      {threadGrouping === "project" ? <ListIcon /> : <ClockIcon />}
+                    </MenuTrigger>
+                    <MenuPopup align="start">
+                      <MenuRadioGroup
+                        value={threadGrouping}
+                        onValueChange={(value) => setThreadGrouping(value as WebThreadGrouping)}
+                      >
+                        {WEB_THREAD_GROUPINGS.filter((grouping) => grouping !== "none").map(
+                          (grouping) => (
+                            <MenuRadioItem
+                              key={grouping}
+                              value={grouping}
+                              closeOnClick
+                              data-testid={`sidebar-thread-grouping-${grouping}`}
+                            >
+                              {grouping === "project" ? <ListIcon /> : <ClockIcon />}
+                              {WEB_THREAD_GROUPING_LABELS[grouping]}
+                            </MenuRadioItem>
+                          ),
+                        )}
+                      </MenuRadioGroup>
+                    </MenuPopup>
+                  </Menu>
+                  <Menu>
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <MenuTrigger
+                            render={
+                              <SidebarMenuButton
+                                size="icon"
+                                type="button"
+                                className="relative shrink-0"
+                                isActive={listOptionsActive}
+                                aria-label="View and filters"
+                                data-testid="sidebar-view-options-trigger"
+                              />
+                            }
+                          />
+                        }
+                      >
+                        <ListFilterIcon />
+                        {listOptionsActive ? (
+                          <span
+                            aria-hidden
+                            className="absolute top-1.5 right-1.5 size-1.5 rounded-full bg-primary"
+                          />
+                        ) : null}
+                      </TooltipTrigger>
+                      <TooltipPopup side="bottom">View & filters</TooltipPopup>
+                    </Tooltip>
+                    <MenuPopup align="end" side="bottom" className="min-w-56">
+                      <MenuGroup>
+                        <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
+                          Ownership
+                        </div>
+                        <MenuRadioGroup
+                          value={ownershipFilter}
+                          onValueChange={(value) => {
+                            if (value !== "any" && value !== "mine" && value !== "theirs") return;
+                            setOwnershipFilter(value);
+                          }}
+                        >
+                          {SIDEBAR_OWNERSHIP_FILTERS.map((value) => (
+                            <MenuRadioItem
+                              key={value}
+                              value={value}
+                              closeOnClick={false}
+                              data-testid={`sidebar-ownership-filter-${value}`}
+                            >
+                              {SIDEBAR_OWNERSHIP_FILTER_LABELS[value]}
+                            </MenuRadioItem>
+                          ))}
+                        </MenuRadioGroup>
+                      </MenuGroup>
+                      {ownershipFilter === "mine" || ownershipFilter === "theirs" ? (
+                        <>
+                          <MenuSeparator />
+                          <MenuGroup>
+                            <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
+                              {ownershipFilter === "mine" ? "Mine includes" : "Theirs includes"}
+                            </div>
+                            <MenuRadioGroup
+                              value={ownershipRelation}
+                              onValueChange={(value) => {
+                                if (!isOwnershipRelation(value)) return;
+                                setOwnershipRelation(value);
+                              }}
+                            >
+                              {SIDEBAR_OWNERSHIP_RELATIONS.map((value) => (
+                                <MenuRadioItem
+                                  key={value}
+                                  value={value}
+                                  closeOnClick={false}
+                                  data-testid={`sidebar-ownership-relation-${value}`}
+                                >
+                                  {SIDEBAR_OWNERSHIP_RELATION_LABELS[value]}
+                                </MenuRadioItem>
+                              ))}
+                            </MenuRadioGroup>
+                          </MenuGroup>
+                        </>
+                      ) : null}
+                      <MenuSeparator />
+                      <MenuGroup>
+                        <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
+                          Settled shelf
+                        </div>
+                        <MenuCheckboxItem
+                          checked={settledShelfExpanded}
+                          closeOnClick={false}
+                          data-testid="sidebar-settled-shelf-expanded"
+                          onCheckedChange={(checked) => setSettledShelfExpanded(checked === true)}
+                        >
+                          Expand settled shelf
+                        </MenuCheckboxItem>
+                      </MenuGroup>
+                      {environments.length > 1 ? (
+                        <>
+                          <MenuSeparator />
+                          <MenuGroup>
+                            <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
+                              Environment
+                            </div>
+                            <MenuCheckboxItem
+                              checked={isAllEnvironmentsSelected(selectedEnvironmentIds)}
+                              closeOnClick={false}
+                              data-testid="sidebar-environment-filter-all"
+                              onCheckedChange={() => setStoredEnvironmentFilter([])}
+                            >
+                              All environments
+                            </MenuCheckboxItem>
+                            {environments.map((environment) => (
+                              <MenuCheckboxItem
+                                key={environment.environmentId}
+                                checked={isEnvironmentSelected(
+                                  selectedEnvironmentIds,
+                                  environment.environmentId,
+                                )}
+                                closeOnClick={false}
+                                data-testid={`sidebar-environment-filter-${environment.environmentId}`}
+                                onCheckedChange={() => {
+                                  setStoredEnvironmentFilter([
+                                    ...toggleEnvironmentId(
+                                      selectedEnvironmentIds,
+                                      environment.environmentId,
+                                    ),
+                                  ]);
+                                }}
+                              >
+                                {environment.label}
+                              </MenuCheckboxItem>
+                            ))}
+                          </MenuGroup>
+                        </>
+                      ) : null}
+                    </MenuPopup>
+                  </Menu>
+                </>
+              ) : null}
+            </div>
           </SidebarGroup>
         }
       >
@@ -4971,6 +5353,32 @@ export default function Sidebar() {
                           </SortableThreadRow>
                         );
                       };
+                      const recencyHeaderBefore = (
+                        rows: readonly EnvironmentThreadShell[],
+                      ): Map<string, { id: string; label: string }> => {
+                        const headers = new Map<string, { id: string; label: string }>();
+                        const groups = groupSortedThreadsByRecency(
+                          rows,
+                          new Date(`${nowMinute}:00.000Z`),
+                        );
+                        if (
+                          threadGrouping !== "recency" ||
+                          !shouldShowRecencySectionHeaders(groups)
+                        ) {
+                          return headers;
+                        }
+                        for (const group of groups) {
+                          const first = group.threads[0];
+                          if (first === undefined) continue;
+                          headers.set(
+                            scopedThreadKey(scopeThreadRef(first.environmentId, first.id)),
+                            { id: group.id, label: group.label },
+                          );
+                        }
+                        return headers;
+                      };
+                      const activeRecencyHeaders = recencyHeaderBefore(activeThreads);
+                      const settledRecencyHeaders = recencyHeaderBefore(renderedSettledThreads);
                       const from = dragState?.activeSection ?? null;
                       const items: ReactNode[] = [
                         <SidebarDraftBlock
@@ -4984,7 +5392,26 @@ export default function Sidebar() {
                       ];
                       for (const item of sidebarListItems) {
                         if (item.kind === "thread") {
-                          items.push(renderThreadRow(threadByKey.get(item.key)!, item.section));
+                          const section = item.section;
+                          const recencyHeaders =
+                            section === "active"
+                              ? activeRecencyHeaders
+                              : section === "settled"
+                                ? settledRecencyHeaders
+                                : null;
+                          const group = recencyHeaders?.get(item.key);
+                          if (group !== undefined) {
+                            items.push(
+                              <li
+                                key={`recency-${section}-${group.id}`}
+                                data-testid={`sidebar-${section}-recency-${group.id}`}
+                                className="list-none px-2.5 pb-1 pt-3 text-xs font-medium text-sidebar-muted-foreground"
+                              >
+                                {group.label}
+                              </li>,
+                            );
+                          }
+                          items.push(renderThreadRow(threadByKey.get(item.key)!, section));
                           continue;
                         }
                         switch (item.marker) {
@@ -5009,6 +5436,15 @@ export default function Sidebar() {
                                 isDropTarget={dragTargetSection === "active"}
                               />,
                             );
+                            if (from === null && pinnedThreads.length > 0) {
+                              items.push(
+                                <li
+                                  key="pinned-divider-rest"
+                                  aria-hidden
+                                  className="mx-2.5 my-1.5 h-px list-none bg-sidebar-border/60"
+                                />,
+                              );
+                            }
                             break;
                           case "active-placeholder":
                             items.push(

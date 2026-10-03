@@ -67,6 +67,8 @@ function detail(
     proposedPlans: [],
     activities: [],
     checkpoints: [],
+    queuedMessages: [],
+    pendingTurnStart: null,
     session: session(threadId, status),
   };
   return AsyncResult.success<EnvironmentThreadState>({

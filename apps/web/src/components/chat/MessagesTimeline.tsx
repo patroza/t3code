@@ -1,4 +1,3 @@
-import { ArrowUpIcon, ClockIcon } from "lucide-react";
 import { ReadOnlySourcePreview } from "../files/AttachmentFilePreview";
 import { useRightPanelStore } from "~/rightPanelStore";
 import {
@@ -49,8 +48,6 @@ import {
 
 const EMPTY_AGENT_PANEL_MODEL = emptyAgentPanelModel();
 const NOOP_OPEN_AGENTS = () => {};
-const EMPTY_QUEUED_MESSAGES: ReadonlyArray<QueuedComposerMessage> = [];
-const NOOP_QUEUED_MESSAGE_ACTION = (_id: string) => {};
 const NOOP_USE_ARTIFACT_TEMPLATE = () => {};
 const NOOP_OPEN_ATTACHMENT = (_attachment: ChatFileAttachment) => {};
 import { resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
@@ -138,7 +135,6 @@ import type {
   KnownComposerContextRecord,
 } from "@t3tools/contracts";
 import { Button } from "../ui/button";
-import type { QueuedComposerMessage } from "../../queuedMessageStore";
 import { useAssetUrlRefresh, useAssetUrls, useAssetUrlState } from "../../assets/assetUrls";
 import { MediaVideoPlayer } from "../media/MediaVideoPlayer";
 import { getVirtualizedScrollFadeClassName } from "../ui/scroll-area";
@@ -299,9 +295,6 @@ interface TimelineRowSharedState {
   onCancelWorktreeSetup: (() => void) | null;
   onWorktreeSetupWorkLocally: (() => void) | null;
   onOpenWorktreeSetupTerminal: ((terminalId: string) => void) | null;
-  onSteerQueuedMessage: (id: string) => void;
-  steerQueuedMessageShortcutLabel: string | null;
-  onRemoveQueuedMessage: (id: string) => void;
 }
 
 interface TimelineRowActivityState {
@@ -310,6 +303,8 @@ interface TimelineRowActivityState {
   isCompacting: boolean;
   isRevertingCheckpoint: boolean;
   latestTurnId: TurnId | null;
+  /** Current plan step label for the working row, when the turn has a plan. */
+  workingStepLabel: string | null;
   unsettledTurnId: TurnId | null;
   /**
    * A worktree setup whose script is still running after the agent took
@@ -405,6 +400,7 @@ interface MessagesTimelineProps {
   agentPanelModel?: AgentPanelModel;
   onOpenAgents?: () => void;
   isWorking: boolean;
+  workingStepLabel?: string | null;
   isPreparingWorktree?: boolean;
   isCompacting?: boolean;
   activeTurnStartedAt: string | null;
@@ -463,11 +459,6 @@ interface MessagesTimelineProps {
   topFadeEnabled?: boolean;
   /** Non-null when older turns exist beyond the loaded window. */
   loadEarlier?: CitationHistoryPage | null;
-  /** Messages sent during the running turn. They render as ghost bubbles after the live rows. */
-  queuedMessages?: ReadonlyArray<QueuedComposerMessage>;
-  onSteerQueuedMessage?: (id: string) => void;
-  steerQueuedMessageShortcutLabel?: string | null;
-  onRemoveQueuedMessage?: (id: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -479,6 +470,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   citationHistoryLoading = false,
   onCiteAssistantText,
   isWorking,
+  workingStepLabel = null,
   worktreeSetup = null,
   onCancelWorktreeSetup,
   onWorktreeSetupWorkLocally,
@@ -522,10 +514,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   hideEmptyPlaceholder = false,
   topFadeEnabled = false,
   loadEarlier = null,
-  queuedMessages = EMPTY_QUEUED_MESSAGES,
-  onSteerQueuedMessage = NOOP_QUEUED_MESSAGE_ACTION,
-  steerQueuedMessageShortcutLabel = null,
-  onRemoveQueuedMessage = NOOP_QUEUED_MESSAGE_ACTION,
 }: MessagesTimelineProps) {
   const listIdentityKey = displayThreadKey ?? routeThreadKey;
   const rememberedPosition = useMemo(
@@ -785,7 +773,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         supportsConversationRollback,
         liveAgentTaskIds,
         worktreeSetup,
-        queuedMessages,
       },
       previous?.threadKey === listIdentityKey && previous.workspaceRoot === workspaceRoot
         ? previous.projection
@@ -808,7 +795,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     supportsConversationRollback,
     liveAgentTaskIds,
     worktreeSetup,
-    queuedMessages,
   ]);
   const rows = useStableRows(rawRows, listIdentityKey);
   const minimapItems = useMemo(() => deriveTimelineMinimapItems(rows), [rows]);
@@ -1173,9 +1159,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onCancelWorktreeSetup: onCancelWorktreeSetup ?? null,
       onWorktreeSetupWorkLocally: onWorktreeSetupWorkLocally ?? null,
       onOpenWorktreeSetupTerminal: onOpenWorktreeSetupTerminal ?? null,
-      onSteerQueuedMessage,
-      steerQueuedMessageShortcutLabel,
-      onRemoveQueuedMessage,
     }),
     [
       readyCitationRequest,
@@ -1209,9 +1192,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onCancelWorktreeSetup,
       onWorktreeSetupWorkLocally,
       onOpenWorktreeSetupTerminal,
-      onSteerQueuedMessage,
-      steerQueuedMessageShortcutLabel,
-      onRemoveQueuedMessage,
     ],
   );
   const backgroundWorktreeSetup =
@@ -1228,6 +1208,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       isCompacting,
       isRevertingCheckpoint,
       latestTurnId: latestTurn?.turnId ?? null,
+      workingStepLabel,
       // The same value the row-derivation uses, so a block and the placeholder
       // beside it can never disagree about whether a turn is still live.
       unsettledTurnId: deriveUnsettledTurnId(latestTurn ?? null, runningTurnId),
@@ -1242,6 +1223,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       // Deliberately the fields `deriveUnsettledTurnId` reads, not the object:
       // its identity changes on every thread-shell patch.
       latestTurn?.turnId,
+      workingStepLabel,
       latestTurn?.state,
       latestTurn?.completedAt,
       runningTurnId,
@@ -1293,7 +1275,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           <LegendList<MessagesTimelineRow>
             ref={listRef}
             data={rows}
-            extraData={`${listIdentityKey}:${rows.length}`}
+            // LegendList can retain a mounted container's previous child while
+            // anchored end-space is recomputed around a newly inserted turn.
+            // Include the thread identity so a huge-thread switch does not keep
+            // the previous pane's mounted children.
+            extraData={{ identity: listIdentityKey, rows }}
             keyExtractor={keyExtractor}
             getItemType={getItemType}
             renderItem={renderItem}
@@ -1679,6 +1665,10 @@ function TimelineMinimapNavigationButton({
 
 type TimelineWorkEntry = Extract<MessagesTimelineRow, { kind: "work" }>["groupedEntries"][number];
 type TimelineRow = MessagesTimelineRow;
+type TimelineUserInputQuestion = Extract<
+  MessagesTimelineRow,
+  { kind: "user-input" }
+>["userInput"]["questions"][number];
 
 const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: TimelineRow }) {
   const isExpandedToolGroup = row.kind === "work" && row.isExpandedToolGroup;
@@ -1742,10 +1732,10 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       ) : null}
       {row.kind === "assistant-meta" ? <AssistantMetaTimelineRow row={row} /> : null}
       {row.kind === "proposed-plan" ? <ProposedPlanTimelineRow row={row} /> : null}
+      {row.kind === "user-input" ? <UserInputTimelineRow row={row} /> : null}
       {row.kind === "working" ? <WorkingTimelineRow row={row} /> : null}
       {row.kind === "thinking" ? <ThinkingTimelineRow /> : null}
       {row.kind === "worktree-setup" ? <WorktreeSetupTimelineRow row={row} /> : null}
-      {row.kind === "queued-message" ? <QueuedMessageTimelineRow row={row} /> : null}
     </div>
   );
 });
@@ -1772,109 +1762,6 @@ function WorktreeSetupTimelineRow({
       }
       onOpenTerminal={onOpenTerminal}
     />
-  );
-}
-
-/** A message waiting for the running turn: a dashed user bubble with icon actions inside it. */
-function QueuedMessageTimelineRow({
-  row,
-}: {
-  row: Extract<TimelineRow, { kind: "queued-message" }>;
-}) {
-  const ctx = use(TimelineRowCtx);
-  const { queuedMessage } = row;
-  const attachmentCount = queuedMessage.images.length + queuedMessage.files.length;
-  const contextCount =
-    queuedMessage.terminalContexts.length +
-    queuedMessage.previewAnnotations.length +
-    queuedMessage.reviewComments.length;
-  const text = queuedMessage.prompt.trim();
-  const sending = queuedMessage.sending !== undefined;
-  const statusLabel = sending
-    ? "Sending to the agent"
-    : queuedMessage.holdUntilUserAction
-      ? "Waits for Send now"
-      : row.isNext
-        ? "Sends after the next tool call or when the turn ends"
-        : "Sends after the messages above it";
-  return (
-    <div className="flex flex-col items-end" data-queued-message-id={queuedMessage.id}>
-      <div className="max-w-[80%] rounded-2xl border border-dashed border-border p-3 text-message-foreground/80">
-        {text.length > 0 ? (
-          <UserMessageBody text={text} skills={ctx.skills} markdownCwd={ctx.markdownCwd} />
-        ) : null}
-        {attachmentCount > 0 || contextCount > 0 ? (
-          <div className={cn("text-secondary-label text-xs", text.length > 0 && "mt-1.5")}>
-            {[
-              attachmentCount > 0
-                ? `${attachmentCount} attachment${attachmentCount === 1 ? "" : "s"}`
-                : null,
-              contextCount > 0
-                ? `${contextCount} context item${contextCount === 1 ? "" : "s"}`
-                : null,
-            ]
-              .filter(Boolean)
-              .join(", ")}
-          </div>
-        ) : null}
-        <div
-          className="mt-2 flex items-center gap-4 text-secondary-label text-xs"
-          data-scroll-anchor-ignore
-        >
-          <Tooltip>
-            <TooltipTrigger
-              render={<span className="inline-flex h-6 items-center gap-1" />}
-              aria-label={`${sending ? "Sending" : "Queued"}. ${statusLabel}.`}
-            >
-              <ClockIcon className="size-3.5" aria-hidden />
-              {sending ? "Sending" : "Queued"}
-            </TooltipTrigger>
-            <TooltipPopup side="bottom">{statusLabel}</TooltipPopup>
-          </Tooltip>
-          <div className={cn("ml-auto flex items-center gap-0.5", sending && "invisible")}>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    type="button"
-                    size="icon-xs"
-                    variant="ghost-muted"
-                    onPointerDown={(event) => event.preventDefault()}
-                    onClick={() => ctx.onSteerQueuedMessage(queuedMessage.id)}
-                    aria-label="Send now"
-                  />
-                }
-              >
-                <ArrowUpIcon className="size-3.5" aria-hidden />
-              </TooltipTrigger>
-              <TooltipPopup side="bottom">
-                Send now
-                {row.isNext && ctx.steerQueuedMessageShortcutLabel
-                  ? ` (${ctx.steerQueuedMessageShortcutLabel})`
-                  : null}
-              </TooltipPopup>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    type="button"
-                    size="icon-xs"
-                    variant="ghost-muted"
-                    onPointerDown={(event) => event.preventDefault()}
-                    onClick={() => ctx.onRemoveQueuedMessage(queuedMessage.id)}
-                    aria-label="Cancel and return to the composer"
-                  />
-                }
-              >
-                <XIcon className="size-3.5" aria-hidden />
-              </TooltipTrigger>
-              <TooltipPopup side="bottom">Cancel and return to the composer</TooltipPopup>
-            </Tooltip>
-          </div>
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -2530,7 +2417,7 @@ function ProposedPlanTimelineRow({
 }
 
 function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "working" }> }) {
-  const { isCompacting, isPreparingWorktree, backgroundWorktreeSetup } =
+  const { isCompacting, isPreparingWorktree, workingStepLabel, backgroundWorktreeSetup } =
     use(TimelineRowActivityCtx);
   // One span for every label so the setup-to-working handoff swaps text in
   // place instead of remounting the row.
@@ -2556,6 +2443,9 @@ function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "workin
           {label}
           {shimmer ? <ActivityShimmerOverlay>{label}</ActivityShimmerOverlay> : null}
         </span>
+        {!isPreparingWorktree && !isCompacting && workingStepLabel ? (
+          <span className="ml-2 text-muted-foreground/55">· {workingStepLabel}</span>
+        ) : null}
         {backgroundWorktreeSetup ? (
           <BackgroundWorktreeSetupChip snapshot={backgroundWorktreeSetup} />
         ) : null}
@@ -3363,6 +3253,113 @@ function WorkGroupToggleTimelineRow({
       <span className="min-w-0 flex-1 truncate text-secondary-label">{row.summary}</span>
       <TimelineRowTimestamp createdAt={row.createdAt} timestampFormat={ctx.timestampFormat} />
     </button>
+  );
+}
+
+/**
+ * A clarifying-question round trip: what the agent asked and what the user
+ * picked. The interactive prompt lives in the composer, so this row is the
+ * thread's only lasting record of the exchange.
+ */
+const UserInputTimelineRow = memo(function UserInputTimelineRow({
+  row,
+}: {
+  row: Extract<TimelineRow, { kind: "user-input" }>;
+}) {
+  const [showOptions, setShowOptions] = useState(false);
+  const { userInput } = row;
+  const hasUnpickedOptions = userInput.questions.some(
+    (question) => question.options.length > question.selectedLabels.length,
+  );
+
+  return (
+    <section
+      className="rounded-lg border border-border/45 bg-muted/16 px-3 py-2.5"
+      aria-label={row.entry.label}
+    >
+      {userInput.questions.map((question, index) => (
+        <div key={question.id} className={cn(index > 0 && "mt-3 border-t border-border/40 pt-3")}>
+          <div className="flex items-center gap-1.5 text-muted-foreground/60">
+            <MessageCircleIcon className="size-3.5 shrink-0 stroke-2" aria-hidden />
+            <span className="min-w-0 truncate text-xs font-semibold uppercase tracking-widest">
+              {question.header}
+            </span>
+          </div>
+          <p className="mt-1.5 text-sm leading-5 text-foreground">{question.question}</p>
+          <UserInputAnswer answered={userInput.answered} question={question} />
+          {showOptions && question.options.length > 0 ? (
+            <ul className="mt-2 space-y-1">
+              {question.options.map((option) => {
+                const picked = question.selectedLabels.includes(option.label);
+                return (
+                  <li
+                    key={option.label}
+                    className={cn(
+                      "rounded-md px-2 py-1 text-sm leading-4",
+                      picked ? "bg-primary/8 text-foreground/85" : "text-muted-foreground/70",
+                    )}
+                  >
+                    <span className="font-medium">{option.label}</span>
+                    {option.description && option.description !== option.label ? (
+                      <span className="ms-1.5 text-muted-foreground/60">{option.description}</span>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
+        </div>
+      ))}
+      {hasUnpickedOptions ? (
+        <button
+          type="button"
+          className="mt-2 flex cursor-pointer items-center gap-1 rounded-md text-xs text-muted-foreground transition-colors hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          aria-expanded={showOptions}
+          onClick={() => setShowOptions((value) => !value)}
+        >
+          <ChevronDownIcon
+            className={cn("size-3 transition-transform duration-200", showOptions && "rotate-180")}
+            aria-hidden
+          />
+          {showOptions ? "Hide options" : "Show options"}
+        </button>
+      ) : null}
+    </section>
+  );
+});
+
+function UserInputAnswer({
+  answered,
+  question,
+}: {
+  answered: boolean;
+  question: TimelineUserInputQuestion;
+}) {
+  const { selectedLabels, customAnswer } = question;
+
+  if (selectedLabels.length === 0 && !customAnswer) {
+    return (
+      <p className="mt-2 text-sm italic leading-5 text-muted-foreground">
+        {answered ? "No answer recorded" : "Awaiting your answer"}
+      </p>
+    );
+  }
+
+  return (
+    <div className="mt-2 space-y-1">
+      {selectedLabels.map((label) => (
+        <p key={label} className="flex items-start gap-1.5 text-sm leading-5 text-foreground">
+          <CheckIcon className="mt-0.5 size-3 shrink-0 text-primary" aria-hidden />
+          <span className="min-w-0 font-medium">{label}</span>
+        </p>
+      ))}
+      {customAnswer ? (
+        <p className="flex items-start gap-1.5 text-sm leading-5 text-foreground">
+          <CheckIcon className="mt-0.5 size-3 shrink-0 text-primary" aria-hidden />
+          <span className="min-w-0 whitespace-pre-wrap italic">{customAnswer}</span>
+        </p>
+      ) : null}
+    </div>
   );
 }
 

@@ -20,9 +20,11 @@ import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/ho
 import type { RemoteT3RunnerOptions } from "@t3tools/ssh/tunnel";
 import serverPackageJson from "../../server/package.json" with { type: "json" };
 
+import { configureDesktopEarlyStartup } from "./electron/DesktopEarlyStartup.ts";
 import * as DesktopIpc from "./ipc/DesktopIpc.ts";
 import * as ElectronApp from "./electron/ElectronApp.ts";
 import * as ElectronDialog from "./electron/ElectronDialog.ts";
+import * as MacApplicationIcon from "./electron/MacApplicationIcon.ts";
 import * as ElectronMenu from "./electron/ElectronMenu.ts";
 import * as ElectronPowerMonitor from "./electron/ElectronPowerMonitor.ts";
 import * as ElectronProtocol from "./electron/ElectronProtocol.ts";
@@ -36,6 +38,7 @@ import * as DesktopAppActivation from "./app/DesktopAppActivation.ts";
 import * as DesktopAppIdentity from "./app/DesktopAppIdentity.ts";
 import * as DesktopConnectionCatalogStore from "./app/DesktopConnectionCatalogStore.ts";
 import * as DesktopClerk from "./app/DesktopClerk.ts";
+import * as DesktopDeepLinks from "./app/DesktopDeepLinks.ts";
 import * as DesktopApplicationMenu from "./window/DesktopApplicationMenu.ts";
 import * as DesktopAssets from "./app/DesktopAssets.ts";
 import * as DesktopBackendConfiguration from "./backend/DesktopBackendConfiguration.ts";
@@ -54,6 +57,7 @@ import * as DesktopSnapShot from "./snapShot/DesktopSnapShot.ts";
 import * as DesktopAppSettings from "./settings/DesktopAppSettings.ts";
 import * as DesktopPreReadyPlatform from "./app/DesktopPreReadyPlatform.ts";
 import * as DesktopShellEnvironment from "./shell/DesktopShellEnvironment.ts";
+import * as DesktopOpenWith from "./shell/DesktopOpenWith.ts";
 import * as DesktopSshEnvironment from "./ssh/DesktopSshEnvironment.ts";
 import * as DesktopSshPasswordPrompts from "./ssh/DesktopSshPasswordPrompts.ts";
 import * as DesktopState from "./app/DesktopState.ts";
@@ -67,6 +71,12 @@ import * as DesktopWindow from "./window/DesktopWindow.ts";
 import * as DesktopWslBackend from "./wsl/DesktopWslBackend.ts";
 import * as DesktopWslEnvironment from "./wsl/DesktopWslEnvironment.ts";
 import * as DesktopWslServerTree from "./wsl/DesktopWslServerTree.ts";
+
+configureDesktopEarlyStartup({
+  app: Electron.app,
+  argv: process.argv,
+  writeStdout: (value) => process.stdout.write(value),
+});
 
 const desktopEnvironmentLayer = Layer.unwrap(
   Effect.gen(function* () {
@@ -122,7 +132,7 @@ const electronLayer = Layer.mergeAll(
   ElectronUpdater.layer,
   ElectronWindow.layer,
   DesktopIpc.layer(Electron.ipcMain),
-);
+).pipe(Layer.provideMerge(MacApplicationIcon.layer));
 
 const desktopFoundationLayer = Layer.mergeAll(
   MacPermissions.layer,
@@ -157,10 +167,16 @@ const desktopWindowLayer = DesktopWindow.layer.pipe(
   Layer.provideMerge(desktopPreviewLayer),
 );
 
+const desktopDeepLinksLayer = DesktopDeepLinks.layer.pipe(
+  Layer.provideMerge(desktopWindowLayer),
+  Layer.provideMerge(desktopFoundationLayer),
+);
+
 const desktopSnapShotLayer = DesktopSnapShot.layer.pipe(
   Layer.provideMerge(desktopWindowLayer),
   Layer.provideMerge(desktopFoundationLayer),
 );
+
 const desktopAppActivationLayer = DesktopAppActivation.layer.pipe(
   Layer.provide(desktopWindowLayer),
 );
@@ -196,9 +212,12 @@ const desktopApplicationLayer = Layer.mergeAll(
   DesktopApplicationMenu.layer,
   DesktopLinuxUrlHandler.layer,
   DesktopShellEnvironment.layer,
+  DesktopOpenWith.layer,
   desktopSshLayer,
 ).pipe(
+  Layer.provideMerge(desktopDeepLinksLayer),
   Layer.provideMerge(desktopSnapShotLayer),
+
   Layer.provideMerge(DesktopUpdates.layer),
   Layer.provideMerge(desktopWslBackendLayer),
   Layer.provideMerge(desktopLocalEnvironmentAuthLayer),

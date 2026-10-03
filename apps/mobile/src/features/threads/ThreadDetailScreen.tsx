@@ -87,6 +87,7 @@ import type {
   PendingUserInputDraftAnswer,
   ThreadFeedEntry,
 } from "../../lib/threadActivity";
+import { ComposerQueuedMessages } from "./ComposerQueuedMessages";
 import { PendingApprovalCard } from "./PendingApprovalCard";
 import { ComposerFeedback } from "./ComposerFeedback";
 import { ComposerUsageLimits } from "./ComposerUsageLimits";
@@ -111,7 +112,6 @@ import {
 } from "./ThreadComposer";
 import { ThreadFeed } from "./ThreadFeed";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
-import { resolveThreadFeedSubmissionAnchor } from "./thread-feed-live-follow";
 
 export interface ThreadDetailScreenProps {
   readonly worktreeSetup?: WorktreeSetupCardProps | null;
@@ -148,10 +148,12 @@ export interface ThreadDetailScreenProps {
   readonly threadSyncStatus?: EnvironmentThreadStatus;
   /** Non-null when older turns exist beyond the loaded window. */
   readonly loadEarlier?: { readonly loading: boolean; readonly onLoadEarlier: () => void } | null;
+  /** A send made now would be held in the steering queue, not open a turn. */
+  readonly sendEntersQueue: boolean;
+  readonly selectedThreadQueueCount: number;
   readonly environmentId: EnvironmentId;
   readonly projectWorkspaceRoot: string | null;
   readonly threadCwd: string | null;
-  readonly selectedThreadQueueCount: number;
   readonly queuedMessages: ReadonlyArray<QueuedThreadMessage>;
   readonly dispatchingMessageId: MessageId | null;
   readonly serverConfig: T3ServerConfig | null;
@@ -167,6 +169,16 @@ export interface ThreadDetailScreenProps {
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
   readonly onSendMessage: () => Promise<MessageId | null>;
+  readonly composerQueueItems: ReadonlyArray<{
+    readonly messageId: MessageId;
+    readonly text: string;
+    readonly attachmentCount: number;
+    readonly deliveryState: "waiting" | "sending" | "queued";
+    readonly queueSource: "local" | "server";
+  }>;
+  readonly onSteerQueuedMessage: (messageId: MessageId) => Promise<void>;
+  readonly onEditQueuedMessage: (messageId: MessageId, source: "local" | "server") => Promise<void>;
+  readonly onStartNewThread: () => void;
   readonly onReconnectEnvironment: () => void;
   readonly onUpdateThreadModelSelection: (modelSelection: ModelSelection) => void;
   readonly onUpdateThreadRuntimeMode: (runtimeMode: RuntimeMode) => void;
@@ -713,6 +725,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   }, [freeze, selectedThreadKey]);
 
   useEffect(() => {
+    // Anchor as soon as the target row exists in the feed — including local
+    // outbox "Sending" bubbles painted before thread detail has finished loading.
     if (
       submittedMessageId === null ||
       anchorMessageId !== submittedMessageId ||
@@ -770,11 +784,10 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     selectedThreadKey,
   ]);
 
+  const sendEntersQueue = props.sendEntersQueue;
   const handleSendMessage = useCallback(async () => {
     const targetThreadKey = selectedThreadKey;
-    const hasUserMessage = selectedThreadFeed.some(
-      (entry) => entry.type === "message" && entry.message.role === "user",
-    );
+    const sendWillQueue = sendEntersQueue;
     const messageId = await props.onSendMessage();
     if (messageId === null || selectedThreadKeyRef.current !== targetThreadKey) {
       return messageId;
@@ -783,27 +796,21 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     // A sent message makes the snapshot stale; a refused send leaves it in place.
     clearUsageLimitsFor(targetThreadKey);
 
-    setSubmittedMessageId(messageId);
-    setAnchorMessageId(
-      resolveThreadFeedSubmissionAnchor({
-        currentAnchorMessageId: anchorMessageId,
-        submittedMessageId: messageId,
-        hasStartedTurn: props.selectedThread.latestTurn !== null,
-        hasUserMessage,
-        queuedMessageCount: props.selectedThreadQueueCount,
-      }),
-    );
+    // A send the server holds in the steering queue stays a composer chip: it
+    // never becomes a feed row, so moving the feed for it would both yank a
+    // reader out of history now and leave the anchor armed to fire whenever
+    // the queue finally drains.
+    if (!sendWillQueue) {
+      // Rejoin the physical live edge before the outgoing-row anchor is
+      // applied. Enabling end maintenance alone is ineffective when the list
+      // was scrolled into older history.
+      listRef.current?.scrollToEnd({ animated: false });
+      setSubmittedMessageId(messageId);
+      setAnchorMessageId(messageId);
+    }
     composerEditorRef.current?.blur();
     return messageId;
-  }, [
-    anchorMessageId,
-    clearUsageLimitsFor,
-    props.onSendMessage,
-    props.selectedThread.latestTurn,
-    props.selectedThreadQueueCount,
-    selectedThreadFeed,
-    selectedThreadKey,
-  ]);
+  }, [clearUsageLimitsFor, props.onSendMessage, selectedThreadKey, sendEntersQueue]);
 
   const handleEditPendingMessage = useCallback(async (message: QueuedThreadMessage) => {
     try {
@@ -848,6 +855,11 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     });
   }, [freeze, scrollMessageToEnd]);
 
+  // Fork: upstream's pill is icon-only. The fork's feed chip said "New
+  // activity" when something arrived while the reader was away, which is the
+  // difference between "you scrolled up" and "you are missing something". The
+  // feed reports it now and the pill carries the dot.
+  const [hasUnreadActivity, setHasUnreadActivity] = useState(false);
   const showScrollToEndButton = contentPresentationKind === "ready" && !endFollowEnabled;
   const { themeAppearance } = useAppearancePreferences();
   const isDarkMode = themeAppearance === "dark";
@@ -940,6 +952,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               usesAutomaticContentInsets={props.usesAutomaticContentInsets}
               onHeaderMaterialVisibilityChange={props.onHeaderMaterialVisibilityChange}
               onEndFollowEnabledChange={setEndFollowEnabled}
+              onUnreadActivityChange={setHasUnreadActivity}
               skills={selectedProviderSkills}
               onUseArtifactTemplate={handleUseArtifactTemplate}
               loadEarlier={props.loadEarlier ?? null}
@@ -950,7 +963,13 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
         <View className="flex-1" />
       )}
 
-      {/* Floating composer — sticks to keyboard via KeyboardStickyView */}
+      {/*
+        Pin the composer to the bottom of a full-screen overlay host.
+        KeyboardStickyView only applies translateY for the IME — it must sit in a
+        full-height column (not `position: absolute; bottom: 0` on itself), or a
+        stale keyboard height leaves the input floating mid-thread with the feed
+        scrolling behind it.
+      */}
       {showContent ? (
         <KeyboardStickyView
           // iOS emits a native animated height target on both will-show and
@@ -982,6 +1001,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                     : null
                 }
                 showScrollToEnd={showScrollToEndButton}
+                hasUnreadActivity={hasUnreadActivity}
                 onScrollToEnd={handleScrollToEnd}
               />
               <View className="w-full self-center" style={{ maxWidth: contentMaxWidth }}>
@@ -1059,6 +1079,19 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                     ) : null}
                   </Animated.View>
                 ) : null}
+                {/* Fork: a send held in the steering queue stays a composer chip
+                    rather than becoming a feed row, so it belongs in the overlay
+                    beside the approval cards. */}
+                <ComposerQueuedMessages
+                  items={props.composerQueueItems}
+                  disabled={props.connectionStateLabel !== "connected"}
+                  onSteer={(messageId) => {
+                    void props.onSteerQueuedMessage(messageId);
+                  }}
+                  onEdit={(messageId, source) => {
+                    void props.onEditQueuedMessage(messageId, source);
+                  }}
+                />
               </View>
 
               {/* Hidden (not unmounted) while a user-input request owns the
@@ -1101,6 +1134,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                   onRemoveDraftImage={props.onRemoveDraftImage}
                   onStopThread={props.onStopThread}
                   onSendMessage={handleSendMessage}
+                  onStartNewThread={props.onStartNewThread}
                   onShowUsageLimits={showUsageLimits}
                   onUpdateModelSelection={props.onUpdateThreadModelSelection}
                   onUpdateRuntimeMode={props.onUpdateThreadRuntimeMode}

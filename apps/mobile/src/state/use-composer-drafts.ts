@@ -537,6 +537,15 @@ export function isComposerDraftEmpty(draft: ComposerDraft): boolean {
   return isEmptyDraft(draft);
 }
 
+/**
+ * Unsent composer content (text or attachments). Settings-only sticky draft
+ * state does not count for list draft dots.
+ */
+export function hasComposerDraftMessage(draft: ComposerDraft | null | undefined): boolean {
+  if (!draft) return false;
+  return draft.text.trim().length > 0 || draft.attachments.length > 0;
+}
+
 // The project stamp is identity, not content: a new-task draft with nothing
 // else in it is still empty and gets dropped like any other.
 function isEmptyDraft(draft: ComposerDraft): boolean {

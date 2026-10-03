@@ -19,6 +19,8 @@ import {
   findLatestProposedPlan,
   hasActionableProposedPlan,
   isLatestTurnSettled,
+  shouldShowPlanFollowUpComposer,
+  shouldShowPlanReadyStatus,
   selectHandoffImageResources,
   selectMessageImageResources,
   workEntryIndicatesToolNeutralStatus,
@@ -411,13 +413,7 @@ describe("hasActionableProposedPlan", () => {
   it("returns true for an unimplemented proposed plan", () => {
     expect(
       hasActionableProposedPlan({
-        id: "plan-1",
-        turnId: TurnId.make("turn-1"),
-        planMarkdown: "# Plan",
         implementedAt: null,
-        implementationThreadId: null,
-        createdAt: "2026-02-23T00:00:00.000Z",
-        updatedAt: "2026-02-23T00:00:01.000Z",
       }),
     ).toBe(true);
   });
@@ -425,15 +421,71 @@ describe("hasActionableProposedPlan", () => {
   it("returns false for a proposed plan already implemented elsewhere", () => {
     expect(
       hasActionableProposedPlan({
-        id: "plan-1",
-        turnId: TurnId.make("turn-1"),
-        planMarkdown: "# Plan",
         implementedAt: "2026-02-23T00:00:02.000Z",
-        implementationThreadId: ThreadId.make("thread-implement"),
-        createdAt: "2026-02-23T00:00:00.000Z",
-        updatedAt: "2026-02-23T00:00:02.000Z",
       }),
     ).toBe(false);
+  });
+});
+
+describe("shouldShowPlanFollowUpComposer", () => {
+  const actionablePlan = {
+    id: "plan-1",
+    turnId: TurnId.make("turn-1"),
+    planMarkdown: "# Plan",
+    implementedAt: null,
+    implementationThreadId: null,
+    createdAt: "2026-02-23T00:00:00.000Z",
+    updatedAt: "2026-02-23T00:00:01.000Z",
+  };
+
+  it("shows Plan Ready while still in plan mode with an actionable plan", () => {
+    expect(
+      shouldShowPlanFollowUpComposer({
+        interactionMode: "plan",
+        hasPendingUserInput: false,
+        proposedPlan: actionablePlan,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not require the turn to be settled (mid-run after exit_plan capture)", () => {
+    // Same gate whether or not a turn is still running — callers no longer pass settle.
+    expect(
+      shouldShowPlanFollowUpComposer({
+        interactionMode: "plan",
+        hasPendingUserInput: false,
+        proposedPlan: actionablePlan,
+      }),
+    ).toBe(true);
+  });
+
+  it("hides when not in plan mode or plan already implemented", () => {
+    expect(
+      shouldShowPlanFollowUpComposer({
+        interactionMode: "default",
+        hasPendingUserInput: false,
+        proposedPlan: actionablePlan,
+      }),
+    ).toBe(false);
+    expect(
+      shouldShowPlanFollowUpComposer({
+        interactionMode: "plan",
+        hasPendingUserInput: false,
+        proposedPlan: { ...actionablePlan, implementedAt: "2026-02-23T00:00:02.000Z" },
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("shouldShowPlanReadyStatus", () => {
+  it("is true for plan mode with an actionable plan flag", () => {
+    expect(
+      shouldShowPlanReadyStatus({
+        interactionMode: "plan",
+        hasPendingUserInput: false,
+        hasActionableProposedPlan: true,
+      }),
+    ).toBe(true);
   });
 });
 
@@ -477,6 +529,40 @@ describe("workEntryIndicatesToolNeutralStatus", () => {
 });
 
 describe("deriveWorkLogEntries", () => {
+  it("shows submitted structured answers with their question transcript", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "input-requested",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "user-input.requested",
+        summary: "User input requested",
+        payload: {
+          requestId: "request-1",
+          questions: [{ id: "goal", header: "Goal", question: "What is the goal?", options: [] }],
+        },
+      }),
+      makeActivity({
+        id: "input-resolved",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "user-input.resolved",
+        summary: "User input submitted",
+        payload: { requestId: "request-1", answers: { goal: "Make it sleep" } },
+      }),
+    ];
+
+    const resolved = deriveWorkLogEntries(activities).find(
+      (entry) => entry.id === "input-requested",
+    );
+    expect(resolved?.userInput).toMatchObject({
+      answered: true,
+      questions: [
+        {
+          customAnswer: "Make it sleep",
+        },
+      ],
+    });
+  });
+
   it("keeps the latest task progress without emitting plan-update log entries", () => {
     const activities = [
       makeActivity({ id: "before", kind: "tool.completed", summary: "Read files", sequence: 0 }),
@@ -1627,6 +1713,287 @@ describe("deriveWorkLogEntries", () => {
   });
 });
 
+describe("deriveWorkLogEntries clarifying questions", () => {
+  function makeQuestionActivities(options: {
+    readonly multiSelect?: boolean;
+    readonly answers?: Record<string, unknown>;
+  }): OrchestrationThreadActivity[] {
+    const requested = makeActivity({
+      id: "ask",
+      createdAt: "2026-02-23T00:00:01.000Z",
+      kind: "user-input.requested",
+      summary: "User input requested",
+      tone: "info",
+      payload: {
+        requestId: "req-1",
+        questions: [
+          {
+            id: "How should we proceed?",
+            header: "Approach",
+            question: "How should we proceed?",
+            options: [
+              { label: "Ship it", description: "Merge as-is" },
+              { label: "Iterate", description: "Another review round" },
+            ],
+            multiSelect: options.multiSelect === true,
+          },
+        ],
+      },
+    });
+    if (!options.answers) {
+      return [requested];
+    }
+    return [
+      requested,
+      makeActivity({
+        id: "answer",
+        createdAt: "2026-02-23T00:00:09.000Z",
+        kind: "user-input.resolved",
+        summary: "User input submitted",
+        tone: "info",
+        payload: { requestId: "req-1", answers: options.answers },
+      }),
+    ];
+  }
+
+  it("merges the request and its answer into one entry carrying the picked option", () => {
+    const entries = deriveWorkLogEntries(
+      makeQuestionActivities({ answers: { "How should we proceed?": "Iterate" } }),
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.label).toBe("Question: Approach");
+    expect(entries[0]?.userInput).toEqual({
+      requestId: "req-1",
+      answered: true,
+      questions: [
+        {
+          id: "How should we proceed?",
+          header: "Approach",
+          question: "How should we proceed?",
+          multiSelect: false,
+          options: [
+            { label: "Ship it", description: "Merge as-is" },
+            { label: "Iterate", description: "Another review round" },
+          ],
+          selectedLabels: ["Iterate"],
+        },
+      ],
+    });
+  });
+
+  it("keeps a free-text answer that matched no option", () => {
+    const entries = deriveWorkLogEntries(
+      makeQuestionActivities({ answers: { "How should we proceed?": "  Split it in two  " } }),
+    );
+
+    expect(entries[0]?.userInput?.questions[0]?.selectedLabels).toEqual([]);
+    expect(entries[0]?.userInput?.questions[0]?.customAnswer).toBe("Split it in two");
+  });
+
+  it("lists multi-select answers in question order", () => {
+    const entries = deriveWorkLogEntries(
+      makeQuestionActivities({
+        multiSelect: true,
+        answers: { "How should we proceed?": ["Iterate", "Ship it"] },
+      }),
+    );
+
+    expect(entries[0]?.userInput?.questions[0]?.selectedLabels).toEqual(["Ship it", "Iterate"]);
+  });
+
+  it("classifies comma-joined multi-select answers from OpenCode", () => {
+    const entries = deriveWorkLogEntries(
+      makeQuestionActivities({
+        multiSelect: true,
+        answers: { "How should we proceed?": "Iterate, Ship it" },
+      }),
+    );
+
+    expect(entries[0]?.userInput?.questions[0]).toMatchObject({
+      selectedLabels: ["Ship it", "Iterate"],
+    });
+    expect(entries[0]?.userInput?.questions[0]?.customAnswer).toBeUndefined();
+  });
+
+  it("keeps an option label that contains a comma whole", () => {
+    const entries = deriveWorkLogEntries([
+      makeActivity({
+        id: "ask",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "user-input.requested",
+        summary: "User input requested",
+        tone: "info",
+        payload: {
+          requestId: "req-1",
+          questions: [
+            {
+              id: "Scope?",
+              header: "Scope",
+              question: "Scope?",
+              options: [
+                { label: "Small, safe change", description: "Minimal diff" },
+                { label: "Tests", description: "Add coverage" },
+              ],
+              multiSelect: true,
+            },
+          ],
+        },
+      }),
+      makeActivity({
+        id: "answer",
+        createdAt: "2026-02-23T00:00:09.000Z",
+        kind: "user-input.resolved",
+        summary: "User input submitted",
+        tone: "info",
+        payload: { requestId: "req-1", answers: { "Scope?": "Small, safe change, Tests" } },
+      }),
+    ]);
+
+    expect(entries[0]?.userInput?.questions[0]?.selectedLabels).toEqual([
+      "Small, safe change",
+      "Tests",
+    ]);
+    expect(entries[0]?.userInput?.questions[0]?.customAnswer).toBeUndefined();
+  });
+
+  it("keeps a multi-select free-text answer containing a comma intact", () => {
+    const entries = deriveWorkLogEntries(
+      makeQuestionActivities({
+        multiSelect: true,
+        answers: { "How should we proceed?": "Ship it, but revert the migration first" },
+      }),
+    );
+
+    expect(entries[0]?.userInput?.questions[0]?.selectedLabels).toEqual([]);
+    expect(entries[0]?.userInput?.questions[0]?.customAnswer).toBe(
+      "Ship it, but revert the migration first",
+    );
+  });
+
+  it("shows the question while it is still unanswered", () => {
+    const entries = deriveWorkLogEntries(makeQuestionActivities({}));
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.userInput?.answered).toBe(false);
+    expect(entries[0]?.userInput?.questions[0]?.selectedLabels).toEqual([]);
+  });
+
+  it("drops the duplicate AskUserQuestion tool rows", () => {
+    const entries = deriveWorkLogEntries([
+      makeActivity({
+        id: "tool-started",
+        createdAt: "2026-02-23T00:00:00.500Z",
+        kind: "tool.started",
+        summary: "Tool call started",
+        payload: { itemType: "dynamic_tool_call", detail: "AskUserQuestion: {}" },
+      }),
+      makeActivity({
+        id: "tool-completed",
+        createdAt: "2026-02-23T00:00:10.000Z",
+        kind: "tool.completed",
+        summary: "Tool call",
+        payload: {
+          itemType: "dynamic_tool_call",
+          detail: 'AskUserQuestion: {"questions":[{"question":"How should we proceed?"}]}',
+          data: { toolName: "AskUserQuestion" },
+        },
+      }),
+      ...makeQuestionActivities({ answers: { "How should we proceed?": "Ship it" } }),
+    ]);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.userInput?.answered).toBe(true);
+  });
+
+  it("still shows the answer when the request activity is out of view", () => {
+    const entries = deriveWorkLogEntries([
+      makeActivity({
+        id: "answer-only",
+        createdAt: "2026-02-23T00:00:09.000Z",
+        kind: "user-input.resolved",
+        summary: "User input submitted",
+        tone: "info",
+        payload: {
+          requestId: "req-1",
+          answers: { "How should we proceed?": "Ship it" },
+        },
+      }),
+    ]);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.userInput).toEqual({
+      requestId: "req-1",
+      answered: true,
+      questions: [
+        {
+          id: "How should we proceed?",
+          header: "Answer",
+          question: "How should we proceed?",
+          multiSelect: false,
+          options: [],
+          selectedLabels: [],
+          customAnswer: "Ship it",
+        },
+      ],
+    });
+  });
+
+  it("falls back to the generic row when the questions cannot be parsed", () => {
+    const entries = deriveWorkLogEntries([
+      makeActivity({
+        id: "ask-broken",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "user-input.requested",
+        summary: "User input requested",
+        tone: "info",
+        payload: { requestId: "req-1", questions: [{ header: "Approach" }] },
+      }),
+    ]);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.userInput).toBeUndefined();
+    expect(entries[0]?.label).toBe("User input requested");
+  });
+
+  it("replaces an unparsed request row when its answer arrives", () => {
+    const entries = deriveWorkLogEntries([
+      makeActivity({
+        id: "ask-broken",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "user-input.requested",
+        summary: "User input requested",
+        tone: "info",
+        payload: { requestId: "req-1", questions: [{ header: "Approach" }] },
+      }),
+      makeActivity({
+        id: "answer",
+        createdAt: "2026-02-23T00:00:09.000Z",
+        kind: "user-input.resolved",
+        summary: "User input submitted",
+        tone: "info",
+        payload: {
+          requestId: "req-1",
+          answers: { "How should we proceed?": "Ship it" },
+        },
+      }),
+    ]);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.id).toBe("ask-broken");
+    expect(entries[0]?.userInput).toMatchObject({
+      requestId: "req-1",
+      answered: true,
+      questions: [
+        {
+          question: "How should we proceed?",
+          customAnswer: "Ship it",
+        },
+      ],
+    });
+  });
+});
+
 describe("image asset requests", () => {
   const image = {
     type: "image" as const,
@@ -2451,7 +2818,7 @@ describe("session activity performance", () => {
     expect(appendedEntries[1]).toBe(initialEntries[1]);
   });
 
-  it("reuses entries when appending to 20,000 ordered tool activities", () => {
+  it("reuses entries when appending to 20,000 ordered tool activities within 250 ms", () => {
     const activities = Array.from({ length: 20_000 }, (_, index) =>
       makeActivity({
         id: `benchmark-tool-${index}`,
@@ -2487,8 +2854,12 @@ describe("session activity performance", () => {
       }),
     ];
 
+    const startedAt = performance.now();
     const updatedEntries = deriveWorkLogEntries(updatedActivities);
     expect(updatedEntries).toHaveLength(20_001);
+    // GitHub-hosted CI has seen the 100ms #8006 budget fail at ~139ms on the
+    // same tree that passed PR CI. 250ms still fails a quadratic rebuild.
+    expect(performance.now() - startedAt).toBeLessThan(250);
     expect(initialEntries.every((entry, index) => updatedEntries[index] === entry)).toBe(true);
     expect(updatedEntries.at(-1)).toMatchObject({
       id: "benchmark-tool-appended",

@@ -12,6 +12,7 @@ import { Button } from "../components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
 import { SidebarInset } from "../components/ui/sidebar";
 import { WorkspacePageHeader } from "../components/WorkspacePageHeader";
+import { hasThreadDeepLinkIntent } from "../deepLinkStore";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import {
   useAllEnvironmentShellsBootstrapped,
@@ -38,7 +39,11 @@ function ChatIndexRouteView() {
  * Landing on the index route drops straight into a draft thread for the most
  * recently active project, so the first screen is a prompt instead of a dead
  * end. Falls back to an add-project hero when no project exists yet.
+ *
+ * While `?thread=` (or a pending deep-link store entry) is present, skip
+ * auto-draft so OmegentDeepLinkCoordinator can open the real thread.
  */
+
 function IndexDraftLanding() {
   const projects = useProjects();
   const threads = useThreadShells();
@@ -46,6 +51,8 @@ function IndexDraftLanding() {
   const handleNewThread = useNewThreadHandler();
   const startingRef = useRef(false);
   const [startState, setStartState] = useState({ failed: false, retryRequest: 0 });
+  // Re-read each render: store is module-level; coordinator clears/marks it.
+  const deferForDeepLink = hasThreadDeepLinkIntent();
 
   const mostRecentProject = useMemo(
     () =>
@@ -56,7 +63,7 @@ function IndexDraftLanding() {
   );
 
   useEffect(() => {
-    if (mostRecentProject === null || startingRef.current) {
+    if (mostRecentProject === null || startingRef.current || deferForDeepLink) {
       return;
     }
     startingRef.current = true;
@@ -66,9 +73,9 @@ function IndexDraftLanding() {
       startingRef.current = false;
       setStartState((state) => ({ ...state, failed: true }));
     });
-  }, [handleNewThread, mostRecentProject, startState.retryRequest]);
+  }, [deferForDeepLink, handleNewThread, mostRecentProject, startState.retryRequest]);
 
-  if (!bootstrapped) {
+  if (!bootstrapped || deferForDeepLink) {
     return null;
   }
   if (mostRecentProject !== null) {

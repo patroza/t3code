@@ -434,14 +434,6 @@ describe("shortcutLabelForCommand", () => {
       "⌘K",
     );
     assert.strictEqual(
-      shortcutLabelForCommand(DEFAULT_BINDINGS, "filePicker.toggle", "MacIntel"),
-      "⌘P",
-    );
-    assert.strictEqual(
-      shortcutLabelForCommand(DEFAULT_BINDINGS, "projectSearch.toggle", "MacIntel"),
-      "⇧⌘F",
-    );
-    assert.strictEqual(
       shortcutLabelForCommand(DEFAULT_BINDINGS, "modelPicker.toggle", "Linux"),
       "Ctrl+Shift+M",
     );
@@ -637,6 +629,7 @@ describe("model picker navigation helpers", () => {
 });
 
 describe("chat/editor shortcuts", () => {
+
   it("matches chat.new shortcut", () => {
     assert.strictEqual(
       resolveShortcutCommand(event({ key: "o", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {

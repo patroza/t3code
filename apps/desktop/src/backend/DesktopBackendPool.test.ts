@@ -13,6 +13,7 @@ import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
+import * as MacApplicationIcon from "../electron/MacApplicationIcon.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
@@ -84,7 +85,13 @@ function makePoolLayer(
         } satisfies DesktopBackendConfiguration.DesktopBackendConfiguration["Service"]),
         DesktopAppSettings.layerTest(),
         DesktopWslEnvironment.layerTest(),
-        ElectronDialog.layer,
+        ElectronDialog.layer.pipe(
+          Layer.provide(
+            Layer.succeed(MacApplicationIcon.MacApplicationIcon, {
+              resolveDataUrl: () => Effect.die("unexpected application icon resolution"),
+            } satisfies MacApplicationIcon.MacApplicationIcon["Service"]),
+          ),
+        ),
         Layer.succeed(DesktopWindow.DesktopWindow, {
           createMain: Effect.die("unexpected window create"),
           ensureMain: Effect.die("unexpected window ensure"),
@@ -100,6 +107,8 @@ function makePoolLayer(
           dispatchSnapShotEvent: () => Effect.void,
           zoomMain: () => Effect.die("unexpected zoom"),
           syncAppearance: Effect.void,
+          navigateToThread: () => Effect.void,
+          navigateToProject: () => Effect.void,
         } satisfies DesktopWindow.DesktopWindow["Service"]),
       ),
     ),

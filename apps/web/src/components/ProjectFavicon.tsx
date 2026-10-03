@@ -109,7 +109,7 @@ export function ProjectFavicon(input: {
   );
 }
 
-function ProjectFaviconFallback({
+export function ProjectFaviconFallback({
   className,
   icon: Icon,
   emoji,

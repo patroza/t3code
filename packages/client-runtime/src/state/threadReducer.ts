@@ -20,6 +20,12 @@ import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
 export type ThreadDetailReducerResult =
   | { readonly kind: "updated"; readonly thread: OrchestrationThread }
   | { readonly kind: "deleted" }
+  /**
+   * The cached transcript cannot be reconciled in place (a resync rewound past
+   * what this client holds). The caller must drop the cached snapshot and reload
+   * the thread rather than keep rendering stale messages.
+   */
+  | { readonly kind: "reload-required" }
   | { readonly kind: "unchanged" };
 
 /** Keep only a legacy route supplied by the server; detail events cannot resolve project hosts. */
@@ -90,6 +96,45 @@ function isResolvableContextWindowActivity(activity: OrchestrationThreadActivity
 }
 
 /**
+ * The oldest activity in a set, by chronology (`createdAt`, then `id`) rather
+ * than array position.
+ *
+ * `activities[0]` is not a stable "oldest": {@link activityOrder} sorts
+ * unsequenced rows to the end (a missing `sequence` is treated as newest) while
+ * the server snapshot lists legacy unsequenced rows first, so the first live
+ * append re-sorts the array and shifts index 0. Both the lazy-load *reshape*
+ * sentinel ({@link liveWindowOldestActivityId}) and the lazy-load *pagination
+ * cursor* derive from this so they agree on which row is oldest regardless of
+ * the reducer's placement of unsequenced rows. Returns `null` when empty.
+ */
+export function oldestActivityByChronology(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): OrchestrationThreadActivity | null {
+  let oldest: OrchestrationThreadActivity | null = null;
+  for (const activity of activities) {
+    if (
+      oldest === null ||
+      activity.createdAt < oldest.createdAt ||
+      (activity.createdAt === oldest.createdAt && activity.id < oldest.id)
+    ) {
+      oldest = activity;
+    }
+  }
+  return oldest;
+}
+
+/**
+ * The id of {@link oldestActivityByChronology}, used as the lazy-load reshape
+ * sentinel (a reconnect re-snapshot or checkpoint revert changes it; a plain
+ * append does not). Returns `null` when empty.
+ */
+export function liveWindowOldestActivityId(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): OrchestrationThreadActivity["id"] | null {
+  return oldestActivityByChronology(activities)?.id ?? null;
+}
+
+/**
  * Apply a single orchestration event to an `OrchestrationThread`, returning
  * the updated thread, a deletion signal, or an "unchanged" marker when the
  * event doesn't affect this thread.
@@ -137,6 +182,8 @@ export function applyThreadDetailEvent(
           deletedAt: null,
           pullRequests: [],
           messages: [],
+          queuedMessages: [],
+          pendingTurnStart: null,
           proposedPlans: [],
           activities: [],
           checkpoints: [],
@@ -358,6 +405,10 @@ export function applyThreadDetailEvent(
             : {}),
           runtimeMode: event.payload.runtimeMode,
           interactionMode: event.payload.interactionMode,
+          pendingTurnStart: {
+            messageId: event.payload.messageId,
+            requestedAt: event.payload.createdAt,
+          },
           updatedAt: event.occurredAt,
         },
       };
@@ -394,6 +445,7 @@ export function applyThreadDetailEvent(
         ...(event.payload.attachments !== undefined
           ? { attachments: event.payload.attachments }
           : {}),
+        ...(event.payload.source !== undefined ? { source: event.payload.source } : {}),
         ...(event.payload.context !== undefined ? { context: event.payload.context } : {}),
         turnId: event.payload.turnId,
         streaming: event.payload.streaming,
@@ -417,6 +469,9 @@ export function applyThreadDetailEvent(
           ...(message.streaming ? {} : { updatedAt: message.updatedAt }),
           ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
           ...(message.context !== undefined ? { context: message.context } : {}),
+          ...(entry.source === undefined && message.source !== undefined
+            ? { source: message.source }
+            : {}),
         };
       });
       if (!found) messages.push(message);
@@ -486,6 +541,46 @@ export function applyThreadDetailEvent(
       };
     }
 
+    // ── Queued messages ─────────────────────────────────────────────
+    case "thread.message-queued": {
+      const queuedMessage = {
+        messageId: event.payload.messageId,
+        text: event.payload.text,
+        attachments: event.payload.attachments,
+        ...(event.payload.modelSelection !== undefined
+          ? { modelSelection: event.payload.modelSelection }
+          : {}),
+        ...(event.payload.sourceProposedPlan !== undefined
+          ? { sourceProposedPlan: event.payload.sourceProposedPlan }
+          : {}),
+        ...(event.payload.source !== undefined ? { source: event.payload.source } : {}),
+        queuedAt: event.payload.queuedAt,
+      };
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          queuedMessages: [
+            ...thread.queuedMessages.filter((entry) => entry.messageId !== queuedMessage.messageId),
+            queuedMessage,
+          ],
+          updatedAt: event.occurredAt,
+        },
+      };
+    }
+
+    case "thread.queued-message-removed":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          queuedMessages: thread.queuedMessages.filter(
+            (entry) => entry.messageId !== event.payload.messageId,
+          ),
+          updatedAt: event.occurredAt,
+        },
+      };
+
     // ── Session ─────────────────────────────────────────────────────
     case "thread.session-set": {
       // Leaving the "running" session status is the turn-end signal: settle a
@@ -525,12 +620,25 @@ export function applyThreadDetailEvent(
             : thread.latestTurn,
       );
 
+      // Mirrors the server projections' pending-turn-start clearing: a
+      // running session with an active turn adopts it; terminal statuses
+      // abandon it.
+      const sessionStatus = event.payload.session.status;
+      const pendingTurnStart =
+        (sessionStatus === "running" && event.payload.session.activeTurnId !== null) ||
+        sessionStatus === "error" ||
+        sessionStatus === "stopped" ||
+        sessionStatus === "interrupted"
+          ? null
+          : thread.pendingTurnStart;
+
       return {
         kind: "updated",
         thread: {
           ...thread,
           session: event.payload.session,
           latestTurn,
+          pendingTurnStart,
           updatedAt: event.occurredAt,
         },
       };
@@ -623,6 +731,31 @@ export function applyThreadDetailEvent(
     }
 
     // ── Revert ──────────────────────────────────────────────────────
+    case "thread.messages-resynced": {
+      // Rewind to the last known-good message and replace only the tail after
+      // it. Everything before the anchor is untouched, so a resync costs a
+      // splice rather than re-downloading the whole thread.
+      const tail = Arr.fromIterable(event.payload.messages);
+      if (event.payload.afterMessageId === null) {
+        return { kind: "updated", thread: { ...thread, messages: tail } };
+      }
+      const anchorIndex = thread.messages.findIndex(
+        (entry) => entry.id === event.payload.afterMessageId,
+      );
+      if (anchorIndex === -1) {
+        // The anchor predates what we hold (or we never had it), so we cannot
+        // splice precisely. Reload rather than render a wrong transcript.
+        return { kind: "reload-required" };
+      }
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          messages: [...thread.messages.slice(0, anchorIndex + 1), ...tail],
+        },
+      };
+    }
+
     case "thread.reverted": {
       const checkpoints = pipe(
         thread.checkpoints,
@@ -739,6 +872,7 @@ export function applyThreadDetailEvent(
     case "thread.approval-response-requested":
     case "thread.user-input-response-requested":
     case "thread.checkpoint-revert-requested":
+    case "thread.context-compact-requested":
       return { kind: "unchanged" };
   }
 
