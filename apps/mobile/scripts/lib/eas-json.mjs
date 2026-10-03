@@ -93,6 +93,12 @@ export function pickUsableBuildId(raw) {
   return build?.id ? String(build.id) : undefined;
 }
 
+export function pickBuildStatus(raw) {
+  const build = extractJson(raw);
+  if (!build || Array.isArray(build) || !build.id || !build.status) return undefined;
+  return `${build.id}:${String(build.status).toUpperCase().replaceAll("-", "_")}`;
+}
+
 export function pickLatestFinishedRuntime(raw) {
   const builds = extractJson(raw);
   if (!Array.isArray(builds)) return undefined;
@@ -105,6 +111,7 @@ export function pickLatestFinishedRuntime(raw) {
 const MODES = new Map([
   ["fingerprint-hash", { pick: pickFingerprintHash, required: true }],
   ["usable-build-id", { pick: pickUsableBuildId, required: false }],
+  ["build-status", { pick: pickBuildStatus, required: true }],
   ["latest-finished-runtime", { pick: pickLatestFinishedRuntime, required: false }],
 ]);
 
