@@ -68,6 +68,7 @@ describe("searchSettings", () => {
     ).toEqual([]);
     expect(searchSettings("work").map((item) => item.id)).toEqual([
       "storage-worktrees",
+      "working-shelf",
       "worktree-remove-confirmation",
       "network-access",
       "project-defaults",
