@@ -2529,8 +2529,7 @@ export default function Sidebar() {
       ),
     [environments],
   );
-  // Shared with the Board so the selection applies to both while they are on
-  // screen together, rather than being a sidebar-local view of the same data.
+  // Keep ownership selection consistent across thread lists.
   const {
     mode: ownershipFilter,
     relation: ownershipRelation,
@@ -2549,7 +2548,7 @@ export default function Sidebar() {
     [claimPersonIdByEnvironment, ownershipFilter, ownershipRelation],
   );
 
-  // Shared with classic list / Board so multi-env filters (e.g. hide t3vm) stick
+  // Shared with classic list so multi-env filters (e.g. hide t3vm) stick
   // when switching sidebars.
   const [storedEnvironmentFilter, setStoredEnvironmentFilter] = useLocalStorage(
     LIST_ENVIRONMENT_FILTER_STORAGE_KEY,

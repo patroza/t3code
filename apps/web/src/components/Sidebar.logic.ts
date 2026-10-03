@@ -148,7 +148,7 @@ export function resolveSidebarRowAccessibility(input: {
 export const SIDEBAR_THREAD_PREWARM_LIMIT = 3;
 // Settled-tail paging: recent history is the common lookup; the deep tail
 // stays behind an explicit Show more. Shared by SidebarV2, classic Recent
-// (hide-settled shelf + recency headers), and the board.
+// (hide-settled shelf + recency headers).
 export const SETTLED_TAIL_INITIAL_COUNT = 10;
 export const SETTLED_TAIL_PAGE_COUNT = 25;
 export type SidebarNewThreadEnvMode = "local" | "worktree";
@@ -714,8 +714,7 @@ export type SidebarV2ThreadContextMenuAction =
   | "copy-branch"
   | "delete";
 
-// Single source for the per-thread menu on both v2 surfaces (sidebar rows
-// and board cards) so the two can't drift apart item-by-item.
+// Per-thread actions for Sidebar V2 rows.
 export function buildSidebarV2ThreadContextMenuItems(input: {
   branch: string | null;
   supportsSettlement: boolean;
@@ -956,7 +955,7 @@ export function hasUnseenCompletion(thread: ThreadStatusInput): boolean {
 }
 
 /**
- * Shared settled classification for display surfaces (sidebar v1/v2, board),
+ * Shared settled classification for display surfaces (sidebar v1/v2),
  * so they always agree on what is settled. Threads on servers without the
  * settlement capability (old server, or descriptor not loaded yet) never
  * classify as settled: the user could neither un-settle nor pin them, so

@@ -118,7 +118,7 @@ export type GitResolvedPullRequest = typeof GitResolvedPullRequest.Type;
  *   for the active thread / git chrome.
  * - `list`: still keeps remote/PR state **up to date** via a **shared budgeted**
  *   refresher for all list-interested worktrees (not one poller fiber per row).
- *   Use for sidebar/board/list PR badges.
+ *   Use for sidebar/list PR badges.
  */
 export const VcsStatusSubscribeMode = Schema.Literals(["full", "list"]);
 export type VcsStatusSubscribeMode = typeof VcsStatusSubscribeMode.Type;

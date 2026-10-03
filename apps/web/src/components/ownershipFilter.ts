@@ -2,8 +2,7 @@
  * The Mine / Theirs ownership filter, shared across every thread surface.
  *
  * The selection is a single user-level preference — "whose work am I looking
- * at" — not a per-surface one, so the Sidebar and the Board read and write the
- * same two keys and update together while both are on screen.
+ * at" — shared by the thread lists.
  *
  * The values are persisted as bare strings rather than JSON, which predates
  * `useLocalStorage`'s codec. Re-encoding them would silently reset every
@@ -117,9 +116,8 @@ export interface OwnershipFilterableThread {
 /**
  * Builds the ownership predicate once for a list pass.
  *
- * Every surface that lists threads must filter through this rather than
- * re-deriving the call: the Board shipped without it and silently showed
- * everyone's threads while the Sidebar beside it was filtered to Mine.
+ * Every surface that lists threads uses this predicate to apply the same
+ * ownership selection.
  */
 export function buildOwnershipPredicate(input: {
   readonly claimPersonIdByEnvironment: ReadonlyMap<string, string | null | undefined> | undefined;

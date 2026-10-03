@@ -278,7 +278,7 @@ export const make = Effect.gen(function* () {
     return lock.withPermits(1)(effect);
   };
   const pollersRef = yield* SynchronizedRef.make(new Map<string, ActiveRemotePoller>());
-  /** cwd → list-mode subscriber count (high-cardinality sidebar/board rows). */
+  /** cwd → list-mode subscriber count (high-cardinality sidebar rows). */
   const listInterestRef = yield* SynchronizedRef.make(new Map<string, number>());
   const listRefreshFiberRef = yield* SynchronizedRef.make<Fiber.Fiber<void, never> | null>(null);
   /** Round-robin cursor across list-interested cwds. */

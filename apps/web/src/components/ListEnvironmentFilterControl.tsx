@@ -20,7 +20,7 @@ export function ListEnvironmentFilterControl(props: {
   environments: readonly ListEnvironmentFilterOption[];
   selectedEnvironmentIds: readonly EnvironmentId[];
   onSelectedEnvironmentIdsChange: (next: readonly EnvironmentId[]) => void;
-  /** Compact trigger for narrow sidebar; default is board/header-sized. */
+  /** Compact trigger for narrow sidebar; default is header-sized. */
   size?: "sm" | "xs";
   className?: string;
   triggerClassName?: string;
