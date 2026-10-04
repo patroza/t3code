@@ -1312,6 +1312,7 @@ it.effect("retries a failed workspace preparation on the same run", () => {
       fetchFailures-- > 0
         ? Effect.fail(
             new GitCommandError({
+              failureKind: "unknown",
               operation: "GitVcsDriver.fetchRemote",
               command: "git",
               cwd: project.workspaceRoot,
