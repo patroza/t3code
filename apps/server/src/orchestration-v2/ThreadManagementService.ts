@@ -11,6 +11,7 @@ import {
   type ModelSelection,
   type OrchestrationV2Actor,
   type OrchestrationV2Command,
+  type OrchestrationV2GetTurnItemResult,
   type OrchestrationV2ServerCommand,
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2CreationSource,
@@ -23,6 +24,7 @@ import {
   RunId,
   type ScheduledTaskId,
   ThreadId,
+  type TurnItemId,
 } from "@t3tools/contracts";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as Context from "effect/Context";
@@ -34,6 +36,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as Orchestrator from "./Orchestrator.ts";
+import { projectTurnItemForDetail } from "./WireProjection.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 
 export type ThreadManagementSendMode = "auto" | "queue" | "steer" | "restart";
@@ -282,6 +285,14 @@ export interface ThreadManagementServiceShape {
   ) => Effect.Effect<Orchestrator.OrchestratorV2DispatchResult, Orchestrator.OrchestratorV2Error>;
   readonly getTimelinePage: Orchestrator.OrchestratorV2["Service"]["getTimelinePage"];
   readonly getMessageCount: Orchestrator.OrchestratorV2["Service"]["getMessageCount"];
+  /**
+   * One turn item with the input and output the thread stream withholds,
+   * bounded for the wire. Clients fetch it when a tool row is expanded.
+   */
+  readonly getTurnItem: (input: {
+    readonly threadId: ThreadId;
+    readonly itemId: TurnItemId;
+  }) => Effect.Effect<OrchestrationV2GetTurnItemResult, Orchestrator.OrchestratorV2Error>;
   readonly getThreadRecords: Orchestrator.OrchestratorV2["Service"]["getThreadRecords"];
   readonly getThreadProjection: (
     threadId: ThreadId,
@@ -319,6 +330,8 @@ export interface ThreadManagementServiceShape {
     input: ThreadManagementInterruptInput,
   ) => Effect.Effect<ThreadManagementInterruptResult, ThreadManagementFailure>;
   readonly getThreadEventSequence: Orchestrator.OrchestratorV2["Service"]["getThreadEventSequence"];
+  readonly recoverDelegatedTask: Orchestrator.OrchestratorV2["Service"]["recoverDelegatedTask"];
+  readonly delegatedTaskResultPending: Orchestrator.OrchestratorV2["Service"]["delegatedTaskResultPending"];
   readonly streamStoredEvents: Orchestrator.OrchestratorV2["Service"]["streamStoredEvents"];
   readonly streamStoredEventsFrom: Orchestrator.OrchestratorV2["Service"]["streamStoredEventsFrom"];
   readonly streamDomainEvents: Orchestrator.OrchestratorV2["Service"]["streamDomainEvents"];
@@ -758,6 +771,11 @@ const make = Effect.gen(function* () {
       ensureProjectionTranscript(threadId).pipe(
         Effect.andThen(orchestrator.getMessageCount(threadId)),
       ),
+    getTurnItem: (input) =>
+      ensureProjectionTranscript(input.threadId).pipe(
+        Effect.andThen(orchestrator.getTurnItem(input)),
+        Effect.map((item) => ({ item: item === null ? null : projectTurnItemForDetail(item) })),
+      ),
     getThreadRecords: (threadId, fields, filter) =>
       ensureProjectionTranscript(threadId).pipe(
         Effect.andThen(orchestrator.getThreadRecords(threadId, fields, filter)),
@@ -775,6 +793,8 @@ const make = Effect.gen(function* () {
     waitForThread,
     interruptThread,
     getThreadEventSequence: orchestrator.getThreadEventSequence,
+    recoverDelegatedTask: orchestrator.recoverDelegatedTask,
+    delegatedTaskResultPending: orchestrator.delegatedTaskResultPending,
     streamStoredEvents: orchestrator.streamStoredEvents,
     streamStoredEventsFrom: orchestrator.streamStoredEventsFrom,
     streamDomainEvents: orchestrator.streamDomainEvents,

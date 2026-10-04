@@ -201,6 +201,10 @@ const isolatedUnitTestFiles = [
   // Mocks `react` (useCallback/useMemo) and `@effect/atom-react`; under
   // isolate:false an earlier file binds real React and useContext is null.
   "src/hooks/useHandleNewThread.test.ts",
+  // Mocks `@effect/atom-react` so settled thread search returns the fixture.
+  // Under isolate:false an earlier file binds the real hook and the atom
+  // reports no matches.
+  "src/state/queries.threadSearch.test.tsx",
   // Mocks `~/localApi` persistence; under isolate:false the real ensureLocalApi
   // is already bound and hydration throws "Local API not found".
   "src/hooks/useSettings.test.ts",

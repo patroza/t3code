@@ -62,11 +62,21 @@ let renderer: ReactTestRenderer | undefined;
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  // Router 1.171 writes `history.scrollRestoration` while setting up a client
+  // router. This file runs in the node unit project, which has no DOM.
+  vi.stubGlobal("history", { scrollRestoration: "auto" });
+  vi.stubGlobal("document", {
+    addEventListener() {},
+    removeEventListener() {},
+  });
+  vi.stubGlobal("addEventListener", () => {});
+  vi.stubGlobal("self", globalThis);
   listBrowserImportSources.mockClear();
 });
 
 afterEach(async () => {
   await act(() => renderer?.unmount());
+  delete (globalThis as { __TSR_ROUTER__?: unknown }).__TSR_ROUTER__;
   vi.unstubAllGlobals();
 });
 
