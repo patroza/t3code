@@ -180,6 +180,7 @@ export default defineConfig({
       "t3code/no-unsupported-hermes-array-methods": "error",
       "t3code/no-native-title-tooltip": "error",
       "t3code/no-test-in-loop": "error",
+      "t3code/no-unscoped-has": "error",
       "t3code/namespace-node-imports": "error",
     },
     overrides: [

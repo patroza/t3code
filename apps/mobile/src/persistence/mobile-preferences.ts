@@ -88,6 +88,8 @@ export interface Preferences {
   readonly ownershipRelation?: "created" | "participated" | "both";
   /** Device-local counterpart of desktop's `planModeEnabled` legacy flag. */
   readonly planModeEnabled?: boolean;
+  /** Device-local counterpart of web's `sidebarWorkingShelfEnabled` beta. */
+  readonly workingShelfEnabled?: boolean;
   /** Model favorites belong to this device, like the web client setting. */
   readonly modelFavorites?: ReadonlyArray<{
     readonly provider: ProviderInstanceId;
@@ -96,6 +98,7 @@ export interface Preferences {
   /** Fresh keys reset both shelves to collapsed when users update. */
   readonly threadListSettledShelfExpanded?: boolean;
   readonly threadListSnoozedShelfExpanded?: boolean;
+  readonly threadListWorkingShelfExpanded?: boolean;
 }
 
 export class MobilePreferencesLoadError extends Schema.TaggedError<MobilePreferencesLoadError>()(
@@ -164,9 +167,11 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     ownershipFilter?: "any" | "mine" | "theirs";
     ownershipRelation?: "created" | "participated" | "both";
     planModeEnabled?: boolean;
+    workingShelfEnabled?: boolean;
     modelFavorites?: Preferences["modelFavorites"];
     threadListSettledShelfExpanded?: boolean;
     threadListSnoozedShelfExpanded?: boolean;
+    threadListWorkingShelfExpanded?: boolean;
   } = {};
 
   if (typeof parsed.liveActivitiesEnabled === "boolean") {
@@ -278,6 +283,9 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   if (typeof parsed.planModeEnabled === "boolean") {
     preferences.planModeEnabled = parsed.planModeEnabled;
   }
+  if (typeof parsed.workingShelfEnabled === "boolean") {
+    preferences.workingShelfEnabled = parsed.workingShelfEnabled;
+  }
   if (Array.isArray(parsed.modelFavorites)) {
     preferences.modelFavorites = parsed.modelFavorites.filter(
       (favorite) =>
@@ -294,6 +302,9 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.threadListSnoozedShelfExpanded === "boolean") {
     preferences.threadListSnoozedShelfExpanded = parsed.threadListSnoozedShelfExpanded;
+  }
+  if (typeof parsed.threadListWorkingShelfExpanded === "boolean") {
+    preferences.threadListWorkingShelfExpanded = parsed.threadListWorkingShelfExpanded;
   }
   return preferences;
 }
