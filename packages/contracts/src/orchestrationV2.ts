@@ -2934,6 +2934,8 @@ const OrchestrationV2InternalCommand = Schema.Union([
    * Records what a pull request watch saw, and wakes the agent in the same transaction when
    * `wake` is set. Rejected once the watch started at `startedAt` has ended, and a wake is
    * rejected on a settled or archived thread, so a read that raced either changes nothing.
+   * Ending the watch (`watch: null`) cancels wakes from this `startedAt` that are still
+   * queued. A `wake` on this command is the one that stays.
    */
   Schema.Struct({
     type: Schema.Literal("thread.pull-request-watch.sync"),
