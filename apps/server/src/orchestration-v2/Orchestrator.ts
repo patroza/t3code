@@ -479,6 +479,83 @@ function hasLiveRun(projection: Pick<OrchestrationV2ThreadProjection, "runs">): 
   );
 }
 
+/**
+ * Progress syncs replace the watch fields and do not echo queued wake ids.
+ * Keep the ids already recorded, and append the wake this command is sending.
+ */
+function watchWithPendingWakes(
+  watch: ThreadPullRequestWatch,
+  pendingWakeMessageIds: ReadonlyArray<MessageId> | undefined,
+  wakeMessageId: MessageId | undefined,
+): ThreadPullRequestWatch {
+  const ids = [...(pendingWakeMessageIds ?? [])];
+  if (wakeMessageId !== undefined && !ids.includes(wakeMessageId)) ids.push(wakeMessageId);
+  if (ids.length === 0) {
+    const { pendingWakeMessageIds: _pending, ...rest } = watch;
+    return rest;
+  }
+  return { ...watch, pendingWakeMessageIds: ids };
+}
+
+/**
+ * Wakes to cancel when a legacy link command drops a pull request.
+ * Relinking that same pull request copies its watch forward, so those wakes stay.
+ */
+function pendingWakeMessageIdsLostByLegacyRelink(
+  thread: OrchestrationV2AppThread,
+  next: ThreadLinkedPullRequest | null,
+): ReadonlyArray<MessageId> {
+  const links = threadPullRequestsOf(thread);
+  const previous =
+    thread.linkedPullRequest == null ? null : legacyThreadPullRequestKey(thread.linkedPullRequest);
+  const preserved = next === null ? null : legacyThreadPullRequestKey(next);
+  const ids: MessageId[] = [];
+  for (const link of links) {
+    const matchesPrevious = previous !== null && threadPullRequestKeysEqual(link, previous);
+    const matchesNext = preserved !== null && threadPullRequestKeysEqual(link, preserved);
+    if (!matchesPrevious && !matchesNext) continue;
+    if (matchesNext) continue;
+    for (const messageId of link.watch?.pendingWakeMessageIds ?? []) {
+      if (!ids.includes(messageId)) ids.push(messageId);
+    }
+  }
+  return ids;
+}
+
+/** Message ids of wakes to cancel because this command takes the watch away. */
+function pendingWakeMessageIdsEndingWith(
+  thread: OrchestrationV2AppThread,
+  command: OrchestrationV2ServerCommand,
+): ReadonlyArray<MessageId> {
+  if (command.type === "thread.metadata.update" || command.type === "thread.pull-request.sync") {
+    if (command.linkedPullRequest === undefined) return [];
+    return pendingWakeMessageIdsLostByLegacyRelink(thread, command.linkedPullRequest);
+  }
+  if (
+    command.type !== "thread.pull-request.watch" &&
+    command.type !== "thread.pull-request-watch.sync" &&
+    command.type !== "thread.pull-request.unlink"
+  ) {
+    return [];
+  }
+  if (command.type === "thread.pull-request.watch" && command.watching) return [];
+  if (command.type === "thread.pull-request-watch.sync" && command.watch !== null) return [];
+  const key = normalizeThreadPullRequestKey(command);
+  const link = threadPullRequestsOf(thread).find(
+    (candidate) =>
+      candidate.source !== "stack-dismissed" && threadPullRequestKeysEqual(candidate, key),
+  );
+  // A sync from a watch that already ended, or from an older generation, must not
+  // cancel wakes belonging to the watch that replaced it.
+  if (
+    command.type === "thread.pull-request-watch.sync" &&
+    link?.watch?.startedAt !== command.startedAt
+  ) {
+    return [];
+  }
+  return link?.watch?.pendingWakeMessageIds ?? [];
+}
+
 /** The link with its watch replaced, or removed when `watch` is undefined. */
 function withPullRequestWatch(
   link: ThreadPullRequestLink,
@@ -2312,6 +2389,38 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
+  const cancelQueuedWatchWakes = (input: {
+    readonly command: { readonly commandId: CommandId; readonly threadId: ThreadId };
+    readonly events: Ref.Ref<Array<OrchestrationV2DomainEvent>>;
+    readonly messageIds: ReadonlyArray<MessageId>;
+    readonly keepMessageId: MessageId | undefined;
+  }) =>
+    Effect.gen(function* () {
+      const projection = yield* projectionStore
+        .getThreadRecords(input.command.threadId, ["runs"])
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: input.command.threadId, cause }),
+          ),
+        );
+      for (const messageId of input.messageIds) {
+        if (messageId === input.keepMessageId) continue;
+        const queued = projection.runs.find(
+          (run) => run.userMessageId === messageId && run.status === "queued",
+        );
+        if (queued === undefined) continue;
+        yield* dispatchQueuedRunCancel(
+          {
+            type: "queued-run.cancel",
+            commandId: input.command.commandId,
+            threadId: input.command.threadId,
+            runId: queued.id,
+          },
+          input.events,
+        );
+      }
+    });
+
   const dispatchThreadMutation = Effect.fn("orchestrationV2.dispatch.threadMutation")(function* (
     command: Extract<
       OrchestrationV2ServerCommand,
@@ -2360,6 +2469,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         commandId: command.commandId,
         commandType: command.type,
         cause: `Thread ${command.threadId} is deleted.`,
+      });
+    }
+    // A merged, closed, stopped, unlinked, or legacy-replaced watch must not start
+    // a turn that was only queued. A wake on this same command is the final one and stays.
+    const endingWatchMessageIds = pendingWakeMessageIdsEndingWith(thread, command);
+    if (endingWatchMessageIds.length > 0) {
+      yield* cancelQueuedWatchWakes({
+        command,
+        events,
+        messageIds: endingWatchMessageIds,
+        keepMessageId:
+          command.type === "thread.pull-request-watch.sync" ? command.wake?.messageId : undefined,
       });
     }
     if (
@@ -2993,7 +3114,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             command.type === "thread.pull-request-watch.sync"
               ? // Progress read before a stop or restart must not bring the old watch back.
                 existing.watch?.startedAt === command.startedAt
-                ? (command.watch ?? undefined)
+                ? command.watch === null
+                  ? undefined
+                  : watchWithPendingWakes(
+                      command.watch,
+                      existing.watch?.pendingWakeMessageIds,
+                      command.wake?.messageId,
+                    )
                 : existing.watch
               : !command.watching
                 ? undefined
