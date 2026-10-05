@@ -75,6 +75,7 @@ overrides:
   '@effect/vitest': 4.0.0-rc.115
   '@effect/vitest>vitest': '-'
   '@expo/dom-webview': 58.0.2
+  '@expo/fingerprint': 0.21.2
   '@expo/metro-config': 58.0.6
   expo-constants: 58.0.9
   expo-router: 58.0.10
