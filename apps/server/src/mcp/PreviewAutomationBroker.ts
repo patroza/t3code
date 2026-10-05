@@ -171,7 +171,7 @@ const hostAssignmentKey = (scope: McpInvocationContext.McpThreadInvocationScope)
 
 const threadClaimKey = (
   environmentId: McpInvocationContext.McpInvocationScope["environmentId"],
-  threadId: McpInvocationContext.McpInvocationScope["threadId"],
+  threadId: McpInvocationContext.McpThreadCaller["threadId"],
 ): string => `${environmentId}\u0000${threadId}`;
 
 const isPreviewTabId = Schema.is(PreviewTabId);
@@ -509,7 +509,7 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
       const assignedConnection = assigned ? current.clients.get(assigned.clientId) : undefined;
       const hasLiveAssignment = assignedConnection?.environmentId === input.scope.environmentId;
       const claimedConnection = current.threadClaims.get(
-        threadClaimKey(input.scope.environmentId, input.scope.threadId),
+        threadClaimKey(input.scope.environmentId, input.scope.thread.threadId),
       );
       const hasLiveClaim =
         claimedConnection?.environmentId === input.scope.environmentId &&

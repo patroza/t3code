@@ -2180,6 +2180,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
               command: "git",
               cwd,
               detail: "Failed to prepare the temporary commit index.",
+              failureKind: "unknown",
               cause,
             }),
         }),

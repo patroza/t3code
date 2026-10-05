@@ -713,6 +713,27 @@ const registerDiscordRenameThread = Effect.fn("McpHttpServer.registerDiscordRena
             );
           }
 
+          const threadId = invocation.thread?.threadId;
+          if (threadId === undefined) {
+            return Effect.succeed(
+              new McpSchema.CallToolResult({
+                isError: true,
+                structuredContent: {
+                  error: {
+                    _tag: "ThreadNotFound",
+                    message: "Renaming needs an agent running inside a T3 thread.",
+                  },
+                },
+                content: [
+                  {
+                    type: "text",
+                    text: "Renaming needs an agent running inside a T3 thread.",
+                  },
+                ],
+              }),
+            );
+          }
+
           return Effect.gen(function* () {
             const millis = yield* Clock.currentTimeMillis;
             const random = yield* Random.nextInt;
@@ -722,13 +743,13 @@ const registerDiscordRenameThread = Effect.fn("McpHttpServer.registerDiscordRena
             yield* engine.dispatch({
               type: "thread.metadata.update",
               commandId,
-              threadId: invocation.threadId,
+              threadId,
               title,
             });
             return new McpSchema.CallToolResult({
               isError: false,
               structuredContent: {
-                threadId: invocation.threadId,
+                threadId,
                 title,
                 discordMirrorRequested: true,
               },

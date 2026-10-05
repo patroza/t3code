@@ -829,7 +829,7 @@ it.effect("routes a claimed thread to its host without affecting other threads",
         environmentId: scope.environmentId,
         connectionId: claimedConnectionId,
         focused: true,
-        threadId: scope.threadId,
+        threadId: scope.thread.threadId,
       });
 
       expect(yield* broker.invoke<string>({ scope, operation: "snapshot", input: {} })).toBe(
@@ -839,8 +839,11 @@ it.effect("routes a claimed thread to its host without affecting other threads",
         yield* broker.invoke<string>({
           scope: {
             ...scope,
-            threadId: ThreadId.make("thread-desktop"),
-            providerSessionId: "provider-session-desktop",
+            thread: {
+              ...scope.thread,
+              threadId: ThreadId.make("thread-desktop"),
+              providerSessionId: "provider-session-desktop",
+            },
           },
           operation: "snapshot",
           input: {},
