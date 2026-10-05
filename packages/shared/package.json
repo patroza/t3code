@@ -111,6 +111,10 @@
       "types": "./src/KeyedDrainableWorker.ts",
       "import": "./src/KeyedDrainableWorker.ts"
     },
+    "./KeyedLock": {
+      "types": "./src/KeyedLock.ts",
+      "import": "./src/KeyedLock.ts"
+    },
     "./schemaJson": {
       "types": "./src/schemaJson.ts",
       "import": "./src/schemaJson.ts"
