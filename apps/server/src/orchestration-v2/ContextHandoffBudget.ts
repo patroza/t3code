@@ -6,7 +6,9 @@ import type {
   OrchestrationV2ContextHandoff,
   OrchestrationV2HistoricalMessage,
   OrchestrationV2ProviderThread,
+  OrchestrationV2Run,
   OrchestrationV2TurnItem,
+  ProviderThreadId,
 } from "@t3tools/contracts";
 
 import * as Config from "effect/Config";
@@ -89,6 +91,97 @@ export function contextUsageForHandoff(input: {
     usedTokens: input.previousUsage.usedTokens,
     ...(maxTokens === undefined ? {} : { maxTokens }),
   };
+}
+
+/**
+ * Latest completed native `/compact` on this provider thread. Its summary
+ * replaces the earlier transcript, so later handoffs must not replay it.
+ */
+export function completedCompactionRunOrdinal(input: {
+  readonly runs: ReadonlyArray<
+    Pick<OrchestrationV2Run, "ordinal" | "status" | "providerThreadId" | "userMessageId">
+  >;
+  readonly providerThreadId: ProviderThreadId;
+  readonly compactUserMessageIds: ReadonlySet<OrchestrationV2Run["userMessageId"]>;
+}): number | undefined {
+  let ordinal: number | undefined;
+  for (const run of input.runs) {
+    if (
+      run.status === "completed" &&
+      run.providerThreadId === input.providerThreadId &&
+      input.compactUserMessageIds.has(run.userMessageId) &&
+      (ordinal === undefined || run.ordinal > ordinal)
+    ) {
+      ordinal = run.ordinal;
+    }
+  }
+  return ordinal;
+}
+
+/**
+ * A completed compact folds imported rows and earlier runs into the native
+ * summary. Counting those bytes as still-resident occupancy refuses a
+ * follow-up the provider session has room for.
+ */
+export function countsTowardNativeContextEstimate(input: {
+  readonly compactionRunOrdinal: number | undefined;
+  readonly itemRunOrdinal: number | undefined;
+}): boolean {
+  if (input.compactionRunOrdinal === undefined) return true;
+  if (input.itemRunOrdinal === undefined) return false;
+  return input.itemRunOrdinal > input.compactionRunOrdinal;
+}
+
+function sameProviderThreadSet(
+  left: ReadonlyArray<ProviderThreadId>,
+  right: ReadonlyArray<ProviderThreadId>,
+): boolean {
+  if (left.length !== right.length) return false;
+  const seen = new Set<ProviderThreadId>(left);
+  return right.every((id) => seen.has(id));
+}
+
+/**
+ * The native session already holds this history: an earlier handoff was
+ * delivered into it, or a completed compact summarized the run it targets.
+ * Re-injecting it is what blows the handoff budget after `/compact`.
+ */
+export function handoffAlreadyInNativeSession(input: {
+  readonly handoff: Pick<
+    OrchestrationV2ContextHandoff,
+    "strategy" | "coveredRunOrdinals" | "fromProviderThreadIds"
+  >;
+  readonly nativeThreadId: string | null | undefined;
+  readonly sameNativeThread: boolean;
+  readonly targetRunOrdinal: number | undefined;
+  readonly compactionRunOrdinal: number | undefined;
+  readonly delivered: ReadonlyArray<
+    Pick<
+      OrchestrationV2ContextHandoff,
+      "strategy" | "coveredRunOrdinals" | "fromProviderThreadIds" | "delivery"
+    >
+  >;
+}): boolean {
+  if (!input.sameNativeThread || input.nativeThreadId == null) return false;
+  if (
+    input.compactionRunOrdinal !== undefined &&
+    input.targetRunOrdinal !== undefined &&
+    input.targetRunOrdinal <= input.compactionRunOrdinal
+  ) {
+    return true;
+  }
+  return input.delivered.some((delivered) => {
+    const delivery = delivered.delivery;
+    return (
+      delivery !== undefined &&
+      delivery.nativeThreadId === input.nativeThreadId &&
+      delivery.status !== "pending" &&
+      delivered.strategy === input.handoff.strategy &&
+      sameProviderThreadSet(delivered.fromProviderThreadIds, input.handoff.fromProviderThreadIds) &&
+      delivered.coveredRunOrdinals.from <= input.handoff.coveredRunOrdinals.from &&
+      delivered.coveredRunOrdinals.to >= input.handoff.coveredRunOrdinals.to
+    );
+  });
 }
 
 export function attachmentTokenAllowance(attachments: ReadonlyArray<ChatAttachment>): number {

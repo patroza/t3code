@@ -2,6 +2,7 @@ import type { ProviderAdapterV2HistoricalContext } from "./ProviderAdapter.ts";
 import { assert, describe, it } from "@effect/vitest";
 import {
   ContextHandoffId,
+  MessageId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -17,7 +18,10 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import {
+  completedCompactionRunOrdinal,
   contextUsageForHandoff,
+  countsTowardNativeContextEstimate,
+  handoffAlreadyInNativeSession,
   handoffBudget,
   historyCost,
   historyResponseItems,
@@ -409,6 +413,132 @@ describe("handoff budget", () => {
         0,
       );
     }
+  });
+});
+
+describe("native session already holds the history", () => {
+  const compactMessageId = MessageId.make("message:compact");
+  const providerThreadId = ProviderThreadId.make("provider-thread:grok");
+  const delivered = {
+    ...handoff,
+    strategy: "manual_context" as const,
+    fromProviderThreadIds: [],
+    toProviderThreadId: providerThreadId,
+    coveredRunOrdinals: { from: 1, to: 1 },
+    delivery: {
+      nativeThreadId: "native:grok",
+      status: "inline" as const,
+      itemIds: [],
+    },
+  };
+
+  it("keeps a completed compact and ignores a later copy of a delivered import", () => {
+    const ordinal = completedCompactionRunOrdinal({
+      providerThreadId,
+      compactUserMessageIds: new Set([compactMessageId]),
+      runs: [
+        {
+          ordinal: 5,
+          status: "failed",
+          providerThreadId,
+          userMessageId: MessageId.make("message:failed"),
+        },
+        {
+          ordinal: 6,
+          status: "completed",
+          providerThreadId,
+          userMessageId: compactMessageId,
+        },
+        {
+          ordinal: 7,
+          status: "completed",
+          providerThreadId: ProviderThreadId.make("provider-thread:other"),
+          userMessageId: compactMessageId,
+        },
+      ],
+    });
+    assert.equal(ordinal, 6);
+    assert.isFalse(
+      countsTowardNativeContextEstimate({
+        compactionRunOrdinal: ordinal,
+        itemRunOrdinal: undefined,
+      }),
+    );
+    assert.isFalse(
+      countsTowardNativeContextEstimate({ compactionRunOrdinal: ordinal, itemRunOrdinal: 6 }),
+    );
+    assert.isTrue(
+      countsTowardNativeContextEstimate({ compactionRunOrdinal: ordinal, itemRunOrdinal: 8 }),
+    );
+    assert.isTrue(
+      countsTowardNativeContextEstimate({
+        compactionRunOrdinal: undefined,
+        itemRunOrdinal: undefined,
+      }),
+    );
+    assert.equal(
+      handoffBudget({
+        tokenCap: 16_000,
+        userText: "update to latest again",
+        attachments: [],
+        providerThread,
+        nativeContextEstimate: 795_175,
+      }),
+      0,
+    );
+    assert.isAbove(
+      handoffBudget({
+        tokenCap: 16_000,
+        userText: "update to latest again",
+        attachments: [],
+        providerThread,
+        nativeContextEstimate: 0,
+        modelContextWindow: 256_000,
+      }),
+      0,
+    );
+
+    const duplicate = { ...delivered, delivery: undefined };
+    assert.isTrue(
+      handoffAlreadyInNativeSession({
+        handoff: duplicate,
+        nativeThreadId: "native:grok",
+        sameNativeThread: true,
+        targetRunOrdinal: 8,
+        compactionRunOrdinal: undefined,
+        delivered: [delivered],
+      }),
+    );
+    assert.isTrue(
+      handoffAlreadyInNativeSession({
+        handoff: { ...delivered, coveredRunOrdinals: { from: 1, to: 6 } },
+        nativeThreadId: "native:grok",
+        sameNativeThread: true,
+        targetRunOrdinal: 6,
+        compactionRunOrdinal: ordinal,
+        delivered: [],
+      }),
+    );
+    assert.isFalse(
+      handoffAlreadyInNativeSession({
+        handoff: { ...handoff, coveredRunOrdinals: { from: 1, to: 8 } },
+        nativeThreadId: "native:grok",
+        sameNativeThread: true,
+        targetRunOrdinal: 9,
+        compactionRunOrdinal: ordinal,
+        delivered: [delivered],
+      }),
+    );
+    assert.isFalse(
+      handoffAlreadyInNativeSession({
+        handoff: duplicate,
+        nativeThreadId: "native:replacement",
+        sameNativeThread: false,
+        targetRunOrdinal: 6,
+        compactionRunOrdinal: ordinal,
+        delivered: [delivered],
+      }),
+    );
   });
 });
 
