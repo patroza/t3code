@@ -314,7 +314,7 @@ function verifyEnvironmentHealthResponse(input: {
 
 export interface ManagedEndpointValidationFailure {
   readonly reason: Exclude<
-    RelayEnvironmentConnectNotAuthorizedReason,
+    EnvironmentConnectNotAuthorizedReason,
     "client_proof_key_thumbprint_missing" | "environment_link_not_found"
   >;
   /** Diagnostic span attributes; never contains secrets. */
