@@ -127,12 +127,10 @@ jobs:
           path: node_modules/.vite/task-cache
           key: ${{ steps.vite-task-check-cache.outputs.cache-primary-key }}
 
-  test:
-    name: Test
+  test_packages:
+    name: Test Packages
     runs-on: ubuntu-24.04
-    # GitHub-hosted `vp run test` after the a97a4a9d18 weld overruns 10m
-    # (install ~2.5m; the suite was still running when the job timed out).
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -153,7 +151,68 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
 
       - name: Test
-        run: vp run test
+        run: vp run --parallel --concurrency-limit 4 --filter '!t3' --filter '!@t3tools/monorepo' --filter '!@t3tools/web' test
+
+  # Keep server files sequential within each runner to avoid load-sensitive
+  # flakes; the existing weighted sequencer balances six independent shards.
+  test_server:
+    name: Test Server ${{ matrix.shard }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || github.sha }}
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Test
+        run: vp run --filter t3 test --shard ${{ matrix.shard }}/${{ strategy.job-total }}
+
+  test_web:
+    name: Test Web
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || github.sha }}
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Test
+        run: vp run --filter @t3tools/web test
+
+  # Preserve the required Test check. Run even after failures or cancellation,
+  # and fail unless every test job (including every server shard) succeeded.
+  test:
+    name: Test
+    needs: [test_packages, test_server, test_web]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    steps:
+      - name: Require every test job to pass
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -e 'all(.[]; .result == "success")'
 
   mobile_native_static_analysis:
     name: Mobile Native Static Analysis
