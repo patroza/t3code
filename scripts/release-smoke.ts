@@ -15,6 +15,7 @@ const workspaceFiles = [
   "pnpm-workspace.yaml",
   "apps/server/package.json",
   "apps/desktop/package.json",
+  "apps/discord-bot/package.json",
   "apps/web/package.json",
   "apps/mobile/package.json",
   "apps/mobile/modules/t3-markdown-text/package.json",
