@@ -208,7 +208,7 @@ describe("ElectronProtocol", () => {
       assert.equal(response.status, 200);
       assert.equal(yield* Effect.promise(() => response.text()), "<html>ready</html>");
       assert.equal(netFetchMock.mock.calls.length, 2);
-    }).pipe(Effect.provide(protocolLayer)),
+    }).pipe(Effect.provide(layerProtocol)),
   );
 
   it.effect("preserves protocol registration failures", () =>

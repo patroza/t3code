@@ -290,6 +290,7 @@ patchedDependencies:
   react-native-keyboard-controller@1.22.6: patches/react-native-keyboard-controller@1.22.6.patch
   react-native-nitro-modules@0.35.9: patches/react-native-nitro-modules@0.35.9.patch
   react-native-screens@4.28.0: patches/react-native-screens@4.28.0.patch
+  dfx@1.0.16: patches/dfx@1.0.16.patch
 
 peerDependencyRules:
   allowAny:
@@ -307,4 +308,5 @@ supportedArchitectures:
   cpu: [current, x64]
   libc: [current, glibc]
   os: [current, linux]
+
 # (workspace already includes apps/*)

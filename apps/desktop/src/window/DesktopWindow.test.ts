@@ -1512,7 +1512,7 @@ describe("DesktopWindow", () => {
       const fakeWindow = makeFakeBrowserWindow();
       const createCount = yield* Ref.make(0);
       const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
-      const layer = makeTestLayer({
+      const layer = layerTest({
         window: fakeWindow.window,
         createCount,
         mainWindow,
@@ -1541,7 +1541,7 @@ describe("DesktopWindow", () => {
       const fakeWindow = makeFakeBrowserWindow();
       const createCount = yield* Ref.make(0);
       const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
-      const layer = makeTestLayer({
+      const layer = layerTest({
         window: fakeWindow.window,
         createCount,
         mainWindow,
@@ -1572,7 +1572,7 @@ describe("DesktopWindow", () => {
       const fakeWindow = makeFakeBrowserWindow();
       const createCount = yield* Ref.make(0);
       const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
-      const layer = makeTestLayer({
+      const layer = layerTest({
         window: fakeWindow.window,
         createCount,
         mainWindow,
