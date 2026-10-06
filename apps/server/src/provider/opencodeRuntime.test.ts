@@ -6,11 +6,11 @@ import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
-import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as OpenCodeServerLedger from "./OpenCodeServerLedger.ts";
-import { OpenCodeRuntime, OpenCodeRuntimeLive } from "./opencodeRuntime.ts";
+import * as OpenCodeRuntime from "./opencodeRuntime.ts";
 
 it.effect("launches a local OpenCode server with the project cwd and final environment", () => {
   let spawnedCommand: unknown;
@@ -34,7 +34,7 @@ it.effect("launches a local OpenCode server with the project cwd and final envir
       }),
     );
   });
-  const runtimeLayer = OpenCodeRuntimeLive.pipe(
+  const runtimeLayer = OpenCodeRuntime.layer.pipe(
     Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner)),
     Layer.provide(OpenCodeServerLedger.layerTest),
   );
@@ -49,7 +49,7 @@ it.effect("launches a local OpenCode server with the project cwd and final envir
         }),
       originalFetch,
     );
-    const runtime = yield* OpenCodeRuntime;
+    const runtime = yield* OpenCodeRuntime.OpenCodeRuntime;
     const sessionScope = yield* Scope.make();
     const server = yield* runtime
       .startOpenCodeServerProcess({

@@ -64,3 +64,4 @@ export * from "./scheduledTask.ts";
 export * from "./worktreeMcp.ts";
 export * from "./rpc.ts";
 export * from "./worktreeSetup.ts";
+export * from "./secretRequest.ts";

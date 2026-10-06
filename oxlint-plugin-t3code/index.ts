@@ -10,6 +10,8 @@ import noNativeTitleTooltip from "./rules/no-native-title-tooltip.ts";
 import noUnsupportedHermesArrayMethods from "./rules/no-unsupported-hermes-array-methods.ts";
 import noTestInLoop from "./rules/no-test-in-loop.ts";
 import noUnscopedHas from "./rules/no-unscoped-has.ts";
+import preferCatchTags from "./rules/prefer-catch-tags.ts";
+import requireSuppressionReason from "./rules/require-suppression-reason.ts";
 
 export default definePlugin({
   meta: {
@@ -26,5 +28,7 @@ export default definePlugin({
     "no-unsupported-hermes-array-methods": noUnsupportedHermesArrayMethods,
     "no-test-in-loop": noTestInLoop,
     "no-unscoped-has": noUnscopedHas,
+    "prefer-catch-tags": preferCatchTags,
+    "require-suppression-reason": requireSuppressionReason,
   },
 });

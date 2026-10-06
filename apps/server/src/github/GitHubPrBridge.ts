@@ -39,7 +39,7 @@ import {
   type IntegrationThreadShellView as OrchestrationThreadShell,
 } from "@t3tools/shared/integrationThreadView";
 import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
-import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
+import { ProviderRegistry } from "../provider/ProviderRegistry.ts";
 import { getAutoBootstrapThreadModelSelection } from "../serverRuntimeStartup.ts";
 import {
   extractJiraIssueKeysFromText,

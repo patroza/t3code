@@ -15,7 +15,7 @@ import * as Schema from "effect/Schema";
 import { fromYaml } from "@t3tools/shared/schemaYaml";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import {
   BundleNotSelfContainedError,

@@ -1,4 +1,4 @@
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import { type EnvironmentId, resolveEnvironmentMachineKind } from "@t3tools/contracts";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { identityClaimPersonIdByEnvironmentAtom } from "../../state/identity";

@@ -10,6 +10,10 @@ import {
   type ServerAuthBootstrapMethod,
 } from "@t3tools/contracts";
 import { LOCAL_BOOTSTRAP_CREDENTIAL_FILE } from "@t3tools/shared/serverRuntime";
+import {
+  DESKTOP_BOOTSTRAP_TOKEN_WINDOW_MS,
+  isValidDesktopBootstrapToken,
+} from "@t3tools/shared/desktopBootstrapToken";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -332,7 +336,15 @@ export const make = Effect.gen(function* () {
       id,
     }).pipe(Effect.asVoid);
 
-  if (config.desktopBootstrapToken) {
+  // A desktop that sends its secret rotates the renderer's token, so accept
+  // whichever token the secret derives for the current window instead of
+  // seeding one fixed token. Older desktops only send the token.
+  const desktopBootstrapSecret = config.desktopBootstrapSecret;
+  const consumeRotatingDesktopToken = (credential: string, nowMs: number) =>
+    desktopBootstrapSecret !== undefined &&
+    isValidDesktopBootstrapToken(desktopBootstrapSecret, credential, nowMs);
+
+  if (config.desktopBootstrapToken && desktopBootstrapSecret === undefined) {
     const now = yield* DateTime.now;
     yield* seedGrant(config.desktopBootstrapToken, {
       method: "desktop-bootstrap",
@@ -468,6 +480,16 @@ export const make = Effect.gen(function* () {
   const consume: PairingGrantStore["Service"]["consume"] = Effect.fn("PairingGrantStore.consume")(
     function* (credential, input) {
       const now = yield* DateTime.now;
+      if (consumeRotatingDesktopToken(credential, now.epochMilliseconds)) {
+        return {
+          method: "desktop-bootstrap",
+          scopes: AuthAdministrativeScopes,
+          subject: "desktop-bootstrap",
+          expiresAt: DateTime.add(now, {
+            milliseconds: DESKTOP_BOOTSTRAP_TOKEN_WINDOW_MS,
+          }),
+        } satisfies BootstrapGrant;
+      }
       const seededResult: ConsumeResult = yield* Ref.modify(
         seededGrantsRef,
         (current): readonly [ConsumeResult, Map<string, StoredBootstrapGrant>] => {

@@ -3,7 +3,7 @@ import {
   claimPersonIdForEnvironment,
   threadMatchesMine,
 } from "@t3tools/client-runtime/state/identity";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import {
   resolveHideSettledOnProjects,
   resolveHideSettledOnRecent,

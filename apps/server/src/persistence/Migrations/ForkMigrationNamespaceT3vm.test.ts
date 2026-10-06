@@ -1,8 +1,8 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as Migrator from "effect/unstable/sql/Migrator";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as Migrator from "effect/sql/Migrator";
 
 import { forkMigrationTable } from "../ForkMigrations.ts";
 import { legacyMigrationBackupTable, upstreamMigrationTable } from "../MigrationBootstrap.ts";

@@ -6,7 +6,7 @@ import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import { McpSchema, McpServer } from "effect/unstable/ai";
+import { McpSchema, McpServer } from "effect/ai";
 
 import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
 import { ProjectStoreV2 } from "../orchestration-v2/ProjectStore.ts";
