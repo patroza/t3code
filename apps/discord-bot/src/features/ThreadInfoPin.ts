@@ -15,7 +15,6 @@ import {
   extractJiraIssueKeysFromDiscordMessage,
   jiraIssueKeysAfterExcludingSentryFalsePositives,
   mergeJiraIssueKeys,
-  omitJiraIssueKeys,
   jiraIssueKeysMaskedBySentryContext,
 } from "../presentation/jiraLinks.ts";
 import {
@@ -578,14 +577,8 @@ export const upsertThreadInfoPin = (input: {
       }
     }
 
-    // Pin backfill may list a key. Only keys on this turn become link identity.
-    const promotedKeys = omitJiraIssueKeys(
-      mergeJiraIssueKeys([], input.incomingJiraKeys),
-      input.dropJiraIssueKeys,
-    );
-    if (promotedKeys.length > 0) {
-      yield* links.promoteJiraIssueKeysToLinked(input.discordThreadId, promotedKeys);
-    }
+    // Keys seen in Discord stay on the pin. They do not become work-item identity.
+    // Jira and GitHub webhooks are what attach a key or PR to a T3 thread.
 
     let sentryIssueUrls = mergeSentryIssueUrls(
       existing?.sentryIssueUrls,

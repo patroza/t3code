@@ -95,6 +95,7 @@ describe("ServerWorkItemJoin", () => {
             threadId: "t-pr",
             jiraIssueKeys: [],
             githubPullRequests: ["https://github.com/acme/repo/pull/9"],
+            sources: ["github-webhook"],
           },
         ],
       }),
@@ -119,7 +120,7 @@ describe("ServerWorkItemJoin", () => {
     ).toBe("t-pr");
   });
 
-  it("does not join a thread whose only association is a pin-backfill key", () => {
+  it("joins a webhook association and ignores a Discord-only row", () => {
     const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "work-item-join-"));
     const filePath = NodePath.join(dir, "thread-work-items.json");
     NodeFS.writeFileSync(
@@ -131,34 +132,54 @@ describe("ServerWorkItemJoin", () => {
             threadId: "t-330",
             jiraIssueKeys: ["SA-465"],
             githubPullRequests: [],
+            sources: ["discord"],
+          },
+          {
+            threadId: "t-jira",
+            jiraIssueKeys: ["SA-465"],
+            githubPullRequests: [],
+            sources: ["jira-webhook"],
           },
         ],
       }),
     );
-    const tombstoned = {
-      ...discordLink("t-330", "tombstone"),
-      backfillJiraIssueKeys: ["SA-465"],
-      linkedJiraIssueKeys: [],
-    };
 
     expect(
       resolveUniqueT3ThreadIdForWorkItems({
         jiraIssueKeys: ["SA-465"],
         prUrls: [],
-        discordLinks: [tombstoned],
+        discordLinks: [],
         serverWorkItemsPath: filePath,
       }),
-    ).toBeNull();
+    ).toBe("t-jira");
 
+    NodeFS.writeFileSync(
+      filePath,
+      JSON.stringify({
+        version: 1,
+        records: [
+          {
+            threadId: "t-330",
+            jiraIssueKeys: ["SA-465"],
+            githubPullRequests: [],
+            sources: ["discord"],
+          },
+        ],
+      }),
+    );
     expect(
       resolveUniqueT3ThreadIdForWorkItems({
         jiraIssueKeys: ["SA-465"],
         prUrls: [],
         discordLinks: [
-          { ...tombstoned, linkedJiraIssueKeys: ["SA-465"], backfillJiraIssueKeys: [] },
+          {
+            ...discordLink("t-330", "tombstone"),
+            linkedJiraIssueKeys: ["SA-465"],
+            backfillJiraIssueKeys: [],
+          },
         ],
         serverWorkItemsPath: filePath,
       }),
-    ).toBe("t-330");
+    ).toBeNull();
   });
 });

@@ -1049,9 +1049,9 @@ const make = (botConfig: DiscordBotConfig) =>
 
         let existing = yield* links.getByDiscordThreadId(input.discordThreadId);
 
-        // First-time Discord channel: if Jira/PR work items already map to a unique T3 thread
-        // (Jira webhook create, GitHub bridge, or another Discord link), join that session
-        // instead of forking a second agent world.
+        // First-time Discord channel: follow a Jira or GitHub webhook association to
+        // the one T3 thread those systems recorded. A key or PR that only appeared
+        // in Discord does not join.
         if (existing === null) {
           const joinStarter = yield* loadThreadStarter({
             discordThreadId: input.discordThreadId,

@@ -131,50 +131,27 @@ const DiscordLinksFile = Schema.Struct({
 });
 const decodeDiscordLinks = Schema.decodeUnknownSync(Schema.fromJsonString(DiscordLinksFile));
 
-/**
- * Keys a Discord link contributes to work-item identity.
- * Once `linkedJiraIssueKeys` has been written (even empty), the pin list is ignored.
- * Older rows that have not been split still contribute `jiraIssueKeys`.
- */
-export function jiraKeysImportedFromDiscordLink(link: {
-  readonly jiraIssueKeys?: ReadonlyArray<string> | undefined;
-  readonly linkedJiraIssueKeys?: ReadonlyArray<string> | undefined;
-}): ReadonlyArray<string> {
-  if (link.linkedJiraIssueKeys !== undefined) {
-    return mergeOrderedUnique([], link.linkedJiraIssueKeys, normalizeJiraIssueKey);
-  }
-  return mergeOrderedUnique([], link.jiraIssueKeys, normalizeJiraIssueKey);
-}
+const EXTERNAL_WORK_ITEM_SOURCES = new Set(["jira-webhook", "github-webhook"]);
 
 /**
- * Drop pin-backfill keys from a discord-only work-item row.
- * Rows that also came from Jira or GitHub keep every key (we cannot tell which
- * source added it).
+ * Jira and GitHub webhooks are the only writers of work-item identity.
+ * Discord mentions and pin backfill do not qualify.
  */
-export function withoutDiscordBackfillJiraKeys(input: {
-  readonly jiraIssueKeys: ReadonlyArray<string>;
-  readonly sources: ReadonlyArray<string>;
-  readonly backfillKeys: ReadonlyArray<string>;
-  readonly linkedKeys: ReadonlyArray<string>;
-}): ReadonlyArray<string> {
-  const discordOnly =
-    input.sources.length === 0 ||
-    input.sources.every((source) => source.trim().toLowerCase() === "discord");
-  if (!discordOnly) return input.jiraIssueKeys;
-  const linked = new Set(mergeOrderedUnique([], input.linkedKeys, normalizeJiraIssueKey));
-  const backfill = new Set(mergeOrderedUnique([], input.backfillKeys, normalizeJiraIssueKey));
-  return input.jiraIssueKeys.filter((raw) => {
-    const key = normalizeJiraIssueKey(raw);
-    if (key === null) return false;
-    return !(backfill.has(key) && !linked.has(key));
-  });
+export function hasExternalWorkItemSource(sources: ReadonlyArray<string> | undefined): boolean {
+  if (!Array.isArray(sources)) return false;
+  return sources.some(
+    (source) =>
+      typeof source === "string" && EXTERNAL_WORK_ITEM_SOURCES.has(source.trim().toLowerCase()),
+  );
 }
 
-function parseDiscordLinksOrEmpty(linksJson: string): ReadonlyArray<typeof DiscordThreadLink.Type> {
+function parseDiscordLinksOrNull(
+  linksJson: string,
+): ReadonlyArray<typeof DiscordThreadLink.Type> | null {
   try {
     return decodeDiscordLinks(linksJson).links;
   } catch {
-    return [];
+    return null;
   }
 }
 
@@ -192,16 +169,16 @@ export class ThreadWorkItemStore extends Context.Service<
     readonly resolveJiraIssue: (issueKey: string) => Effect.Effect<WorkItemLookupResult>;
     readonly resolveGitHubPullRequest: (prRef: string) => Effect.Effect<WorkItemLookupResult>;
     /**
-     * Import associations from a Discord bot links.json.
-     * Link identity is `linkedJiraIssueKeys` when that field is present (pin
-     * backfill keys are not imported). Discord-only rows drop keys listed in
-     * `backfillJiraIssueKeys`.
+     * Drop Discord-only rows from the work-item store.
+     * Discord links are not a source of Jira or PR identity. Rows that Jira or
+     * GitHub already recorded are left alone.
      */
     readonly importDiscordLinksJson: (linksJson: string) => Effect.Effect<{
       readonly threadsTouched: number;
       readonly jiraKeysAdded: number;
       readonly jiraKeysRemoved: number;
       readonly prsAdded: number;
+      readonly prsRemoved: number;
     }>;
   }
 >()("t3/workItems/ThreadWorkItemStore") {}
@@ -327,7 +304,12 @@ export const make = Effect.gen(function* () {
         Effect.map((records) => {
           const normalized = normalizeJiraIssueKey(issueKey);
           if (normalized === null) return { _tag: "unlinked" as const };
-          return resolveKey(records, (record) => record.jiraIssueKeys.includes(normalized));
+          return resolveKey(
+            records,
+            (record) =>
+              hasExternalWorkItemSource(record.sources) &&
+              record.jiraIssueKeys.includes(normalized),
+          );
         }),
       ),
 
@@ -336,116 +318,56 @@ export const make = Effect.gen(function* () {
         Effect.map((records) => {
           const normalized = normalizeGitHubPullRequestRef(prRef);
           if (normalized === null) return { _tag: "unlinked" as const };
-          return resolveKey(records, (record) => record.githubPullRequests.includes(normalized));
+          return resolveKey(
+            records,
+            (record) =>
+              hasExternalWorkItemSource(record.sources) &&
+              record.githubPullRequests.includes(normalized),
+          );
         }),
       ),
 
     importDiscordLinksJson: (linksJson) =>
       lock.withPermit(
         Effect.gen(function* () {
-          const links = parseDiscordLinksOrEmpty(linksJson);
-          if (links.length === 0) {
-            return { threadsTouched: 0, jiraKeysAdded: 0, jiraKeysRemoved: 0, prsAdded: 0 };
+          const links = parseDiscordLinksOrNull(linksJson);
+          if (links === null) {
+            return {
+              threadsTouched: 0,
+              jiraKeysAdded: 0,
+              jiraKeysRemoved: 0,
+              prsAdded: 0,
+              prsRemoved: 0,
+            };
           }
 
-          const now = DateTime.formatIso(yield* DateTime.now);
           let threadsTouched = 0;
-          let jiraKeysAdded = 0;
           let jiraKeysRemoved = 0;
-          let prsAdded = 0;
+          let prsRemoved = 0;
 
           const next = yield* Ref.updateAndGet(state, (records) => {
             const copy = new Map(records);
-            for (const link of links) {
-              if (link.status !== undefined && link.status !== "active") continue;
-              const threadId = link.t3ThreadId.trim() as ThreadId;
-              if (threadId.length === 0) continue;
-
-              const existing = copy.get(threadId) ?? emptyRecord(threadId, now);
-              const beforeJira = existing.jiraIssueKeys.length;
-              const beforePr = existing.githubPullRequests.length;
-              const jiraIssueKeys = mergeOrderedUnique(
-                existing.jiraIssueKeys,
-                jiraKeysImportedFromDiscordLink(link),
-                normalizeJiraIssueKey,
-              );
-              const githubPullRequests = mergeOrderedUnique(
-                existing.githubPullRequests,
-                link.prUrls,
-                normalizeGitHubPullRequestRef,
-              );
-              const sources = mergeOrderedUnique(existing.sources, ["discord"], (raw) => {
-                const value = raw.trim().toLowerCase();
-                return value.length > 0 ? value : null;
-              });
-
-              if (
-                jiraIssueKeys.length === beforeJira &&
-                githubPullRequests.length === beforePr &&
-                copy.has(threadId)
-              ) {
+            for (const [threadId, existing] of copy) {
+              if (hasExternalWorkItemSource(existing.sources)) continue;
+              if (existing.jiraIssueKeys.length === 0 && existing.githubPullRequests.length === 0) {
                 continue;
               }
-
-              jiraKeysAdded += jiraIssueKeys.length - beforeJira;
-              prsAdded += githubPullRequests.length - beforePr;
+              jiraKeysRemoved += existing.jiraIssueKeys.length;
+              prsRemoved += existing.githubPullRequests.length;
               threadsTouched += 1;
-              copy.set(threadId, {
-                threadId,
-                jiraIssueKeys,
-                githubPullRequests,
-                sources,
-                updatedAt: now,
-              });
-            }
-
-            const backfillByThread = new Map<string, string[]>();
-            const linkedByThread = new Map<string, string[]>();
-            for (const link of links) {
-              const threadId = link.t3ThreadId.trim();
-              if (threadId.length === 0) continue;
-              const backfill = backfillByThread.get(threadId) ?? [];
-              backfill.push(...(link.backfillJiraIssueKeys ?? []));
-              backfillByThread.set(threadId, backfill);
-              if (link.linkedJiraIssueKeys !== undefined) {
-                const linked = linkedByThread.get(threadId) ?? [];
-                linked.push(...link.linkedJiraIssueKeys);
-                linkedByThread.set(threadId, linked);
-              }
-            }
-            for (const [threadId, backfillKeys] of backfillByThread) {
-              const existing = copy.get(threadId as ThreadId);
-              if (existing === undefined) continue;
-              const pruned = withoutDiscordBackfillJiraKeys({
-                jiraIssueKeys: existing.jiraIssueKeys,
-                sources: existing.sources,
-                backfillKeys,
-                linkedKeys: linkedByThread.get(threadId) ?? [],
-              });
-              if (
-                pruned.length === existing.jiraIssueKeys.length &&
-                pruned.every((key, index) => key === existing.jiraIssueKeys[index])
-              ) {
-                continue;
-              }
-              jiraKeysRemoved += existing.jiraIssueKeys.length - pruned.length;
-              threadsTouched += 1;
-              const brandedThreadId = threadId as ThreadId;
-              if (pruned.length === 0 && existing.githubPullRequests.length === 0) {
-                copy.delete(brandedThreadId);
-                continue;
-              }
-              copy.set(brandedThreadId, {
-                ...existing,
-                jiraIssueKeys: pruned,
-                updatedAt: now,
-              });
+              copy.delete(threadId);
             }
             return copy;
           });
 
           if (threadsTouched > 0) yield* persist(next);
-          return { threadsTouched, jiraKeysAdded, jiraKeysRemoved, prsAdded };
+          return {
+            threadsTouched,
+            jiraKeysAdded: 0,
+            jiraKeysRemoved,
+            prsAdded: 0,
+            prsRemoved,
+          };
         }),
       ),
   });
