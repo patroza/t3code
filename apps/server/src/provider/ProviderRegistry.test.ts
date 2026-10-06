@@ -2954,6 +2954,7 @@ it.layer(
               "codex",
               "cursor",
               "grok",
+              "kimi",
               "opencode",
               "pi",
             ]);
