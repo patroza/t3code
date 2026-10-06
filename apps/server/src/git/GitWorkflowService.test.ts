@@ -24,6 +24,7 @@ function layer(input: {
   readonly detect: VcsDriverRegistry.VcsDriverRegistry["Service"]["detect"];
   readonly resolve?: VcsDriverRegistry.VcsDriverRegistry["Service"]["resolve"];
   readonly driver?: Record<string, unknown>;
+  readonly manager?: Partial<GitManager.GitManager["Service"]>;
 }) {
   return GitWorkflowService.layer.pipe(
     Layer.provide(
@@ -33,7 +34,7 @@ function layer(input: {
       }),
     ),
     Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)(input.driver ?? {})),
-    Layer.provide(Layer.mock(GitManager.GitManager)({})),
+    Layer.provide(Layer.mock(GitManager.GitManager)(input.manager ?? {})),
     Layer.provide(lifecycleScriptRunnerMock),
   );
 }
@@ -290,7 +291,7 @@ describe("GitWorkflowService", () => {
           layer({
             detect: () => Effect.succeed(bareHandle("/bare-repo")),
             resolve: () => Effect.succeed(bareHandle("/bare-repo")),
-            driver: { createWorktree },
+            manager: { createWorktree },
           }),
         ),
       );

@@ -153,6 +153,7 @@ export default mergeConfig(
             include: ["integration/**/*.test.ts", "scripts/**/*.test.ts", "src/**/*.test.ts"],
             exclude: [
               "src/assets/AssetAccess.test.ts",
+              "src/htmlRender/publicProxy.test.ts",
               "src/bootstrap.test.ts",
               "src/cli/app.test.ts",
               "src/git/GitManager.test.ts",
@@ -178,6 +179,8 @@ export default mergeConfig(
               // visible. Under isolate:false the real module is already bound
               // and the descriptor is not rejected.
               "src/assets/AssetAccess.test.ts",
+              // Mocks local interface addresses; isolate it from cached node:os imports.
+              "src/htmlRender/publicProxy.test.ts",
               "src/bootstrap.test.ts",
               // Mocks `node:os`.homedir so `t3 app` resolves ~/.t3 into the
               // fixture tree. Under isolate:false an earlier file binds the

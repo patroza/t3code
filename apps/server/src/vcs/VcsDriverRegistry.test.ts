@@ -75,7 +75,8 @@ describe("VcsDriverRegistry", () => {
                   stderr: "fatal: not a git repository",
                 };
               }
-              if (command === "rev-parse --is-inside-work-tree") return processOutput("true\n");
+              if (command === "rev-parse --is-bare-repository --is-inside-work-tree")
+                return processOutput("false\ntrue\n");
               if (command === "rev-parse --show-toplevel") return processOutput(`${repoDir}\n`);
               if (command === "rev-parse --git-common-dir") {
                 return processOutput(`${path.relative(input.cwd, path.join(repoDir, ".git"))}\n`);
@@ -102,9 +103,9 @@ describe("VcsDriverRegistry", () => {
         assert.equal(first.repository.rootPath, repoDir);
         assert.equal(second.repository.rootPath, repoDir);
         assert.deepStrictEqual(calls, [
-          "rev-parse --is-inside-work-tree",
-          "rev-parse --show-toplevel",
+          "rev-parse --is-bare-repository --is-inside-work-tree",
           "rev-parse --git-common-dir",
+          "rev-parse --show-toplevel",
         ]);
       }).pipe(Effect.provide(makeDiskBackedLayer(repoDir, calls)));
     }).pipe(Effect.provide(NodeServices.layer)),
@@ -125,7 +126,11 @@ describe("VcsDriverRegistry", () => {
         yield* fs.remove(path.join(repoDir, ".git"), { recursive: true });
 
         assert.equal(yield* registry.detect({ cwd: repoDir }), null);
-        assert.equal(calls.filter((call) => call === "rev-parse --is-inside-work-tree").length, 2);
+        assert.equal(
+          calls.filter((call) => call === "rev-parse --is-bare-repository --is-inside-work-tree")
+            .length,
+          2,
+        );
       }).pipe(Effect.provide(makeDiskBackedLayer(repoDir, calls)));
     }).pipe(Effect.provide(NodeServices.layer)),
   );
@@ -188,59 +193,38 @@ describe("VcsDriverRegistry", () => {
         assert.equal(yield* registry.detect({ cwd: repoDir }), null);
 
         yield* fs.makeDirectory(path.join(repoDir, ".git"));
+        yield* TestClock.adjust("16 seconds");
 
         assert.equal((yield* registry.detect({ cwd: repoDir }))?.repository.rootPath, repoDir);
-        assert.equal(calls.filter((call) => call === "rev-parse --is-inside-work-tree").length, 2);
+        assert.equal(
+          calls.filter((call) => call === "rev-parse --is-bare-repository --is-inside-work-tree")
+            .length,
+          2,
+        );
       }).pipe(Effect.provide(makeDiskBackedLayer(repoDir, calls)));
     }).pipe(Effect.provide(NodeServices.layer)),
   );
-  it.effect("fresh detect sees a repository created during a negative cache TTL", () => {
-    let probeChecks = 0;
-    const layer = Layer.effect(VcsDriverRegistry.VcsDriverRegistry, VcsDriverRegistry.make).pipe(
-      Layer.provide(NodeServices.layer),
-      Layer.provide(
-        Layer.mock(VcsProjectConfig.VcsProjectConfig)({
-          resolveKind: (input) => Effect.succeed(input.requestedKind ?? "auto"),
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(VcsProcess.VcsProcess)({
-          run: (input) =>
-            Effect.sync(() => {
-              const command = normalizeGitArgs(input.args).join(" ");
-              if (command === "rev-parse --is-bare-repository --is-inside-work-tree") {
-                probeChecks += 1;
-                return probeChecks === 1
-                  ? {
-                      ...processOutput(""),
-                      exitCode: ChildProcessSpawner.ExitCode(128),
-                      stderr: "fatal: not a git repository",
-                    }
-                  : processOutput("false\ntrue\n");
-              }
-              if (command === "rev-parse --show-toplevel") {
-                return processOutput("/repo\n");
-              }
-              if (command === "rev-parse --git-common-dir") {
-                return processOutput("/repo/.git\n");
-              }
-              return processOutput("");
-            }),
-        }),
-      ),
-    );
-
-    return Effect.gen(function* () {
-      const registry = yield* VcsDriverRegistry.VcsDriverRegistry;
-
-      assert.equal(yield* registry.detect({ cwd: "/repo" }), null);
-      assert.equal(
-        (yield* registry.detect({ cwd: "/repo", fresh: true }))?.repository.rootPath,
-        "/repo",
-      );
-      // One probe per detect: the combined rev-parse keeps negative detection
-      // to a single git call.
-      assert.equal(probeChecks, 2);
-    }).pipe(Effect.provide(Layer.mergeAll(layer, TestClock.layer())));
-  });
+  it.effect("fresh detect sees a repository created during a negative cache TTL", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const repoDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-vcs-registry-fresh-" });
+      const calls: string[] = [];
+      yield* Effect.gen(function* () {
+        const registry = yield* VcsDriverRegistry.VcsDriverRegistry;
+        assert.equal(yield* registry.detect({ cwd: repoDir }), null);
+        yield* fs.makeDirectory(path.join(repoDir, ".git"));
+        assert.equal(yield* registry.detect({ cwd: repoDir }), null);
+        assert.equal(
+          (yield* registry.detect({ cwd: repoDir, fresh: true }))?.repository.rootPath,
+          repoDir,
+        );
+        assert.equal(
+          calls.filter((call) => call === "rev-parse --is-bare-repository --is-inside-work-tree")
+            .length,
+          2,
+        );
+      }).pipe(Effect.provide(makeDiskBackedLayer(repoDir, calls)));
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
 });

@@ -71,7 +71,7 @@ it.effect("parks automatic pull until activation without delaying command readin
       const dependencies: Layer.Layer<
         Layer.Services<ReturnType<typeof ServerRuntimeStartup.layerWithOptions>>
       > = Layer.mergeAll(
-        FileSystem.layerNoop({}),
+        FileSystem.layerNoop({ writeFileString: () => Effect.void }),
         Layer.mock(ServerConfig.ServerConfig)({
           ...(yield* ServerConfig.deriveServerPaths(cwd, undefined).pipe(
             Effect.provide(Path.layer),
@@ -179,8 +179,11 @@ it.effect("parks automatic pull until activation without delaying command readin
         yield* startup.markHttpListening;
 
         // A reverted, awaited pull reaches statusDetails instead of prepareTrial.
-        // Race the two receipts so that regression fails without a timeout.
-        yield* Effect.raceFirst(Deferred.await(prepared), Deferred.await(statusCalled));
+        // Race both receipts with readiness so a startup failure also rejects promptly.
+        yield* Effect.raceFirst(
+          Effect.raceFirst(Deferred.await(prepared), Deferred.await(statusCalled)),
+          startup.awaitCommandReady,
+        );
         expect(yield* Deferred.isDone(activation)).toBe(false);
         expect(yield* Deferred.isDone(statusCalled)).toBe(false);
         expect(yield* Deferred.isDone(prepared)).toBe(true);
