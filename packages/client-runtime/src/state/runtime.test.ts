@@ -307,6 +307,10 @@ describe("refreshQueryOnSuccess", () => {
       }
 
       const unmountUpdated = registry.mount(liveQuery);
+      // SWR queues mount revalidation on the registry's asynchronous scheduler.
+      while (scheduledTasks.length > 0) {
+        scheduledTasks.shift()?.();
+      }
       expect(
         yield* AtomRegistry.getResult(registry, liveQuery, {
           suspendOnWaiting: true,
