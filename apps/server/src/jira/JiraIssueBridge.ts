@@ -52,11 +52,7 @@ import {
   resolveT3ProjectIdForJiraKey,
 } from "./JiraAppConfig.ts";
 import { JiraDeliveryStore, type StoredJiraDelivery } from "./JiraDeliveryStore.ts";
-import {
-  issueKeyIsDiscordBackfillOnly,
-  resolveDiscordLinkForJiraIssue,
-  resolveThreadIdForJiraIssue,
-} from "./JiraThreadLookup.ts";
+import { resolveDiscordLinkForJiraIssue } from "./JiraThreadLookup.ts";
 import { classifyJiraActorTrust, type JiraActorTrustDecision } from "./jiraActorTrust.ts";
 import {
   formatDiscordJiraContextNote,
@@ -317,42 +313,29 @@ const make = Effect.gen(function* () {
   });
 
   /**
-   * Resolve issue → thread from the server-native work-item store first.
-   * Optionally import/promote from Discord links.json (migration fallback only).
+   * Resolve issue → thread from associations Jira or GitHub recorded.
+   * A miss also drops Discord-only rows so an old pin import cannot keep matching.
    */
   const resolveLinkedThreadId = Effect.fn("JiraIssueBridge.resolveLinkedThreadId")(function* (
     issueKey: string,
   ) {
     const primary = yield* workItems.resolveJiraIssue(issueKey);
+    if (primary._tag !== "unlinked") return primary;
+
     const linksPath = config.enabled ? config.discordLinksPath : null;
     const raw =
       linksPath === null || linksPath.length === 0
         ? ""
         : yield* fileSystem.readFileString(linksPath).pipe(Effect.orElseSucceed(() => ""));
-    const blockedByBackfill =
-      primary._tag === "linked" &&
-      raw.trim().length > 0 &&
-      issueKeyIsDiscordBackfillOnly({
-        issueKey,
-        threadId: primary.threadId,
-        linksJson: raw,
-      });
-    if (primary._tag !== "unlinked" && !blockedByBackfill) return primary;
     if (raw.trim().length === 0) {
       return { _tag: "unlinked" } satisfies WorkItemLookupResult;
     }
 
-    // Promote all active Discord associations into the server store, then re-resolve.
     const imported = yield* workItems.importDiscordLinksJson(raw);
     if (imported.threadsTouched > 0) {
-      yield* Effect.logInfo("Imported Discord work-item associations into server store", imported);
+      yield* Effect.logInfo("Dropped Discord-only work-item associations", imported);
     }
-
-    const afterImport = yield* workItems.resolveJiraIssue(issueKey);
-    if (afterImport._tag !== "unlinked") return afterImport;
-
-    // Last resort: pure Discord parse without promotion (e.g. decode shape mismatch on import).
-    return resolveThreadIdForJiraIssue({ issueKey, linksJson: raw });
+    return yield* workItems.resolveJiraIssue(issueKey);
   });
 
   /**

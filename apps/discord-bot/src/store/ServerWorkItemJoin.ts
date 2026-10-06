@@ -4,7 +4,8 @@
  * before Discord creates a new session.
  *
  * Sources:
- * - Server `thread-work-items.json` next to state.sqlite (Jira/GitHub bridges)
+ * - Server `thread-work-items.json` rows written by a Jira or GitHub webhook.
+ *   Discord mentions and pin backfill are not identity.
  *
  * Active Discord links are exclusions: one T3 thread must never be implicitly
  * joined from more than one Discord thread.
@@ -46,7 +47,18 @@ type ServerWorkItemRecord = {
   readonly threadId: string;
   readonly jiraIssueKeys?: ReadonlyArray<string>;
   readonly githubPullRequests?: ReadonlyArray<string>;
+  readonly sources?: ReadonlyArray<string>;
 };
+
+const EXTERNAL_WORK_ITEM_SOURCES = new Set(["jira-webhook", "github-webhook"]);
+
+function hasExternalWorkItemSource(sources: ReadonlyArray<string> | undefined): boolean {
+  if (!Array.isArray(sources)) return false;
+  return sources.some(
+    (source) =>
+      typeof source === "string" && EXTERNAL_WORK_ITEM_SOURCES.has(source.trim().toLowerCase()),
+  );
+}
 
 function readServerWorkItemRecords(filePath: string): ReadonlyArray<ServerWorkItemRecord> {
   try {
@@ -67,37 +79,9 @@ function readServerWorkItemRecords(filePath: string): ReadonlyArray<ServerWorkIt
 }
 
 /**
- * True when every Discord row for this T3 thread lists the key as pin-backfill
- * only, and none lists it as link identity. Those keys stay on the pin and must
- * not join a thread.
- */
-export function jiraKeyBlockedByPinBackfill(input: {
-  readonly discordLinks: ReadonlyArray<
-    Pick<ThreadLink, "t3ThreadId" | "linkedJiraIssueKeys" | "backfillJiraIssueKeys">
-  >;
-  readonly t3ThreadId: string;
-  readonly issueKey: string;
-}): boolean {
-  const issueKey = input.issueKey.trim().toUpperCase();
-  if (issueKey.length === 0) return false;
-  let backfill = false;
-  let linked = false;
-  for (const link of input.discordLinks) {
-    if (link.t3ThreadId !== input.t3ThreadId) continue;
-    if ((link.linkedJiraIssueKeys ?? []).some((key) => key.trim().toUpperCase() === issueKey)) {
-      linked = true;
-    }
-    if ((link.backfillJiraIssueKeys ?? []).some((key) => key.trim().toUpperCase() === issueKey)) {
-      backfill = true;
-    }
-  }
-  return backfill && !linked;
-}
-
-/**
- * Return a unique T3 thread id if the given Jira keys / PR URLs map to exactly one thread.
- * Fail closed on zero or many matches.
- * Pin-backfill keys do not count as a match.
+ * Return a unique T3 thread id if the given Jira keys / PR URLs map to exactly one thread
+ * that Jira or GitHub recorded. Fail closed on zero or many matches.
+ * Discord-only rows do not count.
  */
 export function resolveUniqueT3ThreadIdForWorkItems(input: {
   readonly jiraIssueKeys: ReadonlyArray<string>;
@@ -130,6 +114,7 @@ export function resolveUniqueT3ThreadIdForWorkItems(input: {
 
   const serverRecords = readServerWorkItemRecords(input.serverWorkItemsPath);
   for (const record of serverRecords) {
+    if (!hasExternalWorkItemSource(record.sources)) continue;
     if (discordLinkedThreadIds.has(record.threadId)) continue;
     const recordKeys = new Set(
       (record.jiraIssueKeys ?? [])
@@ -141,15 +126,7 @@ export function resolveUniqueT3ThreadIdForWorkItems(input: {
         .map((url) => normalizeGitHubPullRequestRef(url))
         .filter((ref): ref is string => ref !== null),
     );
-    const jiraHit = jiraKeys.some(
-      (key) =>
-        recordKeys.has(key) &&
-        !jiraKeyBlockedByPinBackfill({
-          discordLinks: input.discordLinks,
-          t3ThreadId: record.threadId,
-          issueKey: key,
-        }),
-    );
+    const jiraHit = jiraKeys.some((key) => recordKeys.has(key));
     const prHit = prRefs.some((ref) => recordPrs.has(ref));
     if (jiraHit || prHit) threadIds.add(record.threadId);
   }

@@ -1,10 +1,7 @@
 /**
- * Resolve a Jira issue key from a Discord bot links.json payload.
- *
- * Preferred resolution is the server-native {@link ThreadWorkItemStore}. This helper remains
- * for migration/fallback when Discord still holds associations that have not been imported yet.
- *
- * Discord destinations (for untrusted context notes) also come from the same links.json.
+ * Discord destinations for untrusted Jira context notes come from links.json.
+ * These helpers do not choose the T3 thread for a Jira or Discord turn. Work-item
+ * identity is only what a Jira or GitHub webhook recorded.
  */
 
 import type { ThreadId } from "@t3tools/contracts";
@@ -55,7 +52,7 @@ function decodeLinks(linksJson: string): ReadonlyArray<typeof DiscordThreadLink.
   }
 }
 
-/** Link identity. A present `linkedJiraIssueKeys` (even empty) replaces the pin list. */
+/** Keys used to find the Discord channel for a context note. Not work-item identity. */
 function linkIdentityKeys(link: typeof DiscordThreadLink.Type): ReadonlyArray<string> {
   if (link.linkedJiraIssueKeys !== undefined) return link.linkedJiraIssueKeys;
   return link.jiraIssueKeys ?? [];
@@ -74,32 +71,7 @@ function activeLinksWithIssue(
   });
 }
 
-/**
- * True when Discord rows for this T3 thread list the key as pin-backfill only.
- * The work-item store may still contain it until the next import prunes it.
- */
-export function issueKeyIsDiscordBackfillOnly(input: {
-  readonly issueKey: string;
-  readonly threadId: string;
-  readonly linksJson: string;
-}): boolean {
-  const issueKey = input.issueKey.trim().toUpperCase();
-  const threadId = input.threadId.trim();
-  if (issueKey.length === 0 || threadId.length === 0) return false;
-  let backfill = false;
-  let linked = false;
-  for (const link of decodeLinks(input.linksJson)) {
-    if (link.t3ThreadId.trim() !== threadId) continue;
-    if ((link.linkedJiraIssueKeys ?? []).some((key) => key.trim().toUpperCase() === issueKey)) {
-      linked = true;
-    }
-    if ((link.backfillJiraIssueKeys ?? []).some((key) => key.trim().toUpperCase() === issueKey)) {
-      backfill = true;
-    }
-  }
-  return backfill && !linked;
-}
-
+/** Legacy parse of Discord link rows. Jira resolution does not call this. */
 export function resolveThreadIdForJiraIssue(input: {
   readonly issueKey: string;
   readonly linksJson: string;
