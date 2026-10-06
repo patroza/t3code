@@ -238,7 +238,7 @@ describe("tailscale", () => {
   );
 
   it.effect("reads serve mappings through the process spawner service", () => {
-    const layer = mockSpawnerLayer((command, args) => {
+    const layer = layerMockSpawner((command, args) => {
       assert.equal(command, "tailscale");
       assert.deepEqual(args, ["serve", "status", "--json"]);
       return { stdout: tailscaleServeStatusJson };
