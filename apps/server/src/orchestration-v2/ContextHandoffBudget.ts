@@ -142,9 +142,10 @@ function sameProviderThreadSet(
 }
 
 /**
- * The native session already holds this history: an earlier handoff was
- * delivered into it, or a completed compact summarized the run it targets.
- * Re-injecting it is what blows the handoff budget after `/compact`.
+ * The native session already holds this history when an earlier handoff of
+ * the same strategy and source set was delivered into it. A `/compact` that
+ * cannot take an inline transcript leaves its handoff undelivered on purpose;
+ * the next ordinary turn still sends that one.
  */
 export function handoffAlreadyInNativeSession(input: {
   readonly handoff: Pick<
@@ -153,8 +154,6 @@ export function handoffAlreadyInNativeSession(input: {
   >;
   readonly nativeThreadId: string | null | undefined;
   readonly sameNativeThread: boolean;
-  readonly targetRunOrdinal: number | undefined;
-  readonly compactionRunOrdinal: number | undefined;
   readonly delivered: ReadonlyArray<
     Pick<
       OrchestrationV2ContextHandoff,
@@ -163,13 +162,6 @@ export function handoffAlreadyInNativeSession(input: {
   >;
 }): boolean {
   if (!input.sameNativeThread || input.nativeThreadId == null) return false;
-  if (
-    input.compactionRunOrdinal !== undefined &&
-    input.targetRunOrdinal !== undefined &&
-    input.targetRunOrdinal <= input.compactionRunOrdinal
-  ) {
-    return true;
-  }
   return input.delivered.some((delivered) => {
     const delivery = delivered.delivery;
     return (

@@ -1007,8 +1007,6 @@ export const layer: Layer.Layer<
             handoff,
             nativeThreadId,
             sameNativeThread,
-            targetRunOrdinal: runOrdinalById.get(handoff.targetRunId),
-            compactionRunOrdinal,
             delivered: settledHandoffs,
           }),
       );

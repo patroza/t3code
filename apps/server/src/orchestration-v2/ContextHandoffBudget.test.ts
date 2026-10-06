@@ -504,18 +504,15 @@ describe("native session already holds the history", () => {
         handoff: duplicate,
         nativeThreadId: "native:grok",
         sameNativeThread: true,
-        targetRunOrdinal: 8,
-        compactionRunOrdinal: undefined,
         delivered: [delivered],
       }),
     );
-    assert.isTrue(
+    // `/compact` defers an undelivered handoff for the next ordinary turn.
+    assert.isFalse(
       handoffAlreadyInNativeSession({
         handoff: { ...delivered, coveredRunOrdinals: { from: 1, to: 6 } },
         nativeThreadId: "native:grok",
         sameNativeThread: true,
-        targetRunOrdinal: 6,
-        compactionRunOrdinal: ordinal,
         delivered: [],
       }),
     );
@@ -524,8 +521,6 @@ describe("native session already holds the history", () => {
         handoff: { ...handoff, coveredRunOrdinals: { from: 1, to: 8 } },
         nativeThreadId: "native:grok",
         sameNativeThread: true,
-        targetRunOrdinal: 9,
-        compactionRunOrdinal: ordinal,
         delivered: [delivered],
       }),
     );
@@ -534,8 +529,6 @@ describe("native session already holds the history", () => {
         handoff: duplicate,
         nativeThreadId: "native:replacement",
         sameNativeThread: false,
-        targetRunOrdinal: 6,
-        compactionRunOrdinal: ordinal,
         delivered: [delivered],
       }),
     );
