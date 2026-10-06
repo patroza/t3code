@@ -381,6 +381,22 @@ describe("Jira thread lookup", () => {
       _tag: "linked",
       threadId: "thread-a",
     });
+    expect(
+      resolveThreadIdForJiraIssue({
+        issueKey: "SA-465",
+        linksJson: JSON.stringify({
+          links: [
+            {
+              t3ThreadId: "thread-a",
+              status: "active",
+              jiraIssueKeys: ["SA-465"],
+              linkedJiraIssueKeys: [],
+              backfillJiraIssueKeys: ["SA-465"],
+            },
+          ],
+        }),
+      }),
+    ).toEqual({ _tag: "unlinked" });
     expect(resolveDiscordLinkForJiraIssue({ issueKey: "SA-402", linksJson })).toEqual({
       _tag: "linked",
       discordThreadId: "discord-a",

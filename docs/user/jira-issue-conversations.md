@@ -63,8 +63,11 @@ How associations get there:
 
 1. **Jira webhook** — on a successful resolve/dispatch, the issue key is appended for that thread
 2. **GitHub webhook** — PR URLs are recorded the same way (shared store)
-3. **Discord import** — optional one-shot/fallback import from Discord bot `links.json`
-   (`T3CODE_JIRA_DISCORD_LINKS_PATH`) when the server store has no match yet
+3. **Discord import** — optional fallback import from Discord bot `links.json`
+   (`T3CODE_JIRA_DISCORD_LINKS_PATH`). Only keys a person attached on a Discord turn
+   (`linkedJiraIssueKeys`) become join identity. The thread-info pin may also list keys
+   scraped from bot replies (pin backfill); those stay on the pin and are not used to
+   join or import a thread. Rows that have not been split yet still import their pin list.
 4. **Future** — authenticated API / web UI / agent tools to attach work items without Discord
 
 Fail closed when:

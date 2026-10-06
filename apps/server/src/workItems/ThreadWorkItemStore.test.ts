@@ -2,10 +2,12 @@ import { describe, expect, it } from "@effect/vitest";
 
 import {
   extractJiraIssueKeysFromText,
+  jiraKeysImportedFromDiscordLink,
   mergeOrderedUnique,
   normalizeGitHubPullRequestRef,
   normalizeJiraIssueKey,
   resolveJiraIssueFromRecords,
+  withoutDiscordBackfillJiraKeys,
 } from "./ThreadWorkItemStore.ts";
 
 describe("ThreadWorkItemStore helpers", () => {
@@ -57,5 +59,40 @@ describe("ThreadWorkItemStore helpers", () => {
         "SA-402",
       ),
     ).toMatchObject({ _tag: "ambiguous" });
+  });
+
+  it("imports linked Jira keys and ignores the pin list once the link set exists", () => {
+    expect(
+      jiraKeysImportedFromDiscordLink({
+        jiraIssueKeys: ["SA-465", "SA-100"],
+        linkedJiraIssueKeys: ["SA-100"],
+      }),
+    ).toEqual(["SA-100"]);
+    expect(jiraKeysImportedFromDiscordLink({ jiraIssueKeys: ["SA-100"] })).toEqual(["SA-100"]);
+    expect(
+      jiraKeysImportedFromDiscordLink({
+        jiraIssueKeys: ["SA-465"],
+        linkedJiraIssueKeys: [],
+      }),
+    ).toEqual([]);
+  });
+
+  it("drops pin-backfill keys from discord-only rows and keeps webhook rows", () => {
+    expect(
+      withoutDiscordBackfillJiraKeys({
+        jiraIssueKeys: ["SA-470", "SA-465", "SA-100"],
+        sources: ["discord"],
+        backfillKeys: ["SA-470", "SA-465"],
+        linkedKeys: ["SA-100"],
+      }),
+    ).toEqual(["SA-100"]);
+    expect(
+      withoutDiscordBackfillJiraKeys({
+        jiraIssueKeys: ["SA-465"],
+        sources: ["discord", "jira-webhook"],
+        backfillKeys: ["SA-465"],
+        linkedKeys: [],
+      }),
+    ).toEqual(["SA-465"]);
   });
 });

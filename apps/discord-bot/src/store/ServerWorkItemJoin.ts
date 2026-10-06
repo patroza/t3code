@@ -67,8 +67,37 @@ function readServerWorkItemRecords(filePath: string): ReadonlyArray<ServerWorkIt
 }
 
 /**
+ * True when every Discord row for this T3 thread lists the key as pin-backfill
+ * only, and none lists it as link identity. Those keys stay on the pin and must
+ * not join a thread.
+ */
+export function jiraKeyBlockedByPinBackfill(input: {
+  readonly discordLinks: ReadonlyArray<
+    Pick<ThreadLink, "t3ThreadId" | "linkedJiraIssueKeys" | "backfillJiraIssueKeys">
+  >;
+  readonly t3ThreadId: string;
+  readonly issueKey: string;
+}): boolean {
+  const issueKey = input.issueKey.trim().toUpperCase();
+  if (issueKey.length === 0) return false;
+  let backfill = false;
+  let linked = false;
+  for (const link of input.discordLinks) {
+    if (link.t3ThreadId !== input.t3ThreadId) continue;
+    if ((link.linkedJiraIssueKeys ?? []).some((key) => key.trim().toUpperCase() === issueKey)) {
+      linked = true;
+    }
+    if ((link.backfillJiraIssueKeys ?? []).some((key) => key.trim().toUpperCase() === issueKey)) {
+      backfill = true;
+    }
+  }
+  return backfill && !linked;
+}
+
+/**
  * Return a unique T3 thread id if the given Jira keys / PR URLs map to exactly one thread.
  * Fail closed on zero or many matches.
+ * Pin-backfill keys do not count as a match.
  */
 export function resolveUniqueT3ThreadIdForWorkItems(input: {
   readonly jiraIssueKeys: ReadonlyArray<string>;
@@ -112,7 +141,15 @@ export function resolveUniqueT3ThreadIdForWorkItems(input: {
         .map((url) => normalizeGitHubPullRequestRef(url))
         .filter((ref): ref is string => ref !== null),
     );
-    const jiraHit = jiraKeys.some((key) => recordKeys.has(key));
+    const jiraHit = jiraKeys.some(
+      (key) =>
+        recordKeys.has(key) &&
+        !jiraKeyBlockedByPinBackfill({
+          discordLinks: input.discordLinks,
+          t3ThreadId: record.threadId,
+          issueKey: key,
+        }),
+    );
     const prHit = prRefs.some((ref) => recordPrs.has(ref));
     if (jiraHit || prHit) threadIds.add(record.threadId);
   }

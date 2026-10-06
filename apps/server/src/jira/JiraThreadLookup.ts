@@ -17,6 +17,8 @@ const DiscordThreadLink = Schema.Struct({
   guildId: Schema.optional(Schema.String),
   status: Schema.optional(Schema.String),
   jiraIssueKeys: Schema.optional(Schema.Array(Schema.String)),
+  linkedJiraIssueKeys: Schema.optional(Schema.Array(Schema.String)),
+  backfillJiraIssueKeys: Schema.optional(Schema.Array(Schema.String)),
 });
 
 const DiscordLinksFile = Schema.Struct({
@@ -45,6 +47,20 @@ export type JiraDiscordLinkLookupResult =
       readonly guildId: string | null;
     };
 
+function decodeLinks(linksJson: string): ReadonlyArray<typeof DiscordThreadLink.Type> {
+  try {
+    return decodeLinksFile(linksJson).links;
+  } catch {
+    return [];
+  }
+}
+
+/** Link identity. A present `linkedJiraIssueKeys` (even empty) replaces the pin list. */
+function linkIdentityKeys(link: typeof DiscordThreadLink.Type): ReadonlyArray<string> {
+  if (link.linkedJiraIssueKeys !== undefined) return link.linkedJiraIssueKeys;
+  return link.jiraIssueKeys ?? [];
+}
+
 function activeLinksWithIssue(
   linksJson: string,
   issueKeyRaw: string,
@@ -52,18 +68,36 @@ function activeLinksWithIssue(
   const issueKey = issueKeyRaw.trim().toUpperCase();
   if (issueKey.length === 0) return [];
 
-  let links: ReadonlyArray<typeof DiscordThreadLink.Type>;
-  try {
-    links = decodeLinksFile(linksJson).links;
-  } catch {
-    return [];
-  }
-
-  return links.filter((link) => {
+  return decodeLinks(linksJson).filter((link) => {
     if (link.status !== undefined && link.status !== "active") return false;
-    const keys = link.jiraIssueKeys ?? [];
-    return keys.some((key) => key.trim().toUpperCase() === issueKey);
+    return linkIdentityKeys(link).some((key) => key.trim().toUpperCase() === issueKey);
   });
+}
+
+/**
+ * True when Discord rows for this T3 thread list the key as pin-backfill only.
+ * The work-item store may still contain it until the next import prunes it.
+ */
+export function issueKeyIsDiscordBackfillOnly(input: {
+  readonly issueKey: string;
+  readonly threadId: string;
+  readonly linksJson: string;
+}): boolean {
+  const issueKey = input.issueKey.trim().toUpperCase();
+  const threadId = input.threadId.trim();
+  if (issueKey.length === 0 || threadId.length === 0) return false;
+  let backfill = false;
+  let linked = false;
+  for (const link of decodeLinks(input.linksJson)) {
+    if (link.t3ThreadId.trim() !== threadId) continue;
+    if ((link.linkedJiraIssueKeys ?? []).some((key) => key.trim().toUpperCase() === issueKey)) {
+      linked = true;
+    }
+    if ((link.backfillJiraIssueKeys ?? []).some((key) => key.trim().toUpperCase() === issueKey)) {
+      backfill = true;
+    }
+  }
+  return backfill && !linked;
 }
 
 export function resolveThreadIdForJiraIssue(input: {
