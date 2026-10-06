@@ -52,7 +52,11 @@ import {
   resolveT3ProjectIdForJiraKey,
 } from "./JiraAppConfig.ts";
 import { JiraDeliveryStore, type StoredJiraDelivery } from "./JiraDeliveryStore.ts";
-import { resolveDiscordLinkForJiraIssue, resolveThreadIdForJiraIssue } from "./JiraThreadLookup.ts";
+import {
+  issueKeyIsDiscordBackfillOnly,
+  resolveDiscordLinkForJiraIssue,
+  resolveThreadIdForJiraIssue,
+} from "./JiraThreadLookup.ts";
 import { classifyJiraActorTrust, type JiraActorTrustDecision } from "./jiraActorTrust.ts";
 import {
   formatDiscordJiraContextNote,
@@ -320,13 +324,20 @@ const make = Effect.gen(function* () {
     issueKey: string,
   ) {
     const primary = yield* workItems.resolveJiraIssue(issueKey);
-    if (primary._tag !== "unlinked") return primary;
-
     const linksPath = config.enabled ? config.discordLinksPath : null;
-    if (linksPath === null || linksPath.length === 0) {
-      return { _tag: "unlinked" } satisfies WorkItemLookupResult;
-    }
-    const raw = yield* fileSystem.readFileString(linksPath).pipe(Effect.orElseSucceed(() => ""));
+    const raw =
+      linksPath === null || linksPath.length === 0
+        ? ""
+        : yield* fileSystem.readFileString(linksPath).pipe(Effect.orElseSucceed(() => ""));
+    const blockedByBackfill =
+      primary._tag === "linked" &&
+      raw.trim().length > 0 &&
+      issueKeyIsDiscordBackfillOnly({
+        issueKey,
+        threadId: primary.threadId,
+        linksJson: raw,
+      });
+    if (primary._tag !== "unlinked" && !blockedByBackfill) return primary;
     if (raw.trim().length === 0) {
       return { _tag: "unlinked" } satisfies WorkItemLookupResult;
     }
