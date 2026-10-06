@@ -118,4 +118,47 @@ describe("ServerWorkItemJoin", () => {
       }),
     ).toBe("t-pr");
   });
+
+  it("does not join a thread whose only association is a pin-backfill key", () => {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "work-item-join-"));
+    const filePath = NodePath.join(dir, "thread-work-items.json");
+    NodeFS.writeFileSync(
+      filePath,
+      JSON.stringify({
+        version: 1,
+        records: [
+          {
+            threadId: "t-330",
+            jiraIssueKeys: ["SA-465"],
+            githubPullRequests: [],
+          },
+        ],
+      }),
+    );
+    const tombstoned = {
+      ...discordLink("t-330", "tombstone"),
+      backfillJiraIssueKeys: ["SA-465"],
+      linkedJiraIssueKeys: [],
+    };
+
+    expect(
+      resolveUniqueT3ThreadIdForWorkItems({
+        jiraIssueKeys: ["SA-465"],
+        prUrls: [],
+        discordLinks: [tombstoned],
+        serverWorkItemsPath: filePath,
+      }),
+    ).toBeNull();
+
+    expect(
+      resolveUniqueT3ThreadIdForWorkItems({
+        jiraIssueKeys: ["SA-465"],
+        prUrls: [],
+        discordLinks: [
+          { ...tombstoned, linkedJiraIssueKeys: ["SA-465"], backfillJiraIssueKeys: [] },
+        ],
+        serverWorkItemsPath: filePath,
+      }),
+    ).toBe("t-330");
+  });
 });
