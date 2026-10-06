@@ -51,7 +51,7 @@ import {
   type PreparedConnection,
 } from "@t3tools/client-runtime/connection";
 import {
-  remoteHttpClientLayer,
+  layerRemoteHttpClient,
   RpcSessionFactory,
   rpcSessionFactoryLayer,
   type RpcSession,
@@ -68,7 +68,7 @@ import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import * as Socket from "effect/unstable/socket/Socket";
+import * as Socket from "effect/socket/Socket";
 
 import { newCommandId, newMessageId, newProjectId, newThreadId } from "./ids.ts";
 import type { IdentitySnapshot, IdentityStatus, SessionIdentityClaim } from "./identity.ts";
@@ -120,7 +120,7 @@ export class T3Client {
   readonly #runtime = ManagedRuntime.make(
     Layer.merge(
       rpcSessionFactoryLayer({}).pipe(Layer.provide(Socket.layerWebSocketConstructorGlobal)),
-      remoteHttpClientLayer((input, init) => globalThis.fetch(input, init)),
+      layerRemoteHttpClient((input, init) => globalThis.fetch(input, init)),
     ),
   );
   #scope: Scope.Closeable | null = null;
