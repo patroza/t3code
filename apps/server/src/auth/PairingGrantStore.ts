@@ -339,10 +339,19 @@ export const make = Effect.gen(function* () {
   // A desktop that sends its secret rotates the renderer's token, so accept
   // whichever token the secret derives for the current window instead of
   // seeding one fixed token. Older desktops only send the token.
+  //
+  // A desktop that attaches to an already-running server never delivers that
+  // secret. It derives the same rotating token from local-bootstrap-credential,
+  // so the file is a rotating secret too. Clients that send the file contents
+  // unchanged still match the seeded grant below.
   const desktopBootstrapSecret = config.desktopBootstrapSecret;
+  const localCredential = readLocalBootstrapCredential(config.stateDir);
   const consumeRotatingDesktopToken = (credential: string, nowMs: number) =>
-    desktopBootstrapSecret !== undefined &&
-    isValidDesktopBootstrapToken(desktopBootstrapSecret, credential, nowMs);
+    (desktopBootstrapSecret !== undefined &&
+      isValidDesktopBootstrapToken(desktopBootstrapSecret, credential, nowMs)) ||
+    (localCredential !== undefined &&
+      localCredential !== desktopBootstrapSecret &&
+      isValidDesktopBootstrapToken(localCredential, credential, nowMs));
 
   if (config.desktopBootstrapToken && desktopBootstrapSecret === undefined) {
     const now = yield* DateTime.now;
@@ -361,7 +370,6 @@ export const make = Effect.gen(function* () {
       remainingUses: "unbounded",
     });
   }
-  const localCredential = readLocalBootstrapCredential(config.stateDir);
   if (localCredential !== undefined && localCredential !== config.desktopBootstrapToken) {
     const now = yield* DateTime.now;
     yield* seedGrant(localCredential, {
