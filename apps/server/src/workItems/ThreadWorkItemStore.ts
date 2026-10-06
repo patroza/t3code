@@ -119,6 +119,10 @@ const DiscordThreadLink = Schema.Struct({
   t3ThreadId: Schema.String,
   status: Schema.optional(Schema.String),
   jiraIssueKeys: Schema.optional(Schema.Array(Schema.String)),
+  /** When present, this is the only Discord Jira set imported for thread linking. */
+  linkedJiraIssueKeys: Schema.optional(Schema.Array(Schema.String)),
+  /** Pin-backfill keys. Removed from discord-only work-item rows. */
+  backfillJiraIssueKeys: Schema.optional(Schema.Array(Schema.String)),
   prUrls: Schema.optional(Schema.Array(Schema.String)),
 });
 const DiscordLinksFile = Schema.Struct({
@@ -126,6 +130,45 @@ const DiscordLinksFile = Schema.Struct({
   links: Schema.Array(DiscordThreadLink),
 });
 const decodeDiscordLinks = Schema.decodeUnknownSync(Schema.fromJsonString(DiscordLinksFile));
+
+/**
+ * Keys a Discord link contributes to work-item identity.
+ * Once `linkedJiraIssueKeys` has been written (even empty), the pin list is ignored.
+ * Older rows that have not been split still contribute `jiraIssueKeys`.
+ */
+export function jiraKeysImportedFromDiscordLink(link: {
+  readonly jiraIssueKeys?: ReadonlyArray<string> | undefined;
+  readonly linkedJiraIssueKeys?: ReadonlyArray<string> | undefined;
+}): ReadonlyArray<string> {
+  if (link.linkedJiraIssueKeys !== undefined) {
+    return mergeOrderedUnique([], link.linkedJiraIssueKeys, normalizeJiraIssueKey);
+  }
+  return mergeOrderedUnique([], link.jiraIssueKeys, normalizeJiraIssueKey);
+}
+
+/**
+ * Drop pin-backfill keys from a discord-only work-item row.
+ * Rows that also came from Jira or GitHub keep every key (we cannot tell which
+ * source added it).
+ */
+export function withoutDiscordBackfillJiraKeys(input: {
+  readonly jiraIssueKeys: ReadonlyArray<string>;
+  readonly sources: ReadonlyArray<string>;
+  readonly backfillKeys: ReadonlyArray<string>;
+  readonly linkedKeys: ReadonlyArray<string>;
+}): ReadonlyArray<string> {
+  const discordOnly =
+    input.sources.length === 0 ||
+    input.sources.every((source) => source.trim().toLowerCase() === "discord");
+  if (!discordOnly) return input.jiraIssueKeys;
+  const linked = new Set(mergeOrderedUnique([], input.linkedKeys, normalizeJiraIssueKey));
+  const backfill = new Set(mergeOrderedUnique([], input.backfillKeys, normalizeJiraIssueKey));
+  return input.jiraIssueKeys.filter((raw) => {
+    const key = normalizeJiraIssueKey(raw);
+    if (key === null) return false;
+    return !(backfill.has(key) && !linked.has(key));
+  });
+}
 
 function parseDiscordLinksOrEmpty(linksJson: string): ReadonlyArray<typeof DiscordThreadLink.Type> {
   try {
@@ -149,12 +192,15 @@ export class ThreadWorkItemStore extends Context.Service<
     readonly resolveJiraIssue: (issueKey: string) => Effect.Effect<WorkItemLookupResult>;
     readonly resolveGitHubPullRequest: (prRef: string) => Effect.Effect<WorkItemLookupResult>;
     /**
-     * Import associations from a Discord bot links.json (active links only).
-     * Merges into the server store without removing existing entries.
+     * Import associations from a Discord bot links.json.
+     * Link identity is `linkedJiraIssueKeys` when that field is present (pin
+     * backfill keys are not imported). Discord-only rows drop keys listed in
+     * `backfillJiraIssueKeys`.
      */
     readonly importDiscordLinksJson: (linksJson: string) => Effect.Effect<{
       readonly threadsTouched: number;
       readonly jiraKeysAdded: number;
+      readonly jiraKeysRemoved: number;
       readonly prsAdded: number;
     }>;
   }
@@ -299,12 +345,13 @@ export const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const links = parseDiscordLinksOrEmpty(linksJson);
           if (links.length === 0) {
-            return { threadsTouched: 0, jiraKeysAdded: 0, prsAdded: 0 };
+            return { threadsTouched: 0, jiraKeysAdded: 0, jiraKeysRemoved: 0, prsAdded: 0 };
           }
 
           const now = DateTime.formatIso(yield* DateTime.now);
           let threadsTouched = 0;
           let jiraKeysAdded = 0;
+          let jiraKeysRemoved = 0;
           let prsAdded = 0;
 
           const next = yield* Ref.updateAndGet(state, (records) => {
@@ -319,7 +366,7 @@ export const make = Effect.gen(function* () {
               const beforePr = existing.githubPullRequests.length;
               const jiraIssueKeys = mergeOrderedUnique(
                 existing.jiraIssueKeys,
-                link.jiraIssueKeys,
+                jiraKeysImportedFromDiscordLink(link),
                 normalizeJiraIssueKey,
               );
               const githubPullRequests = mergeOrderedUnique(
@@ -351,11 +398,54 @@ export const make = Effect.gen(function* () {
                 updatedAt: now,
               });
             }
+
+            const backfillByThread = new Map<string, string[]>();
+            const linkedByThread = new Map<string, string[]>();
+            for (const link of links) {
+              const threadId = link.t3ThreadId.trim();
+              if (threadId.length === 0) continue;
+              const backfill = backfillByThread.get(threadId) ?? [];
+              backfill.push(...(link.backfillJiraIssueKeys ?? []));
+              backfillByThread.set(threadId, backfill);
+              if (link.linkedJiraIssueKeys !== undefined) {
+                const linked = linkedByThread.get(threadId) ?? [];
+                linked.push(...link.linkedJiraIssueKeys);
+                linkedByThread.set(threadId, linked);
+              }
+            }
+            for (const [threadId, backfillKeys] of backfillByThread) {
+              const existing = copy.get(threadId as ThreadId);
+              if (existing === undefined) continue;
+              const pruned = withoutDiscordBackfillJiraKeys({
+                jiraIssueKeys: existing.jiraIssueKeys,
+                sources: existing.sources,
+                backfillKeys,
+                linkedKeys: linkedByThread.get(threadId) ?? [],
+              });
+              if (
+                pruned.length === existing.jiraIssueKeys.length &&
+                pruned.every((key, index) => key === existing.jiraIssueKeys[index])
+              ) {
+                continue;
+              }
+              jiraKeysRemoved += existing.jiraIssueKeys.length - pruned.length;
+              threadsTouched += 1;
+              const brandedThreadId = threadId as ThreadId;
+              if (pruned.length === 0 && existing.githubPullRequests.length === 0) {
+                copy.delete(brandedThreadId);
+                continue;
+              }
+              copy.set(brandedThreadId, {
+                ...existing,
+                jiraIssueKeys: pruned,
+                updatedAt: now,
+              });
+            }
             return copy;
           });
 
           if (threadsTouched > 0) yield* persist(next);
-          return { threadsTouched, jiraKeysAdded, prsAdded };
+          return { threadsTouched, jiraKeysAdded, jiraKeysRemoved, prsAdded };
         }),
       ),
   });

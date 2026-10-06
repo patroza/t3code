@@ -10,6 +10,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
+import { mergePromotedLinkedKeys } from "../presentation/jiraKeyRoles.ts";
 import { mergeSentryIssueUrls } from "../presentation/sentryLinks.ts";
 
 export const LINKS_DOCUMENT_VERSION = 2 as const;
@@ -65,9 +66,20 @@ export const ThreadLink = Schema.Struct({
   sentDiscordUserMessageIds: Schema.optional(Schema.Array(Schema.String)),
   /**
    * Jira issue keys observed for this Discord thread, in first-seen order (no duplicates).
-   * Surfaced on the pinned thread-info message.
+   * Surfaced on the pinned thread-info message. Includes pin-backfill hits.
+   * Not a work-item join key — see `linkedJiraIssueKeys`.
    */
   jiraIssueKeys: Schema.optional(Schema.Array(Schema.String)),
+  /**
+   * Jira keys that may join or import this T3 thread. A person attached these on
+   * a turn, or they were already on the pin and were not bot-only in scanned history.
+   * Pin backfill must not add keys here.
+   */
+  linkedJiraIssueKeys: Schema.optional(Schema.Array(Schema.String)),
+  /**
+   * Pin-list keys that must not be used for thread linking (bot prose / backfill).
+   */
+  backfillJiraIssueKeys: Schema.optional(Schema.Array(Schema.String)),
   /**
    * Sentry issue URLs observed for this Discord thread, in first-seen order
    * (canonical https://*.sentry.io/issues/…, no duplicates).
@@ -114,6 +126,8 @@ export type ThreadLink = {
   readonly streamDiscordMessageIds?: ReadonlyArray<string> | undefined;
   readonly sentDiscordUserMessageIds?: ReadonlyArray<string> | undefined;
   readonly jiraIssueKeys?: ReadonlyArray<string> | undefined;
+  readonly linkedJiraIssueKeys?: ReadonlyArray<string> | undefined;
+  readonly backfillJiraIssueKeys?: ReadonlyArray<string> | undefined;
   readonly sentryIssueUrls?: ReadonlyArray<string> | undefined;
   readonly prUrls?: ReadonlyArray<string> | undefined;
   readonly infoDiscordMessageId?: string | undefined;
@@ -144,6 +158,8 @@ export type ThreadLinkInput = {
   readonly streamDiscordMessageIds?: ReadonlyArray<string> | undefined;
   readonly sentDiscordUserMessageIds?: ReadonlyArray<string> | undefined;
   readonly jiraIssueKeys?: ReadonlyArray<string> | undefined;
+  readonly linkedJiraIssueKeys?: ReadonlyArray<string> | undefined;
+  readonly backfillJiraIssueKeys?: ReadonlyArray<string> | undefined;
   readonly sentryIssueUrls?: ReadonlyArray<string> | undefined;
   readonly prUrls?: ReadonlyArray<string> | undefined;
   readonly infoDiscordMessageId?: string | undefined;
@@ -269,6 +285,8 @@ function asThreadLink(link: {
   readonly streamDiscordMessageIds?: ReadonlyArray<string> | undefined;
   readonly sentDiscordUserMessageIds?: ReadonlyArray<string> | undefined;
   readonly jiraIssueKeys?: ReadonlyArray<string> | undefined;
+  readonly linkedJiraIssueKeys?: ReadonlyArray<string> | undefined;
+  readonly backfillJiraIssueKeys?: ReadonlyArray<string> | undefined;
   readonly sentryIssueUrls?: ReadonlyArray<string> | undefined;
   readonly prUrls?: ReadonlyArray<string> | undefined;
   readonly infoDiscordMessageId?: string | undefined;
@@ -297,6 +315,8 @@ function asThreadLink(link: {
     streamDiscordMessageIds: link.streamDiscordMessageIds,
     sentDiscordUserMessageIds: link.sentDiscordUserMessageIds,
     jiraIssueKeys: link.jiraIssueKeys,
+    linkedJiraIssueKeys: link.linkedJiraIssueKeys,
+    backfillJiraIssueKeys: link.backfillJiraIssueKeys,
     sentryIssueUrls: link.sentryIssueUrls,
     prUrls: link.prUrls,
     infoDiscordMessageId: link.infoDiscordMessageId,
@@ -319,6 +339,8 @@ export function migrateV1Link(link: {
   readonly streamDiscordMessageIds?: ReadonlyArray<string> | undefined;
   readonly sentDiscordUserMessageIds?: ReadonlyArray<string> | undefined;
   readonly jiraIssueKeys?: ReadonlyArray<string> | undefined;
+  readonly linkedJiraIssueKeys?: ReadonlyArray<string> | undefined;
+  readonly backfillJiraIssueKeys?: ReadonlyArray<string> | undefined;
   readonly sentryIssueUrls?: ReadonlyArray<string> | undefined;
   readonly prUrls?: ReadonlyArray<string> | undefined;
   readonly infoDiscordMessageId?: string | undefined;
@@ -345,6 +367,8 @@ export function migrateV1Link(link: {
     streamDiscordMessageIds: link.streamDiscordMessageIds,
     sentDiscordUserMessageIds: link.sentDiscordUserMessageIds,
     jiraIssueKeys: link.jiraIssueKeys,
+    linkedJiraIssueKeys: link.linkedJiraIssueKeys,
+    backfillJiraIssueKeys: link.backfillJiraIssueKeys,
     sentryIssueUrls: link.sentryIssueUrls,
     prUrls: link.prUrls,
     infoDiscordMessageId: link.infoDiscordMessageId,
@@ -377,6 +401,8 @@ export function normalizeThreadLinkInput(link: ThreadLinkInput): ThreadLink {
     streamDiscordMessageIds: link.streamDiscordMessageIds,
     sentDiscordUserMessageIds: link.sentDiscordUserMessageIds,
     jiraIssueKeys: link.jiraIssueKeys,
+    linkedJiraIssueKeys: link.linkedJiraIssueKeys,
+    backfillJiraIssueKeys: link.backfillJiraIssueKeys,
     sentryIssueUrls: link.sentryIssueUrls,
     prUrls: link.prUrls,
     infoDiscordMessageId: link.infoDiscordMessageId,
@@ -481,6 +507,28 @@ export interface ThreadLinkStoreService {
     jiraIssueKeys: ReadonlyArray<string>,
   ) => Effect.Effect<ThreadLink | null>;
   readonly setJiraIssueKeys: (
+    discordThreadId: string,
+    jiraIssueKeys: ReadonlyArray<string>,
+  ) => Effect.Effect<ThreadLink | null>;
+  /**
+   * Replace pin list, link identity, and backfill-only keys together.
+   * `linkedKeysAtStart` is the link set when classification began (`undefined`
+   * means the row was not split yet). Keys added since then survive.
+   */
+  readonly setJiraKeyRoles: (
+    discordThreadId: string,
+    roles: {
+      readonly jiraIssueKeys: ReadonlyArray<string>;
+      readonly linkedJiraIssueKeys: ReadonlyArray<string>;
+      readonly backfillJiraIssueKeys: ReadonlyArray<string>;
+      readonly linkedKeysAtStart: ReadonlyArray<string> | undefined;
+    },
+  ) => Effect.Effect<ThreadLink | null>;
+  /**
+   * Record keys a person attached on a turn. Adds them to link identity and
+   * drops them from the backfill-only set. Does not change the pin list.
+   */
+  readonly promoteJiraIssueKeysToLinked: (
     discordThreadId: string,
     jiraIssueKeys: ReadonlyArray<string>,
   ) => Effect.Effect<ThreadLink | null>;
@@ -677,6 +725,14 @@ export const makeThreadLinkStore = (dataDirRaw: string) =>
                         link.jiraIssueKeys !== undefined
                           ? normalized.jiraIssueKeys
                           : existing.jiraIssueKeys,
+                      linkedJiraIssueKeys:
+                        link.linkedJiraIssueKeys !== undefined
+                          ? normalized.linkedJiraIssueKeys
+                          : existing.linkedJiraIssueKeys,
+                      backfillJiraIssueKeys:
+                        link.backfillJiraIssueKeys !== undefined
+                          ? normalized.backfillJiraIssueKeys
+                          : existing.backfillJiraIssueKeys,
                       sentryIssueUrls:
                         link.sentryIssueUrls !== undefined
                           ? normalized.sentryIssueUrls
@@ -815,6 +871,43 @@ export const makeThreadLinkStore = (dataDirRaw: string) =>
           return {
             ...existing,
             jiraIssueKeys: merged.length > 0 ? merged : undefined,
+            updatedAt: nowIso(),
+          };
+        }),
+
+      setJiraKeyRoles: (discordThreadId, roles) =>
+        updateLink(discordThreadId, (existing) => {
+          const pin = mergeJiraKeysOrdered([], roles.jiraIssueKeys);
+          const merged = mergePromotedLinkedKeys({
+            classifiedLinkedKeys: roles.linkedJiraIssueKeys,
+            classifiedBackfillKeys: roles.backfillJiraIssueKeys,
+            linkedKeysAtStart: roles.linkedKeysAtStart,
+            linkedKeysNow: existing.linkedJiraIssueKeys,
+          });
+          return {
+            ...existing,
+            jiraIssueKeys: pin.length > 0 ? pin : undefined,
+            // Keep an empty array so a later backfill can tell "split, nothing
+            // linkable" from "this row has never been split".
+            linkedJiraIssueKeys: merged.linkedKeys,
+            backfillJiraIssueKeys: merged.backfillKeys.length > 0 ? merged.backfillKeys : undefined,
+            updatedAt: nowIso(),
+          };
+        }),
+
+      promoteJiraIssueKeysToLinked: (discordThreadId, jiraIssueKeys) =>
+        updateLink(discordThreadId, (existing) => {
+          const incoming = mergeJiraKeysOrdered([], jiraIssueKeys);
+          if (incoming.length === 0) return existing;
+          const incomingSet = new Set(incoming);
+          const linked = mergeJiraKeysOrdered(existing.linkedJiraIssueKeys, incoming);
+          const backfill = mergeJiraKeysOrdered([], existing.backfillJiraIssueKeys).filter(
+            (key) => !incomingSet.has(key),
+          );
+          return {
+            ...existing,
+            linkedJiraIssueKeys: linked.length > 0 ? linked : undefined,
+            backfillJiraIssueKeys: backfill.length > 0 ? backfill : undefined,
             updatedAt: nowIso(),
           };
         }),

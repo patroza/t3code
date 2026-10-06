@@ -7,8 +7,15 @@ import * as Redacted from "effect/Redacted";
 import type { DiscordBotConfig } from "../config.ts";
 import { resolveGitHubUrlForWorkspace } from "../presentation/githubLinks.ts";
 import {
+  excludeBotOnlyKeysAcrossLinks,
+  linkNeedsJiraRoleScan,
+  splitJiraKeysForPinAndLink,
+} from "../presentation/jiraKeyRoles.ts";
+import {
   extractJiraIssueKeysFromDiscordMessage,
   jiraIssueKeysAfterExcludingSentryFalsePositives,
+  mergeJiraIssueKeys,
+  omitJiraIssueKeys,
   jiraIssueKeysMaskedBySentryContext,
 } from "../presentation/jiraLinks.ts";
 import {
@@ -571,6 +578,15 @@ export const upsertThreadInfoPin = (input: {
       }
     }
 
+    // Pin backfill may list a key. Only keys on this turn become link identity.
+    const promotedKeys = omitJiraIssueKeys(
+      mergeJiraIssueKeys([], input.incomingJiraKeys),
+      input.dropJiraIssueKeys,
+    );
+    if (promotedKeys.length > 0) {
+      yield* links.promoteJiraIssueKeysToLinked(input.discordThreadId, promotedKeys);
+    }
+
     let sentryIssueUrls = mergeSentryIssueUrls(
       existing?.sentryIssueUrls,
       input.incomingSentryIssueUrls ?? [],
@@ -682,14 +698,28 @@ const BACKFILL_CONCURRENCY = 2;
 export const backfillThreadInfoPins = (botConfig: DiscordBotConfig) =>
   Effect.gen(function* () {
     const links = yield* ThreadLinkStore;
+    const t3 = yield* T3Session;
 
     const all = yield* links.list();
     const active = all
       .filter((link) => link.status === "active")
       .toSorted((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
+    // Tombstoned rows can still hold pin keys that were imported as join identity.
+    // Classify those too so a bot-only key cannot keep linking after the Discord
+    // row is no longer active.
+    const classify = all
+      .filter((link) => linkNeedsJiraRoleScan(link))
+      .toSorted((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
+    // Already-split tombstones are not fetched again. Their backfill keys still
+    // participate in the cross-link pass so a sibling thread cannot confirm them.
+    const alreadySplitIdle = all.filter(
+      (link) => link.status !== "active" && link.linkedJiraIssueKeys !== undefined,
+    );
 
     yield* Effect.logInfo("Thread info pin backfill starting", {
       activeLinks: active.length,
+      classifyLinks: classify.length,
+      alreadySplitIdle: alreadySplitIdle.length,
       jiraBrowseBaseUrl: botConfig.jiraBrowseBaseUrl ?? "(unset)",
     });
 
@@ -697,11 +727,24 @@ export const backfillThreadInfoPins = (botConfig: DiscordBotConfig) =>
     let failed = 0;
     let skipped = 0;
 
+    const classified: Array<{
+      readonly link: ThreadLink;
+      readonly pinKeys: ReadonlyArray<string>;
+      readonly linkedKeys: ReadonlyArray<string>;
+      readonly backfillKeys: ReadonlyArray<string>;
+      readonly botOnlyKeys: ReadonlyArray<string>;
+      readonly explicitLinkedKeys: ReadonlyArray<string> | undefined;
+      readonly sentryMaskedFromHistory: ReadonlyArray<string>;
+      readonly sentryUrlsFromHistory: ReadonlyArray<string>;
+      readonly prUrlsFromHistory: ReadonlyArray<string>;
+      readonly discoveredInfoMessageId: string | null;
+    }> = [];
+
     yield* Effect.forEach(
-      active,
+      classify,
       (link) =>
         Effect.gen(function* () {
-          const result = yield* backfillOneThreadInfoPin(link, botConfig).pipe(Effect.result);
+          const result = yield* classifyThreadJiraKeys(link).pipe(Effect.result);
 
           if (result._tag === "Failure") {
             failed += 1;
@@ -712,38 +755,101 @@ export const backfillThreadInfoPins = (botConfig: DiscordBotConfig) =>
             });
             return;
           }
-          if (result.success === "skipped") {
+          if (result.success === null) {
             skipped += 1;
             return;
           }
-          updated += 1;
+          classified.push(result.success);
         }),
       { concurrency: BACKFILL_CONCURRENCY },
     );
 
+    const linkedAfterCrossLink = new Map(
+      excludeBotOnlyKeysAcrossLinks([
+        ...classified.map((row) => ({
+          t3ThreadId: row.link.t3ThreadId,
+          botOnlyKeys: mergeJiraIssueKeys(row.botOnlyKeys, row.link.backfillJiraIssueKeys),
+          linkedKeys: row.linkedKeys,
+          explicitLinkedKeys: row.explicitLinkedKeys,
+          discordThreadId: row.link.discordThreadId,
+        })),
+        ...alreadySplitIdle.map((link) => ({
+          t3ThreadId: link.t3ThreadId,
+          botOnlyKeys: mergeJiraIssueKeys([], link.backfillJiraIssueKeys),
+          linkedKeys: link.linkedJiraIssueKeys ?? [],
+          explicitLinkedKeys: link.linkedJiraIssueKeys,
+          discordThreadId: link.discordThreadId,
+        })),
+      ]).map((row) => [row.discordThreadId, row.linkedKeys]),
+    );
+
+    for (const row of classified) {
+      const linkedKeys = linkedAfterCrossLink.get(row.link.discordThreadId) ?? row.linkedKeys;
+      const backfillKeys = mergeJiraIssueKeys(row.backfillKeys, row.botOnlyKeys).filter(
+        (key) => !linkedKeys.includes(key),
+      );
+      yield* links.setJiraKeyRoles(row.link.discordThreadId, {
+        jiraIssueKeys: row.pinKeys,
+        linkedJiraIssueKeys: linkedKeys,
+        backfillJiraIssueKeys: backfillKeys,
+        linkedKeysAtStart: row.explicitLinkedKeys,
+      });
+      if (row.link.status !== "active") {
+        updated += 1;
+        continue;
+      }
+      if (
+        row.discoveredInfoMessageId !== null &&
+        row.discoveredInfoMessageId !== row.link.infoDiscordMessageId
+      ) {
+        yield* links.setInfoDiscordMessageId(row.link.discordThreadId, row.discoveredInfoMessageId);
+      }
+      yield* links.setSentryIssueUrls(
+        row.link.discordThreadId,
+        mergeSentryIssueUrls(row.link.sentryIssueUrls, row.sentryUrlsFromHistory),
+      );
+      yield* links.setPrUrls(
+        row.link.discordThreadId,
+        mergePullRequestUrls(row.link.prUrls, row.prUrlsFromHistory),
+      );
+      const shell = yield* t3.getThreadShell(row.link.t3ThreadId as ThreadId);
+      yield* upsertThreadInfoPin({
+        discordThreadId: row.link.discordThreadId,
+        t3ThreadId: row.link.t3ThreadId,
+        botConfig,
+        incomingJiraKeys: [],
+        dropJiraIssueKeys: row.sentryMaskedFromHistory,
+        incomingSentryIssueUrls: [],
+        incomingPrUrls: [],
+        modelSelection: shell?.modelSelection ?? null,
+        worktreePath: shell?.worktreePath ?? null,
+        local: shell?.worktreePath === null,
+      });
+      updated += 1;
+    }
+
     yield* Effect.logInfo("Thread info pin backfill finished", {
-      considered: active.length,
+      considered: classify.length,
       updated,
       skipped,
       failed,
     });
   });
 
-const backfillOneThreadInfoPin = (link: ThreadLink, botConfig: DiscordBotConfig) =>
+const classifyThreadJiraKeys = (link: ThreadLink) =>
   Effect.gen(function* () {
     const rest = yield* DiscordREST;
-    const t3 = yield* T3Session;
-    const links = yield* ThreadLinkStore;
 
     const channelOk = yield* rest.getChannel(link.discordThreadId).pipe(
       Effect.as(true as const),
       Effect.orElseSucceed(() => false as const),
     );
-    if (!channelOk) return "skipped" as const;
+    if (!channelOk) return null;
 
     const history = yield* fetchChannelMessagesOldestFirst(link.discordThreadId);
 
-    const keysFromHistory: string[] = [];
+    const humanKeys: string[] = [];
+    const botKeys: string[] = [];
     const sentryMaskedFromHistory: string[] = [];
     const sentryUrlsFromHistory: string[] = [];
     const prUrlsFromHistory: string[] = [];
@@ -756,7 +862,8 @@ const backfillOneThreadInfoPin = (link: ThreadLink, botConfig: DiscordBotConfig)
         continue;
       }
       const keys = extractJiraIssueKeysFromDiscordMessage(message);
-      for (const key of keys) keysFromHistory.push(key);
+      const bucket = message.author?.bot === true ? botKeys : humanKeys;
+      for (const key of keys) bucket.push(key);
       for (const key of jiraIssueKeysMaskedBySentryContext(message)) {
         sentryMaskedFromHistory.push(key);
       }
@@ -767,39 +874,34 @@ const backfillOneThreadInfoPin = (link: ThreadLink, botConfig: DiscordBotConfig)
       for (const url of prUrls) prUrlsFromHistory.push(url);
     }
 
-    const mergedKeys = jiraIssueKeysAfterExcludingSentryFalsePositives(
-      link.jiraIssueKeys,
-      keysFromHistory,
+    const split = splitJiraKeysForPinAndLink({
+      existingPinKeys: link.jiraIssueKeys,
+      existingLinkedKeys: link.linkedJiraIssueKeys,
+      existingBackfillKeys: link.backfillJiraIssueKeys,
+      humanKeys,
+      botKeys,
+      maskedKeys: sentryMaskedFromHistory,
+    });
+    // Keep the sentry false-positive filter used by the pin, including keys that
+    // were already stored and are only masked inside a Sentry message.
+    const pinKeys = jiraIssueKeysAfterExcludingSentryFalsePositives(
+      split.pinKeys,
+      [],
       sentryMaskedFromHistory,
     );
-    yield* links.setJiraIssueKeys(link.discordThreadId, mergedKeys);
-    const mergedSentryUrls = mergeSentryIssueUrls(link.sentryIssueUrls, sentryUrlsFromHistory);
-    yield* links.setSentryIssueUrls(link.discordThreadId, mergedSentryUrls);
-    const mergedPrUrls = mergePullRequestUrls(link.prUrls, prUrlsFromHistory);
-    yield* links.setPrUrls(link.discordThreadId, mergedPrUrls);
-    if (discoveredInfoMessageId !== null && discoveredInfoMessageId !== link.infoDiscordMessageId) {
-      yield* links.setInfoDiscordMessageId(link.discordThreadId, discoveredInfoMessageId);
-    }
 
-    const shell = yield* t3.getThreadShell(link.t3ThreadId as ThreadId);
-    const modelSelection = shell?.modelSelection ?? null;
-    const worktreePath = shell?.worktreePath ?? null;
-
-    yield* upsertThreadInfoPin({
-      discordThreadId: link.discordThreadId,
-      t3ThreadId: link.t3ThreadId,
-      botConfig,
-      incomingJiraKeys: [],
-      dropJiraIssueKeys: sentryMaskedFromHistory,
-      incomingSentryIssueUrls: [],
-      incomingPrUrls: [],
-      modelSelection,
-      worktreePath,
-      local: worktreePath === null,
-      // Keys/URLs already persisted via setJiraIssueKeys/setPrUrls; upsert merges from store.
-    });
-
-    return "updated" as const;
+    return {
+      link,
+      pinKeys,
+      linkedKeys: split.linkedKeys,
+      backfillKeys: split.backfillKeys,
+      botOnlyKeys: split.botOnlyKeys,
+      explicitLinkedKeys: link.linkedJiraIssueKeys,
+      sentryMaskedFromHistory,
+      sentryUrlsFromHistory,
+      prUrlsFromHistory,
+      discoveredInfoMessageId,
+    };
   });
 
 const fetchChannelMessagesOldestFirst = (channelId: string) =>
