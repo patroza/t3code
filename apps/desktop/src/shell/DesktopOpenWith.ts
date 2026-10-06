@@ -19,8 +19,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as NodePath from "node:path";
-import * as ChildProcess from "effect/unstable/process/ChildProcess";
-import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
+import * as ChildProcess from "effect/process/ChildProcess";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as MacApplicationIcon from "../electron/MacApplicationIcon.ts";
@@ -51,7 +51,7 @@ const isMacApplicationPath = (value: string): boolean =>
 const commandExists = Effect.fn("desktop.openWith.commandExists")(function* (command: string) {
   return yield* resolveCommandPath(command).pipe(
     Effect.as(true),
-    Effect.catchTag("CommandResolutionError", () => Effect.succeed(false)),
+    Effect.catchTags({ CommandResolutionError: () => Effect.succeed(false) }),
   );
 });
 
@@ -199,7 +199,7 @@ export const make = Effect.gen(function* () {
     );
 
   const readClientSettings = clientSettings.get.pipe(
-    Effect.catchTag("DesktopClientSettingsReadError", () => Effect.succeed(Option.none())),
+    Effect.catchTags({ DesktopClientSettingsReadError: () => Effect.succeed(Option.none()) }),
   );
 
   const resolvePresentations = Effect.gen(function* () {

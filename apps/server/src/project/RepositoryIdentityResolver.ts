@@ -78,6 +78,17 @@ function repositoryPathOf(canonicalKey: string): string {
   return canonicalKey.split("/").slice(1).join("/");
 }
 
+function buildRepositoryOrigin(
+  originUrl: string | undefined,
+  canonicalKey: string,
+): RepositoryIdentity["origin"] {
+  if (!originUrl) return undefined;
+  const originKey = normalizeGitRemoteUrl(originUrl);
+  if (originKey === canonicalKey) return undefined;
+  const displayName = repositoryPathOf(originKey);
+  return { canonicalKey: originKey, ...(displayName ? { displayName } : {}) };
+}
+
 function describeRemote(input: {
   readonly remoteName: string;
   readonly remoteUrl: string;
@@ -108,9 +119,11 @@ function buildRepositoryIdentity(input: {
 }): RepositoryIdentity {
   const primary = describeRemote(input);
   const repositoryPath = repositoryPathOf(primary.canonicalKey);
+  const origin = buildRepositoryOrigin(input.remotes.get("origin"), primary.canonicalKey);
 
   return {
     canonicalKey: primary.canonicalKey,
+    ...(origin ? { origin } : {}),
     locator: {
       source: "git-remote",
       remoteName: primary.remoteName,

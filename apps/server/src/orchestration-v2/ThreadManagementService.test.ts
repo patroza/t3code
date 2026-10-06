@@ -5,6 +5,7 @@ import {
   NodeId,
   type OrchestrationV2Command,
   type OrchestrationV2Run,
+  type OrchestrationV2StoredEvent,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadShell,
   type ProjectCloneSnapshot,
@@ -19,6 +20,8 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Queue from "effect/Queue";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
@@ -277,7 +280,7 @@ it.effect("classifies projection infrastructure failures separately from a missi
     threadId,
     cause: infrastructureCause,
   });
-  const testLayer = threadManagementLayer.pipe(
+  const layerTest = threadManagementLayer.pipe(
     Layer.provide(
       Layer.mock(Orchestrator.OrchestratorV2)({
         getThreadProjection: () => Effect.fail(projectionError),
@@ -296,7 +299,7 @@ it.effect("classifies projection infrastructure failures separately from a missi
       cause: projectionError,
     });
     expect(error.message).toBe(`Unable to load thread ${threadId} in project ${projectId}.`);
-  }).pipe(Effect.provide(testLayer));
+  }).pipe(Effect.provide(layerTest));
 });
 
 it.effect("uses thread-not-found only after a projection loads outside the project", () => {
@@ -310,7 +313,7 @@ it.effect("uses thread-not-found only after a projection loads outside the proje
       deletedAt: null,
     },
   } as OrchestrationV2ThreadProjection;
-  const testLayer = threadManagementLayer.pipe(
+  const layerTest = threadManagementLayer.pipe(
     Layer.provide(
       Layer.mock(Orchestrator.OrchestratorV2)({
         getThreadProjection: () => Effect.succeed(projection),
@@ -325,7 +328,7 @@ it.effect("uses thread-not-found only after a projection loads outside the proje
     expect(error).toBeInstanceOf(ThreadManagementService.ThreadManagementThreadNotFoundError);
     expect(error).toMatchObject({ projectId, threadId });
     expect("cause" in error).toBe(false);
-  }).pipe(Effect.provide(testLayer));
+  }).pipe(Effect.provide(layerTest));
 });
 
 it.effect("preserves failed legacy materialization when reading checkpoint context", () => {
@@ -335,7 +338,7 @@ it.effect("preserves failed legacy materialization when reading checkpoint conte
     operation: "hydrate transcript for",
     cause: new Error("checkpoint import failed"),
   });
-  const testLayer = threadManagementLegacyLayer.pipe(
+  const layerTest = threadManagementLegacyLayer.pipe(
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(Orchestrator.OrchestratorV2)({
@@ -353,7 +356,7 @@ it.effect("preserves failed legacy materialization when reading checkpoint conte
     const error = yield* service.getCheckpointContext(threadId).pipe(Effect.flip);
     expect(error).toBeInstanceOf(Orchestrator.OrchestratorProjectionError);
     expect(error).toMatchObject({ threadId, cause: importError });
-  }).pipe(Effect.provide(testLayer));
+  }).pipe(Effect.provide(layerTest));
 });
 
 it.effect.each([
@@ -369,35 +372,34 @@ it.effect.each([
     const projectId = ProjectId.make("project:thread-management:wait-timeout");
     const threadId = ThreadId.make("thread:thread-management:wait-timeout");
     const runId = RunId.make("run:thread-management:wait-timeout");
-    const loopRead = yield* Deferred.make<void>();
+    const subscribed = yield* Deferred.make<void>();
     let reads = 0;
     const projection = (status: OrchestrationV2Run["status"] | "missing") =>
       ({
         thread: { id: threadId, projectId, deletedAt: null },
         runs: status === "missing" ? [] : [{ id: runId, status }],
       }) as unknown as OrchestrationV2ThreadProjection;
-    const testLayer = threadManagementLayer.pipe(
+    const layerTest = threadManagementLayer.pipe(
       Layer.provide(
         Layer.mock(Orchestrator.OrchestratorV2)({
+          getThreadEventSequence: () => Effect.succeed(0),
+          // No run update arrives, so the timeout path runs while a final
+          // projection read can still observe a terminal run.
+          streamStoredEventsFrom: () =>
+            Stream.fromEffect(Deferred.succeed(subscribed, undefined)).pipe(
+              Stream.drain,
+              Stream.concat(Stream.never),
+            ),
           getThreadRecords: () =>
-            Effect.gen(function* () {
+            Effect.sync(() => {
               reads += 1;
-              if (reads === 1) {
-                return projection("running");
-              }
-              if (reads === 2) {
-                // Park inside the wait loop so the timeout path runs while a
-                // final projection read can still observe a terminal run.
-                yield* Deferred.succeed(loopRead, undefined);
-                return yield* Effect.never;
-              }
-              return projection(scenario.finalStatus);
+              return projection(reads === 1 ? "running" : scenario.finalStatus);
             }),
         }),
       ),
     );
     const service = yield* ThreadManagementService.ThreadManagementService.pipe(
-      Effect.provide(testLayer),
+      Effect.provide(layerTest),
     );
     const fiber = yield* service
       .waitForThread({
@@ -407,7 +409,7 @@ it.effect.each([
         timeoutMs: 1,
       })
       .pipe(Effect.result, Effect.forkChild);
-    yield* Deferred.await(loopRead);
+    yield* Deferred.await(subscribed);
     yield* TestClock.adjust(Duration.millis(1));
     const result = yield* Fiber.join(fiber);
 
@@ -516,7 +518,7 @@ it.effect.each([createDuringCloneCommand, sendDuringCloneCommand])(
   (command) =>
     Effect.gen(function* () {
       let dispatched = false;
-      const testLayer = ThreadManagementService.layer.pipe(
+      const layerTest = ThreadManagementService.layer.pipe(
         Layer.provide(
           Layer.mergeAll(
             Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({
@@ -533,7 +535,7 @@ it.effect.each([createDuringCloneCommand, sendDuringCloneCommand])(
         ),
       );
       const service = yield* ThreadManagementService.ThreadManagementService.pipe(
-        Effect.provide(testLayer),
+        Effect.provide(layerTest),
       );
       const error = yield* service.dispatch(command).pipe(Effect.flip);
       expect(error).toMatchObject({
@@ -566,7 +568,7 @@ it.effect("refuses service sends used by MCP and schedules while the project is 
       visibleTurnItems: [],
       updatedAt: NOW,
     };
-    const testLayer = ThreadManagementService.layer.pipe(
+    const layerTest = ThreadManagementService.layer.pipe(
       Layer.provide(
         Layer.mergeAll(
           Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({
@@ -579,7 +581,7 @@ it.effect("refuses service sends used by MCP and schedules while the project is 
       ),
     );
     const service = yield* ThreadManagementService.ThreadManagementService.pipe(
-      Effect.provide(testLayer),
+      Effect.provide(layerTest),
     );
     const error = yield* service
       .sendToThread({
@@ -595,5 +597,57 @@ it.effect("refuses service sends used by MCP and schedules while the project is 
       })
       .pipe(Effect.flip);
     expect(error.message).toBe("The repository was not cloned. Retry the clone first.");
+  }),
+);
+
+it.effect("waitForThread reads the run again only when the run updates", () =>
+  Effect.gen(function* () {
+    const projectId = ProjectId.make("project:thread-management:wait-event");
+    const threadId = ThreadId.make("thread:thread-management:wait-event");
+    const runId = RunId.make("run:thread-management:wait-event");
+    const subscribed = yield* Deferred.make<void>();
+    const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
+    let status: OrchestrationV2Run["status"] = "running";
+    let reads = 0;
+    const stored = (sequence: number, event: object) =>
+      ({ sequence, event: { threadId, ...event } }) as unknown as OrchestrationV2StoredEvent;
+    const layerTest = threadManagementLayer.pipe(
+      Layer.provide(
+        Layer.mock(Orchestrator.OrchestratorV2)({
+          getThreadEventSequence: () => Effect.succeed(0),
+          // Only the run.updated stream carries events in this test.
+          streamStoredEventsFrom: (input) =>
+            input?.eventType === "run.updated"
+              ? Stream.fromEffect(Deferred.succeed(subscribed, undefined)).pipe(
+                  Stream.drain,
+                  Stream.concat(Stream.fromQueue(events)),
+                )
+              : Stream.never,
+          getThreadRecords: () =>
+            Effect.sync(() => {
+              reads += 1;
+              return {
+                thread: { id: threadId, projectId, deletedAt: null },
+                runs: [{ id: runId, status }],
+              } as unknown as OrchestrationV2ThreadProjection;
+            }),
+        }),
+      ),
+    );
+    const service = yield* ThreadManagementService.ThreadManagementService.pipe(
+      Effect.provide(layerTest),
+    );
+    const fiber = yield* service
+      .waitForThread({ projectId, threadId, runId, timeoutMs: 60 * 60 * 1_000 })
+      .pipe(Effect.forkChild);
+    yield* Deferred.await(subscribed);
+    status = "completed";
+    yield* Queue.offer(events, stored(1, { type: "run.updated", payload: { id: "other-run" } }));
+    yield* Queue.offer(events, stored(2, { type: "run.updated", payload: { id: runId, status } }));
+    const result = yield* Fiber.join(fiber);
+
+    expect(result).toMatchObject({ timedOut: false, run: { id: runId, status: "completed" } });
+    // The first read plus one for this run's update. The other run caused none.
+    expect(reads).toBe(2);
   }),
 );

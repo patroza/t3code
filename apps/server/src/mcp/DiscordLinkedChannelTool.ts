@@ -6,7 +6,7 @@ import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import { McpSchema, McpServer } from "effect/unstable/ai";
+import { McpSchema, McpServer } from "effect/ai";
 
 import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
 import { ProjectStoreV2 } from "../orchestration-v2/ProjectStore.ts";
@@ -766,12 +766,22 @@ export const registerDiscordLinkedChannelPostTool = Effect.fn("DiscordLinkedChan
             return Effect.succeed(errorResult(validationError, "InvalidDiscordPostInput"));
           }
 
+          const threadId = invocation.thread?.threadId;
+          if (threadId === undefined) {
+            return Effect.succeed(
+              errorResult(
+                "Discord posting needs an agent running inside a T3 thread.",
+                "ThreadNotFound",
+              ),
+            );
+          }
+
           return Effect.gen(function* () {
             const threadShell = yield* snapshotQuery
-              .getThreadShell(invocation.threadId)
+              .getThreadShell(threadId)
               .pipe(Effect.map(Option.fromNullishOr));
             if (Option.isNone(threadShell)) {
-              return errorResult(`Thread ${invocation.threadId} was not found.`, "ThreadNotFound");
+              return errorResult(`Thread ${threadId} was not found.`, "ThreadNotFound");
             }
             const projectShell = yield* projects.get(threadShell.value.projectId);
             if (Option.isNone(projectShell)) {
@@ -804,7 +814,7 @@ export const registerDiscordLinkedChannelPostTool = Effect.fn("DiscordLinkedChan
 
             const cwd = threadShell.value.worktreePath ?? projectShell.value.workspaceRoot;
             const discordThreadId = yield* Effect.promise(() =>
-              resolveLinkedDiscordThreadId(invocation.threadId),
+              resolveLinkedDiscordThreadId(threadId),
             );
             const destinationId = resolveDiscordPostDestination(
               linkedChannel.channelId,

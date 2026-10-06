@@ -153,14 +153,13 @@ export default mergeConfig(
             include: ["integration/**/*.test.ts", "scripts/**/*.test.ts", "src/**/*.test.ts"],
             exclude: [
               "src/assets/AssetAccess.test.ts",
+              "src/htmlRender/publicProxy.test.ts",
               "src/bootstrap.test.ts",
               "src/cli/app.test.ts",
               "src/git/GitManager.test.ts",
               "src/observability/HeapSnapshot.test.ts",
-              "src/orchestration/Layers/CheckpointReactor.test.ts",
-              "src/provider/Layers/ClaudeCapabilitiesProbe.test.ts",
-              "src/provider/Layers/GrokAdapter.test.ts",
-              "src/provider/Layers/ProviderRegistry.test.ts",
+              "src/provider/ClaudeCapabilitiesProbe.test.ts",
+              "src/provider/ProviderRegistry.test.ts",
               "src/orchestration-v2/Adapters/CursorAgentSdk.test.ts",
               "src/textGeneration/CursorTextGeneration.test.ts",
               "src/terminal/NodePtyAdapter.test.ts",
@@ -180,6 +179,8 @@ export default mergeConfig(
               // visible. Under isolate:false the real module is already bound
               // and the descriptor is not rejected.
               "src/assets/AssetAccess.test.ts",
+              // Mocks local interface addresses; isolate it from cached node:os imports.
+              "src/htmlRender/publicProxy.test.ts",
               "src/bootstrap.test.ts",
               // Mocks `node:os`.homedir so `t3 app` resolves ~/.t3 into the
               // fixture tree. Under isolate:false an earlier file binds the
@@ -192,21 +193,14 @@ export default mergeConfig(
               // leftover hook (`cannot find a hook named post-checkout`).
               "src/git/GitManager.test.ts",
               "src/vcs/GitVcsDriverCore.test.ts",
-              // Real git in a temp cwd. Under isolate:false a sibling can leave
-              // a .git / unparseable HEAD and `git: false` / init-between-turns
-              // fail on CI (`existsSync(.git)` true, `could not parse HEAD`).
-              "src/orchestration/Layers/CheckpointReactor.test.ts",
               // Mocks `node:v8`.writeHeapSnapshot. Under isolate:false an
               // earlier file binds the real v8 module and the partial-file
               // cleanup assertion never sees the mocked path.
               "src/observability/HeapSnapshot.test.ts",
-              // xAI prompt-complete can land after the assertion under
-              // isolate:false CI load (`hello from ` vs `hello from mock`).
-              "src/provider/Layers/GrokAdapter.test.ts",
               // Wraps ChildProcessSpawner and drives SettingsWatcherLive
               // through TestClock. Under isolate:false a sibling file in
               // the same worker can swallow the second binaryPath probe.
-              "src/provider/Layers/ProviderRegistry.test.ts",
+              "src/provider/ProviderRegistry.test.ts",
               // These install different mocks for the same Cursor SDK wrapper.
               // Isolate them from real SDK bindings and each other's fake agent.
               "src/orchestration-v2/Adapters/CursorAgentSdk.test.ts",
@@ -227,9 +221,8 @@ export default mergeConfig(
             include: [
               // Spies `@anthropic-ai/claude-agent-sdk`.query. Under isolate:false
               // ClaudeProvider already bound the real query. Keep this file out
-              // of the Grok isolated pool so its 4s live timeout does not race
-              // prompt-complete assertions (`hello from ` vs `hello from mock`).
-              "src/provider/Layers/ClaudeCapabilitiesProbe.test.ts",
+              // of other module mocks so the real query is never cached first.
+              "src/provider/ClaudeCapabilitiesProbe.test.ts",
             ],
           },
         },

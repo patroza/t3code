@@ -1,4 +1,4 @@
-import * as Migrator from "effect/unstable/sql/Migrator";
+import * as Migrator from "effect/sql/Migrator";
 
 import Migration0001 from "./Migrations/037_ProjectionQueuedMessages.ts";
 import Migration0002 from "./Migrations/038_SessionIdentityClaims.ts";

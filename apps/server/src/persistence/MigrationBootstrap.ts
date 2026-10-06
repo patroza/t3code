@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { MigrationError } from "effect/unstable/sql/Migrator";
+import * as SqlClient from "effect/sql/SqlClient";
+import { MigrationError } from "effect/sql/Migrator";
 
 import { forkMigrationTable } from "./ForkMigrations.ts";
 import Migration0035 from "./Migrations/035_ProjectionThreadTitleRegeneration.ts";

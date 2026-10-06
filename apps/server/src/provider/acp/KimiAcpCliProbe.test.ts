@@ -7,7 +7,7 @@ import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { describe, expect } from "vite-plus/test";
 
-import { checkKimiProviderStatus } from "../Layers/KimiProvider.ts";
+import { checkKimiProviderStatus } from "../KimiProvider.ts";
 import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
 
 describe.runIf(process.env.T3_KIMI_ACP_PROBE === "1")("Kimi ACP CLI probe", () => {

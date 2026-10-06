@@ -36,7 +36,7 @@ import {
   type PreparedConnection,
 } from "@t3tools/client-runtime/connection";
 import {
-  remoteHttpClientLayer,
+  layerRemoteHttpClient,
   RpcSessionFactory,
   rpcSessionFactoryLayer,
   type RpcSession,
@@ -60,7 +60,7 @@ import * as Result from "effect/Result";
 import * as Scope from "effect/Scope";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import * as Socket from "effect/unstable/socket/Socket";
+import * as Socket from "effect/socket/Socket";
 
 const decodeThreadDetailSnapshot = Schema.decodeUnknownEffect(
   Schema.toCodecJson(OrchestrationV2ThreadDetailSnapshot),
@@ -365,7 +365,7 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
     const runtime = ManagedRuntime.make(
       Layer.merge(
         rpcSessionFactoryLayer({}).pipe(Layer.provide(Socket.layerWebSocketConstructorGlobal)),
-        remoteHttpClientLayer((input, init) => globalThis.fetch(input, init)),
+        layerRemoteHttpClient((input, init) => globalThis.fetch(input, init)),
       ),
     );
 

@@ -8,7 +8,7 @@ import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
 
 import type { PreparedConnection } from "../connection/model.ts";
-import { RemoteEnvironmentAuthTimeoutError, remoteHttpClientLayer } from "../rpc/http.ts";
+import { RemoteEnvironmentAuthTimeoutError, layerRemoteHttpClient } from "../rpc/http.ts";
 import { fetchEnvironmentThreadSnapshot } from "./threadSnapshotHttp.ts";
 
 const TARGET = new PrimaryConnectionTarget({
@@ -41,7 +41,7 @@ describe("thread snapshot HTTP loads", () => {
   it.effect("keeps a slow link on HTTP rather than deferring the snapshot to the socket", () =>
     Effect.gen(function* () {
       const errorFiber = yield* loadSnapshot().pipe(
-        Effect.provide(remoteHttpClientLayer(hangingFetch())),
+        Effect.provide(layerRemoteHttpClient(hangingFetch())),
         Effect.flip,
         Effect.forkScoped,
       );

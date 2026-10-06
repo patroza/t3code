@@ -21,8 +21,8 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import * as ChildProcess from "effect/unstable/process/ChildProcess";
-import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
+import * as ChildProcess from "effect/process/ChildProcess";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as EffectAcpClient from "effect-acp/client";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/compat";
@@ -99,6 +99,7 @@ export interface AcpSpawnInput {
   readonly env?: NodeJS.ProcessEnv;
   readonly forceKillAfter?: Duration.Input;
   readonly extendEnv?: boolean;
+  readonly shell?: false;
 }
 
 export interface AcpSessionRuntimeOptions {
@@ -1415,7 +1416,8 @@ export const make = (
   Effect.gen(function* () {
     const crypto = yield* Crypto.Crypto;
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const runtimeScope = yield* Scope.Scope;
+    // A child of the caller's scope, so termination can close the runtime without closing the caller's.
+    const runtimeScope = yield* Scope.fork(yield* Scope.Scope);
     const eventQueue = yield* Queue.unbounded<AcpSessionRuntimeEvent>();
     const modeStateRef = yield* Ref.make<AcpSessionModeState | undefined>(undefined);
     const toolCallsRef = yield* Ref.make(new Map<string, AcpToolCallTrackedState>());
@@ -1550,10 +1552,13 @@ export const make = (
         ),
       );
 
-    const spawnCommand = yield* resolveSpawnCommand(options.spawn.command, options.spawn.args, {
-      ...(options.spawn.env ? { env: options.spawn.env } : {}),
-      extendEnv: options.spawn.extendEnv ?? true,
-    });
+    const spawnCommand =
+      options.spawn.shell === false
+        ? { command: options.spawn.command, args: options.spawn.args, shell: false }
+        : yield* resolveSpawnCommand(options.spawn.command, options.spawn.args, {
+            ...(options.spawn.env ? { env: options.spawn.env } : {}),
+            extendEnv: options.spawn.extendEnv ?? true,
+          });
     const linuxCgroupLease =
       options.ownDescendantProcessGroups === true && options.processGroupPlatform === "linux"
         ? yield* Effect.sync(() => {
@@ -2339,21 +2344,26 @@ export const make = (
             } satisfies EffectAcpSchema.LoadSessionRequest;
             const loaded = yield* runLoadSessionWithReplayIdle(loadPayload, initializeResult).pipe(
               Effect.map((result) => ({ sessionId, sessionSetupResult: result })),
-              Effect.catchTag("AcpRequestError", (error) =>
-                isAcpAuthenticationRequired(error) || ![-32601, -32602, -32603].includes(error.code)
-                  ? Effect.fail(error)
-                  : Effect.logWarning("ACP saved session was rejected; starting a fresh session.", {
-                      resumeSessionId: sessionId,
-                      code: error.code,
-                    }).pipe(
-                      Effect.andThen(
-                        Effect.sync(() => {
-                          rejectedResume = { sessionId, error };
-                        }),
+              Effect.catchTags({
+                AcpRequestError: (error) =>
+                  isAcpAuthenticationRequired(error) ||
+                  ![-32601, -32602, -32603].includes(error.code)
+                    ? Effect.fail(error)
+                    : Effect.logWarning(
+                        "ACP saved session was rejected; starting a fresh session.",
+                        {
+                          resumeSessionId: sessionId,
+                          code: error.code,
+                        },
+                      ).pipe(
+                        Effect.andThen(
+                          Effect.sync(() => {
+                            rejectedResume = { sessionId, error };
+                          }),
+                        ),
+                        Effect.andThen(createFreshSession),
                       ),
-                      Effect.andThen(createFreshSession),
-                    ),
-              ),
+              }),
             );
             sessionId = loaded.sessionId;
             sessionSetupResult = loaded.sessionSetupResult;

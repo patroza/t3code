@@ -10,7 +10,7 @@ import {
   type ThreadParticipantSummary,
 } from "@t3tools/contracts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
-import { Atom } from "effect/unstable/reactivity";
+import { Atom } from "effect/reactivity";
 import { createEnvironmentRpcCommand, createEnvironmentRpcQueryAtomFamily } from "./runtime.ts";
 
 export function createIdentityEnvironmentAtoms<R, E>(

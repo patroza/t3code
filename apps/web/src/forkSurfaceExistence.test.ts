@@ -18,6 +18,13 @@ function readSrc(relativePath: string): string {
 }
 
 describe("fork surface existence (anti stack-drop)", () => {
+  it("keeps fast and ultrafast icons in the composer traits control", () => {
+    const traits = readSrc("components/chat/TraitsPicker.tsx");
+    expect(traits).toContain('icon={speedIcon === "ultrafast" ? UltrafastIcon : ZapIcon}');
+    expect(traits).toContain("{fastModeIcon ?? (");
+    expect(traits).toContain("aria-label={accessibleLabel}");
+    expect(readSrc("components/Icons.tsx")).toContain("export const UltrafastIcon");
+  });
   it("keeps branch reuse available in the shared worktree picker", () => {
     expect(readSrc("components/BranchPicker.tsx")).toContain(
       'aria-label="Reuse the selected branch in the worktree"',
