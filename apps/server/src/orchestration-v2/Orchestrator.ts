@@ -47,6 +47,7 @@ import {
   type OrchestrationV2TurnItem,
   orchestrationV2RunWorkStartedAt,
   ProviderInstanceId,
+  type ProviderThreadId,
   type ProviderSessionId,
   RunId,
   ThreadLinkedPullRequest,
@@ -767,10 +768,39 @@ export function shouldPrepareLegacyImportHandoff(input: {
   readonly hasCompletedRun: boolean;
   readonly historyOrigin: OrchestrationV2AppThread["historyOrigin"];
   readonly legacyImportItemCount: number;
+  readonly alreadyInNativeThread?: boolean;
 }): boolean {
   return (
-    input.historyOrigin === "v1_import" && !input.hasCompletedRun && input.legacyImportItemCount > 0
+    input.historyOrigin === "v1_import" &&
+    !input.hasCompletedRun &&
+    input.legacyImportItemCount > 0 &&
+    input.alreadyInNativeThread !== true
   );
+}
+
+/** A v1 import already injected or inlined into this native session. */
+export function legacyImportAlreadyInNativeThread(input: {
+  readonly handoffs: ReadonlyArray<
+    Pick<
+      OrchestrationV2ContextHandoff,
+      "strategy" | "fromProviderThreadIds" | "toProviderThreadId" | "delivery"
+    >
+  >;
+  readonly providerThreadId: ProviderThreadId | undefined;
+  readonly nativeThreadId: string | null | undefined;
+}): boolean {
+  if (input.providerThreadId === undefined || input.nativeThreadId == null) return false;
+  return input.handoffs.some((handoff) => {
+    const delivery = handoff.delivery;
+    return (
+      handoff.strategy === "manual_context" &&
+      handoff.fromProviderThreadIds.length === 0 &&
+      handoff.toProviderThreadId === input.providerThreadId &&
+      delivery !== undefined &&
+      delivery.nativeThreadId === input.nativeThreadId &&
+      delivery.status !== "pending"
+    );
+  });
 }
 
 export function appendContextHandoffId(
@@ -1546,7 +1576,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 ),
               );
       const legacyImportRecoveryHandoff =
-        latestCompletedRun === undefined && needsFullContext && legacyImportItems.length > 0
+        needsFullContext &&
+        shouldPrepareLegacyImportHandoff({
+          historyOrigin: projection.thread.historyOrigin,
+          hasCompletedRun: latestCompletedRun !== undefined,
+          legacyImportItemCount: legacyImportItems.length,
+          alreadyInNativeThread: legacyImportAlreadyInNativeThread({
+            handoffs: projection.contextHandoffs,
+            providerThreadId: queuedProviderThread.id,
+            nativeThreadId: queuedProviderThread.nativeThreadRef?.nativeId,
+          }),
+        })
           ? yield* contextHandoffService
               .prepareLegacyImport({
                 threadId,
@@ -5246,6 +5286,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           historyOrigin: projection.thread.historyOrigin,
           hasCompletedRun: latestCompletedRun !== undefined,
           legacyImportItemCount: legacyImportItems.length,
+          alreadyInNativeThread: legacyImportAlreadyInNativeThread({
+            handoffs: projection.contextHandoffs,
+            providerThreadId: activeProviderThread?.id,
+            nativeThreadId: activeProviderThread?.nativeThreadRef?.nativeId,
+          }),
         })
           ? yield* contextHandoffService
               .prepareLegacyImport({
@@ -5857,8 +5902,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const legacyImportRecoveryHandoff =
         isProviderSwitch &&
         !canResumeAcrossInstances &&
-        latestCompletedRun === undefined &&
-        legacyImportItems.length > 0
+        shouldPrepareLegacyImportHandoff({
+          historyOrigin: projection.thread.historyOrigin,
+          hasCompletedRun: latestCompletedRun !== undefined,
+          legacyImportItemCount: legacyImportItems.length,
+          alreadyInNativeThread: legacyImportAlreadyInNativeThread({
+            handoffs: projection.contextHandoffs,
+            providerThreadId: ensuredProviderThread.id,
+            nativeThreadId: ensuredProviderThread.nativeThreadRef?.nativeId,
+          }),
+        })
           ? yield* contextHandoffService
               .prepareLegacyImport({
                 threadId: command.threadId,
