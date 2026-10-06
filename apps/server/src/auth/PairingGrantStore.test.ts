@@ -5,6 +5,7 @@ import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { LOCAL_BOOTSTRAP_CREDENTIAL_FILE } from "@t3tools/shared/serverRuntime";
 import { expect, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -287,6 +288,46 @@ it.layer(NodeServices.layer)("PairingGrantStore.layer", (it) => {
         ),
       ),
     ),
+  );
+
+  it.effect(
+    "accepts rotating tokens derived from the local bootstrap file without a launch secret",
+    () =>
+      Effect.gen(function* () {
+        const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
+        const secret = "installed-server-secret";
+        const window = DESKTOP_BOOTSTRAP_TOKEN_WINDOW_MS;
+
+        yield* TestClock.adjust(Duration.days(5));
+        const now = (yield* DateTime.now).epochMilliseconds;
+        const current = yield* bootstrapCredentials.consume(
+          currentDesktopBootstrapToken(secret, now),
+        );
+        expect(current.method).toBe("desktop-bootstrap");
+        expect(current.subject).toBe("desktop-bootstrap");
+        expect(current.scopes).toContain("access:write");
+
+        // The Discord bot and other colocated clients still send the file contents.
+        const raw = yield* bootstrapCredentials.consume(secret);
+        expect(raw.subject).toBe("local-bootstrap");
+
+        const stale = yield* Effect.flip(
+          bootstrapCredentials.consume(currentDesktopBootstrapToken(secret, now - 2 * window)),
+        );
+        expect(stale._tag).toBe("UnknownBootstrapCredentialError");
+
+        const otherSecret = yield* Effect.flip(
+          bootstrapCredentials.consume(currentDesktopBootstrapToken("other-secret", now)),
+        );
+        expect(otherSecret._tag).toBe("UnknownBootstrapCredentialError");
+      }).pipe(
+        Effect.provide(
+          Layer.merge(
+            makeLocalBootstrapGrantStoreLayer("installed-server-secret"),
+            TestClock.layer(),
+          ),
+        ),
+      ),
   );
 
   it.effect("keeps credentials out of pairing lists and change events", () =>
