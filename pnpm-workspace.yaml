@@ -203,6 +203,9 @@ overrides:
   "@effect/vitest": "catalog:"
   "@effect/vitest>vitest": "-"
   "@expo/dom-webview": 58.0.2
+  # expo@58.0.2 depends on ^0.21.2. A fresh lockfile otherwise selects 0.21.3
+  # and the patched 0.21.2 is unused, which fails release smoke.
+  "@expo/fingerprint": 0.21.2
   "@expo/metro-config": 58.0.6
   expo-constants: 58.0.9
   expo-router: 58.0.10

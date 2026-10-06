@@ -46,7 +46,6 @@ import {
   resolveRemoteWebSocketConnectionUrl,
 } from "@t3tools/client-runtime/authorization";
 import { fetchRemoteEnvironmentDescriptor } from "@t3tools/client-runtime/environment";
-import { applyShellStreamEvent } from "@t3tools/client-runtime/state/shell";
 import { modelSelectionCommandType } from "@t3tools/shared/model";
 import { appendOmegentT3ProductHandshake } from "@t3tools/shared/productFamily";
 import * as Clock from "effect/Clock";
@@ -76,6 +75,7 @@ import {
 import { formatThreadTitle } from "../presentation/messages.ts";
 import { normalizeWorkspacePath } from "../presentation/mentions.ts";
 import { followOrchestrationThread } from "./DiscordThreadFollower.ts";
+import { applyIntegrationShellStreamItem } from "./shellStream.ts";
 import { newCommandId, newMessageId, newThreadId, shortId } from "./ids.ts";
 import {
   clearPersistedBearerSession,
@@ -618,11 +618,7 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
             const stream = connected.client[ORCHESTRATION_V2_WS_METHODS.subscribeShell]({}).pipe(
               Stream.runForEach((item) =>
                 Effect.sync(() => {
-                  if (item.kind === "snapshot") shell = item.snapshot;
-                  else if (item.kind === "synchronized") {
-                    // Status-only marker (parity with EnvironmentShellState.applyItem);
-                    // no shell snapshot mutation in the headless bridge.
-                  } else if (shell !== null) shell = applyShellStreamEvent(shell, item);
+                  shell = applyIntegrationShellStreamItem(shell, item);
                 }),
               ),
             );
