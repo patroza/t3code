@@ -31,7 +31,10 @@ import {
   handoffTokenCapConfig,
   handoffBudget,
   attachmentTokenAllowance,
+  completedCompactionRunOrdinal,
   contextUsageForHandoff,
+  countsTowardNativeContextEstimate,
+  handoffAlreadyInNativeSession,
   historicalMessage,
   latestNativeContextUsage,
 } from "./ContextHandoffBudget.ts";
@@ -984,6 +987,30 @@ export const layer: Layer.Layer<
           handoff.delivery?.nativeThreadId === runningProviderThread.nativeThreadRef?.nativeId &&
           handoff.delivery?.status !== "pending",
       );
+      const compactionRunOrdinal = sameNativeThread
+        ? completedCompactionRunOrdinal({
+            runs: projection.runs,
+            providerThreadId: providerThread.id,
+            compactUserMessageIds: new Set(
+              projection.messages.flatMap((message) =>
+                message.attachments.length === 0 && message.text.trim().toLowerCase() === "/compact"
+                  ? [message.id]
+                  : [],
+              ),
+            ),
+          })
+        : undefined;
+      const runOrdinalById = new Map(projection.runs.map((source) => [source.id, source.ordinal]));
+      const nativeThreadId = runningProviderThread.nativeThreadRef?.nativeId;
+      effectiveHandoffs = effectiveHandoffs.filter(
+        (handoff) =>
+          !handoffAlreadyInNativeSession({
+            handoff,
+            nativeThreadId,
+            sameNativeThread,
+            delivered: settledHandoffs,
+          }),
+      );
       const deliveredItemIds = new Set(
         settledHandoffs.flatMap((handoff) => handoff.delivery?.itemIds ?? []),
       );
@@ -1034,6 +1061,10 @@ export const layer: Layer.Layer<
         return sameNativeThread
           ? (yield* projectionStore.getTurnStartHistory(input.threadId)).reduce((sum, item) => {
               if (
+                !countsTowardNativeContextEstimate({
+                  compactionRunOrdinal,
+                  itemRunOrdinal: item.runId === null ? undefined : runOrdinalById.get(item.runId),
+                }) ||
                 item.runId === run.id ||
                 (item.runId !== null &&
                   missedRunIds.has(item.runId) &&
@@ -1071,6 +1102,7 @@ export const layer: Layer.Layer<
       const missedRuns = projection.runs.filter(
         (source) =>
           source.ordinal < run.ordinal &&
+          (compactionRunOrdinal === undefined || source.ordinal > compactionRunOrdinal) &&
           source.providerThreadId === providerThread.id &&
           (source.status === "failed" || source.status === "interrupted") &&
           !deliveredAttemptIds.has(source.activeAttemptId),
