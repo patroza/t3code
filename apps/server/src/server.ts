@@ -280,13 +280,9 @@ const layerPlatformServices = NodeServices.layer;
 const layerPersistence = Layer.empty.pipe(Layer.provideMerge(SqlitePersistence.layerConfig));
 
 /** Durable identity claims — residual-free once Persistence/SqlClient is in the graph. */
-const IdentityLayerLive = IdentityService.layerPersisted.pipe(
-  Layer.provideMerge(layerPersistence),
-);
+const IdentityLayerLive = IdentityService.layerPersisted.pipe(Layer.provideMerge(layerPersistence));
 
-const layerVcsDriverRegistry = VcsDriverRegistry.layer.pipe(
-  Layer.provide(VcsProjectConfig.layer),
-);
+const layerVcsDriverRegistry = VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer));
 
 const layerSourceControlProviderRegistry = SourceControlProviderRegistry.layer.pipe(
   Layer.provide(
@@ -358,9 +354,7 @@ const layerGitManager = GitManager.layer.pipe(
   Layer.provideMerge(WorktreeSetupTracker.layer),
   Layer.provideMerge(GitVcsDriver.layer),
   Layer.provideMerge(layerSourceControlProviderRegistry),
-  Layer.provideMerge(
-    TextGeneration.layer.pipe(Layer.provide(layerSourceControlProviderRegistry)),
-  ),
+  Layer.provideMerge(TextGeneration.layer.pipe(Layer.provide(layerSourceControlProviderRegistry))),
   Layer.provide(PrLookupFreezeLive),
 );
 

@@ -225,10 +225,7 @@ import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
-import {
-  requiredScopeForDeviceList,
-  rpcAuthorizationError,
-} from "./auth/RpcAuthorization.ts";
+import { requiredScopeForDeviceList, rpcAuthorizationError } from "./auth/RpcAuthorization.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as IdentityService from "./identity/IdentityService.ts";
 import { stampOrchestrationCommandSource } from "./identity/stampSource.ts";

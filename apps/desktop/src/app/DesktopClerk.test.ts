@@ -63,7 +63,9 @@ const makeDesktopClerkLayer = (
   events: string[] = [],
   shell: ElectronShell.ElectronShell["Service"] = defaultShell,
   platform: NodeJS.Platform = "darwin",
-  fileSystemLayer: Layer.Layer<FileSystem.FileSystem> = FileSystem.layerNoop({ exists: () => Effect.succeed(false) }),
+  fileSystemLayer: Layer.Layer<FileSystem.FileSystem> = FileSystem.layerNoop({
+    exists: () => Effect.succeed(false),
+  }),
 ) => {
   const environment = DesktopEnvironment.DesktopEnvironment.of({
     stateDir: "/tmp/t3-state",
@@ -172,7 +174,14 @@ describe("DesktopClerk", () => {
       Effect.runSync(
         Effect.scoped(
           Layer.build(
-            makeDesktopClerkLayer(isDevelopment, !isDevelopment, events, defaultShell, platform, DesktopPreReadyFileSystem.layer),
+            makeDesktopClerkLayer(
+              isDevelopment,
+              !isDevelopment,
+              events,
+              defaultShell,
+              platform,
+              DesktopPreReadyFileSystem.layer,
+            ),
           ),
         ),
       );
