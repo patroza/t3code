@@ -5,12 +5,17 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as PlatformError from "effect/PlatformError";
 import * as Request from "effect/Request";
 import * as RequestResolver from "effect/RequestResolver";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
-import { TrimmedNonEmptyString, type SourceControlRepositoryVisibility } from "@t3tools/contracts";
+import {
+  TrimmedNonEmptyString,
+  type SourceControlRepositoryVisibility,
+  type VcsError,
+} from "@t3tools/contracts";
 import { normalizeGitRemoteUrl } from "@t3tools/shared/git";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import {
@@ -80,10 +85,23 @@ export class GitHubPullRequestNotFoundError extends Schema.TaggedError<GitHubPul
 
 export class GitHubCliCommandError extends Schema.TaggedError<GitHubCliCommandError>()(
   "GitHubCliCommandError",
-  { ...gitHubCliFailureFields, httpStatus: Schema.optional(Schema.Int) },
+  {
+    ...gitHubCliFailureFields,
+    httpStatus: Schema.optional(Schema.Int),
+    publicDiagnostic: Schema.optional(Schema.String),
+  },
 ) {
+  /** Guest App-wrapper text when present; otherwise the generic command failure. */
+  get detail(): string {
+    return this.publicDiagnostic ?? "GitHub CLI command failed.";
+  }
+
   override get message(): string {
-    // GitHub's own reason ("A pull request already exists…") or the failed step's, when known.
+    // A GitHub App wrapper line is the operator-facing reason. Otherwise GitHub's own
+    // reason ("A pull request already exists…") or the failed step's, when known.
+    if (this.publicDiagnostic !== undefined && this.publicDiagnostic.length > 0) {
+      return this.publicDiagnostic;
+    }
     const reason =
       this.cause instanceof Error && this.cause.message.trim() !== ""
         ? this.cause.message.trim()
@@ -177,6 +195,49 @@ function fromGitHubApiError(cwd: string, error: GitHubApi.GitHubApiError): GitHu
   }
 }
 
+/**
+ * Maps a `gh` process failure. Pull-request reads go through the API; this remains for the
+ * checks command and for guest App-wrapper diagnostics on stderr.
+ */
+export function fromVcsError(
+  context: {
+    readonly command: "gh";
+    readonly cwd: string;
+  },
+  error: VcsError,
+): GitHubCliError {
+  if (
+    error._tag === "VcsProcessSpawnError" &&
+    error.cause instanceof PlatformError.PlatformError &&
+    error.cause.reason._tag === "NotFound" &&
+    error.cause.reason.module === "ChildProcess" &&
+    error.cause.reason.method === "spawn"
+  ) {
+    return new GitHubCliUnavailableError({ ...context, cause: error });
+  }
+
+  if (error._tag === "VcsProcessExitError") {
+    if (error.failureKind === "authentication") {
+      return new GitHubCliAuthenticationError({ ...context, cause: error });
+    }
+    if (error.failureKind === "rate-limited") {
+      return new GitHubCliRateLimitError({ ...context, cause: error });
+    }
+    if (error.failureKind === "not-found") {
+      return new GitHubPullRequestNotFoundError({ ...context, cause: error });
+    }
+    if (error.publicDiagnostic !== undefined) {
+      return new GitHubCliCommandError({
+        ...context,
+        cause: error,
+        publicDiagnostic: error.publicDiagnostic,
+      });
+    }
+  }
+
+  return new GitHubCliCommandError({ ...context, cause: error });
+}
+
 export interface GitHubPullRequestSummary {
   readonly number: number;
   readonly title: string;
@@ -184,6 +245,7 @@ export interface GitHubPullRequestSummary {
   readonly baseRefName: string;
   readonly headRefName: string;
   readonly state?: "open" | "closed" | "merged";
+  readonly hasFailingChecks?: boolean;
   readonly isDraft?: boolean;
   readonly closedAt?: string | null;
   readonly mergedAt?: string | null;
@@ -236,6 +298,10 @@ export class GitHubCli extends Context.Service<
       readonly reference: string;
       readonly rateLimitHost?: string;
     }) => Effect.Effect<GitHubPullRequestSummary, GitHubCliError>;
+    readonly getPullRequestHasFailingChecks: (input: {
+      readonly cwd: string;
+      readonly reference: string;
+    }) => Effect.Effect<boolean, GitHubCliError>;
 
     readonly getRepositoryCloneUrls: (input: {
       readonly cwd: string;
@@ -332,6 +398,28 @@ function repositoryCloneUrls(
 }
 
 const decodeViewerLogin = decodeJsonResult(Schema.Struct({ login: TrimmedNonEmptyString }));
+
+/** `gh pr checks --json bucket,state`. Invalid or empty output is "no failing check", not an error. */
+const decodePullRequestChecks = decodeJsonResult(
+  Schema.Array(
+    Schema.Struct({
+      bucket: Schema.optional(Schema.NullOr(Schema.String)),
+      state: Schema.optional(Schema.NullOr(Schema.String)),
+    }),
+  ),
+);
+
+function pullRequestHasFailingChecks(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return false;
+  const decoded = decodePullRequestChecks(trimmed);
+  if (Result.isFailure(decoded)) return false;
+  return decoded.success.some((check) => {
+    const bucket = check.bucket?.trim().toLowerCase();
+    const state = check.state?.trim().toLowerCase();
+    return bucket === "fail" || state === "fail" || state === "failure" || state === "error";
+  });
+}
 
 type PullRequestListState = "open" | "closed" | "merged" | "all";
 
@@ -1008,6 +1096,22 @@ export const make = Effect.gen(function* () {
         allowReserve: true,
       }).pipe(Effect.map(toSummaries)),
     getPullRequest: (input) => readPullRequest(input).pipe(Effect.map(pullRequestSummary)),
+    // Still `gh pr checks`: the guest App wrapper reports install failures on that process,
+    // and a failing check makes gh exit non-zero with the JSON still on stdout.
+    getPullRequestHasFailingChecks: (input) =>
+      process
+        .run({
+          operation: "GitHubCli.getPullRequestHasFailingChecks",
+          command: "gh",
+          args: ["pr", "checks", input.reference, "--json", "bucket,state"],
+          cwd: input.cwd,
+          timeoutMs: 30_000,
+          allowNonZeroExit: true,
+        })
+        .pipe(
+          Effect.mapError((error) => fromVcsError({ command: "gh", cwd: input.cwd }, error)),
+          Effect.map((result) => pullRequestHasFailingChecks(result.stdout)),
+        ),
     getRepositoryCloneUrls: (input) =>
       Effect.gen(function* () {
         const fallbackHost = (yield* resolveRepository({ cwd: input.cwd }).pipe(

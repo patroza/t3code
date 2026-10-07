@@ -1,3 +1,4 @@
+import { ClientSourceHint, SourceRef, ThreadParticipantSummary } from "./identity.ts";
 import { OrchestrationMessageContext } from "./composerContext.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -362,6 +363,8 @@ export const OrchestrationV2LimitRecoveryUpdate = Schema.Struct({
 export type OrchestrationV2LimitRecoveryUpdate = typeof OrchestrationV2LimitRecoveryUpdate.Type;
 
 export const OrchestrationV2AppThread = Schema.Struct({
+  originSource: Schema.optional(Schema.NullOr(SourceRef)),
+  participantSummaries: Schema.optional(Schema.Array(ThreadParticipantSummary)),
   ...OrchestrationV2CreationFields,
   id: ThreadId,
   projectId: ProjectId,
@@ -1110,6 +1113,7 @@ export const OrchestrationV2Notification = Schema.Struct({
 export type OrchestrationV2Notification = typeof OrchestrationV2Notification.Type;
 
 export const OrchestrationV2ConversationMessage = Schema.Struct({
+  source: Schema.optional(SourceRef),
   notification: Schema.optional(OrchestrationV2Notification),
   ...OrchestrationV2CreationFields,
   scheduledTaskId: Schema.optional(ScheduledTaskId),
@@ -1831,6 +1835,8 @@ export type OrchestrationV2LatestVisibleMessageSummary =
   typeof OrchestrationV2LatestVisibleMessageSummary.Type;
 
 export const OrchestrationV2ThreadShell = Schema.Struct({
+  originSource: Schema.optional(Schema.NullOr(SourceRef)),
+  participantSummaries: Schema.optional(Schema.Array(ThreadParticipantSummary)),
   ...OrchestrationV2CreationFields,
   id: ThreadId,
   projectId: ProjectId,
@@ -2608,6 +2614,7 @@ export type OrchestrationV2StoredEventJson = typeof OrchestrationV2StoredEventJs
 export const OrchestrationV2Command = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("thread.create"),
+    originSource: Schema.optional(SourceRef),
     ...OrchestrationV2CreationFields,
     commandId: CommandId,
     threadId: ThreadId,
@@ -2833,6 +2840,8 @@ export const OrchestrationV2Command = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("message.dispatch"),
+    source: Schema.optional(SourceRef),
+    sourceHint: Schema.optional(ClientSourceHint),
     notification: Schema.optional(OrchestrationV2Notification),
     ...OrchestrationV2CreationFields,
     scheduledTaskId: Schema.optional(ScheduledTaskId),
@@ -3061,6 +3070,8 @@ const OrchestrationV2InternalCommand = Schema.Union([
    * Records what a pull request watch saw, and wakes the agent in the same transaction when
    * `wake` is set. Rejected once the watch started at `startedAt` has ended, and a wake is
    * rejected on a settled or archived thread, so a read that raced either changes nothing.
+   * Ending the watch (`watch: null`) cancels wakes from this `startedAt` that are still
+   * queued. A `wake` on this command is the one that stays.
    */
   Schema.Struct({
     type: Schema.Literal("thread.pull-request-watch.sync"),
@@ -3175,6 +3186,7 @@ export type OrchestrationV2ArchivedShellStreamItem =
   typeof OrchestrationV2ArchivedShellStreamItem.Type;
 
 export const OrchestrationV2ThreadLaunchInput = Schema.Struct({
+  sourceHint: Schema.optional(ClientSourceHint),
   commandId: CommandId,
   creationSource: Schema.optional(OrchestrationV2CreationSource),
   threadId: Schema.optional(ThreadId),

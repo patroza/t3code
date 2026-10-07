@@ -1,0 +1,1322 @@
+import {
+  integrationThreadView,
+  integrationThreadShellView,
+  type IntegrationThreadView as OrchestrationThread,
+  type IntegrationThreadShellView as OrchestrationThreadShell,
+} from "@t3tools/shared/integrationThreadView";
+// @effect-diagnostics globalDate:off globalFetch:off globalFetchInEffect:off globalTimers:off globalErrorInEffectCatch:off globalErrorInEffectFailure:off anyUnknownInErrorContext:off missingEffectContext:off missingEffectError:off preferSchemaOverJson:off tryCatchInEffectGen:off deterministicKeys:off
+import {
+  EnvironmentId,
+  ORCHESTRATION_V2_WS_METHODS,
+  OrchestrationV2ThreadDetailSnapshot,
+  type OrchestrationV2ThreadProjection,
+  RuntimeRequestId,
+  PRIMARY_LOCAL_ENVIRONMENT_ID,
+  ProjectId,
+  WS_METHODS,
+  type OrchestrationV2Command,
+  type MessageId,
+  type ModelSelection,
+  type OrchestrationProjectShell,
+  type OrchestrationV2ShellSnapshot,
+  type ProviderApprovalDecision,
+  type ProviderInteractionMode,
+  type ProviderUserInputAnswers,
+  type RuntimeMode,
+  type ServerConfig,
+  type ServerProvider,
+  type ThreadId,
+  type UploadChatAttachment,
+  type VcsResolveBranchChangeRequestResult,
+  type VcsStatusStreamEvent,
+} from "@t3tools/contracts";
+import { type DiscordClientSourceHint } from "./sourceHint.ts";
+import {
+  PrimaryConnectionTarget,
+  type PreparedConnection,
+} from "@t3tools/client-runtime/connection";
+import {
+  layerRemoteHttpClient,
+  RpcSessionFactory,
+  rpcSessionFactoryLayer,
+  type RpcSession,
+} from "@t3tools/client-runtime/rpc";
+import {
+  bootstrapRemoteBearerSession,
+  resolveRemoteWebSocketConnectionUrl,
+} from "@t3tools/client-runtime/authorization";
+import { fetchRemoteEnvironmentDescriptor } from "@t3tools/client-runtime/environment";
+import { modelSelectionCommandType } from "@t3tools/shared/model";
+import { appendOmegentT3ProductHandshake } from "@t3tools/shared/productFamily";
+import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as ManagedRuntime from "effect/ManagedRuntime";
+import * as Result from "effect/Result";
+import * as Scope from "effect/Scope";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
+import * as Socket from "effect/socket/Socket";
+
+const decodeThreadDetailSnapshot = Schema.decodeUnknownEffect(
+  Schema.toCodecJson(OrchestrationV2ThreadDetailSnapshot),
+);
+
+import type { DiscordBotConfig } from "../config.ts";
+import { preferredModelSelection } from "../config.ts";
+import {
+  BrowserAutomationHost,
+  browserResponseAfterDeliveryFailure,
+} from "../browser/BrowserAutomationHost.ts";
+import { formatThreadTitle } from "../presentation/messages.ts";
+import { normalizeWorkspacePath } from "../presentation/mentions.ts";
+import { followOrchestrationThread } from "./DiscordThreadFollower.ts";
+import { applyIntegrationShellStreamItem } from "./shellStream.ts";
+import { newCommandId, newMessageId, newThreadId, shortId } from "./ids.ts";
+import {
+  clearPersistedBearerSession,
+  persistedBearerExpiresAtIso,
+  readPersistedBearerSession,
+  shouldReusePersistedBearer,
+  writePersistedBearerSession,
+} from "./PersistedBearer.ts";
+
+function wsBaseUrl(httpBaseUrl: string): string {
+  const url = new URL(httpBaseUrl);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.toString();
+}
+
+function localSocketUrl(httpBaseUrl: string): string {
+  const url = new URL(wsBaseUrl(httpBaseUrl));
+  url.pathname = "/ws";
+  url.search = "";
+  url.hash = "";
+  url.searchParams.set("orchestrationProtocol", "2");
+  return appendOmegentT3ProductHandshake(url.toString());
+}
+
+function messageFromCause(cause: unknown): string {
+  if (cause instanceof Error && cause.message.trim() !== "") return cause.message;
+  return String(cause);
+}
+
+/**
+ * Detect dead/transient socket failures that should force a reconnect when
+ * `RpcSession.closed` did not fire (or fired too late). Used for soft recovery
+ * on dispatch errors — we do **not** auto-retry the command (double-start risk).
+ */
+export function isT3TransportError(cause: unknown): boolean {
+  const msg = messageFromCause(cause);
+  if (/SocketCloseError|ConnectionTransientError|SocketError/i.test(msg)) return true;
+  if (/ECONNREFUSED|ECONNRESET|ENOTFOUND|EPIPE|ETIMEDOUT/i.test(msg)) return true;
+  if (/websocket/i.test(msg) && /close|closed|reset|refused|not connected/i.test(msg)) return true;
+  return false;
+}
+
+/** True when T3 rejected a bearer/bootstrap credential (re-bootstrap, don't loop). */
+export function isT3InvalidCredentialError(cause: unknown): boolean {
+  const msg = messageFromCause(cause);
+  return /invalid_credential|rejected this client's credentials/i.test(msg);
+}
+
+/**
+ * User-facing copy when the bot waited for T3 to become ready and the deadline
+ * elapsed (boot/reconnect still incomplete). Mentions normally **wait** instead
+ * of failing immediately — this is the timeout fallback.
+ */
+export const T3_STILL_CONNECTING_MESSAGE =
+  "T3 did not become ready after a server restart (or first boot). Try again in a minute.";
+
+/** Discord reaction while a mention is parked waiting for T3 to connect. */
+export const T3_CONNECT_WAIT_REACTION_EMOJI = "⏳";
+
+/** Default how long inbound work waits for shell readiness before failing. */
+export const DEFAULT_T3_WAIT_UNTIL_READY_TIMEOUT_MS = 120_000;
+
+/** Poll interval while waiting for T3 readiness. */
+export const T3_WAIT_UNTIL_READY_POLL_MS = 200;
+
+/**
+ * Pure wait-loop decision for {@link T3SessionService.waitUntilReady}.
+ * Keeps the timeout policy unit-testable without a live RpcSession.
+ */
+export function shouldContinueWaitingForT3Ready(input: {
+  readonly ready: boolean;
+  readonly elapsedMs: number;
+  readonly timeoutMs: number;
+}): "ready" | "wait" | "timeout" {
+  if (input.ready) return "ready";
+  if (input.elapsedMs >= input.timeoutMs) return "timeout";
+  return "wait";
+}
+
+export function shouldPersistThreadModelSelectionForNextTurn(input: {
+  readonly currentModelSelection?: ModelSelection;
+  readonly nextModelSelection?: ModelSelection;
+}): boolean {
+  const next = input.nextModelSelection;
+  if (next === undefined) return false;
+  const current = input.currentModelSelection;
+  if (current === undefined) return true;
+  return (
+    next.model !== current.model ||
+    next.instanceId !== current.instanceId ||
+    JSON.stringify(next.options ?? null) !== JSON.stringify(current.options ?? null)
+  );
+}
+
+export class T3SessionError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "T3SessionError";
+  }
+}
+
+export interface T3SessionService {
+  readonly connect: () => Effect.Effect<void, T3SessionError>;
+  /**
+   * Keep retrying {@link connect} with the same backoff as mid-life reconnect
+   * until the shell snapshot is live. Used at boot so the process does not exit
+   * when Discord comes up before T3 (guest restart race).
+   */
+  readonly connectUntilReady: () => Effect.Effect<void>;
+  /**
+   * Register a callback invoked after a successful automatic reconnect
+   * (socket drop → reconnectLoop). Used to rehydrate Discord bridges.
+   */
+  readonly setOnReconnected: (handler: (() => Promise<void>) | null) => void;
+  /**
+   * True when a live RpcSession exists (may still be waiting for shell on a
+   * race; prefer {@link isReady} before project lookups).
+   */
+  readonly isConnected: () => Effect.Effect<boolean>;
+  /** True when connected and the orchestration shell snapshot has arrived. */
+  readonly isReady: () => Effect.Effect<boolean>;
+  /**
+   * Poll until {@link isReady} is true, or fail with
+   * {@link T3_STILL_CONNECTING_MESSAGE} after `timeoutMs` (default
+   * {@link DEFAULT_T3_WAIT_UNTIL_READY_TIMEOUT_MS}). Used so Discord mentions
+   * that land during boot/reconnect are queued instead of rejected.
+   */
+  readonly waitUntilReady: (options?: {
+    readonly timeoutMs?: number;
+  }) => Effect.Effect<void, T3SessionError>;
+  readonly shell: () => Effect.Effect<
+    | (Omit<OrchestrationV2ShellSnapshot, "threads"> & {
+        readonly threads: ReadonlyArray<OrchestrationThreadShell>;
+      })
+    | null
+  >;
+  readonly serverConfig: () => Effect.Effect<ServerConfig | null>;
+  readonly findProjectByWorkspaceRoot: (
+    workspaceRoot: string,
+  ) => Effect.Effect<OrchestrationProjectShell | null>;
+  readonly getProjectShell: (
+    projectId: ProjectId,
+  ) => Effect.Effect<OrchestrationProjectShell | null>;
+  readonly startTurnWithWorktree: (input: {
+    readonly project: OrchestrationProjectShell;
+    readonly prompt: string;
+    readonly titleSeed?: string;
+    readonly modelSelection: ModelSelection;
+    readonly runtimeMode?: RuntimeMode;
+    readonly interactionMode?: ProviderInteractionMode;
+    readonly baseBranch: string;
+    readonly local: boolean;
+    /** User images from Discord (same shape as web composer uploads). */
+    readonly attachments?: ReadonlyArray<UploadChatAttachment>;
+    /**
+     * Discord human who triggered the turn. Server identity map resolves this
+     * into personId/username when the identity overlay is composed.
+     */
+    readonly sourceHint?: DiscordClientSourceHint;
+  }) => Effect.Effect<{ readonly threadId: ThreadId; readonly messageId: string }, T3SessionError>;
+  readonly startTurn: (input: {
+    readonly threadId: ThreadId;
+    readonly prompt: string;
+    readonly messageId?: MessageId;
+    readonly modelSelection?: ModelSelection;
+    readonly runtimeMode?: RuntimeMode;
+    readonly interactionMode?: ProviderInteractionMode;
+    readonly attachments?: ReadonlyArray<UploadChatAttachment>;
+    readonly sourceHint?: DiscordClientSourceHint;
+  }) => Effect.Effect<{ readonly messageId: string }, T3SessionError>;
+  /**
+   * Inject a server-queued follow-up into the active turn (or start a turn if
+   * idle). Used after `startTurn` queues a mid-turn Discord message so the bot
+   * supports explicit immediate steering.
+   */
+  readonly steerQueuedMessage: (input: {
+    readonly threadId: ThreadId;
+    readonly messageId: MessageId;
+  }) => Effect.Effect<void, T3SessionError>;
+  readonly removeQueuedMessage: (input: {
+    readonly threadId: ThreadId;
+    readonly messageId: MessageId;
+  }) => Effect.Effect<void, T3SessionError>;
+  /**
+   * Subscribe to thread events until disconnect/interrupt.
+   * Runs `onThread` in the caller fiber context (must not be forked onto a bare T3 runtime).
+   *
+   * @param options.afterSequence - when set, only events after this sequence are streamed
+   *   (no embedded snapshot unless warmSeed is missing). Prefer warm seed or HTTP tip first.
+   * @param options.onSequence - durable marker callback after each applied snapshot/event.
+   * @param options.warmSeed - durable trimmed tip (web/desktop-style cache). When set with a
+   *   finite sequence, skips HTTP full-tip fetch and resumes via afterSequence from that base.
+   * @param options.projectThread - optional projection before onThread / retained apply base
+   *   (e.g. drop Discord-finalized history beyond a small buffer).
+   */
+  readonly subscribeThread: (
+    threadId: ThreadId,
+    onThread: (thread: OrchestrationThread) => Effect.Effect<void, unknown, unknown>,
+    options?: {
+      readonly afterSequence?: number;
+      readonly onSequence?: (sequence: number) => Effect.Effect<void, unknown, unknown>;
+      readonly warmSeed?: {
+        readonly snapshotSequence: number;
+        readonly projection: OrchestrationV2ThreadProjection;
+      } | null;
+      readonly projectThread?: (thread: OrchestrationThread) => OrchestrationThread;
+      readonly onProjection?: (
+        projection: OrchestrationV2ThreadProjection,
+        sequence: number,
+      ) => Effect.Effect<void, unknown, unknown>;
+    },
+  ) => Effect.Effect<void, T3SessionError, unknown>;
+  readonly respondToApproval: (
+    threadId: ThreadId,
+    requestId: string,
+    decision: ProviderApprovalDecision,
+  ) => Effect.Effect<void, T3SessionError>;
+  readonly respondToUserInput: (
+    threadId: ThreadId,
+    requestId: string,
+    answers: ProviderUserInputAnswers,
+  ) => Effect.Effect<void, T3SessionError>;
+  readonly interrupt: (threadId: ThreadId) => Effect.Effect<void, T3SessionError>;
+  readonly compact: (threadId: ThreadId) => Effect.Effect<void, T3SessionError>;
+  readonly resolveModelSelection: (input: {
+    readonly project?: OrchestrationProjectShell | null;
+    readonly stickyModelSelection?: ModelSelection | null;
+    readonly overrideInstanceId?: string;
+    readonly overrideModel?: string;
+  }) => Effect.Effect<ModelSelection>;
+  readonly getThreadShell: (threadId: ThreadId) => Effect.Effect<OrchestrationThreadShell | null>;
+  /**
+   * HTTP snapshot of a thread (full transcript + sequence). Used by Discord bridges to
+   * reconcile when the WS event stream stalls mid-turn so Discord is not stuck on Working..
+   * while the T3 client still shows progress.
+   */
+  readonly fetchThreadDetail: (
+    threadId: ThreadId,
+  ) => Effect.Effect<
+    { readonly snapshotSequence: number; readonly thread: OrchestrationThread } | null,
+    T3SessionError
+  >;
+  readonly resolveBranchChangeRequest: (input: {
+    readonly cwd: string;
+    readonly refName: string;
+  }) => Effect.Effect<VcsResolveBranchChangeRequestResult, T3SessionError>;
+  readonly subscribeVcsStatus: (
+    cwd: string,
+    onStatus: (event: VcsStatusStreamEvent) => Effect.Effect<void, unknown, unknown>,
+  ) => Effect.Effect<void, T3SessionError, unknown>;
+  readonly refreshVcsStatus: (cwd: string) => Effect.Effect<void, T3SessionError>;
+  /**
+   * Resolve a signed absolute HTTP URL for a chat attachment (image) stored on the T3 server.
+   * Used so Discord can download and re-upload the file as a message attachment.
+   */
+  readonly createAttachmentUrl: (attachmentId: string) => Effect.Effect<string, T3SessionError>;
+  /**
+   * Resolve a signed absolute HTTP URL for a workspace (or absolute host) file via assets.createUrl.
+   * Used for Codex `generated_images` paths that appear as markdown embeds, when local disk
+   * is not readable from the bot process.
+   */
+  readonly createWorkspaceFileUrl: (input: {
+    readonly threadId: ThreadId;
+    readonly path: string;
+  }) => Effect.Effect<string, T3SessionError>;
+}
+
+export class T3Session extends Context.Service<T3Session, T3SessionService>()(
+  "@t3tools/discord-bot/t3/T3Session",
+) {}
+
+/**
+ * Same backoff as EnvironmentSupervisor (client-runtime connection/supervisor.ts), so
+ * the bot behaves like the web and mobile clients rather than inventing its own policy.
+ */
+const RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000] as const;
+
+/** How long to wait for the first shell snapshot after the WS is up (ms poll × attempts). */
+const SHELL_SNAPSHOT_POLL_MS = 100;
+const SHELL_SNAPSHOT_MAX_ATTEMPTS = 150; // 15s — guest T3 can lag Discord on restart
+
+/** Brief wait for shell when a mention races reconnect completion. */
+const PROJECT_LOOKUP_SHELL_WAIT_ATTEMPTS = 30; // 3s
+
+export const makeT3Session = (botConfig: DiscordBotConfig) =>
+  Effect.sync(() => {
+    const runtime = ManagedRuntime.make(
+      Layer.merge(
+        rpcSessionFactoryLayer({}).pipe(Layer.provide(Socket.layerWebSocketConstructorGlobal)),
+        layerRemoteHttpClient((input, init) => globalThis.fetch(input, init)),
+      ),
+    );
+
+    let scope: Scope.Closeable | null = null;
+    let session: RpcSession | null = null;
+    let httpBaseUrl: string | null = null;
+    /** Bearer used for HTTP snapshot reloads (same token as WS connect). */
+    let httpBearerToken: string | null = null;
+    let shell: OrchestrationV2ShellSnapshot | null = null;
+    let serverConfig: ServerConfig | null = null;
+    let shellFiber: Fiber.Fiber<void, unknown> | null = null;
+    let browserFiber: Fiber.Fiber<void, unknown> | null = null;
+    let browserHost: BrowserAutomationHost | null = null;
+    let reconnecting = false;
+    let onReconnected: (() => Promise<void>) | null = null;
+    const threadFibers = new Map<string, Fiber.Fiber<void, unknown>>();
+
+    const requireSession = (): RpcSession => {
+      if (session === null) throw new T3SessionError(T3_STILL_CONNECTING_MESSAGE);
+      return session;
+    };
+
+    /**
+     * Tear the connection down so the next connect() rebuilds it.
+     *
+     * Without this the bot keeps a dead socket forever: connectPrepared() early-returns
+     * while `session` is non-null, so every dispatch after a server restart failed with
+     * `SocketCloseError: 1005` until the bot was manually restarted.
+     */
+    const teardown = async () => {
+      const previousScope = scope;
+      const previousFibers = [shellFiber, browserFiber, ...threadFibers.values()];
+      const previousBrowserHost = browserHost;
+      scope = null;
+      session = null;
+      httpBaseUrl = null;
+      httpBearerToken = null;
+      shell = null;
+      serverConfig = null;
+      shellFiber = null;
+      browserFiber = null;
+      browserHost = null;
+      // Drop thread subscriptions so subscribeThread() re-subscribes on the new session
+      // instead of holding fibers that will never emit again.
+      threadFibers.clear();
+
+      // These are forked on the ManagedRuntime, not on the connection scope, so closing
+      // the scope does NOT stop them -- they would sit on a dead socket forever.
+      // Interrupt explicitly, matching subscribeThread's existing replace-fiber pattern.
+      for (const fiber of previousFibers) {
+        if (fiber !== null) {
+          await runtime.runPromise(Fiber.interrupt(fiber)).catch(() => {});
+        }
+      }
+      if (previousScope !== null) {
+        await runtime.runPromise(Scope.close(previousScope, Exit.void)).catch(() => {});
+      }
+      if (previousBrowserHost !== null) {
+        await previousBrowserHost.close().catch(() => {});
+      }
+    };
+
+    /**
+     * When the socket is dead but `closed` never fired (or dispatch saw the failure
+     * first), tear down and enter reconnectLoop. Does not re-run the failed command.
+     */
+    const scheduleReconnectFromTransportError = (cause: unknown) => {
+      if (reconnecting) return;
+      void (async () => {
+        await runtime
+          .runPromise(
+            Effect.logWarning(`T3 transport error; forcing reconnect: ${messageFromCause(cause)}`),
+          )
+          .catch(() => {});
+        await teardown();
+        await reconnectLoop();
+      })();
+    };
+
+    /**
+     * Reconnect with backoff, mirroring EnvironmentSupervisor's schedule
+     * (packages/client-runtime/src/connection/supervisor.ts) which web/mobile already
+     * use. Retries indefinitely: a server restart is routine here, and the bot has
+     * nothing useful to do while disconnected.
+     */
+    const reconnectLoop = async () => {
+      if (reconnecting) return;
+      reconnecting = true;
+      try {
+        for (let attempt = 0; ; attempt += 1) {
+          const delay =
+            RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)] ?? 16_000;
+          await runtime.runPromise(Effect.sleep(Duration.millis(delay))).catch(() => {});
+          try {
+            await runtime.runPromise(connect());
+            await runtime.runPromise(Effect.logInfo("Reconnected to T3"));
+            const handler = onReconnected;
+            if (handler !== null) {
+              try {
+                await handler();
+              } catch (cause) {
+                await runtime
+                  .runPromise(
+                    Effect.logError(`T3 reconnect rehydrate failed: ${messageFromCause(cause)}`),
+                  )
+                  .catch(() => {});
+              }
+            }
+            return;
+          } catch (cause) {
+            await runtime
+              .runPromise(
+                Effect.logWarning(
+                  `T3 reconnect attempt ${attempt + 1} failed: ${messageFromCause(cause)}`,
+                ),
+              )
+              .catch(() => {});
+          }
+        }
+      } finally {
+        reconnecting = false;
+      }
+    };
+
+    /**
+     * `RpcSession.closed` fails with ConnectionTransientError when the socket drops.
+     * Watching it means we notice a server restart immediately, instead of discovering
+     * it on the next user-visible dispatch and reporting a raw socket error to Discord.
+     */
+    // Not stored: this fiber ends when `closed` fires, and it is the thing that calls
+    // teardown() -- holding a handle would only tempt us into interrupting it from
+    // inside itself.
+    const superviseClose = (connected: RpcSession) => {
+      runtime.runFork(
+        connected.closed.pipe(
+          Effect.catchCause((cause) =>
+            Effect.gen(function* () {
+              // Another fiber may already have torn down and started reconnect
+              // (e.g. soft recovery from a transport error on dispatch).
+              if (session !== connected) return;
+              yield* Effect.logWarning(`T3 connection lost: ${messageFromCause(cause)}`);
+              yield* Effect.promise(() => teardown());
+              yield* Effect.promise(() => reconnectLoop());
+            }),
+          ),
+          Effect.asVoid,
+        ),
+      );
+    };
+
+    const dispatch = (command: OrchestrationV2Command) =>
+      Effect.tryPromise({
+        try: () =>
+          runtime.runPromise(
+            requireSession().client[ORCHESTRATION_V2_WS_METHODS.dispatchCommand](command),
+          ),
+        catch: (cause) => {
+          if (isT3TransportError(cause)) {
+            scheduleReconnectFromTransportError(cause);
+          }
+          return new T3SessionError(`dispatch failed: ${messageFromCause(cause)}`, { cause });
+        },
+      }).pipe(Effect.asVoid);
+
+    const claimBrowserHost = (threadId: ThreadId) =>
+      Effect.gen(function* () {
+        const claim = browserHost?.claim(threadId);
+        if (claim === null || claim === undefined) return;
+        yield* requireSession().client[WS_METHODS.previewAutomationFocusHost](claim);
+        yield* Effect.logInfo("Claimed Discord browser host for thread", { threadId });
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Could not claim Discord browser host for thread", {
+            threadId,
+            cause,
+          }),
+        ),
+      );
+
+    // Parameter must not be named `httpBaseUrl` — that shadows the outer
+    // connection-state binding, so `httpBaseUrl = normalizedBaseUrl` would only
+    // mutate the parameter and leave outer state null forever. steernow and
+    // bridge HTTP reseed then always see "snapshot unavailable".
+    const connectPrepared = (baseUrl: string, bearerToken?: string) =>
+      Effect.tryPromise({
+        try: async () => {
+          const normalizedBaseUrl = new URL(baseUrl).toString();
+          // Half-open: session without shell must never short-circuit (stuck forever).
+          if (session !== null && shell !== null) return;
+          if (session !== null && shell === null) {
+            await teardown();
+          }
+
+          let environmentId = EnvironmentId.make(PRIMARY_LOCAL_ENVIRONMENT_ID);
+          let socketUrl = localSocketUrl(normalizedBaseUrl);
+          let label = "T3 Code";
+          if (bearerToken !== undefined && bearerToken !== "") {
+            const descriptor = await runtime.runPromise(
+              fetchRemoteEnvironmentDescriptor({ httpBaseUrl: normalizedBaseUrl }),
+            );
+            socketUrl = await runtime.runPromise(
+              resolveRemoteWebSocketConnectionUrl({
+                wsBaseUrl: wsBaseUrl(normalizedBaseUrl),
+                httpBaseUrl: normalizedBaseUrl,
+                bearerToken,
+              }),
+            );
+            const protocolSocketUrl = new URL(socketUrl);
+            protocolSocketUrl.searchParams.set("orchestrationProtocol", "2");
+            socketUrl = appendOmegentT3ProductHandshake(protocolSocketUrl.toString());
+            label = descriptor.label;
+            environmentId = descriptor.environmentId;
+          }
+
+          const target = new PrimaryConnectionTarget({
+            environmentId,
+            label,
+            httpBaseUrl: normalizedBaseUrl,
+            wsBaseUrl: wsBaseUrl(normalizedBaseUrl),
+          });
+          const prepared: PreparedConnection = {
+            environmentId,
+            label,
+            httpBaseUrl: normalizedBaseUrl,
+            socketUrl,
+            httpAuthorization:
+              bearerToken === undefined || bearerToken === ""
+                ? null
+                : { _tag: "Bearer", token: bearerToken },
+            target,
+          };
+
+          const nextScope = await runtime.runPromise(Scope.make());
+          try {
+            const connected = await runtime.runPromise(
+              Effect.gen(function* () {
+                const factory = yield* RpcSessionFactory;
+                const result = yield* factory.connect(prepared);
+                yield* result.ready;
+                return result;
+              }).pipe(Scope.provide(nextScope)),
+            );
+            scope = nextScope;
+            session = connected;
+            httpBaseUrl = normalizedBaseUrl;
+            httpBearerToken = bearerToken !== undefined && bearerToken !== "" ? bearerToken : null;
+            serverConfig = await runtime.runPromise(connected.initialConfig);
+            superviseClose(connected);
+
+            const stream = connected.client[ORCHESTRATION_V2_WS_METHODS.subscribeShell]({}).pipe(
+              Stream.runForEach((item) =>
+                Effect.sync(() => {
+                  shell = applyIntegrationShellStreamItem(shell, item);
+                }),
+              ),
+            );
+            shellFiber = runtime.runFork(stream);
+
+            if (botConfig.browserEnabled) {
+              try {
+                const host = await BrowserAutomationHost.launch(botConfig, environmentId);
+                browserHost = host;
+                browserFiber = runtime.runFork(
+                  connected.client[WS_METHODS.previewAutomationConnect](host.registration()).pipe(
+                    Stream.runForEach((event) =>
+                      Effect.gen(function* () {
+                        const startedAt = yield* Clock.currentTimeMillis;
+                        const response = yield* Effect.tryPromise({
+                          try: () => host.consume(event),
+                          catch: (cause) =>
+                            new T3SessionError(
+                              `Browser operation failed: ${messageFromCause(cause)}`,
+                              { cause },
+                            ),
+                        });
+                        if (event.type === "request") {
+                          yield* Effect.logInfo("Discord browser operation completed", {
+                            operation: event.request.operation,
+                            requestId: event.request.requestId,
+                            tabId: event.request.tabId ?? null,
+                            elapsedMs: (yield* Clock.currentTimeMillis) - startedAt,
+                            ok: response?.ok ?? false,
+                            errorTag: response?.error?._tag ?? null,
+                          });
+                        }
+                        return response;
+                      }).pipe(
+                        Effect.flatMap((response) => {
+                          if (response === null) return Effect.void;
+                          const respond = connected.client[WS_METHODS.previewAutomationRespond];
+                          // A single result that fails schema encoding must not end the
+                          // host stream. The broker would drop the thread claim and the
+                          // next call would land on a different browser.
+                          return respond(response).pipe(
+                            Effect.catchCause((cause) =>
+                              Effect.logWarning(
+                                "Discord browser response was not delivered; returning an error for this call.",
+                                { requestId: response.requestId, cause },
+                              ).pipe(
+                                Effect.andThen(
+                                  respond(browserResponseAfterDeliveryFailure(response, cause)),
+                                ),
+                              ),
+                            ),
+                          );
+                        }),
+                      ),
+                    ),
+                    Effect.catchCause((cause) =>
+                      Effect.sync(() => {
+                        if (browserHost === host) browserHost = null;
+                      }).pipe(
+                        Effect.andThen(Effect.promise(() => host.close())),
+                        Effect.ignore,
+                        Effect.andThen(
+                          Effect.logError(
+                            `Discord browser automation host stopped: ${messageFromCause(cause)}`,
+                          ),
+                        ),
+                      ),
+                    ),
+                    Effect.asVoid,
+                  ),
+                );
+                await runtime.runPromise(
+                  Effect.logInfo("Discord browser automation host active", {
+                    profile: botConfig.browserProfile,
+                  }),
+                );
+              } catch (cause) {
+                await runtime.runPromise(
+                  Effect.logError(
+                    `Discord browser automation unavailable: ${messageFromCause(cause)}`,
+                  ),
+                );
+              }
+            }
+
+            // `shell` is updated by the concurrently running subscription fiber.
+            for (let attempt = 0; attempt < SHELL_SNAPSHOT_MAX_ATTEMPTS; attempt += 1) {
+              if (shell !== null) break;
+              await Effect.runPromise(Effect.sleep(Duration.millis(SHELL_SNAPSHOT_POLL_MS)));
+            }
+            if (shell === null) {
+              throw new T3SessionError(
+                "Connected to T3 but the orchestration shell snapshot did not arrive in time",
+              );
+            }
+          } catch (cause) {
+            // Full teardown is required: a partial connect leaves session non-null and
+            // the next connectPrepared early-returns forever (stuck bot after restart).
+            await teardown();
+            // nextScope may not have been published to `scope` yet (fail before assign).
+            await runtime.runPromise(Scope.close(nextScope, Exit.void)).catch(() => {});
+            throw cause instanceof T3SessionError
+              ? cause
+              : new T3SessionError(`Could not connect to T3 Code: ${messageFromCause(cause)}`, {
+                  cause,
+                });
+          }
+        },
+        catch: (cause) =>
+          cause instanceof T3SessionError
+            ? cause
+            : new T3SessionError(messageFromCause(cause), { cause }),
+      });
+
+    const persistBootstrappedBearer = (accessToken: string, expiresInSeconds: number) =>
+      Effect.gen(function* () {
+        const nowMs = yield* Clock.currentTimeMillis;
+        try {
+          writePersistedBearerSession(botConfig.dataDir, {
+            accessToken,
+            expiresAt: persistedBearerExpiresAtIso(nowMs, expiresInSeconds),
+            httpBaseUrl: botConfig.t3HttpBaseUrl,
+          });
+        } catch (cause) {
+          yield* Effect.logWarning(
+            `Could not persist T3 bearer session: ${messageFromCause(cause)}`,
+          );
+        }
+      });
+
+    const connectWithBootstrapCredential = () =>
+      Effect.gen(function* () {
+        const tokenSession = yield* Effect.tryPromise({
+          try: () =>
+            runtime.runPromise(
+              bootstrapRemoteBearerSession({
+                httpBaseUrl: botConfig.t3HttpBaseUrl,
+                credential: botConfig.t3BootstrapCredential!,
+                clientMetadata: { label: "T3 Discord Bot", deviceType: "bot" },
+              }),
+            ),
+          catch: (cause) =>
+            new T3SessionError(`Bootstrap failed: ${messageFromCause(cause)}`, { cause }),
+        });
+        yield* persistBootstrappedBearer(tokenSession.access_token, tokenSession.expires_in);
+        yield* connectPrepared(botConfig.t3HttpBaseUrl, tokenSession.access_token);
+      });
+
+    const connect = () =>
+      Effect.gen(function* () {
+        if (botConfig.t3BearerToken !== undefined && botConfig.t3BearerToken !== "") {
+          yield* connectPrepared(botConfig.t3HttpBaseUrl, botConfig.t3BearerToken);
+          return;
+        }
+
+        const nowMs = yield* Clock.currentTimeMillis;
+        const persisted = readPersistedBearerSession(botConfig.dataDir);
+        if (
+          persisted !== null &&
+          shouldReusePersistedBearer({
+            record: persisted,
+            nowMs,
+            httpBaseUrl: botConfig.t3HttpBaseUrl,
+          })
+        ) {
+          const persistedConnect = yield* Effect.result(
+            connectPrepared(botConfig.t3HttpBaseUrl, persisted.accessToken),
+          );
+          if (Result.isSuccess(persistedConnect)) return;
+          if (!isT3InvalidCredentialError(persistedConnect.failure)) {
+            return yield* Effect.fail(persistedConnect.failure);
+          }
+          yield* Effect.logWarning("Persisted T3 bearer rejected; falling back to bootstrap");
+          clearPersistedBearerSession(botConfig.dataDir);
+        }
+
+        if (
+          botConfig.t3BootstrapCredential !== undefined &&
+          botConfig.t3BootstrapCredential !== ""
+        ) {
+          yield* connectWithBootstrapCredential();
+          return;
+        }
+        yield* connectPrepared(botConfig.t3HttpBaseUrl);
+      });
+
+    /**
+     * Boot path: Discord may start before guest T3 is listening. Retry forever
+     * with the same schedule as mid-life reconnect instead of exiting the process.
+     */
+    const connectUntilReady = () =>
+      Effect.gen(function* () {
+        for (let attempt = 0; ; attempt += 1) {
+          const outcome = yield* Effect.result(connect());
+          if (Result.isSuccess(outcome)) return;
+          const delay =
+            RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)] ?? 16_000;
+          yield* Effect.logWarning(
+            `T3 boot connect attempt ${attempt + 1} failed: ${messageFromCause(outcome.failure)}; retrying in ${delay}ms`,
+          );
+          yield* Effect.sleep(Duration.millis(delay));
+        }
+      });
+
+    /**
+     * Wait for a live shell so Discord intake can park work across boot/reconnect
+     * instead of telling the human to retry. Polls the same readiness predicate as
+     * {@link isReady}; does not itself drive reconnect (that is connectUntilReady /
+     * reconnectLoop).
+     */
+    const waitUntilReady = (options?: { readonly timeoutMs?: number }) =>
+      Effect.gen(function* () {
+        if (session !== null && shell !== null) return;
+        const timeoutMs = options?.timeoutMs ?? DEFAULT_T3_WAIT_UNTIL_READY_TIMEOUT_MS;
+        const startedAt = yield* Clock.currentTimeMillis;
+        yield* Effect.logInfo("Waiting for T3 shell readiness", { timeoutMs });
+        for (;;) {
+          const ready = session !== null && shell !== null;
+          const now = yield* Clock.currentTimeMillis;
+          const decision = shouldContinueWaitingForT3Ready({
+            ready,
+            elapsedMs: now - startedAt,
+            timeoutMs,
+          });
+          if (decision === "ready") {
+            yield* Effect.logInfo("T3 became ready while waiting", {
+              waitedMs: now - startedAt,
+            });
+            return;
+          }
+          if (decision === "timeout") {
+            return yield* Effect.fail(new T3SessionError(T3_STILL_CONNECTING_MESSAGE));
+          }
+          yield* Effect.sleep(Duration.millis(T3_WAIT_UNTIL_READY_POLL_MS));
+        }
+      });
+
+    const providersForSelection = (): ReadonlyArray<ServerProvider> =>
+      serverConfig?.providers ?? [];
+
+    const persistAttachments = (
+      threadId: ThreadId,
+      messageId: MessageId,
+      attachments: ReadonlyArray<UploadChatAttachment>,
+    ) =>
+      Effect.tryPromise({
+        try: () =>
+          runtime.runPromise(
+            requireSession().client[WS_METHODS.assetsPersistChatAttachments]({
+              threadId,
+              messageId,
+              attachments,
+            }),
+          ),
+        catch: (cause) =>
+          new T3SessionError(`Attachment upload failed: ${messageFromCause(cause)}`, { cause }),
+      }).pipe(Effect.map((result) => result.attachments));
+
+    const fetchThreadProjectionHttp = (threadId: ThreadId) =>
+      Effect.tryPromise({
+        try: async (): Promise<unknown> => {
+          const base = httpBaseUrl;
+          if (base === null) return null;
+          const url = new URL(
+            `/api/orchestration/threads/${encodeURIComponent(threadId)}`,
+            base,
+          ).toString();
+          const headers: Record<string, string> = {
+            Accept: "application/json",
+            "X-T3-Orchestration-Protocol": "2",
+          };
+          if (httpBearerToken !== null) {
+            headers.Authorization = `Bearer ${httpBearerToken}`;
+          }
+          const response = await globalThis.fetch(url, { headers });
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status} loading thread snapshot`);
+          }
+          return response.json() as Promise<unknown>;
+        },
+        catch: (cause) =>
+          new T3SessionError(`Thread snapshot fetch failed: ${messageFromCause(cause)}`, {
+            cause,
+          }),
+      }).pipe(
+        Effect.flatMap((raw) =>
+          raw === null ? Effect.succeed(null) : decodeThreadDetailSnapshot(raw),
+        ),
+        Effect.mapError(
+          (cause) =>
+            new T3SessionError(`Thread snapshot decode failed: ${messageFromCause(cause)}`, {
+              cause,
+            }),
+        ),
+        Effect.catch((error) =>
+          Effect.logWarning("Could not fetch thread snapshot over HTTP", {
+            threadId,
+            error: String(error),
+          }).pipe(Effect.as(null)),
+        ),
+      );
+
+    return T3Session.of({
+      connect,
+      connectUntilReady,
+      setOnReconnected: (handler) => {
+        onReconnected = handler;
+      },
+      isConnected: () => Effect.sync(() => session !== null),
+      isReady: () => Effect.sync(() => session !== null && shell !== null),
+      waitUntilReady,
+      shell: () =>
+        Effect.succeed(
+          shell === null
+            ? null
+            : { ...shell, threads: shell.threads.map(integrationThreadShellView) },
+        ),
+      serverConfig: () => Effect.succeed(serverConfig),
+      findProjectByWorkspaceRoot: (workspaceRoot) =>
+        Effect.gen(function* () {
+          // Mentions can land while shell is still filling after reconnect.
+          for (let attempt = 0; attempt < PROJECT_LOOKUP_SHELL_WAIT_ATTEMPTS; attempt += 1) {
+            // shell/session are mutated by connect/teardown/shellFiber, not this loop body.
+            if (shell !== null || session === null) break;
+            yield* Effect.sleep(Duration.millis(SHELL_SNAPSHOT_POLL_MS));
+          }
+          if (shell === null) return null;
+          const target = normalizeWorkspacePath(workspaceRoot);
+          return (
+            shell.projects.find(
+              (project) => normalizeWorkspacePath(project.workspaceRoot) === target,
+            ) ?? null
+          );
+        }),
+      getProjectShell: (projectId) =>
+        Effect.sync(() => shell?.projects.find((project) => project.id === projectId) ?? null),
+      resolveModelSelection: ({
+        project,
+        stickyModelSelection,
+        overrideInstanceId,
+        overrideModel,
+      }) =>
+        Effect.sync(() =>
+          preferredModelSelection({
+            config: botConfig,
+            providers: providersForSelection(),
+            projectDefault: project?.defaultModelSelection ?? null,
+            ...(stickyModelSelection === undefined ? {} : { stickyModelSelection }),
+            ...(overrideInstanceId === undefined ? {} : { overrideInstanceId }),
+            ...(overrideModel === undefined ? {} : { overrideModel }),
+          }),
+        ),
+      getThreadShell: (threadId) =>
+        Effect.sync(() => {
+          const thread = shell?.threads.find((thread) => thread.id === threadId);
+          return thread ? integrationThreadShellView(thread) : null;
+        }),
+      fetchThreadDetail: (threadId) =>
+        fetchThreadProjectionHttp(threadId).pipe(
+          Effect.map((snapshot) =>
+            snapshot === null
+              ? null
+              : {
+                  snapshotSequence: snapshot.snapshotSequence,
+                  thread: integrationThreadView(snapshot.projection),
+                },
+          ),
+        ),
+      resolveBranchChangeRequest: (input) =>
+        Effect.tryPromise({
+          try: () =>
+            runtime.runPromise(
+              requireSession().client[WS_METHODS.vcsResolveBranchChangeRequest](input),
+            ),
+          catch: (cause) =>
+            new T3SessionError(
+              `Could not resolve branch change request for ${input.refName}: ${messageFromCause(cause)}`,
+              { cause },
+            ),
+        }),
+      startTurnWithWorktree: (input) =>
+        Effect.gen(function* () {
+          const threadId = newThreadId();
+          const messageId = newMessageId();
+          const title = formatThreadTitle(input.titleSeed ?? input.prompt, 72, "Discord thread");
+          const interactionMode = input.interactionMode ?? "default";
+          const runtimeMode = input.runtimeMode ?? botConfig.t3DefaultRuntimeMode;
+          const worktreeBranch = `t3-discord/${shortId()}`;
+
+          yield* claimBrowserHost(threadId);
+          const attachments = yield* persistAttachments(
+            threadId,
+            messageId,
+            input.attachments ?? [],
+          );
+          yield* Effect.tryPromise({
+            try: () =>
+              runtime.runPromise(
+                requireSession().client[ORCHESTRATION_V2_WS_METHODS.launchThread]({
+                  commandId: newCommandId(),
+                  threadId,
+                  projectId: input.project.id,
+                  title,
+                  modelSelection: input.modelSelection,
+                  runtimeMode,
+                  interactionMode,
+                  creationSource: "server",
+                  workspaceStrategy: input.local
+                    ? { type: "root" }
+                    : {
+                        type: "worktree",
+                        baseRef: input.baseBranch,
+                        branch: worktreeBranch,
+                        startFromOrigin: true,
+                      },
+                  initialMessage: { messageId, text: input.prompt, attachments },
+                  ...(input.sourceHint ? { sourceHint: input.sourceHint } : {}),
+                }),
+              ),
+            catch: (cause) =>
+              new T3SessionError(`Thread launch failed: ${messageFromCause(cause)}`, { cause }),
+          });
+
+          return { threadId, messageId };
+        }),
+      startTurn: (input) =>
+        Effect.gen(function* () {
+          const thread = shell?.threads.find((entry) => entry.id === input.threadId);
+          const messageId = input.messageId ?? newMessageId();
+          // Sticky model on continue: never re-apply bot defaults (codex/gpt-5.4).
+          // Explicit overrides come only from Discord --provider/--model flags.
+          // modelSelection is optional on message.dispatch; omit when unknown so the
+          // server keeps the thread's existing selection (Grok refuses mid-thread switches).
+          const modelSelection = input.modelSelection ?? thread?.modelSelection;
+          yield* claimBrowserHost(input.threadId);
+          const attachments = yield* persistAttachments(
+            input.threadId,
+            messageId,
+            input.attachments ?? [],
+          );
+          if (
+            shouldPersistThreadModelSelectionForNextTurn({
+              ...(thread?.modelSelection === undefined
+                ? {}
+                : { currentModelSelection: thread.modelSelection }),
+              ...(modelSelection === undefined ? {} : { nextModelSelection: modelSelection }),
+            })
+          ) {
+            yield* dispatch({
+              type: thread?.modelSelection
+                ? modelSelectionCommandType(thread.modelSelection.instanceId, modelSelection!)
+                : "thread.model-selection.set",
+              commandId: newCommandId(),
+              threadId: input.threadId,
+              modelSelection: modelSelection!,
+            });
+          }
+          if (input.runtimeMode !== undefined && input.runtimeMode !== thread?.runtimeMode)
+            yield* dispatch({
+              type: "thread.runtime-mode.set",
+              commandId: newCommandId(),
+              threadId: input.threadId,
+              runtimeMode: input.runtimeMode,
+            });
+          if (
+            input.interactionMode !== undefined &&
+            input.interactionMode !== thread?.interactionMode
+          )
+            yield* dispatch({
+              type: "thread.interaction-mode.set",
+              commandId: newCommandId(),
+              threadId: input.threadId,
+              interactionMode: input.interactionMode,
+            });
+          yield* dispatch({
+            type: "message.dispatch",
+            commandId: newCommandId(),
+            threadId: input.threadId,
+            messageId,
+            text: input.prompt,
+            attachments,
+            createdBy: "user",
+            creationSource: "server",
+            dispatchMode: { type: "queue_after_active" },
+            ...(modelSelection ? { modelSelection } : {}),
+            ...(input.sourceHint ? { sourceHint: input.sourceHint } : {}),
+          });
+
+          return { messageId };
+        }),
+      steerQueuedMessage: (input) =>
+        Effect.gen(function* () {
+          const snapshot = yield* fetchThreadProjectionHttp(input.threadId);
+          if (snapshot === null)
+            return yield* Effect.fail(
+              new T3SessionError("Could not load the queued runs from this server."),
+            );
+          const queued = snapshot?.projection.runs.find(
+            (run) => run.status === "queued" && run.userMessageId === input.messageId,
+          );
+          const active = snapshot?.projection.runs.findLast((run) =>
+            ["preparing", "starting", "running", "waiting"].includes(run.status),
+          );
+          if (!queued) return;
+          if (!active)
+            return yield* dispatch({
+              type: "queue.resume",
+              commandId: newCommandId(),
+              threadId: input.threadId,
+            });
+          yield* dispatch({
+            type: "queued-message.promote-to-steer",
+            commandId: newCommandId(),
+            threadId: input.threadId,
+            queuedRunId: queued.id,
+            targetRunId: active.id,
+          });
+        }),
+      removeQueuedMessage: (input) =>
+        Effect.gen(function* () {
+          const snapshot = yield* fetchThreadProjectionHttp(input.threadId);
+          if (snapshot === null)
+            return yield* Effect.fail(
+              new T3SessionError("Could not load the queued runs from this server."),
+            );
+          const queued = snapshot?.projection.runs.find(
+            (run) => run.status === "queued" && run.userMessageId === input.messageId,
+          );
+          if (!queued) return;
+          yield* dispatch({
+            type: "queued-run.cancel",
+            commandId: newCommandId(),
+            threadId: input.threadId,
+            runId: queued.id,
+          });
+        }),
+      /**
+       * Subscribe to thread events and run `onThread` in the **caller's** Effect context.
+       *
+       * Must NOT use `runtime.runFork` — that runs on the T3 ManagedRuntime without
+       * DiscordREST, so every Discord post fails silently ("nothing happens").
+       * Run the stream with `yield*` so the Discord bridge fiber provides services.
+       *
+       * Client-aligned via {@link followOrchestrationThread} (same apply/reload/retry
+       * semantics as EnvironmentThreadState; no core package edits).
+       */
+      subscribeThread: (threadId, onThread, options) =>
+        Effect.gen(function* () {
+          const active = requireSession();
+          yield* followOrchestrationThread({
+            threadId,
+            afterSequence: options?.afterSequence ?? null,
+            ...(options?.onSequence !== undefined ? { onSequence: options.onSequence } : {}),
+            warmSeed: options?.warmSeed ?? null,
+            ...(options?.projectThread !== undefined
+              ? { projectThread: options.projectThread }
+              : {}),
+            onThread,
+            fetchSnapshot: () => fetchThreadProjectionHttp(threadId),
+            ...(options?.onProjection ? { onProjection: options.onProjection } : {}),
+            openStream: ({ afterSequence }) =>
+              active.client[ORCHESTRATION_V2_WS_METHODS.subscribeThread]({
+                threadId,
+                ...(afterSequence !== undefined ? { afterSequence } : {}),
+              }).pipe(
+                Stream.mapError(
+                  (cause) =>
+                    new T3SessionError(`Thread subscription failed: ${messageFromCause(cause)}`, {
+                      cause,
+                    }),
+                ),
+              ),
+            retryForever: true,
+          });
+        }),
+      subscribeVcsStatus: (cwd, onStatus) =>
+        Effect.gen(function* () {
+          const active = requireSession();
+
+          yield* active.client[WS_METHODS.subscribeVcsStatus]({
+            cwd,
+          }).pipe(
+            Stream.runForEach((event) =>
+              onStatus(event).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logError("Thread bridge onVcsStatus failed", { cwd, cause }),
+                ),
+              ),
+            ),
+            Effect.mapError(
+              (cause) =>
+                new T3SessionError(`VCS status subscription failed: ${messageFromCause(cause)}`, {
+                  cause,
+                }),
+            ),
+          );
+        }),
+      refreshVcsStatus: (cwd) =>
+        Effect.tryPromise({
+          try: () =>
+            runtime.runPromise(
+              requireSession().client[WS_METHODS.vcsRefreshStatus]({
+                cwd,
+              }),
+            ),
+          catch: (cause) =>
+            new T3SessionError(
+              `Could not refresh VCS status for ${cwd}: ${messageFromCause(cause)}`,
+              {
+                cause,
+              },
+            ),
+        }).pipe(Effect.asVoid),
+      respondToApproval: (threadId, requestId, decision) =>
+        dispatch({
+          type: "runtime-request.respond",
+          commandId: newCommandId(),
+          threadId,
+          requestId: RuntimeRequestId.make(requestId),
+          decision,
+        }),
+      respondToUserInput: (threadId, requestId, answers) =>
+        dispatch({
+          type: "runtime-request.respond",
+          commandId: newCommandId(),
+          threadId,
+          requestId: RuntimeRequestId.make(requestId),
+          answers,
+        }),
+      interrupt: (threadId) =>
+        Effect.gen(function* () {
+          const snapshot = yield* fetchThreadProjectionHttp(threadId);
+          const active = snapshot?.projection.runs.findLast((run) =>
+            ["preparing", "starting", "running", "waiting"].includes(run.status),
+          );
+          if (!active) return;
+          yield* dispatch({
+            type: "run.interrupt",
+            commandId: newCommandId(),
+            threadId,
+            runId: active.id,
+            holdQueue: true,
+          });
+        }),
+      compact: () =>
+        Effect.fail(
+          new T3SessionError(
+            "This server's orchestration runtime does not expose context compaction.",
+          ),
+        ),
+      createAttachmentUrl: (attachmentId) =>
+        Effect.tryPromise({
+          try: async () => {
+            const active = requireSession();
+            const base = httpBaseUrl;
+            if (base === null) {
+              throw new T3SessionError("T3 Code is not connected.");
+            }
+            const result = await runtime.runPromise(
+              active.client[WS_METHODS.assetsCreateUrl]({
+                resource: { _tag: "attachment", attachmentId },
+              }),
+            );
+            return new URL(result.relativeUrl, base).toString();
+          },
+          catch: (cause) =>
+            cause instanceof T3SessionError
+              ? cause
+              : new T3SessionError(
+                  `Could not create attachment URL for ${attachmentId}: ${messageFromCause(cause)}`,
+                  { cause },
+                ),
+        }),
+      createWorkspaceFileUrl: ({ threadId, path }) =>
+        Effect.tryPromise({
+          try: async () => {
+            const active = requireSession();
+            const base = httpBaseUrl;
+            if (base === null) {
+              throw new T3SessionError("T3 Code is not connected.");
+            }
+            const result = await runtime.runPromise(
+              active.client[WS_METHODS.assetsCreateUrl]({
+                resource: { _tag: "workspace-file", threadId, path },
+              }),
+            );
+            return new URL(result.relativeUrl, base).toString();
+          },
+          catch: (cause) =>
+            cause instanceof T3SessionError
+              ? cause
+              : new T3SessionError(
+                  `Could not create workspace file URL for ${path}: ${messageFromCause(cause)}`,
+                  { cause },
+                ),
+        }),
+    });
+  });
+
+export const layer = (botConfig: DiscordBotConfig) =>
+  Layer.effect(T3Session, makeT3Session(botConfig));

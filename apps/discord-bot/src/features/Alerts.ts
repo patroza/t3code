@@ -1,0 +1,1159 @@
+// @effect-diagnostics nodeBuiltinImport:off missingEffectContext:off anyUnknownInErrorContext:off
+/**
+ * Guest-side ops alerts → a dedicated Discord channel.
+ *
+ * - Host: load, CPU%, memory, disk free
+ * - Runaways: legacy stdio Sentry MCP proliferation / high RSS → alert only (never kill)
+ * - T3: long-running turns (page at 0.25h × 2ⁿ age milestones); **real** session errors only
+ *   (not orphan-restart recover text)
+ * - App: postFatalAlert() / postBridgeAlert() for hard + bridge failures
+ */
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import { DiscordConfig, DiscordREST } from "dfx";
+import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
+import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
+import * as Schedule from "effect/Schedule";
+
+import { loadAlertProcessRulesFromFileSync, type AlertProcessRule } from "../alertProcessRules.ts";
+import type { DiscordBotConfig } from "../config.ts";
+import {
+  createMessageWithAttachments,
+  DiscordUploadError,
+  textFile,
+  type DiscordUploadFile,
+} from "../presentation/discordFiles.ts";
+
+const POLL_MS = 60 * 1000;
+const POLL = "60 seconds";
+const COOLDOWN_MS = 10 * 60 * 1000;
+/** Fatal errors use a shorter cooldown so distinct keys still surface quickly. */
+const FATAL_COOLDOWN_MS = 2 * 60 * 1000;
+/**
+ * Session last_error fatals used to re-post every 2m per thread after restarts.
+ * Sticky projection rows never clear, so cooldown alone re-pages the same failure
+ * forever (e.g. a week-old "Invalid params" every 30m). Age-gate + matching
+ * cooldown: page once while the row is still fresh, then drop it.
+ */
+export const SESSION_ERROR_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+const SESSION_ERROR_FATAL_COOLDOWN_MS = SESSION_ERROR_MAX_AGE_MS;
+/** Cap distinct session-error posts per watchdog tick. */
+const SESSION_ERROR_ALERT_MAX = 5;
+/** Leave headroom below Discord's 2,000-character message-content limit. */
+const DISCORD_ALERT_MESSAGE_LIMIT = 1900;
+
+const LOAD_RATIO = 0.75;
+const CPU_PERCENT_ALERT = 85;
+const MEM_AVAILABLE_MIN_MB = 1024;
+const DISK_FREE_MIN_PERCENT = 10;
+const DISK_FREE_MIN_GB = 2;
+/** Alert when a legacy stdio Sentry MCP process exceeds this RSS. */
+const SENTRY_RSS_ALERT_MB = 512;
+const SENTRY_COUNT_ALERT = 2;
+/**
+ * Default generic process rule for "unexpectedly hot" processes.
+ * The sustained duration preserves the prior five-sample window semantics:
+ * the first sample establishes the CPU-rate baseline, then four 60s intervals
+ * must stay hot before alerting.
+ *
+ * This measures a *rate* (Δcpu / Δwall between ticks), not cumulative CPU time:
+ * a long-lived-but-idle process (e.g. one that gathered 200s of CPU over hours
+ * yet now moves a few seconds per 10 min) is not a problem and used to re-alert
+ * forever. What we want to catch is a process actually pegging CPU or memory for
+ * a sustained stretch.
+ */
+const DEFAULT_PROCESS_CPU_PERCENT = 50; // percent of a single core, averaged over the tick gap
+const DEFAULT_PROCESS_RSS_ALERT_MB = 768;
+const DEFAULT_PROCESS_SUSTAINED_FOR_MS = 4 * POLL_MS;
+/**
+ * First long-turn page threshold and base of the doubling milestone ladder.
+ * Pages at 0.25h, 0.5h, 1h, 2h, 4h, … (15m × 2ⁿ) while the turn stays `running`,
+ * instead of re-paging every fixed cooldown (was 10m — spammy for multi-hour turns).
+ */
+export const TURN_RUNNING_MIN_MS = 15 * 60 * 1000;
+
+/** Paths to check for free space (guest rootfs is tiny; data volume is the real store). */
+const DISK_PATHS = ["/", "/var/lib/t3"] as const;
+
+/**
+ * Processes we watch as "runaways" (alert only — never auto-kill).
+ * Targets legacy local `@sentry/mcp-server` stdio children. Excludes the shared
+ * `shared-sentry-mcp-proxy` HTTP proxy (contains "sentry-mcp" in the path).
+ */
+const RUNAWAY_PATTERNS: ReadonlyArray<{
+  readonly id: string;
+  readonly match: (cmd: string) => boolean;
+}> = [
+  {
+    id: "sentry-mcp",
+    match: (cmd) => {
+      if (cmd.includes("shared-sentry-mcp-proxy") || cmd.includes("t3-watchdog")) return false;
+      return cmd.includes("@sentry/mcp-server") || /\bsentry-mcp\b/.test(cmd);
+    },
+  },
+];
+
+export interface ProcInfo {
+  readonly pid: number;
+  readonly rssMb: number;
+  readonly cpuSeconds: number;
+  readonly cmd: string;
+  readonly label: string;
+}
+
+/** Per-process tracker state carried between ticks to derive a CPU rate. */
+export interface ProcSustainState {
+  readonly cpuSeconds: number;
+  readonly sampledAtMs: number;
+  readonly wasHot: boolean;
+  /** When the current hot streak began, for reporting how long it has lasted. */
+  readonly hotSinceMs: number;
+}
+
+/** A process that has been hot (high CPU rate or RSS) for long enough to alert. */
+export interface SustainedHotProcess {
+  readonly pid: number;
+  readonly rssMb: number;
+  /** Average CPU over the last tick gap, as percent of a single core. */
+  readonly cpuPercent: number;
+  readonly ruleId: string;
+  readonly rssMbThreshold: number | null;
+  readonly cpuPercentThreshold: number | null;
+  readonly sustainedForMs: number;
+  /** How long it has been continuously hot. */
+  readonly sustainedMs: number;
+  readonly label: string;
+}
+
+interface ResolvedProcessAlertRule {
+  readonly id: string;
+  readonly rssMbThreshold: number | null;
+  readonly cpuPercentThreshold: number | null;
+  readonly sustainedForMs: number;
+}
+
+const DEFAULT_PROCESS_ALERT_RULE: ResolvedProcessAlertRule = {
+  id: "default",
+  rssMbThreshold: DEFAULT_PROCESS_RSS_ALERT_MB,
+  cpuPercentThreshold: DEFAULT_PROCESS_CPU_PERCENT,
+  sustainedForMs: DEFAULT_PROCESS_SUSTAINED_FOR_MS,
+};
+
+/**
+ * Advance the per-process hotness tracker by one tick.
+ *
+ * Pure so the streak/rate logic is testable without /proc. Only pids present in
+ * `procs` survive into the returned state, which prunes exited processes; a pid
+ * whose CPU counter went backwards is treated as reused and its streak resets.
+ */
+export function trackSustainedHotProcesses(input: {
+  readonly prev: ReadonlyMap<number, ProcSustainState>;
+  readonly procs: ReadonlyArray<ProcInfo>;
+  readonly nowMs: number;
+  readonly resolveRule: (proc: ProcInfo) => ResolvedProcessAlertRule;
+}): {
+  readonly next: Map<number, ProcSustainState>;
+  readonly hot: ReadonlyArray<SustainedHotProcess>;
+} {
+  const next = new Map<number, ProcSustainState>();
+  const hot: SustainedHotProcess[] = [];
+
+  for (const proc of input.procs) {
+    const rule = input.resolveRule(proc);
+    const prior = input.prev.get(proc.pid);
+    // A counter that went backwards means the pid was reused; ignore the prior.
+    const reused = prior !== undefined && proc.cpuSeconds < prior.cpuSeconds;
+    const previous = reused ? undefined : prior;
+
+    const elapsedMs = previous ? input.nowMs - previous.sampledAtMs : 0;
+    const cpuPercent =
+      previous && elapsedMs > 0
+        ? (Math.max(0, proc.cpuSeconds - previous.cpuSeconds) / (elapsedMs / 1_000)) * 100
+        : null;
+
+    const isHot =
+      (rule.cpuPercentThreshold !== null &&
+        cpuPercent !== null &&
+        cpuPercent >= rule.cpuPercentThreshold) ||
+      (rule.rssMbThreshold !== null && proc.rssMb >= rule.rssMbThreshold);
+    const hotSinceMs = isHot ? (previous?.wasHot ? previous.hotSinceMs : input.nowMs) : input.nowMs;
+
+    next.set(proc.pid, {
+      cpuSeconds: proc.cpuSeconds,
+      sampledAtMs: input.nowMs,
+      wasHot: isHot,
+      hotSinceMs,
+    });
+
+    if (isHot && input.nowMs - hotSinceMs >= rule.sustainedForMs) {
+      hot.push({
+        pid: proc.pid,
+        rssMb: proc.rssMb,
+        cpuPercent: cpuPercent ?? 0,
+        ruleId: rule.id,
+        rssMbThreshold: rule.rssMbThreshold,
+        cpuPercentThreshold: rule.cpuPercentThreshold,
+        sustainedForMs: rule.sustainedForMs,
+        sustainedMs: input.nowMs - hotSinceMs,
+        label: proc.label,
+      });
+    }
+  }
+
+  hot.sort((a, b) => b.cpuPercent - a.cpuPercent || b.rssMb - a.rssMb);
+  return { next, hot: hot.slice(0, 8) };
+}
+
+export interface DiskInfo {
+  readonly path: string;
+  readonly totalGb: number;
+  readonly freeGb: number;
+  readonly freePercent: number;
+}
+
+export interface HostSnapshot {
+  readonly load1: number;
+  readonly load5: number;
+  readonly nproc: number;
+  readonly cpuPercent: number | null;
+  readonly memTotalMb: number;
+  readonly memAvailableMb: number;
+  readonly disks: ReadonlyArray<DiskInfo>;
+  readonly runaways: ReadonlyArray<ProcInfo>;
+  readonly fatProcesses: ReadonlyArray<SustainedHotProcess>;
+  readonly longTurns: ReadonlyArray<{
+    readonly threadId: string;
+    readonly turnId: string;
+    readonly ageMin: number;
+  }>;
+  readonly sessionErrors: ReadonlyArray<{
+    readonly threadId: string;
+    readonly lastError: string;
+    readonly status?: string | null;
+    readonly updatedAt?: string | null;
+  }>;
+  readonly failedUnits: ReadonlyArray<string>;
+}
+
+export type SessionLastErrorKind = "ignore" | "stale" | "fatal";
+
+/**
+ * Operational recover text that must not page as FATAL.
+ * Written by orphan settle after server restart / reaper — expected, high volume.
+ */
+export function isExpectedSessionLastError(lastError: string): boolean {
+  const text = lastError.trim().toLowerCase();
+  if (text === "") return true;
+  if (text.includes("recovered orphan session")) return true;
+  if (text.includes("server restarted while the agent was working")) return true;
+  if (text.includes("send a follow-up to resume")) return true;
+  return false;
+}
+
+/**
+ * Age of a projection_thread_sessions.updated_at value, or null if unparseable.
+ * Sticky last_error rows keep their original timestamp; use this to drop ancient noise.
+ */
+export function sessionErrorAgeMs(
+  updatedAt: string | null | undefined,
+  nowMs: number,
+): number | null {
+  if (updatedAt == null || updatedAt.trim() === "") return null;
+  const parsed = Date.parse(updatedAt);
+  if (Number.isNaN(parsed)) return null;
+  return Math.max(0, nowMs - parsed);
+}
+
+/**
+ * Classify a session last_error for the ops watchdog.
+ * - ignore: expected recover / empty
+ * - stale: real failure text, but too old to re-page (sticky projection row)
+ * - fatal: real provider / process / hard session failure still worth paging
+ */
+export function classifySessionLastError(input: {
+  readonly lastError: string;
+  readonly status?: string | null | undefined;
+  readonly updatedAt?: string | null | undefined;
+  readonly nowMs?: number;
+  readonly maxAgeMs?: number;
+}): SessionLastErrorKind {
+  if (isExpectedSessionLastError(input.lastError)) return "ignore";
+  // Age-gate only when the caller supplied both updatedAt and nowMs (projection path).
+  // Pure text-only classification (unit tests) skips the gate — no Date.now() here.
+  if (input.updatedAt !== undefined && input.nowMs !== undefined) {
+    const maxAgeMs = input.maxAgeMs ?? SESSION_ERROR_MAX_AGE_MS;
+    const ageMs = sessionErrorAgeMs(input.updatedAt, input.nowMs);
+    // null/unparseable timestamps: treat as stale so a bad row cannot page forever.
+    if (ageMs === null || ageMs > maxAgeMs) return "stale";
+  }
+  // Prefer true error rows; still allow non-empty last_error on other statuses when
+  // the text is not an expected recover (e.g. ACP spawn failure left on interrupted).
+  if (input.status === "error" || input.status === "interrupted" || input.status == null) {
+    return "fatal";
+  }
+  // ready/idle/stopped with a leftover last_error string — still worth a quiet fatal
+  // once, but not recover spam (already ignored above).
+  return "fatal";
+}
+
+/**
+ * Filter + cap session errors for Discord posting.
+ * Groups ignored recoveries / stale stickies for optional summary; never emits them as FATAL.
+ */
+export function selectSessionErrorsForAlert(
+  errors: ReadonlyArray<{
+    readonly threadId: string;
+    readonly lastError: string;
+    readonly status?: string | null | undefined;
+    readonly updatedAt?: string | null | undefined;
+  }>,
+  maxFatals: number = SESSION_ERROR_ALERT_MAX,
+  timing?: { readonly nowMs: number; readonly maxAgeMs?: number },
+): {
+  readonly fatals: ReadonlyArray<{ readonly threadId: string; readonly lastError: string }>;
+  readonly ignoredRecoveryCount: number;
+  readonly ignoredStaleCount: number;
+} {
+  let ignoredRecoveryCount = 0;
+  let ignoredStaleCount = 0;
+  const fatals: Array<{ threadId: string; lastError: string }> = [];
+  const maxAgeMs = timing?.maxAgeMs ?? SESSION_ERROR_MAX_AGE_MS;
+  for (const entry of errors) {
+    const kind = classifySessionLastError({
+      lastError: entry.lastError,
+      status: entry.status,
+      updatedAt: entry.updatedAt,
+      ...(timing !== undefined ? { nowMs: timing.nowMs, maxAgeMs } : {}),
+    });
+    if (kind === "ignore") {
+      ignoredRecoveryCount += 1;
+      continue;
+    }
+    if (kind === "stale") {
+      ignoredStaleCount += 1;
+      continue;
+    }
+    if (fatals.length < Math.max(0, maxFatals)) {
+      fatals.push({ threadId: entry.threadId, lastError: entry.lastError });
+    }
+  }
+  return { fatals, ignoredRecoveryCount, ignoredStaleCount };
+}
+
+/** Stable-ish key so identical failure text across threads shares one cooldown bucket. */
+export function sessionErrorAlertKey(threadId: string, lastError: string): string {
+  const signature = lastError
+    .trim()
+    .toLowerCase()
+    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/giu, "<id>")
+    .replace(/\b\d{4,}\b/gu, "<n>")
+    .slice(0, 120);
+  // Prefer signature-first so N threads with the same spawn error share cooldown.
+  // Fall back to thread id when the body is empty/unique.
+  if (signature.length >= 12) {
+    return `session-error-sig:${signature}`;
+  }
+  return `session-error:${threadId}`;
+}
+
+// --- /proc helpers -----------------------------------------------------------
+
+function readLoad(): { load1: number; load5: number } {
+  const raw = NodeFS.readFileSync("/proc/loadavg", "utf8");
+  const parts = raw.split(/\s+/);
+  return { load1: Number(parts[0] ?? "0"), load5: Number(parts[1] ?? "0") };
+}
+
+function readNproc(): number {
+  try {
+    return NodeFS.readdirSync("/sys/devices/system/cpu").filter((name) => /^cpu\d+$/.test(name))
+      .length;
+  } catch {
+    return 1;
+  }
+}
+
+function readMemMb(): { total: number; available: number } {
+  const raw = NodeFS.readFileSync("/proc/meminfo", "utf8");
+  const get = (key: string) => {
+    const match = new RegExp(`^${key}:\\s+(\\d+)`, "m").exec(raw);
+    return match ? Number(match[1]) / 1024 : 0;
+  };
+  return { total: get("MemTotal"), available: get("MemAvailable") };
+}
+
+/** Sample total jiffies from /proc/stat (all cpus line). */
+function readCpuJiffies(): { idle: number; total: number } | null {
+  try {
+    const line = NodeFS.readFileSync("/proc/stat", "utf8").split("\n")[0] ?? "";
+    // cpu user nice system idle iowait irq softirq steal ...
+    const parts = line.trim().split(/\s+/).slice(1).map(Number);
+    if (parts.length < 4) return null;
+    const idle = (parts[3] ?? 0) + (parts[4] ?? 0); // idle + iowait
+    const total = parts.reduce((a, b) => a + b, 0);
+    return { idle, total };
+  } catch {
+    return null;
+  }
+}
+
+let lastCpuSample: { idle: number; total: number } | null = null;
+
+function sampleCpuPercent(): number | null {
+  const now = readCpuJiffies();
+  if (now === null) return null;
+  const prev = lastCpuSample;
+  lastCpuSample = now;
+  if (prev === null) return null;
+  const dTotal = now.total - prev.total;
+  const dIdle = now.idle - prev.idle;
+  if (dTotal <= 0) return null;
+  return Math.max(0, Math.min(100, (1 - dIdle / dTotal) * 100));
+}
+
+function readDisk(path: string): DiskInfo | null {
+  try {
+    if (!NodeFS.existsSync(path)) return null;
+    const s = NodeFS.statfsSync(path);
+    // Node types: bsize, blocks, bfree, bavail
+    const bsize = Number(s.bsize);
+    const total = Number(s.blocks) * bsize;
+    const free = Number(s.bavail) * bsize;
+    if (total <= 0) return null;
+    return {
+      path,
+      totalGb: total / 1024 ** 3,
+      freeGb: free / 1024 ** 3,
+      freePercent: (free / total) * 100,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function readRssMb(pid: number): number {
+  try {
+    const status = NodeFS.readFileSync(`/proc/${pid}/status`, "utf8");
+    const match = /^VmRSS:\s+(\d+)\s+kB/m.exec(status);
+    return match ? Number(match[1]) / 1024 : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** utime + stime from /proc/pid/stat (clock ticks → seconds). */
+function readCpuSeconds(pid: number): number {
+  try {
+    const stat = NodeFS.readFileSync(`/proc/${pid}/stat`, "utf8");
+    // comm can contain spaces/parens — split after last ") "
+    const idx = stat.lastIndexOf(") ");
+    if (idx < 0) return 0;
+    const fields = stat.slice(idx + 2).split(/\s+/);
+    const utime = Number(fields[11] ?? 0); // 14th field overall, 12th after state
+    const stime = Number(fields[12] ?? 0);
+    const ticks =
+      Number(NodeChildProcess.execFileSync("getconf", ["CLK_TCK"], { encoding: "utf8" }).trim()) ||
+      100;
+    return (utime + stime) / ticks;
+  } catch {
+    try {
+      // fields: after ") " → state ppid ... utime is index 11 (0-based) in the remainder
+      const stat = NodeFS.readFileSync(`/proc/${pid}/stat`, "utf8");
+      const idx = stat.lastIndexOf(") ");
+      const fields = stat.slice(idx + 2).split(/\s+/);
+      return (Number(fields[11] ?? 0) + Number(fields[12] ?? 0)) / 100;
+    } catch {
+      return 0;
+    }
+  }
+}
+
+function readCmdline(pid: number): string {
+  try {
+    return NodeFS.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").join(" ").trim();
+  } catch {
+    return "";
+  }
+}
+
+function shortCmd(cmd: string): string {
+  if (cmd.includes("shared-sentry-mcp-proxy")) return "shared-sentry-mcp-proxy";
+  if (cmd.includes("@sentry/mcp-server") || /\bsentry-mcp\b/.test(cmd)) return "sentry-mcp";
+  const base = cmd.split(/\s+/).find((p) => p.includes("/")) ?? cmd;
+  return base.slice(-80);
+}
+
+function listProcesses(): ReadonlyArray<ProcInfo> {
+  const out: ProcInfo[] = [];
+  for (const ent of NodeFS.readdirSync("/proc")) {
+    if (!/^\d+$/.test(ent)) continue;
+    const pid = Number(ent);
+    if (pid === process.pid) continue;
+    const cmd = readCmdline(pid);
+    if (cmd === "") continue;
+    out.push({
+      pid,
+      rssMb: readRssMb(pid),
+      cpuSeconds: readCpuSeconds(pid),
+      cmd,
+      label: shortCmd(cmd),
+    });
+  }
+  return out;
+}
+
+function listRunaways(procs: ReadonlyArray<ProcInfo>): ReadonlyArray<ProcInfo> {
+  return procs.filter((p) => RUNAWAY_PATTERNS.some((rule) => rule.match(p.cmd)));
+}
+
+// Per-tick tracker state for sustained-hotness detection. Module-level because
+// it must persist across `collectHostSnapshot` calls; the logic itself lives in
+// the pure `trackSustainedHotProcesses`.
+let sustainState: ReadonlyMap<number, ProcSustainState> = new Map();
+
+function listFatProcesses(
+  procs: ReadonlyArray<ProcInfo>,
+  nowMs: number,
+  rules: ReadonlyArray<AlertProcessRule>,
+): ReadonlyArray<SustainedHotProcess> {
+  // Generic sustained high RSS / CPU alerts (never auto-kill). Our own long-lived
+  // services are excluded — they are expected to run hot and are handled by
+  // dedicated checks, not this generic catch-all.
+  const skip = (cmd: string) =>
+    cmd.includes("t3code") ||
+    cmd.includes("apps/server") ||
+    cmd.includes("discord-bot") ||
+    cmd.includes("shared-sentry-mcp-proxy") ||
+    cmd.includes("codex app-server") ||
+    cmd.includes("cloud-hypervisor") ||
+    cmd.includes("virtiofsd");
+
+  const resolveRule = (proc: ProcInfo): ResolvedProcessAlertRule => {
+    const normalizedCmd = proc.cmd.toLowerCase();
+    const normalizedLabel = proc.label.toLowerCase();
+    const custom = rules.find((rule) => {
+      const match = rule.match.toLowerCase();
+      return normalizedCmd.includes(match) || normalizedLabel.includes(match);
+    });
+    if (custom === undefined) return DEFAULT_PROCESS_ALERT_RULE;
+    return {
+      id: custom.id,
+      rssMbThreshold: custom.rssMbThreshold ?? null,
+      cpuPercentThreshold: custom.cpuPercentThreshold ?? null,
+      sustainedForMs: custom.sustainedForMs,
+    };
+  };
+
+  const { next, hot } = trackSustainedHotProcesses({
+    prev: sustainState,
+    procs: procs.filter((p) => !skip(p.cmd)),
+    nowMs,
+    resolveRule,
+  });
+  sustainState = next;
+  return hot;
+}
+
+function querySqliteJson(dbPath: string, scriptBody: string, extraArgs: string[] = []): unknown {
+  if (!NodeFS.existsSync(dbPath)) return null;
+  try {
+    const script = `
+import json, sqlite3, sys, time
+from datetime import datetime
+db_path = sys.argv[1]
+db = sqlite3.connect("file:" + db_path + "?mode=ro", uri=True)
+${scriptBody}
+`;
+    const raw = NodeChildProcess.execFileSync("python3", ["-c", script, dbPath, ...extraArgs], {
+      encoding: "utf8",
+      timeout: 5_000,
+    });
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Highest 0.25h × 2ⁿ milestone the turn age has reached, or `null` if still
+ * below the first page threshold.
+ *
+ * Examples (base 15m): 14m → null; 15–29m → 15m; 30–59m → 30m; 60–119m → 60m;
+ * 125m → 120m.
+ */
+export function longRunningTurnMilestoneMs(
+  ageMs: number,
+  baseMs: number = TURN_RUNNING_MIN_MS,
+): number | null {
+  if (!(ageMs >= baseMs) || !(baseMs > 0)) return null;
+  const exp = Math.floor(Math.log2(ageMs / baseMs));
+  if (!Number.isFinite(exp) || exp < 0) return null;
+  return baseMs * 2 ** exp;
+}
+
+/** Next doubling milestone after the one we just paged (cap not applied). */
+export function nextLongRunningTurnMilestoneMs(milestoneMs: number): number {
+  return milestoneMs * 2;
+}
+
+/** Human label for a milestone duration: `15m`, `30m`, `1h`, `2h`, … */
+export function formatLongRunningTurnMilestone(milestoneMs: number): string {
+  const minutes = milestoneMs / 60_000;
+  if (minutes < 60) return `${Math.round(minutes)}m`;
+  const hours = minutes / 60;
+  if (Number.isInteger(hours)) return `${hours}h`;
+  // Keep one decimal for non-integer hours (shouldn't happen on pure 2ⁿ ladder).
+  return `${hours}h`;
+}
+
+/**
+ * Whether to page for this long-running turn given the last milestone already
+ * posted for its `turnId`. Milestone is derived from turn age (not wall-clock
+ * since last post), so bot restarts re-page at most once for the current rung.
+ */
+export function shouldAlertLongRunningTurn(
+  ageMs: number,
+  lastAlertedMilestoneMs: number | undefined,
+  baseMs: number = TURN_RUNNING_MIN_MS,
+):
+  | { readonly alert: true; readonly milestoneMs: number }
+  | { readonly alert: false; readonly milestoneMs: number | null } {
+  const milestoneMs = longRunningTurnMilestoneMs(ageMs, baseMs);
+  if (milestoneMs === null) {
+    return { alert: false, milestoneMs: null };
+  }
+  if (lastAlertedMilestoneMs !== undefined && milestoneMs <= lastAlertedMilestoneMs) {
+    return { alert: false, milestoneMs };
+  }
+  return { alert: true, milestoneMs };
+}
+
+function listLongRunningTurns(
+  dbPath: string,
+  minAgeMs: number,
+): ReadonlyArray<{ threadId: string; turnId: string; ageMin: number }> {
+  const parsed = querySqliteJson(
+    dbPath,
+    `
+min_age_ms = float(sys.argv[2])
+cur = db.execute(
+  "SELECT thread_id, turn_id, requested_at FROM projection_turns "
+  "WHERE state = 'running' AND turn_id IS NOT NULL ORDER BY requested_at ASC LIMIT 10"
+)
+now = time.time()
+out = []
+for thread_id, turn_id, requested_at in cur:
+  try:
+    started = datetime.fromisoformat(requested_at.replace("Z", "+00:00")).timestamp()
+  except Exception:
+    started = now
+  age_ms = (now - started) * 1000
+  if age_ms >= min_age_ms:
+    out.append({"threadId": thread_id, "turnId": turn_id, "ageMin": int(age_ms // 60000)})
+print(json.dumps(out))
+`,
+    [String(minAgeMs)],
+  );
+  return (parsed as Array<{ threadId: string; turnId: string; ageMin: number }>) ?? [];
+}
+
+export function listSessionErrors(dbPath: string): ReadonlyArray<{
+  threadId: string;
+  lastError: string;
+  status: string | null;
+  updatedAt: string | null;
+}> {
+  const parsed = querySqliteJson(
+    dbPath,
+    `
+cur = db.execute(
+  "SELECT thread_id, last_error, status, updated_at FROM projection_thread_sessions "
+  "WHERE last_error IS NOT NULL AND TRIM(last_error) != '' "
+  "ORDER BY updated_at DESC LIMIT 40"
+)
+print(json.dumps([
+  {"threadId": r[0], "lastError": r[1] or "", "status": r[2], "updatedAt": r[3]}
+  for r in cur
+]))
+`,
+  );
+  return (
+    (parsed as Array<{
+      threadId: string;
+      lastError: string;
+      status: string | null;
+      updatedAt: string | null;
+    }>) ?? []
+  );
+}
+
+function listFailedSystemdUnits(): ReadonlyArray<string> {
+  try {
+    const raw = NodeChildProcess.execFileSync(
+      "systemctl",
+      ["list-units", "--failed", "--no-legend", "--no-pager", "--plain"],
+      { encoding: "utf8", timeout: 5_000 },
+    );
+    return raw
+      .split("\n")
+      .map((line) => line.trim().split(/\s+/)[0] ?? "")
+      .filter((u) => u.endsWith(".service") || u.endsWith(".timer"));
+  } catch {
+    return [];
+  }
+}
+
+export function collectHostSnapshot(input: {
+  readonly stateSqlitePath: string | undefined;
+  readonly nowMs: number;
+  readonly alertProcessRules: ReadonlyArray<AlertProcessRule>;
+}): HostSnapshot {
+  const mem = readMemMb();
+  const load = readLoad();
+  const procs = listProcesses();
+  const disks = DISK_PATHS.map(readDisk).filter((d): d is DiskInfo => d !== null);
+  const db = input.stateSqlitePath ?? "";
+  return {
+    load1: load.load1,
+    load5: load.load5,
+    nproc: Math.max(1, readNproc()),
+    cpuPercent: sampleCpuPercent(),
+    memTotalMb: mem.total,
+    memAvailableMb: mem.available,
+    disks,
+    runaways: listRunaways(procs),
+    fatProcesses: listFatProcesses(procs, input.nowMs, input.alertProcessRules),
+    longTurns: listLongRunningTurns(db, TURN_RUNNING_MIN_MS),
+    sessionErrors: listSessionErrors(db),
+    failedUnits: listFailedSystemdUnits(),
+  };
+}
+
+// --- Fatal / bridge alert bus (callable from bridge / main) ------------------
+
+type Poster = (
+  key: string,
+  content: string,
+  cooldownMs?: number,
+  files?: ReadonlyArray<DiscordUploadFile>,
+) => Effect.Effect<void>;
+
+let poster: Poster | null = null;
+
+/** Bridge snapshot handler failures: short enough to notice, long enough to avoid spam. */
+const BRIDGE_ALERT_COOLDOWN_MS = 3 * 60 * 1000;
+const TRACE_MIME_TYPE = "text/plain;charset=utf-8";
+
+export interface AlertTraceDelivery {
+  readonly content: string;
+  readonly files: ReadonlyArray<DiscordUploadFile>;
+}
+
+function alertTraceDelivery(content: string, filename: string, trace: string): AlertTraceDelivery {
+  return {
+    content: `${content}\n_Complete trace attached as \`${filename}\`._`,
+    files: [textFile(filename, trace, TRACE_MIME_TYPE)],
+  };
+}
+
+/** Identity lines shown in the short Discord alert body (not only the attachment). */
+export type AlertIdentity = {
+  readonly threadId?: string;
+  readonly channelId?: string;
+};
+
+function alertIdentityLines(identity?: AlertIdentity): ReadonlyArray<string> {
+  if (identity === undefined) return [];
+  const lines: string[] = [];
+  if (identity.threadId !== undefined && identity.threadId.trim() !== "") {
+    lines.push(`thread=\`${identity.threadId}\``);
+  }
+  if (identity.channelId !== undefined && identity.channelId.trim() !== "") {
+    lines.push(`channel=\`${identity.channelId}\``);
+  }
+  return lines;
+}
+
+export function fatalAlertDelivery(
+  title: string,
+  trace: string,
+  identity?: AlertIdentity,
+): AlertTraceDelivery {
+  return alertTraceDelivery(
+    [`**FATAL: ${title}**`, ...alertIdentityLines(identity)].join("\n"),
+    "fatal-trace.txt",
+    trace,
+  );
+}
+
+export function bridgeAlertDelivery(
+  title: string,
+  trace: string,
+  identity?: AlertIdentity,
+): AlertTraceDelivery {
+  return alertTraceDelivery(
+    [`**BRIDGE: ${title}**`, ...alertIdentityLines(identity)].join("\n"),
+    "bridge-trace.txt",
+    trace,
+  );
+}
+
+export function sessionErrorAlertDelivery(threadId: string, trace: string): AlertTraceDelivery {
+  const filename = `t3-session-error-${threadId}.txt`;
+  return alertTraceDelivery(
+    ["**FATAL: T3 session error**", `thread=\`${threadId}\``].join("\n"),
+    filename,
+    trace,
+  );
+}
+
+/**
+ * Render an Effect `Cause` (or any thrown value) for Discord / logs.
+ * Logging `{ cause }` alone shows `{ _id: 'Cause', failures: [ [Object] ] }`.
+ */
+export function formatAlertCause(cause: unknown, maxLen?: number): string {
+  let text: string;
+  try {
+    if (Cause.isCause(cause)) {
+      text = Cause.pretty(cause);
+    } else if (cause instanceof Error) {
+      text = cause.stack?.trim() || cause.message || String(cause);
+    } else if (typeof cause === "string") {
+      text = cause;
+    } else {
+      text = JSON.stringify(cause, null, 2) ?? String(cause);
+    }
+  } catch {
+    text = String(cause);
+  }
+  const trimmed = text.replace(/\s+$/u, "").trim();
+  if (trimmed === "") return "(empty cause)";
+  return maxLen !== undefined && trimmed.length > maxLen ? `${trimmed.slice(0, maxLen)}…` : trimmed;
+}
+
+/**
+ * Post a **fatal** ops alert (short cooldown). Safe no-op if watchdog not started
+ * or channel unset. Does not require DiscordREST in the caller — uses the
+ * watchdog-held poster.
+ */
+export const postFatalAlert = (
+  key: string,
+  title: string,
+  detail: string,
+  identity?: AlertIdentity,
+) =>
+  Effect.gen(function* () {
+    const p = poster;
+    if (p === null) {
+      yield* Effect.logError(`Fatal (no alerts channel): ${title}`, { detail, ...identity });
+      return;
+    }
+    const delivery = fatalAlertDelivery(title, detail, identity);
+    yield* p(`fatal:${key}`, delivery.content, FATAL_COOLDOWN_MS, delivery.files);
+  });
+
+/**
+ * Post a **bridge** ops alert (medium cooldown). Use for onThread failures,
+ * stream/heartbeat Discord errors, and other bridge soft-failures that leave
+ * Discord threads desynced while T3 still advances.
+ */
+export const postBridgeAlert = (
+  key: string,
+  title: string,
+  detail: string,
+  identity?: AlertIdentity,
+) =>
+  Effect.gen(function* () {
+    const p = poster;
+    if (p === null) {
+      yield* Effect.logError(`Bridge alert (no alerts channel): ${title}`, { detail, ...identity });
+      return;
+    }
+    const delivery = bridgeAlertDelivery(title, detail, identity);
+    yield* p(`bridge:${key}`, delivery.content, BRIDGE_ALERT_COOLDOWN_MS, delivery.files);
+  });
+
+// --- Watchdog ----------------------------------------------------------------
+
+/**
+ * Periodic guest watchdog → Discord alerts channel.
+ * No-op (log only) when `alertsChannelId` is unset.
+ */
+export const runAlertWatchdog = (botConfig: DiscordBotConfig) =>
+  Effect.gen(function* () {
+    const channelId = botConfig.alertsChannelId;
+    if (channelId === undefined || channelId.trim() === "") {
+      yield* Effect.logInfo(
+        "Discord alerts channel unset (DISCORD_ALERTS_CHANNEL_ID); watchdog idle",
+      );
+      return;
+    }
+
+    const rest = yield* DiscordREST;
+    const discordConfig = yield* DiscordConfig.DiscordConfig;
+    const alertProcessRules = loadAlertProcessRulesFromFileSync(botConfig.alertProcessRulesPath);
+    const lastSent = new Map<string, number>();
+    /** Highest long-turn milestone already posted per `turnId` (0.25h × 2ⁿ ladder). */
+    const lastTurnMilestones = new Map<string, number>();
+
+    const postAlert: Poster = (key, content, cooldownMs = COOLDOWN_MS, files = []) =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis;
+        const prev = lastSent.get(key) ?? 0;
+        if (now - prev < cooldownMs) return;
+        lastSent.set(key, now);
+        const body =
+          content.length > DISCORD_ALERT_MESSAGE_LIMIT
+            ? `${content.slice(0, DISCORD_ALERT_MESSAGE_LIMIT)}…`
+            : content;
+        yield* Effect.gen(function* () {
+          if (files.length === 0) {
+            yield* rest.createMessage(channelId, { content: body });
+          } else {
+            yield* Effect.tryPromise({
+              try: () =>
+                createMessageWithAttachments({
+                  baseUrl: discordConfig.rest.baseUrl,
+                  botToken: Redacted.value(discordConfig.token),
+                  channelId,
+                  content: body,
+                  files,
+                }),
+              catch: (cause) =>
+                cause instanceof DiscordUploadError
+                  ? cause
+                  : new DiscordUploadError(cause instanceof Error ? cause.message : String(cause)),
+            });
+          }
+          yield* Effect.logInfo("Posted Discord ops alert", {
+            key,
+            channelId,
+            fileCount: files.length,
+          });
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logError("Failed to post Discord ops alert").pipe(
+              Effect.andThen(Effect.logError(cause)),
+            ),
+          ),
+        );
+      });
+
+    poster = postAlert;
+
+    // Prime CPU sample so the next tick has a delta. No boot/idle chatter —
+    // only post when a check fails.
+    sampleCpuPercent();
+
+    yield* Effect.repeat(
+      Effect.gen(function* () {
+        const nowMs = yield* Clock.currentTimeMillis;
+        const snap = collectHostSnapshot({
+          stateSqlitePath: botConfig.stateSqlitePath,
+          nowMs,
+          alertProcessRules,
+        });
+        const loadLimit = snap.nproc * LOAD_RATIO;
+
+        // --- load ---
+        if (snap.load1 >= loadLimit && snap.load1 >= 2) {
+          yield* postAlert(
+            "load",
+            [
+              "**High load**",
+              `load1=${snap.load1.toFixed(2)} load5=${snap.load5.toFixed(2)}`,
+              `threshold≈${loadLimit.toFixed(2)} on ${snap.nproc} CPUs`,
+              `cpu≈${snap.cpuPercent?.toFixed(0) ?? "?"}%; mem avail=${snap.memAvailableMb.toFixed(0)} MiB`,
+            ].join("\n"),
+          );
+        }
+
+        // --- cpu ---
+        if (snap.cpuPercent !== null && snap.cpuPercent >= CPU_PERCENT_ALERT) {
+          yield* postAlert(
+            "cpu",
+            [
+              "**High CPU**",
+              `cpu≈${snap.cpuPercent.toFixed(0)}% (alert ≥${CPU_PERCENT_ALERT}%)`,
+              `load1=${snap.load1.toFixed(2)} nproc=${snap.nproc}`,
+              snap.fatProcesses.length > 0
+                ? `sustained:\n${snap.fatProcesses
+                    .slice(0, 5)
+                    .map(
+                      (p) =>
+                        `• pid=${p.pid} rss=${p.rssMb.toFixed(0)}MiB cpu≈${p.cpuPercent.toFixed(0)}% ${p.label}`,
+                    )
+                    .join("\n")}`
+                : "",
+            ]
+              .filter(Boolean)
+              .join("\n"),
+          );
+        }
+
+        // --- memory ---
+        if (snap.memAvailableMb > 0 && snap.memAvailableMb < MEM_AVAILABLE_MIN_MB) {
+          yield* postAlert(
+            "mem",
+            [
+              "**Low memory**",
+              `available=${snap.memAvailableMb.toFixed(0)} MiB (min ${MEM_AVAILABLE_MIN_MB})`,
+              `total=${snap.memTotalMb.toFixed(0)} MiB`,
+              snap.runaways.length > 0
+                ? `runaways: ${snap.runaways.map((s) => `pid=${s.pid} ${s.rssMb.toFixed(0)}MiB`).join(", ")}`
+                : "",
+            ]
+              .filter(Boolean)
+              .join("\n"),
+          );
+        }
+
+        // --- disk ---
+        for (const d of snap.disks) {
+          if (d.freePercent < DISK_FREE_MIN_PERCENT || d.freeGb < DISK_FREE_MIN_GB) {
+            yield* postAlert(
+              `disk:${d.path}`,
+              [
+                "**Low disk space**",
+                `path=\`${d.path}\``,
+                `free=${d.freeGb.toFixed(1)} GiB (${d.freePercent.toFixed(0)}%) of ${d.totalGb.toFixed(1)} GiB`,
+                `thresholds: <${DISK_FREE_MIN_PERCENT}% or <${DISK_FREE_MIN_GB} GiB`,
+              ].join("\n"),
+            );
+          }
+        }
+
+        // --- runaway MCP (legacy stdio Sentry) — alert only, never kill ---
+        const runaways = snap.runaways;
+        if (runaways.length >= SENTRY_COUNT_ALERT) {
+          yield* postAlert(
+            "runaway-count",
+            [
+              `**Legacy Sentry MCP stdio process(es)** (${runaways.length})`,
+              ...runaways.map(
+                (s) =>
+                  `• pid=${s.pid} rss=${s.rssMb.toFixed(0)} MiB cpuTime=${s.cpuSeconds.toFixed(0)}s ${s.label}`,
+              ),
+              "_Not auto-killed. Prefer shared proxy `shared-sentry-mcp-proxy` + `/etc/shared-mcp-setup`._",
+            ].join("\n"),
+          );
+        } else {
+          const fat = runaways.filter((s) => s.rssMb >= SENTRY_RSS_ALERT_MB);
+          if (fat.length > 0) {
+            yield* postAlert(
+              "runaway-rss",
+              [
+                "**Legacy Sentry MCP high RSS**",
+                ...fat.map(
+                  (s) =>
+                    `• pid=${s.pid} rss=${s.rssMb.toFixed(0)} MiB (alert ≥${SENTRY_RSS_ALERT_MB}) ${s.label}`,
+                ),
+                "_Not auto-killed. Check agent MCP config points at http://127.0.0.1:7391/mcp._",
+              ].join("\n"),
+            );
+          }
+        }
+
+        // --- other stuck/fat processes (alert only) ---
+        const fatNonRunaway = snap.fatProcesses.filter(
+          (p) => !runaways.some((k) => k.pid === p.pid),
+        );
+        if (fatNonRunaway.length > 0) {
+          yield* postAlert(
+            "stuck-proc",
+            [
+              "**Sustained high RSS / CPU process(es)**",
+              ...fatNonRunaway.map(
+                (p) =>
+                  `• pid=${p.pid} rss=${p.rssMb.toFixed(0)}MiB cpu≈${p.cpuPercent.toFixed(0)}% ` +
+                  `for ${Math.round(p.sustainedMs / 60_000)}m ${p.label}`,
+              ),
+              ...fatNonRunaway.map((p) => {
+                const parts = [];
+                if (p.rssMbThreshold !== null) parts.push(`RSS≥${p.rssMbThreshold.toFixed(0)}MiB`);
+                if (p.cpuPercentThreshold !== null) {
+                  parts.push(`CPU≥${p.cpuPercentThreshold.toFixed(0)}% of a core`);
+                }
+                return `_rule=${p.ruleId}; sustained ≥${Math.round(p.sustainedForMs / 60_000)}m; ${parts.join(" or ")}._`;
+              }),
+            ].join("\n"),
+          );
+        }
+
+        // --- long T3 turns (page at 0.25h × 2ⁿ age milestones; drop finished turns) ---
+        const longTurnIds = new Set(snap.longTurns.map((t) => t.turnId));
+        for (const turnId of lastTurnMilestones.keys()) {
+          if (!longTurnIds.has(turnId)) lastTurnMilestones.delete(turnId);
+        }
+        for (const turn of snap.longTurns) {
+          const ageMs = turn.ageMin * 60_000;
+          const decision = shouldAlertLongRunningTurn(ageMs, lastTurnMilestones.get(turn.turnId));
+          if (!decision.alert) continue;
+          lastTurnMilestones.set(turn.turnId, decision.milestoneMs);
+          const milestoneLabel = formatLongRunningTurnMilestone(decision.milestoneMs);
+          const nextLabel = formatLongRunningTurnMilestone(
+            nextLongRunningTurnMilestoneMs(decision.milestoneMs),
+          );
+          // Cooldown 0: cadence is the age-milestone ladder, not wall-clock spacing.
+          yield* postAlert(
+            `turn:${turn.turnId}`,
+            [
+              "**Long-running T3 turn**",
+              `thread=\`${turn.threadId}\``,
+              `turn=\`${turn.turnId}\``,
+              `age≈${turn.ageMin} min · milestone ${milestoneLabel} (next ~${nextLabel}; ladder 15m×2ⁿ)`,
+            ].join("\n"),
+            0,
+          );
+        }
+
+        // --- session last_error (fresh real fatals only; skip recover + sticky stale) ---
+        const sessionSelection = selectSessionErrorsForAlert(
+          snap.sessionErrors,
+          SESSION_ERROR_ALERT_MAX,
+          {
+            nowMs,
+            maxAgeMs: SESSION_ERROR_MAX_AGE_MS,
+          },
+        );
+        for (const err of sessionSelection.fatals) {
+          const delivery = sessionErrorAlertDelivery(err.threadId, err.lastError);
+          yield* postAlert(
+            sessionErrorAlertKey(err.threadId, err.lastError),
+            delivery.content,
+            SESSION_ERROR_FATAL_COOLDOWN_MS,
+            delivery.files,
+          );
+        }
+        // Expected recoveries and sticky multi-day last_error rows are intentionally not
+        // posted — recoveries are high volume after restarts; stickies re-page forever
+        // without an age gate (see SESSION_ERROR_MAX_AGE_MS).
+        if (sessionSelection.ignoredRecoveryCount > 0 || sessionSelection.ignoredStaleCount > 0) {
+          yield* Effect.logDebug("Skipped non-actionable session last_error rows", {
+            recoveryCount: sessionSelection.ignoredRecoveryCount,
+            staleCount: sessionSelection.ignoredStaleCount,
+          });
+        }
+
+        // --- failed systemd units ---
+        if (snap.failedUnits.length > 0) {
+          yield* postAlert(
+            "systemd-failed",
+            ["**FATAL: systemd failed units**", ...snap.failedUnits.map((u) => `• \`${u}\``)].join(
+              "\n",
+            ),
+            FATAL_COOLDOWN_MS,
+          );
+        }
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logError("Alert watchdog tick failed").pipe(
+            Effect.andThen(Effect.logError(cause)),
+          ),
+        ),
+      ),
+      Schedule.spaced(POLL),
+    );
+  });

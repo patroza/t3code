@@ -65,6 +65,9 @@ function toChangeRequest(summary: GitHubCli.GitHubPullRequestSummary): ChangeReq
     ...(summary.headRepositoryOwnerLogin !== undefined
       ? { headRepositoryOwnerLogin: summary.headRepositoryOwnerLogin }
       : {}),
+    ...(summary.hasFailingChecks !== undefined
+      ? { hasFailingChecks: summary.hasFailingChecks }
+      : {}),
   };
 }
 
@@ -396,7 +399,19 @@ export const make = Effect.gen(function* () {
             : { rateLimitHost: new URL(input.context.provider.baseUrl).host }),
         })
         .pipe(
-          Effect.map(toChangeRequest),
+          // Checks are a separate read. A failure there must not hide the pull request, and a
+          // missing pull request must not ask for checks the caller did not stub.
+          Effect.flatMap((summary) =>
+            github.getPullRequestHasFailingChecks(input).pipe(
+              Effect.orElseSucceed(() => false),
+              Effect.map((hasFailingChecks) =>
+                toChangeRequest({
+                  ...summary,
+                  ...(hasFailingChecks ? { hasFailingChecks } : {}),
+                }),
+              ),
+            ),
+          ),
           Effect.mapError(
             (error) =>
               new SourceControlProviderError({

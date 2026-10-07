@@ -62,6 +62,7 @@ it.effect("maps GitHub PR summaries into provider-neutral change requests", () =
           headRepositoryNameWithOwner: "fork/t3code",
           headRepositoryOwnerLogin: "fork",
         }),
+      getPullRequestHasFailingChecks: () => Effect.succeed(true),
     });
 
     const changeRequest = yield* provider.getChangeRequest({
@@ -83,6 +84,7 @@ it.effect("maps GitHub PR summaries into provider-neutral change requests", () =
       isCrossRepository: true,
       headRepositoryNameWithOwner: "fork/t3code",
       headRepositoryOwnerLogin: "fork",
+      hasFailingChecks: true,
     });
   }),
 );

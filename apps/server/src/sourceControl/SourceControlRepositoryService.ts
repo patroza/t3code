@@ -344,6 +344,25 @@ export const make = Effect.gen(function* () {
         ),
       );
 
+    const nativePostCheckout = path.join(prepared.destinationPath, ".githooks", "post-checkout");
+    if (yield* fileSystem.exists(nativePostCheckout)) {
+      yield* git.execute({
+        operation: "SourceControlRepositoryService.configureNativeHooks",
+        cwd: prepared.destinationPath,
+        args: ["config", "core.hooksPath", ".githooks"],
+      });
+      // Clone's checkout happened before the repository-owned hooks were configured.
+      // Re-checking out the fresh HEAD invokes post-checkout synchronously, so setup
+      // (including pnpm install) finishes before the clone is handed to the user.
+      yield* git.execute({
+        operation: "SourceControlRepositoryService.prepareClone",
+        cwd: prepared.destinationPath,
+        args: ["checkout", "--force", "HEAD"],
+        timeoutMs: 120_000,
+        maxOutputBytes: 256 * 1024,
+      });
+    }
+
     return {
       cwd: prepared.destinationPath,
       remoteUrl: prepared.remoteUrl,

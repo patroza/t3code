@@ -1389,6 +1389,8 @@ export function threadShellFromProjection(
     pullRequests: projection.thread.pullRequests,
   });
   return {
+    originSource: projection.thread.originSource,
+    participantSummaries: projection.thread.participantSummaries,
     createdBy: projection.thread.createdBy,
     creationSource: projection.thread.creationSource,
     id: projection.thread.id,
@@ -1657,6 +1659,8 @@ function shellFromState(input: {
   readonly visibleItemCount: number;
 }): OrchestrationV2ThreadShell {
   return {
+    originSource: input.state.thread.originSource,
+    participantSummaries: input.state.thread.participantSummaries,
     createdBy: input.state.thread.createdBy,
     creationSource: input.state.thread.creationSource,
     id: input.state.thread.id,

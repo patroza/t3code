@@ -1,4 +1,4 @@
-import { assert, it, describe } from "@effect/vitest";
+import { assert, it, beforeEach, afterEach, describe, vi } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as TestClock from "effect/testing/TestClock";
 import * as Effect from "effect/Effect";
@@ -7,6 +7,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { ChildProcessSpawner } from "effect/process";
+import { VcsProcessExitError } from "@t3tools/contracts";
 
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
@@ -37,6 +38,15 @@ const restResponse = (body: unknown, status = 200): GitHubApi.GitHubRestResponse
   invalidUtf8: false,
 });
 
+// An ambient GH_REPO would replace the remotes these tests resolve.
+beforeEach(() => {
+  vi.stubEnv("GH_REPO", undefined);
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 const node = (number: number, headRefName: string, owner = "acme") => ({
   number,
   title: `PR ${number}`,
@@ -58,6 +68,7 @@ function harness(input: {
   readonly remotes: string;
   readonly api: Partial<GitHubApi.GitHubApi["Service"]>;
   readonly localBranches?: ReadonlyArray<string>;
+  readonly run?: VcsProcess.VcsProcess["Service"]["run"];
 }) {
   const git: Array<readonly [string, unknown]> = [];
   const record =
@@ -86,11 +97,15 @@ function harness(input: {
     listLocalBranchNames: () => Effect.succeed([...(input.localBranches ?? [])]),
     resolveCommit: () => Effect.succeed({ commitSha: "abc123" }),
   });
+  const processCalls: Array<VcsProcess.VcsProcessInput> = [];
   const process = Layer.mock(VcsProcess.VcsProcess)({
-    run: (args) =>
-      Effect.succeed(
+    run: (args) => {
+      processCalls.push(args);
+      if (input.run !== undefined && args.command === "gh") return input.run(args);
+      return Effect.succeed(
         args.args[0] === "remote" ? processOutput(input.remotes) : processOutput("", 1),
-      ),
+      );
+    },
   });
   const layer = Layer.effect(GitHubCli.GitHubCli, GitHubCli.make).pipe(
     Layer.provide(
@@ -102,7 +117,7 @@ function harness(input: {
       ),
     ),
   );
-  return { layer, git };
+  return { layer, git, processCalls };
 }
 
 describe("selectGitHubBaseRepository", () => {
@@ -634,5 +649,69 @@ describe("GitHubCli.checkoutPullRequest", () => {
     assert.strictEqual(name("main", true), "someone/main");
     assert.strictEqual(name("feature", true), "feature");
     assert.strictEqual(name("main", false), "main");
+  });
+});
+
+describe("GitHub App wrapper", () => {
+  it("surfaces guest App-wrapper diagnostics instead of the generic command-failed line", () => {
+    const context = { command: "gh", cwd: "/repo" } as const;
+    const cause = new VcsProcessExitError({
+      operation: "GitHubCli.execute",
+      command: "gh",
+      cwd: context.cwd,
+      exitCode: 1,
+      failureKind: "command-failed",
+      detail: "Process exited with a non-zero status.",
+      publicDiagnostic:
+        "t3-github-app-token: app is not installed on pingdotgg/t3code (or repo does not exist)",
+    });
+
+    const error = GitHubCli.fromVcsError(context, cause);
+
+    assert.equal(error._tag, "GitHubCliCommandError");
+    if (error._tag !== "GitHubCliCommandError") return;
+    assert.equal(
+      error.detail,
+      "t3-github-app-token: app is not installed on pingdotgg/t3code (or repo does not exist)",
+    );
+    assert.equal(error.message.includes("app is not installed"), true);
+  });
+
+  it.effect("detects failing pull request checks from gh pr checks json", () => {
+    const { layer, processCalls } = harness({
+      remotes: "",
+      api: {},
+      run: () =>
+        Effect.succeed(
+          processOutput(
+            encodeJson([
+              { bucket: "pass", state: "SUCCESS" },
+              { bucket: "fail", state: "FAILURE" },
+            ]),
+          ),
+        ),
+    });
+    return Effect.gen(function* () {
+      const gh = yield* GitHubCli.GitHubCli;
+      const result = yield* gh.getPullRequestHasFailingChecks({
+        cwd: "/repo",
+        reference: "#42",
+      });
+
+      assert.strictEqual(result, true);
+      assert.deepStrictEqual(
+        processCalls.filter((call) => call.command === "gh"),
+        [
+          {
+            operation: "GitHubCli.getPullRequestHasFailingChecks",
+            command: "gh",
+            args: ["pr", "checks", "#42", "--json", "bucket,state"],
+            cwd: "/repo",
+            timeoutMs: 30_000,
+            allowNonZeroExit: true,
+          },
+        ],
+      );
+    }).pipe(Effect.provide(layer));
   });
 });

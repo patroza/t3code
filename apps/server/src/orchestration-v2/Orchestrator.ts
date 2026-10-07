@@ -1,3 +1,5 @@
+import { ThreadParticipantSummary } from "@t3tools/contracts";
+import { mergeParticipantSummaries } from "@t3tools/shared/sourceAttribution";
 import {
   latestExecutedRun,
   latestRootProviderFailure,
@@ -47,6 +49,7 @@ import {
   orchestrationV2RunWorkStartedAt,
   ProviderInstanceId,
   ProviderInteractionMode,
+  type ProviderThreadId,
   type ProviderSessionId,
   RunId,
   RuntimeMode,
@@ -510,6 +513,83 @@ function hasLiveRun(projection: Pick<OrchestrationV2ThreadProjection, "runs">): 
   );
 }
 
+/**
+ * Progress syncs replace the watch fields and do not echo queued wake ids.
+ * Keep the ids already recorded, and append the wake this command is sending.
+ */
+function watchWithPendingWakes(
+  watch: ThreadPullRequestWatch,
+  pendingWakeMessageIds: ReadonlyArray<MessageId> | undefined,
+  wakeMessageId: MessageId | undefined,
+): ThreadPullRequestWatch {
+  const ids = [...(pendingWakeMessageIds ?? [])];
+  if (wakeMessageId !== undefined && !ids.includes(wakeMessageId)) ids.push(wakeMessageId);
+  if (ids.length === 0) {
+    const { pendingWakeMessageIds: _pending, ...rest } = watch;
+    return rest;
+  }
+  return { ...watch, pendingWakeMessageIds: ids };
+}
+
+/**
+ * Wakes to cancel when a legacy link command drops a pull request.
+ * Relinking that same pull request copies its watch forward, so those wakes stay.
+ */
+function pendingWakeMessageIdsLostByLegacyRelink(
+  thread: OrchestrationV2AppThread,
+  next: ThreadLinkedPullRequest | null,
+): ReadonlyArray<MessageId> {
+  const links = threadPullRequestsOf(thread);
+  const previous =
+    thread.linkedPullRequest == null ? null : legacyThreadPullRequestKey(thread.linkedPullRequest);
+  const preserved = next === null ? null : legacyThreadPullRequestKey(next);
+  const ids: MessageId[] = [];
+  for (const link of links) {
+    const matchesPrevious = previous !== null && threadPullRequestKeysEqual(link, previous);
+    const matchesNext = preserved !== null && threadPullRequestKeysEqual(link, preserved);
+    if (!matchesPrevious && !matchesNext) continue;
+    if (matchesNext) continue;
+    for (const messageId of link.watch?.pendingWakeMessageIds ?? []) {
+      if (!ids.includes(messageId)) ids.push(messageId);
+    }
+  }
+  return ids;
+}
+
+/** Message ids of wakes to cancel because this command takes the watch away. */
+function pendingWakeMessageIdsEndingWith(
+  thread: OrchestrationV2AppThread,
+  command: OrchestrationV2ServerCommand,
+): ReadonlyArray<MessageId> {
+  if (command.type === "thread.metadata.update" || command.type === "thread.pull-request.sync") {
+    if (command.linkedPullRequest === undefined) return [];
+    return pendingWakeMessageIdsLostByLegacyRelink(thread, command.linkedPullRequest);
+  }
+  if (
+    command.type !== "thread.pull-request.watch" &&
+    command.type !== "thread.pull-request-watch.sync" &&
+    command.type !== "thread.pull-request.unlink"
+  ) {
+    return [];
+  }
+  if (command.type === "thread.pull-request.watch" && command.watching) return [];
+  if (command.type === "thread.pull-request-watch.sync" && command.watch !== null) return [];
+  const key = normalizeThreadPullRequestKey(command);
+  const link = threadPullRequestsOf(thread).find(
+    (candidate) =>
+      candidate.source !== "stack-dismissed" && threadPullRequestKeysEqual(candidate, key),
+  );
+  // A sync from a watch that already ended, or from an older generation, must not
+  // cancel wakes belonging to the watch that replaced it.
+  if (
+    command.type === "thread.pull-request-watch.sync" &&
+    link?.watch?.startedAt !== command.startedAt
+  ) {
+    return [];
+  }
+  return link?.watch?.pendingWakeMessageIds ?? [];
+}
+
 /** The link with its watch replaced, or removed when `watch` is undefined. */
 function withPullRequestWatch(
   link: ThreadPullRequestLink,
@@ -721,10 +801,39 @@ export function shouldPrepareLegacyImportHandoff(input: {
   readonly hasCompletedRun: boolean;
   readonly historyOrigin: OrchestrationV2AppThread["historyOrigin"];
   readonly legacyImportItemCount: number;
+  readonly alreadyInNativeThread?: boolean;
 }): boolean {
   return (
-    input.historyOrigin === "v1_import" && !input.hasCompletedRun && input.legacyImportItemCount > 0
+    input.historyOrigin === "v1_import" &&
+    !input.hasCompletedRun &&
+    input.legacyImportItemCount > 0 &&
+    input.alreadyInNativeThread !== true
   );
+}
+
+/** A v1 import already injected or inlined into this native session. */
+export function legacyImportAlreadyInNativeThread(input: {
+  readonly handoffs: ReadonlyArray<
+    Pick<
+      OrchestrationV2ContextHandoff,
+      "strategy" | "fromProviderThreadIds" | "toProviderThreadId" | "delivery"
+    >
+  >;
+  readonly providerThreadId: ProviderThreadId | undefined;
+  readonly nativeThreadId: string | null | undefined;
+}): boolean {
+  if (input.providerThreadId === undefined || input.nativeThreadId == null) return false;
+  return input.handoffs.some((handoff) => {
+    const delivery = handoff.delivery;
+    return (
+      handoff.strategy === "manual_context" &&
+      handoff.fromProviderThreadIds.length === 0 &&
+      handoff.toProviderThreadId === input.providerThreadId &&
+      delivery !== undefined &&
+      delivery.nativeThreadId === input.nativeThreadId &&
+      delivery.status !== "pending"
+    );
+  });
 }
 
 export function appendContextHandoffId(
@@ -1500,7 +1609,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 ),
               );
       const legacyImportRecoveryHandoff =
-        latestCompletedRun === undefined && needsFullContext && legacyImportItems.length > 0
+        needsFullContext &&
+        shouldPrepareLegacyImportHandoff({
+          historyOrigin: projection.thread.historyOrigin,
+          hasCompletedRun: latestCompletedRun !== undefined,
+          legacyImportItemCount: legacyImportItems.length,
+          alreadyInNativeThread: legacyImportAlreadyInNativeThread({
+            handoffs: projection.contextHandoffs,
+            providerThreadId: queuedProviderThread.id,
+            nativeThreadId: queuedProviderThread.nativeThreadRef?.nativeId,
+          }),
+        })
           ? yield* contextHandoffService
               .prepareLegacyImport({
                 threadId,
@@ -1607,6 +1726,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           status: "completed",
           title: null,
           type: "user_message",
+          ...(queuedMessage.source === undefined ? {} : { source: queuedMessage.source }),
           messageId: queuedMessage.id,
           text: queuedMessage.text,
           attachments: queuedMessage.attachments,
@@ -2171,6 +2291,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const now = yield* DateTime.now;
     const emitEvent = emit(events, command);
     const thread: OrchestrationV2AppThread = {
+      ...(command.originSource === undefined ? {} : { originSource: command.originSource }),
       createdBy: command.createdBy,
       creationSource: command.creationSource,
       id: command.threadId,
@@ -2341,6 +2462,38 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
+  const cancelQueuedWatchWakes = (input: {
+    readonly command: { readonly commandId: CommandId; readonly threadId: ThreadId };
+    readonly events: Ref.Ref<Array<OrchestrationV2DomainEvent>>;
+    readonly messageIds: ReadonlyArray<MessageId>;
+    readonly keepMessageId: MessageId | undefined;
+  }) =>
+    Effect.gen(function* () {
+      const projection = yield* projectionStore
+        .getThreadRecords(input.command.threadId, ["runs"])
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: input.command.threadId, cause }),
+          ),
+        );
+      for (const messageId of input.messageIds) {
+        if (messageId === input.keepMessageId) continue;
+        const queued = projection.runs.find(
+          (run) => run.userMessageId === messageId && run.status === "queued",
+        );
+        if (queued === undefined) continue;
+        yield* dispatchQueuedRunCancel(
+          {
+            type: "queued-run.cancel",
+            commandId: input.command.commandId,
+            threadId: input.command.threadId,
+            runId: queued.id,
+          },
+          input.events,
+        );
+      }
+    });
+
   const dispatchThreadMutation = Effect.fn("orchestrationV2.dispatch.threadMutation")(function* (
     command: Extract<
       OrchestrationV2ServerCommand,
@@ -2389,6 +2542,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         commandId: command.commandId,
         commandType: command.type,
         cause: `Thread ${command.threadId} is deleted.`,
+      });
+    }
+    // A merged, closed, stopped, unlinked, or legacy-replaced watch must not start
+    // a turn that was only queued. A wake on this same command is the final one and stays.
+    const endingWatchMessageIds = pendingWakeMessageIdsEndingWith(thread, command);
+    if (endingWatchMessageIds.length > 0) {
+      yield* cancelQueuedWatchWakes({
+        command,
+        events,
+        messageIds: endingWatchMessageIds,
+        keepMessageId:
+          command.type === "thread.pull-request-watch.sync" ? command.wake?.messageId : undefined,
       });
     }
     if (
@@ -3075,7 +3240,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             command.type === "thread.pull-request-watch.sync"
               ? // Progress read before a stop or restart must not bring the old watch back.
                 existing.watch?.startedAt === command.startedAt
-                ? (command.watch ?? undefined)
+                ? command.watch === null
+                  ? undefined
+                  : watchWithPendingWakes(
+                      command.watch,
+                      existing.watch?.pendingWakeMessageIds,
+                      command.wake?.messageId,
+                    )
                 : existing.watch
               : !command.watching
                 ? undefined
@@ -4442,6 +4613,44 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   ) =>
     Effect.gen(function* () {
       let projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+      if (command.source !== undefined) {
+        const source = command.source;
+        const now = yield* DateTime.now;
+        const participantSummaries = yield* Schema.decodeUnknownEffect(
+          Schema.Array(ThreadParticipantSummary),
+        )(
+          mergeParticipantSummaries({
+            existing: projection.thread.participantSummaries ?? [],
+            source,
+            participatedAt: DateTime.formatIso(now),
+            originPersonId: projection.thread.originSource?.personId,
+          }),
+        ).pipe(
+          Effect.mapError(
+            (cause) =>
+              new OrchestratorDispatchError({
+                commandId: command.commandId,
+                commandType: command.type,
+                cause,
+              }),
+          ),
+        );
+        const thread = {
+          ...projection.thread,
+          originSource: projection.thread.originSource ?? source,
+          participantSummaries,
+        };
+        yield* emit(
+          events,
+          command,
+        )({
+          type: "thread.metadata-updated",
+          threadId: command.threadId,
+          occurredAt: now,
+          payload: thread,
+        });
+        projection = { ...projection, thread };
+      }
       if (command.manualContinuationOfRunId !== undefined) {
         const source = projection.runs.find((run) => run.id === command.manualContinuationOfRunId);
         const limited = latestRootProviderFailure(source ?? null, projection.turnItems);
@@ -5000,6 +5209,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           runId,
           nodeId: rootNodeId,
           role: "user",
+          ...(command.source === undefined ? {} : { source: command.source }),
           text: dispatchText,
           ...(command.context ? { context: command.context } : {}),
           attachments: command.attachments,
@@ -5205,6 +5415,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           historyOrigin: projection.thread.historyOrigin,
           hasCompletedRun: latestCompletedRun !== undefined,
           legacyImportItemCount: legacyImportItems.length,
+          alreadyInNativeThread: legacyImportAlreadyInNativeThread({
+            handoffs: projection.contextHandoffs,
+            providerThreadId: activeProviderThread?.id,
+            nativeThreadId: activeProviderThread?.nativeThreadRef?.nativeId,
+          }),
         })
           ? yield* contextHandoffService
               .prepareLegacyImport({
@@ -5343,6 +5558,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           runId,
           nodeId: rootNodeId,
           role: "user",
+          ...(command.source === undefined ? {} : { source: command.source }),
           text: dispatchText,
           ...(command.context ? { context: command.context } : {}),
           attachments: command.attachments,
@@ -5814,8 +6030,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const legacyImportRecoveryHandoff =
         isProviderSwitch &&
         !canResumeAcrossInstances &&
-        latestCompletedRun === undefined &&
-        legacyImportItems.length > 0
+        shouldPrepareLegacyImportHandoff({
+          historyOrigin: projection.thread.historyOrigin,
+          hasCompletedRun: latestCompletedRun !== undefined,
+          legacyImportItemCount: legacyImportItems.length,
+          alreadyInNativeThread: legacyImportAlreadyInNativeThread({
+            handoffs: projection.contextHandoffs,
+            providerThreadId: ensuredProviderThread.id,
+            nativeThreadId: ensuredProviderThread.nativeThreadRef?.nativeId,
+          }),
+        })
           ? yield* contextHandoffService
               .prepareLegacyImport({
                 threadId: command.threadId,
@@ -6034,6 +6258,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         runId,
         nodeId: rootNodeId,
         role: "user",
+        ...(command.source === undefined ? {} : { source: command.source }),
         text: dispatchText,
         ...(command.context ? { context: command.context } : {}),
         attachments: command.attachments,
@@ -7426,6 +7651,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         projection,
         modelSelection: projection.thread.modelSelection,
         targetRunId: command.targetRunId,
+        ...(queuedMessage.source === undefined ? {} : { source: queuedMessage.source }),
         messageId: queuedMessage.id,
         text: queuedMessage.text,
         attachments: queuedMessage.attachments,

@@ -128,6 +128,7 @@ function makeLayer(input: {
         kind: "git" as const,
         rootPath: "/repo",
         metadataPath: null,
+        bare: false,
         freshness: {
           source: "live-local" as const,
           observedAt: DateTime.makeUnsafe("1970-01-01T00:00:00.000Z"),
@@ -870,6 +871,7 @@ it.effect("preserves Git checkout failures without deriving the domain message f
     operation: "fetchRemoteBranch",
     command: "git fetch origin feature/source-control",
     cwd: "/repo",
+    failureKind: "unknown",
     detail: "remote rejected the request",
   });
   const { layer } = makeLayer({
