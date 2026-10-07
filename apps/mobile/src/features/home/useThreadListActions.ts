@@ -227,7 +227,7 @@ function useConfirmDeleteThread(
 }
 
 export function useThreadListActions(): {
-  readonly archiveThread: (thread: EnvironmentThreadShell) => void;
+  readonly archiveThread: (thread: EnvironmentThreadShell) => Promise<unknown>;
   readonly confirmDeleteThread: (thread: EnvironmentThreadShell) => void;
   readonly settleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly snoozeThread: (thread: EnvironmentThreadShell, snoozedUntil: string) => Promise<boolean>;
@@ -269,7 +269,8 @@ export function useThreadListActions(): {
 
   const archiveThread = useCallback(
     (thread: EnvironmentThreadShell) => {
-      void runArchiveWithWorktreeCleanup({
+      // Returned so a caller that awaits the archive waits through the cleanup preview.
+      return runArchiveWithWorktreeCleanup({
         // Server-authoritative preview; a failure (old server, transient
         // error) degrades to a plain archive without a prompt. A thread
         // mid-turn keeps the original archive guard: executeAction re-checks

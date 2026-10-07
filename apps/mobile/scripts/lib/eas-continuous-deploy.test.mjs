@@ -11,7 +11,7 @@ function run(scenario) {
   const log = NodePath.join(dir, "calls");
   NodeFS.writeFileSync(
     NodePath.join(dir, "eas"),
-    `#!/bin/bash
+    `#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$CALLS"
 case "$1" in
  fingerprint:generate) echo '{"hash":"runtime"}' ;;
