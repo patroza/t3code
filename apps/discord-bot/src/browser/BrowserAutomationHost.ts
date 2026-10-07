@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - abortable delay uses Node's timers/promises.
 import * as NodeTimersPromises from "node:timers/promises";
 
 import {
