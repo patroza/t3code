@@ -13,16 +13,19 @@ import {
 import { type EnvironmentId, type SidebarProjectGroupingMode } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { useFocusEffect } from "@react-navigation/native";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { use, useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import {
   ActivityIndicator,
   Platform,
   Text,
+  ScrollView,
   View,
+  type ScrollViewProps,
   type GestureResponderEvent,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from "react-native";
+import { ScrollViewMarker } from "react-native-screens";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -31,7 +34,10 @@ import { EmptyState } from "../../components/EmptyState";
 import { MaterialFloatingActionButton } from "../../components/MaterialFloatingActionButton";
 import type { WorkspaceEnvironment, WorkspaceState } from "../../state/workspaceModel";
 import type { SavedRemoteConnection } from "../../lib/connection";
-import { scopedProjectKey } from "../../lib/scopedEntities";
+import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
+import { NativePrimaryColumnContext } from "../../native/v5-workspace-context";
+import { nativeHeaderScrollEdgeEffects } from "../../native/scrollEdgeEffects";
+import { useNativeColumnLayoutMetrics } from "../../native/native-layout-metrics";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { useThreadSearch } from "../../state/queries";
 import { useThreadJumpShortcuts } from "../keyboard/threadKeyboardShortcuts";
@@ -224,17 +230,67 @@ function HomeTopContentSpacer() {
   return <View className="h-4" />;
 }
 
+function HomeScrollView(props: ComponentProps<typeof ScrollView>) {
+  const insets = useSafeAreaInsets();
+  const primaryColumn = use(NativePrimaryColumnContext);
+  if (Platform.OS !== "ios") return <ScrollView {...props} />;
+
+  // v5 needs the actual content scroll view registered with its screen controller.
+  // The layout observer and header siblings prevent UIKit from finding it implicitly.
+  return (
+    <ScrollViewMarker
+      style={{ flex: 1 }}
+      scrollEdgeEffects={{
+        ...nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version),
+        // Retain the existing sidebar fade on iOS 26; iOS 27 uses the native bar material.
+        top: Number.parseInt(String(Platform.Version), 10) >= 27 ? "automatic" : "soft",
+      }}
+    >
+      <ScrollView
+        {...props}
+        // UIKit's scroll-edge material needs the scroll view's own surface color.
+        className={cn(props.className, primaryColumn ? "bg-drawer" : "bg-screen")}
+        // Use the column's measured inset so UIKit recognizes the resting top.
+        // Padding visually clears the bar but leaves the native scroll offset
+        // past its edge, activating scroll-edge protection before any scroll.
+        automaticallyAdjustContentInsets={false}
+        contentInsetAdjustmentBehavior="never"
+        contentOffset={props.contentOffset ?? { x: 0, y: -insets.top }}
+      />
+    </ScrollViewMarker>
+  );
+}
+
+function renderHomeScrollView(props: ScrollViewProps) {
+  // FlatList clones this element with its cells and ref. Keep the marker inside
+  // the component so those cells remain children of the actual ScrollView.
+  return <HomeScrollView {...props} />;
+}
+
 /* ─── Main screen ────────────────────────────────────────────────────── */
 
 export function HomeScreen(props: HomeScreenProps) {
+  const primaryColumn = use(NativePrimaryColumnContext);
+  const contentBackground = primaryColumn ? "bg-drawer" : "bg-screen";
+  const containerClassName = cn(
+    "flex-1",
+    Platform.OS === "android" ? "bg-header" : contentBackground,
+  );
+  const columnMetrics = useNativeColumnLayoutMetrics();
+  const selectedThreadKey = primaryColumn?.selectedThreadKey ?? null;
+  const fullSwipeWidth = primaryColumn && columnMetrics ? columnMetrics.width - 20 : undefined;
   const queuedThreadKeys = useQueuedThreadKeys();
   const openSwipeableRef = useRef<SwipeableMethods | null>(null);
   const insets = useSafeAreaInsets();
   const { fabClearance } = useAndroidControlSizing();
   const iosBottomToolbarClearance =
-    Platform.OS === "ios" && !NATIVE_LIQUID_GLASS_SUPPORTED
+    Platform.OS === "ios" &&
+    !NATIVE_LIQUID_GLASS_SUPPORTED &&
+    !(Platform.isPad && primaryColumn !== null)
       ? PRE_LIQUID_GLASS_BOTTOM_TOOLBAR_HEIGHT
       : 0;
+  const iosBottomClearance =
+    Math.max(columnMetrics?.safeArea.bottom ?? insets.bottom, 24) + iosBottomToolbarClearance;
   const searchEnvironmentIds = useMemo(() => {
     const connectedIds = props.environments
       .filter((environment) => environment.connectionState === "connected")
@@ -571,12 +627,13 @@ export function HomeScreen(props: HomeScreenProps) {
       inboxReturnAt: threadListInboxReturns.returnedAt,
       snoozedShelfExpanded,
       settledShelfExpanded,
-      selectedThreadKey: null,
+      selectedThreadKey,
     });
   }, [
     workingShelfEnabled,
     workingShelfExpanded,
     pendingOrder,
+    selectedThreadKey,
     queuedThreadKeys,
     nowMinute,
     snoozeWakeTick,
@@ -737,6 +794,9 @@ export function HomeScreen(props: HomeScreenProps) {
       const thread = item.item.thread;
       return (
         <ThreadListV2Row
+          pane={primaryColumn ? "sidebar" : "screen"}
+          selected={scopedThreadKey(thread.environmentId, thread.id) === selectedThreadKey}
+          fullSwipeWidth={fullSwipeWidth}
           onNewThreadOnBranch={props.onNewThreadOnBranch}
           thread={thread}
           variant={item.item.variant}
@@ -828,6 +888,9 @@ export function HomeScreen(props: HomeScreenProps) {
       props.onDeletePendingTask,
       props.onSelectPendingTask,
       props.onSelectThread,
+      primaryColumn,
+      selectedThreadKey,
+      fullSwipeWidth,
       props.onNewThreadOnBranch,
       props.savedConnectionsById,
       resolveProviderInstance,
@@ -858,6 +921,7 @@ export function HomeScreen(props: HomeScreenProps) {
       listEnvironments,
       savedConnectionsById: props.savedConnectionsById,
       searchQuery: props.searchQuery,
+      selectedThreadKey,
       threadSearchMatchByKey,
       // Rows read it for their reorder menu items.
       workingShelfEnabled,
@@ -866,6 +930,7 @@ export function HomeScreen(props: HomeScreenProps) {
       projectByKey,
       projectCwdByKey,
       props.searchQuery,
+      selectedThreadKey,
       props.savedConnectionsById,
       listEnvironments,
       threadSearchMatchByKey,
@@ -898,14 +963,15 @@ export function HomeScreen(props: HomeScreenProps) {
 
   if (!hasAnyThreads) {
     return (
-      <View className="flex-1 bg-screen android:bg-header">
+      <View className={containerClassName}>
         <View
           className={cn(
-            "flex-1 items-center justify-center bg-screen px-8",
+            "flex-1 items-center justify-center px-8",
+            contentBackground,
             Platform.OS === "android" && "overflow-hidden rounded-t-[28px]",
           )}
           style={{
-            paddingBottom: Math.max(insets.bottom, 24) + iosBottomToolbarClearance,
+            paddingBottom: Platform.OS === "ios" ? iosBottomClearance : Math.max(insets.bottom, 24),
             paddingTop: NATIVE_LIQUID_GLASS_SUPPORTED ? insets.top + 72 : 0,
           }}
         >
@@ -989,12 +1055,12 @@ export function HomeScreen(props: HomeScreenProps) {
   }
 
   return (
-    <View className="flex-1 bg-screen android:bg-header">
+    <View className={containerClassName}>
       <View
         className={
           Platform.OS === "android"
             ? "flex-1 overflow-hidden rounded-t-[28px] bg-screen"
-            : "flex-1 bg-screen"
+            : cn("flex-1", contentBackground)
         }
       >
         {/* Shared with the iPad sidebar: cells are reused across data
@@ -1007,6 +1073,7 @@ export function HomeScreen(props: HomeScreenProps) {
             onTouchStart={(event) => trackListTouches(event, true)}
             onTouchEnd={(event) => trackListTouches(event, false)}
             onTouchCancel={(event) => trackListTouches(event, false)}
+            renderScrollComponent={Platform.OS === "ios" ? renderHomeScrollView : undefined}
             data={threadListV2Items}
             renderItem={renderV2Item}
             keyExtractor={v2KeyExtractor}
@@ -1028,16 +1095,19 @@ export function HomeScreen(props: HomeScreenProps) {
             ListEmptyComponent={v2ListEmpty}
             style={{ flex: 1 }}
             automaticallyAdjustsScrollIndicatorInsets={Platform.OS === "ios"}
-            contentInsetAdjustmentBehavior={Platform.OS === "ios" ? "automatic" : "never"}
+            contentInsetAdjustmentBehavior="never"
+            contentInset={Platform.OS === "ios" ? { top: insets.top } : undefined}
+            contentInsetStartAdjustment={Platform.OS === "ios" ? insets.top : 0}
             showsVerticalScrollIndicator={false}
             keyboardDismissMode="on-drag"
             keyboardShouldPersistTaps="handled"
             {...scrollGateHandlers}
             scrollEventThrottle={16}
             contentContainerStyle={{
+              paddingHorizontal: primaryColumn ? 8 : 0,
               paddingBottom:
                 Platform.OS === "ios"
-                  ? Math.max(insets.bottom, 24) + 96 + iosBottomToolbarClearance
+                  ? iosBottomClearance
                   : Math.max(insets.bottom, 16) + (Platform.OS === "android" ? fabClearance : 88),
             }}
           />

@@ -11,10 +11,11 @@ import {
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { prefetchEnvironmentThread, warmSelectedEnvironmentThread } from "../../state/threads";
 import { identityClaimPersonIdByEnvironmentAtom } from "../../state/identity";
+import { NativePrimaryColumnContext } from "../../native/v5-workspace-context";
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 import { useNavigation } from "@react-navigation/native";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { use, useCallback, useEffect, useMemo, useState } from "react";
 import { Platform, useWindowDimensions } from "react-native";
 
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
@@ -25,6 +26,7 @@ import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
+import { useNativeColumnLayoutMetrics } from "../../native/native-layout-metrics";
 import { WorkspaceEmptyDetail } from "../layout/WorkspaceEmptyDetail";
 import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
 import { checkForAppUpdateOnLaunch, startAppUpdateForegroundRecheck } from "../updates/app-updates";
@@ -41,6 +43,9 @@ import { useThreadListActions } from "./useThreadListActions";
 
 export function HomeRouteScreen() {
   const { width: windowWidth } = useWindowDimensions();
+  const nativePrimaryColumn = use(NativePrimaryColumnContext);
+  const columnMetrics = useNativeColumnLayoutMetrics();
+  const headerWidth = nativePrimaryColumn ? (columnMetrics?.width ?? windowWidth) : windowWidth;
   const { layout, panes } = useAdaptiveWorkspaceLayout();
   const projects = useProjects();
   const threads = useNavigationThreadShells();
@@ -184,7 +189,7 @@ export function HomeRouteScreen() {
 
   // In split layouts the persistent sidebar IS the thread list — Home becomes
   // an empty detail pane so selecting a thread never transitions layouts.
-  if (layout.usesSplitView) {
+  if (layout.usesSplitView && !nativePrimaryColumn) {
     return (
       <>
         <NativeStackScreenOptions
@@ -233,7 +238,7 @@ export function HomeRouteScreen() {
             shallow-merged. Title/brand stay on HomeHeader (list-mode title +
             connection-aware slot) so we do not paint the status twice. */}
         <NativeStackScreenOptions
-          optionsVersion={windowWidth}
+          optionsVersion={headerWidth}
           options={{
             headerShown: true,
           }}
