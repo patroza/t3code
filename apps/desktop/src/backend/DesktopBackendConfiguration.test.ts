@@ -1097,8 +1097,10 @@ describe("DesktopBackendConfiguration", () => {
       const previousAnthropicKey = process.env.ANTHROPIC_API_KEY;
       const previousOtlpHeaders = process.env.T3CODE_OTLP_HEADERS;
       const previousOtlpProtocol = process.env.T3CODE_OTLP_PROTOCOL;
-      // A developer's own OTEL_* variables would be forwarded too.
-      const ambientOtel = Object.entries(process.env).filter(([name]) => name.startsWith("OTEL_"));
+      // A developer's own OTEL_* and T3CODE_OTLP_* variables would be forwarded too.
+      const ambientOtel = Object.entries(process.env).filter(
+        ([name]) => name.startsWith("OTEL_") || name.startsWith("T3CODE_OTLP_"),
+      );
       try {
         for (const [name] of ambientOtel) delete process.env[name];
         process.env.WSLENV = "GOPATH/p:OPENAI_API_KEY/u:EMPTY::AZURE_DEVOPS_EXT_PAT/u";

@@ -473,6 +473,8 @@ export function useThreadActions() {
           ),
         );
       }
+      const permissionFailure = threadOperationFailure(threadRef);
+      if (permissionFailure) return permissionFailure;
 
       const currentRouteThreadRef = getCurrentRouteThreadRef();
       const shouldNavigateToDraft =
@@ -485,11 +487,15 @@ export function useThreadActions() {
         // active thread that references a worktree. A preview failure (old
         // server, transient error) degrades to a plain archive.
         previewCandidate: async () => {
+          // The shell's worktree path comes from the server projection. Nothing
+          // to clean up means the preview RPC would only add a request.
+          if (!thread.worktreePath) return null;
           const previewResult = await previewWorktreeCleanup({
             environmentId: threadRef.environmentId,
             input: { threadId: threadRef.threadId },
           });
-          return previewResult?._tag === "Success" ? previewResult.value.candidate : null;
+          if (previewResult?._tag !== "Success") return null;
+          return previewResult.value?.candidate ?? null;
         },
         removalPolicy: confirmWorktreeRemoval ? "confirm" : "remove",
         confirmRemoval: localApi
@@ -697,6 +703,10 @@ export function useThreadActions() {
           input: { threadId: threadRef.threadId },
         });
       }
+      // stopThreadSession can revoke the grant. Closing the terminal is its own
+      // command and does not recheck, so stop before that side effect.
+      const permissionFailureAfterStop = threadOperationFailure(threadRef);
+      if (permissionFailureAfterStop) return permissionFailureAfterStop;
 
       await closeTerminal({
         environmentId: threadRef.environmentId,

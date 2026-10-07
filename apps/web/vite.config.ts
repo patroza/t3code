@@ -246,6 +246,17 @@ const isolatedUnitTestFiles = [
   "src/terminal/ghostty/core.test.ts",
   "src/uiStateStore.test.ts",
   "src/versionSkew.test.ts",
+  // Mock react, the session store, or the router. Under isolate:false an
+  // earlier file binds the real modules and these vi.mock calls never apply.
+  "src/components/KeybindingsConfigWarning.test.tsx",
+  "src/components/onboarding/WelcomeWizard.terminal.test.tsx",
+  "src/components/preview/addBrowserSurface.test.ts",
+  "src/components/settings/ProjectSettingsPanel.test.tsx",
+  "src/hooks/useSettings.sync.test.tsx",
+  "src/hooks/useThreadActionMenu.test.ts",
+  "src/hooks/useThreadActions.permissions.test.ts",
+  "src/state/sourceControlActions.test.ts",
+  "src/state/terminalSessionAvailability.test.ts",
 ] as const;
 
 const unitTestProject = {
