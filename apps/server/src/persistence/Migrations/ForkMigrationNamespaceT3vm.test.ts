@@ -29,7 +29,6 @@ layer("t3vm migration namespace repair", (it) => {
         SELECT migration_id, name FROM ${sql(upstreamMigrationTable)} ORDER BY migration_id
       `;
       assert.deepStrictEqual(upstream.slice(-10), [
-        { migration_id: 49, name: "ProjectionThreadsActiveOrderKey" },
         { migration_id: 50, name: "ProjectionThreadPullRequests" },
         { migration_id: 51, name: "ProjectionThreadMessageContext" },
         { migration_id: 52, name: "ProjectionThreadTitleState" },
@@ -39,6 +38,7 @@ layer("t3vm migration namespace repair", (it) => {
         { migration_id: 56, name: "RemoveRedundantProjectionIndexes" },
         { migration_id: 57, name: "ScheduledTaskWebhooks" },
         { migration_id: 58, name: "WebhookRelayDeliveries" },
+        { migration_id: 59, name: "McpAppModelContext" },
       ]);
       const fork = yield* sql<LedgerRow>`
         SELECT migration_id, name FROM ${sql(forkMigrationTable)} ORDER BY migration_id

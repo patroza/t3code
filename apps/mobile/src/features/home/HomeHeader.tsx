@@ -3,11 +3,12 @@ import {
   NativeStackScreenOptions,
   nativeHeaderScrollEdgeEffects,
 } from "../../native/StackHeader";
-import { useCallback, useRef } from "react";
+import { use, useCallback, useRef } from "react";
 import { Platform, Text as RNText, useWindowDimensions } from "react-native";
 import type { SearchBarCommands } from "react-native-screens";
 
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
+import { NativePrimaryColumnContext } from "../../native/v5-workspace-context";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
@@ -17,6 +18,7 @@ import {
 } from "../layout/native-mail-search-toolbar";
 import { getConnectionAwareBrandHeaderOptions } from "./WorkspaceConnectionTitle";
 import { buildHomeListFilterMenu } from "./home-list-filter-menu";
+import { createSidebarHeaderItems } from "../threads/sidebar-native-header-items";
 import {
   DEFAULT_OWNERSHIP_FILTER,
   OWNERSHIP_FILTER_LABELS,
@@ -46,6 +48,8 @@ function defaultHideSettledForGrouping(threadGrouping: HomeThreadGrouping): bool
 }
 
 export function HomeHeader(props: HomeHeaderProps) {
+  const primaryColumn = use(NativePrimaryColumnContext);
+  const iPadSidebar = Platform.OS === "ios" && Platform.isPad && primaryColumn !== null;
   const searchBarRef = useRef<SearchBarCommands>(null);
   const { width: headerWidth } = useWindowDimensions();
   const theme = useUniwindTheme();
@@ -99,7 +103,7 @@ export function HomeHeader(props: HomeHeaderProps) {
           // through so it survives the swap.
           ...getConnectionAwareBrandHeaderOptions({
             headerWidth,
-            trailingItemCount: alternateModes.length + 1,
+            trailingItemCount: alternateModes.length + (iPadSidebar ? 2 : 1),
             onOpenEnvironments: props.onOpenEnvironments,
             title: headerTitle,
             brand: (
@@ -116,67 +120,95 @@ export function HomeHeader(props: HomeHeaderProps) {
                 scrollEdgeEffects: HEADER_SCROLL_EDGE_EFFECTS,
               }
             : {}),
-          unstable_headerRightItems: () => [
-            ...alternateModes.map((mode) =>
-              withNativeGlassHeaderItem({
-                accessibilityLabel: HOME_LIST_MODE_LABELS[mode],
-                icon: { name: HOME_LIST_MODE_ICONS[mode], type: "sfSymbol" } as const,
-                identifier: `home-mode-${mode}`,
-                label: "",
-                onPress: () => props.onListModeChange(mode),
-                type: "button",
-              }),
-            ),
-            withNativeGlassHeaderItem({
-              accessibilityLabel: "Open settings",
-              icon: { name: "ellipsis", type: "sfSymbol" } as const,
-              identifier: "home-settings",
-              label: "",
-              onPress: props.onOpenSettings,
-              type: "button",
-            }),
-          ],
+          unstable_headerRightItems: () =>
+            iPadSidebar
+              ? createSidebarHeaderItems({
+                  filterIcon: hasCustomListOptions
+                    ? "line.3.horizontal.decrease.circle.fill"
+                    : "line.3.horizontal.decrease.circle",
+                  filterMenu,
+                  listMode: props.listMode,
+                  onListModeChange: props.onListModeChange,
+                  onOpenSettings: props.onOpenSettings,
+                })
+              : [
+                  ...alternateModes.map((mode) =>
+                    withNativeGlassHeaderItem({
+                      accessibilityLabel: HOME_LIST_MODE_LABELS[mode],
+                      icon: { name: HOME_LIST_MODE_ICONS[mode], type: "sfSymbol" } as const,
+                      identifier: `home-mode-${mode}`,
+                      label: "",
+                      onPress: () => props.onListModeChange(mode),
+                      type: "button",
+                    }),
+                  ),
+                  withNativeGlassHeaderItem({
+                    accessibilityLabel: "Open settings",
+                    icon: { name: "ellipsis", type: "sfSymbol" } as const,
+                    identifier: "home-settings",
+                    label: "",
+                    onPress: props.onOpenSettings,
+                    type: "button",
+                  }),
+                ],
           // Mail-search toolbar is iOS 26+ only;
           // pre-Liquid-Glass falls back to the standard nav search field.
           // Keys are omitted (not `undefined`) on the NativeHeaderToolbar
           // fallback so a reapply cannot clobber options that toolbar owns.
-          ...(NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED
+          ...(iPadSidebar
             ? {
-                unstable_headerToolbarItems: () => [
-                  createNativeMailSearchToolbarItem({
-                    composeButtonId: "home-new-task",
-                    composeSystemImageName: "square.and.pencil",
-                    filterMenu,
-                    filterButtonId: "home-filter",
-                    filterSystemImageName: hasCustomListOptions
-                      ? "line.3.horizontal.decrease.circle.fill"
-                      : "line.3.horizontal.decrease",
-                    onComposePress: props.onStartNewTask,
-                    onSearchTextChange: props.onSearchQueryChange,
-                    placeholder: "Search",
-                    searchTextChangeId: "home-search-text",
-                    showsSearchDismissButton: true,
-                  }),
-                ],
-              }
-            : {
                 headerSearchBarOptions: {
                   ref: searchBarRef,
                   autoCapitalize: "none" as const,
                   hideNavigationBar: false,
+                  hideWhenScrolling: false,
+                  obscureBackground: false,
+                  placement: "stacked" as const,
+                  allowToolbarIntegration: false,
                   placeholder: "Search",
-                  onCancelButtonPress: () => {
-                    props.onSearchQueryChange("");
-                  },
-                  onChangeText: (event: { nativeEvent: { text: string } }) => {
-                    props.onSearchQueryChange(event.nativeEvent.text);
-                  },
+                  onCancelButtonPress: () => props.onSearchQueryChange(""),
+                  onChangeText: (event: { nativeEvent: { text: string } }) =>
+                    props.onSearchQueryChange(event.nativeEvent.text),
                 },
-              }),
+                unstable_headerToolbarItems: () => [],
+              }
+            : NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED
+              ? {
+                  unstable_headerToolbarItems: () => [
+                    createNativeMailSearchToolbarItem({
+                      composeButtonId: "home-new-task",
+                      composeSystemImageName: "square.and.pencil",
+                      filterMenu,
+                      filterButtonId: "home-filter",
+                      filterSystemImageName: hasCustomListOptions
+                        ? "line.3.horizontal.decrease.circle.fill"
+                        : "line.3.horizontal.decrease",
+                      onComposePress: props.onStartNewTask,
+                      onSearchTextChange: props.onSearchQueryChange,
+                      placeholder: "Search",
+                      searchTextChangeId: "home-search-text",
+                      showsSearchDismissButton: true,
+                    }),
+                  ],
+                }
+              : {
+                  headerSearchBarOptions: {
+                    ref: searchBarRef,
+                    autoCapitalize: "none" as const,
+                    hideNavigationBar: false,
+                    placeholder: "Search",
+                    onCancelButtonPress: () => {
+                      props.onSearchQueryChange("");
+                    },
+                    onChangeText: (event: { nativeEvent: { text: string } }) => {
+                      props.onSearchQueryChange(event.nativeEvent.text);
+                    },
+                  },
+                }),
         }}
       />
 
-      {NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED ? null : (
+      {iPadSidebar || NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED ? null : (
         <NativeHeaderToolbar placement="bottom">
           <NativeHeaderToolbar.Menu
             accessibilityLabel="Filter threads"
