@@ -197,6 +197,7 @@ server.listen(0, "127.0.0.1", () => {
             }),
           );
           // Redirect only the state directory. Never use the developer's SSH state.
+          // PATH stays so cat, kill, sleep, and rm resolve. They are not on every shell's default PATH.
           const isolatedScript = script.replace(
             /^STATE_DIR=.*$/mu,
             'STATE_DIR="$T3_TEST_STATE_DIR"',
@@ -206,7 +207,10 @@ server.listen(0, "127.0.0.1", () => {
             const stop = yield* spawner.spawn(
               ChildProcess.make("/bin/sh", ["-s"], {
                 cwd: fixture,
-                env: { T3_TEST_STATE_DIR: fixture },
+                env: {
+                  ...(process.env.PATH === undefined ? {} : { PATH: process.env.PATH }),
+                  T3_TEST_STATE_DIR: fixture,
+                },
                 stdin: Stream.make(new TextEncoder().encode(isolatedScript)),
               }),
             );
