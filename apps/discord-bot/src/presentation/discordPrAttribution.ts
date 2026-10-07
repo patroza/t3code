@@ -160,7 +160,7 @@ export function toT3PublicShortThreadUrl(
 export function pickT3ThreadUrlForGithubRepo(input: {
   readonly fullUrl: string | null | undefined;
   readonly repoIsPrivate: boolean | null;
-  readonly publicBaseUrl?: string | null;
+  readonly publicBaseUrl?: string | null | undefined;
 }): string | null {
   const full = input.fullUrl?.trim();
   if (full === undefined || full.length === 0) return null;
