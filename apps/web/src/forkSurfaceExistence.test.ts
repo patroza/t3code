@@ -119,7 +119,11 @@ describe("fork surface existence (anti stack-drop)", () => {
 
     const composer = readSrc("components/chat/ChatComposer.tsx");
     expect(composer).toContain("const isSendDisabled = sendDisabledReason !== null");
-    expect(composer).toContain("if (noProviderAvailable || isSendDisabled)");
+    expect(composer).toContain("noProviderAvailable ||");
+    expect(composer).toContain("isSendDisabled ||");
+    expect(composer).toContain(
+      "!readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)",
+    );
     expect(composer.match(/sendDisabledReason=\{sendDisabledReason\}/g)).toHaveLength(3);
     expect(composer).not.toContain("sendDisabledReason={null}");
   });

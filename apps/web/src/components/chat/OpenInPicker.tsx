@@ -380,7 +380,7 @@ export const OpenInPicker = memo(function OpenInPicker({
   // Remote mode ignores the server's PATH probe: what matters is what runs on
   // the viewing machine, which only the desktop app can probe.
   const effectiveEditors = remote.mode === "local-exec" ? availableEditors : remoteCapableEditors;
-  const [preferredEditor, setPreferredEditor] = usePreferredEditor(effectiveEditors);
+  usePreferredEditor(effectiveEditors);
   const canManageCustom =
     !compact &&
     environmentId === primaryEnvironmentId &&
@@ -548,56 +548,11 @@ export const OpenInPicker = memo(function OpenInPicker({
     [environmentId, markRemoteHintSeen, openInCwd, openInEditorMutation, persistPreference, remote],
   );
 
-  const openInEditor = useCallback(
-    (editorId: EditorId | null) => {
-      if (!openInCwd) return;
-      const editor = editorId ?? preferredEditor;
-      if (!editor) return;
-      if (remote.mode === "remote-unavailable") return;
-      if (remote.mode === "remote-links") {
-        const url = buildRemoteOpenUrl({
-          editor,
-          host: remote.host.host,
-          absolutePath: openInCwd,
-        });
-        if (url === undefined) return;
-        // Only record hint-seen/preferred when the shell actually accepted
-        // the URL (an older desktop build can refuse the editor scheme).
-        void openRemoteEditorUrl(url).then((opened) => {
-          if (!opened) return;
-          markRemoteHintSeen();
-          setPreferredEditor(editor);
-        });
-        return;
-      }
-      if (!readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) return;
-      const result = openInEditorMutation({
-        environmentId,
-        input: {
-          cwd: openInCwd,
-          editor,
-        },
-      });
-      setPreferredEditor(editor);
-      return result;
-    },
-    [
-      environmentId,
-      markRemoteHintSeen,
-      openInCwd,
-      openInEditorMutation,
-      preferredEditor,
-      remote,
-      setPreferredEditor,
-    ],
-  );
-
   useEffect(() => {
     if (!enableShortcut || !canOpenEditor) return;
     const handler = (event: globalThis.KeyboardEvent) => {
       if (!isOpenFavoriteEditorShortcut(event, keybindings)) return;
-      if (!openInCwd) return;
-      if (!preferredEditor && preferredOption?.type !== "custom") return;
+      if (!openInCwd || !preferredOption) return;
       if (
         remote.mode === "local-exec" &&
         !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)
@@ -605,11 +560,7 @@ export const OpenInPicker = memo(function OpenInPicker({
         return;
       }
       event.preventDefault();
-      if (preferredOption?.type === "custom") {
-        void dispatch(preferredOption, false);
-        return;
-      }
-      void openInEditor(preferredEditor);
+      void dispatch(preferredOption, false);
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
@@ -620,8 +571,6 @@ export const OpenInPicker = memo(function OpenInPicker({
     environmentId,
     keybindings,
     openInCwd,
-    openInEditor,
-    preferredEditor,
     preferredOption,
     remote.mode,
   ]);
@@ -1064,11 +1013,7 @@ export const OpenInPicker = memo(function OpenInPicker({
             density="touch"
             disabled={!openInCwd || !canOpenEditor}
             onClick={() => {
-              if (preferredOption.type === "custom") {
-                void dispatch(preferredOption);
-                return;
-              }
-              openInEditor(preferredEditor);
+              void dispatch(preferredOption, false);
             }}
           >
             <OptionIcon option={preferredOption} className="size-4" />
@@ -1104,22 +1049,20 @@ export const OpenInPicker = memo(function OpenInPicker({
           variant={isPanel ? "ghost" : "outline"}
           part="primary"
           panel={isPanel}
-          disabled={!preferredEditor || !openInCwd || !canOpenEditor}
+          disabled={!preferredOption || !openInCwd || !canOpenEditor}
           onClick={() => {
-            if (preferredOption?.type === "custom") {
-              void dispatch(preferredOption);
-              return;
-            }
-            openInEditor(preferredEditor);
+            if (!preferredOption) return;
+            void dispatch(preferredOption, false);
           }}
         >
           {preferredOption && <OptionIcon option={preferredOption} className="size-3.5" />}
           <span
-            className={
+            className={cn(
               compact
                 ? "sr-only"
-                : "sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5"
-            }
+                : "sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5",
+              isPanel && "not-sr-only ml-0 min-w-0 truncate",
+            )}
           >
             {isPanel && preferredOption
               ? `Open in ${optionLabel(preferredOption, navigator.platform)}`

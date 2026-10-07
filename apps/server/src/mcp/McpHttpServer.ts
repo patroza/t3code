@@ -915,8 +915,9 @@ export const DiscordThreadToolkitRegistrationLive = Layer.effectDiscard(
   registerDiscordRenameThread(),
 );
 
-export const DiscordLinkedChannelToolkitRegistrationLive = Layer.effectDiscard(
-  DiscordLinkedChannelTool.registerDiscordLinkedChannelPostTool(),
+const layerDiscordLinkedChannelRegistration = toolkitRegistration(
+  DiscordLinkedChannelTool.DiscordLinkedChannelToolkit,
+  DiscordLinkedChannelTool.layer,
 );
 
 export const layerPreviewToolkit = Layer.mergeAll(
@@ -992,6 +993,6 @@ export const layer = Layer.mergeAll(
   layerPullRequestsToolkit,
   layerDeviceToolkit,
   DiscordThreadToolkitRegistrationLive,
-  DiscordLinkedChannelToolkitRegistrationLive,
+  layerDiscordLinkedChannelRegistration,
   layerHtmlToolkit,
 ).pipe(Layer.provideMerge(layerMcpTransport));

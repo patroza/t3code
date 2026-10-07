@@ -1,16 +1,18 @@
 // @effect-diagnostics nodeBuiltinImport:off globalFetch:off globalFetchInEffect:off outdatedApi:off
+import { OrchestratorMcpFailure } from "@t3tools/contracts";
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
+import { Tool, Toolkit } from "effect/ai";
 import * as Cause from "effect/Cause";
-import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import { McpSchema, McpServer } from "effect/ai";
+import * as Schema from "effect/Schema";
 
 import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
 import { ProjectStoreV2 } from "../orchestration-v2/ProjectStore.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
+import * as McpToolAccess from "./McpToolAccess.ts";
 
 const DISCORD_API_BASE_URL = "https://discord.com/api/v10";
 const DISCORD_DEFAULT_ALIASES_PATH = "/run/secrets/project-aliases.yaml";
@@ -55,61 +57,27 @@ interface LinkedDiscordChannel {
 
 interface DiscordAttachmentInput {
   readonly path: string;
-  readonly filename?: string;
-  readonly description?: string;
-  readonly spoiler?: boolean;
-}
-
-interface DiscordEmbedInput {
-  readonly title?: string;
-  readonly description?: string;
-  readonly url?: string;
-  readonly color?: number;
-  readonly fields?: ReadonlyArray<{
-    readonly name: string;
-    readonly value: string;
-    readonly inline?: boolean;
-  }>;
-  readonly footer?: {
-    readonly text: string;
-    readonly icon_url?: string;
-  };
-  readonly author?: {
-    readonly name: string;
-    readonly url?: string;
-    readonly icon_url?: string;
-  };
-  readonly image?: { readonly url: string };
-  readonly thumbnail?: { readonly url: string };
+  readonly filename?: string | undefined;
+  readonly description?: string | undefined;
+  readonly spoiler?: boolean | undefined;
 }
 
 interface DiscordPollInput {
   readonly question: string;
   readonly answers: ReadonlyArray<string>;
-  readonly durationHours?: number;
-  readonly allowMultiselect?: boolean;
+  readonly durationHours?: number | undefined;
+  readonly allowMultiselect?: boolean | undefined;
 }
 
 interface DiscordPostToolInput {
-  readonly content?: string;
-  readonly attachments?: ReadonlyArray<DiscordAttachmentInput>;
-  readonly embeds?: ReadonlyArray<DiscordEmbedInput>;
-  readonly poll?: DiscordPollInput;
-  readonly replyToMessageId?: string;
-  readonly tts?: boolean;
-  readonly suppressEmbeds?: boolean;
-  readonly suppressNotifications?: boolean;
-}
-
-interface MutableDiscordPostToolInput {
-  content?: string;
-  attachments?: ReadonlyArray<DiscordAttachmentInput>;
-  embeds?: ReadonlyArray<DiscordEmbedInput>;
-  poll?: DiscordPollInput;
-  replyToMessageId?: string;
-  tts?: boolean;
-  suppressEmbeds?: boolean;
-  suppressNotifications?: boolean;
+  readonly content?: string | undefined;
+  readonly attachments?: ReadonlyArray<DiscordAttachmentInput> | undefined;
+  readonly embeds?: ReadonlyArray<{ readonly [key: string]: unknown }> | undefined;
+  readonly poll?: DiscordPollInput | undefined;
+  readonly replyToMessageId?: string | undefined;
+  readonly tts?: boolean | undefined;
+  readonly suppressEmbeds?: boolean | undefined;
+  readonly suppressNotifications?: boolean | undefined;
 }
 
 interface DiscordUploadFile {
@@ -492,36 +460,6 @@ async function resolveLinkedChannel(input: {
   return picked.match;
 }
 
-function normalizeDiscordPostToolInput(payload: unknown): DiscordPostToolInput {
-  if (typeof payload !== "object" || payload === null) return {};
-  const record = payload as Record<string, unknown>;
-  const normalized: MutableDiscordPostToolInput = {};
-  if (typeof record.content === "string") normalized.content = record.content;
-  if (Array.isArray(record.attachments)) {
-    normalized.attachments = record.attachments.filter(
-      (entry): entry is DiscordAttachmentInput =>
-        typeof entry === "object" &&
-        entry !== null &&
-        typeof (entry as { path?: unknown }).path === "string",
-    );
-  }
-  if (Array.isArray(record.embeds)) {
-    normalized.embeds = record.embeds.filter(
-      (entry): entry is DiscordEmbedInput => typeof entry === "object" && entry !== null,
-    ) as ReadonlyArray<DiscordEmbedInput>;
-  }
-  if (typeof record.poll === "object" && record.poll !== null) {
-    normalized.poll = record.poll as DiscordPollInput;
-  }
-  if (typeof record.replyToMessageId === "string") {
-    normalized.replyToMessageId = record.replyToMessageId;
-  }
-  if (record.tts === true) normalized.tts = true;
-  if (record.suppressEmbeds === true) normalized.suppressEmbeds = true;
-  if (record.suppressNotifications === true) normalized.suppressNotifications = true;
-  return normalized;
-}
-
 function validateDiscordPostToolInput(input: DiscordPostToolInput): string | null {
   const hasContent = (input.content?.trim().length ?? 0) > 0;
   const hasAttachments = (input.attachments?.length ?? 0) > 0;
@@ -678,198 +616,175 @@ async function createDiscordMessage(input: {
   return (await response.json()) as DiscordMessageResponse;
 }
 
-function errorResult(message: string, tag = "DiscordLinkedChannelPostError") {
-  return new McpSchema.CallToolResult({
-    isError: true,
-    structuredContent: {
-      error: {
-        _tag: tag,
-        message,
-      },
-    },
-    content: [{ type: "text", text: message }],
-  });
-}
+const isOrchestratorMcpFailure = Schema.is(OrchestratorMcpFailure);
 
-export const registerDiscordLinkedChannelPostTool = Effect.fn("DiscordLinkedChannelTool.register")(
-  function* () {
-    const server = yield* McpServer.McpServer;
-    const snapshotQuery = yield* ThreadManagementService;
-    const projects = yield* ProjectStoreV2;
+const discordPostFailure = (
+  message: string,
+  code: "invalid_request" | "thread_not_found" | "orchestration_error" = "orchestration_error",
+) => new OrchestratorMcpFailure({ code, message });
 
-    yield* server.addTool({
-      tool: new McpSchema.Tool({
-        name: "discord_post_to_linked_channel",
-        description:
-          "Post to the Discord thread linked to the active T3 thread, falling back to the repository channel linked via a `t3-<shortName>` topic tag. Supports file attachments, rich embeds, and polls.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            content: { type: "string", description: "Plain message content." },
-            attachments: {
-              type: "array",
-              description:
-                "Local files to upload. Relative paths resolve from the current thread workspace.",
-              items: {
-                type: "object",
-                properties: {
-                  path: { type: "string" },
-                  filename: { type: "string" },
-                  description: { type: "string" },
-                  spoiler: { type: "boolean" },
-                },
-                required: ["path"],
-                additionalProperties: false,
-              },
-            },
-            embeds: {
-              type: "array",
-              description:
-                "Discord rich embeds. Uploaded files can be referenced with attachment://filename URLs.",
-              items: { type: "object" },
-            },
-            poll: {
-              type: "object",
-              properties: {
-                question: { type: "string" },
-                answers: { type: "array", items: { type: "string" } },
-                durationHours: { type: "integer", minimum: 1, maximum: 768 },
-                allowMultiselect: { type: "boolean" },
-              },
-              required: ["question", "answers"],
-              additionalProperties: false,
-            },
-            replyToMessageId: { type: "string" },
-            tts: { type: "boolean" },
-            suppressEmbeds: { type: "boolean" },
-            suppressNotifications: { type: "boolean" },
-          },
-          additionalProperties: false,
-        },
-        annotations: {
-          title: "Post to linked Discord channel",
-          destructiveHint: false,
-          idempotentHint: false,
-          openWorldHint: true,
-        },
-      }),
-      annotations: Context.empty(),
-      handle: (payload) =>
-        Effect.withFiber((fiber) => {
-          const invocation = Context.getUnsafe(
-            fiber.context,
-            McpInvocationContext.McpInvocationContext,
-          );
-          const input = normalizeDiscordPostToolInput(payload);
-          const validationError = validateDiscordPostToolInput(input);
-          if (validationError) {
-            return Effect.succeed(errorResult(validationError, "InvalidDiscordPostInput"));
-          }
-
-          const threadId = invocation.thread?.threadId;
-          if (threadId === undefined) {
-            return Effect.succeed(
-              errorResult(
-                "Discord posting needs an agent running inside a T3 thread.",
-                "ThreadNotFound",
-              ),
-            );
-          }
-
-          return Effect.gen(function* () {
-            const threadShell = yield* snapshotQuery
-              .getThreadShell(threadId)
-              .pipe(Effect.map(Option.fromNullishOr));
-            if (Option.isNone(threadShell)) {
-              return errorResult(`Thread ${threadId} was not found.`, "ThreadNotFound");
-            }
-            const projectShell = yield* projects.get(threadShell.value.projectId);
-            if (Option.isNone(projectShell)) {
-              return errorResult(
-                `Project ${threadShell.value.projectId} was not found for this thread.`,
-                "ProjectNotFound",
-              );
-            }
-
-            const token = yield* Effect.promise(() => resolveDiscordBotToken());
-            if (!token) {
-              return errorResult(
-                "Discord posting is unavailable because no Discord bot token is configured.",
-                "DiscordUnavailable",
-              );
-            }
-
-            const linkedChannel = yield* Effect.promise(() =>
-              resolveLinkedChannel({
-                token,
-                workspaceRoot: projectShell.value.workspaceRoot,
-              }),
-            );
-            if (linkedChannel === null) {
-              return errorResult(
-                `No linked Discord channel was found for repository workspace '${projectShell.value.workspaceRoot}'.`,
-                "LinkedChannelNotFound",
-              );
-            }
-
-            const cwd = threadShell.value.worktreePath ?? projectShell.value.workspaceRoot;
-            const discordThreadId = yield* Effect.promise(() =>
-              resolveLinkedDiscordThreadId(threadId),
-            );
-            const destinationId = resolveDiscordPostDestination(
-              linkedChannel.channelId,
-              discordThreadId,
-            );
-            const files = yield* Effect.promise(() =>
-              readDiscordUploadFiles(input.attachments ?? [], cwd),
-            );
-            const body = buildDiscordCreateMessageBody(input, files);
-            const message = yield* Effect.promise(() =>
-              createDiscordMessage({
-                token,
-                channelId: destinationId,
-                body,
-                files,
-              }),
-            );
-
-            return new McpSchema.CallToolResult({
-              isError: false,
-              structuredContent: {
-                shortName: linkedChannel.shortName,
-                guildId: linkedChannel.guildId,
-                guildName: linkedChannel.guildName,
-                channelId: linkedChannel.channelId,
-                channelName: linkedChannel.channelName,
-                destinationId,
-                discordThreadId,
-                messageId: message.id,
-                attachmentCount: message.attachments?.length ?? 0,
-              },
-              content: [
-                {
-                  type: "text",
-                  text:
-                    discordThreadId === null
-                      ? `Posted to Discord ${linkedChannel.guildName}/#${linkedChannel.channelName}.`
-                      : `Posted to the linked Discord thread in ${linkedChannel.guildName}/#${linkedChannel.channelName}.`,
-                },
-              ],
-            });
-          }).pipe(
-            Effect.matchCause({
-              onFailure: (cause) =>
-                errorResult(
-                  messageFromUnknown(Cause.squash(cause)),
-                  "DiscordLinkedChannelPostError",
-                ),
-              onSuccess: (result) => result,
-            }),
-          );
+const DiscordPostTool = Tool.make("discord_post_to_linked_channel", {
+  description:
+    "Post to the Discord thread linked to the active T3 thread, falling back to the repository channel linked via a `t3-<shortName>` topic tag. Supports file attachments, rich embeds, and polls.",
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    ThreadManagementService,
+    ProjectStoreV2,
+  ],
+  parameters: Schema.Struct({
+    content: Schema.optional(Schema.String).annotate({ description: "Plain message content." }),
+    attachments: Schema.optional(
+      Schema.Array(
+        Schema.Struct({
+          path: Schema.String,
+          filename: Schema.optional(Schema.String),
+          description: Schema.optional(Schema.String),
+          spoiler: Schema.optional(Schema.Boolean),
         }),
-    });
-  },
-);
+      ),
+    ).annotate({
+      description:
+        "Local files to upload. Relative paths resolve from the current thread workspace.",
+    }),
+    embeds: Schema.optional(Schema.Array(Schema.Record(Schema.String, Schema.Unknown))).annotate({
+      description:
+        "Discord rich embeds. Uploaded files can be referenced with attachment://filename URLs.",
+    }),
+    poll: Schema.optional(
+      Schema.Struct({
+        question: Schema.String,
+        answers: Schema.Array(Schema.String),
+        durationHours: Schema.optional(
+          Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 768 })),
+        ),
+        allowMultiselect: Schema.optional(Schema.Boolean),
+      }),
+    ),
+    replyToMessageId: Schema.optional(Schema.String),
+    tts: Schema.optional(Schema.Boolean),
+    suppressEmbeds: Schema.optional(Schema.Boolean),
+    suppressNotifications: Schema.optional(Schema.Boolean),
+  }),
+  success: Schema.Struct({
+    shortName: Schema.String,
+    guildId: Schema.String,
+    guildName: Schema.String,
+    channelId: Schema.String,
+    channelName: Schema.String,
+    destinationId: Schema.String,
+    discordThreadId: Schema.NullOr(Schema.String),
+    messageId: Schema.String,
+    attachmentCount: Schema.Int,
+    summary: Schema.String,
+  }),
+})
+  .annotate(Tool.Title, "Post to linked Discord channel")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, false)
+  .annotate(Tool.OpenWorld, true);
+
+export const DiscordLinkedChannelToolkit = Toolkit.make(DiscordPostTool);
+
+const postToLinkedDiscordChannel = Effect.fn("DiscordLinkedChannelTool.post")(function* (
+  input: DiscordPostToolInput,
+) {
+  const validationError = validateDiscordPostToolInput(input);
+  if (validationError) {
+    return yield* discordPostFailure(validationError, "invalid_request");
+  }
+
+  const invocation = yield* McpInvocationContext.McpInvocationContext;
+  const threadId = invocation.thread?.threadId;
+  if (threadId === undefined) {
+    return yield* discordPostFailure(
+      "Discord posting needs an agent running inside a T3 thread.",
+      "thread_not_found",
+    );
+  }
+
+  const snapshotQuery = yield* ThreadManagementService;
+  const projects = yield* ProjectStoreV2;
+  const threadShell = yield* snapshotQuery
+    .getThreadShell(threadId)
+    .pipe(Effect.map(Option.fromNullishOr));
+  if (Option.isNone(threadShell)) {
+    return yield* discordPostFailure(`Thread ${threadId} was not found.`, "thread_not_found");
+  }
+  const projectShell = yield* projects.get(threadShell.value.projectId);
+  if (Option.isNone(projectShell)) {
+    return yield* discordPostFailure(
+      `Project ${threadShell.value.projectId} was not found for this thread.`,
+      "invalid_request",
+    );
+  }
+
+  const token = yield* Effect.promise(() => resolveDiscordBotToken());
+  if (!token) {
+    return yield* discordPostFailure(
+      "Discord posting is unavailable because no Discord bot token is configured.",
+    );
+  }
+
+  const linkedChannel = yield* Effect.promise(() =>
+    resolveLinkedChannel({
+      token,
+      workspaceRoot: projectShell.value.workspaceRoot,
+    }),
+  );
+  if (linkedChannel === null) {
+    return yield* discordPostFailure(
+      `No linked Discord channel was found for repository workspace '${projectShell.value.workspaceRoot}'.`,
+      "invalid_request",
+    );
+  }
+
+  const cwd = threadShell.value.worktreePath ?? projectShell.value.workspaceRoot;
+  const discordThreadId = yield* Effect.promise(() => resolveLinkedDiscordThreadId(threadId));
+  const destinationId = resolveDiscordPostDestination(linkedChannel.channelId, discordThreadId);
+  const files = yield* Effect.promise(() => readDiscordUploadFiles(input.attachments ?? [], cwd));
+  const body = buildDiscordCreateMessageBody(input, files);
+  const message = yield* Effect.promise(() =>
+    createDiscordMessage({
+      token,
+      channelId: destinationId,
+      body,
+      files,
+    }),
+  );
+
+  return {
+    shortName: linkedChannel.shortName,
+    guildId: linkedChannel.guildId,
+    guildName: linkedChannel.guildName,
+    channelId: linkedChannel.channelId,
+    channelName: linkedChannel.channelName,
+    destinationId,
+    discordThreadId,
+    messageId: message.id,
+    attachmentCount: message.attachments?.length ?? 0,
+    summary:
+      discordThreadId === null
+        ? `Posted to Discord ${linkedChannel.guildName}/#${linkedChannel.channelName}.`
+        : `Posted to the linked Discord thread in ${linkedChannel.guildName}/#${linkedChannel.channelName}.`,
+  };
+});
+
+export const layer = McpToolAccess.toLayer(DiscordLinkedChannelToolkit, {
+  discord_post_to_linked_channel: McpToolAccess.actsAsCaller((input) =>
+    postToLinkedDiscordChannel(input).pipe(
+      Effect.catchCause((cause) => {
+        const failure = Cause.findErrorOption(cause);
+        if (Option.isSome(failure) && isOrchestratorMcpFailure(failure.value)) {
+          return Effect.fail(failure.value);
+        }
+        return Effect.fail(discordPostFailure(messageFromUnknown(Cause.squash(cause))));
+      }),
+    ),
+  ),
+});
 
 export const __testing = {
   extractEnvAssignment,
