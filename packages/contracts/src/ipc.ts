@@ -11,11 +11,6 @@ import type {
 import { AuthAccessTokenResult, AuthSessionState, AuthWebSocketTicketResult } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
 import { EditorId } from "./editor.ts";
-import type {
-  DesktopApplicationSelection,
-  DesktopOpenWithInput,
-  OpenWithEntryPresentation,
-} from "./openWith.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import type { PreviewForwardedShortcut } from "./keybindings.ts";
 import type { ProviderInstanceId } from "./providerInstance.ts";
@@ -1213,9 +1208,6 @@ export interface DesktopBridge {
   receiveProviderAuthCallback?: (authorizationUrl: string) => Promise<string>;
   cancelProviderAuthCallback?: (authorizationUrl: string) => Promise<void>;
   openExternal: (url: string) => Promise<boolean>;
-  pickOpenWithApplication: () => Promise<DesktopApplicationSelection | null>;
-  resolveOpenWithPresentations: () => Promise<readonly OpenWithEntryPresentation[]>;
-  openWith: (input: DesktopOpenWithInput) => Promise<void>;
   /**
    * Open a System Settings pane by identifier. Optional: older desktop builds
    * lack it, and callers no-op when it is missing.
@@ -1366,13 +1358,10 @@ export interface LocalApi {
   dialogs: {
     pickFolder: (options?: PickFolderOptions) => Promise<string | null>;
     confirm: (message: string, options?: ConfirmDialogOptions) => Promise<boolean>;
-    pickOpenWithApplication: () => Promise<DesktopApplicationSelection | null>;
   };
   shell: {
     openInEditor: (cwd: string, editor: EditorId) => Promise<void>;
     openExternal: (url: string) => Promise<void>;
-    resolveOpenWithPresentations: () => Promise<readonly OpenWithEntryPresentation[]>;
-    openWith: (input: DesktopOpenWithInput) => Promise<void>;
     /** Opens a known System Settings pane; no-ops outside the desktop app. */
     openSystemSettings: (pane: SystemSettingsPane) => Promise<void>;
   };

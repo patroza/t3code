@@ -18,6 +18,13 @@ function readSrc(relativePath: string): string {
 }
 
 describe("fork surface existence (anti stack-drop)", () => {
+  it("keeps the upstream editor picker without custom application management", () => {
+    const picker = readSrc("components/chat/OpenInPicker.tsx");
+    expect(picker).toContain('aria-label="Choose editor"');
+    expect(picker).toContain("useRemoteOpenState");
+    expect(picker).not.toContain("openWithEntries");
+    expect(picker).not.toContain("openWithDialogs");
+  });
   it("keeps fast and ultrafast icons in the composer traits control", () => {
     const traits = readSrc("components/chat/TraitsPicker.tsx");
     expect(traits).toContain('icon={speedIcon === "ultrafast" ? UltrafastIcon : ZapIcon}');

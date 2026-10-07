@@ -371,13 +371,20 @@ describe("ClientSettings composer context strip", () => {
   });
 });
 
-describe("ClientSettings word wrap", () => {
-  it("defaults Open With settings for legacy documents", () => {
-    const settings = decodeClientSettings({});
-    expect(settings.openWithEntries).toEqual([]);
-    expect(settings.preferredOpenWith).toBeNull();
+describe("ClientSettings retired custom launchers", () => {
+  it("ignores saved custom launcher preferences while retaining other settings", () => {
+    const settings = decodeClientSettings({
+      openWithEntries: [{ id: "terminal", name: "Terminal" }],
+      preferredOpenWith: { type: "custom", id: "terminal" },
+      wordWrap: false,
+    });
+    expect(settings).not.toHaveProperty("openWithEntries");
+    expect(settings).not.toHaveProperty("preferredOpenWith");
+    expect(settings.wordWrap).toBe(false);
   });
+});
 
+describe("ClientSettings word wrap", () => {
   it("defaults word wrap on", () => {
     expect(decodeClientSettings({}).wordWrap).toBe(true);
   });

@@ -3,7 +3,6 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   ClientSettingsSchema,
   DEFAULT_CLIENT_SETTINGS,
-  OpenWithEntryId,
   type ClientSettings,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -56,17 +55,6 @@ const clientSettings: ClientSettings = {
   onboardingCompletedAt: null,
   panelAnimationDurationMs: 0,
   providerFavorites: [],
-  openWithEntries: [
-    {
-      id: OpenWithEntryId.make("terminal"),
-      name: "Terminal",
-      kind: "terminal",
-      invocation: { type: "mac-application", applicationPath: "/Applications/Terminal.app" },
-      directoryMode: "open-target",
-      arguments: [],
-    },
-  ],
-  preferredOpenWith: { type: "custom", id: OpenWithEntryId.make("terminal") },
   planModeEnabled: false,
   proactivePanelsEnabled: true,
   showSkillsInSlashMenu: false,

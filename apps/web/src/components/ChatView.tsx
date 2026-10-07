@@ -462,7 +462,6 @@ import {
 import { ChatHeader } from "./chat/ChatHeader";
 import { useRemoteOpenState } from "~/remoteOpen";
 import { shouldShowOpenInPicker } from "./chat/OpenInPicker.logic";
-import { useOpenFavoriteEditorShortcut } from "./chat/OpenInPickerShortcut";
 import {
   PanelLayoutControls,
   type PanelLayoutControlsProps,
@@ -4265,13 +4264,6 @@ export default function ChatView(props: ChatViewProps) {
     activeThreadEnvironmentId: activeThread?.environmentId ?? environmentId,
     primaryEnvironmentId,
     remoteOpenMode: remoteOpenState.mode,
-  });
-  useOpenFavoriteEditorShortcut({
-    enabled: showOpenInPicker,
-    environmentId: activeThread?.environmentId ?? environmentId,
-    keybindings,
-    availableEditors,
-    openInCwd: gitCwd,
   });
   const manualCompactionProviderAvailable = useMemo(
     () =>

@@ -69,11 +69,6 @@ import {
   setSnapShotShortcutSuppressed,
 } from "./methods/snapShot.ts";
 import * as PreviewIpc from "./methods/preview.ts";
-import {
-  openWith,
-  pickOpenWithApplication,
-  resolveOpenWithPresentations,
-} from "./methods/openWith.ts";
 import * as AppActivationIpc from "./methods/appActivation.ts";
 import {
   completeLegacyLocalStorage,
@@ -145,9 +140,6 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(openExternal);
   yield* ipc.handle(receiveProviderAuthCallback);
   yield* ipc.handle(cancelProviderAuthCallback);
-  yield* ipc.handle(pickOpenWithApplication);
-  yield* ipc.handle(resolveOpenWithPresentations);
-  yield* ipc.handle(openWith);
   yield* ipc.handle(openSystemSettings);
   yield* ipc.handle(checkSystemPermission);
   yield* ipc.handle(pasteAsText);
