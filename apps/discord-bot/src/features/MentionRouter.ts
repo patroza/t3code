@@ -1196,6 +1196,7 @@ const make = (botConfig: DiscordBotConfig) =>
             discordThreadId: input.discordThreadId,
             t3ThreadId: existing.t3ThreadId,
             webUiBaseUrl: botConfig.webUiBaseUrl,
+            publicWebUiBaseUrl: botConfig.publicWebUiBaseUrl,
           });
           if (stagedFiles.skipped.length > 0) {
             yield* Effect.logWarning("Skipped some Discord file attachments", {

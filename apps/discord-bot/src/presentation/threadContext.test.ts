@@ -12,6 +12,7 @@ import {
   formatDiscordMessage,
   formatEmbed,
   formatLinkedJiraWorkItemsBlock,
+  formatT3PrLinkPromptBlock,
   formatReferencedMessageBlock,
   formatRequesterLine,
   looksLikeSentryContext,
@@ -335,7 +336,8 @@ describe("buildDiscordTurnPrompt", () => {
       discordThreadId: "1531376362399465595",
       discordThreadTitle: "Open Random PR Test",
       t3ThreadId: "t3-thread-1",
-      webUiBaseUrl: "https://t3vm.tail86038f.ts.net",
+      webUiBaseUrl: "https://private.example.test",
+      publicWebUiBaseUrl: "https://public.example.test",
     });
     expect(prompt).toContain("pr:");
     expect(prompt).toContain("uid=593167616273809448");
@@ -345,7 +347,7 @@ describe("buildDiscordTurnPrompt", () => {
     expect(prompt).toContain("title=Open Random PR Test");
     expect(prompt).not.toContain("https://discord.com/");
     expect(prompt).toContain(
-      "t3: full=https://t3vm.tail86038f.ts.net/?thread=t3-thread-1 short=https://t3vm/?thread=t3-thread-1",
+      "t3: full=https://private.example.test/?thread=t3-thread-1 public=https://public.example.test/?thread=t3-thread-1",
     );
   });
 
@@ -418,5 +420,19 @@ describe("referenced message + Sentry bootstrap", () => {
     expect(block).toContain("## ref");
     expect(block).toContain("please look at this");
     expect(block).toContain("jump: 1/2/m1");
+  });
+});
+
+describe("public PR URL policy in agent prompts", () => {
+  it("instructs omission for public repositories when no public origin is configured", () => {
+    const block = formatT3PrLinkPromptBlock({
+      t3ThreadId: "t1",
+      webUiBaseUrl: "https://private.example.test",
+    });
+    expect(block).toContain("public=none (omit T3 links on public or unknown repositories)");
+    expect(block).not.toContain("https://t3vm");
+  });
+  it("does not invent an origin when no web base is configured", () => {
+    expect(formatT3PrLinkPromptBlock({ t3ThreadId: "t1" })).toBeNull();
   });
 });

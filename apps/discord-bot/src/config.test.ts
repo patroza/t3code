@@ -1,7 +1,34 @@
+import { it as effectIt } from "@effect/vitest";
 import { ProviderInstanceId } from "@t3tools/contracts";
+import * as ConfigProvider from "effect/ConfigProvider";
+import * as Effect from "effect/Effect";
 import { describe, expect, it } from "vite-plus/test";
 
-import { preferredModelSelection, type DiscordBotConfig } from "./config.ts";
+import { preferredModelSelection, DiscordBotConfig } from "./config.ts";
+import { pickT3ThreadUrlForGithubRepo } from "./presentation/discordPrAttribution.ts";
+
+describe("tenant web URL configuration", () => {
+  effectIt.effect("uses the configured public origin when selecting a public PR link", () =>
+    Effect.gen(function* () {
+      const config = yield* DiscordBotConfig.pipe(
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromUnknown({
+            T3_WEB_UI_BASE_URL: "https://private.example.test",
+            T3_WEB_UI_PUBLIC_BASE_URL: "https://public.example.test",
+          }),
+        ),
+      );
+      expect(
+        pickT3ThreadUrlForGithubRepo({
+          fullUrl: `${config.webUiBaseUrl}/?thread=t1`,
+          repoIsPrivate: false,
+          publicBaseUrl: config.publicWebUiBaseUrl,
+        }),
+      ).toBe("https://public.example.test/?thread=t1");
+    }),
+  );
+});
 
 const baseConfig = {
   discordToken: "x",

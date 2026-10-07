@@ -343,6 +343,7 @@ const ensureAttributionFootersForIncomingPrs = (input: {
   readonly link: ThreadLink | null;
   readonly incomingPrUrls: ReadonlyArray<string>;
   readonly webUiBaseUrl?: string | undefined;
+  readonly publicWebUiBaseUrl?: string | undefined;
 }) =>
   Effect.gen(function* () {
     const prUrls = mergePullRequestUrls([], input.incomingPrUrls);
@@ -385,6 +386,7 @@ const ensureAttributionFootersForIncomingPrs = (input: {
           prUrls,
           footer: attribution.footer,
           t3FullThreadUrl,
+          publicWebUiBaseUrl: input.publicWebUiBaseUrl,
         }),
       catch: (cause) => cause,
     }).pipe(
@@ -605,12 +607,13 @@ export const upsertThreadInfoPin = (input: {
     // Hardcode Discord PR attribution (thread starter + title) — no agent prompt.
     // Only runs for *incoming* PR URLs this call (pin refresh with empty incoming is a no-op).
     // ensureDiscordPrAttributionFooters is idempotent if the footer is already present.
-    // Also appends T3 thread link: full host for private GH repos, short t3vm host for public.
+    // Also appends T3 thread link: configured private URL for private repos, explicit public URL otherwise.
     yield* ensureAttributionFootersForIncomingPrs({
       discordThreadId: input.discordThreadId,
       link: existing,
       incomingPrUrls: input.incomingPrUrls ?? [],
       webUiBaseUrl: input.botConfig.webUiBaseUrl,
+      publicWebUiBaseUrl: input.botConfig.publicWebUiBaseUrl,
     }).pipe(
       Effect.catch((error) =>
         Effect.logWarning("Discord PR attribution side-effect failed", {

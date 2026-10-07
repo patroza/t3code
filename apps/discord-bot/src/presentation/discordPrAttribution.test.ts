@@ -4,7 +4,6 @@ import {
   appendDiscordPrAttributionFooter,
   buildDiscordThreadJumpUrl,
   buildOmegentThreadMessageUrl,
-  buildT3WebThreadUrl,
   DISCORD_PR_ATTRIBUTION_MARKER,
   ensureDiscordPrAttributionFooters,
   formatDiscordPrAttributionFooter,
@@ -70,31 +69,45 @@ describe("formatDiscordPrAttributionFooter", () => {
 });
 
 describe("T3 thread URL helpers", () => {
-  it("builds full and short t3 thread URLs", () => {
-    expect(buildT3WebThreadUrl("https://t3vm.tail86038f.ts.net/", "tid-1")).toBe(
-      "https://t3vm.tail86038f.ts.net/?thread=tid-1",
-    );
-    expect(toT3PublicShortThreadUrl("https://t3vm.tail86038f.ts.net/?thread=tid-1")).toBe(
-      "https://t3vm/?thread=tid-1",
-    );
+  it.each(["omega", "abasone"])("uses %s's explicitly configured public URL", (tenant) => {
+    const privateUrl = `https://${tenant}.private.example.test/?thread=tid-1&privateHint=secret#message-m1`;
+    const publicBaseUrl = `https://${tenant}.public.example.test/`;
     expect(
-      pickT3ThreadUrlForGithubRepo({
-        fullUrl: "https://t3vm.tail86038f.ts.net/?thread=tid-1",
-        repoIsPrivate: true,
-      }),
-    ).toBe("https://t3vm.tail86038f.ts.net/?thread=tid-1");
+      pickT3ThreadUrlForGithubRepo({ fullUrl: privateUrl, repoIsPrivate: true, publicBaseUrl }),
+    ).toBe(privateUrl);
+    for (const repoIsPrivate of [false, null]) {
+      expect(
+        pickT3ThreadUrlForGithubRepo({ fullUrl: privateUrl, repoIsPrivate, publicBaseUrl }),
+      ).toBe(`https://${tenant}.public.example.test/?thread=tid-1#message-m1`);
+    }
+  });
+
+  it("omits public links rather than leaking an unconfigured private origin", () => {
+    const fullUrl = "https://private.example.test/?thread=tid-1";
+    expect(toT3PublicShortThreadUrl(fullUrl)).toBeNull();
+    expect(pickT3ThreadUrlForGithubRepo({ fullUrl, repoIsPrivate: false })).toBeNull();
+    expect(pickT3ThreadUrlForGithubRepo({ fullUrl, repoIsPrivate: null })).toBeNull();
+    expect(pickT3ThreadUrlForGithubRepo({ fullUrl, repoIsPrivate: true })).toBe(fullUrl);
+  });
+
+  it.each([
+    "invalid",
+    "javascript:alert(1)",
+    "https://user:password@example.test",
+    "https://example.test/?token=secret",
+    "https://example.test/#token",
+  ])("rejects an unsafe public base %s", (base) => {
+    expect(toT3PublicShortThreadUrl("https://private.example.test/?thread=tid-1", base)).toBeNull();
+  });
+
+  it("supports a public deployment under a configured path without copying private query data", () => {
     expect(
-      pickT3ThreadUrlForGithubRepo({
-        fullUrl: "https://t3vm.tail86038f.ts.net/?thread=tid-1",
-        repoIsPrivate: false,
-      }),
-    ).toBe("https://t3vm/?thread=tid-1");
-    expect(
-      pickT3ThreadUrlForGithubRepo({
-        fullUrl: "https://t3vm.tail86038f.ts.net/?thread=tid-1",
-        repoIsPrivate: null,
-      }),
-    ).toBe("https://t3vm/?thread=tid-1");
+      toT3PublicShortThreadUrl(
+        "https://private.example.test/app/?thread=tid-1&secret=x",
+        "https://public.example.test/t3/",
+      ),
+    ).toBe("https://public.example.test/t3/?thread=tid-1");
+    expect(toT3PublicShortThreadUrl("invalid", "https://public.example.test")).toBeNull();
   });
 
   it("withT3ThreadLink is idempotent", () => {

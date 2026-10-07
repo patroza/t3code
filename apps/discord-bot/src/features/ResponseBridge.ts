@@ -3880,6 +3880,7 @@ export const runBridge = (
         const botConfig = yield* DiscordBotConfig;
         const t3Url = buildOmegentThreadMessageUrl({
           webUiBaseUrl: botConfig.webUiBaseUrl,
+          publicWebUiBaseUrl: botConfig.publicWebUiBaseUrl,
           threadId: input.t3ThreadId,
           messageId: t3MessageId,
         });

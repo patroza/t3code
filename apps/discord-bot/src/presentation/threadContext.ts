@@ -100,6 +100,7 @@ export interface ThreadBootstrapContext {
   readonly t3ThreadId?: string | null | undefined;
   /** T3 web UI base (e.g. https://t3vm.tail….ts.net) for full private PR links. */
   readonly webUiBaseUrl?: string | null | undefined;
+  readonly publicWebUiBaseUrl?: string | null | undefined;
 }
 
 /** Collapse whitespace so one-line turn fields cannot inject extra markdown headers. */
@@ -201,20 +202,23 @@ export function formatDiscordPrFooterPromptBlock(input: {
 
 /**
  * Compact T3 thread link fields for PR footers.
- * Agents pick full (private GH repo) vs short host `t3vm` (public).
+ * Agents use the full URL only for private repos, and the explicit public URL
+ * for public/unknown repos. No public base means no public PR link.
  */
 export function formatT3PrLinkPromptBlock(input: {
   readonly t3ThreadId?: string | null | undefined;
   readonly webUiBaseUrl?: string | null | undefined;
+  readonly publicWebUiBaseUrl?: string | null | undefined;
 }): string | null {
   const id = input.t3ThreadId?.trim();
   if (id === undefined || id.length === 0) return null;
 
   const full = buildT3WebThreadUrl(input.webUiBaseUrl, id);
-  const short = full !== null ? toT3PublicShortThreadUrl(full) : `https://t3vm/?thread=${id}`;
-
-  if (full !== null) return `t3: full=${full} short=${short}`;
-  return `t3: short=${short}`;
+  if (full === null) return null;
+  const publicUrl = toT3PublicShortThreadUrl(full, input.publicWebUiBaseUrl);
+  return publicUrl === null
+    ? `t3: full=${full} public=none (omit T3 links on public or unknown repositories)`
+    : `t3: full=${full} public=${publicUrl}`;
 }
 
 export function buildDiscordTurnPrompt(input: {
@@ -231,6 +235,7 @@ export function buildDiscordTurnPrompt(input: {
   readonly discordThreadTitle?: string | null | undefined;
   readonly t3ThreadId?: string | null | undefined;
   readonly webUiBaseUrl?: string | null | undefined;
+  readonly publicWebUiBaseUrl?: string | null | undefined;
   /** Override Discord overlay rules path (tests). Defaults to package docs path. */
   readonly agentTurnRulesPath?: string | undefined;
 }): string {
@@ -265,6 +270,7 @@ export function buildDiscordTurnPrompt(input: {
   const t3Block = formatT3PrLinkPromptBlock({
     t3ThreadId: input.t3ThreadId,
     webUiBaseUrl: input.webUiBaseUrl,
+    publicWebUiBaseUrl: input.publicWebUiBaseUrl,
   });
   const t3Section = t3Block !== null ? `\n${t3Block}` : "";
 
@@ -398,6 +404,7 @@ export function buildFirstTurnPrompt(input: ThreadBootstrapContext): string {
     discordThreadTitle: input.discordThreadTitle,
     t3ThreadId: input.t3ThreadId,
     webUiBaseUrl: input.webUiBaseUrl,
+    publicWebUiBaseUrl: input.publicWebUiBaseUrl,
   });
 
   if (input.starter !== null) {
@@ -490,6 +497,7 @@ ${buildDiscordTurnPrompt({
   discordThreadTitle: input.discordThreadTitle,
   t3ThreadId: input.t3ThreadId,
   webUiBaseUrl: input.webUiBaseUrl,
+  publicWebUiBaseUrl: input.publicWebUiBaseUrl,
 })}
 
 project: ${input.projectShortName} root: ${input.workspaceRoot}
