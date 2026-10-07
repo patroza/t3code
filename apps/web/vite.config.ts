@@ -9,7 +9,10 @@ import "vite-plus/test/config";
 import { defineConfig, type Connect, type Plugin } from "vite-plus";
 import pkg from "./package.json" with { type: "json" };
 
-import { DEV_PROXIED_PATH_PREFIXES } from "@t3tools/shared/devProxy";
+import {
+  DEV_PROXIED_ORIGIN_PRESERVING_PREFIXES,
+  DEV_PROXIED_PATH_PREFIXES,
+} from "@t3tools/shared/devProxy";
 
 import { loadRepoEnv } from "../../scripts/lib/public-config";
 import { thirdPartyLicensesPlugin } from "../../scripts/lib/third-party-licenses";
@@ -142,12 +145,13 @@ const isolatedUnitTestFiles = [
   // applies — the icon falls back to the browser mockup and the stored-favicon
   // assertion fails, depending only on how files land across workers.
   "src/components/preview/PreviewFaviconIcon.test.tsx",
-  // Mocks `~/localApi` getClientSettings; under isolate:false the real
-  // localApi is already bound so open waits forever or never sees the mock.
-  "src/components/preview/PreviewAutomationHosts.test.tsx",
   "src/components/preview/PreviewView.test.tsx",
   "src/components/preview/openPreviewSession.test.ts",
   "src/components/preview/openTerminalLinkInPreview.test.ts",
+  // Replaces `openPreviewSession` with a bare vi.fn(). Under isolate:false
+  // that mock leaks into reopenClosedView.test.ts, so the session result is
+  // undefined and reading `_tag` throws.
+  "src/components/ReopenClosedViewShortcut.test.tsx",
   // Tests that mock `react` itself and drive components through
   // reactHookHarness need their own module registry: under `isolate: false`
   // the component graph may already be bound to the real react/compiler
@@ -230,7 +234,6 @@ const isolatedUnitTestFiles = [
   // Real Pierre worker + 7k-line tokenizer. The 60-edit stale-highlight case
   // timed out at 15s under isolate:false CI load.
   "src/components/files/AttachmentFilePreview.test.tsx",
-  "src/components/files/fileEditorHighlight.test.ts",
   "src/components/permissions/usePermissionStatus.test.ts",
   // react-test-renderer + Base UI Popover/Tooltip. Under isolate:false a
   // sibling can bind the real floating-ui modules first, so the mocks never
@@ -247,6 +250,38 @@ const isolatedUnitTestFiles = [
   "src/terminal/ghostty/core.test.ts",
   "src/uiStateStore.test.ts",
   "src/versionSkew.test.ts",
+  // Mock react, the session store, or the router. Under isolate:false an
+  // earlier file binds the real modules and these vi.mock calls never apply.
+  "src/components/KeybindingsConfigWarning.test.tsx",
+  "src/components/onboarding/WelcomeWizard.terminal.test.tsx",
+  "src/components/preview/addBrowserSurface.test.ts",
+  "src/components/settings/ProjectSettingsPanel.test.tsx",
+  "src/hooks/useSettings.sync.test.tsx",
+  "src/hooks/useThreadActionMenu.test.ts",
+  "src/hooks/useThreadActions.permissions.test.ts",
+  "src/state/sourceControlActions.test.ts",
+  "src/state/terminalSessionAvailability.test.ts",
+  // These mock react, settings scope, or a button stub. Left in the shared
+  // worker, the mock binds first and a later file calls the real hook.
+  "src/assets/assetUrls.test.ts",
+  "src/editorPreferences.test.ts",
+  "src/state/queries.filesystem.test.ts",
+  "src/state/use-orchestration-command.test.ts",
+  "src/components/GitActionsControl.test.ts",
+  "src/components/PullRequestThreadDialog.test.ts",
+  "src/components/media/MediaActions.test.tsx",
+  "src/components/cloud/CloudEnvironmentConnectList.test.tsx",
+  "src/components/chat/OpenInPicker.test.tsx",
+  "src/components/ChatMarkdown.test.tsx",
+  "src/components/ChatMarkdown.assets.test.tsx",
+  "src/components/ChatMarkdown.permissions.test.tsx",
+  "src/components/ThreadNotificationCoordinator.badge.test.tsx",
+  "src/components/ThreadTerminalDrawer.permissions.test.tsx",
+  "src/components/onboarding/WelcomeWizard.import.test.tsx",
+  "src/components/pullRequest/PullRequestMarkdownEditor.test.tsx",
+  "src/components/settings/KeybindingsSettings.environment.test.tsx",
+  "src/components/settings/SourceControlWritingSettings.test.tsx",
+  "src/components/settings/settingsLayout.test.tsx",
 ] as const;
 
 const unitTestProject = {
@@ -385,7 +420,7 @@ export default defineConfig(() => {
         "@clerk/clerk-js",
         "@clerk/react/internal",
         "@pierre/diffs",
-        "@pierre/diffs/editor",
+        "@pierre/diffs/edit",
         "@pierre/diffs/react",
         "@pierre/diffs/worker/worker.js",
         "effect/Array",
@@ -447,7 +482,7 @@ export default defineConfig(() => {
                 prefix,
                 {
                   target: devProxyTarget,
-                  changeOrigin: true,
+                  changeOrigin: !DEV_PROXIED_ORIGIN_PRESERVING_PREFIXES.has(prefix),
                   ...(prefix === "/ws" || prefix === "/api" ? { ws: true } : {}),
                 },
               ]),

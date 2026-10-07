@@ -1,5 +1,5 @@
-import * as NodeTimersPromises from "node:timers/promises";
 // @effect-diagnostics nodeBuiltinImport:off
+import * as NodeTimersPromises from "node:timers/promises";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";

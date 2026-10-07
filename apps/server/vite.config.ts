@@ -165,6 +165,13 @@ export default mergeConfig(
               "src/terminal/NodePtyAdapter.test.ts",
               "src/vcs/GitVcsDriverCore.test.ts",
               "src/workspace/WorkspaceEntries.test.ts",
+              // Mocks `./ServerBrowserContexts`. Under isolate:false the real
+              // pool is already bound, so launch asks the stub browser for an
+              // executable and desktop CDP connects to ws://desktop.
+              "src/preview/ServerBrowser.test.ts",
+              // Mocks `node:fs/promises` and spies on playwright. Under
+              // isolate:false the real mkdir runs against `/test` and fails.
+              "src/preview/ServerBrowserContexts.test.ts",
             ],
           },
         },
@@ -207,6 +214,13 @@ export default mergeConfig(
               "src/textGeneration/CursorTextGeneration.test.ts",
               "src/terminal/NodePtyAdapter.test.ts",
               "src/workspace/WorkspaceEntries.test.ts",
+              // Mocks `./ServerBrowserContexts`. Under isolate:false the real
+              // pool is already bound, so launch asks the stub browser for an
+              // executable and desktop CDP connects to ws://desktop.
+              "src/preview/ServerBrowser.test.ts",
+              // Mocks `node:fs/promises` and spies on playwright. Under
+              // isolate:false the real mkdir runs against `/test` and fails.
+              "src/preview/ServerBrowserContexts.test.ts",
             ],
           },
         },

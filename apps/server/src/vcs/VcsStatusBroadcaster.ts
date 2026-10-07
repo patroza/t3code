@@ -20,6 +20,7 @@ import type {
   VcsStatusRemoteResult,
   VcsStatusResult,
   VcsStatusStreamEvent,
+  VcsStatusSubscriptionInput,
 } from "@t3tools/contracts";
 import { mergeGitStatusParts } from "@t3tools/shared/git";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
@@ -235,7 +236,7 @@ export class VcsStatusBroadcaster extends Context.Service<
       cwd: string,
     ) => Effect.Effect<VcsStatusRemoteResult | null, GitManagerServiceError>;
     readonly streamStatus: (
-      input: VcsStatusInput,
+      input: VcsStatusSubscriptionInput,
       options?: StreamStatusOptions,
     ) => Stream.Stream<VcsStatusStreamEvent, GitManagerServiceError>;
   }
@@ -937,12 +938,14 @@ export const make = Effect.gen(function* () {
         const subscription = yield* PubSub.subscribe(changesPubSub);
         const initialLocal = yield* getOrLoadLocalStatus(cwd);
         let cachedStatus = yield* getCachedStatus(cwd);
+        const includeRemote = input.includeRemote !== false;
 
         // List mode: shared budgeted refresher keeps remote/PR state fresh for all
         // list-interested cwds without one 30s poller fiber per worktree (storm root).
         // Full mode: dedicated poller (may include git fetch) for active git chrome.
+        // includeRemote false: passive observers receive the cache and do not poll.
         let release: Effect.Effect<void> = Effect.void;
-        if (mode === "list") {
+        if (includeRemote && mode === "list") {
           // Registers cwd with the shared budgeted refresher (keeps PR/remote fresh).
           // No per-cwd poller and no per-subscribe remote stampede (reconnect storms
           // used to fire N concurrent remoteStatus calls and block auth SQL).
@@ -958,7 +961,7 @@ export const make = Effect.gen(function* () {
             );
           }
           release = releaseListInterest(cwd).pipe(Effect.ignore, Effect.asVoid);
-        } else {
+        } else if (includeRemote) {
           yield* retainRemotePoller(
             cwd,
             input.cwd,
@@ -971,19 +974,19 @@ export const make = Effect.gen(function* () {
 
         const initialRemote = cachedStatus?.remote?.value ?? null;
 
-        // When remote is not cached yet, emit localUpdated only — never a snapshot that
-        // fabricates remote defaults (pr:null). Downstream clients treat that fake null
-        // PR as "no PR" and thrash badges (Discord ▫️⇄❌🔀 on every rehydrate).
+        // Active streams must not publish a snapshot that fabricates remote
+        // defaults (pr:null). Clients treat that as "no PR" and thrash badges.
+        // Passive observers asked not to refresh, so they receive the cache as-is.
         const initialEvent =
-          initialRemote !== null
+          includeRemote && initialRemote === null
             ? ({
+                _tag: "localUpdated" as const,
+                local: initialLocal,
+              } as const)
+            : ({
                 _tag: "snapshot" as const,
                 local: initialLocal,
                 remote: initialRemote,
-              } as const)
-            : ({
-                _tag: "localUpdated" as const,
-                local: initialLocal,
               } as const);
 
         return Stream.concat(

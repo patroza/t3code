@@ -11,7 +11,7 @@ function run(scenario: string) {
   const log = NodePath.join(dir, "calls");
   NodeFS.writeFileSync(
     NodePath.join(dir, "gh"),
-    `#!/bin/bash
+    `#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$CALLS"
 if [[ "$1" == api ]]; then
   if [[ "$*" == *production* && "$SCENARIO" == disabled ]]; then echo disabled_manually

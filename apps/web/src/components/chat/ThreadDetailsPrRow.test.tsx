@@ -9,7 +9,11 @@ const state = vi.hoisted(() => ({
   perform: vi.fn(),
 }));
 
-vi.mock("~/state/entities", () => ({ useServerConfigs: () => new Map() }));
+vi.mock("~/state/entities", () => ({
+  useServerConfigs: () => new Map(),
+  // Partial mocks leak under isolate:false. Preview reopen needs this export.
+  readEnvironmentSupportsServerBrowser: () => false,
+}));
 vi.mock("~/state/pullRequests", () => ({ pullRequestEnvironment: {} }));
 vi.mock("~/hooks/useLiveRefresh", () => ({ useLiveRefresh: () => {} }));
 vi.mock("~/state/query", () => ({

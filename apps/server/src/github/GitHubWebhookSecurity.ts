@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Effect's Crypto has no createHmac, sign, or timingSafeEqual.
 import * as NodeBuffer from "node:buffer";
 import * as NodeCrypto from "node:crypto";
 

@@ -2,7 +2,11 @@ import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-vi.mock("~/state/entities", () => ({ useThreadShell: () => null }));
+vi.mock("~/state/entities", () => ({
+  useThreadShell: () => null,
+  // Partial mocks leak under isolate:false. Preview reopen needs this export.
+  readEnvironmentSupportsServerBrowser: () => false,
+}));
 vi.mock("~/state/session", () => ({ usePreparedConnection: () => ({ _tag: "None" }) }));
 
 import {

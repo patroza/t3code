@@ -1,3 +1,5 @@
+import { useScopedSettingsWriteAllowed } from "./useScopedSettings";
+import { AuthSettingsWriteScope } from "@t3tools/contracts";
 import { EnvironmentId, type T3ProjectFileScript } from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
@@ -52,6 +54,7 @@ export function ProjectActionsSettings() {
     (candidate) =>
       JSON.stringify(candidate.settings.defaultProjectScripts) !== JSON.stringify(scripts),
   );
+  const canWriteSettings = useScopedSettingsWriteAllowed();
   const [request, setRequest] = useState<ProjectScriptEditorRequest | null>(null);
   const memberById = new Map(
     isProjectScope ? scope.members.map((member) => [member.id, member]) : [],
@@ -114,6 +117,7 @@ export function ProjectActionsSettings() {
         runOnWorktreeRemove: fileScript.runOnWorktreeRemove ?? false,
         runOnPrMerged: fileScript.runOnPrMerged ?? false,
         waitForSetup: fileScript.runOnWorktreeCreate === true && fileScript.async === false,
+        runOnSettle: fileScript.runOnSettle ?? false,
         keybinding: null,
         previewUrl: fileScript.previewUrl ?? null,
         autoOpenPreview: fileScript.previewUrl ? (fileScript.autoOpenPreview ?? false) : false,
@@ -150,7 +154,7 @@ export function ProjectActionsSettings() {
                       id="import-scripts"
                       size="xs"
                       variant="ghost"
-                      disabled={saving}
+                      disabled={saving || !canWriteSettings}
                       type="button"
                     />
                   }
@@ -186,7 +190,7 @@ export function ProjectActionsSettings() {
             <Button
               size="xs"
               variant="outline"
-              disabled={saving || targets.length === 0}
+              disabled={saving || !canWriteSettings || targets.length === 0}
               onClick={() => setRequest({ scriptId: null, initial: EMPTY_PROJECT_SCRIPT_INPUT })}
             >
               <PlusIcon className="size-3.5" />
@@ -204,7 +208,7 @@ export function ProjectActionsSettings() {
         <ProjectActionsList
           scripts={scripts}
           keybindings={keybindings}
-          disabled={saving}
+          disabled={saving || !canWriteSettings}
           onEdit={(script) => setRequest(editorRequestForScript(script, keybindings))}
         />
       )}
@@ -215,15 +219,19 @@ export function ProjectActionsSettings() {
           className="text-warning"
         />
       ) : null}
-      <ProjectScriptEditorDialog
-        request={request}
-        scripts={scripts}
-        onSubmit={submit}
-        onDelete={(id) =>
-          void persist((current) => current.filter((script) => script.id !== id), id, null)
-        }
-        onClose={() => setRequest(null)}
-      />
+      {target && (
+        <ProjectScriptEditorDialog
+          environmentId={target.environmentId}
+          editScope={AuthSettingsWriteScope}
+          request={request}
+          scripts={scripts}
+          onSubmit={submit}
+          onDelete={(id) =>
+            void persist((current) => current.filter((script) => script.id !== id), id, null)
+          }
+          onClose={() => setRequest(null)}
+        />
+      )}
     </SettingsSection>
   );
 }

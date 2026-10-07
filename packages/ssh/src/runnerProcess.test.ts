@@ -11,6 +11,7 @@ import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as NodeNet from "node:net";
 
+import { remoteStateKey } from "./command.ts";
 import { buildRemoteStopScript, buildRemoteT3RunnerScript } from "./tunnel.ts";
 
 const Started = Schema.Struct({
@@ -187,13 +188,16 @@ server.listen(0, "127.0.0.1", () => {
           for (const [name, contents] of Object.entries(savedState)) {
             yield* fs.writeFileString(path.join(fixture, name), contents);
           }
-          const script = buildRemoteStopScript({
-            alias: "fixture",
-            hostname: "fixture",
-            username: null,
-            port: null,
-          });
+          const script = buildRemoteStopScript(
+            yield* remoteStateKey({
+              alias: "fixture",
+              hostname: "fixture",
+              username: null,
+              port: null,
+            }),
+          );
           // Redirect only the state directory. Never use the developer's SSH state.
+          // PATH stays so cat, kill, sleep, and rm resolve. They are not on every shell's default PATH.
           const isolatedScript = script.replace(
             /^STATE_DIR=.*$/mu,
             'STATE_DIR="$T3_TEST_STATE_DIR"',
@@ -203,7 +207,10 @@ server.listen(0, "127.0.0.1", () => {
             const stop = yield* spawner.spawn(
               ChildProcess.make("/bin/sh", ["-s"], {
                 cwd: fixture,
-                env: { T3_TEST_STATE_DIR: fixture },
+                env: {
+                  ...(process.env.PATH === undefined ? {} : { PATH: process.env.PATH }),
+                  T3_TEST_STATE_DIR: fixture,
+                },
                 stdin: Stream.make(new TextEncoder().encode(isolatedScript)),
               }),
             );
