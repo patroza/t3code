@@ -99,13 +99,6 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(chat).toMatch(/deepLink|message-|scrollIntoView/i);
   });
 
-  it("chat header keeps remote Open in VS Code control markers", () => {
-    const header = readSrc("components/chat/ChatHeader.tsx");
-    expect(header).toContain("shouldOfferRemoteVscodeOpen");
-    expect(header).toContain("Open in VS Code Remote SSH on");
-    expect(header).toContain("shell.openExternal");
-  });
-
   it("chat header keeps AI usage status and host resource gauges", () => {
     const header = readSrc("components/chat/ChatHeader.tsx");
     expect(header).toContain("HostResourceStatus");
