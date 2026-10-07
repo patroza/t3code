@@ -90,6 +90,15 @@ describe("T3 thread URL helpers", () => {
     expect(pickT3ThreadUrlForGithubRepo({ fullUrl, repoIsPrivate: true })).toBe(fullUrl);
   });
 
+  it("does not copy credential fragments into public links", () => {
+    expect(
+      toT3PublicShortThreadUrl(
+        "https://private.example.test/?thread=t1#token=secret",
+        "https://public.example.test",
+      ),
+    ).toBe("https://public.example.test/?thread=t1");
+  });
+
   it.each([
     "invalid",
     "javascript:alert(1)",

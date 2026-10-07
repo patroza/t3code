@@ -146,7 +146,7 @@ export function toT3PublicShortThreadUrl(
     if (!threadId) return null;
     const url = new URL(`${base.toString().replace(/\/+$/u, "")}/`);
     url.searchParams.set("thread", threadId);
-    url.hash = full.hash;
+    if (/^#message-[\w.-]+$/u.test(full.hash)) url.hash = full.hash;
     return url.toString();
   } catch {
     return null;
