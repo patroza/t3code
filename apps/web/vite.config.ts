@@ -9,7 +9,10 @@ import "vite-plus/test/config";
 import { defineConfig, type Connect, type Plugin } from "vite-plus";
 import pkg from "./package.json" with { type: "json" };
 
-import { DEV_PROXIED_PATH_PREFIXES } from "@t3tools/shared/devProxy";
+import {
+  DEV_PROXIED_ORIGIN_PRESERVING_PREFIXES,
+  DEV_PROXIED_PATH_PREFIXES,
+} from "@t3tools/shared/devProxy";
 
 import { loadRepoEnv } from "../../scripts/lib/public-config";
 import { thirdPartyLicensesPlugin } from "../../scripts/lib/third-party-licenses";
@@ -142,9 +145,6 @@ const isolatedUnitTestFiles = [
   // applies — the icon falls back to the browser mockup and the stored-favicon
   // assertion fails, depending only on how files land across workers.
   "src/components/preview/PreviewFaviconIcon.test.tsx",
-  // Mocks `~/localApi` getClientSettings; under isolate:false the real
-  // localApi is already bound so open waits forever or never sees the mock.
-  "src/components/preview/PreviewAutomationHosts.test.tsx",
   "src/components/preview/PreviewView.test.tsx",
   "src/components/preview/openPreviewSession.test.ts",
   "src/components/preview/openTerminalLinkInPreview.test.ts",
@@ -230,7 +230,6 @@ const isolatedUnitTestFiles = [
   // Real Pierre worker + 7k-line tokenizer. The 60-edit stale-highlight case
   // timed out at 15s under isolate:false CI load.
   "src/components/files/AttachmentFilePreview.test.tsx",
-  "src/components/files/fileEditorHighlight.test.ts",
   "src/components/permissions/usePermissionStatus.test.ts",
   // react-test-renderer + Base UI Popover/Tooltip. Under isolate:false a
   // sibling can bind the real floating-ui modules first, so the mocks never
@@ -385,7 +384,7 @@ export default defineConfig(() => {
         "@clerk/clerk-js",
         "@clerk/react/internal",
         "@pierre/diffs",
-        "@pierre/diffs/editor",
+        "@pierre/diffs/edit",
         "@pierre/diffs/react",
         "@pierre/diffs/worker/worker.js",
         "effect/Array",
@@ -447,7 +446,7 @@ export default defineConfig(() => {
                 prefix,
                 {
                   target: devProxyTarget,
-                  changeOrigin: true,
+                  changeOrigin: !DEV_PROXIED_ORIGIN_PRESERVING_PREFIXES.has(prefix),
                   ...(prefix === "/ws" || prefix === "/api" ? { ws: true } : {}),
                 },
               ]),

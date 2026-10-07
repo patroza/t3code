@@ -7,6 +7,8 @@ import {
   projectLifecycleRuntimeEnv,
   projectScriptCwd,
   projectScriptRuntimeEnv,
+  projectScriptMenuLabel,
+  settleProjectScript,
   setupProjectScript,
   worktreeRemoveProjectScript,
 } from "@t3tools/shared/projectScripts";
@@ -18,7 +20,8 @@ import {
   nextProjectScriptId,
   primaryProjectScript,
   projectScriptIdFromCommand,
-  projectScriptMenuLabel,
+  projectScriptMenuLabel as webProjectScriptMenuLabel,
+  releaseClaimedRoles,
 } from "./projectScripts";
 
 describe("projectScripts helpers", () => {
@@ -32,6 +35,7 @@ describe("projectScripts helpers", () => {
         runOnWorktreeRemove: false,
         runOnPrMerged: false,
         waitForSetup: false,
+        runOnSettle: false,
         previewUrl: "http://localhost:5733",
         autoOpenPreview: true,
       }),
@@ -56,6 +60,7 @@ describe("projectScripts helpers", () => {
         runOnWorktreeRemove: false,
         runOnPrMerged: false,
         waitForSetup: false,
+        runOnSettle: false,
         previewUrl: null,
         autoOpenPreview: false,
       }),
@@ -78,6 +83,7 @@ describe("projectScripts helpers", () => {
         runOnWorktreeRemove: true,
         runOnPrMerged: true,
         waitForSetup: false,
+        runOnSettle: false,
         previewUrl: null,
         autoOpenPreview: false,
       }),
@@ -101,6 +107,7 @@ describe("projectScripts helpers", () => {
       runOnPrMerged: false,
       previewUrl: null,
       autoOpenPreview: false,
+      runOnSettle: false,
     } as const;
     expect(
       buildProjectScript("setup", { ...input, runOnWorktreeCreate: true, waitForSetup: true }),
@@ -170,6 +177,14 @@ describe("projectScripts helpers", () => {
         runOnPrMerged: true,
       },
       {
+        id: "clean",
+        name: "Clean",
+        command: "cargo clean",
+        icon: "build" as const,
+        runOnWorktreeCreate: false,
+        runOnSettle: true,
+      },
+      {
         id: "test",
         name: "Test",
         command: "bun test",
@@ -182,7 +197,10 @@ describe("projectScripts helpers", () => {
     expect(setupProjectScript(scripts)?.id).toBe("setup");
     expect(worktreeRemoveProjectScript(scripts)?.id).toBe("teardown");
     expect(prMergedProjectScript(scripts)?.id).toBe("merged");
-    expect(projectScriptMenuLabel(scripts[1]!)).toBe("Teardown (teardown)");
+    expect(settleProjectScript(scripts)?.id).toBe("clean");
+    expect(webProjectScriptMenuLabel(scripts[1]!)).toBe("Teardown (teardown)");
+    // Cleanup is never the one-click run button, even when it is all there is.
+    expect(primaryProjectScript(scripts.filter((script) => script.id === "clean"))).toBeNull();
   });
 
   it("clears conflicting lifecycle flags from other scripts", () => {
@@ -202,6 +220,52 @@ describe("projectScripts helpers", () => {
     });
     expect(cleared.runOnWorktreeRemove).toBeUndefined();
     expect(cleared.runOnPrMerged).toBe(true);
+  });
+
+  it("labels every lifecycle role a script runs in", () => {
+    const script = {
+      id: "both",
+      name: "Both",
+      command: "true",
+      icon: "play" as const,
+      runOnWorktreeCreate: true,
+    };
+    expect(projectScriptMenuLabel(script)).toBe("Both (setup)");
+    expect(projectScriptMenuLabel({ ...script, runOnSettle: true })).toBe(
+      "Both (setup, on settle)",
+    );
+    expect(projectScriptMenuLabel({ ...script, runOnWorktreeCreate: false })).toBe("Both");
+  });
+
+  it("moves the setup and settle roles to the script that claims them", () => {
+    const input = {
+      name: "Next",
+      command: "true",
+      icon: "play",
+      runOnWorktreeRemove: false,
+      runOnPrMerged: false,
+      waitForSetup: false,
+      previewUrl: null,
+      autoOpenPreview: false,
+    } as const;
+    const holder = {
+      id: "holder",
+      name: "Holder",
+      command: "true",
+      icon: "play" as const,
+      runOnWorktreeCreate: true,
+      runOnSettle: true,
+    };
+
+    expect(
+      releaseClaimedRoles(holder, { ...input, runOnWorktreeCreate: false, runOnSettle: true }),
+    ).toMatchObject({ runOnWorktreeCreate: true, runOnSettle: false });
+    expect(
+      releaseClaimedRoles(holder, { ...input, runOnWorktreeCreate: true, runOnSettle: false }),
+    ).toMatchObject({ runOnWorktreeCreate: false, runOnSettle: true });
+    expect(
+      releaseClaimedRoles(holder, { ...input, runOnWorktreeCreate: false, runOnSettle: false }),
+    ).toBe(holder);
   });
 
   it("builds default runtime env for scripts", () => {

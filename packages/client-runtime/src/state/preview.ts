@@ -71,6 +71,12 @@ export function createPreviewEnvironmentAtoms<R, E>(
       scheduler: lifecycleScheduler,
       concurrency: lifecycleConcurrency,
     }),
+    adjust: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:preview:adjust",
+      tag: WS_METHODS.previewAdjust,
+      scheduler: lifecycleScheduler,
+      concurrency: lifecycleConcurrency,
+    }),
     refresh: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:preview:refresh",
       tag: WS_METHODS.previewRefresh,
@@ -98,6 +104,10 @@ export function createPreviewEnvironmentAtoms<R, E>(
         key: ({ environmentId, input }: { environmentId: string; input: { port: number } }) =>
           JSON.stringify([environmentId, input.port]),
       },
+    }),
+    clearProfile: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:preview:clear-profile",
+      tag: WS_METHODS.previewClearProfile,
     }),
     reportStatus: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:preview:report-status",

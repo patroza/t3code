@@ -21,6 +21,12 @@ const mocks = vi.hoisted(() => ({
     async (_environmentId: string, target: { readonly url?: string }): Promise<string> =>
       (target.url ?? "").replace("localhost", "172.25.85.75"),
   ),
+  resolveDiscoveredServerUrl: vi.fn((_environmentId: string, rawUrl: string): string =>
+    rawUrl.replace("localhost", "172.25.85.75"),
+  ),
+  readEnvironmentScope: vi.fn(() => true),
+  setAnnotationSendEnabled: vi.fn(async (): Promise<void> => undefined),
+  cancelPickElement: vi.fn(async () => undefined),
   submittedUrl: null as ((url: string) => void) | null,
   emptyStateUrl: null as ((url: string) => void) | null,
   togglePictureInPicture: null as (() => void) | null,
@@ -67,7 +73,16 @@ vi.mock("~/browserHistoryStore", () => ({
 vi.mock("~/state/session", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/state/session")>()),
   readPreparedConnection: mocks.readPreparedConnection,
+  readEnvironmentScope: mocks.readEnvironmentScope,
+  useEnvironmentScope: mocks.readEnvironmentScope,
 }));
+
+// File-preview errors share a module with asset hooks. Keep the pure URL resolver
+// without importing those hooks and their environment runtime into chrome tests.
+vi.mock("~/assets/assetUrls", async () => {
+  const { resolveAssetUrl } = await import("@t3tools/client-runtime/state/assets");
+  return { resolveAssetUrl };
+});
 
 // Stubbed at the direct dependency rather than letting the real module pull in
 // `useSettings` -> `state/server`, which would drag the whole settings and
@@ -213,6 +228,8 @@ vi.mock("./previewBridge", () => ({
   previewBridge: {
     navigate: mocks.navigate,
     pickElement: mocks.pickElement,
+    setAnnotationSendEnabled: mocks.setAnnotationSendEnabled,
+    cancelPickElement: mocks.cancelPickElement,
     pictureInPicture: {
       open: mocks.openPictureInPicture,
       close: mocks.closePictureInPicture,
@@ -227,14 +244,14 @@ vi.mock("./PreviewChromeRow", () => ({
     onPictureInPicture?: () => void;
     pictureInPicture?: boolean;
     trailingActions?: {
-      props: { onNativePictureInPicture?: () => void };
+      props: { actions?: { toggleNativePictureInPicture?: () => void } };
     };
   }) => {
     mocks.submittedUrl = props.onSubmit;
     mocks.toggleAnnotation = props.onPickElement ?? null;
     mocks.togglePictureInPicture = props.onPictureInPicture ?? null;
     mocks.toggleNativePictureInPicture =
-      props.trailingActions?.props.onNativePictureInPicture ?? null;
+      props.trailingActions?.props.actions?.toggleNativePictureInPicture ?? null;
     mocks.pictureInPicturePressed = props.pictureInPicture ?? false;
     return null;
   },
@@ -247,8 +264,8 @@ vi.mock("./PreviewEmptyState", () => ({
   },
 }));
 vi.mock("./PreviewMoreMenu", () => ({
-  PreviewMoreMenu: (props: { onNativePictureInPicture: () => void }) => {
-    mocks.toggleNativePictureInPicture = props.onNativePictureInPicture;
+  PreviewMoreMenu: (props: { actions: { toggleNativePictureInPicture?: () => void } }) => {
+    mocks.toggleNativePictureInPicture = props.actions.toggleNativePictureInPicture ?? null;
     return null;
   },
 }));
@@ -262,6 +279,7 @@ vi.mock("./usePreviewSession", () => ({ usePreviewSession: vi.fn() }));
 
 vi.mock("~/browser/browserTargetResolver", () => ({
   resolveNavigableUrl: mocks.resolveNavigableUrl,
+  resolveDiscoveredServerUrl: mocks.resolveDiscoveredServerUrl,
 }));
 
 import { PreviewView } from "./PreviewView";
@@ -342,6 +360,10 @@ describe("PreviewView navigation", () => {
     mocks.rememberPreviewUrl.mockClear();
     mocks.readPreparedConnection.mockClear();
     mocks.resolveNavigableUrl.mockClear();
+    mocks.resolveDiscoveredServerUrl.mockClear();
+    mocks.readEnvironmentScope.mockReset().mockReturnValue(true);
+    mocks.setAnnotationSendEnabled.mockClear();
+    mocks.cancelPickElement.mockClear();
     mocks.submittedUrl = null;
     mocks.emptyStateUrl = null;
     mocks.togglePictureInPicture = null;
@@ -624,6 +646,94 @@ describe("PreviewView navigation", () => {
 
     await vi.waitFor(() => expect(onSendAnnotation).toHaveBeenCalledWith(annotation, null));
     expect(mocks.addPreviewAnnotation).toHaveBeenCalledWith(TEST_THREAD_REF, annotation);
+  });
+
+  it("retains the annotation locally when its own environment loses access during capture", async () => {
+    const annotation = {
+      id: "annotation-revoked",
+      pageUrl: "https://example.com/dashboard",
+      pageTitle: "Dashboard",
+      comment: "Tighten this spacing",
+      elements: [],
+      regions: [],
+      strokes: [],
+      styleChanges: [],
+      screenshot: null,
+      createdAt: "2026-09-05T00:00:00.000Z",
+    };
+    const onSendAnnotation = vi.fn();
+    let submitPick: (() => void) | undefined;
+    mocks.pickElement.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          submitPick = () => resolve({ annotation, submission: "send" });
+        }),
+    );
+    const document = installTestDom();
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(document.createElement("div") as unknown as Element);
+    const view = () => (
+      <PreviewView
+        threadRef={TEST_THREAD_REF}
+        tabId="tab-1"
+        visible
+        onSendAnnotation={onSendAnnotation}
+      />
+    );
+    try {
+      await act(async () => root.render(view()));
+      await act(async () => mocks.toggleAnnotation?.());
+      expect(submitPick).toBeDefined();
+      expect(mocks.setAnnotationSendEnabled).toHaveBeenLastCalledWith(TEST_RUNTIME_TAB_ID, true);
+
+      mocks.readEnvironmentScope.mockImplementation(
+        (environmentId?: unknown) => environmentId !== TEST_THREAD_REF.environmentId,
+      );
+      await act(async () => root.render(view()));
+      expect(mocks.setAnnotationSendEnabled).toHaveBeenLastCalledWith(TEST_RUNTIME_TAB_ID, false);
+      await act(async () => submitPick!());
+      expect(mocks.addPreviewAnnotation).toHaveBeenCalledWith(TEST_THREAD_REF, annotation);
+      expect(onSendAnnotation).not.toHaveBeenCalled();
+
+      mocks.readEnvironmentScope.mockReturnValue(true);
+      mocks.pickElement.mockResolvedValue({ annotation, submission: "send" });
+      await act(async () => root.render(view()));
+      await act(async () => mocks.toggleAnnotation?.());
+      expect(mocks.setAnnotationSendEnabled).toHaveBeenLastCalledWith(TEST_RUNTIME_TAB_ID, true);
+      expect(onSendAnnotation).toHaveBeenCalledWith(annotation, null);
+    } finally {
+      await act(async () => root.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not reopen a cancelled picker after the permission update finishes", async () => {
+    let finishUpdate: (() => void) | undefined;
+    mocks.setAnnotationSendEnabled.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishUpdate = resolve;
+        }),
+    );
+    const document = installTestDom();
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(document.createElement("div") as unknown as Element);
+    try {
+      await act(async () =>
+        root.render(<PreviewView threadRef={TEST_THREAD_REF} tabId="tab-1" visible />),
+      );
+      await act(async () => mocks.toggleAnnotation?.());
+      expect(finishUpdate).toBeDefined();
+      expect(mocks.pickElement).not.toHaveBeenCalled();
+      await act(async () => mocks.toggleAnnotation?.());
+      expect(mocks.cancelPickElement).toHaveBeenCalledWith(TEST_RUNTIME_TAB_ID);
+      await act(async () => finishUpdate!());
+      expect(mocks.pickElement).not.toHaveBeenCalled();
+      expect(mocks.addPreviewAnnotation).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+      vi.unstubAllGlobals();
+    }
   });
 
   it("warns when main dropped the crop before handing over the pick", async () => {

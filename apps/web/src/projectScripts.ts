@@ -15,6 +15,7 @@ export interface ProjectScriptInput {
   readonly runOnWorktreeRemove: boolean;
   readonly runOnPrMerged: boolean;
   readonly waitForSetup: boolean;
+  readonly runOnSettle: boolean;
   readonly previewUrl: Exclude<ProjectScript["previewUrl"], undefined> | null;
   readonly autoOpenPreview: boolean;
 }
@@ -29,12 +30,31 @@ export function buildProjectScript(id: string, input: ProjectScriptInput): Proje
     ...(input.runOnWorktreeRemove ? { runOnWorktreeRemove: true } : {}),
     ...(input.runOnPrMerged ? { runOnPrMerged: true } : {}),
     ...(input.runOnWorktreeCreate && input.waitForSetup ? { async: false } : {}),
+    ...(input.runOnSettle ? { runOnSettle: true } : {}),
     ...(input.previewUrl === null
       ? {}
       : {
           previewUrl: input.previewUrl,
           autoOpenPreview: input.autoOpenPreview,
         }),
+  };
+}
+
+/**
+ * A project runs at most one setup script and one settle script, so saving a
+ * script that claims either role takes it from the script that held it.
+ */
+export function releaseClaimedRoles(
+  script: ProjectScript,
+  saved: ProjectScriptInput,
+): ProjectScript {
+  const releaseSetup = saved.runOnWorktreeCreate && script.runOnWorktreeCreate;
+  const releaseSettle = saved.runOnSettle && script.runOnSettle === true;
+  if (!releaseSetup && !releaseSettle) return script;
+  return {
+    ...script,
+    ...(releaseSetup ? { runOnWorktreeCreate: false } : {}),
+    ...(releaseSettle ? { runOnSettle: false } : {}),
   };
 }
 
@@ -94,7 +114,8 @@ export function isLifecycleProjectScript(script: ProjectScript): boolean {
   return (
     script.runOnWorktreeCreate ||
     script.runOnWorktreeRemove === true ||
-    script.runOnPrMerged === true
+    script.runOnPrMerged === true ||
+    script.runOnSettle === true
   );
 }
 
@@ -103,6 +124,7 @@ export function projectScriptMenuLabel(script: ProjectScript): string {
   if (script.runOnWorktreeCreate) tags.push("setup");
   if (script.runOnWorktreeRemove === true) tags.push("teardown");
   if (script.runOnPrMerged === true) tags.push("pr-merged");
+  if (script.runOnSettle === true) tags.push("on settle");
   return tags.length > 0 ? `${script.name} (${tags.join(", ")})` : script.name;
 }
 
@@ -131,5 +153,5 @@ export function clearConflictingLifecycleFlags(
 
 export function primaryProjectScript(scripts: ReadonlyArray<ProjectScript>): ProjectScript | null {
   const regular = scripts.find((script) => !isLifecycleProjectScript(script));
-  return regular ?? scripts[0] ?? null;
+  return regular ?? scripts.find((script) => !script.runOnSettle) ?? null;
 }

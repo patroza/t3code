@@ -1,12 +1,13 @@
 import * as Context from "effect/Context";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as NodeTimersPromises from "node:timers/promises";
 import * as Path from "effect/Path";
 import * as Mime from "effect/http/Mime";
 import * as Ref from "effect/Ref";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
@@ -178,11 +179,52 @@ const registerDesktopSchemePrivileges = Effect.sync(registerDesktopSchemePrivile
 
 export const layerSchemePrivileges = Layer.effectDiscard(registerDesktopSchemePrivileges);
 
-async function proxyRequest(
+class ElectronProtocolFetchError extends Schema.TaggedError<ElectronProtocolFetchError>()(
+  "ElectronProtocolFetchError",
+  { cause: Schema.Defect() },
+) {}
+
+class RetryableDocumentResponse extends Data.TaggedError("RetryableDocumentResponse")<{
+  readonly response: Response;
+}> {}
+
+const netFetch = (url: string, init: RequestInit) =>
+  Effect.tryPromise({
+    try: () => Electron.net.fetch(url, init),
+    catch: (cause) => new ElectronProtocolFetchError({ cause }),
+  });
+
+function isRetryableDocumentResponse(url: string, response: Response): boolean {
+  if (response.status !== 503 && response.status !== 404) {
+    return false;
+  }
+  // Only the app shell / SPA document — hashed assets should fail fast so
+  // preload recovery can run instead of masking a torn swap.
+  const pathname = new URL(url).pathname;
+  return pathname === "/" || pathname === "/index.html" || !pathname.includes(".");
+}
+
+// The dev renderer target can briefly refuse connections while Vite restarts,
+// and an in-progress asset swap can answer the document shell with 503/404.
+// Retry idempotent requests after 50ms, then 150ms. Connection failures keep
+// the last error; a document shell that stays unavailable keeps the last response.
+const fetchWithTransientRetry = (url: string, init: RequestInit) =>
+  netFetch(url, init).pipe(
+    Effect.filterOrFail(
+      (response) => !isRetryableDocumentResponse(url, response),
+      (response) => new RetryableDocumentResponse({ response }),
+    ),
+    Effect.retry({ schedule: Schedule.exponential("50 millis", 3), times: 2 }),
+    Effect.catchTags({
+      RetryableDocumentResponse: (error) => Effect.succeed(error.response),
+    }),
+  );
+
+const proxyRequest = Effect.fn("desktop.protocol.proxyRequest")(function* (
   request: Request,
   targetOrigin: URL,
   contentSecurityPolicy: string,
-): Promise<Response> {
+) {
   const requestUrl = new URL(request.url);
   if (requestUrl.host !== DESKTOP_HOST) {
     return new Response(null, { status: 404 });
@@ -218,22 +260,10 @@ async function proxyRequest(
   }
   const response =
     request.method === "GET" || request.method === "HEAD"
-      ? await fetchWithTransientRetry(targetUrl.toString(), init)
-      : await Electron.net.fetch(targetUrl.toString(), init);
+      ? yield* fetchWithTransientRetry(targetUrl.toString(), init)
+      : yield* netFetch(targetUrl.toString(), init);
   return withContentSecurityPolicy(response, contentSecurityPolicy);
-}
-
-const TRANSIENT_FETCH_RETRY_DELAYS_MS = [0, 50, 150, 400] as const;
-
-function isRetryableDocumentResponse(url: string, response: Response): boolean {
-  if (response.status !== 503 && response.status !== 404) {
-    return false;
-  }
-  // Only the app shell / SPA document — hashed assets should fail fast so
-  // preload recovery can run instead of masking a torn swap.
-  const pathname = new URL(url).pathname;
-  return pathname === "/" || pathname === "/index.html" || !pathname.includes(".");
-}
+});
 
 // Serves the packaged web client without a backend: files resolve within the
 // asset directory, and any other path falls back to index.html so the SPA
@@ -276,33 +306,6 @@ const serveDesktopAsset = Effect.fn("desktop.protocol.serveAsset")(function* (
   });
 });
 
-async function fetchWithTransientRetry(url: string, init: RequestInit): Promise<Response> {
-  let lastError: unknown;
-  let lastResponse: Response | null = null;
-
-  for (const delayMs of TRANSIENT_FETCH_RETRY_DELAYS_MS) {
-    if (delayMs > 0) {
-      await NodeTimersPromises.setTimeout(delayMs);
-    }
-
-    try {
-      const response = await Electron.net.fetch(url, init);
-      if (!isRetryableDocumentResponse(url, response)) {
-        return response;
-      }
-      lastResponse = response;
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  if (lastResponse !== null) {
-    return lastResponse;
-  }
-
-  throw lastError;
-}
-
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const registered = yield* Ref.make(false);
@@ -325,7 +328,14 @@ export const make = Effect.gen(function* () {
                   contentSecurityPolicy,
                 );
               }
-              return proxyRequest(request, input.targetOrigin, contentSecurityPolicy);
+              // Reject with net.fetch's own error, as an unproxied fetch would.
+              return runPromise(
+                proxyRequest(request, input.targetOrigin, contentSecurityPolicy).pipe(
+                  Effect.catchTags({
+                    ElectronProtocolFetchError: (error) => Effect.die(error.cause),
+                  }),
+                ),
+              );
             });
           },
           catch: (cause) => new ElectronProtocolRegistrationError({ scheme: input.scheme, cause }),
