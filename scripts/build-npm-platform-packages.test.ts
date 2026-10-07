@@ -35,7 +35,11 @@ const run = Effect.fn("test.run")(function* (
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const child = yield* spawner.spawn(
-    ChildProcess.make(command, args, { cwd: options.cwd, env: options.env ?? {} }),
+    ChildProcess.make(command, args, {
+      cwd: options.cwd,
+      // tar -czf runs gzip through the shell. An empty env hides gzip when it is only on PATH.
+      env: options.env ?? (process.env.PATH === undefined ? {} : { PATH: process.env.PATH }),
+    }),
   );
   const [stdout, stderr, exitCode] = yield* Effect.all(
     [collect(child.stdout), collect(child.stderr), child.exitCode.pipe(Effect.map(Number))],

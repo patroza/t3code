@@ -1,0 +1,276 @@
+name: Fork CI
+
+env:
+  # Install dependencies without downloading Electron in every job. The desktop jobs
+  # fetch and verify the runtime explicitly below; mobile lint and release smoke do not need it.
+  ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+on:
+  workflow_dispatch:
+    inputs:
+      # Tim/candidates provenance tips do not carry fork-ci.yml (only upstream
+      # Blacksmith ci.yml). Dispatch against fork/changes (or any ref that has
+      # this workflow) and set checkout_ref to the tip under test so checks
+      # attach to that SHA / permanent draft PR.
+      checkout_ref:
+        description: "Git ref or SHA to check out and test (default: dispatch ref)"
+        required: false
+        type: string
+        default: ""
+  # Full PR CI for product layers. Job names match required checks (Check / Test /
+  # Mobile Native Static Analysis / Release Smoke) on protected bases.
+  #
+  # Permanent stack PRs (bases):
+  # - #255 base → main (dispatch only; do not list main here)
+  # - #1 tim → fork/base
+  # - #27 candidates → fork/tim
+  # - #2 changes → fork/candidates
+  #
+  # Upstream Blacksmith CI must stay disabled_manually. fork/base supplies
+  # GitHub-hosted runners + fork-ci.yml for all layers above it.
+  #
+  # integrationOverlays is empty: the overlays were drained into fork/dev at
+  # cutover. Re-add bases here if one is ever registered again.
+  pull_request:
+    # Explicit, to add ready_for_review: a PR marked ready without a new commit
+    # would otherwise sit forever on required checks that can never report.
+    #
+    # "edited" is deliberately absent. It was added to cover retargeting, but it
+    # also fires for title and body edits, and a job-level guard that skips those
+    # is worse than not triggering: a skipped job still publishes a check run,
+    # GitHub counts a skipped required check as satisfied, and the skipped run
+    # supersedes the real one. Editing the title of a red PR would clear its
+    # failures. Retarget without a push is rarer and recoverable -- close and
+    # reopen fires "reopened", which is watched.
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches:
+      - fork/base
+      - fork/tim
+      - fork/candidates
+      - fork/changes
+      # Stable contributor and release branch (docs/stable-dev-release-branch-handover.md).
+      - fork/dev
+  # fork/dev is never rebased, so its merge commits are the release candidates.
+  # Deployment promotes an exact green SHA and keys on a successful run of this
+  # workflow for that SHA, so every merge must produce one — a green PR tip is
+  # not enough when the merge SHA differs.
+  push:
+    branches:
+      - fork/dev
+
+concurrency:
+  # Push runs are keyed by SHA and never cancelled: the conclusion of a push run
+  # is what approves that exact commit for deployment, so cancelling one as
+  # superseded would leave that merge SHA permanently unapprovable.
+  #
+  # The "v2-" generation exists to escape a wedged run. A run that GitHub will
+  # not cancel ("Cannot cancel a workflow re-run that has not yet queued") keeps
+  # holding its group indefinitely, and no later run in that group can start.
+  # Bumping the generation puts every new run in a fresh namespace. Bump it
+  # again if this recurs; nothing depends on the literal value.
+  group: ci-v2-${{ github.event.pull_request.number || inputs.checkout_ref ||
+    (github.event_name == 'push' && github.sha) || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || github.sha }}
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Restore Vite Task check cache
+        id: vite-task-check-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: node_modules/.vite/task-cache
+          key: vite-task-check-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            vite-task-check-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Ensure Electron runtime is installed
+        run: vp run --filter @t3tools/desktop ensure:electron
+
+      - name: Install browser secret helper build libraries
+        run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
+
+      - name: Check
+        run: vp check
+
+      - name: Typecheck
+        run: vp run -r --cache --log labeled typecheck
+
+      - name: Build desktop pipeline
+        run: vp run --cache build:desktop
+
+      - name: Verify preload bundle output
+        run: |
+          test -f apps/desktop/dist-electron/preload.cjs
+          grep -nE "desktopBridge|getLocalEnvironmentBootstrap|PICK_FOLDER_CHANNEL|wsUrl" apps/desktop/dist-electron/preload.cjs
+          grep -n "__clerk_internal_electron_passkeys" apps/desktop/dist-electron/preload.cjs
+
+      - name: Save Vite Task check cache
+        if: success()
+        uses: actions/cache/save@v6
+        with:
+          path: node_modules/.vite/task-cache
+          key: ${{ steps.vite-task-check-cache.outputs.cache-primary-key }}
+
+  test_packages:
+    name: Test Packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || github.sha }}
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Ensure Electron runtime is installed
+        run: vp run --filter @t3tools/desktop ensure:electron
+
+      - name: Install browser secret helper build libraries
+        run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
+
+      - name: Test
+        run: vp run --parallel --concurrency-limit 4 --filter '!t3' --filter '!@t3tools/monorepo' --filter '!@t3tools/web' test
+
+  # Keep server files sequential within each runner to avoid load-sensitive
+  # flakes; the existing weighted sequencer balances six independent shards.
+  test_server:
+    name: Test Server ${{ matrix.shard }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || github.sha }}
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Install Chromium for server browser integration tests
+        run: node apps/server/node_modules/playwright-core/cli.js install --with-deps --only-shell chromium
+
+      - name: Test
+        run: vp run --filter t3 test --shard ${{ matrix.shard }}/${{ strategy.job-total }}
+
+  test_web:
+    name: Test Web
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || github.sha }}
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Test
+        run: vp run --filter @t3tools/web test
+
+  # Preserve the required Test check. Run even after failures or cancellation,
+  # and fail unless every test job (including every server shard) succeeded.
+  test:
+    name: Test
+    needs: [test_packages, test_server, test_web]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    steps:
+      - name: Require every test job to pass
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -e 'all(.[]; .result == "success")'
+
+  mobile_native_static_analysis:
+    name: Mobile Native Static Analysis
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || github.sha }}
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          # Saving the complete macOS node_modules cache takes ~95 seconds and
+          # loses the cache reservation whenever parallel PR runs overlap.
+          # A clean install is faster and has deterministic completion time.
+          cache: false
+          run-install: true
+
+      - name: Ensure Electron runtime is installed
+        run: vp run --filter @t3tools/desktop ensure:electron
+
+      - name: Test macOS Open With integration
+        # Present from Tim onward; fork/base is CI plumbing only and lacks this path.
+        run: |
+          if [[ -f apps/desktop/src/shell/DesktopOpenWith.test.ts ]]; then
+            vp test run apps/desktop/src/shell/DesktopOpenWith.test.ts
+          else
+            echo "DesktopOpenWith tests not on this tip; skipping."
+          fi
+
+      - name: Install mobile native static analysis tools
+        run: brew bundle install --file apps/mobile/Brewfile
+
+      - name: Lint mobile native sources
+        run: vp run lint:mobile
+
+  release_smoke:
+    name: Release Smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || github.sha }}
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Exercise release-only workflow steps
+        run: node scripts/release-smoke.ts

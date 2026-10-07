@@ -23,6 +23,7 @@ allowBuilds:
   workerd: false
 
 catalog:
+  dfx: 1.0.16
   "@clerk/backend": 3.18.1
   "@clerk/clerk-js": 6.32.1
   "@clerk/electron": 0.0.44
@@ -212,6 +213,9 @@ overrides:
   "@effect/vitest": "catalog:"
   "@effect/vitest>vitest": "-"
   "@expo/dom-webview": 58.0.2
+  # expo@58.0.2 depends on ^0.21.2. A fresh lockfile otherwise selects 0.21.3
+  # and the patched 0.21.2 is unused, which fails release smoke.
+  "@expo/fingerprint": 0.21.2
   "@expo/metro-config": 58.0.6
   expo-constants: 58.0.9
   expo-router: 58.0.10
@@ -256,6 +260,7 @@ packageExtensions:
       vite-plus: "catalog:"
 
 patchedDependencies:
+  "@expo/fingerprint@0.21.2": patches/@expo__fingerprint@0.21.2.patch
   alchemy@2.0.0-beta.80: patches/alchemy@2.0.0-beta.80.patch
   expo-glass-effect@58.0.3: patches/expo-glass-effect@58.0.3.patch
   expo-blur@58.0.3: patches/expo-blur@58.0.3.patch
@@ -285,6 +290,7 @@ patchedDependencies:
   react-native-keyboard-controller@1.22.6: patches/react-native-keyboard-controller@1.22.6.patch
   react-native-nitro-modules@0.35.9: patches/react-native-nitro-modules@0.35.9.patch
   react-native-screens@4.28.0: patches/react-native-screens@4.28.0.patch
+  dfx@1.0.16: patches/dfx@1.0.16.patch
 
 peerDependencyRules:
   allowAny:
@@ -302,3 +308,5 @@ supportedArchitectures:
   cpu: [current, x64]
   libc: [current, glibc]
   os: [current, linux]
+
+# (workspace already includes apps/*)

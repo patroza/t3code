@@ -74,17 +74,247 @@ const buildSourcemap: boolean | "hidden" =
       ? "hidden"
       : true;
 
+const isolatedUnitTestFiles = [
+  // Direct hook harnesses replace React hooks and compiler caches, requiring fresh module binding.
+  "src/hooks/useThreadActions.undo.test.ts",
+  "src/components/settings/ProjectFaviconPickerDialog.test.tsx",
+  "src/components/settings/ThemeEditorHost.test.tsx",
+  "src/components/settings/AcpSessionManagementSection.test.tsx",
+  "src/components/settings/AcpRegistrySearchStep.test.tsx",
+  "src/components/settings/SettingsPanels.restore.test.tsx",
+  "src/components/settings/ProviderSetupSection.test.tsx",
+
+  // Its direct component hook harness mocks React; real React from siblings must not bind first.
+  "src/components/settings/AcpRegistryIcon.test.ts",
+  // These exercise the real live-refresh hook; sibling presentation tests mock it.
+  "src/hooks/usePullRequestChecksRefresh.test.ts",
+  "src/authBootstrap.test.ts",
+  // Mocks `~/state/session`; same isolate:false hazard as the favicon test —
+  // it failed in one full run and passed in the next, purely on file ordering.
+  "src/browserHistoryStore.test.ts",
+  "src/browser/browserRecording.test.ts",
+  // Mocks `~/hooks/useSettings`; under isolate:false an earlier file binds
+  // the real store and getBrowserDefaults never sees the test profile list.
+  "src/browser/browserDefaults.test.ts",
+  // Mocks `~/hooks/useSettings`; under isolate:false the real hydrate path
+  // already bound ensureLocalApi, so failed-read tests throw "Local API not found".
+  "src/browser/browserLinkTarget.test.ts",
+  // Mocks `~/localApi` persistence; same isolate:false binding as useSettings.
+  "src/browser/HostedBrowserWebview.test.tsx",
+  "src/browser/browserTargetResolver.test.ts",
+  "src/browser/desktopTabLifetime.test.ts",
+  "src/branding.test.ts",
+  "src/clientPersistenceStorage.test.ts",
+  "src/cloud/dpop.test.ts",
+  "src/cloud/linkEnvironment.test.ts",
+  "src/cloud/managedAuth.test.ts",
+  "src/components/ComposerPromptEditor.test.ts",
+  "src/components/ProjectFavicon.test.tsx",
+  "src/components/ProviderUpdateEnvironmentRows.test.tsx",
+  "src/components/ServerUpdateAction.test.tsx",
+  // Mocks `~/lib/assistantTextSelection` and `../ui/toast`; under
+  // isolate:false those modules are already bound and citation Range/CSS
+  // highlight fixtures never attach.
+  "src/components/chat/AssistantCitationSource.test.ts",
+  // Mocks `@tanstack/react-router`; under isolate:false a sibling already
+  // bound the real Link, which throws reading `isServer` without a router
+  // (Fork CI on ce3ef6b4 failed all four source-disappearance tests).
+  "src/components/chat/AssistantCitationChip.test.tsx",
+  "src/components/chat/MessagesTimeline.test.tsx",
+  // Mocks `../assets/assetUrls` while ChatMarkdown is already bound to the
+  // real module under isolate:false — useAssetUrlState then sees
+  // useAtomValue() === null and throws on `_tag`.
+  "src/components/ChatMarkdown.workspace-images.test.tsx",
+  "src/components/chat/draftHeroTransition.test.ts",
+  // Mounts react-dom createRoot against a stub document; under isolate:false
+  // an earlier file can bind a real document/ReactDOM so hide/unhide never
+  // closes the popup.
+  "src/components/chat/useComposerMenuState.test.tsx",
+  // ComposerBanner uses buttonVariants. Under isolate:false a sibling's
+  // stub `../ui/button` mock (Button only) binds first and these tests die
+  // with "No buttonVariants export is defined on the mock".
+  "src/components/chat/ComposerBannerStack.test.tsx",
+  "src/components/chat/ComposerPendingUserInputPanel.test.tsx",
+  "src/components/chat/ComposerStashMenu.test.tsx",
+  "src/components/files/projectFilesQueryState.test.ts",
+  // Same react-hook mock as the .ts sibling; the .tsx refresh tests were added
+  // upstream and fail under isolate:false when real React is already bound.
+  "src/components/files/projectFilesQueryState.test.tsx",
+  // Mocks `~/browserFaviconStore`; under `isolate: false` an earlier file in
+  // the same worker can bind the real module first, and the mock then never
+  // applies — the icon falls back to the browser mockup and the stored-favicon
+  // assertion fails, depending only on how files land across workers.
+  "src/components/preview/PreviewFaviconIcon.test.tsx",
+  "src/components/preview/PreviewView.test.tsx",
+  "src/components/preview/openPreviewSession.test.ts",
+  "src/components/preview/openTerminalLinkInPreview.test.ts",
+  // Replaces `openPreviewSession` with a bare vi.fn(). Under isolate:false
+  // that mock leaks into reopenClosedView.test.ts, so the session result is
+  // undefined and reading `_tag` throws.
+  "src/components/ReopenClosedViewShortcut.test.tsx",
+  // Tests that mock `react` itself and drive components through
+  // reactHookHarness need their own module registry: under `isolate: false`
+  // the component graph may already be bound to the real react/compiler
+  // runtime by an earlier file in the same worker, and the mock then never
+  // applies — the compiled component reports a memo-cache hit and skips the
+  // hooks these tests assert on. Upstream ships these without isolation
+  // because it does not share registries; the fork does.
+  "src/components/diffs/StyledDiffCodeView.test.tsx",
+  "src/components/settings/AddProviderInstanceDialog.environment.test.tsx",
+  // Replaces `window` with a capture-bridge stub and fakes rAF/localStorage;
+  // under isolate:false that window leak makes later files miss animation
+  // frames or fail composer persist verification, depending on worker order.
+  "src/components/desktop/SnapShotCoordinator.test.ts",
+  // Mocks `~/lib/desktopSnapShot` and drives keyboard recording against a
+  // stub window; under isolate:false an earlier file can bind the real
+  // capture bridge so suppression never arms.
+  "src/components/settings/useSnapShotShortcutRecorder.test.tsx",
+  // Mounts CaptureShortcutConfig through react-test-renderer; under
+  // isolate:false useTheme's useSyncExternalStore hits a second React copy.
+  "src/components/settings/CaptureShortcutConfig.test.tsx",
+  // Mocks `../../hooks/useSettings` without usePrimarySettingsAvailable;
+  // under isolate:false that incomplete mock leaks into SettingsRow and
+  // ProviderInstanceCard.test.ts throws on the missing export.
+  "src/components/settings/SnapShotSettings.test.tsx",
+  // Mocks `~/hooks/useSettings` with only useEnvironmentIdentificationMode;
+  // same isolate:false SettingsRow leak as SnapShotSettings.test.tsx.
+  "src/components/chat/ComposerPrimaryActions.test.tsx",
+  // Mocks `../../hooks/useSettings` and `../../state/environments`; under
+  // isolate:false an earlier file binds the real hooks so useEnvironments
+  // sees a null presentations map and throws on `.entries()`.
+  "src/components/settings/IntegrationsSettings.test.tsx",
+  // Mocks `../ui/button` as a host-element string; under isolate:false that
+  // stub leaks into later files (ComposerControl then renders variant as a
+  // DOM attribute and drops size classes).
+  "src/components/settings/ProjectIconPickerDialog.test.tsx",
+  "src/components/settings/ProviderSettingsPanel.environment.test.tsx",
+  // Mocks `../ui/toast`; under isolate:false an earlier file binds the real
+  // toast manager and the release-link error toast is never recorded.
+  "src/components/sidebar/SidebarUpdateReleaseNotes.test.tsx",
+  // Mocks `react` useState and `../ui/button` as "button"; same isolate:false
+  // Button leak as ProjectIconPickerDialog.test.tsx.
+  "src/components/usage/UsagePage.test.tsx",
+  // Partial `../../state/server` mock (`serverEnvironment` only). Isolate so
+  // it cannot replace the server module used by other test files.
+  "src/components/usage/UsagePage.refresh.test.tsx",
+  "src/connection/storage.test.ts",
+  "src/contextMenuFallback.test.ts",
+  "src/environments/primary/bootstrap.test.ts",
+  "src/environments/primary/httpLayer.test.ts",
+  "src/hooks/useCopyToClipboard.test.ts",
+  // Mocks `react` (useCallback/useMemo) and `@effect/atom-react`; under
+  // isolate:false an earlier file binds real React and useContext is null.
+  "src/hooks/useHandleNewThread.test.ts",
+  // Mocks `@effect/atom-react` so settled thread search returns the fixture.
+  // Under isolate:false an earlier file binds the real hook and the atom
+  // reports no matches.
+  "src/state/queries.threadSearch.test.tsx",
+  // Mocks `~/localApi` persistence; under isolate:false the real ensureLocalApi
+  // is already bound and hydration throws "Local API not found".
+  "src/hooks/useSettings.test.ts",
+  "src/hooks/useLocalStorage.test.ts",
+  "src/hooks/useTheme.test.ts",
+  // Mocks `react` (useSyncExternalStore) like useTheme.test.ts; under
+  // isolate:false an earlier file binds real React and the mock never applies.
+  "src/hooks/useEnvironmentThemeSync.test.ts",
+  "src/lib/elementContext.test.ts",
+  // Mocks `@t3tools/client-runtime/state/runtime` without spreading the real
+  // module; under isolate:false that incomplete mock leaks into later files
+  // that import asset URL atoms (PullRequestListFilters.test.tsx).
+  "src/lib/attachmentUploadQueue.test.ts",
+  "src/localApi.test.ts",
+  // Mocks `~/localApi`; under isolate:false terminalCloseConfirm is already
+  // bound to the real module so confirm() is never the mock and pending stays false.
+  "src/lib/terminalCloseConfirm.test.ts",
+  "src/providerUpdateDismissal.test.ts",
+  // Mocks `@pierre/diffs` getSharedHighlighter; under isolate:false ChatMarkdown
+  // already binds the real highlighter so the recovered-text cache test sees
+  // a live object instead of the stub.
+  "src/lib/syntaxHighlighting.test.ts",
+  // Real Pierre worker + 7k-line tokenizer. The 60-edit stale-highlight case
+  // timed out at 15s under isolate:false CI load.
+  "src/components/files/AttachmentFilePreview.test.tsx",
+  "src/components/permissions/usePermissionStatus.test.ts",
+  // react-test-renderer + Base UI Popover/Tooltip. Under isolate:false a
+  // sibling can bind the real floating-ui modules first, so the mocks never
+  // apply and CI dies with `Element is not defined` / `window is not defined`.
+  "src/components/pullRequest/PullRequestDetailPanel.test.tsx",
+  "src/components/pullRequest/PullRequestSummaryTab.test.tsx",
+  "src/components/ThreadNotificationCoordinator.test.tsx",
+  // Uses the real atom registry; shared-worker mocks omit RegistryContext.
+  "src/components/ThreadStatusIndicators.subscriptions.test.tsx",
+  // Queue presentation mocks must not replace stores used by draft recovery tests.
+  "src/components/chat/QueuedRunsControl.test.tsx",
+  // Mocks `./vendor/ghostty-vt.wasm?url`; under isolate:false runtime.ts is
+  // already bound to the real asset URL and fetch('/src/...wasm') is invalid.
+  "src/terminal/ghostty/core.test.ts",
+  "src/uiStateStore.test.ts",
+  "src/versionSkew.test.ts",
+  // Mock react, the session store, or the router. Under isolate:false an
+  // earlier file binds the real modules and these vi.mock calls never apply.
+  "src/components/KeybindingsConfigWarning.test.tsx",
+  "src/components/onboarding/WelcomeWizard.terminal.test.tsx",
+  "src/components/preview/addBrowserSurface.test.ts",
+  "src/components/settings/ProjectSettingsPanel.test.tsx",
+  "src/hooks/useSettings.sync.test.tsx",
+  "src/hooks/useThreadActionMenu.test.ts",
+  "src/hooks/useThreadActions.permissions.test.ts",
+  "src/state/sourceControlActions.test.ts",
+  "src/state/terminalSessionAvailability.test.ts",
+  // These mock react, settings scope, or a button stub. Left in the shared
+  // worker, the mock binds first and a later file calls the real hook.
+  "src/assets/assetUrls.test.ts",
+  "src/editorPreferences.test.ts",
+  "src/state/queries.filesystem.test.ts",
+  "src/state/use-orchestration-command.test.ts",
+  "src/components/GitActionsControl.test.ts",
+  "src/components/PullRequestThreadDialog.test.ts",
+  "src/components/media/MediaActions.test.tsx",
+  "src/components/cloud/CloudEnvironmentConnectList.test.tsx",
+  "src/components/chat/OpenInPicker.test.tsx",
+  "src/components/ChatMarkdown.test.tsx",
+  "src/components/ChatMarkdown.assets.test.tsx",
+  "src/components/ChatMarkdown.permissions.test.tsx",
+  "src/components/ThreadNotificationCoordinator.badge.test.tsx",
+  "src/components/ThreadTerminalDrawer.permissions.test.tsx",
+  "src/components/onboarding/WelcomeWizard.import.test.tsx",
+  "src/components/pullRequest/PullRequestMarkdownEditor.test.tsx",
+  "src/components/settings/KeybindingsSettings.environment.test.tsx",
+  "src/components/settings/SourceControlWritingSettings.test.tsx",
+  "src/components/settings/settingsLayout.test.tsx",
+] as const;
+
 const unitTestProject = {
   extends: true,
   test: {
     name: "unit",
+    // Reuse each worker's transformed module graph across test files. The suite
+    // resets its stores explicitly; process isolation was spending most of CI
+    // time re-importing the same React/Effect graph for every file.
+    isolate: false,
+    fileParallelism: true,
+    maxWorkers: 4,
     include: ["src/**/*.test.{ts,tsx}"],
+    exclude: [...isolatedUnitTestFiles],
     // The web runtime suite exercises auth bootstrap, saved environments,
     // and websocket subscription lifecycles. Under the full monorepo test
     // run, those async tests can exceed Vitest's default 5s budget.
     hookTimeout: 15_000,
     testTimeout: 15_000,
     setupFiles: ["../../packages/shared/src/testing/longTempDir.ts"],
+  },
+} satisfies TestProjectInlineConfiguration;
+
+const isolatedUnitTestProject = {
+  extends: true,
+  test: {
+    name: "unit-isolated",
+    isolate: true,
+    fileParallelism: true,
+    maxWorkers: 4,
+    include: [...isolatedUnitTestFiles],
+    hookTimeout: 15_000,
+    testTimeout: 15_000,
   },
 } satisfies TestProjectInlineConfiguration;
 
@@ -287,7 +517,7 @@ export default defineConfig(() => {
       sourcemap: buildSourcemap,
     },
     test: {
-      projects: [defineProject(unitTestProject)],
+      projects: [defineProject(unitTestProject), defineProject(isolatedUnitTestProject)],
     },
   };
 });

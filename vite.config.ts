@@ -78,8 +78,17 @@ export default defineConfig({
     ],
   },
   staged: {
-    // Formatter only for now — no lint or typecheck on commit.
+    // Commit runs format + lint (keep in sync with lint-staged.config.js).
+    // Heavier typecheck + tests stay in the agent ship gate (pre-push on ready
+    // PRs / `pnpm pr:ready`).
+    // `--no-error-on-unmatched-pattern`: a commit whose staged files are all
+    // unformattable (e.g. only *.nix) leaves `vp fmt` with no targets, which
+    // otherwise fails the whole pre-commit. Treat "nothing to format" as a no-op.
     "*": "vp fmt --no-error-on-unmatched-pattern",
+    // Lint (with autofix) only the code files oxlint understands.
+    // lint-staged.config.js also drops `.repos/**` (oxlint ignorePatterns) so a
+    // vendor-ref sync does not fail with "No files found to lint".
+    "*.{js,jsx,ts,tsx,mjs,cjs,mts,cts}": "vp lint --fix",
   },
   fmt: {
     ignorePatterns: [
@@ -135,10 +144,12 @@ export default defineConfig({
     },
     rules: {
       "unicorn/no-array-sort": "off",
+      "unicorn/no-array-reverse": "off",
       "unicorn/consistent-function-scoping": "off",
       "oxc/no-map-spread": "off",
       "react-in-jsx-scope": "off",
       "react-hooks/exhaustive-deps": "off",
+      "react/no-unstable-nested-components": ["warn", { allowAsProps: true }],
       "eslint/no-shadow": "off",
       "eslint/no-await-in-loop": "off",
       "eslint/no-underscore-dangle": "off",
@@ -166,6 +177,7 @@ export default defineConfig({
       "t3code/no-global-process-runtime": "error",
       "t3code/no-inline-schema-compile": "warn",
       "t3code/no-manual-effect-runtime-in-tests": "error",
+      "t3code/no-unsupported-hermes-array-methods": "error",
       "t3code/no-native-title-tooltip": "error",
       "t3code/no-raw-mcp-registration": "error",
       "t3code/no-test-in-loop": "error",
@@ -363,6 +375,7 @@ export default defineConfig({
           "apps/mobile/src/features/settings/SettingsEnvironmentsRouteScreen.tsx",
           "apps/mobile/src/features/threads/GitActionProgressOverlay.tsx",
           "apps/mobile/src/features/threads/NewTaskDraftScreen.tsx",
+          "apps/mobile/src/features/threads/ThreadNavigationSidebar.tsx",
           "apps/mobile/src/features/threads/ThreadComposer.tsx",
           "apps/mobile/src/features/threads/ThreadFeed.tsx",
           "apps/mobile/src/features/settings/appearance/components/FontSizeSliderRow.tsx",
@@ -383,6 +396,15 @@ export default defineConfig({
           "t3code/no-mobile-uniwind-theme-escape-hatches": ["error", { allowUniwindTheme: true }],
         },
       },
+      // Legacy manual Effect runners tracked as debt: no net-new occurrences.
+      // Lower a ceiling when you migrate a file, and delete its entry at zero.
+      ...Object.entries({
+        "apps/server/src/provider/Layers/CursorProvider.test.ts": 1,
+        "apps/server/src/relay/AgentAwarenessRelay.test.ts": 1,
+      }).map(([file, maxOccurrences]) => {
+        const rule: ["error", { maxOccurrences: number }] = ["error", { maxOccurrences }];
+        return { files: [file], rules: { "t3code/no-manual-effect-runtime-in-tests": rule } };
+      }),
     ],
     options: {
       reportUnusedDisableDirectives: "error",

@@ -13,7 +13,6 @@ import {
   RelayEnvironmentMintResponse,
   RelayEnvironmentMintResponseProofPayload,
   RelayCloudMintCredentialProofPayload,
-  RelayEnvironmentConnectNotAuthorizedReason,
   type RelayEnvironmentConnectResponse,
   type RelayEnvironmentStatusResponse,
   type RelayManagedEndpoint,
@@ -47,8 +46,21 @@ import * as ManagedEndpointAllocations from "./ManagedEndpointAllocations.ts";
 import * as RelayConfiguration from "../Config.ts";
 import { isManagedEndpointHostname } from "../deploymentConfig.ts";
 
+export const EnvironmentConnectNotAuthorizedReason = Schema.Literals([
+  "client_proof_key_thumbprint_missing",
+  "environment_link_not_found",
+  "endpoint_provider_not_managed",
+  "managed_endpoint_allocation_not_found",
+  "managed_endpoint_base_domain_not_configured",
+  "managed_endpoint_allocation_not_ready",
+  "managed_endpoint_hostname_invalid",
+  "managed_endpoint_mismatch",
+]);
+export type EnvironmentConnectNotAuthorizedReason =
+  typeof EnvironmentConnectNotAuthorizedReason.Type;
+
 function environmentConnectNotAuthorizedReasonMessage(
-  reason: RelayEnvironmentConnectNotAuthorizedReason,
+  reason: EnvironmentConnectNotAuthorizedReason,
 ): string {
   switch (reason) {
     case "client_proof_key_thumbprint_missing":
@@ -75,7 +87,7 @@ export class EnvironmentConnectNotAuthorized extends Schema.TaggedError<Environm
   {
     environmentId: Schema.String,
     operation: Schema.Literals(["connect", "status"]),
-    reason: RelayEnvironmentConnectNotAuthorizedReason,
+    reason: EnvironmentConnectNotAuthorizedReason,
   },
 ) {
   override get message(): string {
@@ -302,7 +314,7 @@ function verifyEnvironmentHealthResponse(input: {
 
 export interface ManagedEndpointValidationFailure {
   readonly reason: Exclude<
-    RelayEnvironmentConnectNotAuthorizedReason,
+    EnvironmentConnectNotAuthorizedReason,
     "client_proof_key_thumbprint_missing" | "environment_link_not_found"
   >;
   /** Diagnostic span attributes; never contains secrets. */

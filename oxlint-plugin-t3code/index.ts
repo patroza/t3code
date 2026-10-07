@@ -8,6 +8,7 @@ import noManualEffectRuntimeInTests from "./rules/no-manual-effect-runtime-in-te
 import noMobileUniwindThemeEscapeHatches from "./rules/no-mobile-uniwind-theme-escape-hatches.ts";
 import noNativeTitleTooltip from "./rules/no-native-title-tooltip.ts";
 import noRawMcpRegistration from "./rules/no-raw-mcp-registration.ts";
+import noUnsupportedHermesArrayMethods from "./rules/no-unsupported-hermes-array-methods.ts";
 import noTestInLoop from "./rules/no-test-in-loop.ts";
 import noRpcPermissionBypass from "./rules/no-rpc-permission-bypass.ts";
 import noUnscopedHas from "./rules/no-unscoped-has.ts";
@@ -27,6 +28,7 @@ export default definePlugin({
     "no-mobile-uniwind-theme-escape-hatches": noMobileUniwindThemeEscapeHatches,
     "no-native-title-tooltip": noNativeTitleTooltip,
     "no-raw-mcp-registration": noRawMcpRegistration,
+    "no-unsupported-hermes-array-methods": noUnsupportedHermesArrayMethods,
     "no-test-in-loop": noTestInLoop,
     "no-rpc-permission-bypass": noRpcPermissionBypass,
     "no-unscoped-has": noUnscopedHas,

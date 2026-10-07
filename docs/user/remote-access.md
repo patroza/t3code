@@ -300,6 +300,33 @@ your login; `t3 connect logout` also clears that login. Background-service
 Treat pairing URLs and authorization codes as passwords. Do not include them in
 screenshots, logs, or bug reports.
 
+## Preview a port on a remote environment
+
+Agent-started preview servers usually listen only on that machine's loopback
+interface, so the address you use to reach T3 Code does not reach them.
+
+Opening such a port in the in-app browser asks the environment to find a
+reachable URL, in this order:
+
+1. Reuse an existing Tailscale Serve route for that port.
+2. Use the environment's own address if the server already answers there.
+3. Otherwise publish a tailnet-only HTTPS route, confirm it answers, and return
+   that URL. The route is removed when the preview server exits or the
+   environment shuts down.
+
+Step 3 needs Tailscale signed in on the host, and the T3 Code server allowed to
+manage Serve routes (`sudo tailscale set --operator=$USER`). Without that, you
+can publish a port yourself:
+
+```sh
+tailscale serve --bg --https=5173 http://127.0.0.1:5173
+```
+
+These routes are visible to your tailnet only, never through Tailscale Funnel.
+Anyone on the tailnet can reach a published preview while it runs. To skip
+automatic publishing, bind the preview server to a reachable address or publish
+the ports you want by hand.
+
 ## T3 Connect troubleshooting
 
 Run `t3 connect status` on the host to inspect saved authorization and link

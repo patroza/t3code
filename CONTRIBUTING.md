@@ -25,6 +25,8 @@ Search existing reports, discussions, and documented workflows before starting w
 
 <a id="prior-approval"></a>
 
+If you are an external contributor, expect `vouch:unvouched` until a maintainer vouches for you. This fork does not carry upstream's `.github/VOUCHED.td` roster.
+
 ## Establish the problem and scope first
 
 Outside the focused exceptions below, features and intentional changes to product behavior require
@@ -107,8 +109,8 @@ Passing triage does not approve correctness, security, performance, or merging. 
 Updates to the PR can change its eligibility and require reassessment.
 
 PRs receive `vouch:*` contributor-status labels and `size:*` diff-size labels. These are context, not
-eligibility rules. Vouching through [.github/VOUCHED.td](.github/VOUCHED.td) is separate from permission
-to bypass triage. Only the GitHub logins explicitly listed in
+eligibility rules. Vouching is separate from permission to bypass triage; this fork does not carry
+upstream's `.github/VOUCHED.td` roster. Only the GitHub logins explicitly listed in
 [.github/TRIAGE_EXEMPTIONS.td](.github/TRIAGE_EXEMPTIONS.td) bypass triage. Organization membership,
 vouching, collaborator or bot status, repository write access, and previous successful PRs do not
 establish an exemption. Other contributors, including vouched contributors, go through triage.

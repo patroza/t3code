@@ -25,6 +25,7 @@ const repoEnv = loadRepoEnv();
 const cliBuildChannel = /^[^-+]+-(?:nightly|preview)\./.test(packageJson.version)
   ? "nightly"
   : "latest";
+const serverTestTimeout = 120_000;
 
 // `build:exe` wraps the same bundle in a Node single-executable. tsdown's exe
 // step refuses multi-chunk output and counts the sourcemap as a chunk, and the
@@ -81,7 +82,11 @@ export default mergeConfig(
       entry: packExecutable ? ["src/bin.ts"] : ["src/bin.ts", "src/claude-history-worker.ts"],
       outDir: packExecutable ? "dist-exe" : "dist",
       sourcemap: !packExecutable,
-      clean: true,
+      // Never wipe dist/ wholesale during the default pack: deploy builds the
+      // server while a live process is still serving dist/client. The exe pack
+      // writes to dist-exe and can clean. cli.ts selectively removes non-client
+      // artifacts before pack instead.
+      clean: packExecutable,
       ...(packExecutable
         ? {
             exe: {
@@ -138,10 +143,108 @@ export default mergeConfig(
       sequence: { sequencer: WeightedShardSequencer },
       // Appended to the root setup, which mergeConfig concatenates.
       setupFiles: ["./src/testUtils/gitConfig.setup.ts"],
+      projects: [
+        {
+          test: {
+            name: "server",
+            isolate: false,
+            hookTimeout: serverTestTimeout,
+            testTimeout: serverTestTimeout,
+            include: ["integration/**/*.test.ts", "scripts/**/*.test.ts", "src/**/*.test.ts"],
+            exclude: [
+              "src/assets/AssetAccess.test.ts",
+              "src/htmlRender/publicProxy.test.ts",
+              "src/bootstrap.test.ts",
+              "src/cli/app.test.ts",
+              "src/git/GitManager.test.ts",
+              "src/observability/HeapSnapshot.test.ts",
+              "src/provider/ClaudeCapabilitiesProbe.test.ts",
+              "src/provider/ProviderRegistry.test.ts",
+              "src/orchestration-v2/Adapters/CursorAgentSdk.test.ts",
+              "src/textGeneration/CursorTextGeneration.test.ts",
+              "src/terminal/NodePtyAdapter.test.ts",
+              "src/vcs/GitVcsDriverCore.test.ts",
+              "src/workspace/WorkspaceEntries.test.ts",
+              // Mocks `./ServerBrowserContexts`. Under isolate:false the real
+              // pool is already bound, so launch asks the stub browser for an
+              // executable and desktop CDP connects to ws://desktop.
+              "src/preview/ServerBrowser.test.ts",
+              // Mocks `node:fs/promises` and spies on playwright. Under
+              // isolate:false the real mkdir runs against `/test` and fails.
+              "src/preview/ServerBrowserContexts.test.ts",
+            ],
+          },
+        },
+        {
+          test: {
+            name: "server-isolated-module-mocks",
+            isolate: true,
+            hookTimeout: serverTestTimeout,
+            testTimeout: serverTestTimeout,
+            include: [
+              // Mocks `node:fs/promises`.open so a path swap during open is
+              // visible. Under isolate:false the real module is already bound
+              // and the descriptor is not rejected.
+              "src/assets/AssetAccess.test.ts",
+              // Mocks local interface addresses; isolate it from cached node:os imports.
+              "src/htmlRender/publicProxy.test.ts",
+              "src/bootstrap.test.ts",
+              // Mocks `node:os`.homedir so `t3 app` resolves ~/.t3 into the
+              // fixture tree. Under isolate:false an earlier file binds the
+              // real os module and the mock never applies — the CLI then
+              // connects to the live Linux desktop socket.
+              "src/cli/app.test.ts",
+              // Real git with per-repo gpg.program / core.hooksPath fixtures.
+              // Under isolate:false a sibling can leak git env so signing never
+              // fails, or `git hook run post-checkout` ignores a non-executable
+              // leftover hook (`cannot find a hook named post-checkout`).
+              "src/git/GitManager.test.ts",
+              "src/vcs/GitVcsDriverCore.test.ts",
+              // Mocks `node:v8`.writeHeapSnapshot. Under isolate:false an
+              // earlier file binds the real v8 module and the partial-file
+              // cleanup assertion never sees the mocked path.
+              "src/observability/HeapSnapshot.test.ts",
+              // Wraps ChildProcessSpawner and drives SettingsWatcherLive
+              // through TestClock. Under isolate:false a sibling file in
+              // the same worker can swallow the second binaryPath probe.
+              "src/provider/ProviderRegistry.test.ts",
+              // These install different mocks for the same Cursor SDK wrapper.
+              // Isolate them from real SDK bindings and each other's fake agent.
+              "src/orchestration-v2/Adapters/CursorAgentSdk.test.ts",
+              "src/textGeneration/CursorTextGeneration.test.ts",
+              "src/terminal/NodePtyAdapter.test.ts",
+              "src/workspace/WorkspaceEntries.test.ts",
+              // Mocks `./ServerBrowserContexts`. Under isolate:false the real
+              // pool is already bound, so launch asks the stub browser for an
+              // executable and desktop CDP connects to ws://desktop.
+              "src/preview/ServerBrowser.test.ts",
+              // Mocks `node:fs/promises` and spies on playwright. Under
+              // isolate:false the real mkdir runs against `/test` and fails.
+              "src/preview/ServerBrowserContexts.test.ts",
+            ],
+          },
+        },
+        {
+          test: {
+            name: "server-isolated-claude-probe",
+            isolate: true,
+            fileParallelism: false,
+            maxWorkers: 1,
+            hookTimeout: serverTestTimeout,
+            testTimeout: serverTestTimeout,
+            include: [
+              // Spies `@anthropic-ai/claude-agent-sdk`.query. Under isolate:false
+              // ClaudeProvider already bound the real query. Keep this file out
+              // of other module mocks so the real query is never cached first.
+              "src/provider/ClaudeCapabilitiesProbe.test.ts",
+            ],
+          },
+        },
+      ],
       // Server integration tests exercise sqlite, git, and orchestration together.
       // Under package-wide runs they can exceed the default budget on loaded CI hosts.
-      hookTimeout: 120_000,
-      testTimeout: 120_000,
+      hookTimeout: serverTestTimeout,
+      testTimeout: serverTestTimeout,
     },
   }),
 );
