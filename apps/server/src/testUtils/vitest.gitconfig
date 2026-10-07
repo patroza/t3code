@@ -1,0 +1,9 @@
+[core]
+	autocrlf = false
+	longpaths = true
+[commit]
+	gpgsign = false
+[tag]
+	gpgsign = false
+[init]
+	defaultBranch = main

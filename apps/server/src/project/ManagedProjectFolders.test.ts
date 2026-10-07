@@ -560,6 +560,7 @@ it.effect("removes the folder when the repository cannot be made", () =>
         execute: (input) =>
           Effect.fail(
             new GitCommandError({
+              failureKind: "unknown",
               operation: input.operation,
               command: "git",
               cwd: input.cwd,

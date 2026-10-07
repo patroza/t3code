@@ -29,12 +29,15 @@ import { NETWORK_BLOCKING_HINT } from "../errors/network.ts";
 import type {
   ConnectionAttemptError,
   ConnectionTransientError,
+  ConnectionTransientReason,
   PreparedConnection,
 } from "../connection/model.ts";
 import {
   ConnectionBlockedError,
   ConnectionTransientError as ConnectionTransientErrorClass,
 } from "../connection/model.ts";
+import { formatDisconnectDetail, type SocketCloseCapture } from "../connection/disconnectDetail.ts";
+import * as ConnectionDiagnosticsLog from "../connection/diagnosticsLog.ts";
 import {
   applyServerConfigProjection,
   type ServerConfigProjection,
@@ -43,6 +46,141 @@ import {
 import { environmentMismatchError } from "../connection/errors.ts";
 
 const SOCKET_OPEN_TIMEOUT = "15 seconds";
+
+/** Mutable sink filled before onDisconnect so we never emit a bare "disconnected." */
+type DisconnectCauseSink = {
+  causeMessage?: string;
+  reason?: ConnectionTransientReason;
+  close?: SocketCloseCapture;
+};
+
+function socketHostFromUrl(socketUrl: string): string | undefined {
+  try {
+    return new URL(socketUrl).host;
+  } catch {
+    return undefined;
+  }
+}
+
+function captureSocketClose(
+  webSocketConstructor: (
+    url: string,
+    options?: Socket.WebSocketConstructorOptions,
+  ) => Socket.WebSocketLike,
+  sink: { current: SocketCloseCapture },
+): (url: string, options?: Socket.WebSocketConstructorOptions) => Socket.WebSocketLike {
+  return (url, options) => {
+    const socket = webSocketConstructor(url, options);
+    socket.addEventListener(
+      "close",
+      (event) => {
+        const closeEvent = event as CloseEvent;
+        sink.current = {
+          code: typeof closeEvent.code === "number" ? closeEvent.code : undefined,
+          reason: typeof closeEvent.reason === "string" ? closeEvent.reason : undefined,
+        };
+      },
+      { once: true },
+    );
+    return socket;
+  };
+}
+
+function causeTextOf(cause: unknown, fallback: string): string {
+  if (cause instanceof Error) return cause.message;
+  if (typeof cause === "string") return cause;
+  return fallback;
+}
+
+function noteSocketError(sink: DisconnectCauseSink, error: Socket.SocketError): void {
+  const reason = error.reason;
+  switch (reason._tag) {
+    case "SocketCloseError": {
+      sink.close = {
+        code: reason.code,
+        reason: reason.closeReason,
+      };
+      // Prefer close-code formatting over a generic SocketCloseError string.
+      sink.reason ??= "transport";
+      return;
+    }
+    case "SocketOpenError": {
+      const causeText = causeTextOf(reason.cause, reason.kind);
+      const lower = causeText.toLowerCase();
+      if (lower.includes("ping timeout")) {
+        sink.causeMessage = "ping timeout";
+        sink.reason = "timeout";
+        return;
+      }
+      // WebSocket openTimeout (not keepalive) — leave cause empty so formatters use open wording.
+      if (reason.kind === "Timeout") {
+        sink.reason ??= "timeout";
+        return;
+      }
+      sink.causeMessage ??= causeText;
+      sink.reason ??= lower.includes("timeout") ? "timeout" : "transport";
+      return;
+    }
+    case "SocketReadError":
+    case "SocketWriteError": {
+      sink.causeMessage ??= causeTextOf(reason.cause, reason._tag);
+      sink.reason ??= "transport";
+      return;
+    }
+  }
+}
+
+function mergeCloseCapture(
+  fromEvent: SocketCloseCapture,
+  fromError: SocketCloseCapture | undefined,
+): SocketCloseCapture {
+  return {
+    code: fromEvent.code ?? fromError?.code,
+    reason: fromEvent.reason ?? fromError?.reason,
+  };
+}
+
+/**
+ * Wrap a Socket so transport failures are recorded before ConnectionHooks.onDisconnect.
+ * onDisconnect alone only sees an empty close capture when the failure is a ping timeout
+ * (socket still open; browser close event fires later/async).
+ */
+function tapSocketError<A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+  sink: DisconnectCauseSink,
+): Effect.Effect<A, E, R> {
+  return effect.pipe(
+    Effect.tapError((error) =>
+      Effect.sync(() => {
+        if (Socket.SocketError.is(error)) {
+          noteSocketError(sink, error);
+        }
+      }),
+    ),
+  );
+}
+
+function captureSocketFailures(socket: Socket.Socket, sink: DisconnectCauseSink): Socket.Socket {
+  return Socket.make({
+    reader: tapSocketError(socket.reader, sink).pipe(
+      Effect.map((reader) => ({
+        ...reader,
+        pull: tapSocketError(reader.pull, sink),
+        upgrade: (options?: Parameters<typeof reader.upgrade>[0]) =>
+          tapSocketError(reader.upgrade(options), sink),
+      })),
+    ),
+    writer: socket.writer.pipe(
+      Effect.map((writer) => ({
+        ...writer,
+        write: (chunk: Parameters<typeof writer.write>[0]) =>
+          tapSocketError(writer.write(chunk), sink),
+        writeAll: (chunks: Parameters<typeof writer.writeAll>[0]) =>
+          tapSocketError(writer.writeAll(chunks), sink),
+      })),
+    ),
+  });
+}
 
 export interface RpcSession {
   readonly client: WsRpcProtocolClient;
@@ -140,11 +278,19 @@ function mapSessionRpcError(
         reason: "remote-unavailable",
         detail: error.message,
       });
-    case "RpcClientError":
+    case "RpcClientError": {
+      const lower = error.message.toLowerCase();
+      if (lower.includes("ping timeout")) {
+        return new ConnectionTransientErrorClass({
+          reason: "timeout",
+          detail: "ping timeout",
+        });
+      }
       return new ConnectionTransientErrorClass({
         reason: "transport",
         detail: `${error.message}${isSocketErrorReason(error.reason) ? networkHint : ""}`,
       });
+    }
   }
 }
 
@@ -153,6 +299,9 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
   options: RpcSessionOptions = {},
 ) {
   const webSocketConstructor = yield* Socket.WebSocketConstructor;
+  const diagnosticsLog = yield* Effect.serviceOption(
+    ConnectionDiagnosticsLog.ConnectionDiagnosticsLog,
+  );
   const serverConfigInput: ServerConfigSubscriptionInput = {
     ...(options.environmentThemes === true ? { environmentThemes: true } : {}),
     ...(options.usageLimitSources === true ? { usageLimitSources: true } : {}),
@@ -170,48 +319,64 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
 
     const connected = yield* Deferred.make<void>();
     const disconnected = yield* Deferred.make<never, ConnectionTransientError>();
-    // Set when the socket closes because pongs stopped, so the failure says so
-    // instead of looking like the server closed the connection.
-    const pingTimedOut = yield* Ref.make(false);
+    const closeCapture: { current: SocketCloseCapture } = { current: {} };
+    const causeSink: DisconnectCauseSink = {};
+    const trackedConstructor = captureSocketClose(webSocketConstructor, closeCapture);
     const hooks = RpcClient.ConnectionHooks.of({
       onConnect: Deferred.succeed(connected, undefined).pipe(Effect.asVoid),
-      onPingTimeout: Ref.set(pingTimedOut, true),
-      onDisconnect: Effect.all([Deferred.isDone(connected), Ref.get(pingTimedOut)]).pipe(
-        Effect.flatMap(([wasConnected, timedOut]) =>
-          Deferred.fail(
-            disconnected,
-            new ConnectionTransientErrorClass({
-              reason: "transport",
-              detail: `${
-                !wasConnected
-                  ? `${connection.label} could not establish a WebSocket connection.`
-                  : timedOut
-                    ? `${connection.label} stopped responding.`
-                    : `${connection.label} disconnected.`
-              }${networkHint}`,
-            }),
-          ),
-        ),
-        Effect.asVoid,
+      // Fork patch: runs before the protocol fails the socket with SocketOpenError(ping timeout).
+      onPingTimeout: Effect.sync(() => {
+        causeSink.causeMessage = "ping timeout";
+        causeSink.reason = "timeout";
+      }),
+      onDisconnect: Deferred.isDone(connected).pipe(
+        Effect.flatMap((wasConnected) => {
+          const close = mergeCloseCapture(closeCapture.current, causeSink.close);
+          const detail = `${formatDisconnectDetail({
+            label: connection.label,
+            wasConnected,
+            close,
+            causeMessage: causeSink.causeMessage,
+          })}${networkHint}`;
+          const error = new ConnectionTransientErrorClass({
+            reason: causeSink.reason ?? "transport",
+            detail,
+          });
+          const record = Option.match(diagnosticsLog, {
+            onNone: () => Effect.void,
+            onSome: (log) =>
+              log.record({
+                environmentId: connection.environmentId,
+                label: connection.label,
+                kind: wasConnected ? "disconnect" : "connect_failed",
+                reason: error.reason,
+                detail: error.detail,
+                closeCode: close.code,
+                closeReason: close.reason,
+                socketHost: socketHostFromUrl(connection.socketUrl),
+              }),
+          });
+          return record.pipe(Effect.andThen(Deferred.fail(disconnected, error)), Effect.asVoid);
+        }),
       ),
     });
-    const layerSocket = Socket.layerWebSocket(connection.socketUrl, {
-      openTimeout: SOCKET_OPEN_TIMEOUT,
-    }).pipe(Layer.provide(Layer.succeed(Socket.WebSocketConstructor, webSocketConstructor)));
+    // Build socket, wrap to capture SocketError (close codes / open errors), then protocol.
     const layerProtocol = Layer.effect(
       RpcClient.Protocol,
-      RpcClient.makeProtocolSocket({
-        retryTransientErrors: false,
-        retryPolicy: Schedule.recurs(0),
+      Effect.gen(function* () {
+        const rawSocket = yield* Socket.makeWebSocket(connection.socketUrl, {
+          openTimeout: SOCKET_OPEN_TIMEOUT,
+        }).pipe(Effect.provideService(Socket.WebSocketConstructor, trackedConstructor));
+        const socket = captureSocketFailures(rawSocket, causeSink);
+        return yield* RpcClient.makeProtocolSocket({
+          retryTransientErrors: false,
+          retryPolicy: Schedule.recurs(0),
+        }).pipe(
+          Effect.provideService(Socket.Socket, socket),
+          Effect.provide(RpcSerialization.layerJson),
+          Effect.provideService(RpcClient.ConnectionHooks, hooks),
+        );
       }),
-    ).pipe(
-      Layer.provide(
-        Layer.mergeAll(
-          layerSocket,
-          RpcSerialization.layerJson,
-          Layer.succeed(RpcClient.ConnectionHooks, hooks),
-        ),
-      ),
     );
     const protocolContext = yield* Layer.build(layerProtocol).pipe(
       Effect.withSpan("environment.websocket.connect"),

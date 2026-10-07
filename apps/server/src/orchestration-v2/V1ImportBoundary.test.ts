@@ -17,8 +17,12 @@ const legacyReaders = ["orchestration-v2/legacy/", "persistence/Migrations/"] as
  * list short; new V1 reads belong in the importer.
  */
 const legacyReaderFiles: Record<string, string> = {
+  "externalSessions/backfillGrokSession.ts":
+    "offline V1 transcript repair rejects migrated V2 databases before reading or writing legacy data",
   // Provider history for settings migration reads V1 thread sessions once at load.
   "serverSettings.ts": "one-time provider history for settings migration",
+  "persistence/MigrationBootstrap.ts":
+    "validate legacy schema before separating upstream and fork migration ledgers",
 };
 const retiredPaths = [
   "orchestration",

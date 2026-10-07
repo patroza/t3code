@@ -1,3 +1,4 @@
+import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import { limitRecoveryCommand } from "./UsageLimitRecoveryWorker.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -74,6 +75,12 @@ import { shellStreamItemFromThreadShell } from "./ShellStream.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
+
+const layerRuntimeWithCloneTracker = RuntimeLayer.layer.pipe(
+  Layer.provide(
+    Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({ get: () => Effect.succeed(null) }),
+  ),
+);
 
 const layerPlatformTest = Layer.merge(
   NodeServices.layer,
@@ -264,7 +271,7 @@ const moveProject = (projectId: ProjectId, workspaceRoot: string, updatedAt: str
   );
 
 const layerTest = Layer.mergeAll(
-  RuntimeLayer.layer,
+  layerRuntimeWithCloneTracker,
   RuntimeLayer.layerEventSink,
   ProjectStore.layer,
   ProjectionStore.layer,
@@ -282,7 +289,7 @@ const layerTest = Layer.mergeAll(
   Layer.provide(layerPlatformTest),
 );
 
-const layerLegacyImportTest = RuntimeLayer.layer.pipe(
+const layerLegacyImportTest = layerRuntimeWithCloneTracker.pipe(
   Layer.provide(McpSessionRegistryTestkit.layer),
   Layer.provideMerge(SqlitePersistence.layerMemory),
   Layer.provide(layerCheckpointStoreTest),
@@ -295,7 +302,7 @@ const layerLegacyImportTest = RuntimeLayer.layer.pipe(
 );
 
 const layerProjectDeletionTest = Layer.mergeAll(
-  RuntimeLayer.layer.pipe(Layer.provide(RuntimeLayer.layerProjectService)),
+  layerRuntimeWithCloneTracker.pipe(Layer.provide(RuntimeLayer.layerProjectService)),
   RuntimeLayer.layerProjectService,
   RuntimeLayer.layerEventSink,
   ThreadCommandExecutor.layer,
@@ -437,7 +444,7 @@ it.layer(layerProjectDeletionTest)("project deletion during thread commands", (i
 });
 
 const layerSharedApplicationDataPlaneTest = Layer.mergeAll(
-  RuntimeLayer.layer.pipe(Layer.provide(RuntimeLayer.layerProjectService)),
+  layerRuntimeWithCloneTracker.pipe(Layer.provide(RuntimeLayer.layerProjectService)),
   RuntimeLayer.layerProjectService,
   RuntimeLayer.layerEventSink,
   RuntimeLayer.layerEventInfrastructure,
@@ -2455,6 +2462,424 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         threadId,
       });
       assert.isFalse(yield* watched);
+    }),
+  );
+
+  it.effect("cancels queued watch wakes when that watch ends", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+      const threadId = ThreadId.make("runtime-pull-request-watch-cancel");
+      const projectId = ProjectId.make("pr-watch-cancel-project");
+      yield* seedProject({
+        projectId,
+        title: "Watch cancel",
+        workspaceRoot: "/workspace/watch-cancel",
+        defaultModelSelection: null,
+        createdAt: "2026-10-01T00:00:00.000Z",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("pr-watch-cancel-create"),
+        threadId,
+        projectId,
+        title: "Watch cancel",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      const key = { host: "github.com", repository: "pingdotgg/t3code", number: 9 };
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.watch",
+        commandId: CommandId.make("pr-watch-cancel-start"),
+        threadId,
+        ...key,
+        watching: true,
+        link: { url: "https://github.com/pingdotgg/t3code/pull/9", source: "agent" },
+      });
+      const started = (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch;
+      assert.isDefined(started);
+      if (started === undefined) return;
+
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("pr-watch-cancel-active"),
+        threadId,
+        messageId: MessageId.make("pr-watch-cancel-active"),
+        text: "Active",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "start_immediately" },
+      });
+
+      const wake = (id: string, summary: string, watch: typeof started) =>
+        orchestrator.dispatch({
+          type: "thread.pull-request-watch.sync" as const,
+          commandId: CommandId.make(id),
+          threadId,
+          ...key,
+          startedAt: started.startedAt,
+          watch,
+          wake: {
+            messageId: MessageId.make(id),
+            text: summary,
+            notification: {
+              source: { kind: "monitor" as const },
+              outcome: "updated" as const,
+              summary,
+            },
+          },
+        });
+      yield* wake("pr-watch-cancel-checks", "checks passed", {
+        ...started,
+        headSha: "abc",
+        passed: true,
+      });
+      yield* wake("pr-watch-cancel-comment", "new comment", {
+        ...started,
+        headSha: "abc",
+        passed: true,
+        wakes: 1,
+      });
+
+      const queued = yield* orchestrator.getThreadProjection(threadId);
+      const queuedWakeIds = queued.runs
+        .filter((run) => run.status === "queued")
+        .sort((left, right) => (left.queuePosition ?? 0) - (right.queuePosition ?? 0))
+        .map((run) => run.userMessageId);
+      assert.deepEqual(queuedWakeIds, [
+        MessageId.make("pr-watch-cancel-checks"),
+        MessageId.make("pr-watch-cancel-comment"),
+      ]);
+      assert.deepEqual(
+        queued.thread.pullRequests?.[0]?.watch?.pendingWakeMessageIds,
+        queuedWakeIds,
+      );
+
+      // A sync from a watch that is no longer the current one must not drop the queue.
+      const stale = yield* orchestrator
+        .dispatch({
+          type: "thread.pull-request-watch.sync",
+          commandId: CommandId.make("pr-watch-cancel-stale"),
+          threadId,
+          ...key,
+          startedAt: "2020-01-01T00:00:00.000Z",
+          watch: null,
+        })
+        .pipe(Effect.flip);
+      assert.equal(stale._tag, "OrchestratorDispatchError");
+      assert.equal(
+        (yield* orchestrator.getThreadProjection(threadId)).runs.filter(
+          (run) => run.status === "queued",
+        ).length,
+        2,
+      );
+
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request-watch.sync",
+        commandId: CommandId.make("pr-watch-cancel-merge"),
+        threadId,
+        ...key,
+        startedAt: started.startedAt,
+        watch: null,
+        wake: {
+          messageId: MessageId.make("pr-watch-cancel-final"),
+          text: "stopped watching, could not read it",
+          notification: {
+            source: { kind: "monitor" },
+            outcome: "failed",
+            summary: "#9: stopped watching, could not read it",
+          },
+        },
+      });
+
+      const ended = yield* orchestrator.getThreadProjection(threadId);
+      assert.isUndefined(ended.thread.pullRequests?.[0]?.watch);
+      const statusOf = (id: string) =>
+        ended.runs.find((run) => run.userMessageId === MessageId.make(id))?.status;
+      assert.equal(statusOf("pr-watch-cancel-active"), "starting");
+      assert.equal(statusOf("pr-watch-cancel-checks"), "cancelled");
+      assert.equal(statusOf("pr-watch-cancel-comment"), "cancelled");
+      assert.equal(statusOf("pr-watch-cancel-final"), "queued");
+      assert.isTrue((yield* maintenance.rebuild).valid);
+      const rebuilt = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(
+        rebuilt.runs.find((run) => run.userMessageId === MessageId.make("pr-watch-cancel-final"))
+          ?.status,
+        "queued",
+      );
+      assert.isUndefined(rebuilt.thread.pullRequests?.[0]?.watch);
+    }),
+  );
+
+  it.effect("cancels a queued watch wake when the watch is stopped or unlinked", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = ThreadId.make("runtime-pull-request-watch-stop");
+      const projectId = ProjectId.make("pr-watch-stop-project");
+      yield* seedProject({
+        projectId,
+        title: "Watch stop",
+        workspaceRoot: "/workspace/watch-stop",
+        defaultModelSelection: null,
+        createdAt: "2026-10-01T00:00:00.000Z",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("pr-watch-stop-create"),
+        threadId,
+        projectId,
+        title: "Watch stop",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("pr-watch-stop-active"),
+        threadId,
+        messageId: MessageId.make("pr-watch-stop-active"),
+        text: "Active",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "start_immediately" },
+      });
+      const cases = [
+        { name: "stop", number: 10, end: "stop" as const },
+        { name: "unlink", number: 11, end: "unlink" as const },
+      ];
+      for (const item of cases) {
+        const key = { host: "github.com", repository: "pingdotgg/t3code", number: item.number };
+        yield* orchestrator.dispatch({
+          type: "thread.pull-request.watch",
+          commandId: CommandId.make(`pr-watch-${item.name}-start`),
+          threadId,
+          ...key,
+          watching: true,
+          link: { url: `https://github.com/pingdotgg/t3code/pull/${item.number}`, source: "agent" },
+        });
+        const started = (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.find(
+          (link) => link.number === item.number,
+        )?.watch;
+        assert.isDefined(started);
+        if (started === undefined) return;
+        yield* orchestrator.dispatch({
+          type: "thread.pull-request-watch.sync",
+          commandId: CommandId.make(`pr-watch-${item.name}-wake`),
+          threadId,
+          ...key,
+          startedAt: started.startedAt,
+          watch: { ...started, headSha: "def", passed: true },
+          wake: {
+            messageId: MessageId.make(`pr-watch-${item.name}-wake`),
+            text: "checks passed",
+            notification: {
+              source: { kind: "monitor" },
+              outcome: "updated",
+              summary: "checks passed",
+            },
+          },
+        });
+        if (item.end === "stop") {
+          yield* orchestrator.dispatch({
+            type: "thread.pull-request.watch",
+            commandId: CommandId.make(`pr-watch-${item.name}-end`),
+            threadId,
+            ...key,
+            watching: false,
+          });
+        } else {
+          yield* orchestrator.dispatch({
+            type: "thread.pull-request.unlink",
+            commandId: CommandId.make(`pr-watch-${item.name}-end`),
+            threadId,
+            ...key,
+          });
+        }
+        const projection = yield* orchestrator.getThreadProjection(threadId);
+        assert.equal(
+          projection.runs.find(
+            (run) => run.userMessageId === MessageId.make(`pr-watch-${item.name}-wake`),
+          )?.status,
+          "cancelled",
+        );
+      }
+    }),
+  );
+
+  it.effect("cancels a queued watch wake when metadata unlinks or replaces that pull request", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = ThreadId.make("runtime-pull-request-watch-metadata");
+      const projectId = ProjectId.make("pr-watch-metadata-project");
+      yield* seedProject({
+        projectId,
+        title: "Watch metadata",
+        workspaceRoot: "/workspace/watch-metadata",
+        defaultModelSelection: null,
+        createdAt: "2026-10-01T00:00:00.000Z",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("pr-watch-metadata-create"),
+        threadId,
+        projectId,
+        title: "Watch metadata",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("pr-watch-metadata-active"),
+        threadId,
+        messageId: MessageId.make("pr-watch-metadata-active"),
+        text: "Active",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "start_immediately" },
+      });
+
+      const linked = (number: number) => ({
+        projectId,
+        repository: "pingdotgg/t3code",
+        number,
+        url: `https://github.com/pingdotgg/t3code/pull/${number}`,
+      });
+      const keyOf = (number: number) => ({
+        host: "github.com",
+        repository: "pingdotgg/t3code",
+        number,
+      });
+      const linkAndWatch = (number: number) =>
+        Effect.gen(function* () {
+          yield* orchestrator.dispatch({
+            type: "thread.metadata.update",
+            commandId: CommandId.make(`pr-watch-metadata-link-${number}`),
+            threadId,
+            linkedPullRequest: linked(number),
+          });
+          yield* orchestrator.dispatch({
+            type: "thread.pull-request.watch",
+            commandId: CommandId.make(`pr-watch-metadata-watch-${number}`),
+            threadId,
+            ...keyOf(number),
+            watching: true,
+          });
+        });
+      yield* linkAndWatch(12);
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.watch",
+        commandId: CommandId.make("pr-watch-metadata-watch-13"),
+        threadId,
+        ...keyOf(13),
+        watching: true,
+        link: { url: "https://github.com/pingdotgg/t3code/pull/13", source: "agent" },
+      });
+
+      const wake = (number: number) =>
+        Effect.gen(function* () {
+          const started = (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.find(
+            (link) => link.number === number,
+          )?.watch;
+          assert.isDefined(started);
+          if (started === undefined) return;
+          yield* orchestrator.dispatch({
+            type: "thread.pull-request-watch.sync",
+            commandId: CommandId.make(`pr-watch-metadata-wake-${number}`),
+            threadId,
+            ...keyOf(number),
+            startedAt: started.startedAt,
+            watch: { ...started, headSha: "abc", passed: true },
+            wake: {
+              messageId: MessageId.make(`pr-watch-metadata-wake-${number}`),
+              text: "checks passed",
+              notification: {
+                source: { kind: "monitor" },
+                outcome: "updated",
+                summary: "checks passed",
+              },
+            },
+          });
+        });
+      yield* wake(12);
+      yield* wake(13);
+
+      const statusOf = (id: string) =>
+        Effect.gen(function* () {
+          const projection = yield* orchestrator.getThreadProjection(threadId);
+          return projection.runs.find((run) => run.userMessageId === MessageId.make(id))?.status;
+        });
+      yield* orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make("pr-watch-metadata-rename"),
+        threadId,
+        title: "Still watching",
+      });
+      assert.equal(yield* statusOf("pr-watch-metadata-wake-12"), "queued");
+      assert.equal(yield* statusOf("pr-watch-metadata-wake-13"), "queued");
+
+      // Linking the same pull request again keeps its watch and its queued wake.
+      yield* orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make("pr-watch-metadata-relink-12"),
+        threadId,
+        linkedPullRequest: linked(12),
+      });
+      assert.equal(yield* statusOf("pr-watch-metadata-wake-12"), "queued");
+      assert.isDefined(
+        (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.find(
+          (link) => link.number === 12,
+        )?.watch,
+      );
+
+      yield* orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make("pr-watch-metadata-unlink"),
+        threadId,
+        linkedPullRequest: null,
+      });
+      assert.equal(yield* statusOf("pr-watch-metadata-wake-12"), "cancelled");
+      assert.equal(yield* statusOf("pr-watch-metadata-wake-13"), "queued");
+      assert.isUndefined(
+        (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.find(
+          (link) => link.number === 12,
+        ),
+      );
+
+      yield* linkAndWatch(14);
+      yield* wake(14);
+      yield* orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make("pr-watch-metadata-replace"),
+        threadId,
+        linkedPullRequest: linked(15),
+      });
+      assert.equal(yield* statusOf("pr-watch-metadata-wake-14"), "cancelled");
+      assert.equal(yield* statusOf("pr-watch-metadata-wake-13"), "queued");
+      assert.isUndefined(
+        (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.find(
+          (link) => link.number === 15,
+        )?.watch,
+      );
     }),
   );
 

@@ -1,6 +1,12 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+
 import { AuthAdministrativeScopes, AuthStandardClientScopes } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { LOCAL_BOOTSTRAP_CREDENTIAL_FILE } from "@t3tools/shared/serverRuntime";
 import { expect, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -44,6 +50,29 @@ const layerPairingGrantStore = (
   PairingGrantStore.layer.pipe(
     Layer.provide(SqlitePersistence.layerMemory),
     Layer.provide(layerServerConfig(overrides)),
+  );
+
+const makeLocalBootstrapGrantStoreLayer = (credential: string) =>
+  PairingGrantStore.layer.pipe(
+    Layer.provide(SqlitePersistence.layerMemory),
+    Layer.provide(
+      Layer.effect(
+        ServerConfig.ServerConfig,
+        Effect.gen(function* () {
+          const config = yield* ServerConfig.ServerConfig;
+          NodeFS.writeFileSync(
+            NodePath.join(config.stateDir, LOCAL_BOOTSTRAP_CREDENTIAL_FILE),
+            `${credential}\n`,
+            { mode: 0o600 },
+          );
+          return config;
+        }),
+      ).pipe(
+        Layer.provide(
+          ServerConfig.layerTest(process.cwd(), { prefix: "t3-auth-local-bootstrap-test-" }),
+        ),
+      ),
+    ),
   );
 
 const layerPairingGrantStoreTest = (
@@ -203,6 +232,28 @@ it.layer(NodeServices.layer)("PairingGrantStore.layer", (it) => {
     ),
   );
 
+  it.effect("seeds the local bootstrap file as a long-lived reusable grant", () =>
+    Effect.gen(function* () {
+      const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
+
+      yield* TestClock.adjust(Duration.hours(25));
+      const afterADay = yield* bootstrapCredentials.consume("local-file-bootstrap-token");
+      expect(afterADay.method).toBe("desktop-bootstrap");
+      expect(afterADay.subject).toBe("local-bootstrap");
+
+      yield* TestClock.adjust(Duration.days(400));
+      const monthsLater = yield* bootstrapCredentials.consume("local-file-bootstrap-token");
+      expect(monthsLater.subject).toBe("local-bootstrap");
+    }).pipe(
+      Effect.provide(
+        Layer.merge(
+          makeLocalBootstrapGrantStoreLayer("local-file-bootstrap-token"),
+          TestClock.layer(),
+        ),
+      ),
+    ),
+  );
+
   it.effect("accepts rotating desktop bootstrap tokens derived from the desktop secret", () =>
     Effect.gen(function* () {
       const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
@@ -237,6 +288,46 @@ it.layer(NodeServices.layer)("PairingGrantStore.layer", (it) => {
         ),
       ),
     ),
+  );
+
+  it.effect(
+    "accepts rotating tokens derived from the local bootstrap file without a launch secret",
+    () =>
+      Effect.gen(function* () {
+        const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
+        const secret = "installed-server-secret";
+        const window = DESKTOP_BOOTSTRAP_TOKEN_WINDOW_MS;
+
+        yield* TestClock.adjust(Duration.days(5));
+        const now = (yield* DateTime.now).epochMilliseconds;
+        const current = yield* bootstrapCredentials.consume(
+          currentDesktopBootstrapToken(secret, now),
+        );
+        expect(current.method).toBe("desktop-bootstrap");
+        expect(current.subject).toBe("desktop-bootstrap");
+        expect(current.scopes).toContain("access:write");
+
+        // The Discord bot and other colocated clients still send the file contents.
+        const raw = yield* bootstrapCredentials.consume(secret);
+        expect(raw.subject).toBe("local-bootstrap");
+
+        const stale = yield* Effect.flip(
+          bootstrapCredentials.consume(currentDesktopBootstrapToken(secret, now - 2 * window)),
+        );
+        expect(stale._tag).toBe("UnknownBootstrapCredentialError");
+
+        const otherSecret = yield* Effect.flip(
+          bootstrapCredentials.consume(currentDesktopBootstrapToken("other-secret", now)),
+        );
+        expect(otherSecret._tag).toBe("UnknownBootstrapCredentialError");
+      }).pipe(
+        Effect.provide(
+          Layer.merge(
+            makeLocalBootstrapGrantStoreLayer("installed-server-secret"),
+            TestClock.layer(),
+          ),
+        ),
+      ),
   );
 
   it.effect("keeps credentials out of pairing lists and change events", () =>

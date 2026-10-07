@@ -1,3 +1,4 @@
+import * as DirenvEnvironment from "../DirenvEnvironment.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { ProviderInstanceId } from "@t3tools/contracts";
@@ -40,6 +41,7 @@ const layerTest = ServerConfig.layerTest(process.cwd(), {
       HttpClient.make(() => Effect.die("Disabled Grok must not make an HTTP request")),
     ),
   ),
+  Layer.provideMerge(DirenvEnvironment.layerNoop),
 );
 
 const noSpawner = ChildProcessSpawner.make(() =>

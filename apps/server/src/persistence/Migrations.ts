@@ -13,6 +13,9 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import { reconcileV2PreviewMigration } from "./reconcileV2PreviewMigration.ts";
 
+import { forkMigrationTable, makeForkMigrationLoader } from "./ForkMigrations.ts";
+import { bootstrapMigrationNamespaces, upstreamMigrationTable } from "./MigrationBootstrap.ts";
+
 // Import all migrations statically
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
 import Migration0002 from "./Migrations/002_OrchestrationCommandReceipts.ts";
@@ -148,7 +151,7 @@ export const migrationEntries = [
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
 
-const makeMigrationLoader = (throughId?: number) =>
+export const makeMigrationLoader = (throughId?: number) =>
   Migrator.fromRecord(
     Object.fromEntries(
       migrationEntries
@@ -184,10 +187,16 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     toMigrationInclusive === undefined || toMigrationInclusive >= 55
       ? yield* reconcileV2PreviewMigration()
       : [];
-  const executedMigrations = [
-    ...previewMigrations,
-    ...(yield* run({ loader: makeMigrationLoader(toMigrationInclusive) })),
-  ];
+  yield* bootstrapMigrationNamespaces();
+  const upstreamMigrations = yield* run({
+    loader: makeMigrationLoader(toMigrationInclusive),
+    table: upstreamMigrationTable,
+  });
+  const forkMigrations =
+    toMigrationInclusive === undefined
+      ? yield* run({ loader: makeForkMigrationLoader(), table: forkMigrationTable })
+      : [];
+  const executedMigrations = [...previewMigrations, ...upstreamMigrations, ...forkMigrations];
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
   yield* migrations.length === 0
     ? Effect.logDebug("Database schema is current")

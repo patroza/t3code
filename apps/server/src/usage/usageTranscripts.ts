@@ -74,6 +74,7 @@ export function totalTokens(totals: UsageTokenTotals): number {
 export function mightCarryUsage(line: string, provider: UsageProviderKind): boolean {
   if (provider === "claude") return line.includes('"usage"');
   if (provider === "grok") return line.includes('"turn_completed"');
+  if (provider === "kimi") return line.includes('"token_usage"');
   return line.includes('"token_count"');
 }
 
@@ -525,6 +526,94 @@ export function parseGrokRecord(parsed: unknown): readonly UsageRecord[] {
     });
   }
   return results;
+}
+
+/* Kimi                                                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The model recorded for Kimi turns.
+ *
+ * Kimi's wire log names no model on any record, and the CLI's configured model
+ * at scan time says nothing about what served a turn weeks ago. Rather than
+ * attribute — and therefore price — turns against a guess, they are recorded
+ * under a sentinel that `usagePricing` treats as unpriceable, so Kimi shows
+ * real token counts and an honest "unpriced" share instead of a fabricated
+ * cost.
+ */
+export const KIMI_UNKNOWN_MODEL = "kimi";
+
+/** Rolling state for a single Kimi `wire.jsonl`. */
+export interface KimiScanState {
+  sessionId: string;
+}
+
+export function initialKimiScanState(sessionId: string): KimiScanState {
+  return { sessionId };
+}
+
+/**
+ * Feeds one line of a Kimi wire log into `state`, returning a record when the
+ * line was a status update carrying token usage.
+ *
+ * Each `StatusUpdate` reports the counts for one served response — the input
+ * side re-states the whole context because that is what the request billed —
+ * so these sum across turns. `message_id` de-duplicates the repeats Kimi emits
+ * when a status is refreshed without a new round trip.
+ */
+export function parseKimiLine(line: string, state: KimiScanState): UsageRecord | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+
+  const record = parsed as Record<string, unknown>;
+  const message = record["message"];
+  if (typeof message !== "object" || message === null) return null;
+  const messageRecord = message as Record<string, unknown>;
+  if (messageRecord["type"] !== "StatusUpdate") return null;
+
+  const payload = messageRecord["payload"];
+  if (typeof payload !== "object" || payload === null) return null;
+  const payloadRecord = payload as Record<string, unknown>;
+  const usage = payloadRecord["token_usage"];
+  if (typeof usage !== "object" || usage === null) return null;
+  const usageRecord = usage as Record<string, unknown>;
+
+  // Kimi timestamps are epoch seconds with a fractional part.
+  const timestamp = record["timestamp"];
+  if (typeof timestamp !== "number" || !Number.isFinite(timestamp) || timestamp <= 0) return null;
+  const timestampMs = Math.trunc(timestamp * 1000);
+
+  const outputTokens = int(usageRecord["output"]);
+  const totals: UsageTokenTotals = {
+    // `input_other` already excludes the cached and cache-creation portions.
+    uncachedInputTokens: int(usageRecord["input_other"]),
+    cachedInputTokens: int(usageRecord["input_cache_read"]),
+    cacheCreationTokens: int(usageRecord["input_cache_creation"]),
+    outputTokens,
+    // Kimi does not break reasoning out of the output count.
+    reasoningTokens: 0,
+  };
+
+  if (totalTokens(totals) === 0) return null;
+
+  const messageId = payloadRecord["message_id"];
+
+  return {
+    provider: "kimi",
+    timestampMs,
+    model: KIMI_UNKNOWN_MODEL,
+    sessionId: state.sessionId,
+    totals,
+    // Kimi does not report cost in the wire log.
+    reportedCostUsd: null,
+    speed: "standard",
+    dedupeKey: typeof messageId === "string" && messageId.length > 0 ? messageId : null,
+  };
 }
 
 export { EMPTY_TOTALS };

@@ -21,6 +21,7 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import type { ProviderAdapterV2Shape } from "../orchestration-v2/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
+import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderReplayHarness from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
@@ -40,6 +41,11 @@ const adapter = {
   openSession: () => Effect.die("No provider process needed for metadata commands"),
 } as ProviderAdapterV2Shape;
 const layerDatabase = SqlitePersistence.layerMemory;
+const layerThreadManagement = ThreadManagement.layer.pipe(
+  Layer.provide(
+    Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({ get: () => Effect.succeed(null) }),
+  ),
+);
 const layerOrchestrator = Layer.mergeAll(
   layerDatabase,
   ProjectionStore.layer.pipe(Layer.provide(layerDatabase)),
@@ -184,7 +190,7 @@ it.layer(layerOrchestrator)("writesThreads against a mode raise", (it) => {
       const shell = yield* projections.getThreadShell(threadId);
       assert.equal(shell?.runtimeMode, "full-access");
       assert.equal(shell?.title, "Before");
-    }).pipe(Effect.provide(ThreadManagement.layer)),
+    }).pipe(Effect.provide(layerThreadManagement)),
   );
 
   it.effect("lets the write through when the thread stays within the caller's modes", () =>
@@ -195,6 +201,6 @@ it.layer(layerOrchestrator)("writesThreads against a mode raise", (it) => {
       const outcome = yield* renameRacingTheUser(threadId, false);
       assert.deepEqual(outcome, { renamed: true });
       assert.equal((yield* projections.getThreadShell(threadId))?.title, "Renamed by the agent");
-    }).pipe(Effect.provide(ThreadManagement.layer)),
+    }).pipe(Effect.provide(layerThreadManagement)),
   );
 });

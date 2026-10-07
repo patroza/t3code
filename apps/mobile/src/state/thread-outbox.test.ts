@@ -614,6 +614,69 @@ describe("thread outbox", () => {
     registry.dispose();
   });
 
+  it("surfaces enqueue in memory before the durable write resolves", async () => {
+    const registry = AtomRegistry.make();
+    let releaseWrite!: () => void;
+    const writeGate = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    const storage: ThreadOutboxStorage = {
+      load: async () => ({ messages: [], errors: [] }),
+      write: async () => {
+        await writeGate;
+      },
+      remove: async () => undefined,
+    };
+    const manager = createThreadOutboxManager({ registry, storage });
+    const message = queuedMessage({
+      messageId: "message-1",
+      createdAt: "2026-06-08T10:00:01.000Z",
+    });
+
+    const enqueuePromise = manager.enqueue(message);
+    expect(registry.get(manager.queuedMessagesByThreadKeyAtom)).toEqual({
+      "environment-1:thread-1": [message],
+    });
+
+    releaseWrite();
+    await enqueuePromise;
+    registry.dispose();
+  });
+
+  it("rolls back the in-memory queue when the durable write fails", async () => {
+    const registry = AtomRegistry.make();
+    const writeCause = new Error("write failed");
+    const storage: ThreadOutboxStorage = {
+      load: async () => ({ messages: [], errors: [] }),
+      write: async () => {
+        throw writeCause;
+      },
+      remove: async () => undefined,
+    };
+    const manager = createThreadOutboxManager({ registry, storage });
+    const message = queuedMessage({
+      messageId: "message-1",
+      createdAt: "2026-06-08T10:00:01.000Z",
+    });
+
+    expect(registry.get(manager.queuedMessagesByThreadKeyAtom)).toEqual({});
+    const enqueuePromise = manager.enqueue(message);
+    expect(registry.get(manager.queuedMessagesByThreadKeyAtom)).toEqual({
+      "environment-1:thread-1": [message],
+    });
+    await expect(enqueuePromise).rejects.toEqual(
+      new ThreadOutboxManagerError({
+        operation: "enqueue",
+        environmentId: message.environmentId,
+        threadId: message.threadId,
+        messageId: message.messageId,
+        cause: writeCause,
+      }),
+    );
+    expect(registry.get(manager.queuedMessagesByThreadKeyAtom)).toEqual({});
+    registry.dispose();
+  });
+
   it("keeps atom state aligned with durable writes and removals", async () => {
     const registry = AtomRegistry.make();
     const stored = new Map<MessageId, QueuedThreadMessage>();
@@ -850,6 +913,41 @@ describe("thread outbox", () => {
     expect(registry.get(manager.queuedMessagesByThreadKeyAtom)).toEqual({});
     expect(stored.size).toBe(0);
     registry.dispose();
+  });
+
+  it("keeps offline messages local and hands connected messages to the server", () => {
+    expect(
+      resolveThreadOutboxDeliveryAction({
+        isCreation: false,
+        threadExists: false,
+        shellStatus: "synchronizing",
+        environmentConnected: true,
+      }),
+    ).toBe("wait");
+    expect(
+      resolveThreadOutboxDeliveryAction({
+        isCreation: false,
+        threadExists: false,
+        shellStatus: "live",
+        environmentConnected: true,
+      }),
+    ).toBe("remove");
+    expect(
+      resolveThreadOutboxDeliveryAction({
+        isCreation: false,
+        threadExists: true,
+        shellStatus: "live",
+        environmentConnected: false,
+      }),
+    ).toBe("wait");
+    expect(
+      resolveThreadOutboxDeliveryAction({
+        isCreation: false,
+        threadExists: true,
+        shellStatus: "live",
+        environmentConnected: true,
+      }),
+    ).toBe("send");
   });
 
   it("rejects a stale revision before its payload reaches durable storage", async () => {
@@ -1305,7 +1403,6 @@ describe("thread outbox", () => {
         threadExists: false,
         shellStatus: "synchronizing",
         environmentConnected: true,
-        threadBusy: false,
       }),
     ).toBe("wait");
     expect(
@@ -1314,7 +1411,6 @@ describe("thread outbox", () => {
         threadExists: false,
         shellStatus: "live",
         environmentConnected: true,
-        threadBusy: false,
       }),
     ).toBe("remove");
     expect(
@@ -1322,8 +1418,15 @@ describe("thread outbox", () => {
         isCreation: false,
         threadExists: true,
         shellStatus: "live",
+        environmentConnected: false,
+      }),
+    ).toBe("wait");
+    expect(
+      resolveThreadOutboxDeliveryAction({
+        isCreation: false,
+        threadExists: true,
+        shellStatus: "live",
         environmentConnected: true,
-        threadBusy: false,
       }),
     ).toBe("send");
   });
@@ -1356,7 +1459,6 @@ describe("thread outbox", () => {
         threadExists: false,
         shellStatus: "cached",
         environmentConnected: false,
-        threadBusy: false,
       }),
     ).toBe("wait");
     // Connected but not yet synchronized: a previously delivered creation may
@@ -1367,7 +1469,6 @@ describe("thread outbox", () => {
         threadExists: false,
         shellStatus: "synchronizing",
         environmentConnected: true,
-        threadBusy: false,
       }),
     ).toBe("wait");
     expect(
@@ -1376,7 +1477,6 @@ describe("thread outbox", () => {
         threadExists: false,
         shellStatus: "live",
         environmentConnected: true,
-        threadBusy: false,
       }),
     ).toBe("send");
     expect(
@@ -1385,7 +1485,6 @@ describe("thread outbox", () => {
         threadExists: true,
         shellStatus: "live",
         environmentConnected: true,
-        threadBusy: true,
       }),
     ).toBe("remove");
   });

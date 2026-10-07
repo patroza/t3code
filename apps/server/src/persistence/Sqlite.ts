@@ -9,22 +9,32 @@ import { runMigrations } from "./Migrations.ts";
 import { initializeV2Database } from "./initializeV2Database.ts";
 import * as ServerConfig from "../config.ts";
 
+const makeRuntimeSqliteLayer = (config: {
+  readonly filename: string;
+  readonly spanAttributes?: Record<string, unknown>;
+}) => NodeSqliteClient.layer(config);
+
 // Size the -wal file is cut back to on the first commit after a WAL reset.
 export const WAL_SIZE_LIMIT_BYTES = 32 * 1024 * 1024;
 
-const layerSetup = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    // CLI and server write from separate processes; wait rather than fail with SQLITE_BUSY.
-    yield* sql`PRAGMA busy_timeout = 5000;`;
-    yield* sql`PRAGMA foreign_keys = ON;`;
-    yield* sql`PRAGMA journal_mode = WAL;`;
-    // PASSIVE checkpoints never shrink the -wal file, so it otherwise keeps its
-    // largest size until the last connection closes.
-    yield* sql.unsafe(`PRAGMA journal_size_limit = ${WAL_SIZE_LIMIT_BYTES};`);
-    yield* runMigrations();
-  }),
-);
+const setup = (trial: boolean) =>
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      // CLI and server write from separate processes; wait rather than fail with
+      // SQLITE_BUSY. Bounded so auth (websocket-ticket) cannot hang indefinitely
+      // when writers hold the single SQL permit longer than expected.
+      yield* sql`PRAGMA busy_timeout = 5000;`;
+      yield* sql`PRAGMA foreign_keys = ON;`;
+      if (!trial) {
+        yield* sql`PRAGMA journal_mode = WAL;`;
+        // PASSIVE checkpoints never shrink the -wal file, so it otherwise keeps its
+        // largest size until the last connection closes.
+        yield* sql.unsafe(`PRAGMA journal_size_limit = ${WAL_SIZE_LIMIT_BYTES};`);
+        yield* runMigrations();
+      }
+    }),
+  );
 
 export const layerFromPath = Effect.fn("makeSqlitePersistenceLive")(function* (dbPath: string) {
   const fs = yield* FileSystem.FileSystem;
@@ -32,8 +42,8 @@ export const layerFromPath = Effect.fn("makeSqlitePersistenceLive")(function* (d
   yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true });
 
   return Layer.provideMerge(
-    layerSetup,
-    NodeSqliteClient.layer({
+    setup(false),
+    makeRuntimeSqliteLayer({
       filename: dbPath,
       spanAttributes: {
         "db.name": path.basename(dbPath),
@@ -44,8 +54,8 @@ export const layerFromPath = Effect.fn("makeSqlitePersistenceLive")(function* (d
 }, Layer.unwrap);
 
 export const layerMemory = Layer.provideMerge(
-  layerSetup,
-  NodeSqliteClient.layer({ filename: ":memory:" }),
+  setup(false),
+  makeRuntimeSqliteLayer({ filename: ":memory:" }),
 );
 
 export const layerConfig = Layer.unwrap(

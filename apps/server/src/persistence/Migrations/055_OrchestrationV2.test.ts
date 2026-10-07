@@ -30,6 +30,9 @@ layer("055_OrchestrationV2", (it) => {
         [56, "RemoveRedundantProjectionIndexes"],
         [57, "ScheduledTaskWebhooks"],
         [58, "WebhookRelayDeliveries"],
+        [1, "ProjectionQueuedMessages"],
+        [2, "SessionIdentityClaims"],
+        [3, "ProjectionThreadSourceAttribution"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
 

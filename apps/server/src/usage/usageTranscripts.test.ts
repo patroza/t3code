@@ -3,9 +3,12 @@ import { describe, expect, it } from "@effect/vitest";
 import {
   GROK_COST_USD_TICKS_PER_DOLLAR,
   initialCodexScanState,
+  initialKimiScanState,
+  KIMI_UNKNOWN_MODEL,
   parseClaudeLine,
   parseCodexLine,
   parseGrokLine,
+  parseKimiLine,
   totalTokens,
 } from "./usageTranscripts.ts";
 
@@ -267,6 +270,123 @@ describe("parseCodexLine", () => {
       );
       expect(record).not.toBeNull();
     });
+  });
+});
+
+describe("parseKimiLine", () => {
+  // Shape copied from a real ~/.kimi/sessions/<hash>/<session>/wire.jsonl.
+  const statusUpdate = (
+    usage: Record<string, number>,
+    messageId = "chatcmpl-0PaxSO2787FGCr5nPVWAxidi",
+    timestamp = 1785096129.2452343,
+  ) =>
+    JSON.stringify({
+      timestamp,
+      message: {
+        type: "StatusUpdate",
+        payload: {
+          context_usage: 0.0167,
+          context_tokens: 17600,
+          max_context_tokens: 1048576,
+          token_usage: usage,
+          message_id: messageId,
+          plan_mode: false,
+          mcp_status: null,
+        },
+      },
+    });
+
+  it("reads a served response's counts and takes the session from the caller", () => {
+    const state = initialKimiScanState("15f9b4f3-af5d-4939-9a82-c4ca191b5d58");
+    const record = parseKimiLine(
+      statusUpdate({
+        input_other: 15296,
+        output: 129,
+        input_cache_read: 2304,
+        input_cache_creation: 0,
+      }),
+      state,
+    );
+
+    expect(record).not.toBeNull();
+    expect(record?.provider).toBe("kimi");
+    expect(record?.speed).toBe("standard");
+    expect(record?.sessionId).toBe("15f9b4f3-af5d-4939-9a82-c4ca191b5d58");
+    expect(record?.totals.uncachedInputTokens).toBe(15296);
+    expect(record?.totals.cachedInputTokens).toBe(2304);
+    expect(record?.totals.cacheCreationTokens).toBe(0);
+    expect(record?.totals.outputTokens).toBe(129);
+    // Epoch seconds, not milliseconds.
+    expect(record?.timestampMs).toBe(1785096129245);
+  });
+
+  it("records no model so the turn prices as unpriced rather than a guess", () => {
+    const state = initialKimiScanState("session");
+    const record = parseKimiLine(statusUpdate({ input_other: 10, output: 5 }), state);
+    expect(record?.model).toBe(KIMI_UNKNOWN_MODEL);
+    expect(record?.reportedCostUsd).toBeNull();
+  });
+
+  it("carries message_id so a refreshed status is not counted twice", () => {
+    const state = initialKimiScanState("session");
+    const record = parseKimiLine(statusUpdate({ input_other: 10, output: 5 }, "msg-1"), state);
+    expect(record?.dedupeKey).toBe("msg-1");
+  });
+
+  it("sums across turns, because each response re-bills its whole context", () => {
+    // A second turn re-sends the grown context, so its input side legitimately
+    // repeats the first turn's tokens — that is what was billed. Treating the
+    // counts as a running session total and taking only the last would
+    // undercount every turn before it.
+    const state = initialKimiScanState("session");
+    const first = parseKimiLine(
+      statusUpdate({ input_other: 15296, output: 129, input_cache_read: 2304 }, "msg-1"),
+      state,
+    );
+    const second = parseKimiLine(
+      statusUpdate({ input_other: 15400, output: 240, input_cache_read: 2304 }, "msg-2"),
+      state,
+    );
+
+    expect(first?.dedupeKey).toBe("msg-1");
+    expect(second?.dedupeKey).toBe("msg-2");
+    // Distinct responses, so nothing collapses them.
+    expect(second?.totals.outputTokens).toBe(240);
+  });
+
+  it("gives a refreshed status the same dedupe key so it collapses", () => {
+    // Kimi re-emits a status without a new round trip; both copies carry the
+    // same message_id, which is what the caller de-duplicates on.
+    const state = initialKimiScanState("session");
+    const a = parseKimiLine(statusUpdate({ input_other: 100, output: 10 }, "msg-1"), state);
+    const b = parseKimiLine(statusUpdate({ input_other: 100, output: 10 }, "msg-1"), state);
+
+    expect(a?.dedupeKey).toBe("msg-1");
+    expect(b?.dedupeKey).toBe(a?.dedupeKey);
+  });
+
+  it("ignores the wire log's other frames", () => {
+    const state = initialKimiScanState("session");
+    expect(
+      parseKimiLine(JSON.stringify({ type: "metadata", protocol_version: "1.10" }), state),
+    ).toBeNull();
+    expect(
+      parseKimiLine(
+        JSON.stringify({
+          timestamp: 1785096129.2,
+          message: { type: "TurnBegin", payload: { user_input: "hi" } },
+        }),
+        state,
+      ),
+    ).toBeNull();
+    expect(parseKimiLine("not json", state)).toBeNull();
+  });
+
+  it("drops a status update that carries no tokens", () => {
+    const state = initialKimiScanState("session");
+    expect(
+      parseKimiLine(statusUpdate({ input_other: 0, output: 0, input_cache_read: 0 }), state),
+    ).toBeNull();
   });
 });
 

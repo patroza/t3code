@@ -36,6 +36,8 @@ export const ProjectScript = Schema.Struct({
   command: TrimmedNonEmptyString,
   icon: ProjectScriptIcon,
   runOnWorktreeCreate: Schema.Boolean,
+  runOnWorktreeRemove: Schema.optionalKey(Schema.Boolean),
+  runOnPrMerged: Schema.optionalKey(Schema.Boolean),
   /** Run in the thread's worktree each time the thread settles. */
   runOnSettle: Schema.optional(Schema.Boolean),
   /** Start the agent while setup runs unless explicitly disabled. */
@@ -449,6 +451,11 @@ export const ProjectReadFileResult = Schema.Struct({
 });
 export type ProjectReadFileResult = typeof ProjectReadFileResult.Type;
 
+export const ProjectFileChangeEvent = Schema.Struct({
+  relativePath: TrimmedNonEmptyString,
+});
+export type ProjectFileChangeEvent = typeof ProjectFileChangeEvent.Type;
+
 export const ProjectFileFailure = Schema.Literals([
   "workspace_path_outside_root",
   "resolved_path_outside_root",
@@ -461,10 +468,12 @@ export type ProjectFileFailure = typeof ProjectFileFailure.Type;
 export const ProjectFileOperation = Schema.Literals([
   "realpath-workspace-root",
   "realpath-target",
+  "realpath-watch-directory",
   "open",
   "stat",
   "read",
   "close",
+  "watch",
   "make-directory",
   "write-file",
 ]);

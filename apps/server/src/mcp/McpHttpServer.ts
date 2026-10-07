@@ -1,3 +1,4 @@
+import { CommandId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -7,6 +8,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Random from "effect/Random";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
@@ -22,6 +24,7 @@ import * as HtmlRender from "../htmlRender/HtmlRender.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
+import { assertLiveCaller, unavailable } from "./threadAccess.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import { PreviewControlsToolkit } from "./toolkits/previewControls/tools.ts";
 import * as PreviewControlsHandlers from "./toolkits/previewControls/handlers.ts";
@@ -36,6 +39,7 @@ import * as ThreadHandlers from "./toolkits/thread/handlers.ts";
 import * as ThreadMetadataMcpService from "./ThreadMetadataMcpService.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
+import * as DiscordLinkedChannelTool from "./DiscordLinkedChannelTool.ts";
 import * as OrchestratorHandlers from "./toolkits/orchestrator/handlers.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
 import * as PreviewHandlers from "./toolkits/preview/handlers.ts";
@@ -497,6 +501,7 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
                   readonly data: string;
                   readonly width: number;
                   readonly height: number;
+                  readonly path?: string;
                 };
               };
               const { screenshot, ...page } = snapshot;
@@ -521,6 +526,7 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
                   mimeType: screenshot.mimeType,
                   width: screenshot.width,
                   height: screenshot.height,
+                  ...(screenshot.path === undefined ? {} : { path: screenshot.path }),
                 },
                 ...(screenshotPath === undefined ? {} : { screenshotPath }),
               };
@@ -786,6 +792,168 @@ const layerPreviewSnapshotRegistration = imageToolRegistration(
   PreviewHandlers.layerSnapshot,
 );
 
+const registerDiscordRenameThread = Effect.fn("McpHttpServer.registerDiscordRenameThread")(
+  function* () {
+    const server = yield* McpServer.McpServer;
+    const engine = yield* ThreadManagementService.ThreadManagementService;
+
+    yield* server.addTool({
+      tool: new McpSchema.Tool({
+        name: "discord_rename_thread",
+        description:
+          "Rename the current T3 thread. When this thread is linked to a Discord thread through the Discord bot, the bot mirrors the new title onto that Discord thread automatically.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            title: {
+              type: "string",
+              description: "New concise title for the current linked thread.",
+            },
+          },
+          required: ["title"],
+          additionalProperties: false,
+        },
+        annotations: {
+          title: "Rename linked Discord thread",
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      }),
+      annotations: Context.empty(),
+      handle: (payload) =>
+        Effect.withFiber((fiber) => {
+          const invocation = Context.getUnsafe(
+            fiber.context,
+            McpInvocationContext.McpInvocationContext,
+          );
+          const rawTitle =
+            typeof payload === "object" && payload !== null && "title" in payload
+              ? payload.title
+              : undefined;
+          const title = typeof rawTitle === "string" ? rawTitle.trim().replace(/\s+/g, " ") : "";
+          if (title.length === 0) {
+            return Effect.succeed(
+              new McpSchema.CallToolResult({
+                isError: true,
+                structuredContent: {
+                  error: { _tag: "InvalidTitle", message: "Title cannot be empty." },
+                },
+                content: [{ type: "text", text: "Title cannot be empty." }],
+              }),
+            );
+          }
+
+          const threadId = invocation.thread?.threadId;
+          if (threadId === undefined) {
+            return Effect.succeed(
+              new McpSchema.CallToolResult({
+                isError: true,
+                structuredContent: {
+                  error: {
+                    _tag: "ThreadNotFound",
+                    message: "Renaming needs an agent running inside a T3 thread.",
+                  },
+                },
+                content: [
+                  {
+                    type: "text",
+                    text: "Renaming needs an agent running inside a T3 thread.",
+                  },
+                ],
+              }),
+            );
+          }
+
+          return Effect.gen(function* () {
+            // Same gate as Discord posting: a credential that outlived its run cannot rename.
+            if (invocation.client?.access === "read-only") {
+              return yield* new OrchestratorMcpFailure({
+                code: "capability_denied",
+                message:
+                  "This tool changes the environment, and this MCP client was approved for read-only access.",
+              });
+            }
+            const shell = yield* engine
+              .getThreadShell(threadId)
+              .pipe(Effect.mapError(() => unavailable()));
+            if (shell === null || shell.deletedAt !== null) {
+              return yield* new OrchestratorMcpFailure({
+                code: "thread_not_found",
+                message: "The calling thread was not found.",
+              });
+            }
+            yield* assertLiveCaller({
+              scope: invocation,
+              threads: engine,
+              caller: shell,
+              limits: {
+                runtimeMode: shell.runtimeMode,
+                interactionMode: shell.interactionMode,
+              },
+            });
+            const millis = yield* Clock.currentTimeMillis;
+            const random = yield* Random.nextInt;
+            const commandId = CommandId.make(
+              `server:mcp-discord-rename-thread:${millis}:${String(Math.abs(random))}`,
+            );
+            yield* engine.dispatch({
+              type: "thread.metadata.update",
+              commandId,
+              threadId,
+              title,
+            });
+            return new McpSchema.CallToolResult({
+              isError: false,
+              structuredContent: {
+                threadId,
+                title,
+                discordMirrorRequested: true,
+              },
+              content: [
+                {
+                  type: "text",
+                  text: `Renamed the T3 thread to "${title}". A linked Discord bot will mirror the title.`,
+                },
+              ],
+            });
+          }).pipe(
+            Effect.matchCause({
+              onFailure: (cause) => {
+                const failure = Cause.findErrorOption(cause);
+                const rejected =
+                  Option.isSome(failure) && isOrchestratorMcpFailure(failure.value)
+                    ? failure.value
+                    : undefined;
+                const message = rejected?.message ?? "Failed to rename the linked thread.";
+                return new McpSchema.CallToolResult({
+                  isError: true,
+                  structuredContent: {
+                    error: {
+                      _tag: rejected?.code ?? "ThreadRenameFailed",
+                      message,
+                    },
+                  },
+                  content: [{ type: "text", text: message }],
+                });
+              },
+              onSuccess: (result) => result,
+            }),
+          );
+        }),
+    });
+  },
+);
+
+export const DiscordThreadToolkitRegistrationLive = Layer.effectDiscard(
+  registerDiscordRenameThread(),
+);
+
+const layerDiscordLinkedChannelRegistration = toolkitRegistration(
+  DiscordLinkedChannelTool.DiscordLinkedChannelToolkit,
+  DiscordLinkedChannelTool.layer,
+);
+
 export const layerPreviewToolkit = Layer.mergeAll(
   layerPreviewStandardToolkitRegistration,
   layerPreviewSnapshotRegistration,
@@ -858,5 +1026,7 @@ export const layer = Layer.mergeAll(
   layerWorktreeToolkitRegistration,
   layerPullRequestsToolkit,
   layerDeviceToolkit,
+  DiscordThreadToolkitRegistrationLive,
+  layerDiscordLinkedChannelRegistration,
   layerHtmlToolkit,
 ).pipe(Layer.provideMerge(layerMcpTransport));

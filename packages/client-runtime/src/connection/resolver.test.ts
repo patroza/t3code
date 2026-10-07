@@ -235,15 +235,25 @@ describe("ConnectionResolver", () => {
         wsBaseUrl: "ws://127.0.0.1:3777",
       });
 
-      expect(yield* broker.prepare(catalogEntry(target))).toEqual({
+      const prepared = yield* broker.prepare(catalogEntry(target));
+      expect(prepared).toMatchObject({
         environmentId: ENVIRONMENT_ID,
         label: "Primary",
         httpBaseUrl: "http://127.0.0.1:3777",
         socketUrl:
-          "ws://127.0.0.1:3777/ws?clientSurface=web&clientDeviceType=desktop&connectionMethod=direct&orchestrationProtocol=2",
+          "ws://127.0.0.1:3777/ws?clientSurface=web&clientDeviceType=desktop&connectionMethod=direct&productFamily=omegent-t3&productToken=omegent-t3-product-v1-9c4e2f71a8b6&orchestrationProtocol=2",
         httpAuthorization: null,
         target,
       });
+      expect(prepared.socketUrl.startsWith("ws://127.0.0.1:3777/ws?")).toBe(true);
+      const socketUrl = new URL(prepared.socketUrl);
+      expect(socketUrl.searchParams.get("productFamily")).toBe("omegent-t3");
+      expect(socketUrl.searchParams.get("clientSurface")).toBe("web");
+      expect(socketUrl.searchParams.get("clientDeviceType")).toBe("desktop");
+      expect(socketUrl.searchParams.get("connectionMethod")).toBe("direct");
+      expect(socketUrl.searchParams.get("orchestrationProtocol")).toBe(
+        String(ORCHESTRATION_PROTOCOL_VERSION),
+      );
     }),
   );
 

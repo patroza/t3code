@@ -206,6 +206,7 @@ function threadManagementFailure(error: unknown): OrchestratorMcpFailure {
       return failure("thread_not_found", error.message);
     case "ThreadManagementRunNotFoundError":
       return failure("run_not_found", error.message);
+    case "OrchestrationDispatchCommandError":
     case "ThreadManagementThreadArchivedError":
     case "ThreadManagementNoSteerableRunError":
       return failure("thread_not_sendable", error.message);

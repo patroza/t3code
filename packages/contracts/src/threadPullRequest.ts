@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 
 import {
   IsoDateTime,
+  MessageId,
   NonNegativeInt,
   PositiveInt,
   ProjectId,
@@ -121,6 +122,11 @@ export const ThreadPullRequestWatch = Schema.Struct({
   conflicting: Schema.Boolean,
   /** Comment-only wakes in a row. Watching stops at a limit, so bots cannot loop it. */
   wakes: NonNegativeInt,
+  /**
+   * Wakes for this watch that may still be queued. Ending the watch cancels those
+   * runs. A wake that already started is not in this list's concern.
+   */
+  pendingWakeMessageIds: Schema.optional(Schema.Array(MessageId)),
 });
 export type ThreadPullRequestWatch = typeof ThreadPullRequestWatch.Type;
 

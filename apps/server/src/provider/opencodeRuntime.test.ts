@@ -1,0 +1,98 @@
+import { expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as Scope from "effect/Scope";
+import * as Sink from "effect/Sink";
+import * as Stream from "effect/Stream";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import * as TestClock from "effect/testing/TestClock";
+
+import * as OpenCodeServerLedger from "./OpenCodeServerLedger.ts";
+import * as OpenCodeRuntime from "./opencodeRuntime.ts";
+
+it.effect("launches a local OpenCode server with the project cwd and final environment", () => {
+  let spawnedCommand: unknown;
+  const spawner = ChildProcessSpawner.make((command) => {
+    spawnedCommand = command;
+    return Effect.succeed(
+      ChildProcessSpawner.makeHandle({
+        pid: ChildProcessSpawner.ProcessId(987_654),
+        exitCode: Effect.never,
+        isRunning: Effect.succeed(true),
+        kill: () => Effect.void,
+        unref: Effect.succeed(Effect.void),
+        stdin: Sink.drain,
+        stdout: Stream.encodeText(
+          Stream.make("opencode server listening on http://127.0.0.1:4310\n"),
+        ),
+        stderr: Stream.empty,
+        all: Stream.empty,
+        getInputFd: () => Sink.drain,
+        getOutputFd: () => Stream.empty,
+      }),
+    );
+  });
+  const runtimeLayer = OpenCodeRuntime.layer.pipe(
+    Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner)),
+    Layer.provide(OpenCodeServerLedger.layerTest),
+  );
+
+  return Effect.gen(function* () {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = Object.assign(
+      async () =>
+        new Response(JSON.stringify({ healthy: true, version: "1.15.13" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      originalFetch,
+    );
+    const runtime = yield* OpenCodeRuntime.OpenCodeRuntime;
+    const sessionScope = yield* Scope.make();
+    const server = yield* runtime
+      .startOpenCodeServerProcess({
+        binaryPath: "/project/bin/opencode",
+        directory: "/project/worktree",
+        cwd: "/project/worktree",
+        environment: {
+          PATH: "/project/bin",
+          KEEP: "value",
+          // Upstream #4242: a caller-supplied config wins. Forcing "{}" here
+          // used to clobber the user's opencode config and hide their
+          // providers; only an unset value falls back to the empty config.
+          OPENCODE_CONFIG_CONTENT: '{"provider":{}}',
+        },
+        port: 4310,
+      })
+      .pipe(
+        Effect.provideService(Scope.Scope, sessionScope),
+        Effect.ensuring(
+          Effect.sync(() => {
+            globalThis.fetch = originalFetch;
+          }),
+        ),
+      );
+
+    expect(server.url).toBe("http://127.0.0.1:4310");
+    expect(server.version).toBe("1.15.13");
+    const command = spawnedCommand as {
+      readonly options: {
+        readonly cwd?: string;
+        readonly env?: NodeJS.ProcessEnv;
+        readonly extendEnv?: boolean;
+      };
+    };
+    expect(command.options.cwd).toBe("/project/worktree");
+    expect(command.options.extendEnv).toBe(false);
+    expect(command.options.env).toEqual({
+      PATH: "/project/bin",
+      KEEP: "value",
+      OPENCODE_CONFIG_CONTENT: '{"provider":{}}',
+    });
+    const closeFiber = yield* Scope.close(sessionScope, Exit.void).pipe(Effect.forkChild);
+    yield* TestClock.adjust("1 second");
+    yield* Fiber.join(closeFiber);
+  }).pipe(Effect.provide(runtimeLayer));
+});

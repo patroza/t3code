@@ -572,7 +572,14 @@ describe("UsageService", () => {
       const removed = yield* service.readSummary(WINDOW);
       assert.deepStrictEqual(removed.buckets, summary.buckets);
 
-      const sources = summary.sources.filter((source) => source.status === "ok");
+      // `~/.kimi/sessions` on a developer machine is another ok source. Count
+      // only the homes this test created.
+      const homeRoot = yield* Effect.promise(() => NodeFSP.realpath(home));
+      const sources = summary.sources.filter(
+        (source) =>
+          source.status === "ok" &&
+          source.fingerprint.resolvedHomePath.startsWith(`${homeRoot}${NodePath.sep}`),
+      );
       assert.strictEqual(sources.length, 4);
       assert.strictEqual(
         sources.reduce((sum, source) => sum + source.scannedFiles, 0),

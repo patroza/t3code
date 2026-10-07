@@ -1,3 +1,4 @@
+import { SourceRef, ThreadParticipantSummary } from "@t3tools/contracts";
 import {
   threadPullRequestKeysEqual,
   threadPullRequestsOf,
@@ -8,6 +9,9 @@ import {
   DEFAULT_MODEL,
   EventId,
   MessageId,
+  RunId,
+  PlanId,
+  type OrchestrationV2Run,
   ModelSelection,
   type OrchestrationV2AppThread,
   OrchestrationV2AppThreadJson,
@@ -37,6 +41,8 @@ const IMPORT_EVENT_PREFIX = "migration:v1";
 const TRANSCRIPT_EVENT_BATCH_SIZE = 100;
 
 interface LegacyThreadRow {
+  readonly origin_source_json?: string | null;
+  readonly participant_summaries_json?: string | null;
   readonly thread_id: string;
   readonly project_id: string;
   readonly title: string;
@@ -68,6 +74,7 @@ interface LegacyRepairRow extends LegacyThreadRow {
 }
 
 interface LegacyMessageRow {
+  readonly source_json?: string | null;
   readonly message_id: string;
   readonly thread_id: string;
   readonly role: "user" | "assistant";
@@ -203,6 +210,16 @@ function importedThread(row: LegacyThreadRow): OrchestrationV2AppThread {
       ? [...pullRequests, legacyLink]
       : pullRequests;
   return {
+    ...(row.origin_source_json
+      ? { originSource: Schema.decodeUnknownSync(SourceRef)(parseJson(row.origin_source_json)) }
+      : {}),
+    ...(row.participant_summaries_json
+      ? {
+          participantSummaries: Schema.decodeUnknownSync(Schema.Array(ThreadParticipantSummary))(
+            parseJson(row.participant_summaries_json),
+          ),
+        }
+      : {}),
     createdBy: "system",
     creationSource: "server",
     id: threadId,
@@ -249,6 +266,9 @@ function messageEvents(row: LegacyMessageRow): ReadonlyArray<OrchestrationV2Doma
   const updatedAt = dateTime(row.updated_at);
   const attachments = attachmentsFor(row);
   const message: OrchestrationV2ConversationMessage = {
+    ...(row.source_json
+      ? { source: Schema.decodeUnknownSync(SourceRef)(parseJson(row.source_json)) }
+      : {}),
     createdBy: row.role === "user" ? "user" : "agent",
     creationSource: "server",
     id: messageId,
@@ -336,6 +356,85 @@ function messageEvents(row: LegacyMessageRow): ReadonlyArray<OrchestrationV2Doma
   ];
 }
 
+interface LegacyQueuedMessageRow {
+  readonly message_id: string;
+  readonly thread_id: string;
+  readonly text: string;
+  readonly attachments_json: string;
+  readonly model_selection_json: string | null;
+  readonly source_proposed_plan_thread_id: string | null;
+  readonly source_proposed_plan_id: string | null;
+  readonly queued_at: string;
+}
+
+function queuedMessageEvents(
+  row: LegacyQueuedMessageRow,
+  thread: OrchestrationV2AppThread,
+  position: number,
+  ordinal: number,
+): ReadonlyArray<OrchestrationV2DomainEvent> {
+  const runId = RunId.make(`${IMPORT_EVENT_PREFIX}:queued-run:${row.message_id}`);
+  const requestedAt = dateTime(row.queued_at);
+  const modelSelection =
+    row.model_selection_json === null
+      ? thread.modelSelection
+      : Option.getOrElse(
+          decodeModelSelection(parseJson(row.model_selection_json)),
+          () => thread.modelSelection,
+        );
+  const run: OrchestrationV2Run = {
+    id: runId,
+    threadId: thread.id,
+    ordinal: position,
+    providerInstanceId: modelSelection.instanceId,
+    modelSelection,
+    providerThreadId: null,
+    userMessageId: MessageId.make(row.message_id),
+    rootNodeId: null,
+    activeAttemptId: null,
+    status: "queued",
+    queuePosition: position,
+    queueHeld: true,
+    requestedAt,
+    startedAt: null,
+    completedAt: null,
+    checkpointId: null,
+    contextHandoffId: null,
+    ...(row.source_proposed_plan_thread_id && row.source_proposed_plan_id
+      ? {
+          sourcePlanRef: {
+            threadId: ThreadId.make(row.source_proposed_plan_thread_id),
+            planId: PlanId.make(row.source_proposed_plan_id),
+          },
+        }
+      : {}),
+  };
+  const events = messageEvents({
+    ...row,
+    role: "user",
+    is_streaming: 0,
+    created_at: row.queued_at,
+    updated_at: row.queued_at,
+    ordinal,
+  });
+  return [
+    {
+      id: EventId.make(`${IMPORT_EVENT_PREFIX}:queued-run:${row.message_id}`),
+      type: "run.created",
+      threadId: thread.id,
+      occurredAt: requestedAt,
+      payload: run,
+    },
+    ...events.map((event) =>
+      event.type === "message.updated"
+        ? { ...event, payload: { ...event.payload, runId } }
+        : event.type === "turn-item.updated"
+          ? { ...event, payload: { ...event.payload, runId } }
+          : event,
+    ),
+  ];
+}
+
 function chunks<A>(items: ReadonlyArray<A>, size: number): Array<ReadonlyArray<A>> {
   const result: Array<ReadonlyArray<A>> = [];
   for (let index = 0; index < items.length; index += size) {
@@ -346,6 +445,25 @@ function chunks<A>(items: ReadonlyArray<A>, size: number): Array<ReadonlyArray<A
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  const legacyThreadColumns = yield* sql<{
+    readonly name: string;
+  }>`PRAGMA table_info(projection_threads)`.pipe(Effect.orDie);
+  const legacyMessageColumns = yield* sql<{
+    readonly name: string;
+  }>`PRAGMA table_info(projection_thread_messages)`.pipe(Effect.orDie);
+  const sourceColumn = sql.literal(
+    legacyMessageColumns.some((column) => column.name === "source_json") ? "source_json" : "NULL",
+  );
+  const originSourceColumn = sql.literal(
+    legacyThreadColumns.some((column) => column.name === "origin_source_json")
+      ? "thread.origin_source_json"
+      : "NULL",
+  );
+  const participantsColumn = sql.literal(
+    legacyThreadColumns.some((column) => column.name === "participant_summaries_json")
+      ? "thread.participant_summaries_json"
+      : "NULL",
+  );
   const eventSink = yield* EventSink.EventSinkV2;
   const transcriptImports = yield* KeyedLock.make<ThreadId>();
 
@@ -358,6 +476,7 @@ const make = Effect.gen(function* () {
         text,
         attachments_json,
         context_json,
+        ${sourceColumn} AS source_json,
         is_streaming,
         created_at,
         updated_at,
@@ -381,6 +500,7 @@ const make = Effect.gen(function* () {
           message.text,
           message.attachments_json,
           message.context_json,
+          ${sourceColumn} AS source_json,
           message.is_streaming,
           message.created_at,
           message.updated_at,
@@ -411,6 +531,7 @@ const make = Effect.gen(function* () {
           message.text,
           message.attachments_json,
           message.context_json,
+          ${sourceColumn} AS source_json,
           message.is_streaming,
           message.created_at,
           message.updated_at,
@@ -445,6 +566,8 @@ const make = Effect.gen(function* () {
     const repairRows = yield* sql<LegacyRepairRow>`
       SELECT
         thread.thread_id,
+        ${originSourceColumn} AS origin_source_json,
+        ${participantsColumn} AS participant_summaries_json,
         thread.project_id,
         thread.title,
         thread.model_selection_json,
@@ -549,6 +672,8 @@ const make = Effect.gen(function* () {
     const rows = yield* sql<LegacyThreadRow>`
       SELECT
         thread.thread_id,
+        ${originSourceColumn} AS origin_source_json,
+        ${participantsColumn} AS participant_summaries_json,
         thread.project_id,
         thread.title,
         thread.model_selection_json,
@@ -588,6 +713,15 @@ const make = Effect.gen(function* () {
     for (const row of rows) {
       const thread = importedThread(row);
       const previews = yield* listShellMessages(thread.id);
+      const queued = yield* sql<LegacyQueuedMessageRow>`
+        SELECT * FROM projection_queued_messages WHERE thread_id = ${thread.id} ORDER BY rowid ASC
+      `;
+      const messageCount = yield* sql<{ readonly count: number }>`
+        SELECT COUNT(*) AS count FROM projection_thread_messages WHERE thread_id = ${thread.id}
+      `;
+      const queuedEvents = queued.flatMap((message, index) =>
+        queuedMessageEvents(message, thread, index + 1, (messageCount[0]?.count ?? 0) + index + 1),
+      );
       const events: Array<OrchestrationV2DomainEvent> = [
         {
           id: EventId.make(`${IMPORT_EVENT_PREFIX}:thread:${row.thread_id}:created`),
@@ -598,6 +732,7 @@ const make = Effect.gen(function* () {
           payload: thread,
         },
         ...previews.flatMap(messageEvents),
+        ...queuedEvents,
         {
           id: EventId.make(`${IMPORT_EVENT_PREFIX}:thread:${row.thread_id}:shell`),
           type: "thread.metadata-updated",
@@ -610,7 +745,13 @@ const make = Effect.gen(function* () {
       yield* sql.withTransaction(
         Effect.gen(function* () {
           yield* Effect.forEach(
-            previews,
+            [
+              ...previews,
+              ...queued.map((message, index) => ({
+                message_id: message.message_id,
+                ordinal: (messageCount[0]?.count ?? 0) + index + 1,
+              })),
+            ],
             (message) =>
               sql`
                 INSERT INTO orchestration_v2_turn_item_positions (

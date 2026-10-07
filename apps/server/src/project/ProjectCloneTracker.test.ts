@@ -301,3 +301,30 @@ describe("parseGitCloneProgressLine", () => {
     expect(parseGitCloneProgressLine("fatal: repository not found")).toBeNull();
   });
 });
+
+it.effect.each(["thread.create", "message.dispatch"] as const)(
+  "rejects native %s while its repository is still cloning",
+  (type) => {
+    const harness = makeHarness({ clone: () => Effect.never });
+    return Effect.gen(function* () {
+      const tracker = yield* ProjectCloneTracker.ProjectCloneTracker;
+      yield* tracker.start(startInput, harness.hooks);
+      const failure = yield* ProjectCloneTracker.rejectCommandsDuringClone(tracker, {
+        type,
+        projectId,
+      }).pipe(Effect.flip);
+      expect(failure.message).toBe("The repository is still being cloned.");
+    }).pipe(Effect.provide(harness.layer));
+  },
+);
+it.effect("allows metadata commands while a repository is cloning", () => {
+  const harness = makeHarness({ clone: () => Effect.never });
+  return Effect.gen(function* () {
+    const tracker = yield* ProjectCloneTracker.ProjectCloneTracker;
+    yield* tracker.start(startInput, harness.hooks);
+    yield* ProjectCloneTracker.rejectCommandsDuringClone(tracker, {
+      type: "thread.metadata.update",
+      projectId,
+    });
+  }).pipe(Effect.provide(harness.layer));
+});

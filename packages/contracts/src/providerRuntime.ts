@@ -152,6 +152,7 @@ export type CanonicalRequestType = typeof CanonicalRequestType.Type;
 const SessionStartedType = Schema.Literal("session.started");
 const SessionConfiguredType = Schema.Literal("session.configured");
 const SessionStateChangedType = Schema.Literal("session.state.changed");
+const SessionModeChangedType = Schema.Literal("session.mode.changed");
 const SessionExitedType = Schema.Literal("session.exited");
 const ThreadStartedType = Schema.Literal("thread.started");
 const ThreadStateChangedType = Schema.Literal("thread.state.changed");
@@ -233,6 +234,13 @@ const SessionStateChangedPayload = Schema.Struct({
   detail: Schema.optional(Schema.Unknown),
 });
 export type SessionStateChangedPayload = typeof SessionStateChangedPayload.Type;
+
+const SessionModeChangedPayload = Schema.Struct({
+  modeId: TrimmedNonEmptyStringSchema,
+  /** App-level interaction mode inferred from the provider session mode. */
+  interactionMode: Schema.Literals(["default", "plan"]),
+});
+export type SessionModeChangedPayload = typeof SessionModeChangedPayload.Type;
 
 const SessionExitedPayload = Schema.Struct({
   reason: Schema.optional(TrimmedNonEmptyStringSchema),
@@ -807,6 +815,14 @@ const ProviderRuntimeSessionStateChangedEvent = Schema.Struct({
 export type ProviderRuntimeSessionStateChangedEvent =
   typeof ProviderRuntimeSessionStateChangedEvent.Type;
 
+const ProviderRuntimeSessionModeChangedEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: SessionModeChangedType,
+  payload: SessionModeChangedPayload,
+});
+export type ProviderRuntimeSessionModeChangedEvent =
+  typeof ProviderRuntimeSessionModeChangedEvent.Type;
+
 const ProviderRuntimeSessionExitedEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
   type: SessionExitedType,
@@ -1148,6 +1164,7 @@ export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeSessionStartedEvent,
   ProviderRuntimeSessionConfiguredEvent,
   ProviderRuntimeSessionStateChangedEvent,
+  ProviderRuntimeSessionModeChangedEvent,
   ProviderRuntimeSessionExitedEvent,
   ProviderRuntimeThreadStartedEvent,
   ProviderRuntimeThreadStateChangedEvent,

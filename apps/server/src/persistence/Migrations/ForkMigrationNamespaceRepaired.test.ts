@@ -1,0 +1,68 @@
+import { assert, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as Migrator from "effect/sql/Migrator";
+
+import { forkMigrationTable } from "../ForkMigrations.ts";
+import { legacyMigrationBackupTable, upstreamMigrationTable } from "../MigrationBootstrap.ts";
+import { makeMigrationLoader, runMigrations } from "../Migrations.ts";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
+import ProjectionQueuedMessages from "./037_ProjectionQueuedMessages.ts";
+
+const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })));
+const runLegacyMigrations = Migrator.make({});
+
+layer("fork migration namespace for a repaired database", (it) => {
+  it.effect("converts the already-repaired fork ledger", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runLegacyMigrations({ loader: makeMigrationLoader(36) });
+      yield* ProjectionQueuedMessages;
+      yield* sql`
+        INSERT INTO effect_sql_migrations (migration_id, name)
+        VALUES
+          (37, 'ProjectionQueuedMessages'),
+          (39, 'RepairProjectionThreadTitleRegeneration'),
+          (40, 'RepairProjectionThreadsPinned')
+      `;
+
+      yield* runMigrations();
+
+      const upstream = yield* sql<LedgerRow>`
+        SELECT migration_id, name FROM ${sql(upstreamMigrationTable)} ORDER BY migration_id
+      `;
+      const fork = yield* sql<LedgerRow>`
+        SELECT migration_id, name FROM ${sql(forkMigrationTable)} ORDER BY migration_id
+      `;
+      const backup = yield* sql<LedgerRow>`
+        SELECT migration_id, name FROM ${sql(legacyMigrationBackupTable)} ORDER BY migration_id
+      `;
+      assert.deepStrictEqual(upstream.slice(-8), [
+        { migration_id: 51, name: "ProjectionThreadMessageContext" },
+        { migration_id: 52, name: "ProjectionThreadTitleState" },
+        { migration_id: 53, name: "PullRequestFilesViewed" },
+        { migration_id: 54, name: "ProjectionThreadsAutoSettleDisabledAt" },
+        { migration_id: 55, name: "OrchestrationV2" },
+        { migration_id: 56, name: "RemoveRedundantProjectionIndexes" },
+        { migration_id: 57, name: "ScheduledTaskWebhooks" },
+        { migration_id: 58, name: "WebhookRelayDeliveries" },
+      ]);
+      assert.deepStrictEqual(fork, [
+        { migration_id: 1, name: "ProjectionQueuedMessages" },
+        { migration_id: 2, name: "SessionIdentityClaims" },
+        { migration_id: 3, name: "ProjectionThreadSourceAttribution" },
+      ]);
+      assert.deepStrictEqual(backup.slice(-3), [
+        { migration_id: 37, name: "ProjectionQueuedMessages" },
+        { migration_id: 39, name: "RepairProjectionThreadTitleRegeneration" },
+        { migration_id: 40, name: "RepairProjectionThreadsPinned" },
+      ]);
+    }),
+  );
+});
+
+interface LedgerRow {
+  readonly migration_id: number;
+  readonly name: string;
+}

@@ -28,6 +28,7 @@ import * as ServerSettings from "../../serverSettings.ts";
 import * as ResetCreditCoordinator from "../resetCreditCoordinator.ts";
 import * as ProviderEventLoggers from "../ProviderEventLoggers.ts";
 import * as ModelManifest from "../ModelManifest.ts";
+import * as DirenvEnvironment from "../DirenvEnvironment.ts";
 import {
   createProviderVersionAdvisory,
   ProviderVersionCache,

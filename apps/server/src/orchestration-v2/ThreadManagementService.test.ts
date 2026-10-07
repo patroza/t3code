@@ -7,11 +7,14 @@ import {
   type OrchestrationV2Run,
   type OrchestrationV2StoredEvent,
   type OrchestrationV2ThreadProjection,
+  type OrchestrationV2ThreadShell,
+  type ProjectCloneSnapshot,
   ProjectId,
   ProviderInstanceId,
   RunId,
   ThreadId,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -21,9 +24,18 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
+
+const cloneTrackerLayer = Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({
+  get: () => Effect.succeed(null),
+});
+const threadManagementLayer = ThreadManagementService.layer.pipe(Layer.provide(cloneTrackerLayer));
+const threadManagementLegacyLayer = ThreadManagementService.layerWithLegacyImporter.pipe(
+  Layer.provide(cloneTrackerLayer),
+);
 
 it("stamps authoritative provenance on commands that create threads or messages", () => {
   const command: OrchestrationV2Command = {
@@ -268,7 +280,7 @@ it.effect("classifies projection infrastructure failures separately from a missi
     threadId,
     cause: infrastructureCause,
   });
-  const layerTest = ThreadManagementService.layer.pipe(
+  const layerTest = threadManagementLayer.pipe(
     Layer.provide(
       Layer.mock(Orchestrator.OrchestratorV2)({
         getThreadProjection: () => Effect.fail(projectionError),
@@ -301,7 +313,7 @@ it.effect("uses thread-not-found only after a projection loads outside the proje
       deletedAt: null,
     },
   } as OrchestrationV2ThreadProjection;
-  const layerTest = ThreadManagementService.layer.pipe(
+  const layerTest = threadManagementLayer.pipe(
     Layer.provide(
       Layer.mock(Orchestrator.OrchestratorV2)({
         getThreadProjection: () => Effect.succeed(projection),
@@ -326,7 +338,7 @@ it.effect("preserves failed legacy materialization when reading checkpoint conte
     operation: "hydrate transcript for",
     cause: new Error("checkpoint import failed"),
   });
-  const layerTest = ThreadManagementService.layerWithLegacyImporter.pipe(
+  const layerTest = threadManagementLegacyLayer.pipe(
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(Orchestrator.OrchestratorV2)({
@@ -367,7 +379,7 @@ it.effect.each([
         thread: { id: threadId, projectId, deletedAt: null },
         runs: status === "missing" ? [] : [{ id: runId, status }],
       }) as unknown as OrchestrationV2ThreadProjection;
-    const layerTest = ThreadManagementService.layer.pipe(
+    const layerTest = threadManagementLayer.pipe(
       Layer.provide(
         Layer.mock(Orchestrator.OrchestratorV2)({
           getThreadEventSequence: () => Effect.succeed(0),
@@ -422,6 +434,172 @@ it.effect.each([
   }),
 );
 
+const createDuringCloneCommand: OrchestrationV2Command = {
+  type: "thread.create",
+  createdBy: "agent",
+  creationSource: "mcp",
+  commandId: CommandId.make("command:thread-management:create"),
+  threadId: ThreadId.make("thread:thread-management:create"),
+  projectId: ProjectId.make("project:thread-management"),
+  title: "Thread management",
+  modelSelection: {
+    instanceId: ProviderInstanceId.make("codex"),
+    model: "gpt-5-codex",
+  },
+  runtimeMode: "full-access",
+  interactionMode: "default",
+  branch: null,
+  worktreePath: null,
+};
+const NOW = DateTime.makeUnsafe("2026-01-01T00:00:00.000Z");
+const cloneShell: OrchestrationV2ThreadShell = {
+  id: ThreadId.make("thread:clone"),
+  projectId: ProjectId.make("project:thread-management"),
+  title: "Clone",
+  providerInstanceId: ProviderInstanceId.make("codex"),
+  modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+  runtimeMode: "full-access",
+  interactionMode: "default",
+  branch: null,
+  worktreePath: null,
+  activeProviderThreadId: null,
+  lineage: {
+    rootThreadId: ThreadId.make("thread:clone"),
+    parentThreadId: null,
+    relationshipToParent: null,
+  },
+  forkedFrom: null,
+  createdBy: "user",
+  creationSource: "web",
+  latestRunId: null,
+  activeRunId: null,
+  status: "idle",
+  pendingRuntimeRequest: null,
+  latestVisibleMessage: null,
+  latestUserMessageAt: null,
+  hasActionableProposedPlan: false,
+  itemCount: 0,
+  visibleItemCount: 0,
+  createdAt: NOW,
+  updatedAt: NOW,
+  archivedAt: null,
+  settledOverride: null,
+  settledAt: null,
+  lastVisitedAt: null,
+  deletedAt: null,
+};
+const cloneSnapshot: ProjectCloneSnapshot = {
+  projectId: cloneShell.projectId,
+  remoteUrl: "https://github.com/test/repo.git",
+  destinationPath: "/tmp/cloning-repo",
+  repository: null,
+  phase: "running",
+  stage: "receiving",
+  percent: null,
+  detail: null,
+  error: null,
+  startedAt: "2026-01-01T00:00:00.000Z",
+  endedAt: null,
+  sequence: 1,
+};
+const sendDuringCloneCommand: OrchestrationV2Command = {
+  type: "message.dispatch",
+  commandId: CommandId.make("clone:message"),
+  threadId: cloneShell.id,
+  messageId: MessageId.make("clone:message"),
+  text: "Start work",
+  attachments: [],
+  dispatchMode: { type: "queue_after_active" },
+  createdBy: "user",
+  creationSource: "mcp",
+};
+it.effect.each([createDuringCloneCommand, sendDuringCloneCommand])(
+  "rejects $type before native dispatch while its project is cloning",
+  (command) =>
+    Effect.gen(function* () {
+      let dispatched = false;
+      const layerTest = ThreadManagementService.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({
+              get: () => Effect.succeed(cloneSnapshot),
+            }),
+            Layer.mock(Orchestrator.OrchestratorV2)({
+              getThreadShell: () => Effect.succeed(cloneShell),
+              dispatch: () => {
+                dispatched = true;
+                return Effect.die("Unexpected dispatch");
+              },
+            }),
+          ),
+        ),
+      );
+      const service = yield* ThreadManagementService.ThreadManagementService.pipe(
+        Effect.provide(layerTest),
+      );
+      const error = yield* service.dispatch(command).pipe(Effect.flip);
+      expect(error).toMatchObject({
+        _tag: "OrchestratorCommandRejectedError",
+        cause: { message: "The repository is still being cloned." },
+      });
+      expect(dispatched).toBe(false);
+    }),
+);
+
+it.effect("refuses service sends used by MCP and schedules while the project is cloning", () =>
+  Effect.gen(function* () {
+    const projection: OrchestrationV2ThreadProjection = {
+      thread: { ...cloneShell, lastVisitedAt: null },
+      runs: [],
+      attempts: [],
+      nodes: [],
+      subagents: [],
+      providerSessions: [],
+      providerThreads: [],
+      providerTurns: [],
+      runtimeRequests: [],
+      messages: [],
+      plans: [],
+      turnItems: [],
+      checkpointScopes: [],
+      checkpoints: [],
+      contextHandoffs: [],
+      contextTransfers: [],
+      visibleTurnItems: [],
+      updatedAt: NOW,
+    };
+    const layerTest = ThreadManagementService.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({
+            get: () => Effect.succeed({ ...cloneSnapshot, phase: "failed", error: "Clone failed" }),
+          }),
+          Layer.mock(Orchestrator.OrchestratorV2)({
+            getThreadRecords: () => Effect.succeed(projection),
+          }),
+        ),
+      ),
+    );
+    const service = yield* ThreadManagementService.ThreadManagementService.pipe(
+      Effect.provide(layerTest),
+    );
+    const error = yield* service
+      .sendToThread({
+        projectId: cloneShell.projectId,
+        threadId: cloneShell.id,
+        commandId: CommandId.make("clone:scheduled-send"),
+        messageId: MessageId.make("clone:scheduled-message"),
+        text: "Continue",
+        attachments: [],
+        mode: "queue",
+        createdBy: "agent",
+        creationSource: "server",
+      })
+      .pipe(Effect.flip);
+    expect(error.message).toBe("The repository was not cloned. Retry the clone first.");
+  }),
+);
+
 it.effect("waitForThread reads the run again only when the run updates", () =>
   Effect.gen(function* () {
     const projectId = ProjectId.make("project:thread-management:wait-event");
@@ -433,7 +611,7 @@ it.effect("waitForThread reads the run again only when the run updates", () =>
     let reads = 0;
     const stored = (sequence: number, event: object) =>
       ({ sequence, event: { threadId, ...event } }) as unknown as OrchestrationV2StoredEvent;
-    const layerTest = ThreadManagementService.layer.pipe(
+    const layerTest = threadManagementLayer.pipe(
       Layer.provide(
         Layer.mock(Orchestrator.OrchestratorV2)({
           getThreadEventSequence: () => Effect.succeed(0),

@@ -500,15 +500,34 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
           resource: input.resource,
         });
       }
-      const workspaceRoot = yield* workspacePaths.normalizeWorkspaceRoot(input.workspaceRoot).pipe(
-        Effect.mapError(
-          (cause) =>
-            new AssetWorkspaceRootNormalizationError({
-              resource: input.resource,
-              cause,
-            }),
-        ),
-      );
+      const projectWorkspaceRoot = yield* workspacePaths
+        .normalizeWorkspaceRoot(input.workspaceRoot)
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new AssetWorkspaceRootNormalizationError({
+                resource: input.resource,
+                cause,
+              }),
+          ),
+        );
+      const projectRelativePath = path.isAbsolute(input.resource.path)
+        ? path.relative(projectWorkspaceRoot, input.resource.path)
+        : input.resource.path;
+      const isAbsoluteOutsideProject =
+        path.isAbsolute(input.resource.path) &&
+        (projectRelativePath.startsWith("..") || path.isAbsolute(projectRelativePath));
+      const workspaceRoot = isAbsoluteOutsideProject
+        ? yield* workspacePaths.normalizeWorkspaceRoot(path.dirname(input.resource.path)).pipe(
+            Effect.mapError(
+              (cause) =>
+                new AssetWorkspaceRootNormalizationError({
+                  resource: input.resource,
+                  cause,
+                }),
+            ),
+          )
+        : projectWorkspaceRoot;
       const finalized = yield* finalizeWorkspaceFileAsset({
         workspaceRoot,
         requestedPath: input.resource.path,

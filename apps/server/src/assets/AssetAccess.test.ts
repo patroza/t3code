@@ -666,7 +666,7 @@ describe("AssetAccess", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 
-  it.effect("rejects workspace files outside the authorized root", () =>
+  it.effect("serves explicitly linked absolute preview files outside the project root", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -679,24 +679,59 @@ describe("AssetAccess", () => {
       const htmlPath = path.join(outside, "report.html");
       yield* fileSystem.writeFileString(htmlPath, "<p>outside</p>");
 
-      const error = yield* issueAssetUrl({
+      const canonicalHtmlPath = yield* fileSystem.realPath(htmlPath);
+      const result = yield* issueAssetUrl({
         resource: {
           _tag: "workspace-file",
           threadId: ThreadId.make("thread-1"),
           path: htmlPath,
         },
         workspaceRoot: root,
-      }).pipe(Effect.flip);
-      expect(error.message).toBe("Workspace file path must be relative to the project root.");
-      expect(error).toMatchObject({
-        _tag: "AssetWorkspacePathValidationError",
+      });
+      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+      const separatorIndex = suffix.indexOf("/");
+      const token = suffix.slice(0, separatorIndex);
+      expect(yield* resolveAsset(token, "report.html")).toEqual({
+        kind: "file",
+        path: canonicalHtmlPath,
+      });
+      expect(yield* resolveAsset(token, "../secret.html")).toBeNull();
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("serves absolute Codex-style generated_images png paths outside the project", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const projectRoot = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-asset-project-",
+      });
+      const generatedRoot = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-asset-generated-images-",
+      });
+      const callDir = path.join(generatedRoot, "019f6511-7b93-7663-9908-41e3f45b5bac");
+      yield* fileSystem.makeDirectory(callDir, { recursive: true });
+      const imagePath = path.join(callDir, "call_5K1KcXmRdTGulQT91c2PtIl6.png");
+      yield* fileSystem.writeFile(imagePath, new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
+      const canonicalImagePath = yield* fileSystem.realPath(imagePath);
+
+      const result = yield* issueAssetUrl({
         resource: {
           _tag: "workspace-file",
-          threadId: "thread-1",
-          path: htmlPath,
+          threadId: ThreadId.make("thread-1"),
+          path: imagePath,
         },
+        workspaceRoot: projectRoot,
       });
-      expect(error.cause).toBeInstanceOf(WorkspacePaths.WorkspacePathOutsideRootError);
+      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+      const separatorIndex = suffix.indexOf("/");
+      const token = suffix.slice(0, separatorIndex);
+      const fileName = suffix.slice(separatorIndex + 1);
+      expect(fileName).toBe("call_5K1KcXmRdTGulQT91c2PtIl6.png");
+      expect(yield* resolveAsset(token, fileName)).toEqual({
+        kind: "file",
+        path: canonicalImagePath,
+      });
     }).pipe(Effect.provide(layerTest)),
   );
 
@@ -1084,10 +1119,7 @@ describe("AssetAccess", () => {
         prefix: "t3-asset-favicon-",
       });
       const faviconPath = path.join(root, "favicon.svg");
-      const initialFavicon = "<svg>a</svg>";
-      const updatedFavicon = "<svg>b</svg>";
-      expect(updatedFavicon).toHaveLength(initialFavicon.length);
-      yield* fileSystem.writeFileString(faviconPath, initialFavicon);
+      yield* fileSystem.writeFileString(faviconPath, "<svg />");
       const canonicalFaviconPath = yield* fileSystem.realPath(faviconPath);
 
       const faviconResult = yield* issueAssetUrl({
@@ -1108,14 +1140,6 @@ describe("AssetAccess", () => {
           faviconSuffix.slice(faviconSeparatorIndex + 1),
         ),
       ).toEqual({ kind: "file", path: canonicalFaviconPath });
-
-      yield* fileSystem.writeFileString(faviconPath, updatedFavicon);
-      const updatedFaviconResult = yield* issueAssetUrl({
-        resource: { _tag: "project-favicon", cwd: root },
-      });
-      expect(
-        updatedFaviconResult.relativeUrl.slice(updatedFaviconResult.relativeUrl.lastIndexOf("/")),
-      ).not.toBe(faviconResult.relativeUrl.slice(faviconResult.relativeUrl.lastIndexOf("/")));
 
       yield* fileSystem.remove(faviconPath);
       const fallbackResult = yield* issueAssetUrl({

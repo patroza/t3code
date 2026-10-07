@@ -1,3 +1,4 @@
+import * as DirenvEnvironment from "./DirenvEnvironment.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as CodexInstallation from "./CodexInstallation.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -576,6 +577,7 @@ describe("ProviderInstanceRegistry — all drivers slice", () => {
   const layerInfra = OpenCodeRuntime.layer.pipe(
     Layer.provide(OpenCodeServerLedger.layerTest),
     Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(DirenvEnvironment.layerNoop),
     Layer.provideMerge(
       Layer.mock(CodexInstallation.CodexInstallation)({
         managedDirectory: "unused-managed-installation",

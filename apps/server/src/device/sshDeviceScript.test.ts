@@ -108,6 +108,11 @@ else { const child=spawn(process.execPath,[path.join(path.dirname(process.argv[1
           });
           return result.stdout ? JSON.parse(result.stdout) : null;
         };
+        await NodeFSP.writeFile(
+          NodePath.join(bin, "npm"),
+          `#!${process.execPath}\nconsole.log('10.0.0');`,
+          { mode: 0o755 },
+        );
         const inventory = await invoke("one", "probe");
         expect(inventory.tools.hub.installedVersions).toEqual([DEVICE_HUB_VERSION]);
         expect(inventory.tools.hub.runningVersion).toBeNull();

@@ -232,6 +232,18 @@ describe("ssh tunnel scripts", () => {
     assert.notInclude(script, "npx");
   });
 
+  it("prepends user-local bins before accepting an existing node", () => {
+    const script = SshTunnel.buildRemoteT3RunnerScript({
+      ...NODE_SCRIPT,
+      nodeEngineRange: TEST_NODE_ENGINE_RANGE,
+    });
+
+    assert.isBelow(
+      script.indexOf('prepend_path_if_dir "$HOME/.local/bin"'),
+      script.indexOf("if command -v node >/dev/null 2>&1"),
+    );
+  });
+
   it("uses the remote t3 runner for launch and pairing scripts", () => {
     const stateKey = "711bc738002d72fd";
     const launch = SshTunnel.buildRemoteLaunchScript(ARCHIVE);
