@@ -470,6 +470,10 @@
     "./integrationThreadView": {
       "types": "./src/integrationThreadView.ts",
       "import": "./src/integrationThreadView.ts"
+    },
+    "./mcpApp": {
+      "types": "./src/mcpApp.ts",
+      "import": "./src/mcpApp.ts"
     }
   },
   "scripts": {
