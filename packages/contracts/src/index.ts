@@ -46,7 +46,6 @@ export * from "./threadTitle.ts";
 export * from "./t3ProjectFile.ts";
 export * from "./devStack.ts";
 export * from "./editor.ts";
-export * from "./openWith.ts";
 export * from "./project.ts";
 export * from "./filesystem.ts";
 export * from "./agentSessions.ts";

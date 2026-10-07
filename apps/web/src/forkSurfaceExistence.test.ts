@@ -18,6 +18,13 @@ function readSrc(relativePath: string): string {
 }
 
 describe("fork surface existence (anti stack-drop)", () => {
+  it("keeps the upstream editor picker without custom application management", () => {
+    const picker = readSrc("components/chat/OpenInPicker.tsx");
+    expect(picker).toContain('aria-label="Choose editor"');
+    expect(picker).toContain("useRemoteOpenState");
+    expect(picker).not.toContain("openWithEntries");
+    expect(picker).not.toContain("openWithDialogs");
+  });
   it("keeps fast and ultrafast icons in the composer traits control", () => {
     const traits = readSrc("components/chat/TraitsPicker.tsx");
     expect(traits).toContain('icon={speedIcon === "ultrafast" ? UltrafastIcon : ZapIcon}');
@@ -90,13 +97,6 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(readSrc("deepLinks.ts")).toMatch(/thread|message/i);
     const chat = readSrc("components/ChatView.tsx");
     expect(chat).toMatch(/deepLink|message-|scrollIntoView/i);
-  });
-
-  it("chat header keeps remote Open in VS Code control markers", () => {
-    const header = readSrc("components/chat/ChatHeader.tsx");
-    expect(header).toContain("shouldOfferRemoteVscodeOpen");
-    expect(header).toContain("Open in VS Code Remote SSH on");
-    expect(header).toContain("shell.openExternal");
   });
 
   it("chat header keeps AI usage status and host resource gauges", () => {

@@ -29,7 +29,6 @@ import { ModelSelection } from "./modelSelection.ts";
 import { ProjectScript } from "./project.ts";
 import { DEFAULT_RUNTIME_MODE, RuntimeMode } from "./providerPolicy.ts";
 import { BrowserProfile, BrowserProfileId, DEFAULT_BROWSER_PROFILE_ID } from "./browserProfile.ts";
-import { OpenWithEntries, OpenWithEntryRef } from "./openWith.ts";
 import {
   DEFAULT_PREVIEW_APPEARANCE,
   DEFAULT_PREVIEW_ZOOM_FACTOR,
@@ -430,10 +429,6 @@ export const ClientSettingsSchema = Schema.Struct({
   ).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   providerFavorites: Schema.Array(ProviderInstanceId).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
-  ),
-  openWithEntries: OpenWithEntries.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
-  preferredOpenWith: Schema.NullOr(OpenWithEntryRef).pipe(
-    Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   providerModelPreferences: Schema.Record(
     ProviderInstanceId,
@@ -1918,8 +1913,6 @@ export const ClientSettingsPatch = Schema.Struct({
     ),
   ),
   providerFavorites: Schema.optionalKey(Schema.Array(ProviderInstanceId)),
-  openWithEntries: Schema.optionalKey(OpenWithEntries),
-  preferredOpenWith: Schema.optionalKey(Schema.NullOr(OpenWithEntryRef)),
   providerModelPreferences: Schema.optionalKey(
     Schema.Record(
       ProviderInstanceId,

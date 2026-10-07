@@ -271,7 +271,6 @@ const isolatedUnitTestFiles = [
   "src/components/PullRequestThreadDialog.test.ts",
   "src/components/media/MediaActions.test.tsx",
   "src/components/cloud/CloudEnvironmentConnectList.test.tsx",
-  "src/components/chat/OpenInPicker.test.tsx",
   "src/components/ChatMarkdown.test.tsx",
   "src/components/ChatMarkdown.assets.test.tsx",
   "src/components/ChatMarkdown.permissions.test.tsx",

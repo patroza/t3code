@@ -1248,6 +1248,7 @@ export default function FilePreviewPanel({
           {absolutePath &&
           (environmentId === primaryEnvironmentId || remoteOpenState.mode !== "local-exec") ? (
             <OpenInPicker
+              enableShortcut={false}
               environmentId={environmentId}
               keybindings={keybindings}
               availableEditors={availableEditors}

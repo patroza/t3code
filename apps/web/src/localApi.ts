@@ -24,10 +24,6 @@ function createBrowserLocalApi(): LocalApi {
       confirm: async (message, options?: ConfirmDialogOptions) => {
         return requestConfirmDialog(message, options) ?? false;
       },
-      pickOpenWithApplication: async () => {
-        if (!window.desktopBridge) return rejectUnavailable();
-        return window.desktopBridge.pickOpenWithApplication();
-      },
     },
     shell: {
       openInEditor: async () => rejectUnavailable(),
@@ -41,14 +37,6 @@ function createBrowserLocalApi(): LocalApi {
         }
 
         window.open(url, "_blank", "noopener,noreferrer");
-      },
-      resolveOpenWithPresentations: async () => {
-        if (!window.desktopBridge) return rejectUnavailable();
-        return window.desktopBridge.resolveOpenWithPresentations();
-      },
-      openWith: async (input) => {
-        if (!window.desktopBridge) return rejectUnavailable();
-        return window.desktopBridge.openWith(input);
       },
       // Only the desktop shell can reach the OS; the web build (and older
       // desktop shells that predate this method) have nothing to open.
