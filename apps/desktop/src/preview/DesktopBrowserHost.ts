@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off - Names download files on the shared disk.
+// @effect-diagnostics nodeBuiltinImport:off - Names download files, and loads Electron only to hand focus back after a click.
 /**
  * The desktop end of the desktop browser channel (see `DesktopBrowserEvent` in
  * contracts). The primary backend gets two file descriptors at spawn: this
@@ -15,6 +15,7 @@ import {
   type DesktopBrowserEvent as DesktopBrowserEventType,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as NodeModule from "node:module";
 import * as NodePath from "node:path";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -28,6 +29,117 @@ import { createCdpRelayConnection, type CdpRelayConnection } from "./CdpRelay.ts
 const encodeEvent = Schema.encodeSync(Schema.fromJsonString(DesktopBrowserEvent));
 const decodeCommand = Schema.decodeUnknownOption(Schema.fromJsonString(DesktopBrowserCommand));
 const lineEncoder = new TextEncoder();
+const requireElectron = NodeModule.createRequire(import.meta.url);
+
+/** The bits of Electron a click needs in order to give focus back. */
+interface PreviewFocusSource {
+  readonly getFocusedWebContents: () => Electron.WebContents | null;
+  readonly getFocusedWindow: () => unknown;
+}
+
+/**
+ * A preview click focuses the guest page. Hand focus back to whoever had it,
+ * unless that was the guest, the user picked something else while the click
+ * ran, or they left the app.
+ */
+export function restorePreviewFocus(input: {
+  readonly guestId: number;
+  readonly previouslyFocused: Electron.WebContents | null;
+  readonly focusedNow: Electron.WebContents | null;
+  readonly appWindowFocused: boolean;
+}): void {
+  const previouslyFocused = input.previouslyFocused;
+  if (
+    previouslyFocused === null ||
+    previouslyFocused.id === input.guestId ||
+    previouslyFocused.isDestroyed()
+  ) {
+    return;
+  }
+  const focusedNow = input.focusedNow;
+  if (
+    focusedNow !== null &&
+    focusedNow.id !== input.guestId &&
+    focusedNow.id !== previouslyFocused.id
+  ) {
+    return;
+  }
+  if (focusedNow === null && !input.appWindowFocused) return;
+  previouslyFocused.focus();
+}
+
+const loadElectronFocus = (): PreviewFocusSource | null => {
+  try {
+    const electron = requireElectron("electron") as {
+      readonly webContents: { getFocusedWebContents: () => Electron.WebContents | null };
+      readonly BrowserWindow: { getFocusedWindow: () => unknown };
+    };
+    return {
+      getFocusedWebContents: () => electron.webContents.getFocusedWebContents(),
+      getFocusedWindow: () => electron.BrowserWindow.getFocusedWindow(),
+    };
+  } catch {
+    return null;
+  }
+};
+
+const readFocus = (read: () => Electron.WebContents | null): Electron.WebContents | null => {
+  try {
+    return read();
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Snapshot focus before a mouse press or release, and restore it once that
+ * command settles. Playwright sends the two events separately, so each one
+ * has to hand focus back or the release leaves the guest focused.
+ */
+export function sendPreviewDebuggerCommand(
+  debuggee: {
+    readonly sendCommand: (
+      method: string,
+      params?: unknown,
+      sessionId?: string,
+    ) => Promise<unknown>;
+  },
+  guest: Electron.WebContents,
+  method: string,
+  params: Record<string, unknown>,
+  sessionId: string | undefined,
+  focus: PreviewFocusSource | null,
+): Promise<unknown> {
+  const mouseButton =
+    method === "Input.dispatchMouseEvent" &&
+    (params.type === "mousePressed" || params.type === "mouseReleased");
+  const previouslyFocused =
+    mouseButton && focus !== null ? readFocus(() => focus.getFocusedWebContents()) : null;
+  const sent =
+    sessionId === undefined
+      ? debuggee.sendCommand(method, params)
+      : debuggee.sendCommand(method, params, sessionId);
+  if (!mouseButton || focus === null) return sent;
+  return Promise.resolve(sent).finally(() => {
+    try {
+      const focusedNow = readFocus(() => focus.getFocusedWebContents());
+      let appWindowFocused = false;
+      try {
+        appWindowFocused = focus.getFocusedWindow() !== null;
+      } catch {
+        appWindowFocused = false;
+      }
+      restorePreviewFocus({
+        guestId: guest.id,
+        previouslyFocused,
+        focusedNow,
+        appWindowFocused,
+      });
+    } catch {
+      // Restoring focus must not fail the click the agent already sent.
+    }
+  });
+}
 
 export interface DesktopBrowserTabKey {
   readonly threadId: string;
@@ -102,9 +214,17 @@ export const make = Effect.gen(function* () {
     const relay: CdpRelayConnection = createCdpRelayConnection(
       {
         send: (method, params, sessionId) =>
-          sessionId === undefined
-            ? debuggee.sendCommand(method, params)
-            : debuggee.sendCommand(method, params, sessionId),
+          sendPreviewDebuggerCommand(
+            debuggee,
+            webContents,
+            method,
+            params,
+            sessionId,
+            method === "Input.dispatchMouseEvent" &&
+              (params.type === "mousePressed" || params.type === "mouseReleased")
+              ? loadElectronFocus()
+              : null,
+          ),
         targetId: () =>
           debuggee
             .sendCommand("Target.getTargetInfo")

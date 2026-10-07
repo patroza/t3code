@@ -234,6 +234,22 @@ describe("projectScripts helpers", () => {
     expect(projectScriptMenuLabel({ ...script, runOnSettle: true })).toBe(
       "Both (setup, on settle)",
     );
+    expect(
+      projectScriptMenuLabel({
+        ...script,
+        runOnWorktreeCreate: false,
+        runOnWorktreeRemove: true,
+        runOnPrMerged: true,
+      }),
+    ).toBe("Both (teardown, pr-merged)");
+    expect(
+      projectScriptMenuLabel({
+        ...script,
+        runOnWorktreeRemove: true,
+        runOnPrMerged: true,
+        runOnSettle: true,
+      }),
+    ).toBe("Both (setup, teardown, pr-merged, on settle)");
     expect(projectScriptMenuLabel({ ...script, runOnWorktreeCreate: false })).toBe("Both");
   });
 

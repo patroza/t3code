@@ -24,6 +24,7 @@ import * as HtmlRender from "../htmlRender/HtmlRender.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
+import { assertLiveCaller, unavailable } from "./threadAccess.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import { PreviewControlsToolkit } from "./toolkits/previewControls/tools.ts";
 import * as PreviewControlsHandlers from "./toolkits/previewControls/handlers.ts";
@@ -865,6 +866,32 @@ const registerDiscordRenameThread = Effect.fn("McpHttpServer.registerDiscordRena
           }
 
           return Effect.gen(function* () {
+            // Same gate as Discord posting: a credential that outlived its run cannot rename.
+            if (invocation.client?.access === "read-only") {
+              return yield* new OrchestratorMcpFailure({
+                code: "capability_denied",
+                message:
+                  "This tool changes the environment, and this MCP client was approved for read-only access.",
+              });
+            }
+            const shell = yield* engine
+              .getThreadShell(threadId)
+              .pipe(Effect.mapError(() => unavailable()));
+            if (shell === null || shell.deletedAt !== null) {
+              return yield* new OrchestratorMcpFailure({
+                code: "thread_not_found",
+                message: "The calling thread was not found.",
+              });
+            }
+            yield* assertLiveCaller({
+              scope: invocation,
+              threads: engine,
+              caller: shell,
+              limits: {
+                runtimeMode: shell.runtimeMode,
+                interactionMode: shell.interactionMode,
+              },
+            });
             const millis = yield* Clock.currentTimeMillis;
             const random = yield* Random.nextInt;
             const commandId = CommandId.make(
@@ -892,17 +919,24 @@ const registerDiscordRenameThread = Effect.fn("McpHttpServer.registerDiscordRena
             });
           }).pipe(
             Effect.matchCause({
-              onFailure: (cause) =>
-                new McpSchema.CallToolResult({
+              onFailure: (cause) => {
+                const failure = Cause.findErrorOption(cause);
+                const rejected =
+                  Option.isSome(failure) && isOrchestratorMcpFailure(failure.value)
+                    ? failure.value
+                    : undefined;
+                const message = rejected?.message ?? "Failed to rename the linked thread.";
+                return new McpSchema.CallToolResult({
                   isError: true,
                   structuredContent: {
                     error: {
-                      _tag: "ThreadRenameFailed",
-                      message: Cause.pretty(cause),
+                      _tag: rejected?.code ?? "ThreadRenameFailed",
+                      message,
                     },
                   },
-                  content: [{ type: "text", text: "Failed to rename the linked thread." }],
-                }),
+                  content: [{ type: "text", text: message }],
+                });
+              },
               onSuccess: (result) => result,
             }),
           );

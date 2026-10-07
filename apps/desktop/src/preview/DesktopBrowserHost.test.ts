@@ -120,3 +120,87 @@ describe("DesktopBrowserHost", () => {
     }),
   );
 });
+
+const webContents = (
+  id: number,
+  options?: { readonly destroyed?: boolean },
+): Electron.WebContents & { readonly focused: { count: number } } => {
+  const focused = { count: 0 };
+  return {
+    id,
+    focused,
+    isDestroyed: () => options?.destroyed === true,
+    focus: () => {
+      focused.count += 1;
+    },
+  } as unknown as Electron.WebContents & { readonly focused: { count: number } };
+};
+
+describe("sendPreviewDebuggerCommand", () => {
+  const guest = webContents(7);
+
+  const runClick = (input: {
+    readonly before: Electron.WebContents | null;
+    readonly after: Electron.WebContents | null;
+    readonly appWindowFocused?: boolean;
+    readonly type?: string;
+    readonly method?: string;
+  }) => {
+    let sent = false;
+    const focusReads: Array<"before" | "after"> = [];
+    const focus = {
+      getFocusedWebContents: () => {
+        const phase = sent ? "after" : "before";
+        focusReads.push(phase);
+        return phase === "before" ? input.before : input.after;
+      },
+      getFocusedWindow: () => (input.appWindowFocused === false ? null : {}),
+    };
+    const result = DesktopBrowserHost.sendPreviewDebuggerCommand(
+      {
+        sendCommand: () => {
+          sent = true;
+          return Promise.resolve({ ok: true });
+        },
+      },
+      guest,
+      input.method ?? "Input.dispatchMouseEvent",
+      { type: input.type ?? "mousePressed" },
+      undefined,
+      focus,
+    );
+    return result.then((value) => ({ value, focusReads }));
+  };
+
+  it("restores the window that was focused before a mouse press and release", async () => {
+    const composer = webContents(3);
+    const pressed = await runClick({ before: composer, after: guest });
+    const released = await runClick({ before: composer, after: guest, type: "mouseReleased" });
+    expect(pressed.value).toEqual({ ok: true });
+    expect(pressed.focusReads).toEqual(["before", "after"]);
+    expect(composer.focused.count).toBe(2);
+    expect(released.focusReads).toEqual(["before", "after"]);
+  });
+
+  it("leaves focus alone when the preview already had it, the user moved on, or they left the app", async () => {
+    const composer = webContents(3);
+    const other = webContents(9);
+    const gone = webContents(4, { destroyed: true });
+    await runClick({ before: guest, after: guest });
+    await runClick({ before: composer, after: other });
+    await runClick({ before: composer, after: null, appWindowFocused: false });
+    await runClick({ before: gone, after: guest });
+    await runClick({ before: composer, after: guest, method: "Page.captureScreenshot" });
+    await runClick({ before: composer, after: guest, type: "mouseMoved" });
+    expect(composer.focused.count).toBe(0);
+    expect(other.focused.count).toBe(0);
+    expect(gone.focused.count).toBe(0);
+    expect(guest.focused.count).toBe(0);
+  });
+
+  it("restores focus when the click blurs the page and the app is still focused", async () => {
+    const composer = webContents(3);
+    await runClick({ before: composer, after: null });
+    expect(composer.focused.count).toBe(1);
+  });
+});

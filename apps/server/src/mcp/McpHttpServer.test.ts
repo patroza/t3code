@@ -990,6 +990,51 @@ it.effect("renames the current thread through the Discord mirror tool", () => {
               Effect.promise(() => dispatch(command)).pipe(
                 Effect.as({ sequence: 0, storedEvents: [] }),
               ),
+            getThreadShell: (id) => Effect.succeed(McpToolAccessTestkit.liveThreadShell(id)),
+          }),
+        ),
+      ),
+    ),
+  );
+});
+
+it.effect("rejects a Discord rename after the calling run has ended", () => {
+  const dispatch = vi.fn((_command: unknown) => Promise.resolve({ sequence: 1 }));
+
+  return Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const result = yield* server
+      .callTool({ name: "discord_rename_thread", arguments: { title: "Review PR #428" } })
+      .pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toEqual({
+      error: {
+        _tag: "parent_not_active",
+        message: "The calling provider no longer owns an active thread run.",
+      },
+    });
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: "The calling provider no longer owns an active thread run.",
+      },
+    ]);
+    expect(dispatch).not.toHaveBeenCalled();
+  }).pipe(
+    Effect.provide(
+      DiscordThreadToolTestLayer.pipe(
+        Layer.provideMerge(
+          Layer.mock(ThreadManagementService, {
+            dispatch: (command) =>
+              Effect.promise(() => dispatch(command)).pipe(
+                Effect.as({ sequence: 0, storedEvents: [] }),
+              ),
+            getThreadShell: (id) =>
+              Effect.succeed(McpToolAccessTestkit.liveThreadShell(id, { activeRunId: null })),
           }),
         ),
       ),
