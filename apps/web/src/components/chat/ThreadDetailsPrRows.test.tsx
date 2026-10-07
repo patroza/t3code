@@ -20,7 +20,11 @@ vi.mock("./ThreadDetailsPrRow", () => ({
     />
   ),
 }));
-vi.mock("~/state/entities", () => ({ useProjects: () => [] }));
+vi.mock("~/state/entities", () => ({
+  useProjects: () => [],
+  // Partial mocks leak under isolate:false. Preview reopen needs this export.
+  readEnvironmentSupportsServerBrowser: () => false,
+}));
 vi.mock("~/state/threads", () => ({ threadEnvironment: {} }));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => watchCommand }));
 vi.mock("~/lib/openPullRequestLink", () => ({

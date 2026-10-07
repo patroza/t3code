@@ -39,6 +39,8 @@ vi.mock("../rpc/atomRegistry", () => ({
 vi.mock("../state/entities", () => ({
   readThreadShell: () => ({ projectId: "project-1", worktreePath: null }),
   readProject: () => (state.workspaceAvailable ? { workspaceRoot: "/work/project" } : null),
+  // Partial mocks leak under isolate:false. Preview reopen needs this export.
+  readEnvironmentSupportsServerBrowser: () => false,
 }));
 vi.mock("../composerDraftStore", () => {
   const store = {
