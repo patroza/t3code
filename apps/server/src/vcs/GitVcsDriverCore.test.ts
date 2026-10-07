@@ -1291,6 +1291,9 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
             'alias.spew=!for i in $(seq 1 128); do printf "é%03d\\n" $i >&2; done; echo fatal: last line >&2',
             "spew",
           ],
+          // Git runs a `!` alias through the shell, which sources `BASH_ENV`.
+          // An empty value keeps a host init script from adding a stderr line.
+          env: { BASH_ENV: "" },
           maxOutputBytes: 512,
           appendTruncationMarker: true,
           keepLineCallbacksAfterTruncation: true,

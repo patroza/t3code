@@ -81,7 +81,12 @@ describe("AcpClientTerminals", () => {
         spawner: yield* ChildProcessSpawner.ChildProcessSpawner,
         defaultCwd: process.cwd(),
         shellCommands: true,
-        environmentForSession: () => ({ T3_ACP_MCP_NODE: "mailbox-probe" }),
+        // A session env replaces the process env. `tr` is not a shell builtin,
+        // and NixOS does not put it on the shell's default PATH.
+        environmentForSession: () => ({
+          T3_ACP_MCP_NODE: "mailbox-probe",
+          ...(process.env.PATH === undefined ? {} : { PATH: process.env.PATH }),
+        }),
       });
       yield* Effect.addFinalizer(() => terminals.disposeAll);
       // Same command-only shape as the failed production commands and live capture.
