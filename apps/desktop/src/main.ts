@@ -26,7 +26,6 @@ import { configureDesktopEarlyStartup } from "./electron/DesktopEarlyStartup.ts"
 import * as DesktopIpc from "./ipc/DesktopIpc.ts";
 import * as ElectronApp from "./electron/ElectronApp.ts";
 import * as ElectronDialog from "./electron/ElectronDialog.ts";
-import * as MacApplicationIcon from "./electron/MacApplicationIcon.ts";
 import * as ElectronMenu from "./electron/ElectronMenu.ts";
 import * as ElectronPowerMonitor from "./electron/ElectronPowerMonitor.ts";
 import * as ElectronProtocol from "./electron/ElectronProtocol.ts";
@@ -143,7 +142,7 @@ const layerElectron = Layer.mergeAll(
   ElectronUpdater.layer,
   ElectronWindow.layer,
   DesktopIpc.layer(Electron.ipcMain),
-).pipe(Layer.provideMerge(MacApplicationIcon.layer));
+);
 
 const layerDesktopFoundation = Layer.mergeAll(
   MacPermissions.layer,
