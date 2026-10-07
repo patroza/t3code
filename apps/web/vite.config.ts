@@ -148,6 +148,10 @@ const isolatedUnitTestFiles = [
   "src/components/preview/PreviewView.test.tsx",
   "src/components/preview/openPreviewSession.test.ts",
   "src/components/preview/openTerminalLinkInPreview.test.ts",
+  // Replaces `openPreviewSession` with a bare vi.fn(). Under isolate:false
+  // that mock leaks into reopenClosedView.test.ts, so the session result is
+  // undefined and reading `_tag` throws.
+  "src/components/ReopenClosedViewShortcut.test.tsx",
   // Tests that mock `react` itself and drive components through
   // reactHookHarness need their own module registry: under `isolate: false`
   // the component graph may already be bound to the real react/compiler
