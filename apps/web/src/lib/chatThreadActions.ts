@@ -25,6 +25,7 @@ interface NewThreadHandler {
       worktreePath?: string | null;
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
+      reuseBaseBranch?: boolean;
     },
     // The opened draft's identity, which most callers have no use for.
   ): Promise<unknown>;

@@ -63,6 +63,8 @@ const request: ProjectScriptEditorRequest = {
     command: "vp test",
     icon: "test",
     runOnWorktreeCreate: false,
+    runOnWorktreeRemove: false,
+    runOnPrMerged: false,
     waitForSetup: false,
     runOnSettle: false,
     keybinding: "mod+k",

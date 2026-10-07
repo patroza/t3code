@@ -20,6 +20,7 @@ import type { ConnectedEnvironmentSummary } from "../../state/remote-runtime-typ
 import { serverEnvironment } from "../../state/server";
 import { ConnectionFormField } from "./ConnectionFormField";
 import { ConnectionStatusDot } from "./ConnectionStatusDot";
+import { HostResourceStatus } from "./HostResourceStatus";
 
 function connectionStatusLabel(environment: ConnectedEnvironmentSummary): string | null {
   if (!environment.isEnabled && environment.connectionState !== "unsupported") {
@@ -129,6 +130,11 @@ export function ConnectionEnvironmentRow(props: {
               ) : null}
             </Text>
           ) : null}
+          <HostResourceStatus
+            environmentId={props.environment.environmentId}
+            environmentLabel={props.environment.environmentLabel}
+            connected={props.environment.connectionState === "connected"}
+          />
         </View>
 
         <ThemedSwitch

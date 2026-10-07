@@ -5,7 +5,7 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
   assistantCitationFromLocation,
@@ -24,18 +24,38 @@ const citation: AssistantCitation = {
   suffix: "\nAfter.",
 };
 
+beforeEach(() => {
+  // Router 1.171 writes `history.scrollRestoration` while setting up a client
+  // router. This file runs in the node unit project, which has no DOM.
+  vi.stubGlobal("history", { scrollRestoration: "auto" });
+  vi.stubGlobal("document", {
+    addEventListener() {},
+    removeEventListener() {},
+  });
+  vi.stubGlobal("addEventListener", () => {});
+  vi.stubGlobal("self", globalThis);
+});
+
+afterEach(() => {
+  delete (globalThis as { __TSR_ROUTER__?: unknown }).__TSR_ROUTER__;
+  vi.unstubAllGlobals();
+});
+
 function createCitationRouter(initialEntry = "/environment-one/thread-one") {
   const root = createRootRoute();
   const thread = createRoute({ getParentRoute: () => root, path: "/$environmentId/$threadId" });
   return createRouter({
     routeTree: root.addChildren([thread]),
     history: createMemoryHistory({ initialEntries: [initialEntry] }),
+    isServer: false,
+    origin: "http://localhost",
   });
 }
 
 describe("assistant citation navigation", () => {
   it("preserves encoded quote whitespace through router navigation and reload", async () => {
     const router = createCitationRouter();
+    await router.load();
     await router.navigate(assistantCitationNavigation(citation));
 
     expect(assistantCitationFromLocation(router.state.location.href)).toEqual(citation);
@@ -57,6 +77,7 @@ describe("assistant citation navigation", () => {
 
   it("reactivates an identical citation instead of deduplicating its navigation", async () => {
     const router = createCitationRouter();
+    await router.load();
     await router.navigate(assistantCitationNavigation(citation));
     const previous = router.state.location;
     await router.navigate(assistantCitationNavigation(citation));

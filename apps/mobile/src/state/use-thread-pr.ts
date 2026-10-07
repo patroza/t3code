@@ -17,6 +17,7 @@ import {
   presentThreadPr,
   type ThreadPrPresentation,
 } from "./thread-pr-presentation";
+import { vcsEnvironment } from "./vcs";
 
 const pullRequestSummaryAtom = createLinkedPullRequestSummaryAtomFamily(connectionAtomRuntime);
 const MAX_THREAD_PR_SNAPSHOTS = 500;
@@ -27,7 +28,7 @@ interface ThreadPrSnapshot {
 }
 
 // One bounded cache survives row virtualization without retaining one live
-// atom for every thread or pull request ever seen.
+// atom for every thread, branch, directory, or linked pull request ever seen.
 const threadPrSnapshotsAtom = Atom.make<ReadonlyMap<string, ThreadPrSnapshot>>(new Map()).pipe(
   Atom.keepAlive,
   Atom.withLabel("mobile:thread-pr-snapshots"),
@@ -40,10 +41,16 @@ export {
 } from "./thread-pr-presentation";
 
 /**
- * Linked PRs use server snapshots. Branch fallback and legacy references share
- * a live summary request across visible rows in the same environment.
+ * Linked PRs use server snapshots. Visible rows share a summary request for
+ * the same PR in the same environment. When the server has not linked a PR,
+ * list rows may still pass a project cwd so unlinked branches can fall back
+ * to a budgeted git status query.
  */
-export function useThreadPr(thread: EnvironmentThreadShell): ThreadPrPresentation | null {
+export function useThreadPr(
+  thread: EnvironmentThreadShell,
+  projectCwd?: string | null,
+): ThreadPrPresentation | null {
+  const cwd = thread.worktreePath ?? projectCwd ?? null;
   const supportsLinks = useAtomValue(
     serverEnvironment.configValueAtom(thread.environmentId),
     (config) => config?.environment.capabilities.threadPullRequests === true,
@@ -61,7 +68,7 @@ export function useThreadPr(thread: EnvironmentThreadShell): ThreadPrPresentatio
     [thread.pullRequests, thread.linkedPullRequest, thread.branchPullRequest, supportsLinks],
   );
   const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-  const snapshotIdentity = JSON.stringify(pullRequestRef);
+  const snapshotIdentity = JSON.stringify(pullRequestRef ?? { branch: thread.branch, cwd });
   // Select this row's entry so writes for other rows do not re-render it.
   const snapshotEntry = useAtomValue(
     threadPrSnapshotsAtom,
@@ -71,6 +78,14 @@ export function useThreadPr(thread: EnvironmentThreadShell): ThreadPrPresentatio
     ),
   );
   const snapshot = snapshotEntry?.identity === snapshotIdentity ? snapshotEntry.presentation : null;
+  const gitStatus = useEnvironmentQuery(
+    pullRequestRef === null && thread.branch !== null && cwd !== null
+      ? vcsEnvironment.listStatus({
+          environmentId: thread.environmentId,
+          input: { cwd },
+        })
+      : null,
+  );
   const pullRequestSummary = useEnvironmentQuery(
     pullRequestRef === null
       ? null
@@ -85,16 +100,23 @@ export function useThreadPr(thread: EnvironmentThreadShell): ThreadPrPresentatio
   );
 
   const live = useMemo<ThreadPrPresentation | null | undefined>(() => {
-    if (pullRequestRef === null) return null;
-    const summary = pullRequestSummary.data;
-    return summary === null
-      ? undefined
-      : presentThreadPr(pullRequestDetailToVcsStatus(summary), {
-          kind: summary.provider,
-          name: summary.provider,
-          baseUrl: "",
-        });
-  }, [pullRequestRef, pullRequestSummary.data]);
+    if (pullRequestRef !== null) {
+      const summary = pullRequestSummary.data;
+      return summary === null
+        ? undefined
+        : presentThreadPr(pullRequestDetailToVcsStatus(summary), {
+            kind: summary.provider,
+            name: summary.provider,
+            baseUrl: "",
+          });
+    }
+
+    if (thread.branch === null || cwd === null) return null;
+    const status = gitStatus.data;
+    if (status === null) return undefined;
+    if (status.refName !== thread.branch || !status.pr) return null;
+    return presentThreadPr(status.pr, status.sourceControlProvider);
+  }, [cwd, gitStatus.data, pullRequestRef, pullRequestSummary.data, thread.branch]);
 
   useEffect(() => {
     if (live === undefined) return;

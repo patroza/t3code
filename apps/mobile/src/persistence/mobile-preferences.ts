@@ -39,6 +39,53 @@ export interface Preferences {
   /** @deprecated Kept temporarily so older OTA bundles retain the selected mode. */
   readonly projectGroupingEnabled?: boolean;
   readonly projectGroupingMode?: SidebarProjectGroupingMode;
+  /**
+   * @deprecated Superseded by `legacyThreadListEnabled` when v2 became the
+   * default (#5672). Kept so older device preference payloads still decode.
+   */
+  readonly threadListV2Enabled?: boolean;
+  /**
+   * @deprecated The grouped legacy thread list was retired. Kept so older
+   * device preference payloads still decode.
+   */
+  readonly legacyThreadListEnabled?: boolean;
+  /**
+   * @deprecated Legacy toggle from Needs attention / Recent work UI (removed).
+   * Kept only so older device preference payloads still decode.
+   */
+  readonly recentWorkEnabled?: boolean;
+  /**
+   * Multi-select home environment filter. Empty or omitted = all
+   * environments. Device-local (no client-settings sync).
+   */
+  readonly selectedEnvironmentIds?: readonly string[];
+  /**
+   * @deprecated Prefer hideSettledOnRecent. Older payloads used a single flag
+   * for Recent only; kept so device prefs still decode.
+   */
+  readonly hideSettledThreads?: boolean;
+  /**
+   * Recent list: hide settled threads. Default true when omitted (cleaner inbox).
+   */
+  readonly hideSettledOnRecent?: boolean;
+  /**
+   * Projects list: hide settled threads. Default false when omitted (full history).
+   */
+  readonly hideSettledOnProjects?: boolean;
+  /**
+   * Threads list organization: recency (Recent), project, or none.
+   * Device-local; survives restarts. Omitted = default project grouping.
+   */
+  readonly threadGrouping?: "recency" | "project" | "none";
+  /**
+   * Home/sidebar ownership filter (anyone / mine / theirs). Device-local so
+   * it survives app restarts — without this, Mine/Theirs resets on launch.
+   */
+  readonly ownershipFilter?: "any" | "mine" | "theirs";
+  /**
+   * Sub-filter for mine/theirs: created, participated, or both (default).
+   */
+  readonly ownershipRelation?: "created" | "participated" | "both";
   /** Device-local counterpart of desktop's `planModeEnabled` legacy flag. */
   readonly planModeEnabled?: boolean;
   /** Device-local counterpart of web's `sidebarWorkingShelfEnabled` beta. */
@@ -109,6 +156,16 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     followUpBehavior?: FollowUpBehavior;
     projectGroupingEnabled?: boolean;
     projectGroupingMode?: SidebarProjectGroupingMode;
+    threadListV2Enabled?: boolean;
+    legacyThreadListEnabled?: boolean;
+    recentWorkEnabled?: boolean;
+    selectedEnvironmentIds?: readonly string[];
+    hideSettledThreads?: boolean;
+    hideSettledOnRecent?: boolean;
+    hideSettledOnProjects?: boolean;
+    threadGrouping?: "recency" | "project" | "none";
+    ownershipFilter?: "any" | "mine" | "theirs";
+    ownershipRelation?: "created" | "participated" | "both";
     planModeEnabled?: boolean;
     workingShelfEnabled?: boolean;
     modelFavorites?: Preferences["modelFavorites"];
@@ -182,6 +239,47 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   ) {
     preferences.projectGroupingMode = parsed.projectGroupingMode;
   }
+  if (typeof parsed.legacyThreadListEnabled === "boolean") {
+    preferences.legacyThreadListEnabled = parsed.legacyThreadListEnabled;
+  }
+  if (typeof parsed.recentWorkEnabled === "boolean") {
+    preferences.recentWorkEnabled = parsed.recentWorkEnabled;
+  }
+  if (Array.isArray(parsed.selectedEnvironmentIds)) {
+    preferences.selectedEnvironmentIds = parsed.selectedEnvironmentIds.filter(
+      (id): id is string => typeof id === "string" && id.length > 0,
+    );
+  }
+  if (typeof parsed.hideSettledThreads === "boolean") {
+    preferences.hideSettledThreads = parsed.hideSettledThreads;
+  }
+  if (typeof parsed.hideSettledOnRecent === "boolean") {
+    preferences.hideSettledOnRecent = parsed.hideSettledOnRecent;
+  }
+  if (typeof parsed.hideSettledOnProjects === "boolean") {
+    preferences.hideSettledOnProjects = parsed.hideSettledOnProjects;
+  }
+  if (
+    parsed.threadGrouping === "recency" ||
+    parsed.threadGrouping === "project" ||
+    parsed.threadGrouping === "none"
+  ) {
+    preferences.threadGrouping = parsed.threadGrouping;
+  }
+  if (
+    parsed.ownershipFilter === "any" ||
+    parsed.ownershipFilter === "mine" ||
+    parsed.ownershipFilter === "theirs"
+  ) {
+    preferences.ownershipFilter = parsed.ownershipFilter;
+  }
+  if (
+    parsed.ownershipRelation === "created" ||
+    parsed.ownershipRelation === "participated" ||
+    parsed.ownershipRelation === "both"
+  ) {
+    preferences.ownershipRelation = parsed.ownershipRelation;
+  }
   if (typeof parsed.planModeEnabled === "boolean") {
     preferences.planModeEnabled = parsed.planModeEnabled;
   }
@@ -209,6 +307,60 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     preferences.threadListWorkingShelfExpanded = parsed.threadListWorkingShelfExpanded;
   }
   return preferences;
+}
+
+/** Resolve stored ownership filter; default Mine when never chosen. */
+export function resolveOwnershipFilter(preferences: Preferences): "any" | "mine" | "theirs" {
+  if (
+    preferences.ownershipFilter === "any" ||
+    preferences.ownershipFilter === "mine" ||
+    preferences.ownershipFilter === "theirs"
+  ) {
+    return preferences.ownershipFilter;
+  }
+  return "mine";
+}
+
+/** Resolve mine/theirs relation sub-filter; default both. */
+export function resolveOwnershipRelation(
+  preferences: Preferences,
+): "created" | "participated" | "both" {
+  if (
+    preferences.ownershipRelation === "created" ||
+    preferences.ownershipRelation === "participated" ||
+    preferences.ownershipRelation === "both"
+  ) {
+    return preferences.ownershipRelation;
+  }
+  return "both";
+}
+
+/** Resolve stored Threads grouping; default project when never chosen. */
+export function resolveThreadGrouping(preferences: Preferences): "recency" | "project" | "none" {
+  if (
+    preferences.threadGrouping === "recency" ||
+    preferences.threadGrouping === "project" ||
+    preferences.threadGrouping === "none"
+  ) {
+    return preferences.threadGrouping;
+  }
+  return "project";
+}
+
+/** Recent: default hide settled. Honors legacy hideSettledThreads when set. */
+export function resolveHideSettledOnRecent(preferences: Preferences): boolean {
+  if (typeof preferences.hideSettledOnRecent === "boolean") {
+    return preferences.hideSettledOnRecent;
+  }
+  if (typeof preferences.hideSettledThreads === "boolean") {
+    return preferences.hideSettledThreads;
+  }
+  return true;
+}
+
+/** Projects: default show settled (hide = false). */
+export function resolveHideSettledOnProjects(preferences: Preferences): boolean {
+  return preferences.hideSettledOnProjects === true;
 }
 
 export const make = Effect.fn("MobilePreferencesStore.make")(function* () {

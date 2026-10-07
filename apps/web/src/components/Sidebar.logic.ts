@@ -3,6 +3,11 @@ import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2Pe
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import * as React from "react";
 import {
+  groupThreadsByRecency,
+  shouldShowRecencySectionHeaders,
+  type ThreadRecencyGroup,
+} from "@t3tools/client-runtime/state/thread-recency-groups";
+import {
   isAtomCommandInterrupted,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
@@ -22,10 +27,84 @@ import {
   toSortableTimestamp,
   type ThreadSortInput,
 } from "../lib/threadSort";
+import {
+  resolveSettledThreadTimestamp,
+  type SettledThreadTimestampInput,
+} from "@t3tools/client-runtime/state/thread-sort";
 import type { SidebarThreadSummary, Thread } from "../types";
 import { cn } from "../lib/utils";
-import { isLatestRunSettled } from "../session-logic";
 import { resolveServerBackedAppStageLabel } from "../branding.logic";
+import type { SnoozePreset } from "./Sidebar.snooze";
+
+export { resolveSettledThreadTimestamp };
+
+export function resolveThreadRowClassName(input: {
+  isActive: boolean;
+  isSelected: boolean;
+}): string {
+  const baseClassName =
+    "h-8 w-full translate-x-0 cursor-pointer justify-start rounded-md px-2 text-left text-sm select-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring";
+
+  if (input.isSelected && input.isActive) {
+    return cn(
+      baseClassName,
+      "bg-sidebar-row-active text-sidebar-foreground font-medium hover:bg-sidebar-row-active hover:text-sidebar-foreground",
+    );
+  }
+
+  if (input.isSelected) {
+    return cn(
+      baseClassName,
+      "bg-sidebar-row-selected text-sidebar-foreground hover:bg-sidebar-row-active hover:text-sidebar-foreground",
+    );
+  }
+
+  if (input.isActive) {
+    return cn(
+      baseClassName,
+      "bg-sidebar-row-active text-sidebar-foreground font-medium hover:bg-sidebar-row-active hover:text-sidebar-foreground",
+    );
+  }
+
+  return cn(
+    baseClassName,
+    "text-sidebar-muted-foreground/80 hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
+  );
+}
+
+type ChangeRequestStateLike = "open" | "closed" | "merged";
+
+export function resolveSidebarProjectBadgeLabel(displayName: string): string {
+  const leafName = displayName.split("/").findLast(Boolean) ?? displayName;
+  const normalized = leafName.trim();
+  if (!normalized) return "?";
+
+  const digitMatch = normalized.match(/^([a-zA-Z]+\d+)/);
+  if (digitMatch?.[1]) return digitMatch[1].slice(0, 3).toUpperCase();
+
+  const words = normalized.split(/[^a-zA-Z0-9]+/).filter(Boolean);
+  if (words.length > 1) {
+    return words
+      .slice(0, 3)
+      .map((word) => word[0])
+      .join("")
+      .toUpperCase();
+  }
+
+  return normalized[0]?.toUpperCase() ?? "?";
+}
+
+export function resolveSidebarProjectBadgeColorIndex(
+  projectKey: string,
+  colorCount: number,
+): number {
+  if (colorCount <= 0) return 0;
+  let hash = 0;
+  for (const character of projectKey) {
+    hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+  }
+  return hash % colorCount;
+}
 
 export function shouldNavigateAfterThreadPark(input: {
   readonly threadKey: string;
@@ -66,7 +145,31 @@ export function resolveSidebarRowAccessibility(input: {
 // activities, growing as agents work) for as long as the row stays visible,
 // so this limit is a direct renderer-heap and server-load multiplier — keep
 // it small; cold opens still render instantly from the cached snapshot.
-const SIDEBAR_THREAD_PREWARM_LIMIT = 3;
+export const SIDEBAR_THREAD_PREWARM_LIMIT = 3;
+// Settled-tail paging: recent history is the common lookup; the deep tail
+// stays behind an explicit Show more. Shared by SidebarV2, classic Recent
+// (hide-settled shelf + recency headers).
+export const SETTLED_TAIL_INITIAL_COUNT = 10;
+export const SETTLED_TAIL_PAGE_COUNT = 25;
+export type SidebarNewThreadEnvMode = "local" | "worktree";
+export type SidebarThreadWorktreeSection =
+  | {
+      kind: "thread";
+      thread: SidebarThreadSummary;
+      /** Resolved checkout path for PR/git status when this thread is not grouped. */
+      checkoutPath?: string;
+    }
+  | {
+      kind: "worktree";
+      key: string;
+      label: string;
+      branch: string | null;
+      checkoutPath: string;
+      source: "local" | "worktree";
+      worktreePath: string | null;
+      threads: SidebarThreadSummary[];
+    };
+
 // A small buffer keeps the next few rows warm without leasing every row that
 // content-visibility leaves mounted below the scroll viewport.
 const SIDEBAR_ROW_SUBSCRIPTION_OVERSCAN_PX = 160;
@@ -611,6 +714,110 @@ export function buildBulkTitleRegenerationContextMenuItem(input: {
   };
 }
 
+export type ThreadContextMenuAction =
+  | "rename"
+  | "mark-unread"
+  | "copy-path"
+  | "copy-thread-id"
+  | "delete";
+
+export function buildThreadContextMenuItems(): readonly ContextMenuItem<ThreadContextMenuAction>[] {
+  return [
+    { id: "rename", label: "Rename thread" },
+    { id: "mark-unread", label: "Mark unread" },
+    { id: "copy-path", label: "Copy Path" },
+    { id: "copy-thread-id", label: "Copy Thread ID" },
+    { id: "delete", label: "Delete", destructive: true, icon: "trash" },
+  ];
+}
+
+export type SidebarV2ThreadContextMenuAction =
+  | "new-thread-on-branch"
+  | "settle"
+  | "unsettle"
+  | "snooze"
+  | `snooze:${string}`
+  | "unsnooze"
+  | "pin"
+  | "unpin"
+  | "rename"
+  | "regenerate-title"
+  | "mark-unread"
+  | "copy-path"
+  | "copy-thread-id"
+  | "copy-branch"
+  | "delete";
+
+// Per-thread actions for Sidebar V2 rows.
+export function buildSidebarV2ThreadContextMenuItems(input: {
+  branch: string | null;
+  supportsSettlement: boolean;
+  isSettled: boolean;
+  supportsSnooze: boolean;
+  isSnoozed: boolean;
+  supportsPinning?: boolean;
+  isPinned?: boolean;
+  canSnoozeNow: boolean;
+  snoozePresets: ReadonlyArray<SnoozePreset>;
+  supportsTitleRegeneration?: boolean;
+  isRegeneratingTitle?: boolean;
+}): readonly ContextMenuItem<SidebarV2ThreadContextMenuAction>[] {
+  return [
+    ...(input.branch
+      ? [
+          {
+            id: "new-thread-on-branch",
+            label: `New thread on ${input.branch}`,
+          } as const,
+        ]
+      : []),
+    ...(input.supportsPinning
+      ? [
+          input.isPinned
+            ? ({ id: "unpin", label: "Unpin thread" } as const)
+            : ({ id: "pin", label: "Pin thread" } as const),
+        ]
+      : []),
+    ...(input.supportsSettlement
+      ? [
+          input.isSettled
+            ? ({ id: "unsettle", label: "Un-settle thread" } as const)
+            : ({ id: "settle", label: "Settle thread" } as const),
+        ]
+      : []),
+    ...(input.supportsSnooze
+      ? [
+          input.isSnoozed
+            ? ({ id: "unsnooze", label: "Wake thread" } as const)
+            : ({
+                id: "snooze",
+                label: "Snooze",
+                disabled: !input.canSnoozeNow,
+                children: input.snoozePresets.map((preset) => ({
+                  id: `snooze:${preset.id}` as const,
+                  label: `${preset.label} (${preset.whenLabel})`,
+                })),
+              } satisfies ContextMenuItem<SidebarV2ThreadContextMenuAction>),
+        ]
+      : []),
+    { id: "rename", label: "Rename thread" },
+    ...(input.supportsTitleRegeneration
+      ? [
+          {
+            id: "regenerate-title",
+            label: input.isRegeneratingTitle ? "Regenerating…" : "Regenerate title",
+            disabled: input.isRegeneratingTitle === true,
+          } as const,
+        ]
+      : []),
+    { id: "mark-unread", label: "Mark unread" },
+    { id: "copy-path", label: "Copy path", icon: "copy" },
+    { id: "copy-thread-id", label: "Copy Thread ID", icon: "copy" },
+    ...(input.branch ? ([{ id: "copy-branch", label: "Copy branch", icon: "copy" }] as const) : []),
+    { id: "delete", label: "Delete", destructive: true, icon: "trash" },
+  ];
+}
+
 /**
  * Bulk unpin follows the same "count only what the action will touch" rule
  * as title regeneration: on a mixed selection the label counts the pinned
@@ -660,16 +867,16 @@ type ThreadStatusInput = Pick<
   pendingBackgroundTasks?: SidebarThreadSummary["pendingBackgroundTasks"] | undefined;
 };
 
-export interface ThreadJumpHintVisibilityController {
-  sync: (shouldShow: boolean) => void;
-  dispose: () => void;
-}
-
 export function resolveSidebarStageBadgeLabel(input: {
   primaryServerVersion: string | null | undefined;
   fallbackStageLabel: string;
 }): string {
   return resolveServerBackedAppStageLabel(input);
+}
+
+export interface ThreadJumpHintVisibilityController {
+  sync: (shouldShow: boolean) => void;
+  dispose: () => void;
 }
 
 export function createThreadJumpHintVisibilityController(input: {
@@ -776,9 +983,42 @@ export function hasUnseenCompletion(thread: ThreadStatusInput): boolean {
   if (Number.isNaN(completedAt)) return false;
   if (!thread.lastVisitedAt) return false;
 
-  const lastVisitedAt = Date.parse(thread.lastVisitedAt);
-  if (Number.isNaN(lastVisitedAt)) return true;
-  return completedAt > lastVisitedAt;
+  const lastVisitedAtMs = Date.parse(thread.lastVisitedAt);
+  if (Number.isNaN(lastVisitedAtMs)) return true;
+  return completedAt > lastVisitedAtMs;
+}
+
+/**
+ * Shared settled classification for display surfaces (sidebar v1/v2),
+ * so they always agree on what is settled. Threads on servers without the
+ * settlement capability (old server, or descriptor not loaded yet) never
+ * classify as settled: the user could neither un-settle nor pin them, so
+ * auto-settling them would strand rows in a tail with no working affordances.
+ */
+export function isThreadSettledForDisplay(
+  thread: {
+    readonly environmentId: string;
+    readonly settledOverride: "settled" | "active" | null;
+  },
+  input: {
+    serverConfigs: {
+      get(environmentId: string):
+        | {
+            readonly environment: {
+              readonly capabilities: { readonly threadSettlement?: boolean };
+            };
+          }
+        | undefined;
+    };
+    now: string;
+    autoSettleAfterDays: number | null;
+    changeRequestState: ChangeRequestStateLike | null;
+  },
+): boolean {
+  const supportsSettlement =
+    input.serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSettlement ===
+    true;
+  return supportsSettlement && thread.settledOverride === "settled";
 }
 
 export function shouldClearThreadSelectionOnMouseDown(target: HTMLElement | null): boolean {
@@ -793,6 +1033,191 @@ export function shouldClearThreadSelectionOnMouseDown(target: HTMLElement | null
 // still count as a normal single activation.
 export function isTrailingDoubleClick(detail: number): boolean {
   return detail > 1;
+}
+
+export function resolveSidebarNewThreadEnvMode(input: {
+  requestedEnvMode?: SidebarNewThreadEnvMode;
+  defaultEnvMode: SidebarNewThreadEnvMode;
+}): SidebarNewThreadEnvMode {
+  return input.requestedEnvMode ?? input.defaultEnvMode;
+}
+
+export function resolveSidebarNewThreadSeedContext(input: {
+  projectId: string;
+  defaultEnvMode: SidebarNewThreadEnvMode;
+  activeThread?: {
+    projectId: string;
+    branch: string | null;
+    worktreePath: string | null;
+  } | null;
+  activeDraftThread?: {
+    projectId: string;
+    branch: string | null;
+    worktreePath: string | null;
+    envMode: SidebarNewThreadEnvMode;
+    startFromOrigin: boolean;
+  } | null;
+}): {
+  branch?: string | null;
+  worktreePath?: string | null;
+  envMode: SidebarNewThreadEnvMode;
+  startFromOrigin?: boolean;
+} {
+  if (
+    input.activeDraftThread?.projectId === input.projectId &&
+    input.activeDraftThread.worktreePath
+  ) {
+    return {
+      branch: input.activeDraftThread.branch,
+      worktreePath: input.activeDraftThread.worktreePath,
+      envMode: "local",
+      startFromOrigin: input.activeDraftThread.startFromOrigin,
+    };
+  }
+
+  if (input.activeThread?.projectId === input.projectId && input.activeThread.worktreePath) {
+    return {
+      branch: input.activeThread.branch,
+      worktreePath: input.activeThread.worktreePath,
+      envMode: "local",
+    };
+  }
+
+  if (input.defaultEnvMode === "worktree") {
+    return {
+      envMode: "worktree",
+    };
+  }
+
+  if (input.activeDraftThread?.projectId === input.projectId) {
+    return {
+      branch: input.activeDraftThread.branch,
+      worktreePath: input.activeDraftThread.worktreePath,
+      envMode: input.activeDraftThread.envMode,
+      startFromOrigin: input.activeDraftThread.startFromOrigin,
+    };
+  }
+
+  if (input.activeThread?.projectId === input.projectId) {
+    return {
+      branch: input.activeThread.branch,
+      worktreePath: input.activeThread.worktreePath,
+      envMode: input.activeThread.worktreePath ? "worktree" : "local",
+    };
+  }
+
+  return {
+    envMode: input.defaultEnvMode,
+  };
+}
+
+export function normalizeWorktreePathForSidebarGroup(worktreePath: string | null): string | null {
+  const trimmed = worktreePath?.trim() ?? "";
+  if (trimmed.length === 0) {
+    return null;
+  }
+  const withoutTrailingSeparators = trimmed.replace(/[\\/]+$/u, "");
+  return withoutTrailingSeparators.length > 0 ? withoutTrailingSeparators : trimmed;
+}
+
+export function formatWorktreeGroupLabel(input: {
+  worktreePath: string;
+  branch: string | null;
+  source?: "local" | "worktree";
+}): string {
+  const pathSegments = input.worktreePath.split(/[\\/]/u);
+  const pathLabel = pathSegments.findLast((segment) => segment.length > 0) ?? input.worktreePath;
+  if (input.branch) {
+    return `${input.branch} · ${pathLabel}`;
+  }
+  return input.source === "local" ? `Local checkout · ${pathLabel}` : pathLabel;
+}
+
+function checkoutSectionBucket(
+  thread: SidebarThreadSummary,
+  resolveLocalCheckoutPath?: (thread: SidebarThreadSummary) => string | null,
+): {
+  key: string;
+  checkoutPath: string;
+  source: "local" | "worktree";
+  worktreePath: string | null;
+} | null {
+  const worktreePath = normalizeWorktreePathForSidebarGroup(thread.worktreePath);
+  if (worktreePath) {
+    return {
+      key: `${thread.environmentId}:${thread.projectId}:worktree:${worktreePath}`,
+      checkoutPath: worktreePath,
+      source: "worktree",
+      worktreePath,
+    };
+  }
+  const localCheckoutPath = normalizeWorktreePathForSidebarGroup(
+    resolveLocalCheckoutPath?.(thread) ?? null,
+  );
+  if (!localCheckoutPath) {
+    return null;
+  }
+  return {
+    key: `${thread.environmentId}:${thread.projectId}:local:${localCheckoutPath}`,
+    checkoutPath: localCheckoutPath,
+    source: "local",
+    worktreePath: null,
+  };
+}
+
+export function buildSidebarThreadWorktreeSections(
+  threads: readonly SidebarThreadSummary[],
+  options: {
+    readonly resolveLocalCheckoutPath?: (thread: SidebarThreadSummary) => string | null;
+  } = {},
+): SidebarThreadWorktreeSection[] {
+  const threadsByWorktreeKey = new Map<string, SidebarThreadSummary[]>();
+  for (const thread of threads) {
+    const bucket = checkoutSectionBucket(thread, options.resolveLocalCheckoutPath);
+    if (!bucket) {
+      continue;
+    }
+    const existing = threadsByWorktreeKey.get(bucket.key);
+    if (existing) {
+      existing.push(thread);
+    } else {
+      threadsByWorktreeKey.set(bucket.key, [thread]);
+    }
+  }
+
+  const emittedWorktreeKeys = new Set<string>();
+  const sections: SidebarThreadWorktreeSection[] = [];
+  for (const thread of threads) {
+    const bucket = checkoutSectionBucket(thread, options.resolveLocalCheckoutPath);
+    const groupThreads = bucket ? threadsByWorktreeKey.get(bucket.key) : undefined;
+    if (!bucket || !groupThreads || groupThreads.length < 2) {
+      sections.push({
+        kind: "thread",
+        thread,
+        ...(bucket ? { checkoutPath: bucket.checkoutPath } : {}),
+      });
+      continue;
+    }
+    if (emittedWorktreeKeys.has(bucket.key)) {
+      continue;
+    }
+    emittedWorktreeKeys.add(bucket.key);
+    sections.push({
+      kind: "worktree",
+      key: bucket.key,
+      label: formatWorktreeGroupLabel({
+        worktreePath: bucket.checkoutPath,
+        branch: thread.branch,
+        source: bucket.source,
+      }),
+      branch: thread.branch,
+      checkoutPath: bucket.checkoutPath,
+      source: bucket.source,
+      worktreePath: bucket.worktreePath,
+      threads: groupThreads,
+    });
+  }
+  return sections;
 }
 
 function nodeClosest(node: object | null, selector: string): unknown {
@@ -870,6 +1295,19 @@ export function getSidebarThreadIdsToPrewarm<TThreadId>(
   return visibleThreadIds.slice(0, Math.max(0, limit));
 }
 
+/**
+ * Prewarming keeps a live thread-detail subscription per row, so the cache is
+ * paid for in retained history, not just in requests. A coarse pointer reports
+ * no hover, so nothing narrows those rows down to the one the reader is heading
+ * for, and the devices behind it are the ones least able to hold ten threads of
+ * history at once. Prewarm nothing there and let opening a thread fetch it.
+ */
+export function resolveSidebarThreadPrewarmLimit(input: {
+  readonly hasCoarsePointer: boolean;
+}): number {
+  return input.hasCoarsePointer ? 0 : SIDEBAR_THREAD_PREWARM_LIMIT;
+}
+
 export function resolveAdjacentThreadId<T>(input: {
   threadIds: readonly T[];
   currentThreadId: T | null;
@@ -904,40 +1342,6 @@ export function isContextMenuPointerDown(input: {
 }): boolean {
   if (input.button === 2) return true;
   return input.isMac && input.button === 0 && input.ctrlKey;
-}
-
-export function resolveThreadRowClassName(input: {
-  isActive: boolean;
-  isSelected: boolean;
-}): string {
-  const baseClassName =
-    "h-8 w-full translate-x-0 cursor-pointer justify-start rounded-md px-2 text-left text-sm select-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring";
-
-  if (input.isSelected && input.isActive) {
-    return cn(
-      baseClassName,
-      "bg-sidebar-row-active text-sidebar-foreground font-medium hover:bg-sidebar-row-active hover:text-sidebar-foreground",
-    );
-  }
-
-  if (input.isSelected) {
-    return cn(
-      baseClassName,
-      "bg-sidebar-row-selected text-sidebar-foreground hover:bg-sidebar-row-active hover:text-sidebar-foreground",
-    );
-  }
-
-  if (input.isActive) {
-    return cn(
-      baseClassName,
-      "bg-sidebar-row-active text-sidebar-foreground font-medium hover:bg-sidebar-row-active hover:text-sidebar-foreground",
-    );
-  }
-
-  return cn(
-    baseClassName,
-    "text-sidebar-muted-foreground/80 hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
-  );
 }
 
 // ── Sidebar v2 status model ─────────────────────────────────────────
@@ -1042,6 +1446,12 @@ export function shouldShowSidebarV2Duration(status: SidebarThreadStatus): boolea
   return status === "working";
 }
 
+export interface SidebarV2TopStatus {
+  label: "Working" | "Monitoring" | "Approval" | "Input" | "Failed" | "Done";
+  icon: "working" | "done" | null;
+  className: string;
+}
+
 /** First VALID timestamp wins: `a ?? b` falls through on null, but a present-
     yet-malformed string must also fall through to the next candidate rather
     than sink the row to the epoch. */
@@ -1144,6 +1554,53 @@ export function reduceSidebarProjectScopeMenuState(
   }
 }
 
+// Settled rows are history, so they order by when the work ENDED, not when
+// the thread was created or last touched.
+export function sortSettledThreadsForSidebar<
+  T extends SettledThreadTimestampInput & { readonly id: string },
+>(threads: readonly T[]): T[] {
+  const timestampMs = (thread: T) => {
+    const timestamp = resolveSettledThreadTimestamp(thread);
+    return timestamp === null ? 0 : Date.parse(timestamp);
+  };
+  return [...threads].toSorted(
+    (left, right) => timestampMs(right) - timestampMs(left) || left.id.localeCompare(right.id),
+  );
+}
+
+/**
+ * Recency section layout for the V2 settled shelf. Callers must pass threads
+ * already ordered by {@link sortSettledThreadsForSidebarV2} (or an equivalent
+ * activity/settle-time order) so buckets preserve that order within each day.
+ *
+ * Headers are suppressed when every visible row lands in a single bucket
+ * (same rule as classic Threads recency).
+ */
+export function groupSettledThreadsByRecencyForSidebarV2<
+  T extends SettledThreadTimestampInput & { readonly id: string },
+>(
+  threads: readonly T[],
+  now: Date = new Date(),
+): {
+  readonly groups: ReadonlyArray<ThreadRecencyGroup<T>>;
+  readonly showHeaders: boolean;
+} {
+  const groups = groupThreadsByRecency(
+    threads,
+    (thread) => {
+      const timestamp = resolveSettledThreadTimestamp(thread);
+      if (timestamp === null) return Number.NaN;
+      const ms = Date.parse(timestamp);
+      return Number.isNaN(ms) ? Number.NaN : ms;
+    },
+    now,
+  );
+  return {
+    groups,
+    showHeaders: shouldShowRecencySectionHeaders(groups),
+  };
+}
+
 /** The timestamp a working thread's elapsed label counts from: when its
     current work started (request time until adoption). Background wakes do
     not reset it. Malformed timestamps fall through to the next candidate. */
@@ -1184,6 +1641,21 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
+  // An actionable plan prompt outranks lingering background work: it needs
+  // the user's decision, while liveness merely reports (review finding).
+  const hasPlanReadyPrompt =
+    !thread.hasPendingUserInput &&
+    thread.interactionMode === "plan" &&
+    thread.hasActionableProposedPlan;
+  if (hasPlanReadyPrompt) {
+    return {
+      label: "Plan Ready",
+      colorClass: "text-violet-600 dark:text-violet-300/90",
+      dotClass: "bg-violet-500 dark:bg-violet-300/90",
+      pulse: false,
+    };
+  }
+
   if (thread.runtime?.status === "running" || thread.runtime?.status === "waiting") {
     return {
       label: "Working",
@@ -1211,20 +1683,6 @@ export function resolveThreadStatusPill(input: {
       label: "Waiting",
       colorClass: "text-sidebar-muted-foreground",
       dotClass: "bg-sidebar-muted-foreground",
-      pulse: false,
-    };
-  }
-
-  const hasPlanReadyPrompt =
-    !thread.hasPendingUserInput &&
-    thread.interactionMode === "plan" &&
-    isLatestRunSettled(thread.latestRun, thread.runtime) &&
-    thread.hasActionableProposedPlan;
-  if (hasPlanReadyPrompt) {
-    return {
-      label: "Plan Ready",
-      colorClass: "text-violet-600 dark:text-violet-300/90",
-      dotClass: "bg-violet-500 dark:bg-violet-300/90",
       pulse: false,
     };
   }

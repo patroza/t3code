@@ -26,6 +26,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
   files: ReadonlyArray<TurnDiffFileChange>;
   allDirectoriesExpanded: boolean;
   resolvedTheme: "light" | "dark";
+  className?: string;
   onToggleAllDirectories: () => void;
   onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
   onFileContextMenu?: ChangedFileContextMenuHandler | undefined;
@@ -35,6 +36,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
     files,
     allDirectoriesExpanded,
     resolvedTheme,
+    className,
     onToggleAllDirectories,
     onOpenTurnDiff,
     onFileContextMenu,
@@ -44,7 +46,10 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
 
   return (
     <div
-      className="@container/changed-files mt-4 rounded-lg bg-secondary dark:bg-input/20"
+      className={cn(
+        "@container/changed-files mt-4 rounded-lg bg-secondary dark:bg-input/20",
+        className,
+      )}
       data-changed-files-state="tree"
     >
       <div

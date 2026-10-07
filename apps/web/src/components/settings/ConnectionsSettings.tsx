@@ -58,6 +58,8 @@ import {
   connectionStatusText,
   environmentMcpUrl,
 } from "@t3tools/client-runtime/connection";
+import { HostResourceStatus } from "../HostResourceStatus";
+import { isLocalConnectionTarget } from "../../connection/desktopLocal";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -1757,11 +1759,21 @@ function SavedBackendListRow({
         </span>
       }
       below={
-        serverUpdateState.status !== "idle" ? (
-          <div className="mt-1 max-w-md">
-            <ServerUpdateProgress state={serverUpdateState} />
-          </div>
-        ) : null
+        <>
+          {serverUpdateState.status !== "idle" ? (
+            <div className="mt-1 max-w-md">
+              <ServerUpdateProgress state={serverUpdateState} />
+            </div>
+          ) : null}
+          <HostResourceStatus
+            environmentId={environmentId}
+            environmentLabel={environment.label}
+            connected={isConnected}
+            showRefresh
+            unavailableLabel
+            remote={!isLocalConnectionTarget(environment.entry.target)}
+          />
+        </>
       }
       detail={
         routesOpen ? (

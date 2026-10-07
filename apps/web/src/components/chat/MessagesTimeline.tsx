@@ -55,6 +55,7 @@ import {
   summarizeSubagentStatuses,
 } from "@t3tools/client-runtime/state/subagent-display";
 
+const NOOP_OPEN_AGENTS = () => {};
 const NOOP_USE_ARTIFACT_TEMPLATE = () => {};
 const NOOP_OPEN_ATTACHMENT = (_attachment: ChatFileAttachment) => {};
 
@@ -1358,7 +1359,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           <LegendList<MessagesTimelineRow>
             ref={setTimelineList}
             data={rows}
-            extraData={`${listIdentityKey}:${rows.length}`}
+            // LegendList can retain a mounted container's previous child while
+            // anchored end-space is recomputed around a newly inserted turn.
+            // Include the thread identity so a huge-thread switch does not keep
+            // the previous pane's mounted children.
+            extraData={{ identity: listIdentityKey, rows }}
             keyExtractor={keyExtractor}
             getItemType={getItemType}
             renderItem={renderItem}
@@ -1770,7 +1775,6 @@ function TimelineMinimapNavigationButton({
 
 type TimelineWorkEntry = Extract<MessagesTimelineRow, { kind: "work" }>["groupedEntries"][number];
 type TimelineRow = MessagesTimelineRow;
-
 const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: TimelineRow }) {
   const isExpandedToolGroup = row.kind === "work" && row.isExpandedToolGroup;
   const isSubagentGroup = row.kind === "event" && row.projectedItem.item.type === "subagent";
@@ -3802,6 +3806,11 @@ function WorkGroupHeader(props: {
   );
 }
 
+/**
+ * A clarifying-question round trip: what the agent asked and what the user
+ * picked. The interactive prompt lives in the composer, so this row is the
+ * thread's only lasting record of the exchange.
+ */
 /** Subscribes directly to the UI state store for expand/collapse state,
  *  so toggling re-renders only this component — not the entire list. */
 const AssistantChangedFilesSection = memo(function AssistantChangedFilesSection({

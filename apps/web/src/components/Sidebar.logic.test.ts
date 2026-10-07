@@ -1,3 +1,4 @@
+import type { SidebarThreadSummary } from "../types";
 import { presentThreadShell } from "@t3tools/client-runtime/state/models";
 import * as DateTime from "effect/DateTime";
 import { deriveActiveWorkStartedAt } from "../session-logic.ts";
@@ -11,6 +12,8 @@ import {
   buildBulkTitleRegenerationContextMenuItem,
   buildBulkUnpinContextMenuItem,
   buildMultiSelectThreadContextMenuItems,
+  buildSidebarThreadWorktreeSections,
+  buildSidebarV2ThreadContextMenuItems,
   createThreadJumpHintVisibilityController,
   deleteSelectedThreadEntries,
   filterSidebarProjectScopeItems,
@@ -25,19 +28,24 @@ import {
   isSidebarSubagentThread,
   isSidebarThreadWorking,
   isTrailingDoubleClick,
+  normalizeWorktreePathForSidebarGroup,
   orderItemsByPreferredIds,
   pinOrderKeyBetween,
   reduceSidebarProjectScopeMenuState,
   resolveAdjacentThreadId,
   resolveProjectStatusIndicator,
+  resolveSidebarProjectBadgeLabel,
+  resolveSidebarProjectBadgeColorIndex,
+  resolveSidebarThreadPrewarmLimit,
+  SIDEBAR_THREAD_PREWARM_LIMIT,
   resolveSidebarSweepKeys,
   resolveSidebarStageBadgeLabel,
   resolveSidebarThreadSection,
   resolveSidebarRowAccessibility,
+  resolveThreadRowClassName,
   resolveSidebarThreadStatus,
   resolveSidebarV2TopStatus,
   resolveThreadLastVisitedAt,
-  resolveThreadRowClassName,
   resolveThreadStatusPill,
   resolveWorkingStartedAt,
   searchSidebarThreads,
@@ -46,6 +54,10 @@ import {
   shouldRecedeSidebarThread,
   sortLogicalProjectsForSidebar,
   sortInboxThreadsByReturn,
+  groupSettledThreadsByRecencyForSidebarV2,
+  isThreadSettledForDisplay,
+  resolveSettledThreadTimestamp,
+  sortSettledThreadsForSidebar,
   resolveSidebarDropTarget,
   planSidebarThreadDrop,
   sortPinnedThreadsForSidebar,
@@ -73,6 +85,25 @@ import {
 import { makeThreadFixture, type ThreadFixtureOverrides } from "../test-fixtures";
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
+
+describe("sidebar recent project badges", () => {
+  it.each([
+    ["example-org/scanner", "S"],
+    ["pingdotgg/t3code", "T3"],
+    ["effect-app/libs", "L"],
+    ["patroza/dotfiles-omarchy", "DO"],
+    ["configurator", "C"],
+  ])("derives a compact label for %s", (displayName, expected) => {
+    expect(resolveSidebarProjectBadgeLabel(displayName)).toBe(expected);
+  });
+
+  it("assigns the same bounded color index for a stable project key", () => {
+    const first = resolveSidebarProjectBadgeColorIndex("repository:t3code", 6);
+    expect(resolveSidebarProjectBadgeColorIndex("repository:t3code", 6)).toBe(first);
+    expect(first).toBeGreaterThanOrEqual(0);
+    expect(first).toBeLessThan(6);
+  });
+});
 
 describe("resolveSidebarRowAccessibility", () => {
   it.each([
@@ -494,8 +525,7 @@ function makeLatestRun(overrides?: {
     status: "completed",
     assistantMessageId: null,
     requestedAt: "2026-03-09T10:00:00.000Z",
-    startedAt:
-      overrides?.startedAt !== undefined ? overrides.startedAt : "2026-03-09T10:00:00.000Z",
+    startedAt: overrides?.startedAt ?? "2026-03-09T10:00:00.000Z",
     completedAt:
       overrides?.completedAt !== undefined ? overrides.completedAt : "2026-03-09T10:05:00.000Z",
   };
@@ -661,6 +691,26 @@ describe("getSidebarThreadIdsToPrewarm", () => {
 
   it("returns no thread ids when the limit is zero", () => {
     expect(getSidebarThreadIdsToPrewarm(["t1", "t2"], 0)).toEqual([]);
+  });
+});
+
+describe("resolveSidebarThreadPrewarmLimit", () => {
+  it("prewarms visible rows when the pointer can hover", () => {
+    expect(resolveSidebarThreadPrewarmLimit({ hasCoarsePointer: false })).toBe(
+      SIDEBAR_THREAD_PREWARM_LIMIT,
+    );
+  });
+
+  it("prewarms nothing behind a coarse pointer", () => {
+    // Each prewarmed row holds a live thread-detail subscription, so a touch
+    // client would otherwise retain ten threads of history it never asked for.
+    expect(resolveSidebarThreadPrewarmLimit({ hasCoarsePointer: true })).toBe(0);
+    expect(
+      getSidebarThreadIdsToPrewarm(
+        ["t1", "t2"],
+        resolveSidebarThreadPrewarmLimit({ hasCoarsePointer: true }),
+      ),
+    ).toEqual([]);
   });
 });
 
@@ -1317,6 +1367,24 @@ describe("resolveThreadStatusPill", () => {
     ).toMatchObject({ label: "Plan Ready", pulse: false });
   });
 
+  it("shows plan ready over working when a plan is captured mid-turn", () => {
+    expect(
+      resolveThreadStatusPill({
+        thread: {
+          ...baseThread,
+          hasActionableProposedPlan: true,
+          interactionMode: "plan",
+          latestRun: makeLatestRun({ completedAt: null }),
+          runtime: {
+            ...baseThread.runtime,
+            status: "running",
+            activeRunId: RunId.make("turn-running"),
+          },
+        },
+      }),
+    ).toMatchObject({ label: "Plan Ready", pulse: false });
+  });
+
   it("does not manufacture completed state without a client visit marker", () => {
     expect(
       resolveThreadStatusPill({
@@ -1481,6 +1549,19 @@ function makeThread(overrides: ThreadFixtureOverrides = {}): Thread {
     worktreePath: null,
     ...overrides,
   });
+}
+
+function makeSidebarThreadSummary(
+  overrides: Partial<SidebarThreadSummary> = {},
+): SidebarThreadSummary {
+  return {
+    ...makeThread(overrides),
+    latestUserMessageAt: null,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    hasActionableProposedPlan: false,
+    ...overrides,
+  };
 }
 
 describe("getFallbackThreadIdAfterDelete", () => {

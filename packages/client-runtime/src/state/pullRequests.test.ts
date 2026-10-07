@@ -294,7 +294,7 @@ it.effect("shares active read identity probes while keeping later reads and muta
           { concurrency: "unbounded" },
         );
         expect(probes).toEqual(["origin", "local"]);
-        expect(reads.toSorted()).toEqual([1, 2, 3, 4]);
+        expect([...reads].sort()).toEqual([1, 2, 3, 4]);
         accountId = "456";
         yield* createPullRequestRouter()(WS_METHODS.pullRequestsSummary, reference);
         yield* createPullRequestRouter()(WS_METHODS.pullRequestsRunAction, {

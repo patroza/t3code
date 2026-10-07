@@ -26,6 +26,8 @@ vi.mock("../../state/entities", () => ({
   useThreadShells: () => state.shells,
   useProjects: () => state.projects,
   useServerConfigs: () => state.configs,
+  // Partial mocks leak under isolate:false. Preview reopen needs this export.
+  readEnvironmentSupportsServerBrowser: () => false,
 }));
 vi.mock("../../lib/archivedThreadsState", () => ({
   useArchivedThreadSnapshots: () => ({ snapshots: [] }),

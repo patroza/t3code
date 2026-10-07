@@ -1,6 +1,13 @@
-import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
+import {
+  NativeHeaderToolbar,
+  NativeStackScreenOptions,
+  nativeHeaderScrollEdgeEffects,
+} from "../../native/StackHeader";
 import { useCallback, useRef } from "react";
+import { Platform, Text as RNText, useWindowDimensions } from "react-native";
 import type { SearchBarCommands } from "react-native-screens";
+
+import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
@@ -8,35 +15,118 @@ import {
   createNativeMailSearchToolbarItem,
   NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED,
 } from "../layout/native-mail-search-toolbar";
+import { getConnectionAwareBrandHeaderOptions } from "./WorkspaceConnectionTitle";
 import { buildHomeListFilterMenu } from "./home-list-filter-menu";
+import {
+  DEFAULT_OWNERSHIP_FILTER,
+  OWNERSHIP_FILTER_LABELS,
+  OWNERSHIP_FILTERS,
+  OWNERSHIP_RELATION_LABELS,
+  OWNERSHIP_RELATIONS,
+} from "./home-list-options";
+import { isAllEnvironmentsSelected, isEnvironmentSelected } from "./homeEnvironmentFilter";
+import {
+  HOME_LIST_MODE_ICONS,
+  HOME_LIST_MODE_LABELS,
+  HOME_LIST_MODE_TITLES,
+  HOME_THREAD_GROUPING_LABELS,
+  HOME_THREAD_GROUPINGS,
+  otherHomeListModes,
+  usesProjectThreadGrouping,
+  type HomeThreadGrouping,
+} from "./homeListMode";
 import type { HomeHeaderProps } from "./HomeHeader.types";
 
 export type { HomeHeaderEnvironment } from "./HomeHeader.types";
 
+const HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
+
+function defaultHideSettledForGrouping(threadGrouping: HomeThreadGrouping): boolean {
+  return !usesProjectThreadGrouping(threadGrouping);
+}
+
 export function HomeHeader(props: HomeHeaderProps) {
   const searchBarRef = useRef<SearchBarCommands>(null);
-  const iconColor = useUniwindTheme()["--color-icon"];
-  // The list uses a fixed creation order and ignores sort/group options, so
-  // the filter menu only carries the filters and the "customized" icon state
-  // keys off those alone.
+  const { width: headerWidth } = useWindowDimensions();
+  const theme = useUniwindTheme();
+  const iconColor = theme["--color-icon"];
+  const alternateModes = otherHomeListModes(props.listMode);
   const hasCustomListOptions =
-    props.selectedEnvironmentId !== null || props.selectedProjectKey !== null;
+    props.selectedEnvironmentIds.length > 0 ||
+    props.ownershipFilter !== DEFAULT_OWNERSHIP_FILTER ||
+    props.ownershipRelation !== "both" ||
+    props.selectedProjectKey !== null ||
+    (props.listMode === "threads" &&
+      props.hideSettledThreads !== defaultHideSettledForGrouping(props.threadGrouping)) ||
+    props.threadGrouping !== "project";
   const focusSearch = useCallback(() => {
     searchBarRef.current?.focus();
     return searchBarRef.current !== null;
   }, []);
   useHardwareKeyboardCommand("focusSearch", focusSearch);
-  const filterMenu = buildHomeListFilterMenu(props);
+  const filterMenu = buildHomeListFilterMenu({
+    environments: props.environments,
+    projects: props.projects,
+    selectedEnvironmentIds: props.selectedEnvironmentIds,
+    selectedProjectKey: props.selectedProjectKey,
+    ownershipFilter: props.ownershipFilter,
+    ownershipRelation: props.ownershipRelation,
+    onClearEnvironments: props.onClearEnvironments,
+    onToggleEnvironment: props.onToggleEnvironment,
+    onProjectChange: props.onProjectChange,
+    onOwnershipFilterChange: props.onOwnershipFilterChange,
+    onOwnershipRelationChange: props.onOwnershipRelationChange,
+    listOrganization: false,
+    threadGrouping: props.listMode === "threads" ? props.threadGrouping : undefined,
+    onThreadGroupingChange: props.listMode === "threads" ? props.onThreadGroupingChange : undefined,
+    ...(props.listMode === "threads"
+      ? {
+          hideSettledThreads: props.hideSettledThreads,
+          onHideSettledThreadsChange: props.onHideSettledThreadsChange,
+        }
+      : {}),
+  });
+
+  const headerTitle = HOME_LIST_MODE_TITLES[props.listMode];
 
   return (
     <>
       <NativeStackScreenOptions
-        optionsVersion={filterMenu.items}
+        optionsVersion={[filterMenu.items, props.listMode, headerTitle, headerWidth]}
         options={{
-          // Static header config (glass, title, fonts) lives in Stack.tsx
-          // (GLASS_HEADER_OPTIONS). Only dynamic values are set here.
+          // The iOS Home header owns the native title, so the connection
+          // status has to swap in here. The list-mode title is passed
+          // through so it survives the swap.
+          ...getConnectionAwareBrandHeaderOptions({
+            headerWidth,
+            trailingItemCount: alternateModes.length + 1,
+            onOpenEnvironments: props.onOpenEnvironments,
+            title: headerTitle,
+            brand: (
+              <RNText className="text-[18px] font-t3-bold text-foreground" numberOfLines={1}>
+                {headerTitle}
+              </RNText>
+            ),
+          }),
           headerTintColor: iconColor,
+          ...(NATIVE_LIQUID_GLASS_SUPPORTED
+            ? {
+                headerTransparent: true,
+                headerStyle: { backgroundColor: "transparent" },
+                scrollEdgeEffects: HEADER_SCROLL_EDGE_EFFECTS,
+              }
+            : {}),
           unstable_headerRightItems: () => [
+            ...alternateModes.map((mode) =>
+              withNativeGlassHeaderItem({
+                accessibilityLabel: HOME_LIST_MODE_LABELS[mode],
+                icon: { name: HOME_LIST_MODE_ICONS[mode], type: "sfSymbol" } as const,
+                identifier: `home-mode-${mode}`,
+                label: "",
+                onPress: () => props.onListModeChange(mode),
+                type: "button",
+              }),
+            ),
             withNativeGlassHeaderItem({
               accessibilityLabel: "Open settings",
               icon: { name: "ellipsis", type: "sfSymbol" } as const,
@@ -46,8 +136,10 @@ export function HomeHeader(props: HomeHeaderProps) {
               type: "button",
             }),
           ],
-          // The keys below are set per-branch (not `undefined`) so a later
-          // reapply cannot clobber options owned by NativeHeaderToolbar.
+          // Mail-search toolbar is iOS 26+ only;
+          // pre-Liquid-Glass falls back to the standard nav search field.
+          // Keys are omitted (not `undefined`) on the NativeHeaderToolbar
+          // fallback so a reapply cannot clobber options that toolbar owns.
           ...(NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED
             ? {
                 unstable_headerToolbarItems: () => [
@@ -68,8 +160,6 @@ export function HomeHeader(props: HomeHeaderProps) {
                 ],
               }
             : {
-                // Pre-Liquid-Glass iOS: standard pull-down search in the nav
-                // bar; create + sort live in the plain bottom toolbar below.
                 headerSearchBarOptions: {
                   ref: searchBarRef,
                   autoCapitalize: "none" as const,
@@ -78,7 +168,7 @@ export function HomeHeader(props: HomeHeaderProps) {
                   onCancelButtonPress: () => {
                     props.onSearchQueryChange("");
                   },
-                  onChangeText: (event) => {
+                  onChangeText: (event: { nativeEvent: { text: string } }) => {
                     props.onSearchQueryChange(event.nativeEvent.text);
                   },
                 },
@@ -101,8 +191,8 @@ export function HomeHeader(props: HomeHeaderProps) {
             <NativeHeaderToolbar.Menu title="Environment">
               <NativeHeaderToolbar.Label>Environment</NativeHeaderToolbar.Label>
               <NativeHeaderToolbar.MenuAction
-                isOn={props.selectedEnvironmentId === null}
-                onPress={() => props.onEnvironmentChange(null)}
+                isOn={isAllEnvironmentsSelected(props.selectedEnvironmentIds)}
+                onPress={() => props.onClearEnvironments()}
                 subtitle="Show threads from every environment"
               >
                 <NativeHeaderToolbar.Label>All environments</NativeHeaderToolbar.Label>
@@ -110,13 +200,52 @@ export function HomeHeader(props: HomeHeaderProps) {
               {props.environments.map((environment) => (
                 <NativeHeaderToolbar.MenuAction
                   key={environment.environmentId}
-                  isOn={props.selectedEnvironmentId === environment.environmentId}
-                  onPress={() => props.onEnvironmentChange(environment.environmentId)}
+                  isOn={isEnvironmentSelected(
+                    props.selectedEnvironmentIds,
+                    environment.environmentId,
+                  )}
+                  onPress={() => props.onToggleEnvironment(environment.environmentId)}
                 >
                   <NativeHeaderToolbar.Label>{environment.label}</NativeHeaderToolbar.Label>
                 </NativeHeaderToolbar.MenuAction>
               ))}
             </NativeHeaderToolbar.Menu>
+
+            <NativeHeaderToolbar.Menu title="Ownership">
+              <NativeHeaderToolbar.Label>Ownership</NativeHeaderToolbar.Label>
+              {OWNERSHIP_FILTERS.map((value) => (
+                <NativeHeaderToolbar.MenuAction
+                  key={value}
+                  isOn={value === props.ownershipFilter}
+                  onPress={() => props.onOwnershipFilterChange(value)}
+                >
+                  <NativeHeaderToolbar.Label>
+                    {OWNERSHIP_FILTER_LABELS[value]}
+                  </NativeHeaderToolbar.Label>
+                </NativeHeaderToolbar.MenuAction>
+              ))}
+            </NativeHeaderToolbar.Menu>
+
+            {props.ownershipFilter === "mine" || props.ownershipFilter === "theirs" ? (
+              <NativeHeaderToolbar.Menu
+                title={props.ownershipFilter === "mine" ? "Mine includes" : "Theirs includes"}
+              >
+                <NativeHeaderToolbar.Label>
+                  {props.ownershipFilter === "mine" ? "Mine includes" : "Theirs includes"}
+                </NativeHeaderToolbar.Label>
+                {OWNERSHIP_RELATIONS.map((value) => (
+                  <NativeHeaderToolbar.MenuAction
+                    key={value}
+                    isOn={value === props.ownershipRelation}
+                    onPress={() => props.onOwnershipRelationChange(value)}
+                  >
+                    <NativeHeaderToolbar.Label>
+                      {OWNERSHIP_RELATION_LABELS[value]}
+                    </NativeHeaderToolbar.Label>
+                  </NativeHeaderToolbar.MenuAction>
+                ))}
+              </NativeHeaderToolbar.Menu>
+            ) : null}
 
             {props.projects.length > 0 ? (
               <NativeHeaderToolbar.Menu title="Project">
@@ -139,8 +268,36 @@ export function HomeHeader(props: HomeHeaderProps) {
                 ))}
               </NativeHeaderToolbar.Menu>
             ) : null}
+
+            {props.listMode === "threads" ? (
+              <>
+                <NativeHeaderToolbar.Menu title="Group threads">
+                  <NativeHeaderToolbar.Label>Group threads</NativeHeaderToolbar.Label>
+                  {HOME_THREAD_GROUPINGS.map((grouping) => (
+                    <NativeHeaderToolbar.MenuAction
+                      key={grouping}
+                      isOn={props.threadGrouping === grouping}
+                      onPress={() => props.onThreadGroupingChange(grouping)}
+                    >
+                      <NativeHeaderToolbar.Label>
+                        {HOME_THREAD_GROUPING_LABELS[grouping]}
+                      </NativeHeaderToolbar.Label>
+                    </NativeHeaderToolbar.MenuAction>
+                  ))}
+                </NativeHeaderToolbar.Menu>
+                <NativeHeaderToolbar.MenuAction
+                  isOn={props.hideSettledThreads}
+                  onPress={() => props.onHideSettledThreadsChange(!props.hideSettledThreads)}
+                  subtitle="Move settled threads out of the main list"
+                >
+                  <NativeHeaderToolbar.Label>Hide settled</NativeHeaderToolbar.Label>
+                </NativeHeaderToolbar.MenuAction>
+              </>
+            ) : null}
           </NativeHeaderToolbar.Menu>
-          <NativeHeaderToolbar.Spacer flexible />
+          <NativeHeaderToolbar.Spacer width={8} sharesBackground={false} />
+          <NativeHeaderToolbar.SearchBarSlot />
+          <NativeHeaderToolbar.Spacer width={8} sharesBackground={false} />
           <NativeHeaderToolbar.Button
             accessibilityLabel="New task"
             icon="square.and.pencil"

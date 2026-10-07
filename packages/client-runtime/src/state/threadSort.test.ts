@@ -166,7 +166,7 @@ describe("sortSettledThreads", () => {
       const timestamp = resolveSettledThreadTimestamp(thread);
       return timestamp === null ? 0 : Date.parse(timestamp);
     };
-    const expected = threads.toSorted(
+    const expected = [...threads].sort(
       (left, right) => timestampMs(right) - timestampMs(left) || left.id.localeCompare(right.id),
     );
 
@@ -500,7 +500,10 @@ describe("sortActiveThreadsByOrderKey", () => {
       createdAt: "2026-03-09T10:00:00.000Z",
       activeOrderKey: null as string | null,
     }));
-    const orderedIds = threads.map((thread) => thread.id).toReversed();
+    const orderedIds = threads
+      .map((thread) => thread.id)
+      .slice()
+      .reverse();
     const assignments = planPinnedReorder({
       orderedIds,
       movedId: orderedIds[0]!,

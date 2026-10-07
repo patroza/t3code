@@ -19,7 +19,11 @@ import { shellEnvironment } from "./state/shell";
 import { useAtomCommand } from "./state/use-atom-command";
 import { readEnvironmentScope } from "./state/session";
 
-const LAST_EDITOR_KEY = "t3code:last-editor";
+export const LAST_EDITOR_KEY = "t3code:last-editor";
+
+export function readLegacyPreferredEditor(): EditorId | null {
+  return getLocalStorageItem(LAST_EDITOR_KEY, EditorId);
+}
 
 export class PreferredEditorEnvironmentRequiredError extends Schema.TaggedError<PreferredEditorEnvironmentRequiredError>()(
   "PreferredEditorEnvironmentRequiredError",

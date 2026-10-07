@@ -1,4 +1,5 @@
 import * as Context from "effect/Context";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -26,6 +27,34 @@ function getDesktopOrigin(isDevelopment: boolean): string {
 
 export function getDesktopUrl(isDevelopment: boolean): string {
   return `${getDesktopOrigin(isDevelopment)}/`;
+}
+
+/**
+ * Builds the desktop renderer URL for a canonical thread route.
+ *
+ * The Electron client uses hash history, so the path is carried after `#/`.
+ */
+export function buildDesktopThreadNavigationUrl(input: {
+  readonly isDevelopment: boolean;
+  readonly environmentId: string;
+  readonly threadId: string;
+}): string {
+  const origin = getDesktopOrigin(input.isDevelopment);
+  const environmentSegment = encodeURIComponent(input.environmentId);
+  const threadSegment = encodeURIComponent(input.threadId);
+  return `${origin}/#/${environmentSegment}/${threadSegment}`;
+}
+
+export function buildDesktopProjectNavigationUrl(input: {
+  readonly isDevelopment: boolean;
+  readonly project: string;
+  readonly action: "reveal" | "latest" | "new";
+}): string {
+  const search = new URLSearchParams({ project: input.project });
+  if (input.action !== "reveal") {
+    search.set("action", input.action);
+  }
+  return `${getDesktopOrigin(input.isDevelopment)}/#/jump?${search.toString()}`;
 }
 
 export class ElectronProtocolRegistrationError extends Schema.TaggedError<ElectronProtocolRegistrationError>()(
@@ -155,17 +184,40 @@ class ElectronProtocolFetchError extends Schema.TaggedError<ElectronProtocolFetc
   { cause: Schema.Defect() },
 ) {}
 
+class RetryableDocumentResponse extends Data.TaggedError("RetryableDocumentResponse")<{
+  readonly response: Response;
+}> {}
+
 const netFetch = (url: string, init: RequestInit) =>
   Effect.tryPromise({
     try: () => Electron.net.fetch(url, init),
     catch: (cause) => new ElectronProtocolFetchError({ cause }),
   });
 
-// The dev renderer target can briefly refuse connections while Vite restarts:
-// retry idempotent requests after 50ms, then 150ms, and keep the last failure.
+function isRetryableDocumentResponse(url: string, response: Response): boolean {
+  if (response.status !== 503 && response.status !== 404) {
+    return false;
+  }
+  // Only the app shell / SPA document — hashed assets should fail fast so
+  // preload recovery can run instead of masking a torn swap.
+  const pathname = new URL(url).pathname;
+  return pathname === "/" || pathname === "/index.html" || !pathname.includes(".");
+}
+
+// The dev renderer target can briefly refuse connections while Vite restarts,
+// and an in-progress asset swap can answer the document shell with 503/404.
+// Retry idempotent requests after 50ms, then 150ms. Connection failures keep
+// the last error; a document shell that stays unavailable keeps the last response.
 const fetchWithTransientRetry = (url: string, init: RequestInit) =>
   netFetch(url, init).pipe(
+    Effect.filterOrFail(
+      (response) => !isRetryableDocumentResponse(url, response),
+      (response) => new RetryableDocumentResponse({ response }),
+    ),
     Effect.retry({ schedule: Schedule.exponential("50 millis", 3), times: 2 }),
+    Effect.catchTags({
+      RetryableDocumentResponse: (error) => Effect.succeed(error.response),
+    }),
   );
 
 const proxyRequest = Effect.fn("desktop.protocol.proxyRequest")(function* (

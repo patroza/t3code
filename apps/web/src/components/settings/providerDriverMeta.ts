@@ -5,11 +5,22 @@ import {
   CodexSettings,
   CursorSettings,
   GrokSettings,
+  KimiSettings,
   OpenCodeSettings,
   PiSettings,
   ProviderDriverKind,
 } from "@t3tools/contracts";
 import type * as Schema from "effect/Schema";
+import {
+  AntigravityIcon,
+  ClaudeAI,
+  CursorIcon,
+  GrokIcon,
+  KimiIcon,
+  type Icon,
+  OpenAI,
+  OpenCodeIcon,
+} from "../Icons";
 
 type ProviderSettingsSchema = {
   readonly fields: Readonly<Record<string, Schema.Top>>;
@@ -75,6 +86,12 @@ const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
     value: ProviderDriverKind.make("grok"),
     label: "Grok",
     settingsSchema: GrokSettings,
+  },
+  {
+    value: ProviderDriverKind.make("kimi"),
+    label: "Kimi Code",
+    badgeLabel: "Early Access",
+    settingsSchema: KimiSettings,
   },
   {
     value: ProviderDriverKind.make("opencode"),

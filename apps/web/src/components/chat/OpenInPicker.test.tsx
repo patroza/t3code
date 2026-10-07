@@ -12,17 +12,20 @@ const state = vi.hoisted(() => ({
   remote: { mode: "local-exec" } as RemoteOpenState,
   run: vi.fn(),
   openUrl: vi.fn(),
+  openExternal: vi.fn(),
   setPreferred: vi.fn(),
   markHintSeen: vi.fn(),
   keydown: null as ((event: KeyboardEvent) => void) | null,
   listeners: new Set<() => void>(),
 }));
 
-vi.mock("../../state/session", async () => {
+vi.mock("../../state/session", async (importOriginal) => {
   const { useSyncExternalStore } = await import("react");
+  const actual = await importOriginal<typeof import("../../state/session")>();
   const readEnvironmentScope = (environmentId: string, scope: string) =>
     scope === AuthOrchestrationOperateScope && state.allowed.has(environmentId);
   return {
+    ...actual,
     readEnvironmentScope,
     useEnvironmentScope: (environmentId: string, scope: string) =>
       useSyncExternalStore(
@@ -36,8 +39,12 @@ vi.mock("../../state/session", async () => {
 });
 vi.mock("../../state/shell", () => ({ shellEnvironment: { openInEditor: "openInEditor" } }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => state.run }));
-vi.mock("../../state/environments", () => ({ useEnvironment: () => ({ label: "Test host" }) }));
+vi.mock("../../state/environments", () => ({
+  useEnvironment: () => ({ label: "Test host" }),
+  usePrimaryEnvironmentId: () => EnvironmentId.make("primary"),
+}));
 vi.mock("../../editorPreferences", () => ({
+  readLegacyPreferredEditor: () => null,
   usePreferredEditor: (available: readonly EditorId[]) => [
     available[0] ?? null,
     state.setPreferred,
@@ -106,6 +113,7 @@ beforeEach(() => {
   state.remote = { mode: "local-exec" };
   state.run.mockReset().mockResolvedValue(AsyncResult.success(undefined));
   state.openUrl.mockReset().mockResolvedValue(true);
+  state.openExternal.mockReset();
   state.setPreferred.mockReset();
   state.markHintSeen.mockReset();
   state.keydown = null;
@@ -113,6 +121,7 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("navigator", { platform: "Linux" });
   vi.stubGlobal("window", {
+    open: state.openExternal,
     addEventListener: (_type: string, callback: (event: KeyboardEvent) => void) => {
       state.keydown = callback;
     },
@@ -167,6 +176,7 @@ describe("host editor access", () => {
       keydown(event);
     });
     expect(state.run).not.toHaveBeenCalled();
+    expect(state.openExternal).not.toHaveBeenCalled();
     expect(state.setPreferred).not.toHaveBeenCalled();
     expect(event.preventDefault).not.toHaveBeenCalled();
 
@@ -190,10 +200,12 @@ describe("host editor access", () => {
     await renderPicker();
     expect(renderer!.root.findByProps({ "data-menu-open": false })).toBeDefined();
     await act(async () => primaryButton().props.onClick());
-    expect(state.run).toHaveBeenCalledExactlyOnceWith({
-      environmentId: selected,
-      input: { cwd: "/work/project", editor: "vscode" },
-    });
+    expect(state.openExternal).toHaveBeenCalledExactlyOnceWith(
+      "vscode://file/work/project?windowId=_blank",
+      "_blank",
+      "noopener,noreferrer",
+    );
+    expect(state.run).not.toHaveBeenCalled();
   });
 });
 
@@ -208,7 +220,7 @@ describe("client editor links", () => {
     );
     expect(state.run).not.toHaveBeenCalled();
     expect(state.markHintSeen).toHaveBeenCalledOnce();
-    expect(state.setPreferred).toHaveBeenCalledExactlyOnceWith("vscode");
+    expect(state.setPreferred).not.toHaveBeenCalled();
   });
 
   it("does not change preferences when the client rejects the SSH URL", async () => {

@@ -6,7 +6,6 @@ import {
 import type { ReactNode } from "react";
 import { Platform } from "react-native";
 
-import { getCompactBrandHeaderOptions } from "../../components/CompactBrandTitle";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { nativeHeaderScrollEdgeEffects } from "../../native/StackHeader";
 import { useMobileNavigationTheme } from "../../lib/useMobileNavigationTheme";
@@ -32,9 +31,10 @@ const SIDEBAR_SCREEN_OPTIONS: SidebarScreenOptions = {
   headerShadowVisible: false,
   headerShown: true,
   headerStyle: NATIVE_LIQUID_GLASS_SUPPORTED ? { backgroundColor: "transparent" } : undefined,
-  ...getCompactBrandHeaderOptions({ fontSize: 18, fontWeight: "800" }),
+  headerTitleStyle: { fontSize: 18, fontWeight: "800" },
   headerTransparent: NATIVE_LIQUID_GLASS_SUPPORTED,
   scrollEdgeEffects: NATIVE_LIQUID_GLASS_SUPPORTED ? SCROLL_EDGE_EFFECTS : undefined,
+  title: "Threads",
   unstable_navigationItemStyle: NATIVE_LIQUID_GLASS_SUPPORTED ? "editor" : undefined,
 };
 

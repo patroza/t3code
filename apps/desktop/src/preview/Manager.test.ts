@@ -189,6 +189,7 @@ const {
   createFromPath,
   fromId,
   getFocusedWebContents,
+  getFocusedWindow,
   mkdir,
   previewSession,
   showItemInFolder,
@@ -197,6 +198,7 @@ const {
   writeClipboard,
 } = vi.hoisted(() => ({
   browserWindowConstructor: vi.fn(),
+  getFocusedWindow: vi.fn<() => Electron.BrowserWindow | null>(() => null),
   clipboardItemConstructor: vi.fn(),
   createFromPath: vi.fn((): { readonly isEmpty: () => boolean; readonly toPNG: () => Buffer } => ({
     isEmpty: () => false,
@@ -213,7 +215,7 @@ const {
 }));
 
 vi.mock("electron", () => ({
-  BrowserWindow: browserWindowConstructor,
+  BrowserWindow: Object.assign(browserWindowConstructor, { getFocusedWindow }),
   ClipboardItem: class {
     constructor(data: Record<string, unknown>) {
       clipboardItemConstructor(data);
@@ -562,6 +564,8 @@ describe("PreviewManager", () => {
     fromId.mockClear();
     getFocusedWebContents.mockReset();
     getFocusedWebContents.mockReturnValue(null);
+    getFocusedWindow.mockReset();
+    getFocusedWindow.mockReturnValue({} as Electron.BrowserWindow);
     mkdir.mockClear();
     previewSession.on.mockClear();
     writeFile.mockClear();

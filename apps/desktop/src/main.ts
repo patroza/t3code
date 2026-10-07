@@ -22,9 +22,11 @@ import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/ho
 import type { RemoteT3RunnerOptions } from "@t3tools/ssh/tunnel";
 import serverPackageJson from "../../server/package.json" with { type: "json" };
 
+import { configureDesktopEarlyStartup } from "./electron/DesktopEarlyStartup.ts";
 import * as DesktopIpc from "./ipc/DesktopIpc.ts";
 import * as ElectronApp from "./electron/ElectronApp.ts";
 import * as ElectronDialog from "./electron/ElectronDialog.ts";
+import * as MacApplicationIcon from "./electron/MacApplicationIcon.ts";
 import * as ElectronMenu from "./electron/ElectronMenu.ts";
 import * as ElectronPowerMonitor from "./electron/ElectronPowerMonitor.ts";
 import * as ElectronProtocol from "./electron/ElectronProtocol.ts";
@@ -38,6 +40,7 @@ import * as DesktopAppActivation from "./app/DesktopAppActivation.ts";
 import * as DesktopAppIdentity from "./app/DesktopAppIdentity.ts";
 import * as DesktopConnectionCatalogStore from "./app/DesktopConnectionCatalogStore.ts";
 import * as DesktopClerk from "./app/DesktopClerk.ts";
+import * as DesktopDeepLinks from "./app/DesktopDeepLinks.ts";
 import * as DesktopApplicationMenu from "./window/DesktopApplicationMenu.ts";
 import * as DesktopAssets from "./app/DesktopAssets.ts";
 import * as DesktopBackendConfiguration from "./backend/DesktopBackendConfiguration.ts";
@@ -57,6 +60,7 @@ import * as DesktopAppSettings from "./settings/DesktopAppSettings.ts";
 import * as DesktopPreReadyFileSystem from "./app/DesktopPreReadyFileSystem.ts";
 import * as DesktopPreReadyPlatform from "./app/DesktopPreReadyPlatform.ts";
 import * as DesktopShellEnvironment from "./shell/DesktopShellEnvironment.ts";
+import * as DesktopOpenWith from "./shell/DesktopOpenWith.ts";
 import * as DesktopSshEnvironment from "./ssh/DesktopSshEnvironment.ts";
 import * as DesktopSshPasswordPrompts from "./ssh/DesktopSshPasswordPrompts.ts";
 import * as DesktopState from "./app/DesktopState.ts";
@@ -74,14 +78,17 @@ import * as DesktopWslBackend from "./wsl/DesktopWslBackend.ts";
 import * as DesktopWslEnvironment from "./wsl/DesktopWslEnvironment.ts";
 import * as DesktopWslServerTree from "./wsl/DesktopWslServerTree.ts";
 
-if (process.argv.includes("--version")) {
-  try {
-    NodeFS.writeSync(process.stdout.fd, `${Electron.app.getVersion()}\n`);
-  } catch (error) {
-    if (!(error instanceof Error) || !("code" in error) || error.code !== "EPIPE") throw error;
-  }
-  Electron.app.exit(0);
-}
+configureDesktopEarlyStartup({
+  app: Electron.app,
+  argv: process.argv,
+  writeStdout: (value) => {
+    try {
+      NodeFS.writeSync(process.stdout.fd, value);
+    } catch (error) {
+      if (!(error instanceof Error) || !("code" in error) || error.code !== "EPIPE") throw error;
+    }
+  },
+});
 
 const layerDesktopEnvironment = Layer.unwrap(
   Effect.gen(function* () {
@@ -137,7 +144,7 @@ const layerElectron = Layer.mergeAll(
   ElectronUpdater.layer,
   ElectronWindow.layer,
   DesktopIpc.layer(Electron.ipcMain),
-);
+).pipe(Layer.provideMerge(MacApplicationIcon.layer));
 
 const layerDesktopFoundation = Layer.mergeAll(
   MacPermissions.layer,
@@ -175,10 +182,16 @@ const layerDesktopWindow = DesktopWindow.layer.pipe(
   Layer.provideMerge(layerDesktopPreview),
 );
 
+const layerDesktopDeepLinks = DesktopDeepLinks.layer.pipe(
+  Layer.provideMerge(layerDesktopWindow),
+  Layer.provideMerge(layerDesktopFoundation),
+);
+
 const layerDesktopSnapShot = DesktopSnapShot.layer.pipe(
   Layer.provideMerge(layerDesktopWindow),
   Layer.provideMerge(layerDesktopFoundation),
 );
+
 const layerDesktopAppActivation = DesktopAppActivation.layer.pipe(
   Layer.provide(layerDesktopWindow),
 );
@@ -214,9 +227,12 @@ const layerDesktopApplication = Layer.mergeAll(
   DesktopApplicationMenu.layer,
   DesktopLinuxUrlHandler.layer,
   DesktopShellEnvironment.layer,
+  DesktopOpenWith.layer,
   layerDesktopSsh,
 ).pipe(
+  Layer.provideMerge(layerDesktopDeepLinks),
   Layer.provideMerge(layerDesktopSnapShot),
+
   Layer.provideMerge(DesktopUpdates.layer),
   Layer.provideMerge(layerDesktopWslBackend),
   Layer.provideMerge(layerDesktopLocalEnvironmentAuth),

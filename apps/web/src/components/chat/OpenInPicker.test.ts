@@ -1,67 +1,41 @@
 import { FolderClosedIcon } from "lucide-react";
-import { FileExplorerIcon, FinderIcon } from "../Icons";
-import { resolveOpenInOptions } from "./OpenInPicker";
-import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { shouldShowOpenInPicker } from "./OpenInPicker.logic";
+import { FileExplorerIcon, FinderIcon } from "../Icons";
+import { resolveDesktopEditorUri, resolveOpenInOptions } from "./OpenInPicker";
 
-describe("shouldShowOpenInPicker", () => {
-  const primaryEnvironmentId = EnvironmentId.make("environment-primary");
-
-  it("shows the picker for projects in the primary environment", () => {
-    expect(
-      shouldShowOpenInPicker({
-        activeProjectName: "codething-mvp",
-        activeThreadEnvironmentId: primaryEnvironmentId,
-        primaryEnvironmentId,
-        remoteOpenMode: "local-exec",
-      }),
-    ).toBe(true);
+describe("resolveDesktopEditorUri", () => {
+  it("builds a vscode://file URL for VS Code", () => {
+    expect(resolveDesktopEditorUri("vscode", "/home/tester/projects/example")).toBe(
+      "vscode://file/home/tester/projects/example?windowId=_blank",
+    );
   });
 
-  it("shows the picker for remote environments in deep-link mode", () => {
-    expect(
-      shouldShowOpenInPicker({
-        activeProjectName: "codething-mvp",
-        activeThreadEnvironmentId: EnvironmentId.make("environment-remote"),
-        primaryEnvironmentId,
-        remoteOpenMode: "remote-links",
-      }),
-    ).toBe(true);
+  it("builds a vscode-insiders://file URL for VS Code Insiders", () => {
+    expect(resolveDesktopEditorUri("vscode-insiders", "/home/tester/project")).toBe(
+      "vscode-insiders://file/home/tester/project?windowId=_blank",
+    );
   });
 
-  it("shows the picker's unavailable state for remote environments without an SSH route", () => {
-    expect(
-      shouldShowOpenInPicker({
-        activeProjectName: "codething-mvp",
-        activeThreadEnvironmentId: EnvironmentId.make("environment-remote"),
-        primaryEnvironmentId: null,
-        remoteOpenMode: "remote-unavailable",
-      }),
-    ).toBe(true);
+  it("builds a cursor://file URL for Cursor", () => {
+    expect(resolveDesktopEditorUri("cursor", "/home/tester/project")).toBe(
+      "cursor://file/home/tester/project?windowId=_blank",
+    );
   });
 
-  it("hides the picker for non-primary local backends", () => {
-    expect(
-      shouldShowOpenInPicker({
-        activeProjectName: "codething-mvp",
-        activeThreadEnvironmentId: EnvironmentId.make("environment-remote"),
-        primaryEnvironmentId,
-        remoteOpenMode: "local-exec",
-      }),
-    ).toBe(false);
+  it("encodes path segments with spaces and reserved characters", () => {
+    expect(resolveDesktopEditorUri("vscode", "/home/tester/project with spaces")).toBe(
+      "vscode://file/home/tester/project%20with%20spaces?windowId=_blank",
+    );
   });
 
-  it("hides the picker when there is no active project", () => {
-    expect(
-      shouldShowOpenInPicker({
-        activeProjectName: undefined,
-        activeThreadEnvironmentId: primaryEnvironmentId,
-        primaryEnvironmentId,
-        remoteOpenMode: "remote-links",
-      }),
-    ).toBe(false);
+  it("returns null for editors without a URL scheme", () => {
+    expect(resolveDesktopEditorUri("vscodium", "/home/tester/project")).toBeNull();
+    expect(resolveDesktopEditorUri("zed", "/home/tester/project")).toBeNull();
+  });
+
+  it("returns null for a non-absolute path", () => {
+    expect(resolveDesktopEditorUri("vscode", "relative/path")).toBeNull();
   });
 });
 
