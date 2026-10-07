@@ -257,6 +257,27 @@ const isolatedUnitTestFiles = [
   "src/hooks/useThreadActions.permissions.test.ts",
   "src/state/sourceControlActions.test.ts",
   "src/state/terminalSessionAvailability.test.ts",
+  // These mock react, settings scope, or a button stub. Left in the shared
+  // worker, the mock binds first and a later file calls the real hook.
+  "src/assets/assetUrls.test.ts",
+  "src/editorPreferences.test.ts",
+  "src/state/queries.filesystem.test.ts",
+  "src/state/use-orchestration-command.test.ts",
+  "src/components/GitActionsControl.test.ts",
+  "src/components/PullRequestThreadDialog.test.ts",
+  "src/components/media/MediaActions.test.tsx",
+  "src/components/cloud/CloudEnvironmentConnectList.test.tsx",
+  "src/components/chat/OpenInPicker.test.tsx",
+  "src/components/ChatMarkdown.test.tsx",
+  "src/components/ChatMarkdown.assets.test.tsx",
+  "src/components/ChatMarkdown.permissions.test.tsx",
+  "src/components/ThreadNotificationCoordinator.badge.test.tsx",
+  "src/components/ThreadTerminalDrawer.permissions.test.tsx",
+  "src/components/onboarding/WelcomeWizard.import.test.tsx",
+  "src/components/pullRequest/PullRequestMarkdownEditor.test.tsx",
+  "src/components/settings/KeybindingsSettings.environment.test.tsx",
+  "src/components/settings/SourceControlWritingSettings.test.tsx",
+  "src/components/settings/settingsLayout.test.tsx",
 ] as const;
 
 const unitTestProject = {
