@@ -8,7 +8,6 @@ describe("migration namespaces", () => {
   it("keeps upstream and fork manifests in independent ledgers", () => {
     assert.notEqual(upstreamMigrationTable, forkMigrationTable);
     assert.deepStrictEqual(migrationManifest.slice(-8), [
-      [51, "ProjectionThreadMessageContext"],
       [52, "ProjectionThreadTitleState"],
       [53, "PullRequestFilesViewed"],
       [54, "ProjectionThreadsAutoSettleDisabledAt"],
@@ -16,6 +15,7 @@ describe("migration namespaces", () => {
       [56, "RemoveRedundantProjectionIndexes"],
       [57, "ScheduledTaskWebhooks"],
       [58, "WebhookRelayDeliveries"],
+      [59, "McpAppModelContext"],
     ]);
     assert.deepStrictEqual(forkMigrationManifest, [
       [1, "ProjectionQueuedMessages"],
