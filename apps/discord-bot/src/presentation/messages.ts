@@ -140,8 +140,8 @@ export function inProgressChunkLimit(limit = DISCORD_MESSAGE_LIMIT): number {
 
 type WakeNoteMessage = {
   readonly role: string;
-  readonly turnId?: string | null;
-  readonly notification?: { readonly summary?: string | null } | null;
+  readonly turnId?: string | null | undefined;
+  readonly notification?: { readonly summary?: string | null | undefined } | null | undefined;
   readonly delegatedCompletion?: unknown;
 };
 
