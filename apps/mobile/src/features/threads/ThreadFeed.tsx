@@ -284,6 +284,8 @@ export interface ThreadFeedProps {
   readonly feed: ReadonlyArray<ThreadFeedEntry>;
   readonly contentPresentation: ThreadContentPresentation;
   readonly agentLabel: string;
+  /** Caption for user messages an agent sent. Falls back to the generic label. */
+  readonly agentAttributionLabel?: string;
   readonly latestRun: ThreadFeedLatestRun | null;
   readonly activeWorkStartedAt: string | null;
   readonly runlessWorkActive?: boolean;
@@ -1480,12 +1482,13 @@ function useMarkdownStyles(
 function AgentMessageAttribution(props: {
   readonly environmentId: EnvironmentId;
   readonly senderThreadId?: ThreadId;
+  readonly label?: string;
 }) {
   const navigation = useNavigation();
   const senderThreadId = props.senderThreadId;
   const label = (
     <Text className="mb-1 pr-1 font-t3-medium text-2xs text-foreground-muted opacity-60">
-      Sent by another agent
+      {props.label ?? "Sent by another agent"}
     </Text>
   );
   return senderThreadId ? (
@@ -1518,6 +1521,7 @@ function renderFeedEntry(
     | "onEditPendingMessage"
     | "threadId"
     | "workspaceRoot"
+    | "agentAttributionLabel"
   > & {
     readonly copiedRowId: string | null;
     readonly expandedWorkRows: Record<string, boolean>;
@@ -1723,6 +1727,7 @@ function renderFeedEntry(
             <AgentMessageAttribution
               environmentId={props.environmentId}
               senderThreadId={message.senderThreadId}
+              label={props.agentAttributionLabel}
             />
           ) : null}
           <View
@@ -3023,6 +3028,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             threadTitle: props.threadTitle,
             skills: props.skills,
             workspaceRoot: props.workspaceRoot,
+            agentAttributionLabel: props.agentAttributionLabel,
           })}
           {props.worktreeSetup && info.index === setupAnchorIndex ? (
             <WorktreeSetupCard key={props.threadId} {...props.worktreeSetup} />
@@ -3070,6 +3076,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       props.threadTitle,
       props.skills,
       props.workspaceRoot,
+      props.agentAttributionLabel,
       renderMarkdownImage,
       renderViewedImage,
       renderReasoning,

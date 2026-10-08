@@ -7,7 +7,13 @@
  *
  * See docs/architecture/source-and-identity.md
  */
-import type { AuthClientMetadataDeviceType, SourceChannel } from "@t3tools/contracts";
+import {
+  IdentityUsername,
+  PersonId,
+  type AuthClientMetadataDeviceType,
+  type SourceChannel,
+  type SourceRef,
+} from "@t3tools/contracts";
 import {
   findPersonByDiscordId,
   findPersonByGithubId,
@@ -225,6 +231,80 @@ export function resolvePersonForSource(
     if (displayName.includes("@")) return findPersonByJiraEmail(people, displayName);
   }
   return null;
+}
+
+/** First word of a map name. "Andrea Simone Costa" is shown as Andrea. */
+function agentGivenName(name: string): string {
+  const [first] = name.trim().split(/\s+/);
+  return first !== undefined && first.length > 0 ? first : name.trim();
+}
+
+/**
+ * Person to stamp on an MCP-started thread or message.
+ * A parent thread that already names a person wins, so an in-thread agent
+ * keeps that origin. An external client is attributed only from the person
+ * claimed on its OAuth session. A session with no claim stays anonymous.
+ */
+export function sourceRefForMcpClaim(input: {
+  readonly parentOrigin?: SourceRef | null | undefined;
+  readonly claim?:
+    | {
+        readonly personId: string;
+        readonly username: string;
+        readonly displayName?: string | null | undefined;
+      }
+    | null
+    | undefined;
+}): SourceRef | undefined {
+  const parentOrigin = input.parentOrigin;
+  if (parentOrigin != null && parentOrigin.personId) return parentOrigin;
+  const personId = input.claim?.personId.trim() ?? "";
+  const username = input.claim?.username.trim() ?? "";
+  if (personId.length === 0 || username.length === 0) return undefined;
+  const displayName = agentGivenName(input.claim?.displayName?.trim() || username);
+  return {
+    channel: "bot",
+    personId: PersonId.make(personId),
+    username: IdentityUsername.make(username),
+    actor: {
+      platformId: personId,
+      displayName,
+    },
+  };
+}
+
+/** Sidebar face for a thread created with a known person, before any message lands. */
+export function originParticipantSummary<TPersonId extends string, TUsername extends string>(
+  origin:
+    | {
+        readonly channel: SourceChannel;
+        readonly personId?: TPersonId | undefined;
+        readonly username?: TUsername | undefined;
+      }
+    | null
+    | undefined,
+  participatedAt: string,
+):
+  | {
+      readonly personId: TPersonId;
+      readonly username: TUsername;
+      readonly firstChannel: SourceChannel;
+      readonly channels: ReadonlyArray<SourceChannel>;
+      readonly firstParticipatedAt: string;
+    }
+  | undefined {
+  if (origin == null) return undefined;
+  const personId = origin.personId;
+  const username = origin.username;
+  if (personId === undefined || personId.length === 0) return undefined;
+  if (username === undefined || username.length === 0) return undefined;
+  return {
+    personId,
+    username,
+    firstChannel: origin.channel,
+    channels: [origin.channel],
+    firstParticipatedAt: participatedAt,
+  };
 }
 
 export function withMappedPerson(

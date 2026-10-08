@@ -1377,6 +1377,21 @@ describe("MessagesTimeline", () => {
     expect(agentMarkup).toContain('data-user-message-attribution="agent"');
     expect(agentMarkup).toContain("Sent by another agent");
     expect(userMarkup).not.toContain("Sent by another agent");
+
+    const namedMarkup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        agentAttributionLabel="Andrea's agent"
+        timelineEntries={[
+          {
+            ...entry,
+            message: { ...entry.message, createdBy: "agent", creationSource: "mcp" },
+          },
+        ]}
+      />,
+    );
+    expect(namedMarkup).toContain("Andrea&#x27;s agent");
+    expect(namedMarkup).not.toContain("Sent by another agent");
   });
 
   it("keeps a subagent parent-thread link at the top of an empty timeline", async () => {

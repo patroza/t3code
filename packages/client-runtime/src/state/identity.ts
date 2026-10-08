@@ -40,11 +40,25 @@ export function createIdentityEnvironmentAtoms<R, E>(
     tag: WS_METHODS.identityClearClaim,
   });
 
+  const clientClaims = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "identity-client-claims",
+    tag: WS_METHODS.identityListClientClaims,
+    staleTimeMs: 5_000,
+    idleTtlMs: 60_000,
+  });
+
+  const setClientClaim = createEnvironmentRpcCommand(runtime, {
+    label: "identity-set-client-claim",
+    tag: WS_METHODS.identitySetClientClaim,
+  });
+
   return {
     snapshot,
     sessionClaim,
     claim,
     clearClaim,
+    clientClaims,
+    setClientClaim,
   };
 }
 

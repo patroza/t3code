@@ -76,7 +76,7 @@ export interface IssuedBearerSession {
  * A read-only grant holds `orchestration:read` alone. Any other grant also
  * holds `orchestration:operate` and carries its runtime-mode ceiling.
  */
-const MCP_CLIENT_SUBJECT = "mcp-client";
+export const MCP_CLIENT_SUBJECT = "mcp-client";
 const MCP_CLIENT_SESSION_TTL = Duration.days(30);
 
 export const mcpClientScopes = (

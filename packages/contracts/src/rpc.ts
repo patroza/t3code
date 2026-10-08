@@ -70,7 +70,9 @@ import {
   IdentityClaimInput,
   IdentityClaimResult,
   IdentityError,
+  IdentityListClientClaimsResult,
   IdentitySessionClaimResult,
+  IdentitySetClientClaimInput,
   IdentitySnapshot,
 } from "./identity.ts";
 import {
@@ -539,6 +541,8 @@ export const WS_METHODS = {
   identityGetSessionClaim: "identity.getSessionClaim",
   identityClaim: "identity.claim",
   identityClearClaim: "identity.clearClaim",
+  identityListClientClaims: "identity.listClientClaims",
+  identitySetClientClaim: "identity.setClientClaim",
   // Pull request methods
   pullRequestsList: "pullRequests.list",
   pullRequestsListStats: "pullRequests.listStats",
@@ -962,6 +966,18 @@ export const WsIdentityClaimRpc = Rpc.make(WS_METHODS.identityClaim, {
 export const WsIdentityClearClaimRpc = Rpc.make(WS_METHODS.identityClearClaim, {
   payload: Schema.Struct({}),
   success: Schema.Struct({ cleared: Schema.Boolean }),
+  error: Schema.Union([IdentityError, EnvironmentAuthorizationError]),
+});
+
+export const WsIdentityListClientClaimsRpc = Rpc.make(WS_METHODS.identityListClientClaims, {
+  payload: Schema.Struct({}),
+  success: IdentityListClientClaimsResult,
+  error: Schema.Union([IdentityError, EnvironmentAuthorizationError]),
+});
+
+export const WsIdentitySetClientClaimRpc = Rpc.make(WS_METHODS.identitySetClientClaim, {
+  payload: IdentitySetClientClaimInput,
+  success: IdentitySessionClaimResult,
   error: Schema.Union([IdentityError, EnvironmentAuthorizationError]),
 });
 
@@ -1981,6 +1997,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsIdentityGetSessionClaimRpc,
   WsIdentityClaimRpc,
   WsIdentityClearClaimRpc,
+  WsIdentityListClientClaimsRpc,
+  WsIdentitySetClientClaimRpc,
   WsPullRequestsListRpc,
   WsPullRequestsListStatsRpc,
   WsPullRequestsSummaryRpc,

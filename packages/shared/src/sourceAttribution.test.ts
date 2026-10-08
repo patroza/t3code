@@ -1,14 +1,18 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import { IdentityUsername, PersonId } from "@t3tools/contracts";
+
 import { parseIdentityMapDocument } from "./identityMap.ts";
 import {
   buildSourceRefFromClaim,
   enrichThreadAttribution,
   mergeParticipantSummaries,
   nextOriginSource,
+  originParticipantSummary,
   parseDiscordConversationActor,
   resolveSourceChannel,
   sourceChannelFromDeviceType,
+  sourceRefForMcpClaim,
   withMappedPerson,
 } from "./sourceAttribution.ts";
 
@@ -176,6 +180,69 @@ Announce it once.`,
       people,
     });
     expect(enriched.originSource?.personId).toBe("enricopolanski");
+  });
+});
+
+describe("sourceRefForMcpClaim", () => {
+  const discordOrigin = {
+    channel: "discord" as const,
+    personId: PersonId.make("patroza"),
+    username: IdentityUsername.make("patroza"),
+    actor: { platformId: "95218063095377920", displayName: "patroza" },
+  };
+  const andrea = {
+    personId: "andreasimonecosta",
+    username: "andreasimonecosta",
+    displayName: "Andrea Simone Costa",
+  };
+
+  it("keeps a parent person ahead of the session claim", () => {
+    expect(
+      sourceRefForMcpClaim({
+        claim: andrea,
+        parentOrigin: discordOrigin,
+      }),
+    ).toBe(discordOrigin);
+  });
+
+  it("stamps the person claimed on the MCP session", () => {
+    expect(sourceRefForMcpClaim({ claim: andrea })).toEqual({
+      channel: "bot",
+      personId: "andreasimonecosta",
+      username: "andreasimonecosta",
+      actor: { platformId: "andreasimonecosta", displayName: "Andrea" },
+    });
+  });
+
+  it("leaves a session with no claim anonymous", () => {
+    expect(sourceRefForMcpClaim({ claim: null })).toBeUndefined();
+    expect(
+      sourceRefForMcpClaim({ claim: { personId: "  ", username: "andreasimonecosta" } }),
+    ).toBeUndefined();
+  });
+});
+
+describe("originParticipantSummary", () => {
+  it("seeds a participant only when the origin names a person", () => {
+    expect(
+      originParticipantSummary(
+        {
+          channel: "bot",
+          personId: "andreasimonecosta",
+          username: "andreasimonecosta",
+        },
+        "2026-10-08T12:00:00.000Z",
+      ),
+    ).toEqual({
+      personId: "andreasimonecosta",
+      username: "andreasimonecosta",
+      firstChannel: "bot",
+      channels: ["bot"],
+      firstParticipatedAt: "2026-10-08T12:00:00.000Z",
+    });
+    expect(
+      originParticipantSummary({ channel: "bot" }, "2026-10-08T12:00:00.000Z"),
+    ).toBeUndefined();
   });
 });
 

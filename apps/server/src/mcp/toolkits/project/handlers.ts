@@ -10,6 +10,7 @@ import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.t
 import * as Repositories from "../../../sourceControl/SourceControlRepositoryService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
+import { sourceRefForMcpCaller } from "../../../identity/stampSource.ts";
 import { newCommandId, readCaller, resolveProjectId, unavailable } from "../../threadAccess.ts";
 import { ProjectToolkit } from "./tools.ts";
 
@@ -115,6 +116,10 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
             message:
               "Pass modelSelection: the project has no default model. orchestrator_capabilities lists providers and models.",
           });
+        const attribution = yield* sourceRefForMcpCaller({
+          parentOrigin: caller?.originSource,
+          clientSessionId: scope.client?.sessionId,
+        });
         const result = yield* ThreadMessageIntake.launchThread({
           commandId,
           threadId,
@@ -124,12 +129,14 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
           runtimeMode,
           interactionMode,
           workspaceStrategy: input.workspaceStrategy ?? { type: "root" },
+          ...(attribution === undefined ? {} : { originSource: attribution }),
           ...(input.message === undefined && attachments.length === 0
             ? {}
             : {
                 initialMessage: {
                   messageId,
                   ...(caller === undefined ? {} : { senderThreadId: caller.id }),
+                  ...(attribution === undefined ? {} : { source: attribution }),
                   text: input.message ?? "",
                   attachments,
                 },

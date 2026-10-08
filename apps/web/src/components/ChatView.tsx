@@ -24,6 +24,7 @@ import {
 import { useLoadBalancedEnvironment } from "../hooks/useLoadBalancedEnvironment";
 import { useScratchProject } from "../hooks/useScratchProject";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
+import { agentSenderLabel } from "@t3tools/client-runtime/user-message";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 import {
   latestExecutedRun,
@@ -2312,6 +2313,7 @@ export default function ChatView(props: ChatViewProps) {
     widthStorageKey: `t3code:preview-panel-width:${activeThreadKey}`,
   });
   const activeThreadShell = useThreadShell(isServerThread ? activeThreadRef : null);
+  const agentAttributionLabel = agentSenderLabel(activeThreadShell?.originSource);
   const changeRequestSnapshotByKey = useAtomValue(threadChangeRequestSnapshotsAtom);
   const timelineThreadError =
     serverRuntime?.status === "failed" &&
@@ -11655,6 +11657,7 @@ export default function ChatView(props: ChatViewProps) {
                 displayThreadKey={displayedTimelineKey}
                 onOpenTurnDiff={paintOnlyDisplayedTimeline ? noopHeldTurnDiff : onOpenTurnDiff}
                 onOpenThread={onOpenRelatedThread}
+                agentAttributionLabel={agentAttributionLabel}
                 parentThreadLink={paintOnlyDisplayedTimeline ? null : parentThreadLink}
                 onForkFromRun={paintOnlyDisplayedTimeline ? async () => {} : onForkFromRun}
                 onRollbackCheckpoint={(input) => {

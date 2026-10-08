@@ -5,6 +5,7 @@ import { useNavigation } from "@react-navigation/native";
 import type { WorktreeSetupCardProps } from "./worktree-setup-card";
 import type { ComposerTextPaste } from "../../native/T3ComposerEditor.types";
 import { type EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
+import { agentSenderLabel } from "@t3tools/client-runtime/user-message";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import type {
   CodexFeedbackSubmission,
@@ -390,6 +391,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const windowHeight = useWindowDimensions().height;
   const navigationHeaderHeight = useContext(HeaderHeightContext) || insets.top + 44;
   const agentLabel = `${props.selectedThread.modelSelection.instanceId} agent`;
+  const agentAttributionLabel = agentSenderLabel(props.selectedThread.originSource);
   const selectedThreadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
   const composerError = useAtomValue(threadComposerErrorsAtom)[selectedThreadKey]?.message ?? null;
   const queuedCount = useThreadQueuedCount({
@@ -1124,6 +1126,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               onEditPendingMessage={isProviderSubagent ? null : handleEditPendingMessage}
               contentPresentation={props.contentPresentation}
               agentLabel={agentLabel}
+              agentAttributionLabel={agentAttributionLabel}
               threadTitle={props.selectedThread.title}
               latestRun={props.activityRun}
               activeWorkStartedAt={props.activeWorkStartedAt}

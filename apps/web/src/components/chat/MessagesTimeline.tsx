@@ -330,6 +330,8 @@ interface TimelineRowSharedState {
   displayThreadKey?: string;
   onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
+  /** Caption for user messages an agent sent. Falls back to the generic label. */
+  agentAttributionLabel?: string | undefined;
   onForkFromRun: (input: {
     readonly sourceThreadId: ThreadId;
     readonly runId: RunId;
@@ -470,6 +472,8 @@ interface MessagesTimelineProps {
   displayThreadKey?: string;
   onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
+  /** Caption for user messages an agent sent. Falls back to the generic label. */
+  agentAttributionLabel?: string;
   parentThreadLink?: {
     readonly threadId: ThreadId;
     readonly title: string;
@@ -557,6 +561,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   displayThreadKey,
   onOpenTurnDiff,
   onOpenThread,
+  agentAttributionLabel,
   parentThreadLink = null,
   onForkFromRun,
   onRollbackCheckpoint,
@@ -1228,6 +1233,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       openPullRequest,
       onOpenTurnDiff,
       onOpenThread,
+      agentAttributionLabel,
       onForkFromRun,
       onRollbackCheckpoint,
       onToggleTurnFold,
@@ -1265,6 +1271,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       openPullRequest,
       onOpenTurnDiff,
       onOpenThread,
+      agentAttributionLabel,
       onForkFromRun,
       onRollbackCheckpoint,
       onToggleTurnFold,
@@ -2205,10 +2212,10 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
               tone="muted"
               aria-label="Open sending thread"
             >
-              Sent by another agent
+              {ctx.agentAttributionLabel ?? "Sent by another agent"}
             </InlineButton>
           ) : (
-            "Sent by another agent"
+            (ctx.agentAttributionLabel ?? "Sent by another agent")
           )}
         </p>
       ) : null}

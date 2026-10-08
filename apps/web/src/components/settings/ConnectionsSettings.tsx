@@ -40,6 +40,7 @@ import {
   AuthTerminalReadScope,
   type AuthClientSession,
   type AuthEnvironmentScope,
+  IdentityUsername,
   type AuthGrantScope,
   type AuthPairingLink,
   type AuthPairingCredentialResult,
@@ -192,6 +193,7 @@ import {
 import { APP_VERSION } from "~/branding";
 import { requestConfirmDialog } from "~/confirmDialog";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { identityEnvironment } from "~/state/identity";
 import { primaryServerKeybindingsAtom, serverEnvironment } from "~/state/server";
 import { ConnectionStatusDot } from "../ConnectionStatusDot";
 import {
@@ -1035,6 +1037,89 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
   );
 });
 
+const MCP_CLIENT_SUBJECT = "mcp-client";
+
+function McpClientIdentityControl(props: {
+  readonly sessionId: ServerClientSessionRecord["sessionId"];
+  readonly clientLabel: string;
+  readonly canAssign: boolean;
+}) {
+  const environmentId = usePrimaryEnvironmentId();
+  const target = useMemo(
+    () => (environmentId === null ? null : { environmentId, input: {} as const }),
+    [environmentId],
+  );
+  const snapshotQuery = useEnvironmentQuery(
+    target === null ? null : identityEnvironment.snapshot(target),
+  );
+  const claimsQuery = useEnvironmentQuery(
+    target === null ? null : identityEnvironment.clientClaims(target),
+  );
+  const setClaim = useAtomCommand(identityEnvironment.setClientClaim, {
+    label: "identity-set-client-claim",
+  });
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const snapshot = snapshotQuery.data;
+  if (snapshot === null || !snapshot.enabled) return null;
+
+  const people = [...snapshot.people].toSorted((left, right) =>
+    (left.name ?? left.username).localeCompare(right.name ?? right.username),
+  );
+  const claimed =
+    claimsQuery.data?.claims.find((claim) => claim.sessionId === props.sessionId)?.username ?? "";
+
+  return (
+    <label className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+      <span className="shrink-0">Identity</span>
+      <select
+        aria-label={`Identity for ${props.clientLabel}`}
+        className="h-7 max-w-44 min-w-0 rounded-md border border-border/70 bg-background px-2 text-xs text-foreground disabled:opacity-60"
+        data-mcp-client-identity={props.sessionId}
+        disabled={!props.canAssign || pending || environmentId === null}
+        value={claimed}
+        onChange={(event) => {
+          if (environmentId === null) return;
+          const username = event.currentTarget.value;
+          setPending(true);
+          setError(null);
+          void setClaim({
+            environmentId,
+            input: {
+              sessionId: props.sessionId,
+              username: username.length === 0 ? null : IdentityUsername.make(username),
+            },
+          }).then(
+            (result) => {
+              setPending(false);
+              if (result._tag === "Failure") {
+                setError("Could not save identity.");
+                return;
+              }
+              claimsQuery.refresh();
+            },
+            () => {
+              setPending(false);
+              setError("Could not save identity.");
+            },
+          );
+        }}
+      >
+        <option value="">Unassigned</option>
+        {claimed.length > 0 && !people.some((person) => person.username === claimed) ? (
+          <option value={claimed}>{claimed}</option>
+        ) : null}
+        {people.map((person) => (
+          <option key={person.personId} value={person.username}>
+            {person.name ?? person.username}
+          </option>
+        ))}
+      </select>
+      {error ? <span className="text-destructive">{error}</span> : null}
+    </label>
+  );
+}
+
 type ConnectedClientListRowProps = {
   clientSession: ServerClientSessionRecord;
   presentation?: AccessSectionPresentation;
@@ -1101,6 +1186,13 @@ const ConnectedClientListRow = memo(function ConnectedClientListRow({
           </p>
         </div>
         <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
+          {clientSession.subject === MCP_CLIENT_SUBJECT ? (
+            <McpClientIdentityControl
+              sessionId={clientSession.sessionId}
+              clientLabel={primaryLabel}
+              canAssign={canRevoke}
+            />
+          ) : null}
           {!clientSession.current ? (
             <Button
               size="xs"
