@@ -2125,9 +2125,9 @@ const make = Effect.gen(function* () {
         const parentNodeId = parentRun.rootNodeId;
         const providers = yield* loadProviders;
         const key = yield* requestKey(input.clientRequestId);
-        const attribution = sourceRefForMcpCaller({
+        const attribution = yield* sourceRefForMcpCaller({
           parentOrigin: parent.thread.originSource,
-          clientLabel: scope.client?.label,
+          clientSessionId: scope.client?.sessionId,
         });
         const created = yield* Effect.forEach(
           input.threads,
@@ -2411,9 +2411,9 @@ const make = Effect.gen(function* () {
         yield* resolveInteractionMode(limits.interactionMode, target.thread.interactionMode);
 
         const mode = input.mode ?? "auto";
-        const attribution = sourceRefForMcpCaller({
+        const attribution = yield* sourceRefForMcpCaller({
           parentOrigin: parent?.thread.originSource,
-          clientLabel: scope.client?.label,
+          clientSessionId: scope.client?.sessionId,
         });
         const key = yield* requestKey(input.clientRequestId);
         const messageId = stableOperationMessageId({

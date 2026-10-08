@@ -92,3 +92,12 @@ Agents without OAuth support cannot connect.
 Approved agents appear under **Settings → Connections** like other clients.
 Revoke one there to cut off its access immediately. A sign-in lasts 30 days;
 after that the agent asks you to approve it again.
+
+## Who the agent is
+
+The name the agent sends, such as `mcpx-server`, is only a label. Every install
+of that app shares it. On the agent's row in **Settings → Connections**, set
+**Identity** to the person it should act as. Threads it starts and messages it
+sends then show that person. Leave it unassigned and those threads stay
+anonymous. An agent already working inside someone else's thread keeps that
+thread's person.

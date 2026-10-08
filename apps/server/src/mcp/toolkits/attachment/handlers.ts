@@ -51,9 +51,9 @@ export const layer = McpToolAccess.toLayer(AttachmentToolkit, {
         );
         const commandId = yield* newCommandId();
         const messageId = MessageId.make(commandId);
-        const attribution = sourceRefForMcpCaller({
+        const attribution = yield* sourceRefForMcpCaller({
           parentOrigin: caller?.originSource,
-          clientLabel: scope.client?.label,
+          clientSessionId: scope.client?.sessionId,
         });
         const result = yield* ThreadMessageIntake.sendToThread({
           projectId: projection.thread.projectId,

@@ -3,6 +3,8 @@
  * or platform sourceHint (Discord / GitHub / Jira bots and bridges).
  * Never trusts client personId/username.
  */
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import type {
   AuthClientMetadataDeviceType,
   ClientSourceHint,
@@ -11,7 +13,7 @@ import type {
   SourceChannel,
   SourceRef,
 } from "@t3tools/contracts";
-import { IdentityUsername, PersonId } from "@t3tools/contracts";
+import { AuthSessionId, IdentityUsername, PersonId } from "@t3tools/contracts";
 import {
   findPersonByDiscordId,
   findPersonByGithubId,
@@ -23,24 +25,41 @@ import {
 import {
   buildSourceRefFromClaim,
   resolveSourceChannel,
-  sourceRefForMcpAttribution,
+  sourceRefForMcpClaim,
 } from "@t3tools/shared/sourceAttribution";
-import { readIdentityMapPeopleFromEnv } from "./IdentityService.ts";
+import * as IdentityService from "./IdentityService.ts";
 
 /**
- * Source for an MCP create, launch, or send. Reads the identity map at the
- * call. A parent person wins; otherwise the OAuth client_name must be mapped.
+ * Source for an MCP create, launch, or send. A parent person wins. Otherwise
+ * the person claimed on this OAuth session is stamped. No claim stays anonymous.
+ * Identity is optional in context so callers without the service keep today's behavior.
  */
-export function sourceRefForMcpCaller(input: {
+export const sourceRefForMcpCaller = (input: {
   readonly parentOrigin?: SourceRef | null | undefined;
-  readonly clientLabel?: string | null | undefined;
-}): SourceRef | undefined {
-  return sourceRefForMcpAttribution({
-    parentOrigin: input.parentOrigin,
-    clientLabel: input.clientLabel,
-    people: readIdentityMapPeopleFromEnv(),
+  readonly clientSessionId?: string | null | undefined;
+}) =>
+  Effect.gen(function* () {
+    const parentOrigin = input.parentOrigin;
+    if (parentOrigin != null && parentOrigin.personId) return parentOrigin;
+    const rawSessionId = input.clientSessionId?.trim() ?? "";
+    if (rawSessionId.length === 0) return undefined;
+    const identity = yield* Effect.serviceOption(IdentityService.IdentityService);
+    if (Option.isNone(identity)) return undefined;
+    const found = yield* identity.value
+      .getSessionClaim(AuthSessionId.make(rawSessionId))
+      .pipe(Effect.orElseSucceed(() => ({ claim: null })));
+    const claim = found.claim;
+    if (claim === null) return undefined;
+    const people = yield* identity.value.listMapPeople();
+    const person = people.find((entry) => entry.personId === claim.personId);
+    return sourceRefForMcpClaim({
+      claim: {
+        personId: claim.personId,
+        username: claim.username,
+        displayName: person?.name ?? claim.username,
+      },
+    });
   });
-}
 
 export function sourceRefFromOperateClaim(input: {
   readonly claim: SessionIdentityClaim;

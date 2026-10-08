@@ -95,6 +95,8 @@ const RPC_AGGREGATES = {
   [WS_METHODS.identityGetSessionClaim]: "identity",
   [WS_METHODS.identityClaim]: "identity",
   [WS_METHODS.identityClearClaim]: "identity",
+  [WS_METHODS.identityListClientClaims]: "identity",
+  [WS_METHODS.identitySetClientClaim]: "identity",
   [WS_METHODS.pullRequestsList]: "pull-requests",
   [WS_METHODS.pullRequestsListStats]: "pull-requests",
   [WS_METHODS.pullRequestsSummary]: "pull-requests",

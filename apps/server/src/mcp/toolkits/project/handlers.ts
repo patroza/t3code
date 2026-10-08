@@ -116,9 +116,9 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
             message:
               "Pass modelSelection: the project has no default model. orchestrator_capabilities lists providers and models.",
           });
-        const attribution = sourceRefForMcpCaller({
+        const attribution = yield* sourceRefForMcpCaller({
           parentOrigin: caller?.originSource,
-          clientLabel: scope.client?.label,
+          clientSessionId: scope.client?.sessionId,
         });
         const result = yield* ThreadMessageIntake.launchThread({
           commandId,

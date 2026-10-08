@@ -100,6 +100,7 @@ import {
   ChatAttachmentId,
   PersistChatAttachmentsError,
   EnvironmentAuthorizationError,
+  IdentityError,
   RpcScopeAuthorization,
   type ProjectId,
   type ProviderDriverKind,
@@ -1881,6 +1882,41 @@ const layerWsRpc = (
         [WS_METHODS.identityGetSessionClaim]: () => identity.getSessionClaim(currentSessionId),
         [WS_METHODS.identityClaim]: (payload) => identity.claim(currentSessionId, payload),
         [WS_METHODS.identityClearClaim]: () => identity.clearClaim(currentSessionId),
+        [WS_METHODS.identityListClientClaims]: () =>
+          Effect.gen(function* () {
+            const sessions = yield* serverAuth
+              .listClientSessions(currentSessionId)
+              .pipe(Effect.orDie);
+            const claims = yield* Effect.forEach(
+              sessions.filter((session) => session.subject === EnvironmentAuth.MCP_CLIENT_SUBJECT),
+              (session) => identity.getSessionClaim(session.sessionId),
+              { concurrency: 1 },
+            );
+            return {
+              claims: claims.flatMap((result) => (result.claim === null ? [] : [result.claim])),
+            };
+          }),
+        [WS_METHODS.identitySetClientClaim]: (payload) =>
+          Effect.gen(function* () {
+            const sessions = yield* serverAuth
+              .listClientSessions(currentSessionId)
+              .pipe(Effect.orDie);
+            const target = sessions.find((session) => session.sessionId === payload.sessionId);
+            if (target === undefined || target.subject !== EnvironmentAuth.MCP_CLIENT_SUBJECT) {
+              return yield* new IdentityError({
+                code: "identity_session_not_assignable",
+                message: "Identity can be set on an MCP client session only.",
+              });
+            }
+            if (payload.username === null) {
+              yield* identity.clearClaim(payload.sessionId);
+              return { claim: null };
+            }
+            return yield* identity.claim(payload.sessionId, {
+              username: payload.username,
+              method: "settings",
+            });
+          }),
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
           Effect.annotateCurrentSpan({
             "orchestration_v2.command_id": command.commandId,

@@ -199,6 +199,18 @@ export const IdentitySessionClaimResult = Schema.Struct({
 });
 export type IdentitySessionClaimResult = typeof IdentitySessionClaimResult.Type;
 
+/** Assign or clear the person on one MCP OAuth session. `null` clears it. */
+export const IdentitySetClientClaimInput = Schema.Struct({
+  sessionId: AuthSessionId,
+  username: Schema.NullOr(IdentityUsername),
+});
+export type IdentitySetClientClaimInput = typeof IdentitySetClientClaimInput.Type;
+
+export const IdentityListClientClaimsResult = Schema.Struct({
+  claims: Schema.Array(SessionIdentityClaim),
+});
+export type IdentityListClientClaimsResult = typeof IdentityListClientClaimsResult.Type;
+
 export class IdentityError extends Schema.TaggedError<IdentityError>()("IdentityError", {
   code: Schema.Literals([
     "identity_map_disabled",
@@ -206,6 +218,7 @@ export class IdentityError extends Schema.TaggedError<IdentityError>()("Identity
     "identity_claim_required",
     "identity_claim_missing",
     "identity_map_invalid",
+    "identity_session_not_assignable",
   ]),
   message: Schema.String,
 }) {}

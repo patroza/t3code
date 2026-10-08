@@ -40,11 +40,6 @@ export type IdentityMapPerson = {
   readonly github?: IdentityMapGitHubRef | undefined;
   readonly jira?: IdentityMapJiraRef | undefined;
   readonly teams?: IdentityMapTeamsRef | undefined;
-  /**
-   * MCP OAuth `client_name` values for this person, matched case-insensitively.
-   * Kept off the public identity snapshot; ops set them in the identity map.
-   */
-  readonly mcpClientNames?: readonly string[] | undefined;
 };
 
 export class IdentityMapParseError extends Error {
@@ -153,38 +148,6 @@ function normalizeLogin(value: unknown): string | undefined {
   return login;
 }
 
-function collectMcpClientNames(raw: Record<string, unknown>): readonly string[] {
-  const mcpNested = isRecord(raw.mcp) ? raw.mcp : undefined;
-  const singles = [
-    raw.mcpClientName,
-    raw.mcp_client_name,
-    mcpNested?.clientName,
-    mcpNested?.client_name,
-  ];
-  const lists = [
-    raw.mcpClientNames,
-    raw.mcp_client_names,
-    mcpNested?.clientNames,
-    mcpNested?.client_names,
-  ];
-  const names: string[] = [];
-  const seen = new Set<string>();
-  const push = (value: unknown) => {
-    const name = asNonEmptyString(value);
-    if (name === undefined) return;
-    const key = name.toLowerCase();
-    if (seen.has(key)) return;
-    seen.add(key);
-    names.push(name);
-  };
-  for (const value of singles) push(value);
-  for (const list of lists) {
-    if (!Array.isArray(list)) continue;
-    for (const entry of list) push(entry);
-  }
-  return names;
-}
-
 function parsePerson(raw: unknown, indexLabel: string, keyHint?: string): IdentityMapPerson {
   if (!isRecord(raw)) {
     throw new IdentityMapParseError(indexLabel, "person entry must be an object");
@@ -250,7 +213,6 @@ function parsePerson(raw: unknown, indexLabel: string, keyHint?: string): Identi
     asNonEmptyString(raw.jiraDisplayName) ??
     asNonEmptyString(raw.jira_display_name);
   const teams = parseTeamsRef(raw, indexLabel);
-  const mcpClientNames = collectMcpClientNames(raw);
 
   return {
     personId,
@@ -284,7 +246,6 @@ function parsePerson(raw: unknown, indexLabel: string, keyHint?: string): Identi
         }
       : {}),
     ...(teams !== undefined ? { teams } : {}),
-    ...(mcpClientNames.length > 0 ? { mcpClientNames } : {}),
   };
 }
 
@@ -315,24 +276,12 @@ export function parseIdentityMapDocument(document: unknown): ReadonlyArray<Ident
 
   const usernames = new Set<string>();
   const personIds = new Set<string>();
-  const mcpClientNames = new Map<string, string>();
   for (const person of people) {
     if (usernames.has(person.username)) {
       throw new IdentityMapParseError(person.username, `duplicate username "${person.username}"`);
     }
     if (personIds.has(person.personId)) {
       throw new IdentityMapParseError(person.personId, `duplicate personId "${person.personId}"`);
-    }
-    for (const clientName of person.mcpClientNames ?? []) {
-      const key = clientName.toLowerCase();
-      const owner = mcpClientNames.get(key);
-      if (owner !== undefined) {
-        throw new IdentityMapParseError(
-          person.username,
-          `duplicate mcp client name "${clientName}" (also on "${owner}")`,
-        );
-      }
-      mcpClientNames.set(key, person.username);
     }
     usernames.add(person.username);
     personIds.add(person.personId);
@@ -475,19 +424,6 @@ export function findPersonByTeamsActor(
     }
   }
   return null;
-}
-
-/** Resolve a closed-set person by MCP OAuth client_name (case-insensitive). */
-export function findPersonByMcpClientName(
-  people: ReadonlyArray<IdentityMapPerson>,
-  clientName: string,
-): IdentityMapPerson | null {
-  const needle = clientName.trim().toLowerCase();
-  if (needle.length === 0) return null;
-  return (
-    people.find((person) => person.mcpClientNames?.some((name) => name.toLowerCase() === needle)) ??
-    null
-  );
 }
 
 export function findPersonByJiraEmail(

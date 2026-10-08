@@ -13,7 +13,7 @@ import {
   resolvePersonForSource,
   resolveSourceChannel,
   sourceChannelFromDeviceType,
-  sourceRefForMcpAttribution,
+  sourceRefForMcpClaim,
   withMappedPerson,
 } from "./sourceAttribution.ts";
 
@@ -184,71 +184,42 @@ Announce it once.`,
   });
 });
 
-describe("sourceRefForMcpAttribution", () => {
-  const people = parseIdentityMapDocument({
-    people: {
-      andreasimonecosta: {
-        username: "andreasimonecosta",
-        name: "Andrea Simone Costa",
-        mcpClientName: "mcpx-server",
-      },
-      patroza: { username: "patroza", name: "Patrick Roza" },
-    },
-  });
+describe("sourceRefForMcpClaim", () => {
   const discordOrigin = {
     channel: "discord" as const,
     personId: PersonId.make("patroza"),
     username: IdentityUsername.make("patroza"),
     actor: { platformId: "95218063095377920", displayName: "patroza" },
   };
+  const andrea = {
+    personId: "andreasimonecosta",
+    username: "andreasimonecosta",
+    displayName: "Andrea Simone Costa",
+  };
 
-  it("keeps a parent person ahead of the MCP client name", () => {
+  it("keeps a parent person ahead of the session claim", () => {
     expect(
-      sourceRefForMcpAttribution({
-        clientLabel: "mcpx-server",
+      sourceRefForMcpClaim({
+        claim: andrea,
         parentOrigin: discordOrigin,
-        people,
       }),
     ).toBe(discordOrigin);
   });
 
-  it("stamps a mapped external client on the bot channel", () => {
-    expect(
-      sourceRefForMcpAttribution({
-        clientLabel: " MCPX-Server ",
-        people,
-      }),
-    ).toEqual({
+  it("stamps the person claimed on the MCP session", () => {
+    expect(sourceRefForMcpClaim({ claim: andrea })).toEqual({
       channel: "bot",
       personId: "andreasimonecosta",
       username: "andreasimonecosta",
-      actor: { platformId: "MCPX-Server", displayName: "Andrea Simone Costa" },
+      actor: { platformId: "andreasimonecosta", displayName: "Andrea Simone Costa" },
     });
   });
 
-  it("leaves an unmapped client anonymous", () => {
+  it("leaves a session with no claim anonymous", () => {
+    expect(sourceRefForMcpClaim({ claim: null })).toBeUndefined();
     expect(
-      sourceRefForMcpAttribution({
-        clientLabel: "Claude Code",
-        people,
-      }),
+      sourceRefForMcpClaim({ claim: { personId: "  ", username: "andreasimonecosta" } }),
     ).toBeUndefined();
-    expect(sourceRefForMcpAttribution({ clientLabel: "  ", people })).toBeUndefined();
-  });
-
-  it("resolves a stored bot actor back to the mapped person", () => {
-    expect(
-      resolvePersonForSource(
-        {
-          channel: "bot",
-          actor: { platformId: "mcpx-server", displayName: "Andrea Simone Costa" },
-        },
-        people,
-      )?.username,
-    ).toBe("andreasimonecosta");
-    expect(
-      resolvePersonForSource({ channel: "bot", actor: { platformId: "Claude Code" } }, people),
-    ).toBeNull();
   });
 });
 

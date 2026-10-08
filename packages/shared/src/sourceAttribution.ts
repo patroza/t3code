@@ -20,7 +20,6 @@ import {
   findPersonByGithubLogin,
   findPersonByJiraAccountId,
   findPersonByJiraEmail,
-  findPersonByMcpClientName,
   type IdentityMapPerson,
 } from "./identityMap.ts";
 
@@ -231,40 +230,38 @@ export function resolvePersonForSource(
     }
     if (displayName.includes("@")) return findPersonByJiraEmail(people, displayName);
   }
-  if (source.channel === "bot") {
-    if (platformId.length > 0) {
-      const byClient = findPersonByMcpClientName(people, platformId);
-      if (byClient) return byClient;
-    }
-    if (displayName.length > 0) return findPersonByMcpClientName(people, displayName);
-  }
   return null;
 }
 
 /**
  * Person to stamp on an MCP-started thread or message.
  * A parent thread that already names a person wins, so an in-thread agent
- * keeps that origin. An external client is attributed only when its
- * `client_name` is on the identity map. Unmapped clients stay anonymous.
+ * keeps that origin. An external client is attributed only from the person
+ * claimed on its OAuth session. A session with no claim stays anonymous.
  */
-export function sourceRefForMcpAttribution(input: {
-  readonly clientLabel?: string | null | undefined;
+export function sourceRefForMcpClaim(input: {
   readonly parentOrigin?: SourceRef | null | undefined;
-  readonly people: readonly IdentityMapPerson[];
+  readonly claim?:
+    | {
+        readonly personId: string;
+        readonly username: string;
+        readonly displayName?: string | null | undefined;
+      }
+    | null
+    | undefined;
 }): SourceRef | undefined {
   const parentOrigin = input.parentOrigin;
   if (parentOrigin != null && parentOrigin.personId) return parentOrigin;
-  const label = input.clientLabel?.trim();
-  if (label === undefined || label.length === 0) return undefined;
-  const person = findPersonByMcpClientName(input.people, label);
-  if (person === null) return undefined;
-  const displayName = person.name ?? label;
+  const personId = input.claim?.personId.trim() ?? "";
+  const username = input.claim?.username.trim() ?? "";
+  if (personId.length === 0 || username.length === 0) return undefined;
+  const displayName = input.claim?.displayName?.trim() || username;
   return {
     channel: "bot",
-    personId: PersonId.make(person.personId),
-    username: IdentityUsername.make(person.username),
+    personId: PersonId.make(personId),
+    username: IdentityUsername.make(username),
     actor: {
-      platformId: label,
+      platformId: personId,
       displayName,
     },
   };
