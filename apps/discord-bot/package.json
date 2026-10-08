@@ -8,6 +8,7 @@
     "dev": "node --watch --import tsx src/main.ts",
     "dev:teams": "node --watch --import tsx src/teams-main.ts",
     "start": "node --import tsx src/main.ts",
+    "start:teams-gateway": "node --import tsx src/teams-gateway-main.ts",
     "start:teams": "node --import tsx src/teams-main.ts",
     "typecheck": "tsc --noEmit",
     "test": "vp test run"
