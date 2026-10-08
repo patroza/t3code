@@ -72,6 +72,7 @@ import {
 } from "../presentation/markdownImages.ts";
 import { rewriteMarkdownTablesForDiscord } from "../presentation/markdownTables.ts";
 import {
+  activeTurnWakeNote,
   chunkDiscordContent,
   formatInProgressChunk,
   formatWakeUpTipContent,
@@ -1248,6 +1249,14 @@ export function isInternalAgentScaffoldingUserText(text: string): boolean {
   if (/^Background task\s+"/iu.test(body) && /completed\s*\(exit code:/iu.test(body)) {
     return true;
   }
+  // ProviderContinuationService wake copy. Adapters dispatch this (or a
+  // command/delegated variant) as a user message so the agent keeps going.
+  // It is not someone typing in another T3 client.
+  if (/^Background task completed\.?$/iu.test(body)) return true;
+  if (/^Background command completed\b/iu.test(body)) return true;
+  if (/^Delegated tasks? \S[\s\S]* reached (?:a terminal state|terminal states)\./iu.test(body)) {
+    return true;
+  }
   // Extra ACP prompt parts (Grok/Cursor/Antigravity) can persist as user-role
   // text. A message that is only those envelopes is not a human client.
   // Mixed bodies still echo; summarizeExternalUserInput strips the tags.
@@ -1275,6 +1284,53 @@ export function shouldSuppressExternalUserEcho(text: string): boolean {
 }
 
 /**
+ * Orchestrator v2 stores a wake as the user message the agent reads, and
+ * records the user-visible fact on `notification` (or `delegatedCompletion`,
+ * which the turn item rewrites into a notification). That prompt is not
+ * someone typing in another client.
+ *
+ * Provider-buffered continuations and subagent child prompts are
+ * `createdBy: agent` + `creationSource: provider` even on a snapshot that
+ * predates the notification field. A person typing in the provider CLI is
+ * `createdBy: user`, so that still echoes.
+ */
+function isOrchestrationWakeUserMessage(input: {
+  readonly createdBy?: string | null | undefined;
+  readonly creationSource?: string | null | undefined;
+  readonly delegatedCompletion?: unknown;
+  readonly notification?: unknown;
+}): boolean {
+  if (input.delegatedCompletion != null) return true;
+  if (hasWakeNotification(input.notification)) return true;
+  return input.createdBy === "agent" && input.creationSource === "provider";
+}
+
+function hasWakeNotification(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const summary = (value as { readonly summary?: unknown }).summary;
+  return typeof summary === "string" && summary.trim() !== "";
+}
+
+type UserMessageWakeMarkers = {
+  readonly createdBy?: string | null;
+  readonly creationSource?: string | null;
+  readonly delegatedCompletion?: unknown;
+  readonly notification?: unknown;
+};
+
+function userMessageWakeMarkers(message: object): UserMessageWakeMarkers {
+  const record = message as UserMessageWakeMarkers;
+  return {
+    ...(record.createdBy === undefined ? {} : { createdBy: record.createdBy }),
+    ...(record.creationSource === undefined ? {} : { creationSource: record.creationSource }),
+    ...(record.delegatedCompletion === undefined
+      ? {}
+      : { delegatedCompletion: record.delegatedCompletion }),
+    ...(record.notification === undefined ? {} : { notification: record.notification }),
+  };
+}
+
+/**
  * Whether Discord should post this user message as External User Input.
  * Whitelist: github + t3-client only (never same-surface Discord, never internal).
  */
@@ -1283,6 +1339,10 @@ export function shouldEchoUserMessageToDiscord(input: {
   readonly messageId: string;
   readonly seenUserMessageIds: ReadonlySet<string> | ReadonlyArray<string>;
   readonly sentDiscordUserMessageIds: ReadonlySet<string> | ReadonlyArray<string>;
+  readonly createdBy?: string | null | undefined;
+  readonly creationSource?: string | null | undefined;
+  readonly delegatedCompletion?: unknown;
+  readonly notification?: unknown;
 }): boolean {
   const seen =
     input.seenUserMessageIds instanceof Set
@@ -1293,6 +1353,7 @@ export function shouldEchoUserMessageToDiscord(input: {
       ? input.sentDiscordUserMessageIds
       : new Set(input.sentDiscordUserMessageIds);
   if (seen.has(input.messageId) || sentByDiscord.has(input.messageId)) return false;
+  if (isOrchestrationWakeUserMessage(input)) return false;
   return DISCORD_EXTERNAL_ECHO_SURFACES.has(classifyUserMessageIngress(input.text));
 }
 
@@ -1313,6 +1374,7 @@ export function externalUserMessagesToEcho(input: {
         messageId: message.id,
         seenUserMessageIds: seen,
         sentDiscordUserMessageIds: sentByDiscord,
+        ...userMessageWakeMarkers(message),
       }),
   );
 }
@@ -3252,6 +3314,15 @@ export const runBridge = (
       );
     };
 
+    const currentTurnWakeNote = (thread: OrchestrationThread | null): string | null => {
+      if (thread === null) return null;
+      return activeTurnWakeNote({
+        latestTurnId: thread.latestTurn?.turnId ?? null,
+        messages: thread.messages,
+        activities: thread.activities,
+      });
+    };
+
     /**
      * In-progress stream only:
      * - edit latest bot message while it remains the channel tip and under 2000 chars
@@ -3438,6 +3509,7 @@ export const runBridge = (
           // 10s heartbeat is not the only place the count can appear mid-prose.
           const latestForTools = yield* Ref.get(latestThreadRef);
           const toolCallCount = currentTurnToolCallCount(latestForTools);
+          const wakeNote = currentTurnWakeNote(latestForTools);
 
           for (let index = 0; index < desiredChunks.length; index += 1) {
             const chunk = desiredChunks[index] ?? "";
@@ -3449,6 +3521,7 @@ export const runBridge = (
               DISCORD_LIMIT,
               2,
               toolCallCount,
+              wakeNote,
             );
 
             if (existingId !== null) {
@@ -4777,13 +4850,21 @@ export const runBridge = (
         if (hb._tag === "noop") return;
 
         const toolCallCount = currentTurnToolCallCount(latest);
+        const wakeNote = currentTurnWakeNote(latest);
         const tipDisplay = rewriteMarkdownTablesForDiscord(streamDisplayText(hb.tipBody));
         const chunks =
           tipDisplay.trim() === ""
             ? ([""] as string[])
             : chunkDiscordContent(tipDisplay, STREAM_CHUNK_LIMIT);
         const tipChunk = chunks.at(-1) ?? "";
-        const hopContent = formatInProgressChunk(tipChunk, true, DISCORD_LIMIT, 2, toolCallCount);
+        const hopContent = formatInProgressChunk(
+          tipChunk,
+          true,
+          DISCORD_LIMIT,
+          2,
+          toolCallCount,
+          wakeNote,
+        );
         const created = yield* rest.createMessage(input.discordChannelId, {
           ...workingMessageFields(hopContent, input.t3ThreadId),
         });
@@ -4835,6 +4916,7 @@ export const runBridge = (
           const latest = yield* Ref.get(latestThreadRef);
           const turnRunning = latest !== null && isTurnInProgress(latest);
           const toolCallCount = currentTurnToolCallCount(latest);
+          const wakeNote = currentTurnWakeNote(latest);
 
           const hb = decideHeartbeat({
             state: state.delivery,
@@ -4860,6 +4942,7 @@ export const runBridge = (
               DISCORD_LIMIT,
               workingDots,
               toolCallCount,
+              wakeNote,
             );
             const created = yield* rest.createMessage(input.discordChannelId, {
               ...workingMessageFields(content, input.t3ThreadId),
@@ -4907,6 +4990,7 @@ export const runBridge = (
             DISCORD_LIMIT,
             workingDots,
             toolCallCount,
+            wakeNote,
           );
           const fields = workingMessageFields(content, input.t3ThreadId);
           const updated = yield* rest

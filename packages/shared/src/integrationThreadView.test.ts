@@ -96,6 +96,7 @@ import {
   OrchestrationV2RunAttempt,
   OrchestrationV2ProviderTurn,
   OrchestrationV2RuntimeRequest,
+  OrchestrationV2TurnItem,
   SourceRef,
   ThreadParticipantSummary,
 } from "@t3tools/contracts";
@@ -105,6 +106,7 @@ const decodeRun = Schema.decodeUnknownSync(OrchestrationV2Run);
 const decodeAttempt = Schema.decodeUnknownSync(OrchestrationV2RunAttempt);
 const decodeTurn = Schema.decodeUnknownSync(OrchestrationV2ProviderTurn);
 const decodeRequest = Schema.decodeUnknownSync(OrchestrationV2RuntimeRequest);
+const decodeTurnItem = Schema.decodeUnknownSync(OrchestrationV2TurnItem);
 const decodeSource = Schema.decodeUnknownSync(SourceRef);
 const decodeParticipants = Schema.decodeUnknownSync(Schema.Array(ThreadParticipantSummary));
 function run(id: string, ordinal: number, status: "queued" | "running" | "completed") {
@@ -262,5 +264,58 @@ describe("integrationThreadView", () => {
     const activity = view.activities.find((a) => a.kind === "context-window.updated");
     expect(activity?.turnId).toBe(first.id);
     expect(activity?.payload).toMatchObject({ inputTokens: 10, outputTokens: 4, usedTokens: 1000 });
+  });
+
+  it("keeps a wake notification on the message and projects its summary as an activity", () => {
+    const message = decodeMessage({
+      id: "message:wake",
+      threadId: v2ThreadId,
+      runId: "run:wake",
+      nodeId: null,
+      createdBy: "agent",
+      creationSource: "server",
+      role: "user",
+      text: "Update on pull request #516. Look into each item.",
+      attachments: [],
+      streaming: false,
+      createdAt: v2Now,
+      updatedAt: v2Now,
+      notification: {
+        source: { kind: "monitor" },
+        outcome: "failed",
+        summary: "#516: checks failed",
+      },
+    });
+    const item = decodeTurnItem({
+      id: "item:wake",
+      threadId: v2ThreadId,
+      runId: "run:wake",
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 1,
+      status: "completed",
+      title: null,
+      startedAt: v2Now,
+      completedAt: v2Now,
+      updatedAt: v2Now,
+      type: "notification",
+      source: { kind: "monitor" },
+      outcome: "failed",
+      summary: "#516: checks failed",
+    });
+    const view = integrationThreadView({
+      ...v2Projection,
+      messages: [message],
+      turnItems: [item],
+    });
+    expect(view.messages[0]?.notification?.summary).toBe("#516: checks failed");
+    expect(view.messages[0]?.text).toContain("Look into each item");
+    const activity = view.activities.find((entry) => entry.kind === "notification");
+    expect(activity?.summary).toBe("#516: checks failed");
+    expect(activity?.tone).toBe("error");
+    expect(view.activities.some((entry) => entry.kind === "tool.completed")).toBe(false);
   });
 });
