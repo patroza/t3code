@@ -8,9 +8,9 @@ describe("agentSenderLabel", () => {
     expect(
       agentSenderLabel({
         username: "andreasimonecosta",
-        actor: { displayName: "Andrea Simone Costa" },
+        actor: { displayName: "Andrea" },
       }),
-    ).toBe("Andrea Simone Costa's agent");
+    ).toBe("Andrea's agent");
     expect(agentSenderLabel({ username: "patroza" })).toBe("patroza's agent");
   });
 

@@ -98,6 +98,6 @@ after that the agent asks you to approve it again.
 The name the agent sends, such as `mcpx-server`, is only a label. Every install
 of that app shares it. On the agent's row in **Settings → Connections**, set
 **Identity** to the person it should act as. Threads it starts and messages it
-sends then show that person. Leave it unassigned and those threads stay
-anonymous. An agent already working inside someone else's thread keeps that
-thread's person.
+sends then show the first word of that person's name. Leave it unassigned and
+those threads stay anonymous. An agent already working inside someone else's
+thread keeps that thread's person.

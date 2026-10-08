@@ -1381,7 +1381,7 @@ describe("MessagesTimeline", () => {
     const namedMarkup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
-        agentAttributionLabel="Andrea Simone Costa's agent"
+        agentAttributionLabel="Andrea's agent"
         timelineEntries={[
           {
             ...entry,
@@ -1390,7 +1390,7 @@ describe("MessagesTimeline", () => {
         ]}
       />,
     );
-    expect(namedMarkup).toContain("Andrea Simone Costa&#x27;s agent");
+    expect(namedMarkup).toContain("Andrea&#x27;s agent");
     expect(namedMarkup).not.toContain("Sent by another agent");
   });
 

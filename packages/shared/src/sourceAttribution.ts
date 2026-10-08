@@ -233,6 +233,12 @@ export function resolvePersonForSource(
   return null;
 }
 
+/** First word of a map name. "Andrea Simone Costa" is shown as Andrea. */
+function agentGivenName(name: string): string {
+  const [first] = name.trim().split(/\s+/);
+  return first !== undefined && first.length > 0 ? first : name.trim();
+}
+
 /**
  * Person to stamp on an MCP-started thread or message.
  * A parent thread that already names a person wins, so an in-thread agent
@@ -255,7 +261,7 @@ export function sourceRefForMcpClaim(input: {
   const personId = input.claim?.personId.trim() ?? "";
   const username = input.claim?.username.trim() ?? "";
   if (personId.length === 0 || username.length === 0) return undefined;
-  const displayName = input.claim?.displayName?.trim() || username;
+  const displayName = agentGivenName(input.claim?.displayName?.trim() || username);
   return {
     channel: "bot",
     personId: PersonId.make(personId),

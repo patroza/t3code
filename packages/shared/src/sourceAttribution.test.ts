@@ -210,7 +210,7 @@ describe("sourceRefForMcpClaim", () => {
       channel: "bot",
       personId: "andreasimonecosta",
       username: "andreasimonecosta",
-      actor: { platformId: "andreasimonecosta", displayName: "Andrea Simone Costa" },
+      actor: { platformId: "andreasimonecosta", displayName: "Andrea" },
     });
   });
 
