@@ -10,7 +10,6 @@ import {
   nextOriginSource,
   originParticipantSummary,
   parseDiscordConversationActor,
-  resolvePersonForSource,
   resolveSourceChannel,
   sourceChannelFromDeviceType,
   sourceRefForMcpClaim,
