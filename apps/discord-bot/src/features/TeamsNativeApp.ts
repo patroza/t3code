@@ -90,16 +90,18 @@ export function splitTeamsMessage(text: string): ReadonlyArray<string> {
   return chunks;
 }
 
-const waitForFinalAnswer = Effect.fn("waitForFinalAnswer")(function* (input: {
+export const waitForFinalAnswer = Effect.fn("waitForFinalAnswer")(function* (input: {
   readonly t3ThreadId: ThreadId;
   readonly baseline: string;
   readonly baselineTurnId: string | null;
   readonly send: (text: string) => Promise<unknown>;
+  readonly canDeliver?: () => boolean;
 }) {
   const t3 = yield* T3Session;
   const announcedRequests = new Set<string>();
   while (true) {
     yield* Effect.sleep("1 second");
+    if (input.canDeliver !== undefined && !input.canDeliver()) return;
     const snapshot = yield* t3.fetchThreadDetail(input.t3ThreadId).pipe(
       Effect.catch((error) =>
         Effect.logWarning("Teams final-answer poll failed", {
