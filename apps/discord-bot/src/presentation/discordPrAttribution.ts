@@ -45,7 +45,7 @@ export type DiscordPrAttributionInput = {
   readonly threadJumpUrl: string;
   /**
    * Optional T3 web thread URL. Full host for private GitHub repos; short
-   * `https://t3vm/?thread=…` for public repos (see pickT3ThreadUrlForGithubRepo).
+   * the configured public web base for public repos (see pickT3ThreadUrlForGithubRepo).
    */
   readonly t3ThreadUrl?: string | null | undefined;
 };
@@ -99,7 +99,7 @@ export function buildT3WebThreadUrl(
 /**
  * Same web UI base as the pin's "Open in Omegent" (`T3_WEB_UI_BASE_URL`),
  * plus `#message-{messageId}` for client scroll-into-view.
- * Does not invent a short `t3vm` host — that rewrite is only for public PR bodies.
+ * Always uses the configured web base.
  */
 export function buildOmegentThreadMessageUrl(input: {
   readonly webUiBaseUrl?: string | null | undefined;
@@ -123,33 +123,49 @@ export function buildOmegentThreadMessageUrl(input: {
 }
 
 /**
- * Public-safe short form: same URL with hostname forced to `t3vm` (no port).
- * Example: `https://t3vm.tail….ts.net/?thread=x` → `https://t3vm/?thread=x`
+ * Public PR URL from the explicitly configured public base, retaining only the
+ * thread id and message anchor. Without a valid public base, omit the link.
  */
-export function toT3PublicShortThreadUrl(fullUrl: string): string {
-  const trimmed = fullUrl.trim();
+export function toT3PublicShortThreadUrl(
+  fullUrl: string,
+  publicBaseUrl?: string | null,
+): string | null {
+  if (!publicBaseUrl?.trim()) return null;
   try {
-    const url = new URL(trimmed);
-    url.hostname = "t3vm";
-    url.port = "";
+    const full = new URL(fullUrl);
+    const base = new URL(publicBaseUrl.trim());
+    if (
+      !["http:", "https:"].includes(base.protocol) ||
+      base.username ||
+      base.password ||
+      base.search ||
+      base.hash
+    )
+      return null;
+    const threadId = full.searchParams.get("thread");
+    if (!threadId) return null;
+    const url = new URL(`${base.toString().replace(/\/+$/u, "")}/`);
+    url.searchParams.set("thread", threadId);
+    if (/^#message-[\w.-]+$/u.test(full.hash)) url.hash = full.hash;
     return url.toString();
   } catch {
-    return trimmed.replace(/^(https?:\/\/)[^/?#]+/u, "$1t3vm");
+    return null;
   }
 }
 
 /**
- * Private GitHub repo → full t3vm host URL. Public/unknown → short `t3vm` host only
- * (avoids leaking tailnet hostnames on public PR bodies).
+ * Private repositories keep the full URL; public/unknown repositories require
+ * an explicit public base to avoid publishing private hostnames.
  */
 export function pickT3ThreadUrlForGithubRepo(input: {
   readonly fullUrl: string | null | undefined;
   readonly repoIsPrivate: boolean | null;
+  readonly publicBaseUrl?: string | null | undefined;
 }): string | null {
   const full = input.fullUrl?.trim();
   if (full === undefined || full.length === 0) return null;
   if (input.repoIsPrivate === true) return full;
-  return toT3PublicShortThreadUrl(full);
+  return toT3PublicShortThreadUrl(full, input.publicBaseUrl);
 }
 
 /** Append ` · [T3](url)` when missing. */
@@ -283,15 +299,16 @@ export type EnsureDiscordPrAttributionResult = {
 /**
  * For each PR URL, append the Discord attribution footer when missing.
  * When `t3FullThreadUrl` is set, appends ` · [T3](…)` using the full host for
- * private GitHub repos and the short `t3vm` host for public/unknown repos.
+ * private GitHub repos and the configured public base for public/unknown repos.
  * Best-effort: failures are returned per-URL and never throw.
  */
 export async function ensureDiscordPrAttributionFooters(input: {
   readonly prUrls: ReadonlyArray<string>;
   /** Discord attribution line (may already include T3; otherwise T3 is chosen per-repo). */
   readonly footer: string;
-  /** Full T3 web URL (`{T3_WEB_UI_BASE_URL}/?thread=…`). Shortened for public repos. */
+  /** Full T3 web URL (`{T3_WEB_UI_BASE_URL}/?thread=…`). Requires an explicit public base for public repos. */
   readonly t3FullThreadUrl?: string | null | undefined;
+  readonly publicWebUiBaseUrl?: string | undefined;
   readonly execFile?: ExecFileLike;
 }): Promise<ReadonlyArray<EnsureDiscordPrAttributionResult>> {
   const execImpl = input.execFile ?? execFile;
@@ -313,6 +330,7 @@ export async function ensureDiscordPrAttributionFooters(input: {
         const t3Url = pickT3ThreadUrlForGithubRepo({
           fullUrl: input.t3FullThreadUrl,
           repoIsPrivate,
+          publicBaseUrl: input.publicWebUiBaseUrl,
         });
         footer = withT3ThreadLink(input.footer, t3Url);
       }

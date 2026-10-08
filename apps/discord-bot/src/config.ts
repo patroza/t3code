@@ -22,6 +22,7 @@ export interface DiscordBotConfig {
   readonly t3DefaultRuntimeMode: RuntimeMode;
   readonly dataDir: string;
   readonly webUiBaseUrl: string | undefined;
+  readonly publicWebUiBaseUrl?: string | undefined;
   /** Bot-local shortName → workspaceRoot map (not on the T3 server). */
   readonly projectAliasesPath: string | undefined;
   /**
@@ -120,6 +121,10 @@ export const DiscordBotConfig: Effect.Effect<DiscordBotConfig, Config.ConfigErro
       Config.withDefault("~/.t3/discord-bot"),
     );
     const webUiBaseUrl = yield* Config.String("T3_WEB_UI_BASE_URL").pipe(
+      Config.option,
+      Config.map(Option.getOrUndefined),
+    );
+    const publicWebUiBaseUrl = yield* Config.String("T3_WEB_UI_PUBLIC_BASE_URL").pipe(
       Config.option,
       Config.map(Option.getOrUndefined),
     );
@@ -232,6 +237,7 @@ export const DiscordBotConfig: Effect.Effect<DiscordBotConfig, Config.ConfigErro
       t3DefaultRuntimeMode,
       dataDir,
       webUiBaseUrl,
+      publicWebUiBaseUrl,
       projectAliasesPath,
       identityMapPath,
       honeycombTraceUrlTemplate,

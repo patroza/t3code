@@ -18,7 +18,7 @@ Don't mix up requester vs thread starter vs others.
 **PR footer** from turn `pr` + `t3` fields (paste at PR body end; bot may re-append):
 `opened by [{name}](https://discord.com/users/{uid}) in chat thread **Discord** · [{title}](https://discord.com/channels/{g}/{c}/{m}) · [T3]({t3url})`
 URL forms only; never bare snowflakes.
-**t3url:** private GitHub repo → turn `t3 full=…`; public repo → turn `t3 short=…` (host is always just `t3vm`). Prefer short when unsure (don't leak internal hosts on public PRs).
+**t3url:** private GitHub repo → turn `t3 full=…`; public or unknown repo → turn `t3 public=…`. When `public=none`, omit the T3 link on public/unknown PRs. Never invent a hostname or publish the private URL as a fallback.
 
 **jira:** put turn keys in PR body (prefer primary in title/branch). Keys are
 context, not a request to comment on the issue.
