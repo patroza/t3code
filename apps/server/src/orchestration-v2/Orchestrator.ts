@@ -1,5 +1,8 @@
 import { ThreadParticipantSummary } from "@t3tools/contracts";
-import { mergeParticipantSummaries } from "@t3tools/shared/sourceAttribution";
+import {
+  mergeParticipantSummaries,
+  originParticipantSummary,
+} from "@t3tools/shared/sourceAttribution";
 import {
   latestExecutedRun,
   latestRootProviderFailure,
@@ -2290,8 +2293,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
     const now = yield* DateTime.now;
     const emitEvent = emit(events, command);
+    const originParticipants = originParticipantSummary(
+      command.originSource,
+      DateTime.formatIso(now),
+    );
     const thread: OrchestrationV2AppThread = {
       ...(command.originSource === undefined ? {} : { originSource: command.originSource }),
+      ...(originParticipants === undefined ? {} : { participantSummaries: [originParticipants] }),
       createdBy: command.createdBy,
       creationSource: command.creationSource,
       id: command.threadId,
@@ -6875,6 +6883,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         payload: taskTurnItem,
       });
 
+      const parentOrigin = parentProjection.thread.originSource;
+      const parentSource =
+        parentOrigin != null && parentOrigin.personId !== undefined ? parentOrigin : undefined;
       const childMessageCommand = {
         type: "message.dispatch",
         createdBy: command.createdBy,
@@ -6887,6 +6898,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         attachments: [],
         modelSelection: command.modelSelection,
         dispatchMode: { type: "start_immediately" },
+        ...(parentSource === undefined ? {} : { source: parentSource }),
       } satisfies Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>;
       yield* dispatchMessage(childMessageCommand, events, effects);
 

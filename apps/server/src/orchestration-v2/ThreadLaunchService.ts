@@ -17,6 +17,7 @@ import {
   type RunId,
   type RuntimeMode,
   type ScheduledTaskId,
+  type SourceRef,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -95,6 +96,7 @@ export interface ThreadLaunchInput {
   };
   readonly createdBy: OrchestrationV2Actor;
   readonly creationSource: OrchestrationV2CreationSource;
+  readonly originSource?: SourceRef;
 }
 
 /** What workspace preparation reads from a launch; a retry rebuilds it from the run. */
@@ -789,6 +791,7 @@ const make = Effect.gen(function* () {
                   : { importedNativeThread: input.importedNativeThread }),
                 createdBy: input.createdBy,
                 creationSource: input.creationSource,
+                ...(input.originSource === undefined ? {} : { originSource: input.originSource }),
               });
         const claimed = yield* claimDispatch.pipe(
           Effect.mapError(

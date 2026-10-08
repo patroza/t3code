@@ -23,6 +23,7 @@ import {
   ProjectId,
   RunId,
   type ScheduledTaskId,
+  type SourceRef,
   ThreadId,
   type TurnItemId,
 } from "@t3tools/contracts";
@@ -114,6 +115,7 @@ export interface ThreadManagementSendInput {
   readonly mode: ThreadManagementSendMode;
   readonly createdBy: OrchestrationV2Actor;
   readonly creationSource: OrchestrationV2CreationSource;
+  readonly source?: SourceRef;
 }
 
 export interface ThreadManagementSendResult {
@@ -621,6 +623,7 @@ const make = Effect.gen(function* () {
         ...(input.scheduledTaskId === undefined ? {} : { scheduledTaskId: input.scheduledTaskId }),
         ...(input.senderThreadId === undefined ? {} : { senderThreadId: input.senderThreadId }),
         text: input.text,
+        ...(input.source === undefined ? {} : { source: input.source }),
         attachments: input.attachments,
         ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
         dispatchMode,

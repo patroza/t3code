@@ -7,13 +7,20 @@
  *
  * See docs/architecture/source-and-identity.md
  */
-import type { AuthClientMetadataDeviceType, SourceChannel } from "@t3tools/contracts";
+import {
+  IdentityUsername,
+  PersonId,
+  type AuthClientMetadataDeviceType,
+  type SourceChannel,
+  type SourceRef,
+} from "@t3tools/contracts";
 import {
   findPersonByDiscordId,
   findPersonByGithubId,
   findPersonByGithubLogin,
   findPersonByJiraAccountId,
   findPersonByJiraEmail,
+  findPersonByMcpClientName,
   type IdentityMapPerson,
 } from "./identityMap.ts";
 
@@ -224,7 +231,77 @@ export function resolvePersonForSource(
     }
     if (displayName.includes("@")) return findPersonByJiraEmail(people, displayName);
   }
+  if (source.channel === "bot") {
+    if (platformId.length > 0) {
+      const byClient = findPersonByMcpClientName(people, platformId);
+      if (byClient) return byClient;
+    }
+    if (displayName.length > 0) return findPersonByMcpClientName(people, displayName);
+  }
   return null;
+}
+
+/**
+ * Person to stamp on an MCP-started thread or message.
+ * A parent thread that already names a person wins, so an in-thread agent
+ * keeps that origin. An external client is attributed only when its
+ * `client_name` is on the identity map. Unmapped clients stay anonymous.
+ */
+export function sourceRefForMcpAttribution(input: {
+  readonly clientLabel?: string | null | undefined;
+  readonly parentOrigin?: SourceRef | null | undefined;
+  readonly people: readonly IdentityMapPerson[];
+}): SourceRef | undefined {
+  const parentOrigin = input.parentOrigin;
+  if (parentOrigin != null && parentOrigin.personId) return parentOrigin;
+  const label = input.clientLabel?.trim();
+  if (label === undefined || label.length === 0) return undefined;
+  const person = findPersonByMcpClientName(input.people, label);
+  if (person === null) return undefined;
+  const displayName = person.name ?? label;
+  return {
+    channel: "bot",
+    personId: PersonId.make(person.personId),
+    username: IdentityUsername.make(person.username),
+    actor: {
+      platformId: label,
+      displayName,
+    },
+  };
+}
+
+/** Sidebar face for a thread created with a known person, before any message lands. */
+export function originParticipantSummary<TPersonId extends string, TUsername extends string>(
+  origin:
+    | {
+        readonly channel: SourceChannel;
+        readonly personId?: TPersonId | undefined;
+        readonly username?: TUsername | undefined;
+      }
+    | null
+    | undefined,
+  participatedAt: string,
+):
+  | {
+      readonly personId: TPersonId;
+      readonly username: TUsername;
+      readonly firstChannel: SourceChannel;
+      readonly channels: ReadonlyArray<SourceChannel>;
+      readonly firstParticipatedAt: string;
+    }
+  | undefined {
+  if (origin == null) return undefined;
+  const personId = origin.personId;
+  const username = origin.username;
+  if (personId === undefined || personId.length === 0) return undefined;
+  if (username === undefined || username.length === 0) return undefined;
+  return {
+    personId,
+    username,
+    firstChannel: origin.channel,
+    channels: [origin.channel],
+    firstParticipatedAt: participatedAt,
+  };
 }
 
 export function withMappedPerson(

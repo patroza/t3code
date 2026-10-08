@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   IdentityMapParseError,
   normalizeJiraAccountId,
+  findPersonByMcpClientName,
   findPersonByTeamsActor,
   parseIdentityMapDocument,
   resolvePersonByJiraAccountId,
@@ -83,5 +84,33 @@ describe("parseIdentityMapDocument", () => {
     ).toBe("patroza");
     expect(findPersonByTeamsActor(people, { userId: "29:patroza" })?.username).toBe("patroza");
     expect(findPersonByTeamsActor(people, { aadObjectId: "nope" })).toBeNull();
+  });
+
+  it("reads MCP client names from flat, nested, and list fields", () => {
+    const people = parseIdentityMapDocument({
+      people: {
+        andreasimonecosta: {
+          username: "andreasimonecosta",
+          name: "Andrea Simone Costa",
+          mcpClientName: "mcpx-server",
+          mcp: { clientName: "MCPX-Server", clientNames: ["review-bot"] },
+        },
+      },
+    });
+    expect(people[0]?.mcpClientNames).toEqual(["mcpx-server", "review-bot"]);
+    expect(findPersonByMcpClientName(people, " MCPX-SERVER ")?.username).toBe("andreasimonecosta");
+    expect(findPersonByMcpClientName(people, "review-bot")?.name).toBe("Andrea Simone Costa");
+    expect(findPersonByMcpClientName(people, "claude code")).toBeNull();
+  });
+
+  it("rejects an MCP client name claimed by two people", () => {
+    expect(() =>
+      parseIdentityMapDocument({
+        people: {
+          andrea: { username: "andrea", mcpClientName: "mcpx-server" },
+          patrick: { username: "patrick", mcp_client_name: "MCPX-Server" },
+        },
+      }),
+    ).toThrow(/duplicate mcp client name/);
   });
 });

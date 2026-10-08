@@ -1,7 +1,26 @@
 import { ScheduledTaskId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolveUserMessagePresentation } from "./userMessage.ts";
+import { agentSenderLabel, resolveUserMessagePresentation } from "./userMessage.ts";
+
+describe("agentSenderLabel", () => {
+  it("names the thread origin when an agent sent the message", () => {
+    expect(
+      agentSenderLabel({
+        username: "andreasimonecosta",
+        actor: { displayName: "Andrea Simone Costa" },
+      }),
+    ).toBe("Andrea Simone Costa's agent");
+    expect(agentSenderLabel({ username: "patroza" })).toBe("patroza's agent");
+  });
+
+  it("keeps the generic caption when the thread has no person", () => {
+    expect(agentSenderLabel(null)).toBe("Sent by another agent");
+    expect(agentSenderLabel({ username: "  ", actor: { displayName: "" } })).toBe(
+      "Sent by another agent",
+    );
+  });
+});
 
 describe("resolveUserMessagePresentation", () => {
   const legacyText = "[Triggered by schedule task: Daily audit]\n\nCheck for crashes.\n";

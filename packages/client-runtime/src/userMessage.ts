@@ -3,6 +3,20 @@ import { type OrchestrationV2Actor, ScheduledTaskId } from "@t3tools/contracts";
 const LEGACY_AUTOMATION_PREFIX = /^\[Triggered by schedule task: [^\r\n]+\]\r?\n\r?\n/;
 const LEGACY_AUTOMATION_MESSAGE_ID = /^scheduled-task-message:(.+):\d+:(?:scheduled|manual)$/;
 
+/** Caption for a user-role message an agent sent on this thread's behalf. */
+export function agentSenderLabel(
+  origin:
+    | {
+        readonly username?: string | null;
+        readonly actor?: { readonly displayName?: string | null } | null;
+      }
+    | null
+    | undefined,
+): string {
+  const who = origin?.actor?.displayName?.trim() || origin?.username?.trim();
+  return who ? `${who}'s agent` : "Sent by another agent";
+}
+
 /** Older scheduled messages stored their attribution in the prompt itself. */
 export function resolveUserMessagePresentation(message: {
   readonly id?: string;

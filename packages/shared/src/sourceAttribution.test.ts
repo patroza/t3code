@@ -1,14 +1,19 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import { IdentityUsername, PersonId } from "@t3tools/contracts";
+
 import { parseIdentityMapDocument } from "./identityMap.ts";
 import {
   buildSourceRefFromClaim,
   enrichThreadAttribution,
   mergeParticipantSummaries,
   nextOriginSource,
+  originParticipantSummary,
   parseDiscordConversationActor,
+  resolvePersonForSource,
   resolveSourceChannel,
   sourceChannelFromDeviceType,
+  sourceRefForMcpAttribution,
   withMappedPerson,
 } from "./sourceAttribution.ts";
 
@@ -176,6 +181,98 @@ Announce it once.`,
       people,
     });
     expect(enriched.originSource?.personId).toBe("enricopolanski");
+  });
+});
+
+describe("sourceRefForMcpAttribution", () => {
+  const people = parseIdentityMapDocument({
+    people: {
+      andreasimonecosta: {
+        username: "andreasimonecosta",
+        name: "Andrea Simone Costa",
+        mcpClientName: "mcpx-server",
+      },
+      patroza: { username: "patroza", name: "Patrick Roza" },
+    },
+  });
+  const discordOrigin = {
+    channel: "discord" as const,
+    personId: PersonId.make("patroza"),
+    username: IdentityUsername.make("patroza"),
+    actor: { platformId: "95218063095377920", displayName: "patroza" },
+  };
+
+  it("keeps a parent person ahead of the MCP client name", () => {
+    expect(
+      sourceRefForMcpAttribution({
+        clientLabel: "mcpx-server",
+        parentOrigin: discordOrigin,
+        people,
+      }),
+    ).toBe(discordOrigin);
+  });
+
+  it("stamps a mapped external client on the bot channel", () => {
+    expect(
+      sourceRefForMcpAttribution({
+        clientLabel: " MCPX-Server ",
+        people,
+      }),
+    ).toEqual({
+      channel: "bot",
+      personId: "andreasimonecosta",
+      username: "andreasimonecosta",
+      actor: { platformId: "MCPX-Server", displayName: "Andrea Simone Costa" },
+    });
+  });
+
+  it("leaves an unmapped client anonymous", () => {
+    expect(
+      sourceRefForMcpAttribution({
+        clientLabel: "Claude Code",
+        people,
+      }),
+    ).toBeUndefined();
+    expect(sourceRefForMcpAttribution({ clientLabel: "  ", people })).toBeUndefined();
+  });
+
+  it("resolves a stored bot actor back to the mapped person", () => {
+    expect(
+      resolvePersonForSource(
+        {
+          channel: "bot",
+          actor: { platformId: "mcpx-server", displayName: "Andrea Simone Costa" },
+        },
+        people,
+      )?.username,
+    ).toBe("andreasimonecosta");
+    expect(
+      resolvePersonForSource({ channel: "bot", actor: { platformId: "Claude Code" } }, people),
+    ).toBeNull();
+  });
+});
+
+describe("originParticipantSummary", () => {
+  it("seeds a participant only when the origin names a person", () => {
+    expect(
+      originParticipantSummary(
+        {
+          channel: "bot",
+          personId: "andreasimonecosta",
+          username: "andreasimonecosta",
+        },
+        "2026-10-08T12:00:00.000Z",
+      ),
+    ).toEqual({
+      personId: "andreasimonecosta",
+      username: "andreasimonecosta",
+      firstChannel: "bot",
+      channels: ["bot"],
+      firstParticipatedAt: "2026-10-08T12:00:00.000Z",
+    });
+    expect(
+      originParticipantSummary({ channel: "bot" }, "2026-10-08T12:00:00.000Z"),
+    ).toBeUndefined();
   });
 });
 

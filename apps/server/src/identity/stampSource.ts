@@ -20,7 +20,27 @@ import {
   findPersonByJiraEmail,
   type IdentityMapPerson,
 } from "@t3tools/shared/identityMap";
-import { buildSourceRefFromClaim, resolveSourceChannel } from "@t3tools/shared/sourceAttribution";
+import {
+  buildSourceRefFromClaim,
+  resolveSourceChannel,
+  sourceRefForMcpAttribution,
+} from "@t3tools/shared/sourceAttribution";
+import { readIdentityMapPeopleFromEnv } from "./IdentityService.ts";
+
+/**
+ * Source for an MCP create, launch, or send. Reads the identity map at the
+ * call. A parent person wins; otherwise the OAuth client_name must be mapped.
+ */
+export function sourceRefForMcpCaller(input: {
+  readonly parentOrigin?: SourceRef | null | undefined;
+  readonly clientLabel?: string | null | undefined;
+}): SourceRef | undefined {
+  return sourceRefForMcpAttribution({
+    parentOrigin: input.parentOrigin,
+    clientLabel: input.clientLabel,
+    people: readIdentityMapPeopleFromEnv(),
+  });
+}
 
 export function sourceRefFromOperateClaim(input: {
   readonly claim: SessionIdentityClaim;
