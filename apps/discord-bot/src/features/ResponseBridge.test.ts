@@ -1697,6 +1697,146 @@ Use get_command_or_subagent_output("call-caf23c75-09ca-4fc6-a98e-daa9bcaa8e80-41
     expect(messages.map((message) => message.id)).toEqual(["user-real-1"]);
   });
 
+  it("suppresses provider continuation wakes such as Background task completed", () => {
+    // Regression: ProviderContinuationService dispatches the plain sentence
+    // "Background task completed." as a user message. Discord echoed it as
+    // 💭 from **unknown@unknown** on every background wake.
+    const continuation = "Background task completed.";
+    const command = "Background command completed (exit 0): pnpm test\n\nOutput tail:\nok";
+    const delegated =
+      "Delegated task task-9 reached a terminal state. Use task_status with taskId task-9 to read the result.";
+    expect(isInternalAgentScaffoldingUserText(continuation)).toBe(true);
+    expect(isInternalAgentScaffoldingUserText("Background task completed")).toBe(true);
+    expect(isInternalAgentScaffoldingUserText(command)).toBe(true);
+    expect(isInternalAgentScaffoldingUserText(delegated)).toBe(true);
+    expect(classifyUserMessageIngress(continuation)).toBe("internal");
+    expect(shouldSuppressExternalUserEcho(continuation)).toBe(true);
+    expect(
+      isInternalAgentScaffoldingUserText(
+        "please check whether the background task completed overnight",
+      ),
+    ).toBe(false);
+
+    const messages = externalUserMessagesToEcho({
+      messages: [
+        {
+          id: MessageId.make("user-wake-1"),
+          role: "user",
+          text: continuation,
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-07-18T00:00:00.000Z",
+          updatedAt: "2026-07-18T00:00:00.000Z",
+        },
+        {
+          id: MessageId.make("user-cmd-1"),
+          role: "user",
+          text: command,
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-07-18T00:00:01.000Z",
+          updatedAt: "2026-07-18T00:00:01.000Z",
+        },
+        {
+          id: MessageId.make("user-delegated-1"),
+          role: "user",
+          text: delegated,
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-07-18T00:00:02.000Z",
+          updatedAt: "2026-07-18T00:00:02.000Z",
+        },
+        {
+          id: MessageId.make("user-real-1"),
+          role: "user",
+          text: "please also check PR 42",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-07-18T00:00:03.000Z",
+          updatedAt: "2026-07-18T00:00:03.000Z",
+        },
+      ],
+      observedInitialUserSnapshot: true,
+      seenUserMessageIds: [],
+      sentDiscordUserMessageIds: [],
+    });
+    expect(messages.map((message) => message.id)).toEqual(["user-real-1"]);
+  });
+
+  it("suppresses provider-owned wakes even when the prompt text is custom", () => {
+    const custom = "shell finished, read the log";
+    expect(isInternalAgentScaffoldingUserText(custom)).toBe(false);
+    expect(
+      shouldEchoUserMessageToDiscord({
+        text: custom,
+        messageId: "user-provider-wake",
+        seenUserMessageIds: [],
+        sentDiscordUserMessageIds: [],
+        createdBy: "agent",
+        creationSource: "provider",
+      }),
+    ).toBe(false);
+    expect(
+      shouldEchoUserMessageToDiscord({
+        text: custom,
+        messageId: "user-from-cli",
+        seenUserMessageIds: [],
+        sentDiscordUserMessageIds: [],
+        createdBy: "user",
+        creationSource: "provider",
+      }),
+    ).toBe(true);
+    expect(
+      shouldEchoUserMessageToDiscord({
+        text: "Update on pull request #12 (https://github.com/acme/widgets/pull/12): checks passed",
+        messageId: "user-pr-watch",
+        seenUserMessageIds: [],
+        sentDiscordUserMessageIds: [],
+        createdBy: "agent",
+        creationSource: "server",
+      }),
+    ).toBe(true);
+
+    const messages = externalUserMessagesToEcho({
+      messages: [
+        {
+          id: MessageId.make("user-provider-wake"),
+          role: "user",
+          text: custom,
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-07-18T00:00:00.000Z",
+          updatedAt: "2026-07-18T00:00:00.000Z",
+          createdBy: "agent",
+          creationSource: "provider",
+        },
+        {
+          id: MessageId.make("user-delegated-marker"),
+          role: "user",
+          text: "look at the child result",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-07-18T00:00:01.000Z",
+          updatedAt: "2026-07-18T00:00:01.000Z",
+          delegatedCompletion: { parentRunId: "run-1", generation: 1, taskIds: ["task-1"] },
+        },
+        {
+          id: MessageId.make("user-real-1"),
+          role: "user",
+          text: "please also check PR 42",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-07-18T00:00:02.000Z",
+          updatedAt: "2026-07-18T00:00:02.000Z",
+        },
+      ] as never,
+      observedInitialUserSnapshot: true,
+      seenUserMessageIds: [],
+      sentDiscordUserMessageIds: [],
+    });
+    expect(messages.map((message) => message.id)).toEqual(["user-real-1"]);
+  });
+
   it("suppresses runtime_info / pull_request_linking scaffolding as external input", () => {
     // Regression: Grok extra ACP prompt parts persist as user-role text and were
     // mirrored as 💭 from **unknown@unknown** with the raw harness instructions.

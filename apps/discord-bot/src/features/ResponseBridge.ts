@@ -1248,6 +1248,14 @@ export function isInternalAgentScaffoldingUserText(text: string): boolean {
   if (/^Background task\s+"/iu.test(body) && /completed\s*\(exit code:/iu.test(body)) {
     return true;
   }
+  // ProviderContinuationService wake copy. Adapters dispatch this (or a
+  // command/delegated variant) as a user message so the agent keeps going.
+  // It is not someone typing in another T3 client.
+  if (/^Background task completed\.?$/iu.test(body)) return true;
+  if (/^Background command completed\b/iu.test(body)) return true;
+  if (/^Delegated tasks? \S[\s\S]* reached (?:a terminal state|terminal states)\./iu.test(body)) {
+    return true;
+  }
   // Extra ACP prompt parts (Grok/Cursor/Antigravity) can persist as user-role
   // text. A message that is only those envelopes is not a human client.
   // Mixed bodies still echo; summarizeExternalUserInput strips the tags.
@@ -1275,6 +1283,40 @@ export function shouldSuppressExternalUserEcho(text: string): boolean {
 }
 
 /**
+ * Provider-owned wake that is stored as a user message.
+ *
+ * Adapter-buffered continuations are `createdBy: agent` + `creationSource: provider`
+ * (see ProviderContinuationService). Delegated completions use `creationSource: server`
+ * and carry `delegatedCompletion`. A person typing in the provider CLI is
+ * `createdBy: user`, so that still echoes.
+ */
+function isProviderOwnedWakeUserMessage(input: {
+  readonly createdBy?: string | null | undefined;
+  readonly creationSource?: string | null | undefined;
+  readonly delegatedCompletion?: unknown;
+}): boolean {
+  if (input.delegatedCompletion != null) return true;
+  return input.createdBy === "agent" && input.creationSource === "provider";
+}
+
+type UserMessageWakeMarkers = {
+  readonly createdBy?: string | null;
+  readonly creationSource?: string | null;
+  readonly delegatedCompletion?: unknown;
+};
+
+function userMessageWakeMarkers(message: object): UserMessageWakeMarkers {
+  const record = message as UserMessageWakeMarkers;
+  return {
+    ...(record.createdBy === undefined ? {} : { createdBy: record.createdBy }),
+    ...(record.creationSource === undefined ? {} : { creationSource: record.creationSource }),
+    ...(record.delegatedCompletion === undefined
+      ? {}
+      : { delegatedCompletion: record.delegatedCompletion }),
+  };
+}
+
+/**
  * Whether Discord should post this user message as External User Input.
  * Whitelist: github + t3-client only (never same-surface Discord, never internal).
  */
@@ -1283,6 +1325,9 @@ export function shouldEchoUserMessageToDiscord(input: {
   readonly messageId: string;
   readonly seenUserMessageIds: ReadonlySet<string> | ReadonlyArray<string>;
   readonly sentDiscordUserMessageIds: ReadonlySet<string> | ReadonlyArray<string>;
+  readonly createdBy?: string | null | undefined;
+  readonly creationSource?: string | null | undefined;
+  readonly delegatedCompletion?: unknown;
 }): boolean {
   const seen =
     input.seenUserMessageIds instanceof Set
@@ -1293,6 +1338,7 @@ export function shouldEchoUserMessageToDiscord(input: {
       ? input.sentDiscordUserMessageIds
       : new Set(input.sentDiscordUserMessageIds);
   if (seen.has(input.messageId) || sentByDiscord.has(input.messageId)) return false;
+  if (isProviderOwnedWakeUserMessage(input)) return false;
   return DISCORD_EXTERNAL_ECHO_SURFACES.has(classifyUserMessageIngress(input.text));
 }
 
@@ -1313,6 +1359,7 @@ export function externalUserMessagesToEcho(input: {
         messageId: message.id,
         seenUserMessageIds: seen,
         sentDiscordUserMessageIds: sentByDiscord,
+        ...userMessageWakeMarkers(message),
       }),
   );
 }
