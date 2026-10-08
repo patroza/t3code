@@ -7,8 +7,11 @@ export const WORKING_INDICATOR = "_Working.._";
 export const WORKING_INDICATOR_SUFFIX = `\n\n${WORKING_INDICATOR}`;
 export type WorkingDotCount = 2 | 3 | 4;
 
-/** Longest Working suffix we reserve room for (dots + large tool count). */
-const WORKING_INDICATOR_MAX = "_Working.... · 9999 tool calls_";
+/** Cap for the wake summary appended to the Working line. */
+export const WORKING_WAKE_NOTE_MAX = 80;
+
+/** Longest Working suffix we reserve room for (dots + wake note + large tool count). */
+const WORKING_INDICATOR_MAX = `_Working.... · ${"x".repeat(WORKING_WAKE_NOTE_MAX)} · 9999 tool calls_`;
 
 /**
  * Optional tool-call progress on the Working indicator (Discord only shows a count,
@@ -20,11 +23,36 @@ export function formatWorkingToolCountLabel(toolCallCount: number): string | nul
   return n === 1 ? "1 tool call" : `${n} tool calls`;
 }
 
-export function workingIndicator(dotCount: WorkingDotCount, toolCallCount = 0): string {
+/**
+ * One-line wake fact for the Working indicator.
+ * Strips markdown that would break the italic marker or the ` · ` separators.
+ */
+export function formatWorkingWakeNote(note: string | null | undefined): string | null {
+  if (note == null) return null;
+  const compact = note
+    .replace(/[\r\n]+/g, " ")
+    .replace(/[_*`]/g, " ")
+    .replace(/·/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (compact.length === 0) return null;
+  if (compact.length <= WORKING_WAKE_NOTE_MAX) return compact;
+  return `${compact.slice(0, WORKING_WAKE_NOTE_MAX - 1).trimEnd()}…`;
+}
+
+export function workingIndicator(
+  dotCount: WorkingDotCount,
+  toolCallCount = 0,
+  wakeNote: string | null = null,
+): string {
   const dots = ".".repeat(dotCount);
+  const note = formatWorkingWakeNote(wakeNote);
   const tools = formatWorkingToolCountLabel(toolCallCount);
+  const parts = [`Working${dots}`];
+  if (note !== null) parts.push(note);
+  if (tools !== null) parts.push(tools);
   // Keep the whole marker italic so Discord renders one clean status line.
-  return tools === null ? `_Working${dots}_` : `_Working${dots} · ${tools}_`;
+  return `_${parts.join(" · ")}_`;
 }
 
 export function nextWorkingDotCount(current: WorkingDotCount): WorkingDotCount {
@@ -35,12 +63,20 @@ export function nextWorkingDotCount(current: WorkingDotCount): WorkingDotCount {
 
 /** Strip trailing Working.. markers so finalize never leaves them on the final post. */
 export function stripWorkingIndicator(content: string): string {
-  // Optional " · N tool call(s)" inside the Working marker (italic or plain).
+  // Optional wake note, then optional " · N tool call(s)", inside the marker (italic or plain).
+  // Notes are sanitized so they contain neither `_` nor `·`.
+  const wakeSuffix = "(?:\\s*·\\s*[^_\\r\\n·]+)?";
   const toolSuffix = "(?:\\s*·\\s*\\d+\\s+tool calls?)?";
-  const workingTail = new RegExp(`(?:\\r?\\n)+\\s*_Working\\.{2,4}${toolSuffix}_\\s*$`, "u");
-  const workingTailPlain = new RegExp(`(?:\\r?\\n)+\\s*Working\\.{2,4}${toolSuffix}\\s*$`, "u");
-  const workingInline = new RegExp(`\\s*_Working\\.{2,4}${toolSuffix}_\\s*$`, "u");
-  const workingInlinePlain = new RegExp(`\\s*Working\\.{2,4}${toolSuffix}\\s*$`, "u");
+  const workingTail = new RegExp(
+    `(?:\\r?\\n)+\\s*_Working\\.{2,4}${wakeSuffix}${toolSuffix}_\\s*$`,
+    "u",
+  );
+  const workingTailPlain = new RegExp(
+    `(?:\\r?\\n)+\\s*Working\\.{2,4}${wakeSuffix}${toolSuffix}\\s*$`,
+    "u",
+  );
+  const workingInline = new RegExp(`\\s*_Working\\.{2,4}${wakeSuffix}${toolSuffix}_\\s*$`, "u");
+  const workingInlinePlain = new RegExp(`\\s*Working\\.{2,4}${wakeSuffix}${toolSuffix}\\s*$`, "u");
   return content
     .replace(workingTail, "")
     .replace(workingTailPlain, "")
@@ -74,7 +110,8 @@ export function chunkDiscordContent(content: string, limit = DISCORD_MESSAGE_LIM
 /**
  * Format a stream chunk for Discord. The last (tip) chunk always ends with _Working.._
  * so users can see the turn is still in progress. Optional toolCallCount shows progress
- * without listing individual tools (e.g. `_Working.. · 3 tool calls_`).
+ * without listing individual tools. wakeNote is the orchestration notification summary
+ * (e.g. `_Working.. · #516: checks failed · 3 tool calls_`).
  */
 export function formatInProgressChunk(
   chunk: string,
@@ -82,12 +119,13 @@ export function formatInProgressChunk(
   limit = DISCORD_MESSAGE_LIMIT,
   workingDots: WorkingDotCount = 2,
   toolCallCount = 0,
+  wakeNote: string | null = null,
 ): string {
   if (!isLastChunk) {
     return chunk.length > 0 ? chunk : "…";
   }
   const body = chunk.trimEnd();
-  const indicator = workingIndicator(workingDots, toolCallCount);
+  const indicator = workingIndicator(workingDots, toolCallCount, wakeNote);
   const indicatorSuffix = `\n\n${indicator}`;
   if (body.length === 0) return indicator;
   const maxBody = Math.max(0, limit - indicatorSuffix.length);
@@ -95,9 +133,58 @@ export function formatInProgressChunk(
   return `${trimmedBody}${indicatorSuffix}`;
 }
 
-/** Chunk limit reserved so the tip can always fit the Working.. suffix (+ tool count). */
+/** Chunk limit reserved so the tip can always fit the Working.. suffix (+ note + tool count). */
 export function inProgressChunkLimit(limit = DISCORD_MESSAGE_LIMIT): number {
   return Math.max(1, limit - `\n\n${WORKING_INDICATOR_MAX}`.length);
+}
+
+type WakeNoteMessage = {
+  readonly role: string;
+  readonly turnId?: string | null;
+  readonly notification?: { readonly summary?: string | null } | null;
+  readonly delegatedCompletion?: unknown;
+};
+
+type WakeNoteActivity = {
+  readonly kind: string;
+  readonly summary: string;
+  readonly turnId?: string | null;
+};
+
+/**
+ * Summary for the turn Discord is currently showing as Working.
+ * Uses the trigger user message's notification. A delegated completion has no
+ * notification on the message; its summary is the notification activity v2 projected.
+ * A later human message on the same turn contributes nothing.
+ */
+export function activeTurnWakeNote(input: {
+  readonly latestTurnId: string | null | undefined;
+  readonly messages: ReadonlyArray<WakeNoteMessage>;
+  readonly activities?: ReadonlyArray<WakeNoteActivity>;
+}): string | null {
+  const turnId = input.latestTurnId?.trim() ?? "";
+  if (turnId === "") return null;
+  let trigger: WakeNoteMessage | undefined;
+  for (let index = input.messages.length - 1; index >= 0; index -= 1) {
+    const message = input.messages[index];
+    if (message === undefined || message.role !== "user") continue;
+    if ((message.turnId?.trim() ?? "") !== turnId) continue;
+    trigger = message;
+    break;
+  }
+  if (trigger === undefined) return null;
+  const summary = trigger.notification?.summary?.trim();
+  if (summary) return summary;
+  if (trigger.delegatedCompletion == null) return null;
+  const activities = input.activities ?? [];
+  for (let index = activities.length - 1; index >= 0; index -= 1) {
+    const activity = activities[index];
+    if (activity === undefined || activity.kind !== "notification") continue;
+    if ((activity.turnId?.trim() ?? "") !== turnId) continue;
+    const text = activity.summary.trim();
+    if (text !== "" && text !== "notification") return text;
+  }
+  return null;
 }
 
 export function turnStopCustomId(threadId: string): string {

@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  activeTurnWakeNote,
   decorateDiscordThreadTitle,
   formatInProgressChunk,
   formatThreadTitle,
   formatWakeUpTipContent,
+  formatWorkingWakeNote,
   idleMessageFields,
   nextWorkingDotCount,
   stripWorkingIndicator,
@@ -13,6 +15,7 @@ import {
   turnStopCustomId,
   WAKE_UP_STATUS_LINE,
   wakeUpMessageFields,
+  WORKING_WAKE_NOTE_MAX,
   workingMessageFields,
 } from "./messages.ts";
 
@@ -223,5 +226,72 @@ describe("Working heartbeat", () => {
     expect(stripWorkingIndicator("answer\n\n_Working...._")).toBe("answer");
     expect(stripWorkingIndicator("answer\n\n_Working.. · 3 tool calls_")).toBe("answer");
     expect(stripWorkingIndicator("answer\n\n_Working... · 1 tool call_")).toBe("answer");
+    expect(
+      stripWorkingIndicator("answer\n\n_Working.. · #516: checks failed · 3 tool calls_"),
+    ).toBe("answer");
+    expect(stripWorkingIndicator("answer\n\nWorking.. · #516: checks failed")).toBe("answer");
+  });
+
+  it("appends the wake summary to the Working line", () => {
+    expect(formatInProgressChunk("", true, 2000, 2, 0, "#516: checks failed")).toBe(
+      "_Working.. · #516: checks failed_",
+    );
+    expect(formatInProgressChunk("partial", true, 2000, 3, 4, "#516: checks failed")).toBe(
+      "partial\n\n_Working... · #516: checks failed · 4 tool calls_",
+    );
+    expect(formatInProgressChunk("", true, 2000, 2, 1, "file_name · `rm -rf`")).toBe(
+      "_Working.. · file name - rm -rf · 1 tool call_",
+    );
+    expect(formatWorkingWakeNote("x".repeat(WORKING_WAKE_NOTE_MAX + 10))?.length).toBe(
+      WORKING_WAKE_NOTE_MAX,
+    );
+  });
+
+  it("uses the active turn's notification, not an older wake or a human follow-up", () => {
+    expect(
+      activeTurnWakeNote({
+        latestTurnId: "run-2",
+        messages: [
+          {
+            role: "user",
+            turnId: "run-1",
+            notification: { summary: "Background task finished" },
+          },
+          {
+            role: "user",
+            turnId: "run-2",
+            notification: { summary: "#516: checks failed" },
+          },
+        ],
+      }),
+    ).toBe("#516: checks failed");
+    expect(
+      activeTurnWakeNote({
+        latestTurnId: "run-2",
+        messages: [{ role: "user", turnId: "run-2" }],
+        activities: [
+          { kind: "notification", summary: "Background task finished", turnId: "run-2" },
+        ],
+      }),
+    ).toBeNull();
+    expect(
+      activeTurnWakeNote({
+        latestTurnId: "run-3",
+        messages: [
+          {
+            role: "user",
+            turnId: "run-3",
+            delegatedCompletion: { parentRunId: "run-parent" },
+          },
+        ],
+        activities: [
+          {
+            kind: "notification",
+            summary: 'Delegated task "Review" finished',
+            turnId: "run-3",
+          },
+        ],
+      }),
+    ).toBe('Delegated task "Review" finished');
   });
 });

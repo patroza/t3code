@@ -1796,6 +1796,23 @@ Use get_command_or_subagent_output("call-caf23c75-09ca-4fc6-a98e-daa9bcaa8e80-41
         creationSource: "server",
       }),
     ).toBe(true);
+    const watchPrompt =
+      "Update on pull request #516 (https://github.com/acme/widgets/pull/516), which T3 Code is watching for you:\n\nLook into each item and act on it as your task requires.";
+    expect(
+      shouldEchoUserMessageToDiscord({
+        text: watchPrompt,
+        messageId: "user-pr-watch-notification",
+        seenUserMessageIds: [],
+        sentDiscordUserMessageIds: [],
+        createdBy: "agent",
+        creationSource: "server",
+        notification: {
+          source: { kind: "monitor" },
+          outcome: "failed",
+          summary: "#516: checks failed",
+        },
+      }),
+    ).toBe(false);
 
     const messages = externalUserMessagesToEcho({
       messages: [
@@ -1821,13 +1838,29 @@ Use get_command_or_subagent_output("call-caf23c75-09ca-4fc6-a98e-daa9bcaa8e80-41
           delegatedCompletion: { parentRunId: "run-1", generation: 1, taskIds: ["task-1"] },
         },
         {
+          id: MessageId.make("user-pr-watch-notification"),
+          role: "user",
+          text: "Update on pull request #516 (https://github.com/acme/widgets/pull/516): checks failed",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-07-18T00:00:02.000Z",
+          updatedAt: "2026-07-18T00:00:02.000Z",
+          createdBy: "agent",
+          creationSource: "server",
+          notification: {
+            source: { kind: "monitor" },
+            outcome: "failed",
+            summary: "#516: checks failed",
+          },
+        },
+        {
           id: MessageId.make("user-real-1"),
           role: "user",
           text: "please also check PR 42",
           turnId: null,
           streaming: false,
-          createdAt: "2026-07-18T00:00:02.000Z",
-          updatedAt: "2026-07-18T00:00:02.000Z",
+          createdAt: "2026-07-18T00:00:03.000Z",
+          updatedAt: "2026-07-18T00:00:03.000Z",
         },
       ] as never,
       observedInitialUserSnapshot: true,

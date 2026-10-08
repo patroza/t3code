@@ -3,6 +3,7 @@ import {
   EventId,
   MessageId,
   ModelSelection,
+  OrchestrationV2Notification,
   ProjectId,
   ThreadId,
   TurnId,
@@ -31,6 +32,12 @@ export const IntegrationMessage = Schema.Struct({
   source: Schema.optional(SourceRef),
   createdAt: Schema.String,
   updatedAt: Schema.String,
+  // v2 keeps the wake prompt on the user message and the visible fact here.
+  // Discord reads these so it can show the summary without echoing the prompt.
+  createdBy: Schema.optional(Schema.String),
+  creationSource: Schema.optional(Schema.String),
+  notification: Schema.optional(OrchestrationV2Notification),
+  delegatedCompletion: Schema.optional(Schema.Unknown),
 });
 export const IntegrationActivity = Schema.Struct({
   id: EventId,
@@ -225,40 +232,65 @@ export function integrationThreadView(
   )[0];
   const activities: IntegrationActivity[] = projection.turnItems
     .filter((item) => item.type !== "user_message" && item.type !== "assistant_message")
-    .map((item) => ({
-      id: EventId.make(item.id),
-      tone:
-        item.type === "error" ? "error" : item.type === "user_input_request" ? "approval" : "tool",
-      kind:
-        item.type === "todo_list"
-          ? "turn.plan.updated"
-          : item.type === "user_input_request"
-            ? "user-input.requested"
-            : item.status === "completed"
-              ? "tool.completed"
-              : "tool.updated",
-      summary: item.title ?? item.type,
-      payload: {
-        ...item,
-        itemId: item.id,
-        toolCallId: item.id,
-        itemType: item.type,
-        title: item.title ?? item.type,
-        detail:
-          item.type === "command_execution"
-            ? item.input
-            : item.type === "file_change"
-              ? item.fileName
-              : item.type === "reasoning"
-                ? item.text
-                : undefined,
-        steps: item.type === "todo_list" ? item.steps : undefined,
-        requestId: item.type === "user_input_request" ? item.requestId : undefined,
-      },
-      turnId: item.runId === null ? null : TurnId.make(item.runId),
-      sequence: item.ordinal,
-      createdAt: iso(item.startedAt ?? item.updatedAt)!,
-    }));
+    .map((item): IntegrationActivity => {
+      // The wake prompt stays a user message. This row is the fact the user sees.
+      if (item.type === "notification") {
+        return {
+          id: EventId.make(item.id),
+          tone: item.outcome === "failed" ? "error" : "info",
+          kind: "notification",
+          summary: item.summary,
+          payload: {
+            ...item,
+            itemId: item.id,
+            itemType: item.type,
+            source: item.source,
+            outcome: item.outcome,
+          },
+          turnId: item.runId === null ? null : TurnId.make(item.runId),
+          sequence: item.ordinal,
+          createdAt: iso(item.startedAt ?? item.updatedAt)!,
+        };
+      }
+      return {
+        id: EventId.make(item.id),
+        tone:
+          item.type === "error"
+            ? "error"
+            : item.type === "user_input_request"
+              ? "approval"
+              : "tool",
+        kind:
+          item.type === "todo_list"
+            ? "turn.plan.updated"
+            : item.type === "user_input_request"
+              ? "user-input.requested"
+              : item.status === "completed"
+                ? "tool.completed"
+                : "tool.updated",
+        summary: item.title ?? item.type,
+        payload: {
+          ...item,
+          itemId: item.id,
+          toolCallId: item.id,
+          itemType: item.type,
+          title: item.title ?? item.type,
+          detail:
+            item.type === "command_execution"
+              ? item.input
+              : item.type === "file_change"
+                ? item.fileName
+                : item.type === "reasoning"
+                  ? item.text
+                  : undefined,
+          steps: item.type === "todo_list" ? item.steps : undefined,
+          requestId: item.type === "user_input_request" ? item.requestId : undefined,
+        },
+        turnId: item.runId === null ? null : TurnId.make(item.runId),
+        sequence: item.ordinal,
+        createdAt: iso(item.startedAt ?? item.updatedAt)!,
+      };
+    });
   for (const request of projection.runtimeRequests) {
     const node = projection.nodes.find((n) => n.id === request.nodeId);
     const item = projection.turnItems.find(
