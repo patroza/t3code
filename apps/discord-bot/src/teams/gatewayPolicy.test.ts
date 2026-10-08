@@ -294,6 +294,43 @@ describe("shared Teams gateway", () => {
     ])
       expect(safeTeamsServiceUrl(url)).toBe(false);
   });
+  it("never re-executes an activity after actor edits or workspace rebinding", () => {
+    const input = activity();
+    expect(policy.accept(input).kind).toBe("mention");
+    config = parseGatewayConfig({
+      ...config,
+      bindings: config.bindings.map((binding) =>
+        binding.id === "alpha"
+          ? {
+              ...binding,
+              workspace: "beta",
+              allowedActorIds: [actor, "66666666-6666-4666-8666-666666666666"],
+            }
+          : binding,
+      ),
+    });
+    expect(policy.accept(input)).toMatchObject({ kind: "reject", reason: "duplicate" });
+  });
+  it("rejects a startup snapshot inconsistent with the actual workspace connections", () => {
+    const initial = config;
+    config = parseGatewayConfig({
+      ...config,
+      workspaces: {
+        ...config.workspaces,
+        alpha: { ...config.workspaces.alpha, t3HttpBaseUrl: "https://changed.internal" },
+      },
+    });
+    expect(
+      () =>
+        new TeamsGatewayPolicy(
+          () => config,
+          directory,
+          () => true,
+          () => now,
+          initial,
+        ),
+    ).toThrow("restart required");
+  });
   it("fails configuration validation for ambiguous routes, shared state, NodeHttp and empty actors", () => {
     expect(() =>
       parseGatewayConfig({

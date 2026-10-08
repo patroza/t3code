@@ -90,6 +90,8 @@ const program = Effect.gen(function* () {
         .get(workspace)
         ?.identities.list()
         .some((person) => person.teams?.aadObjectId?.toLowerCase() === actor) === true,
+    Date.now,
+    initial,
   );
   yield* Effect.forkScoped(
     Effect.sync(() => {

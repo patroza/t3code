@@ -88,17 +88,19 @@ export class TeamsGatewayPolicy {
     dataDir: string,
     identityAllowed: (workspace: string, actorId: string) => boolean,
     now: () => number = Date.now,
+    snapshot?: TeamsGatewayConfig,
   ) {
     this.getConfig = getConfig;
     this.identityAllowed = identityAllowed;
     this.now = now;
-    const initial = getConfig();
+    const initial = snapshot ?? getConfig();
     this.initialIdentity = digest(initial.identity);
     this.initialWorkspaces = new Map(
       Object.entries(initial.workspaces)
         .filter(([, workspace]) => workspace.enabled)
         .map(([id, workspace]) => [id, digest(workspace)]),
     );
+    this.config(); // Policy and already-built connections must share one startup snapshot.
     NodeFS.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     if ((NodeFS.statSync(dataDir).mode & 0o077) !== 0)
       throw new Error("Gateway state directory must be private");
@@ -253,7 +255,13 @@ export class TeamsGatewayPolicy {
     // Expired receipts cannot be replayed because their activity timestamp is now too old.
     for (const [key, receipt] of this.receipts)
       if (receipt.at < now - 90000000) this.receipts.delete(key);
-    const receipt = digest([lease.key, activity.id]);
+    const receipt = digest([
+      binding.tenantId,
+      binding.teamId,
+      binding.channelId,
+      activity.conversation.id,
+      activity.id,
+    ]);
     if (this.receipts.has(receipt)) return reject("duplicate");
     if (
       [...this.receipts.values()].filter((receipt) => receipt.workspace === binding.workspace)
