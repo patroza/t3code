@@ -311,6 +311,7 @@ function messageEvents(row: LegacyMessageRow): ReadonlyArray<OrchestrationV2Doma
           ...baseTurnItem,
           createdBy: "user",
           creationSource: "server",
+          ...(message.source === undefined ? {} : { source: message.source }),
           type: "user_message",
           messageId,
           inputIntent: "turn_start",

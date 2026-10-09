@@ -10,7 +10,12 @@ import * as Haptics from "expo-haptics";
 import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 import { useViewabilityAmount, type LegendListRef } from "@legendapp/list/react-native";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
+import {
+  resolveUserMessagePresentation,
+  userMessageSenderCaption,
+  type MessageSenderSource,
+  type MessageSenderViewer,
+} from "@t3tools/client-runtime/user-message";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
 import {
   type OrchestrationMessageContext,
@@ -284,8 +289,12 @@ export interface ThreadFeedProps {
   readonly feed: ReadonlyArray<ThreadFeedEntry>;
   readonly contentPresentation: ThreadContentPresentation;
   readonly agentLabel: string;
-  /** Caption for user messages an agent sent. Falls back to the generic label. */
-  readonly agentAttributionLabel?: string;
+  /** This client's claim and source channel. Same person and channel stays unlabeled. */
+  readonly messageViewer?: MessageSenderViewer | undefined;
+  /** Thread origin, used when an agent message has no sender of its own. */
+  readonly originSource?: MessageSenderSource | null | undefined;
+  /** Conversation-message senders, for history whose turn item has no source. */
+  readonly messageSourceById?: ReadonlyMap<string, MessageSenderSource> | undefined;
   readonly latestRun: ThreadFeedLatestRun | null;
   readonly activeWorkStartedAt: string | null;
   readonly runlessWorkActive?: boolean;
@@ -1479,6 +1488,21 @@ function useMarkdownStyles(
   ]);
 }
 
+function UserMessageSenderCaption(props: {
+  readonly environmentId: EnvironmentId;
+  readonly senderThreadId?: ThreadId;
+  readonly label: string | undefined;
+}) {
+  if (!props.label) return null;
+  return (
+    <AgentMessageAttribution
+      environmentId={props.environmentId}
+      senderThreadId={props.senderThreadId}
+      label={props.label}
+    />
+  );
+}
+
 function AgentMessageAttribution(props: {
   readonly environmentId: EnvironmentId;
   readonly senderThreadId?: ThreadId;
@@ -1521,7 +1545,9 @@ function renderFeedEntry(
     | "onEditPendingMessage"
     | "threadId"
     | "workspaceRoot"
-    | "agentAttributionLabel"
+    | "messageViewer"
+    | "originSource"
+    | "messageSourceById"
   > & {
     readonly copiedRowId: string | null;
     readonly expandedWorkRows: Record<string, boolean>;
@@ -1723,13 +1749,18 @@ function renderFeedEntry(
             <Text className="mb-1 pr-1 font-t3-medium text-2xs text-foreground-muted opacity-60">
               Sent by automation
             </Text>
-          ) : message.createdBy === "agent" ? (
-            <AgentMessageAttribution
+          ) : (
+            <UserMessageSenderCaption
               environmentId={props.environmentId}
               senderThreadId={message.senderThreadId}
-              label={props.agentAttributionLabel}
+              label={userMessageSenderCaption({
+                createdBy: message.createdBy,
+                source: message.source ?? props.messageSourceById?.get(message.id),
+                originSource: props.originSource,
+                viewer: props.messageViewer,
+              })}
             />
-          ) : null}
+          )}
           <View
             className="min-w-0 gap-2 rounded-[20px] px-3.5 py-2.5"
             style={{
@@ -3028,7 +3059,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             threadTitle: props.threadTitle,
             skills: props.skills,
             workspaceRoot: props.workspaceRoot,
-            agentAttributionLabel: props.agentAttributionLabel,
+            messageViewer: props.messageViewer,
+            originSource: props.originSource,
+            messageSourceById: props.messageSourceById,
           })}
           {props.worktreeSetup && info.index === setupAnchorIndex ? (
             <WorktreeSetupCard key={props.threadId} {...props.worktreeSetup} />
@@ -3076,7 +3109,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       props.threadTitle,
       props.skills,
       props.workspaceRoot,
-      props.agentAttributionLabel,
+      props.messageViewer,
+      props.originSource,
+      props.messageSourceById,
       renderMarkdownImage,
       renderViewedImage,
       renderReasoning,

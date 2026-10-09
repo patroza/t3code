@@ -24,7 +24,7 @@ import {
 import { useLoadBalancedEnvironment } from "../hooks/useLoadBalancedEnvironment";
 import { useScratchProject } from "../hooks/useScratchProject";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
-import { agentSenderLabel } from "@t3tools/client-runtime/user-message";
+import { indexUserMessageSources } from "@t3tools/client-runtime/user-message";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 import {
   latestExecutedRun,
@@ -406,11 +406,13 @@ import {
   terminalContextReference,
 } from "../lib/composerContextRecords";
 import { type ReviewCommentContext } from "../reviewCommentContext";
+import { currentClientSourceChannel } from "../connection/clientMetadata";
 import { environmentCatalog } from "../connection/catalog";
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useEnvironmentDisconnectDelay } from "../hooks/useEnvironmentDisconnectDelay";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { useKnownTerminalSessions, useThreadRunningTerminalIds } from "../state/terminalSessions";
+import { identityEnvironment } from "../state/identity";
 import { useEnvironmentQuery } from "../state/query";
 import { useEnvironmentScope } from "~/state/session";
 import {
@@ -626,6 +628,7 @@ import {
   recallableComposerPrompt,
 } from "./chat/composerPromptHistory";
 
+const EMPTY_SESSION_CLAIM_INPUT = {} as const;
 const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PROVIDER_MODELS: ServerProvider["models"] = [];
 const EMPTY_USAGE_LIMIT_SOURCES: UsageLimitSourceSnapshots = [];
@@ -2313,7 +2316,27 @@ export default function ChatView(props: ChatViewProps) {
     widthStorageKey: `t3code:preview-panel-width:${activeThreadKey}`,
   });
   const activeThreadShell = useThreadShell(isServerThread ? activeThreadRef : null);
-  const agentAttributionLabel = agentSenderLabel(activeThreadShell?.originSource);
+  const sessionClaimQuery = useEnvironmentQuery(
+    activeThread
+      ? identityEnvironment.sessionClaim({
+          environmentId: activeThread.environmentId,
+          input: EMPTY_SESSION_CLAIM_INPUT,
+        })
+      : null,
+  );
+  const messageViewer = useMemo(
+    () => ({
+      personId: sessionClaimQuery.data?.claim?.personId,
+      username: sessionClaimQuery.data?.claim?.username,
+      channel: currentClientSourceChannel(),
+      identityReady: sessionClaimQuery.isSuccess,
+    }),
+    [sessionClaimQuery.data, sessionClaimQuery.isSuccess],
+  );
+  const messageSourceById = useMemo(
+    () => indexUserMessageSources(serverProjection?.messages),
+    [serverProjection?.messages],
+  );
   const changeRequestSnapshotByKey = useAtomValue(threadChangeRequestSnapshotsAtom);
   const timelineThreadError =
     serverRuntime?.status === "failed" &&
@@ -11657,7 +11680,9 @@ export default function ChatView(props: ChatViewProps) {
                 displayThreadKey={displayedTimelineKey}
                 onOpenTurnDiff={paintOnlyDisplayedTimeline ? noopHeldTurnDiff : onOpenTurnDiff}
                 onOpenThread={onOpenRelatedThread}
-                agentAttributionLabel={agentAttributionLabel}
+                messageViewer={messageViewer}
+                originSource={activeThreadShell?.originSource}
+                messageSourceById={messageSourceById}
                 parentThreadLink={paintOnlyDisplayedTimeline ? null : parentThreadLink}
                 onForkFromRun={paintOnlyDisplayedTimeline ? async () => {} : onForkFromRun}
                 onRollbackCheckpoint={(input) => {

@@ -64,6 +64,7 @@ import {
   stagePendingTerminalLaunch,
 } from "../terminal/terminalLaunchContext";
 import { terminalDebugLog } from "../terminal/terminalDebugLog";
+import { indexUserMessageSources } from "@t3tools/client-runtime/user-message";
 import { ThreadDetailScreen, type ThreadDetailScreenProps } from "./ThreadDetailScreen";
 import { GitOverviewSheet } from "./git/GitOverviewSheet";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -353,6 +354,10 @@ function ThreadRouteContent(
   );
   const selectedThreadDetailState = props.selectedThreadDetailState;
   const selectedThreadDetail = Option.getOrNull(selectedThreadDetailState.data);
+  const userMessageSources = useMemo(
+    () => indexUserMessageSources(selectedThreadDetail?.messages),
+    [selectedThreadDetail?.messages],
+  );
   const { selectedThreadCwd } = useSelectedThreadWorktree();
   const composer = useThreadComposerState();
   const gitState = useSelectedThreadGitState();
@@ -1053,6 +1058,7 @@ function ThreadRouteContent(
           feedbackSubmissions={composer.feedbackSubmissions}
           onDismissFeedback={composer.dismissFeedback}
           selectedThreadFeed={composer.selectedThreadFeed}
+          messageSourceById={userMessageSources}
           activityRun={composer.selectedThreadActivityRun}
           activeWorkStartedAt={
             creationState?.kind === "preparing" ||

@@ -1,5 +1,7 @@
 import {
+  IdentityUsername,
   MessageId,
+  PersonId,
   RuntimeRequestId,
   CheckpointId,
   CheckpointScopeId,
@@ -330,6 +332,11 @@ describe("V2 session presentation", () => {
       attachments: [],
       createdBy: "user" as const,
       creationSource: "web" as const,
+      source: {
+        channel: "discord",
+        personId: PersonId.make("patroza"),
+        username: IdentityUsername.make("patroza"),
+      },
     } satisfies OrchestrationV2TurnItem;
     const requestItem = {
       ...base("item-interrupt-request", 1),
@@ -424,6 +431,8 @@ describe("V2 session presentation", () => {
       expect(userEntry.message.inputIntent).toBe("turn_start");
       expect(userEntry.message.createdBy).toBe("user");
       expect(userEntry.message.creationSource).toBe("web");
+      expect(userEntry.message.source?.channel).toBe("discord");
+      expect(userEntry.message.source?.username).toBe("patroza");
     }
     expect(commandEntry?.kind).toBe("work");
     if (commandEntry?.kind === "work") {
@@ -1818,6 +1827,8 @@ it("renders automatic completion as a work entry instead of a user bubble", () =
           item: {
             ...item,
             type: "user_message",
+            // The notification `source` is a task kind, not a sender.
+            source: undefined,
             messageId: MessageId.make("wake-message"),
             createdBy: "agent" as const,
             creationSource: "server" as const,
