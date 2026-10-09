@@ -5,7 +5,10 @@ import { useNavigation } from "@react-navigation/native";
 import type { WorktreeSetupCardProps } from "./worktree-setup-card";
 import type { ComposerTextPaste } from "../../native/T3ComposerEditor.types";
 import { type EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
-import { agentSenderLabel } from "@t3tools/client-runtime/user-message";
+import { type MessageSenderSource } from "@t3tools/client-runtime/user-message";
+import { sourceChannelFromDeviceType } from "@t3tools/shared/sourceAttribution";
+import { authClientMetadata } from "../../lib/authClientMetadata";
+import { identityEnvironment } from "../../state/identity";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import type {
   CodexFeedbackSubmission,
@@ -159,6 +162,8 @@ export interface ThreadDetailScreenProps {
   readonly feedbackSubmissions: ReadonlyArray<CodexFeedbackSubmission>;
   readonly onDismissFeedback: (id: MessageId) => void;
   readonly selectedThreadFeed: ReadonlyArray<ThreadFeedEntry>;
+  /** Conversation-message senders, for history whose turn item has no source. */
+  readonly messageSourceById?: ReadonlyMap<string, MessageSenderSource>;
   readonly activityRun: ThreadFeedLatestRun | null;
   readonly activeWorkStartedAt: string | null;
   /** The live work is a provider-native subagent's runless root turn. */
@@ -317,6 +322,8 @@ const USER_INPUT_TOGGLE_TIMING = {
   easing: Easing.out(Easing.cubic),
 };
 
+const EMPTY_SESSION_CLAIM_INPUT = {} as const;
+
 export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: ThreadDetailScreenProps) {
   const navigation = useNavigation();
   const { session: voiceInputSession } = useGlobalVoiceInput();
@@ -391,7 +398,22 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const windowHeight = useWindowDimensions().height;
   const navigationHeaderHeight = useContext(HeaderHeightContext) || insets.top + 44;
   const agentLabel = `${props.selectedThread.modelSelection.instanceId} agent`;
-  const agentAttributionLabel = agentSenderLabel(props.selectedThread.originSource);
+  const sessionClaimTarget = useMemo(
+    () => ({ environmentId: props.environmentId, input: EMPTY_SESSION_CLAIM_INPUT }),
+    [props.environmentId],
+  );
+  const sessionClaimQuery = useEnvironmentQuery(
+    identityEnvironment.sessionClaim(sessionClaimTarget),
+  );
+  const messageViewer = useMemo(
+    () => ({
+      personId: sessionClaimQuery.data?.claim?.personId,
+      username: sessionClaimQuery.data?.claim?.username,
+      channel: sourceChannelFromDeviceType(authClientMetadata().deviceType),
+      identityReady: sessionClaimQuery.data !== null && sessionClaimQuery.error === null,
+    }),
+    [sessionClaimQuery.data, sessionClaimQuery.error],
+  );
   const selectedThreadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
   const composerError = useAtomValue(threadComposerErrorsAtom)[selectedThreadKey]?.message ?? null;
   const queuedCount = useThreadQueuedCount({
@@ -1126,7 +1148,9 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               onEditPendingMessage={isProviderSubagent ? null : handleEditPendingMessage}
               contentPresentation={props.contentPresentation}
               agentLabel={agentLabel}
-              agentAttributionLabel={agentAttributionLabel}
+              messageViewer={messageViewer}
+              originSource={props.selectedThread.originSource}
+              messageSourceById={props.messageSourceById}
               threadTitle={props.selectedThread.title}
               latestRun={props.activityRun}
               activeWorkStartedAt={props.activeWorkStartedAt}

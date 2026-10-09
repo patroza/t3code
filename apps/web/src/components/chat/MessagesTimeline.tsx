@@ -34,7 +34,12 @@ import {
 import { parseScopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { useAtomValue } from "@effect/atom-react";
 import { environmentThreadDetails } from "../../state/threads";
-import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
+import {
+  resolveUserMessagePresentation,
+  userMessageSenderCaption,
+  type MessageSenderSource,
+  type MessageSenderViewer,
+} from "@t3tools/client-runtime/user-message";
 import { Link } from "@tanstack/react-router";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
 import { notificationChildThreadId } from "@t3tools/client-runtime/state/thread-execution";
@@ -330,8 +335,12 @@ interface TimelineRowSharedState {
   displayThreadKey?: string;
   onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
-  /** Caption for user messages an agent sent. Falls back to the generic label. */
-  agentAttributionLabel?: string | undefined;
+  /** This client's claim and source channel. Same person and channel stays unlabeled. */
+  messageViewer?: MessageSenderViewer | undefined;
+  /** Thread origin, used when an agent message has no sender of its own. */
+  originSource?: MessageSenderSource | null | undefined;
+  /** Conversation-message senders, for history whose turn item has no source. */
+  messageSourceById?: ReadonlyMap<string, MessageSenderSource> | undefined;
   onForkFromRun: (input: {
     readonly sourceThreadId: ThreadId;
     readonly runId: RunId;
@@ -472,8 +481,12 @@ interface MessagesTimelineProps {
   displayThreadKey?: string;
   onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
-  /** Caption for user messages an agent sent. Falls back to the generic label. */
-  agentAttributionLabel?: string;
+  /** This client's claim and source channel. Same person and channel stays unlabeled. */
+  messageViewer?: MessageSenderViewer | undefined;
+  /** Thread origin, used when an agent message has no sender of its own. */
+  originSource?: MessageSenderSource | null | undefined;
+  /** Conversation-message senders, for history whose turn item has no source. */
+  messageSourceById?: ReadonlyMap<string, MessageSenderSource> | undefined;
   parentThreadLink?: {
     readonly threadId: ThreadId;
     readonly title: string;
@@ -561,7 +574,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   displayThreadKey,
   onOpenTurnDiff,
   onOpenThread,
-  agentAttributionLabel,
+  messageViewer,
+  originSource,
+  messageSourceById,
   parentThreadLink = null,
   onForkFromRun,
   onRollbackCheckpoint,
@@ -1233,7 +1248,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       openPullRequest,
       onOpenTurnDiff,
       onOpenThread,
-      agentAttributionLabel,
+      messageViewer,
+      originSource,
+      messageSourceById,
       onForkFromRun,
       onRollbackCheckpoint,
       onToggleTurnFold,
@@ -1271,7 +1288,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       openPullRequest,
       onOpenTurnDiff,
       onOpenThread,
-      agentAttributionLabel,
+      messageViewer,
+      originSource,
+      messageSourceById,
       onForkFromRun,
       onRollbackCheckpoint,
       onToggleTurnFold,
@@ -2028,6 +2047,12 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   const ctx = use(TimelineRowCtx);
   const { onImageExpand, onFileOpen } = ctx;
   const senderThreadId = row.message.senderThreadId;
+  const senderCaption = userMessageSenderCaption({
+    createdBy: row.message.createdBy,
+    source: row.message.source ?? ctx.messageSourceById?.get(row.message.id),
+    originSource: ctx.originSource,
+    viewer: ctx.messageViewer,
+  });
   const resources = useMemo(
     () => selectMessageImageResources(row.message.attachments),
     [row.message.attachments],
@@ -2204,18 +2229,21 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             "Sent by automation"
           )}
         </p>
-      ) : row.message.createdBy === "agent" ? (
-        <p className="me-1 text-2xs text-muted-foreground/70" data-user-message-attribution="agent">
+      ) : senderCaption ? (
+        <p
+          className="me-1 text-2xs text-muted-foreground/70"
+          data-user-message-attribution="sender"
+        >
           {senderThreadId ? (
             <InlineButton
               onClick={() => ctx.onOpenThread(senderThreadId)}
               tone="muted"
               aria-label="Open sending thread"
             >
-              {ctx.agentAttributionLabel ?? "Sent by another agent"}
+              {senderCaption}
             </InlineButton>
           ) : (
-            (ctx.agentAttributionLabel ?? "Sent by another agent")
+            senderCaption
           )}
         </p>
       ) : null}

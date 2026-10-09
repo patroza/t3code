@@ -228,6 +228,7 @@ export function notificationTurnItem(
     attachments: _attachments,
     createdBy: _createdBy,
     creationSource: _creationSource,
+    source: _source,
     scheduledTaskId: _scheduledTaskId,
     ...base
   } = item;

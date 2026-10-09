@@ -4,7 +4,9 @@ import {
   ApprovalRequestId,
   CheckpointRef,
   EnvironmentId,
+  IdentityUsername,
   MessageId,
+  PersonId,
   ProjectId,
   RunId,
   ThreadId,
@@ -1356,12 +1358,19 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("rounded-2xl bg-message p-3");
   });
 
-  it("identifies user-role messages sent by another agent", async () => {
+  it("attributes user messages that this client did not send", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const entry = buildUserTimelineEntry("Review this area");
+    const viewer = {
+      personId: "patroza",
+      username: "patroza",
+      channel: "desktop",
+      identityReady: true,
+    };
     const agentMarkup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
+        messageViewer={viewer}
         timelineEntries={[
           {
             ...entry,
@@ -1371,27 +1380,80 @@ describe("MessagesTimeline", () => {
       />,
     );
     const userMarkup = renderToStaticMarkup(
-      <MessagesTimeline {...buildProps()} timelineEntries={[entry]} />,
+      <MessagesTimeline {...buildProps()} messageViewer={viewer} timelineEntries={[entry]} />,
     );
 
-    expect(agentMarkup).toContain('data-user-message-attribution="agent"');
+    expect(agentMarkup).toContain('data-user-message-attribution="sender"');
     expect(agentMarkup).toContain("Sent by another agent");
     expect(userMarkup).not.toContain("Sent by another agent");
+    expect(userMarkup).not.toContain("data-user-message-attribution");
 
-    const namedMarkup = renderToStaticMarkup(
+    const otherPerson = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
-        agentAttributionLabel="Andrea's agent"
+        messageViewer={viewer}
         timelineEntries={[
           {
             ...entry,
-            message: { ...entry.message, createdBy: "agent", creationSource: "mcp" },
+            message: {
+              ...entry.message,
+              createdBy: "user",
+              source: {
+                channel: "bot",
+                personId: PersonId.make("andreasimonecosta"),
+                username: IdentityUsername.make("andreasimonecosta"),
+              },
+            },
           },
         ]}
       />,
     );
-    expect(namedMarkup).toContain("Andrea&#x27;s agent");
-    expect(namedMarkup).not.toContain("Sent by another agent");
+    expect(otherPerson).toContain("andreasimonecosta@bot");
+
+    const samePerson = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        messageViewer={viewer}
+        timelineEntries={[
+          {
+            ...entry,
+            message: {
+              ...entry.message,
+              createdBy: "user",
+              source: {
+                channel: "discord",
+                personId: PersonId.make("patroza"),
+                username: IdentityUsername.make("patroza"),
+              },
+            },
+          },
+        ]}
+      />,
+    );
+    expect(samePerson).toContain(">discord<");
+    expect(samePerson).not.toContain("patroza@discord");
+
+    const thisClient = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        messageViewer={viewer}
+        timelineEntries={[
+          {
+            ...entry,
+            message: {
+              ...entry.message,
+              createdBy: "user",
+              source: {
+                channel: "desktop",
+                personId: PersonId.make("patroza"),
+                username: IdentityUsername.make("patroza"),
+              },
+            },
+          },
+        ]}
+      />,
+    );
+    expect(thisClient).not.toContain("data-user-message-attribution");
   });
 
   it("keeps a subagent parent-thread link at the top of an empty timeline", async () => {

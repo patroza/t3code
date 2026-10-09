@@ -3909,6 +3909,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly context?: import("@t3tools/contracts").OrchestrationMessageContext | undefined;
     readonly createdBy: OrchestrationV2ConversationMessage["createdBy"];
     readonly creationSource: OrchestrationV2ConversationMessage["creationSource"];
+    readonly source?: OrchestrationV2ConversationMessage["source"];
     readonly scheduledTaskId?: OrchestrationV2ConversationMessage["scheduledTaskId"];
     readonly senderThreadId?: OrchestrationV2ConversationMessage["senderThreadId"];
     readonly delegatedCompletion?: OrchestrationV2ConversationMessage["delegatedCompletion"];
@@ -4058,6 +4059,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           const message: OrchestrationV2ConversationMessage = {
             createdBy: input.createdBy,
             creationSource: input.creationSource,
+            ...(input.source === undefined ? {} : { source: input.source }),
             ...(input.delegatedCompletion === undefined
               ? {}
               : { delegatedCompletion: input.delegatedCompletion }),
@@ -4080,6 +4082,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           const turnItem: OrchestrationV2TurnItem = {
             createdBy: input.createdBy,
             creationSource: input.creationSource,
+            ...(input.source === undefined ? {} : { source: input.source }),
             ...(input.scheduledTaskId === undefined
               ? {}
               : { scheduledTaskId: input.scheduledTaskId }),
@@ -5022,6 +5025,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           attachments: command.attachments,
           createdBy: command.createdBy,
           creationSource: command.creationSource,
+          ...(command.source === undefined ? {} : { source: command.source }),
           ...(command.scheduledTaskId === undefined
             ? {}
             : { scheduledTaskId: command.scheduledTaskId }),
@@ -5579,6 +5583,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         const turnItem: OrchestrationV2TurnItem = {
           createdBy: command.createdBy,
           creationSource: command.creationSource,
+          ...(command.source === undefined ? {} : { source: command.source }),
           ...(command.scheduledTaskId === undefined
             ? {}
             : { scheduledTaskId: command.scheduledTaskId }),
@@ -6279,6 +6284,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const turnItem: OrchestrationV2TurnItem = {
         createdBy: command.createdBy,
         creationSource: command.creationSource,
+        ...(command.source === undefined ? {} : { source: command.source }),
         ...(command.scheduledTaskId === undefined
           ? {}
           : { scheduledTaskId: command.scheduledTaskId }),
