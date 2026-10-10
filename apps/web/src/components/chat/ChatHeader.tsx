@@ -42,7 +42,7 @@ import { useT3ProjectFileScripts } from "~/hooks/useT3ProjectFileScripts";
 import { useThreadActionMenu } from "~/hooks/useThreadActionMenu";
 import { readLocalApi } from "~/localApi";
 import { threadEnvironment } from "../../state/threads";
-import { useAtomCommand } from "../../state/use-atom-command";
+
 import { observeResponsiveBreakpointFade, usePanelAnimationSettings } from "../../panelAnimations";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
@@ -57,7 +57,7 @@ import { observeResize } from "~/lib/observeResize";
 import { cn } from "~/lib/utils";
 import { useIsMobile } from "~/hooks/useMediaQuery";
 import { Button } from "../ui/button";
-import { Menu, MenuItem, MenuItemLabel, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
+import { Menu, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
 import { useAiUsageSnapshot } from "../../hooks/useAiUsageSnapshot";
 import { resolveDriverUsage, usageDotFillClass, usageDotRingColor } from "../../aiUsageState";
 import { HostResourceStatus } from "../HostResourceStatus";

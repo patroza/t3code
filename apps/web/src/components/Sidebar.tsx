@@ -1,5 +1,5 @@
 import { type EnvironmentId } from "@t3tools/contracts";
-import { ThreadHoverCard, ThreadHoverCardPopup } from "./ThreadHoverCard";
+
 import { CollapsibleSectionHeader } from "./ui/collapsible-section-header";
 import { setThreadChangeRequestSnapshot } from "./ThreadStatusIndicators";
 import { ThreadContextDragGhost } from "./chat/ThreadContextDragGhost";
@@ -67,13 +67,11 @@ import type { TimestampFormat } from "@t3tools/contracts/settings";
 import {
   AlarmClockIcon,
   AlarmClockOffIcon,
-  ArrowRightLeftIcon,
   CheckIcon,
   CircleAlertIcon,
   CircleCheckIcon,
   CircleDashedIcon,
   ClockIcon,
-  EyeIcon,
   FolderIcon,
   GitBranchIcon,
   ListIcon,
@@ -256,7 +254,6 @@ import {
   ThreadPullRequestBadgeControl,
   ThreadPullRequestsMiniList,
   ThreadWorktreeIndicator,
-  nextThreadChangeRequestSnapshot,
   prStatusIndicator,
   resolveThreadPullRequestBadge,
   terminalStatusFromRunningIds,
@@ -303,29 +300,22 @@ import {
   DEFAULT_WEB_THREAD_GROUPING,
   EMPTY_LIST_ENVIRONMENT_FILTER,
   LIST_ENVIRONMENT_FILTER_STORAGE_KEY,
-  LIST_MODE_STORAGE_KEY,
   LIST_THREAD_GROUPING_STORAGE_KEY,
   ListEnvironmentFilterSchema,
   ListHideSettledSchema,
-  parseSidebarOwnershipFilter,
   SIDEBAR_OWNERSHIP_FILTER_LABELS,
-  SIDEBAR_OWNERSHIP_FILTER_STORAGE_KEY,
   SIDEBAR_OWNERSHIP_FILTERS,
   SIDEBAR_OWNERSHIP_RELATION_LABELS,
-  SIDEBAR_OWNERSHIP_RELATION_STORAGE_KEY,
   SIDEBAR_OWNERSHIP_RELATIONS,
   SIDEBAR_V2_SETTLED_SHELF_EXPANDED_STORAGE_KEY,
   WEB_THREAD_GROUPING_LABELS,
   WEB_THREAD_GROUPINGS,
   WebThreadGroupingSchema,
-  defaultThreadGroupingFromLegacyModeStorage,
   isAllEnvironmentsSelected,
   isEnvironmentSelected,
   matchesEnvironmentFilter,
   resolveSelectedEnvironmentIds,
   toggleEnvironmentId,
-  usesFlatThreadGrouping,
-  type SidebarOwnershipFilter,
   type WebThreadGrouping,
 } from "./listEnvironmentFilter";
 import {

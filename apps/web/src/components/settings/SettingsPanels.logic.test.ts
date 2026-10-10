@@ -1,5 +1,4 @@
 import {
-  DEFAULT_SERVER_SETTINGS,
   DEFAULT_UNIFIED_SETTINGS,
   ProviderDriverKind,
   ProviderInstanceId,

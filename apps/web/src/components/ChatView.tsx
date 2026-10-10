@@ -87,7 +87,7 @@ import {
   type WorktreeSetupSnapshot,
 } from "@t3tools/contracts";
 import { type EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
-import { deriveThreadTitleSeed } from "@t3tools/client-runtime/operations";
+
 import {
   wasBootstrapThreadDeleted,
   wasBootstrapThreadNotCreated,
@@ -179,11 +179,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
-import { isTransportConnectionErrorMessage } from "@t3tools/client-runtime/errors";
-import {
-  isIdentityClaimRequiredMessage,
-  requestIdentityClaimGate,
-} from "./identity/IdentityClaimGate";
+
 import { isElectron } from "../env";
 import { readLocalApi } from "../localApi";
 import { useDiffPanelStore } from "../diffPanelStore";
@@ -238,8 +234,6 @@ import {
   DEFAULT_THREAD_TERMINAL_ID,
   MAX_TERMINALS_PER_GROUP,
   type ChatMessage,
-  isBrowserPreviewAttachment,
-  isImageAttachment,
   videoMimeType,
   type SessionPhase,
   type Thread,
@@ -317,7 +311,7 @@ import {
   TargetIcon,
   WifiOffIcon,
 } from "lucide-react";
-import { cn, newCommandId, randomUUID } from "~/lib/utils";
+import { cn, randomUUID } from "~/lib/utils";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import {
@@ -327,14 +321,13 @@ import {
 import { type NewProjectScriptInput } from "./ProjectScriptsControl";
 import {
   buildProjectScript,
-  clearConflictingLifecycleFlags,
   commandForProjectScript,
   nextProjectScriptId,
   projectScriptIdFromCommand,
   releaseClaimedRoles,
 } from "~/projectScripts";
 import { newDraftId, newMessageId, newThreadId } from "~/lib/utils";
-import { useBrowserHistoryStore } from "~/browserHistoryStore";
+
 import { registerFaviconProjectForThread } from "~/browserFaviconStore";
 import { getProviderModelCapabilities } from "../providerModels";
 import {
@@ -620,12 +613,7 @@ import {
   supportsServerUpdateThreadContinuation,
 } from "../versionSkew";
 import { useAssetUrls } from "../assets/assetUrls";
-import {
-  defaultFetchAttachmentBlob,
-  describeQueuedAttachmentCapacity,
-  formatMissingAttachmentsError,
-  recallQueuedAttachments,
-} from "./chat/queuedAttachmentRecall";
+
 import {
   ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
   recallableComposerPrompt,

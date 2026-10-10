@@ -134,7 +134,6 @@ import {
   canNavigateUp,
   ensureBrowseDirectoryPath,
   findProjectByPath,
-  getBrowseLeafPathSegment,
   getBrowseParentPath,
   hasTrailingPathSeparator,
   inferProjectTitleFromPath,

@@ -57,7 +57,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
         value: "local",
         label: onWorkspaceTargetChange
           ? resolveEnvModeLabel("local")
-          : (workspaceDisplayName ?? resolveCurrentWorkspaceLabel(activeWorktreePath)),
+          : resolveCurrentWorkspaceLabel(activeWorktreePath),
       },
       ...(onWorkspaceTargetChange && activeWorktreePath
         ? [{ value: "current-worktree", label: resolveCurrentWorkspaceLabel(activeWorktreePath) }]
@@ -67,13 +67,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
         ? [{ value: PREVIOUS_WORKTREE_SELECT_VALUE, label: previousWorktreeLabel }]
         : []),
     ],
-    [
-      activeWorktreePath,
-      previousWorktreeLabel,
-      showPreviousWorktree,
-      workspaceDisplayName,
-      onWorkspaceTargetChange,
-    ],
+    [activeWorktreePath, previousWorktreeLabel, showPreviousWorktree, onWorkspaceTargetChange],
   );
 
   const stopContextMenuMouseDown = (event: ReactMouseEvent) => {
