@@ -80,6 +80,7 @@ function harness(input: {
   readonly localBranches?: ReadonlyArray<string>;
   readonly resolved?: string;
   readonly checks?: string;
+  readonly environment?: NodeJS.ProcessEnv;
   /** Fails the local branch listing, the first git read a checkout makes. */
   readonly gitFailure?: unknown;
 }) {
@@ -130,6 +131,7 @@ function harness(input: {
     host,
     Layer.mock(GitHubApi.GitHubApi)(input.api),
     NodeServices.layer,
+    Layer.succeed(HostProcess.Environment, input.environment ?? {}),
   );
   return { layer, git };
 }
@@ -1160,6 +1162,7 @@ it.effect.each([
   ({ host, resolved, envRepository, expected }) => {
     const targets: string[] = [];
     const { layer } = harness({
+      environment: { GH_REPO: envRepository },
       remotes: remotesOutput(
         ["origin", `git@${host}:me/web.git`],
         ["upstream", `git@${host}:acme/web.git`],
@@ -1203,10 +1206,6 @@ it.effect.each([
         `${host}/repos/${expected}`,
         `${host}/repos/${expected}/pulls`,
       ]);
-    }).pipe(
-      Effect.provide(layer),
-      Effect.provideService(HostProcess.Environment, { GH_REPO: envRepository }),
-      Effect.scoped,
-    );
+    }).pipe(Effect.provide(layer), Effect.scoped);
   },
 );
