@@ -103,6 +103,9 @@ const isolatedUnitTestFiles = [
   "src/browser/HostedBrowserWebview.test.tsx",
   "src/browser/browserTargetResolver.test.ts",
   "src/browser/desktopTabLifetime.test.ts",
+  // Runtime selection mocks capabilities and desktop availability; shared workers
+  // can retain the real modules loaded by another preview test.
+  "src/browser/previewRuntime.test.ts",
   "src/branding.test.ts",
   "src/clientPersistenceStorage.test.ts",
   "src/cloud/dpop.test.ts",
