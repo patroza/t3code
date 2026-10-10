@@ -15,6 +15,10 @@ import {
 
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { previewEnvironment } from "~/state/preview";
+import type { ConnectionTarget } from "@t3tools/client-runtime/connection";
+
+import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
+import { isElectron } from "~/env";
 import { readPreparedConnection } from "~/state/session";
 
 export {
@@ -90,11 +94,24 @@ export function resolveBrowserNavigationTarget(
   return resolveEnvironmentPortTarget(environmentId, target, readEnvironmentUrl(environmentId));
 }
 
+/**
+ * Whether a discovered loopback server is reachable as-is from this client's
+ * own browser tabs. The desktop app draws tabs on the machine that runs its
+ * primary backend and any desktop-local backend (WSL). Its connection URL can
+ * still be a LAN address (WSL NAT mode binds the distro IP), but a dev server
+ * bound to loopback only answers on `localhost` there.
+ */
+const reachesEnvironmentLoopback = (target: ConnectionTarget): boolean =>
+  isElectron &&
+  (target._tag === "PrimaryConnectionTarget" || isDesktopLocalConnectionTarget(target));
+
 export function resolveDiscoveredServerUrl(environmentId: EnvironmentId, rawUrl: string): string {
   try {
     const normalizedUrl = normalizePreviewUrl(rawUrl);
     const parsed = new URL(normalizedUrl);
     if (!isLoopbackHost(parsed.hostname)) return normalizedUrl;
+    const target = readPreparedConnection(environmentId)?.target;
+    if (target && reachesEnvironmentLoopback(target)) return normalizedUrl;
     return resolveEnvironmentPortTarget(
       environmentId,
       {

@@ -1,10 +1,22 @@
+import {
+  DirenvEnvironment,
+  DirenvEnvironmentError,
+  identityDirenvEnvironmentResolver,
+  noopDirenvEnvironmentAllow,
+} from "@t3tools/provider-core/server/DirenvEnvironment";
+export {
+  DirenvEnvironment,
+  DirenvEnvironmentError,
+  identityDirenvEnvironmentResolver,
+  noopDirenvEnvironmentAllow,
+  resolveProviderSessionEnvironment,
+  resolveCurrentProviderEnvironment,
+} from "@t3tools/provider-core/server/DirenvEnvironment";
 import { resolveCommandPath } from "@t3tools/shared/shell";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
-import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
@@ -18,64 +30,6 @@ const STDERR_DETAIL_MAX_LENGTH = 2_048;
 // failure here never leaks direnv stdout across process and UI boundaries.
 const decodeDirenvPatch = decodeJsonResult(
   Schema.Record(Schema.String, Schema.NullOr(Schema.String)),
-);
-
-export class DirenvEnvironmentError extends Schema.TaggedError<DirenvEnvironmentError>()(
-  "DirenvEnvironmentError",
-  {
-    stage: Schema.Literals(["inspection", "execution", "invalid-output"]),
-    detail: Schema.String,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return `Failed to resolve direnv environment during ${this.stage}: ${this.detail}`;
-  }
-}
-
-export class DirenvEnvironment extends Context.Service<
-  DirenvEnvironment,
-  {
-    readonly allow: (input: {
-      readonly cwd: string;
-      readonly environment: NodeJS.ProcessEnv;
-    }) => Effect.Effect<void, DirenvEnvironmentError>;
-    readonly resolve: (input: {
-      readonly cwd: string;
-      readonly environment: NodeJS.ProcessEnv;
-    }) => Effect.Effect<NodeJS.ProcessEnv, DirenvEnvironmentError>;
-  }
->()("t3/provider/DirenvEnvironment") {}
-
-export const identityDirenvEnvironmentResolver: DirenvEnvironment["Service"]["resolve"] = (input) =>
-  Effect.succeed(input.environment);
-
-export const noopDirenvEnvironmentAllow: DirenvEnvironment["Service"]["allow"] = () => Effect.void;
-
-/**
- * Resolves a provider session environment through the optional direnv
- * resolver, mapping failures into the adapter error domain. Adapters that
- * are constructed without a resolver (tests) keep the base environment.
- */
-export const resolveProviderSessionEnvironment = (input: {
-  readonly resolve: DirenvEnvironment["Service"]["resolve"] | undefined;
-  readonly provider: string;
-  readonly threadId: string;
-  readonly cwd: string;
-  readonly environment: NodeJS.ProcessEnv;
-}): Effect.Effect<NodeJS.ProcessEnv, DirenvEnvironmentError> =>
-  input.resolve === undefined
-    ? Effect.succeed(input.environment)
-    : input.resolve({ cwd: input.cwd, environment: input.environment });
-
-/** Optional at adapter boundaries so isolated adapters keep their configured environment. */
-export const resolveCurrentProviderEnvironment = Effect.fn("resolveCurrentProviderEnvironment")(
-  function* (cwd: string, environment: NodeJS.ProcessEnv) {
-    const resolver = yield* Effect.serviceOption(DirenvEnvironment);
-    return Option.isSome(resolver)
-      ? yield* resolver.value.resolve({ cwd, environment })
-      : environment;
-  },
 );
 
 function conciseStderr(stderr: string, environment: NodeJS.ProcessEnv): string | undefined {

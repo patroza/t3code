@@ -53,12 +53,18 @@ interface EnvironmentCommandAtomOptions<Input, A, E, R> extends Omit<
   ) => Effect.Effect<A, E, R>;
 }
 
-interface EnvironmentQueryAtomOptions<Input, A, E, R> extends EnvironmentAtomOptions<
-  Input,
-  A,
-  E,
-  R
+interface EnvironmentQueryAtomOptions<Input, A, E, R> extends Omit<
+  EnvironmentAtomOptions<Input, A, E, R>,
+  "execute"
 > {
+  /**
+   * `emit` shows a provisional value while the query keeps waiting. The settled
+   * result replaces it, so catch failures that should keep it on screen.
+   */
+  readonly execute: (
+    input: Input,
+    emit: (value: A) => Effect.Effect<void>,
+  ) => Effect.Effect<A, E, R>;
   readonly staleTimeMs?: number;
   readonly idleTtlMs?: number;
   readonly refreshIntervalMs?: number;
@@ -72,6 +78,7 @@ interface EnvironmentSubscriptionAtomOptions<Input, A, E, R> {
   readonly sensitiveInput?: boolean;
   readonly label: string;
   readonly subscribe: (input: Input) => Stream.Stream<A, E, R>;
+  readonly completeWhen?: (value: A) => boolean;
   readonly idleTtlMs?: number;
 }
 
@@ -570,10 +577,18 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
           return Effect.never;
         }
         const [connectionState, session] = connection;
+        const emit = (value: A) =>
+          Effect.sync(() => get.setSelf(AsyncResult.success(value, { waiting: true }))).pipe(
+            // A value set while the atom builds wins over the build's own
+            // result, so a query that then settled synchronously would stay
+            // waiting forever. Suspend on a promise (`yieldNow` is drained
+            // inside the build) so the settled result arrives asynchronously.
+            Effect.andThen(Effect.promise(() => Promise.resolve())),
+          );
         switch (connectionState.phase) {
           case "connected":
             return Option.isSome(session)
-              ? runInEnvironment(target.environmentId, options.execute(target.input))
+              ? runInEnvironment(target.environmentId, options.execute(target.input, emit))
               : Effect.never;
           case "connecting":
           case "backoff":
@@ -627,7 +642,11 @@ export function createEnvironmentSubscriptionAtomFamily<R, ER, Input, A, E>(
   const family = Atom.family((key: string) => {
     const target = parseEnvironmentRpcKey<Input>(key);
     return runtime
-      .atom(followStreamInEnvironment(target.environmentId, options.subscribe(target.input)))
+      .atom(
+        followStreamInEnvironment(target.environmentId, options.subscribe(target.input)).pipe(
+          options.completeWhen ? Stream.takeUntil(options.completeWhen) : (stream) => stream,
+        ),
+      )
       .pipe(
         Atom.setIdleTTL(options.idleTtlMs ?? 5 * 60_000),
         Atom.withLabel(
@@ -673,6 +692,7 @@ export function createEnvironmentRpcQueryAtomFamily<
     readonly tag: TTag;
     readonly execute?: (
       input: EnvironmentRpcInput<TTag>,
+      emit: (value: EnvironmentRpcSuccess<TTag>) => Effect.Effect<void>,
     ) => Effect.Effect<
       EnvironmentRpcSuccess<TTag>,
       EnvironmentRpcFailure<TTag> | EnvironmentRpcUnavailableError,
@@ -695,8 +715,10 @@ export function createEnvironmentRpcQueryAtomFamily<
       ? {}
       : { refreshIntervalMs: options.refreshIntervalMs }),
     ...(options.refreshTrigger === undefined ? {} : { refreshTrigger: options.refreshTrigger }),
-    execute: (input: EnvironmentRpcInput<TTag>) =>
-      options.execute?.(input) ?? request(options.tag, input),
+    execute: (
+      input: EnvironmentRpcInput<TTag>,
+      emit: (value: EnvironmentRpcSuccess<TTag>) => Effect.Effect<void>,
+    ) => options.execute?.(input, emit) ?? request(options.tag, input),
   });
 }
 
@@ -711,6 +733,7 @@ export function createEnvironmentRpcSubscriptionAtomFamily<
     readonly label: string;
     readonly tag: TTag;
     readonly idleTtlMs?: number;
+    readonly completeWhen?: (value: B) => boolean;
     readonly transform?: (
       stream: Stream.Stream<
         EnvironmentRpcStreamValue<TTag>,
@@ -726,6 +749,7 @@ export function createEnvironmentRpcSubscriptionAtomFamily<
 ) {
   return createEnvironmentSubscriptionAtomFamily(runtime, {
     label: options.label,
+    ...(options.completeWhen === undefined ? {} : { completeWhen: options.completeWhen }),
     ...(options.idleTtlMs === undefined ? {} : { idleTtlMs: options.idleTtlMs }),
     subscribe: (input: EnvironmentRpcInput<TTag>) => {
       const stream = subscribe(options.tag, input);
