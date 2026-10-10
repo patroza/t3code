@@ -1067,10 +1067,15 @@ export const WINDOWS_NATIVE_ASAR_UNPACK_GLOB =
 
 // The server sidecar unpacks .node files separately, keeping only Windows ones.
 export const WINDOWS_SERVER_ASAR_UNPACK_GLOBS = [
+  "*.dll",
   "**/*.dll",
+  "*.exe",
   "**/*.exe",
+  "*.so",
   "**/*.so",
+  "*.so.*",
   "**/*.so.*",
+  "*.dylib",
   "**/*.dylib",
 ] as const;
 // Mirrors DESKTOP_FILE_EXCLUSIONS for the hand-packed sidecar: the Claude SDK
@@ -3082,6 +3087,12 @@ export const packWindowsServerAsar = Effect.fn("packWindowsServerAsar")(function
   // the darwin and linux prebuilds some packages (node-pty) ship alongside
   // their win32 ones. The Windows primary never loads those, so they stay packed.
   const unpackGlobs: string[] = [...WINDOWS_SERVER_ASAR_UNPACK_GLOBS];
+  // asar matches unpack globs against absolute paths without dot matching.
+  // Anchor selected addons so hidden parent directories do not block unpacking.
+  const sourceGlobPath = input.sourceDir
+    .split(path.sep)
+    .join("/")
+    .replace(/[\\*?[\]{}(),]/g, "\\$&");
   for (const entry of yield* fs.readDirectory(input.sourceDir, { recursive: true })) {
     if (!entry.endsWith(".node")) continue;
     const addonPath = path.join(input.sourceDir, entry);
@@ -3096,7 +3107,7 @@ export const packWindowsServerAsar = Effect.fn("packWindowsServerAsar")(function
         cause: new Error(`native addon path contains glob syntax: ${posixPath}`),
       });
     }
-    unpackGlobs.push(`**/${posixPath}`);
+    unpackGlobs.push(`${sourceGlobPath}/${posixPath}`);
   }
   yield* Effect.tryPromise({
     try: () =>
