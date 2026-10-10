@@ -1723,7 +1723,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           ).pipe(
             Effect.mapError(
               (cause) =>
-                new ProviderAdapterOpenSessionError({
+                new ProviderAdapter.ProviderAdapterOpenSessionError({
                   driver: CODEX_PROVIDER,
                   providerSessionId: input.providerSessionId,
                   cause,

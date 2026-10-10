@@ -58,7 +58,7 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
     (input, { runtimeMode, interactionMode }) =>
       Effect.gen(function* () {
         const context = yield* readCaller();
-        const { caller } = context;
+        const { caller, scope } = context;
         const commandId = yield* newCommandId();
         const threadId = ThreadId.make(commandId);
         const messageId = MessageId.make(commandId);

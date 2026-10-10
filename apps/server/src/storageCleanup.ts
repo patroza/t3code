@@ -327,6 +327,7 @@ const make = Effect.gen(function* () {
       return yield* Effect.fail(
         new GitCommandError({
           operation: "StorageCleanup.cleanupGit",
+          failureKind: "unknown",
           command,
           cwd,
           detail: result.stderr.trim().split(/\r?\n/)[0]?.slice(0, 1000) || "command failed",

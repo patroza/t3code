@@ -654,8 +654,6 @@ function createGitHubProviderWithFakeGh(scenario: FakeGhScenario = {}): {
             toChangeRequest(JSON.parse(result.stdout) as FakePullRequestSummary),
           ),
         ),
-      getPullRequestHasFailingChecks: () =>
-        Effect.succeed(scenario.pullRequest?.hasFailingChecks === true),
       getRepositoryCloneUrls: (input) =>
         execute({
           operation: "getRepositoryCloneUrls",

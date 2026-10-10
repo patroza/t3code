@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - transcript identity derives from its local path.
 import * as NodePath from "node:path";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";

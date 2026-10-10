@@ -2528,7 +2528,7 @@ it.layer(
 
   it.effect("points the terminal's own $SHELL at the shell that starts", () =>
     Effect.gen(function* () {
-      if ((yield* HostProcessPlatform) === "win32") return;
+      if ((yield* HostProcess.Platform) === "win32") return;
       const { manager, ptyAdapter } = yield* createManager(5, {
         shellResolver: () => "/bin/zsh",
         env: { SHELL: "/bin/bash" },

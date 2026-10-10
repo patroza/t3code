@@ -518,7 +518,7 @@ it.effect.each([createDuringCloneCommand, sendDuringCloneCommand])(
   (command) =>
     Effect.gen(function* () {
       let dispatched = false;
-      const layerTest = ThreadManagementService.layer.pipe(
+      const layerTest = threadManagementLayer.pipe(
         Layer.provide(
           Layer.mergeAll(
             Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({
@@ -568,7 +568,7 @@ it.effect("refuses service sends used by MCP and schedules while the project is 
       visibleTurnItems: [],
       updatedAt: NOW,
     };
-    const layerTest = ThreadManagementService.layer.pipe(
+    const layerTest = threadManagementLayer.pipe(
       Layer.provide(
         Layer.mergeAll(
           Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({
@@ -662,7 +662,7 @@ it.effect.each([
     const threadId = ThreadId.make("thread:thread-management:settle-after-run");
     const runId = RunId.make("run:thread-management:settle-after-run");
     const dispatched: Array<string> = [];
-    const layerTest = ThreadManagementService.layer.pipe(
+    const layerTest = threadManagementLayer.pipe(
       Layer.provide(
         Layer.mock(Orchestrator.OrchestratorV2)({
           getThreadEventSequence: () => Effect.succeed(0),

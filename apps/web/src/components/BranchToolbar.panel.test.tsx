@@ -49,7 +49,7 @@ it("keeps machine choices usable when the combined row's workspace is locked", a
           environmentId={EnvironmentId.make("local")}
           threadId={ThreadId.make("thread")}
           showGitControls
-          envMode="local"
+          effectiveEnvModeOverride="local"
           envLocked={false}
           startFromOrigin={false}
           onStartFromOriginChange={vi.fn()}
@@ -109,7 +109,7 @@ it.each([
             environmentId={EnvironmentId.make("local")}
             threadId={ThreadId.make("thread")}
             showGitControls
-            envMode={envMode}
+            effectiveEnvModeOverride={envMode}
             envLocked={false}
             startFromOrigin={false}
             onStartFromOriginChange={vi.fn()}

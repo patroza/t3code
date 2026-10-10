@@ -1,5 +1,5 @@
 import type { ServerHostResourceSnapshot } from "@t3tools/contracts";
-import { HostProcessHostname, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -77,8 +77,8 @@ const unavailableSnapshot = (message: string, checkedAt: string): ServerHostReso
 
 export const make = Effect.gen(function* HostResourceProbeMake() {
   const fileSystem = yield* FileSystem.FileSystem;
-  const hostPlatform = yield* HostProcessPlatform;
-  const hostHostname = yield* HostProcessHostname;
+  const hostPlatform = yield* HostProcess.Platform;
+  const hostHostname = yield* HostProcess.Hostname;
   const probe = Effect.gen(function* HostResourceProbeRead() {
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
     const before = yield* Effect.sync(captureCpuTimes);

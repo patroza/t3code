@@ -749,11 +749,9 @@ export const BranchToolbar = memo(function BranchToolbar({
             showEnvironmentPicker={showEnvironmentPicker}
             showEnvironmentIndicator={activeEnvironmentOption !== null}
             onEnvironmentChange={onEnvironmentChange}
-            effectiveEnvMode={effectiveEnvMode}
             workspaceTarget={workspaceTarget}
             onWorkspaceTargetChange={onWorkspaceTargetChange}
             activeWorktreePath={activeWorktreePath}
-            onEnvModeChange={onEnvModeChange}
             previousWorktreeLabel={previousWorktreeLabel}
             previousWorktreeBranch={previousWorktreeSeed?.branch ?? null}
             onUsePreviousWorktree={onUsePreviousWorktree}
