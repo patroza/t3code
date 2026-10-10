@@ -29,11 +29,11 @@ import {
   providerModelsFromSettings,
   spawnAndCollect,
   type ServerProviderDraft,
-} from "./providerSnapshot.ts";
+} from "@t3tools/provider-core/server/snapshotProbe";
 import {
   enrichProviderSnapshotWithVersionAdvisory,
   type ProviderMaintenanceCapabilities,
-} from "./providerMaintenance.ts";
+} from "@t3tools/provider-core/server/maintenanceResolver";
 
 const PRESENTATION = {
   displayName: "Kimi Code",
@@ -287,7 +287,7 @@ export const enrichKimiSnapshot = (input: {
   readonly publishSnapshot: (snapshot: ServerProvider) => Effect.Effect<void>;
   readonly stampIdentity: (snapshot: ServerProvider) => ServerProvider;
   readonly httpClient: HttpClient.HttpClient;
-}): Effect.Effect<void> => {
+}) => {
   if (!input.settings.enabled || input.snapshot.auth.status === "unauthenticated")
     return Effect.void;
   return enrichProviderSnapshotWithVersionAdvisory(input.snapshot, input.maintenanceCapabilities, {

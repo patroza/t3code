@@ -97,6 +97,7 @@ function layerDesktopWindow(
     dispatchMenuAction: () => Effect.void,
     dispatchSnapShotEvent: () => Effect.void,
     zoomMain: () => Effect.void,
+    runMainContentsCommand: () => Effect.void,
     syncAppearance: Effect.void,
     navigateToThread: () => Effect.void,
     navigateToProject: () => Effect.void,

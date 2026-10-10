@@ -8,11 +8,11 @@ import * as Schema from "effect/Schema";
 import { HttpClient } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 
-import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
-import { ServerConfig } from "../../config.ts";
-import { ServerSettingsService } from "../../serverSettings.ts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
+import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import { makeAcpTextGeneration } from "../../textGeneration/AcpTextGeneration.ts";
-import { ProviderDriverError } from "../Errors.ts";
+import { ProviderDriverError } from "@t3tools/provider-core/server/errors";
 import { applyKimiAcpModelSelection, makeKimiAcpRuntime } from "../acp/KimiAcpSupport.ts";
 import {
   KimiAdapterV2Driver,
@@ -23,26 +23,27 @@ import {
   checkKimiProviderStatus,
   enrichKimiSnapshot,
 } from "../KimiProvider.ts";
-import { ProviderEventLoggers } from "../ProviderEventLoggers.ts";
-import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
+import { makeManagedServerProvider } from "@t3tools/provider-core/server/managedProvider";
 import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
   type ProviderInstance,
-} from "../ProviderDriver.ts";
-import type { ServerProviderDraft } from "../providerSnapshot.ts";
-import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
+} from "@t3tools/provider-core/server/driver";
+import type { ServerProviderDraft } from "@t3tools/provider-core/server/snapshotProbe";
+import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import {
   makeCachedProviderMaintenanceResolution,
   makePackageManagedProviderMaintenanceResolver,
   normalizeCommandPath,
   resolveProviderMaintenanceCapabilitiesEffect,
-} from "../providerMaintenance.ts";
+} from "@t3tools/provider-core/server/maintenanceResolver";
 import {
   haveProviderSnapshotSettingsChanged,
   makeProviderSnapshotSettingsSource,
   type ProviderSnapshotSettings,
-} from "../providerUpdateSettings.ts";
+} from "@t3tools/provider-core/server/snapshotSettings";
+
+import { kimiUsageReader } from "../../usage/kimiUsageReader.ts";
 
 const decodeSettings = Schema.decodeSync(KimiSettings);
 const DRIVER_KIND = ProviderDriverKind.make("kimi");
@@ -64,15 +65,13 @@ const UPDATE = makePackageManagedProviderMaintenanceResolver({
 
 export type KimiDriverEnv =
   | KimiAdapterV2DriverEnv
-  | BackgroundPolicy.BackgroundPolicy
+  | ProviderHost.ProviderHost
+  | ProviderLatestVersions.ProviderLatestVersions
   | ChildProcessSpawner.ChildProcessSpawner
   | Crypto.Crypto
   | FileSystem.FileSystem
   | HttpClient.HttpClient
-  | Path.Path
-  | ProviderEventLoggers
-  | ServerConfig
-  | ServerSettingsService;
+  | Path.Path;
 
 const withInstanceIdentity =
   (input: {
@@ -90,8 +89,9 @@ const withInstanceIdentity =
     continuation: { groupKey: input.continuationGroupKey },
   });
 
-export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv> = {
+export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv, Path.Path> = {
   driverKind: DRIVER_KIND,
+  usage: kimiUsageReader,
   metadata: { displayName: "Kimi Code", supportsMultipleInstances: true },
   configSchema: KimiSettings,
   defaultConfig: (): KimiSettings => decodeSettings({}),
@@ -102,9 +102,9 @@ export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv> = {
       const fileSystem = yield* FileSystem.FileSystem;
       const pathService = yield* Path.Path;
       const httpClient = yield* HttpClient.HttpClient;
-      const serverSettings = yield* ServerSettingsService;
-      const eventLoggers = yield* ProviderEventLoggers;
-      const processEnv = mergeProviderInstanceEnvironment(environment);
+      const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
+      const hostEnvironment = yield* HostProcess.Environment;
+      const processEnv = yield* mergeProviderInstanceEnvironment(environment, hostEnvironment);
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
         instanceId,
@@ -158,7 +158,7 @@ export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv> = {
         Effect.provideService(Crypto.Crypto, crypto),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );
-      const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, serverSettings);
+      const snapshotSettings = yield* makeProviderSnapshotSettingsSource(effectiveConfig);
       const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<KimiSettings>>({
         resolveMaintenance,
         getSettings: snapshotSettings.getSettings,
@@ -178,7 +178,12 @@ export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv> = {
                 publishSnapshot,
                 stampIdentity,
                 httpClient,
-              }),
+              }).pipe(
+                Effect.provideService(
+                  ProviderLatestVersions.ProviderLatestVersions,
+                  latestVersions,
+                ),
+              ),
             ),
           ),
         refreshInterval: SNAPSHOT_REFRESH_INTERVAL,

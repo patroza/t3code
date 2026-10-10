@@ -6,6 +6,7 @@ import {
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
 
 import { pullRequestDetailToVcsStatus } from "@t3tools/client-runtime/state/pull-requests";
+import { detectSourceControlProviderFromRemoteUrl } from "@t3tools/shared/sourceControl";
 import {
   resolveEnvironmentMachineKind,
   type EnvironmentId,
@@ -130,15 +131,19 @@ export function linkedPullRequestSnapshotStatus(
 ): LinkedThreadPullRequestStatus | null {
   const snapshot = link.snapshot;
   if (snapshot === null) return null;
-  const kind = link.url.includes("/-/merge_requests/")
-    ? "gitlab"
-    : link.url.includes("/pullrequest/")
-      ? "azure-devops"
-      : link.url.includes("/pull-requests/")
-        ? "bitbucket"
-        : link.url.includes("/pulls/")
-          ? "forgejo"
-          : "github";
+  // GitCafe's `/pulls/` routes look like Forgejo's, so its two hosts are told apart first.
+  const kind =
+    detectSourceControlProviderFromRemoteUrl(link.url)?.kind === "gitcafe"
+      ? "gitcafe"
+      : link.url.includes("/-/merge_requests/")
+        ? "gitlab"
+        : link.url.includes("/pullrequest/")
+          ? "azure-devops"
+          : link.url.includes("/pull-requests/")
+            ? "bitbucket"
+            : link.url.includes("/pulls/")
+              ? "forgejo"
+              : "github";
   return {
     pr: {
       number: link.number,
@@ -810,7 +815,7 @@ export function ThreadWorktreeIndicator({
               type="button"
               aria-label={worktreePath ? "New session on this worktree" : tooltip}
               data-testid={`thread-worktree-new-session-${thread.id}`}
-              className="inline-flex cursor-pointer items-center justify-center rounded-sm text-muted-foreground/55 outline-hidden transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+              className="inline-flex cursor-pointer items-center justify-center rounded-sm text-muted-foreground/55 outline-hidden transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
               onPointerDown={(event) => {
                 event.stopPropagation();
               }}

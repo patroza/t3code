@@ -8,7 +8,8 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientResponse } from "effect/http";
-import { GROK_DEFAULT_MODEL, GrokSettings } from "@t3tools/contracts";
+import { GROK_DEFAULT_MODEL } from "@t3tools/contracts";
+import { GrokSettings } from "@t3tools/provider-grok/settings";
 
 import {
   buildGrokModelCapabilities,
@@ -17,9 +18,9 @@ import {
   checkGrokProviderStatus,
   grokSlashCommandsFromInitialize,
   parseGrokModelsCliOutput,
-} from "./GrokProvider.ts";
-import { execScriptSource, writeFakeCli } from "../testUtils/fakeCli.ts";
-import { grokUsageResponseToLimits, readGrokAccount } from "./grokUsageLimits.ts";
+} from "@t3tools/provider-grok/testing";
+import { execScriptSource, writeFakeCli } from "@t3tools/provider-testing/fakeCli";
+import { grokUsageResponseToLimits, readGrokAccount } from "@t3tools/provider-grok/testing";
 
 const decodeGrokSettings = Schema.decodeSync(GrokSettings);
 const __dirname = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));

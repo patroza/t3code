@@ -32,14 +32,15 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ClaudeAdapterV2 from "./Adapters/ClaudeAdapterV2.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EventSink from "./EventSink.ts";
-import * as IdAllocator from "./IdAllocator.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ThreadLaunchService from "./ThreadLaunchService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
-import { checkpointWorkspace } from "./testkit/ReplayFixtureWorkspace.ts";
+import { checkpointWorkspace } from "@t3tools/provider-testing/replayWorkspace";
 
 const sessionId = "automatic-delivery-session";
 const settings = Schema.decodeSync(ClaudeSettings)({});
@@ -132,7 +133,7 @@ it.effect.each(["child completion", "scheduled message", "user steering"] as con
         const offers: SDKUserMessage[] = [];
         const nativeQueue: SDKUserMessage[] = [];
         const batchAbort = new AbortController();
-        const adapter = ClaudeAdapterV2.makeClaudeAdapterV2({
+        const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
           instanceId: modelSelection.instanceId,
           settings,
           environment: {},
@@ -429,6 +430,7 @@ it.effect.each(["child completion", "scheduled message", "user steering"] as con
           Layer.mergeAll(
             IdAllocator.layer,
             NodeServices.layer,
+            McpProviderSessions.layer,
             Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({
               get: () => Effect.succeed(null),
             }),

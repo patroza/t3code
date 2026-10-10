@@ -1,5 +1,5 @@
 import { KimiSettings, ProviderDriverKind } from "@t3tools/contracts";
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { resolveSelfInvocation } from "@t3tools/shared/nodeRuntime";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -7,19 +7,20 @@ import * as Path from "effect/Path";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
 import { ChildProcessSpawner } from "effect/process";
-import * as ServerConfig from "../../config.ts";
+import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import {
   applyKimiAcpModelSelection,
   makeKimiAcpRuntime,
 } from "../../provider/acp/KimiAcpSupport.ts";
-import { mergeProviderInstanceEnvironment } from "../../provider/ProviderInstanceEnvironment.ts";
-import * as IdAllocator from "../IdAllocator.ts";
+import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import {
   ProviderAdapterDriverCreateError,
   type ProviderAdapterDriver,
   type ProviderAdapterDriverCreateInput,
-} from "../ProviderAdapterDriver.ts";
-import { AcpProviderCapabilitiesV2, makeAcpAdapterV2 } from "./AcpAdapterV2.ts";
+} from "@t3tools/provider-core/server/adapterDriver";
+import { AcpProviderCapabilitiesV2, makeAcpAdapterV2 } from "@t3tools/provider-acp/server/adapter";
 
 const decodeKimiSettings = Schema.decodeUnknownSync(KimiSettings);
 const DRIVER = ProviderDriverKind.make("kimi");
@@ -28,7 +29,8 @@ export type KimiAdapterV2DriverEnv =
   | FileSystem.FileSystem
   | ChildProcessSpawner.ChildProcessSpawner
   | IdAllocator.IdAllocatorV2
-  | ServerConfig.ServerConfig
+  | ProviderHost.ProviderHost
+  | McpProviderSessions.McpProviderSessions
   | Path.Path;
 export const KimiAdapterV2Driver: ProviderAdapterDriver<KimiSettings, KimiAdapterV2DriverEnv> = {
   driverKind: DRIVER,
@@ -36,20 +38,15 @@ export const KimiAdapterV2Driver: ProviderAdapterDriver<KimiSettings, KimiAdapte
   defaultConfig: () => decodeKimiSettings({}),
   create: Effect.fn("KimiAdapterV2Driver.create")(
     function* (input: ProviderAdapterDriverCreateInput<KimiSettings>) {
-      const crypto = yield* Crypto.Crypto;
-      const fileSystem = yield* FileSystem.FileSystem;
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const idAllocator = yield* IdAllocator.IdAllocatorV2;
-      const serverConfig = yield* ServerConfig.ServerConfig;
-      const hostEnvironment = yield* HostProcessEnvironment;
-      const environment = mergeProviderInstanceEnvironment(input.environment, hostEnvironment);
+      const hostEnvironment = yield* HostProcess.Environment;
+      const environment = yield* mergeProviderInstanceEnvironment(
+        input.environment,
+        hostEnvironment,
+      );
       const selfInvocation = yield* resolveSelfInvocation();
-      return makeAcpAdapterV2({
+      return yield* makeAcpAdapterV2({
         instanceId: input.instanceId,
-        crypto,
-        fileSystem,
-        idAllocator,
-        serverConfig,
         selfInvocation,
         flavor: {
           driver: DRIVER,

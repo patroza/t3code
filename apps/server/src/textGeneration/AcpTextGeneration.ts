@@ -5,11 +5,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import { ChildProcessSpawner } from "effect/process";
 
-import {
-  type CursorSettings,
-  type ModelSelection,
-  type ProviderOptionSelection,
-} from "@t3tools/contracts";
+import { type ModelSelection, type ProviderOptionSelection } from "@t3tools/contracts";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
 import { extractJsonObject } from "@t3tools/shared/schemaJson";
 
@@ -20,13 +16,13 @@ import {
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildThreadTitlePrompt,
-} from "./TextGenerationPrompts.ts";
+} from "@t3tools/provider-core/server/textGenerationPrompts";
 import {
   sanitizeCommitSubject,
   sanitizePrTitle,
   sanitizeThreadTitle,
-} from "./TextGenerationUtils.ts";
-import type * as AcpSessionRuntime from "../provider/acp/AcpSessionRuntime.ts";
+} from "@t3tools/provider-core/server/textGenerationUtils";
+import type * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 import type * as EffectAcpErrors from "effect-acp/errors";
 
 const CURSOR_TIMEOUT_MS = 180_000;

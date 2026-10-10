@@ -58,6 +58,7 @@ import {
   readThreadShells,
 } from "../state/entities";
 import { useUiStateStore } from "../uiStateStore";
+import { clearThreadPreviewState } from "../previewStateStore";
 import { useTerminalUiStateStore } from "../terminalUiStateStore";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
 import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
@@ -621,6 +622,7 @@ export function useThreadActions() {
           clearComposerDraftForThread(target);
           clearTerminalUiState(target);
           clearPerThreadClientState(target);
+          clearThreadPreviewState(target);
         }
         return result;
       }
@@ -740,6 +742,7 @@ export function useThreadActions() {
       );
       clearTerminalUiState(threadRef);
       clearPerThreadClientState(threadRef);
+      clearThreadPreviewState(threadRef);
 
       if (shouldNavigateToFallback) {
         const fallbackThread = fallbackThreadId

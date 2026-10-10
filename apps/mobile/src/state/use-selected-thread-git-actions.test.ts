@@ -26,6 +26,7 @@ vi.mock("react", () => ({
   useCallback: (callback: unknown) => callback,
   useMemo: (factory: () => unknown) => factory(),
   useEffect: () => {},
+  useEffectEvent: (callback: unknown) => callback,
 }));
 // The real package is Flow, which the node test runner cannot parse.
 vi.mock("react-native", () => ({

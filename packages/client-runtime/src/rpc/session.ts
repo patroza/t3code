@@ -24,7 +24,7 @@ import * as RpcClientError from "effect/rpc/RpcClientError";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Socket from "effect/socket/Socket";
 
-import { makeWsRpcProtocolClient, type WsRpcProtocolClient } from "./protocol.ts";
+import { makeWsRpcProtocolClient, PING_TIMEOUT, type WsRpcProtocolClient } from "./protocol.ts";
 import { NETWORK_BLOCKING_HINT } from "../errors/network.ts";
 import type {
   ConnectionAttemptError,
@@ -369,6 +369,7 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
         }).pipe(Effect.provideService(Socket.WebSocketConstructor, trackedConstructor));
         const socket = captureSocketFailures(rawSocket, causeSink);
         return yield* RpcClient.makeProtocolSocket({
+          pingTimeout: PING_TIMEOUT,
           retryTransientErrors: false,
           retryPolicy: Schedule.recurs(0),
         }).pipe(

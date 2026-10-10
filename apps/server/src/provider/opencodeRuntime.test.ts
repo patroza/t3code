@@ -9,8 +9,8 @@ import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as TestClock from "effect/testing/TestClock";
 
-import * as OpenCodeServerLedger from "./OpenCodeServerLedger.ts";
-import * as OpenCodeRuntime from "./opencodeRuntime.ts";
+import * as OpenCodeServerLedger from "@t3tools/provider-opencode/server/OpenCodeServerLedger";
+import * as OpenCodeRuntime from "@t3tools/provider-opencode/server/OpenCodeRuntime";
 
 it.effect("launches a local OpenCode server with the project cwd and final environment", () => {
   let spawnedCommand: unknown;

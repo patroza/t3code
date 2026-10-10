@@ -16,7 +16,7 @@ import {
   type ProjectLifecyclePrAssociation,
   worktreeRemoveProjectScript,
 } from "@t3tools/shared/projectScripts";
-import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -126,8 +126,8 @@ export const make = Effect.gen(function* () {
   const projects = yield* ProjectStoreV2;
   const projection = yield* ProjectionStoreV2;
   const processRunner = yield* ProcessRunner.ProcessRunner;
-  const platform = yield* HostProcessPlatform;
-  const hostEnvironment = yield* HostProcessEnvironment;
+  const platform = yield* HostProcess.Platform;
+  const hostEnvironment = yield* HostProcess.Environment;
 
   const resolveProject = Effect.fn("ProjectLifecycleScriptRunner.resolveProject")(function* (
     input: ProjectLifecycleScriptRunnerInput,

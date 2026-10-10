@@ -54,6 +54,7 @@ import {
   GitHubIcon,
   GitLabIcon,
   ForgejoIcon,
+  GitCafeIcon,
 } from "~/components/Icons";
 import { repositoryFromChangeRequestUrl } from "~/components/pullRequest/pullRequestDetail.logic";
 import { RadioGroup } from "~/components/ui/radio-group";
@@ -122,7 +123,7 @@ import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { vcsEnvironment } from "~/state/vcs";
 import { randomUUID } from "~/lib/utils";
-import { resolvePathLinkTarget } from "~/terminal-links";
+import { resolvePathLinkTarget } from "@t3tools/shared/fileLinks";
 import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { getSourceControlPresentation } from "~/sourceControlPresentation";
 import { useOpenLink } from "~/browser/useOpenLink";
@@ -155,7 +156,7 @@ interface PendingDefaultBranchAction {
 
 type PublishProviderKind = Extract<
   SourceControlProviderKind,
-  "github" | "gitlab" | "forgejo" | "bitbucket" | "azure-devops"
+  "github" | "gitlab" | "forgejo" | "bitbucket" | "azure-devops" | "gitcafe"
 >;
 
 type GitActionToastId = ReturnType<typeof toastManager.add>;
@@ -243,6 +244,14 @@ const PUBLISH_PROVIDER_OPTIONS = [
     host: "dev.azure.com",
     pathPlaceholder: "project/repository",
     Icon: AzureDevOpsIcon,
+  },
+  {
+    value: "gitcafe",
+    label: "GitCafe",
+    description: "git.cafe",
+    host: "git.cafe",
+    pathPlaceholder: "owner/repo",
+    Icon: GitCafeIcon,
   },
 ] as const satisfies ReadonlyArray<{
   readonly value: PublishProviderKind;
@@ -367,13 +376,10 @@ function getMenuActionDisabledReason({
   if (!hasBranch) {
     return `Detached HEAD: check out a branch before creating a ${terminology.singular}.`;
   }
-  if (hasChanges) {
-    return `Commit local changes before creating a ${terminology.singular}.`;
-  }
   if (!gitStatus.hasUpstream && !hasPrimaryRemote) {
     return `Add an "origin" remote before creating a ${terminology.singular}.`;
   }
-  if (!isAhead) {
+  if ((gitStatus.aheadOfDefaultCount ?? gitStatus.aheadCount) <= 0) {
     return `No local commits to include in a ${terminology.singular}.`;
   }
   if (isBehind) {
@@ -469,6 +475,7 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
       forgejo: null,
       bitbucket: null,
       "azure-devops": null,
+      gitcafe: null,
     };
     for (const provider of sourceControlDiscovery.data?.sourceControlProviders ?? []) {
       if (isPublishProviderKind(provider.kind)) {
@@ -694,9 +701,9 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
                     value={option.value}
                     className={cn(
                       "relative flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-3 text-left outline-none transition-[background-color,border-color,box-shadow]",
-                      "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+                      "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
                       isSelected
-                        ? "border-primary bg-background shadow-sm ring-2 ring-primary/35 dark:border-transparent dark:bg-primary/10 dark:shadow-none dark:ring-1 dark:ring-primary/30"
+                        ? "border-primary bg-background shadow-sm ring-2 ring-inset ring-primary/35 dark:border-transparent dark:bg-primary/10 dark:shadow-none dark:ring-1 dark:ring-primary/30"
                         : "border-border bg-background hover:border-foreground/20 hover:bg-muted/50 dark:border-transparent dark:bg-white/[0.035] dark:hover:bg-accent",
                     )}
                   >
@@ -718,7 +725,7 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
               >
                 Repository
               </label>
-              <div className="flex items-stretch overflow-hidden rounded-md border border-input bg-background focus-within:outline-2 focus-within:-outline-offset-1 focus-within:outline-ring">
+              <div className="flex items-stretch overflow-hidden rounded-md border border-input bg-background focus-within:outline-2 focus-within:-outline-offset-2 focus-within:outline-ring">
                 <span className="flex shrink-0 items-center gap-1.5 border-r border-input bg-muted/50 px-2.5 font-mono text-xs text-muted-foreground">
                   <currentPublishProvider.Icon className="size-3.5" />
                   {publishHost}/
@@ -780,9 +787,9 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
                       value={option.value}
                       className={cn(
                         "relative flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2.5 text-left outline-none transition-[background-color,border-color,box-shadow]",
-                        "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+                        "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
                         isSelected
-                          ? "border-primary bg-background shadow-sm ring-2 ring-primary/35 dark:border-transparent dark:bg-primary/10 dark:shadow-none dark:ring-1 dark:ring-primary/30"
+                          ? "border-primary bg-background shadow-sm ring-2 ring-inset ring-primary/35 dark:border-transparent dark:bg-primary/10 dark:shadow-none dark:ring-1 dark:ring-primary/30"
                           : "border-border bg-background hover:border-foreground/20 hover:bg-muted/50 dark:border-transparent dark:bg-white/[0.035] dark:hover:bg-accent",
                       )}
                     >

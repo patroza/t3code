@@ -3,7 +3,9 @@ import {
   NativeStackScreenOptions,
   nativeHeaderScrollEdgeEffects,
 } from "../../native/StackHeader";
-import { use, useCallback, useRef } from "react";
+import { use, useCallback, useEffect, useRef } from "react";
+import { useNavigation, type ParamListBase } from "@react-navigation/native";
+import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { Platform, Text as RNText, useWindowDimensions } from "react-native";
 import type { SearchBarCommands } from "react-native-screens";
 
@@ -12,11 +14,9 @@ import { NativePrimaryColumnContext } from "../../native/v5-workspace-context";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
-import {
-  createNativeMailSearchToolbarItem,
-  NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED,
-} from "../layout/native-mail-search-toolbar";
+import { createNativeMailSearchToolbarItem } from "../layout/native-mail-search-toolbar";
 import { getConnectionAwareBrandHeaderOptions } from "./WorkspaceConnectionTitle";
+import { useNativeMailSearchToolbar } from "../../native/use-native-mail-search-toolbar";
 import { buildHomeListFilterMenu } from "./home-list-filter-menu";
 import { createSidebarHeaderItems } from "../threads/sidebar-native-header-items";
 import {
@@ -38,6 +38,7 @@ import {
   type HomeThreadGrouping,
 } from "./homeListMode";
 import type { HomeHeaderProps } from "./HomeHeader.types";
+import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 
 export type { HomeHeaderEnvironment } from "./HomeHeader.types";
 
@@ -48,13 +49,30 @@ function defaultHideSettledForGrouping(threadGrouping: HomeThreadGrouping): bool
 }
 
 export function HomeHeader(props: HomeHeaderProps) {
+  const navigation = useNavigation<NativeStackNavigationProp<ParamListBase>>();
+  const { panes, togglePrimarySidebar } = useAdaptiveWorkspaceLayout();
+  const usesNativeMailSearchToolbar = useNativeMailSearchToolbar();
   const primaryColumn = use(NativePrimaryColumnContext);
-  const iPadSidebar = Platform.OS === "ios" && Platform.isPad && primaryColumn !== null;
+  const sidebarHeader =
+    Platform.OS === "ios" &&
+    primaryColumn !== null &&
+    (Platform.isPad || !usesNativeMailSearchToolbar);
   const searchBarRef = useRef<SearchBarCommands>(null);
   const { width: headerWidth } = useWindowDimensions();
   const theme = useUniwindTheme();
   const iconColor = theme["--color-icon"];
   const alternateModes = otherHomeListModes(props.listMode);
+  const focusAfterReveal = useRef(false);
+  useEffect(
+    () =>
+      navigation.addListener("transitionEnd", (event) => {
+        if (focusAfterReveal.current && !event.data.closing) {
+          focusAfterReveal.current = false;
+          searchBarRef.current?.focus();
+        }
+      }),
+    [navigation],
+  );
   const hasCustomListOptions =
     props.selectedEnvironmentIds.length > 0 ||
     props.ownershipFilter !== DEFAULT_OWNERSHIP_FILTER ||
@@ -64,9 +82,14 @@ export function HomeHeader(props: HomeHeaderProps) {
       props.hideSettledThreads !== defaultHideSettledForGrouping(props.threadGrouping)) ||
     props.threadGrouping !== "project";
   const focusSearch = useCallback(() => {
+    if (primaryColumn && !panes.primarySidebarVisible) {
+      focusAfterReveal.current = true;
+      togglePrimarySidebar();
+      return true;
+    }
     searchBarRef.current?.focus();
     return searchBarRef.current !== null;
-  }, []);
+  }, [primaryColumn, panes.primarySidebarVisible, togglePrimarySidebar]);
   useHardwareKeyboardCommand("focusSearch", focusSearch);
   const filterMenu = buildHomeListFilterMenu({
     environments: props.environments,
@@ -103,7 +126,7 @@ export function HomeHeader(props: HomeHeaderProps) {
           // through so it survives the swap.
           ...getConnectionAwareBrandHeaderOptions({
             headerWidth,
-            trailingItemCount: alternateModes.length + (iPadSidebar ? 2 : 1),
+            trailingItemCount: alternateModes.length + (sidebarHeader ? 2 : 1),
             onOpenEnvironments: props.onOpenEnvironments,
             title: headerTitle,
             brand: (
@@ -121,7 +144,7 @@ export function HomeHeader(props: HomeHeaderProps) {
               }
             : {}),
           unstable_headerRightItems: () =>
-            iPadSidebar
+            sidebarHeader
               ? createSidebarHeaderItems({
                   filterIcon: hasCustomListOptions
                     ? "line.3.horizontal.decrease.circle.fill"
@@ -151,11 +174,9 @@ export function HomeHeader(props: HomeHeaderProps) {
                     type: "button",
                   }),
                 ],
-          // Mail-search toolbar is iOS 26+ only;
-          // pre-Liquid-Glass falls back to the standard nav search field.
-          // Keys are omitted (not `undefined`) on the NativeHeaderToolbar
-          // fallback so a reapply cannot clobber options that toolbar owns.
-          ...(iPadSidebar
+          // The keys below are set per-branch (not `undefined`) so a later
+          // reapply cannot clobber options owned by NativeHeaderToolbar.
+          ...(sidebarHeader
             ? {
                 headerSearchBarOptions: {
                   ref: searchBarRef,
@@ -172,7 +193,7 @@ export function HomeHeader(props: HomeHeaderProps) {
                 },
                 unstable_headerToolbarItems: () => [],
               }
-            : NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED
+            : usesNativeMailSearchToolbar
               ? {
                   unstable_headerToolbarItems: () => [
                     createNativeMailSearchToolbarItem({
@@ -208,7 +229,7 @@ export function HomeHeader(props: HomeHeaderProps) {
         }}
       />
 
-      {iPadSidebar || NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED ? null : (
+      {sidebarHeader || usesNativeMailSearchToolbar ? null : (
         <NativeHeaderToolbar placement="bottom">
           <NativeHeaderToolbar.Menu
             accessibilityLabel="Filter threads"

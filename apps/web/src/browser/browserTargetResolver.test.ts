@@ -14,6 +14,9 @@ vi.mock("@t3tools/client-runtime/state/runtime", async (importOriginal) => ({
 // command itself is stubbed above, so the registry only needs to exist.
 vi.mock("~/rpc/atomRegistry", () => ({ appAtomRegistry: {} }));
 vi.mock("~/state/preview", () => ({ previewEnvironment: { resolvePort: { label: "test" } } }));
+const env = vi.hoisted(() => ({ isElectron: false }));
+
+vi.mock("~/env", () => env);
 
 describe("browser target resolver", () => {
   beforeEach(() => readPreparedConnection.mockReset());
@@ -168,6 +171,33 @@ describe("browser target resolver", () => {
     expect(
       resolveDiscoveredServerUrl(EnvironmentId.make("environment-1"), "localhost:3000/app"),
     ).toBe("http://192.168.1.25:3000/app");
+  });
+
+  it("keeps localhost for servers on the desktop's own WSL or primary backend", async () => {
+    // WSL NAT mode serves the backend on the distro IP, but a loopback-only dev
+    // server there answers only on localhost from the Windows desktop.
+    const { resolveDiscoveredServerUrl } = await import("./browserTargetResolver");
+    env.isElectron = true;
+    try {
+      for (const target of [
+        { _tag: "BearerConnectionTarget", connectionId: "local:wsl:Ubuntu" },
+        { _tag: "PrimaryConnectionTarget" },
+      ]) {
+        readPreparedConnection.mockReturnValue({ httpBaseUrl: "http://172.24.66.27:3773", target });
+        expect(
+          resolveDiscoveredServerUrl(EnvironmentId.make("environment-1"), "localhost:3001/"),
+        ).toBe("http://localhost:3001/");
+      }
+      readPreparedConnection.mockReturnValue({
+        httpBaseUrl: "http://192.168.1.25:3773",
+        target: { _tag: "BearerConnectionTarget", connectionId: "saved:remote" },
+      });
+      expect(
+        resolveDiscoveredServerUrl(EnvironmentId.make("environment-1"), "localhost:3001/"),
+      ).toBe("http://192.168.1.25:3001/");
+    } finally {
+      env.isElectron = false;
+    }
   });
 
   it("preserves localhost server-picker values when the prepared base is 127.0.0.1", async () => {

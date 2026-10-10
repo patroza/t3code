@@ -59,7 +59,7 @@ import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
 import {
-  THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS,
+  THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS,
   THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS,
   THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS,
 } from "./threadDetailsPanelStyles";
@@ -170,23 +170,35 @@ function relationshipThreadTitle(input: {
 }
 
 /**
- * A delegated task settles with its first run, but the parent can keep sending
- * the child follow-ups. While the child thread has a live run, the row's timer
- * and hover card follow that run instead of the settled task.
+ * The row's timer and hover card follow current child work, including queued
+ * follow-ups whose provider turn has not started yet.
  */
-function liveSubagent<Agent extends RuntimeSubagent>(
+function currentSubagent<Agent extends RuntimeSubagent>(
   agent: Agent | undefined,
   childThread: OrchestrationV2ThreadShell | null | undefined,
 ): Agent | undefined {
-  const liveStatus = childThread?.activityRunStatus;
-  if (!agent || !liveStatus) return agent;
-  const startedAt = childThread.activityRunStartedAt;
+  const liveStatus =
+    childThread?.activityRunStatus ?? (childThread?.status === "queued" ? "queued" : null);
+  if (!agent || !childThread) return agent;
+  const newerRun =
+    childThread.latestRunRequestedAt &&
+    DateTime.toEpochMillis(childThread.latestRunRequestedAt) >
+      Date.parse(agent.completedAt ?? agent.startedAt ?? agent.updatedAt);
+  if (!liveStatus && !newerRun) return agent;
+  const status = liveStatus ?? childThread.status;
+  const startedAt = liveStatus ? childThread.activityRunStartedAt : childThread.latestRunStartedAt;
+  const completedAt = liveStatus ? null : childThread.latestRunCompletedAt;
   return {
     ...agent,
-    status: liveStatus === "running" || liveStatus === "waiting" ? liveStatus : "pending",
+    status:
+      status === "preparing" || status === "starting" || status === "queued"
+        ? "pending"
+        : status === "rolled_back"
+          ? "interrupted"
+          : status,
     startedAt: startedAt ? DateTime.formatIso(startedAt) : null,
-    completedAt: null,
-    // The settled task's output belongs to its first run, not this one.
+    completedAt: completedAt ? DateTime.formatIso(completedAt) : null,
+    // The task's output belongs to its recorded run, not newer child work.
     progress: null,
     result: null,
     error: null,
@@ -212,6 +224,7 @@ export function ThreadRelationshipsPanel(props: {
               driver: subagent.driver,
               providerInstanceId: subagent.providerInstanceId,
               origin: subagent.origin,
+              modelSelection: subagent.modelSelection,
             },
           ]),
       ),
@@ -379,7 +392,7 @@ export function ThreadRelationshipsPanel(props: {
                   ? BotIcon
                   : GitForkIcon;
               const relationship = relationshipLabel(edge, props.threadId);
-              const agent = liveSubagent(
+              const agent = currentSubagent(
                 isSubagent && !isParent ? subagentsByThreadId.get(threadId) : undefined,
                 node?.thread,
               );
@@ -412,6 +425,7 @@ export function ThreadRelationshipsPanel(props: {
                   model={agent.model}
                   providerInstanceId={agent.providerInstanceId}
                   origin={agent.origin}
+                  modelSelection={agent.modelSelection}
                   provider={provider}
                   providers={providers}
                   driver={providerDriver}
@@ -461,12 +475,9 @@ export function ThreadRelationshipsPanel(props: {
                 </>
               );
               return (
-                <li
-                  key={threadId}
-                  className={`group relative flex h-8 items-center rounded-lg ${canStop ? THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS : ""}`}
-                >
+                <li key={threadId} className="group relative flex h-8 items-center rounded-lg">
                   {isMergeTarget ? (
-                    <div className={THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS}>
+                    <div className={THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS}>
                       <Tooltip>
                         <TooltipTrigger
                           delay={200}
@@ -474,7 +485,7 @@ export function ThreadRelationshipsPanel(props: {
                             <ThreadDetailsControl
                               size="sm"
                               variant="ghost"
-                              part="link-primary"
+                              part="primary"
                               aria-label={`${threadTitle} ${threadRelationshipStatusLabel(status)}`}
                               disabled={node?.missing === true}
                               onClick={() => openThread(threadId)}
@@ -534,7 +545,7 @@ export function ThreadRelationshipsPanel(props: {
                             variant="ghost"
                             disabled={node?.missing === true}
                             onClick={() => openThread(threadId)}
-                            part={canStop ? "group-row" : "row"}
+                            part="row"
                           />
                         }
                       >

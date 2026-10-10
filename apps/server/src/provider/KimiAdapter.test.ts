@@ -5,16 +5,16 @@ import { Effect, Layer } from "effect";
 import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/process";
 import { ProviderInstanceId, ProviderSessionId, ThreadId } from "@t3tools/contracts";
-import * as ServerConfig from "../config.ts";
-import * as IdAllocator from "../orchestration-v2/IdAllocator.ts";
+import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { KimiAdapterV2Driver } from "../orchestration-v2/Adapters/KimiAdapterV2.ts";
-import { ProviderAdapterV2RuntimePolicy } from "../orchestration-v2/ProviderAdapter.ts";
+import { ProviderAdapterV2RuntimePolicy } from "@t3tools/provider-core/server/ProviderAdapter";
 const layer = Layer.mergeAll(
   NodeServices.layer,
   IdAllocator.layer,
-  ServerConfig.layerTest(process.cwd(), { prefix: "t3-kimi-v2-" }).pipe(
-    Layer.provide(NodeServices.layer),
-  ),
+  TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer)),
+  McpProviderSessions.layer,
 );
 it.effect("registers Kimi as a native ACP adapter and launches its ACP command", () =>
   Effect.gen(function* () {

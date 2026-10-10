@@ -60,7 +60,7 @@ describe("searchSettings", () => {
   it("matches normalized title substrings", () => {
     expect(searchSettings("  WORD   WRAP  ", ITEMS).map((item) => item.id)).toEqual(["word-wrap"]);
     // "work" is not a substring of "word wrap". The full catalog matches the
-    // fork's "Worktree remove confirmation" (and not Word wrap). Upstream's
+    // worktree settings (and not Word wrap). Upstream's
     // project workspace setting left this catalog with #5923, which moved
     // project settings onto contextual project routes.
     expect(
@@ -72,6 +72,7 @@ describe("searchSettings", () => {
       "working-shelf",
       "worktree-remove-confirmation",
       "worktree-branch-naming",
+      "storage-worktree-keep-when",
       "network-access",
       "project-defaults",
       "environment-identification",

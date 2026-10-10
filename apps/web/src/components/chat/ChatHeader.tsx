@@ -42,7 +42,7 @@ import { useT3ProjectFileScripts } from "~/hooks/useT3ProjectFileScripts";
 import { useThreadActionMenu } from "~/hooks/useThreadActionMenu";
 import { readLocalApi } from "~/localApi";
 import { threadEnvironment } from "../../state/threads";
-import { useAtomCommand } from "../../state/use-atom-command";
+
 import { observeResponsiveBreakpointFade, usePanelAnimationSettings } from "../../panelAnimations";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
@@ -53,14 +53,16 @@ import {
   WorkspaceBreadcrumbSeparator,
   WorkspaceBreadcrumbText,
 } from "../WorkspaceBreadcrumb";
+import { observeResize } from "~/lib/observeResize";
 import { cn } from "~/lib/utils";
 import { useIsMobile } from "~/hooks/useMediaQuery";
 import { Button } from "../ui/button";
-import { Menu, MenuItem, MenuItemLabel, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
+import { Menu, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
 import { useAiUsageSnapshot } from "../../hooks/useAiUsageSnapshot";
 import { resolveDriverUsage, usageDotFillClass, usageDotRingColor } from "../../aiUsageState";
 import { HostResourceStatus } from "../HostResourceStatus";
 import { isLocalConnectionTarget } from "~/connection/desktopLocal";
+import { useClientSettings } from "../../hooks/useSettings";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -75,6 +77,8 @@ interface ChatHeaderProps {
   preferredScriptId: string | null;
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
+  parentThreadLink: { threadId: ThreadId; title: string } | null;
+  onOpenThread: (threadId: ThreadId) => void;
   rightPanelOpen: boolean;
   gitCwd: string | null;
   isPreparingWorktree?: boolean;
@@ -148,6 +152,8 @@ export const ChatHeader = memo(function ChatHeader({
   preferredScriptId,
   keybindings,
   availableEditors,
+  parentThreadLink,
+  onOpenThread,
   rightPanelOpen,
   gitCwd,
   isPreparingWorktree = false,
@@ -184,9 +190,7 @@ export const ChatHeader = memo(function ChatHeader({
     if (!container) return;
     const update = () => setIsNarrowHeader(container.clientWidth < 512);
     update();
-    const observer = new ResizeObserver(update);
-    observer.observe(container);
-    return () => observer.disconnect();
+    return observeResize(container, update);
   }, []);
   const actionsCollapsed = isMobile || isNarrowHeader;
   const [actionsOpen, setActionsOpen] = useState(false);
@@ -233,6 +237,9 @@ export const ChatHeader = memo(function ChatHeader({
   const headerDotClass = headerUsage ? usageDotFillClass(headerUsage.marker) : undefined;
   const headerRingColor = headerUsage ? usageDotRingColor(headerUsage.marker) : undefined;
 
+  const interfaceFont = useClientSettings((settings) => settings.fontFamilySans);
+  const breadcrumbContainerRef = useRef<HTMLDivElement>(null);
+  const [collapseParentTitle, setCollapseParentTitle] = useState(false);
   const activeThreadRef = useMemo(
     () => scopeThreadRef(activeThreadEnvironmentId, activeThreadId),
     [activeThreadEnvironmentId, activeThreadId],
@@ -266,6 +273,43 @@ export const ChatHeader = memo(function ChatHeader({
     renaming.environmentId === activeThreadEnvironmentId
       ? renaming.title
       : null;
+  // Leaving rename swaps the input back for the title, which needs a fresh fit.
+  const isRenamingTitle = renamingTitle !== null;
+  useEffect(() => {
+    const list = breadcrumbContainerRef.current?.querySelector("ol");
+    if (!list || !parentThreadLink) return;
+    // Measure the untruncated labels, including a collapsed parent's hidden
+    // text, so expanding and collapsing never change the fit calculation.
+    // Width-capped labels (the project) never grow, so their overflow is skipped.
+    const measure = () => {
+      const gap = Number.parseFloat(getComputedStyle(list).columnGap) || 0;
+      const width = Array.from(list.children).reduce(
+        (total, item) => {
+          const label = item.querySelector('[data-slot="workspace-breadcrumb-text"]');
+          const ellipsis = item.querySelector("[data-parent-breadcrumb-ellipsis]");
+          return (
+            total +
+            (item.firstElementChild?.getBoundingClientRect().width ?? 0) +
+            (label && getComputedStyle(label).maxWidth === "none"
+              ? label.scrollWidth - label.clientWidth
+              : 0) -
+            (ellipsis?.getBoundingClientRect().width ?? 0)
+          );
+        },
+        gap * (list.children.length - 1),
+      );
+      setCollapseParentTitle(width > list.clientWidth);
+    };
+    measure();
+    const frame = requestAnimationFrame(measure);
+    document.fonts.addEventListener("loadingdone", measure);
+    const stopObserving = observeResize(list, measure);
+    return () => {
+      cancelAnimationFrame(frame);
+      document.fonts.removeEventListener("loadingdone", measure);
+      stopObserving();
+    };
+  }, [activeProjectName, activeThreadTitle, parentThreadLink, interfaceFont, isRenamingTitle]);
   const renameCommittedRef = useRef(false);
   const startRename = useCallback(() => {
     if (
@@ -451,7 +495,11 @@ export const ChatHeader = memo(function ChatHeader({
   );
   return (
     <div
-      className="@container/header-actions flex min-w-0 flex-1 items-center gap-2 sm:gap-3"
+      ref={breadcrumbContainerRef}
+      className={cn(
+        "@container/header-actions flex min-w-0 flex-1 items-center gap-2 sm:gap-3",
+        rightPanelOpen ? "pr-10" : "pr-24",
+      )}
       onContextMenu={handleHeaderContextMenu}
     >
       <WorkspaceBreadcrumb
@@ -471,7 +519,7 @@ export const ChatHeader = memo(function ChatHeader({
                       type="button"
                       aria-label={`New thread in ${activeProjectName}`}
                       onClick={onNewThreadInProject}
-                      className="inline-flex min-w-0 max-w-full cursor-pointer items-center gap-1.5 rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+                      className="inline-flex min-w-0 max-w-full cursor-pointer items-center gap-1.5 rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                     />
                   }
                 >
@@ -488,12 +536,46 @@ export const ChatHeader = memo(function ChatHeader({
             </WorkspaceBreadcrumbSeparator>
           </>
         ) : null}
+        {parentThreadLink ? (
+          <>
+            <WorkspaceBreadcrumbItem>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-label={`Open parent thread: ${parentThreadLink.title}`}
+                      onClick={() => onOpenThread(parentThreadLink.threadId)}
+                      className="inline-flex min-w-0 max-w-full cursor-pointer items-center rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                    />
+                  }
+                >
+                  <WorkspaceBreadcrumbText
+                    aria-hidden
+                    className={collapseParentTitle ? "w-0" : undefined}
+                  >
+                    {parentThreadLink.title}
+                  </WorkspaceBreadcrumbText>
+                  {collapseParentTitle ? (
+                    <span aria-hidden data-parent-breadcrumb-ellipsis>
+                      ...
+                    </span>
+                  ) : null}
+                </TooltipTrigger>
+                <TooltipPopup side="top">{parentThreadLink.title}</TooltipPopup>
+              </Tooltip>
+            </WorkspaceBreadcrumbItem>
+            <WorkspaceBreadcrumbSeparator>
+              <WorkspaceBreadcrumbText>/</WorkspaceBreadcrumbText>
+            </WorkspaceBreadcrumbSeparator>
+          </>
+        ) : null}
         <WorkspaceBreadcrumbItem current className="min-w-10 flex-1">
           {renamingTitle !== null ? (
             <input
               autoFocus
               aria-label="Thread title"
-              className="min-w-0 flex-1 rounded-sm bg-transparent text-sm font-medium text-foreground outline-none ring-1 ring-ring/50 focus:ring-ring"
+              className="min-w-0 flex-1 rounded-sm bg-transparent text-sm font-medium text-foreground outline-none ring-1 ring-inset ring-ring/50 focus:ring-ring"
               defaultValue={renamingTitle}
               onBlur={(event) => {
                 if (renameCommittedRef.current) return;
@@ -514,7 +596,7 @@ export const ChatHeader = memo(function ChatHeader({
                     onClick={openMenuFromTitle}
                     onDoubleClick={canOperateThread ? handleTitleDoubleClick : undefined}
                     onBlur={cancelPendingTitleMenu}
-                    className="group/thread-title inline-flex min-w-0 max-w-full cursor-pointer items-center gap-1 rounded-sm text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+                    className="group/thread-title inline-flex min-w-0 max-w-full cursor-pointer items-center gap-1 rounded-sm text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   />
                 }
               >

@@ -251,8 +251,11 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(sidebarV2).toContain("environmentId={thread.environmentId}");
     const root = readSrc("routes/__root.tsx");
     expect(root).toContain("IdentityClaimGate");
-    const chat = readSrc("components/ChatView.tsx");
-    expect(chat).toContain("requestIdentityClaimGate");
+    for (const sidebar of [sidebarV1, sidebarV2]) {
+      expect(sidebar).toMatch(
+        /if \(isIdentityClaimRequiredMessage\(message\)\) \{\s*requestIdentityClaimGate\(threadRef\.environmentId\);/,
+      );
+    }
     expect(sidebarV2).toContain("ThreadIdentityMark");
     expect(sidebarV2).toContain("sidebar-ownership-filter-");
     expect(sidebarV1).toContain("ThreadIdentityMark");
