@@ -167,12 +167,12 @@ export const captureViewport = async (
       scale: options.scale,
     };
   }
-  const capture = () =>
-    cdp.send("Page.captureScreenshot", {
-      format: options.format,
-      ...(options.quality === undefined ? {} : { quality: options.quality }),
-      ...(clip ? { clip } : {}),
-    });
+  const parameters = {
+    format: options.format,
+    ...(options.quality === undefined ? {} : { quality: options.quality }),
+    ...(clip ? { clip } : {}),
+  };
+  const capture = () => cdp.send("Page.captureScreenshot", parameters);
   try {
     return (await capture()).data;
   } catch (error) {
