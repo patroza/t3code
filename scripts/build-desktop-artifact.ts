@@ -3089,7 +3089,8 @@ export const packWindowsServerAsar = Effect.fn("packWindowsServerAsar")(function
   const unpackGlobs: string[] = [...WINDOWS_SERVER_ASAR_UNPACK_GLOBS];
   // asar matches unpack globs against absolute paths without dot matching.
   // Anchor selected addons so hidden parent directories do not block unpacking.
-  const sourceGlobPath = input.sourceDir
+  const sourceGlobPath = path
+    .resolve(input.sourceDir)
     .split(path.sep)
     .join("/")
     .replace(/[\\*?[\]{}(),]/g, "\\$&");
