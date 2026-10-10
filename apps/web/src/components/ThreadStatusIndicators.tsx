@@ -810,7 +810,7 @@ export function ThreadWorktreeIndicator({
               type="button"
               aria-label={worktreePath ? "New session on this worktree" : tooltip}
               data-testid={`thread-worktree-new-session-${thread.id}`}
-              className="inline-flex cursor-pointer items-center justify-center rounded-sm text-muted-foreground/55 outline-hidden transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+              className="inline-flex cursor-pointer items-center justify-center rounded-sm text-muted-foreground/55 outline-hidden transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
               onPointerDown={(event) => {
                 event.stopPropagation();
               }}
