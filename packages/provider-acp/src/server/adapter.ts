@@ -6253,7 +6253,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           yield* Ref.set(initialSessionActivationFailure, started.rejectedResume);
           itemIdentityVersion = 2;
           yield* Ref.set(runtimeRestartRequired, false);
-          prepareClaimableTerminalEnvironment(input.threadId);
+          prepareClaimableTerminalEnvironment(yield* readMcpContext(input.threadId));
         }
         yield* Ref.set(activeSessionId, started.sessionId);
         yield* Ref.set(activeSessionSetup, started);
