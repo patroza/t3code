@@ -28,7 +28,7 @@ export class DirenvEnvironment extends Context.Service<
       readonly environment: NodeJS.ProcessEnv;
     }) => Effect.Effect<NodeJS.ProcessEnv, DirenvEnvironmentError>;
   }
->()("t3/provider/DirenvEnvironment") {}
+>()("@t3tools/provider-core/server/DirenvEnvironment") {}
 
 export const identityDirenvEnvironmentResolver: DirenvEnvironment["Service"]["resolve"] = (input) =>
   Effect.succeed(input.environment);
