@@ -319,3 +319,54 @@ describe("server browser drag", () => {
     }
   });
 });
+
+describe("server browser viewport capture", () => {
+  const options = { format: "png", scale: 1 } as const;
+  const unavailable = () =>
+    new Error(
+      "cdpSession.send: Protocol error (Page.captureScreenshot): Unable to capture screenshot",
+    );
+
+  it("recovers from a transient screenshot protocol error", async () => {
+    let attempts = 0;
+    const cdp = {
+      send: async () => {
+        if (++attempts === 1) throw unavailable();
+        return { data: "captured-image" };
+      },
+    } as unknown as CDPSession;
+
+    expect(await ServerBrowserPage.captureViewport({} as Page, cdp, options)).toBe(
+      "captured-image",
+    );
+    expect(attempts).toBe(2);
+  });
+
+  it("reports a persistent capture failure after one retry", async () => {
+    let attempts = 0;
+    const error = unavailable();
+    const cdp = {
+      send: async () => {
+        attempts++;
+        throw error;
+      },
+    } as unknown as CDPSession;
+
+    await expect(ServerBrowserPage.captureViewport({} as Page, cdp, options)).rejects.toBe(error);
+    expect(attempts).toBe(2);
+  });
+
+  it("reports other protocol errors without retrying", async () => {
+    let attempts = 0;
+    const error = new Error("cdpSession.send: Target page, context or browser has been closed");
+    const cdp = {
+      send: async () => {
+        attempts++;
+        throw error;
+      },
+    } as unknown as CDPSession;
+
+    await expect(ServerBrowserPage.captureViewport({} as Page, cdp, options)).rejects.toBe(error);
+    expect(attempts).toBe(1);
+  });
+});

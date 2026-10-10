@@ -167,12 +167,27 @@ export const captureViewport = async (
       scale: options.scale,
     };
   }
-  const { data } = await cdp.send("Page.captureScreenshot", {
-    format: options.format,
-    ...(options.quality === undefined ? {} : { quality: options.quality }),
-    ...(clip ? { clip } : {}),
-  });
-  return data;
+  const capture = () =>
+    cdp.send("Page.captureScreenshot", {
+      format: options.format,
+      ...(options.quality === undefined ? {} : { quality: options.quality }),
+      ...(clip ? { clip } : {}),
+    });
+  try {
+    return (await capture()).data;
+  } catch (error) {
+    if (
+      !(error instanceof Error) ||
+      !error.message.endsWith(
+        "Protocol error (Page.captureScreenshot): Unable to capture screenshot",
+      )
+    ) {
+      throw error;
+    }
+    // Retry this transient Chromium capture error once; persistent failures still propagate.
+    await new Promise((resolve) => setTimeout(resolve, WAIT_POLL_MS));
+    return (await capture()).data;
+  }
 };
 
 export const snapshot = async (input: {
