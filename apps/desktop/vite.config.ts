@@ -24,6 +24,7 @@ const isolatedDesktopTestFiles = [
   "src/ipc/methods/window.test.ts",
   "src/permissions/MacPermissionHelper.test.ts",
   "src/permissions/MacSettingsWindow.test.ts",
+  "src/shell/DesktopShellEnvironment.test.ts",
   "src/preview/BrowserSession.test.ts",
   "src/preview/Manager.test.ts",
   // Window-capture tests mock electron/nativeImage/child_process. Under

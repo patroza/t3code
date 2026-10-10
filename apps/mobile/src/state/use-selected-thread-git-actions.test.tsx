@@ -4,6 +4,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { AsyncResult } from "effect/reactivity";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+vi.mock("react-native", () => ({ Alert: { alert: vi.fn() } }));
+
 const harness = vi.hoisted(() => ({
   selection: {
     selectedThread: { environmentId: "environment-1", id: "thread-1" } as unknown,
