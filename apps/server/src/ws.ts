@@ -1,3 +1,10 @@
+import * as Struct from "effect/Struct";
+import {
+  WsEnvironmentRpcGroup,
+  WsPullRequestsRpcGroup,
+  WsWorkspaceRpcGroup,
+  WsInteractiveRpcGroup,
+} from "@t3tools/contracts";
 import * as WorktreeLifecycle from "./orchestration-v2/WorktreeLifecycleService.ts";
 import {
   isValidOmegentT3ProductHandshake,
@@ -564,6 +571,11 @@ const BOOTSTRAP_WORKTREE_PROJECTION_ATTEMPTS = Math.ceil(
 
 // Middleware added later wraps middleware added earlier, so instrumentation wraps authorization.
 const ServerWsRpcGroup = WsRpcGroup.middleware(RpcInstrumentation);
+const ServerEnvironmentRpcGroup = WsEnvironmentRpcGroup.middleware(RpcInstrumentation);
+const ServerPullRequestsRpcGroup = WsPullRequestsRpcGroup.middleware(RpcInstrumentation);
+const ServerWorkspaceRpcGroup = WsWorkspaceRpcGroup.middleware(RpcInstrumentation);
+const ServerInteractiveRpcGroup = WsInteractiveRpcGroup.middleware(RpcInstrumentation);
+
 // When a resuming client's cursor is more than this many events behind the
 // current head, skip the per-event catch-up replay and send a fresh shell
 // snapshot instead. Replaying each intervening event costs a shell refetch;
@@ -1217,7 +1229,7 @@ const layerWsRpc = (
   productHandshakeValid: boolean,
   serverBrowser: ServerBrowser.ServerBrowser["Service"],
 ) =>
-  ServerWsRpcGroup.toLayer(
+  Layer.unwrap(
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
       const sql = yield* SqlClient.SqlClient;
@@ -3285,7 +3297,32 @@ const layerWsRpc = (
             }),
           ),
       });
-      return handlers;
+      return Layer.mergeAll(
+        ServerEnvironmentRpcGroup.toLayer(
+          Struct.pick(
+            handlers,
+            Array.from(ServerEnvironmentRpcGroup.requests.values(), (rpc) => rpc._tag),
+          ),
+        ),
+        ServerPullRequestsRpcGroup.toLayer(
+          Struct.pick(
+            handlers,
+            Array.from(ServerPullRequestsRpcGroup.requests.values(), (rpc) => rpc._tag),
+          ),
+        ),
+        ServerWorkspaceRpcGroup.toLayer(
+          Struct.pick(
+            handlers,
+            Array.from(ServerWorkspaceRpcGroup.requests.values(), (rpc) => rpc._tag),
+          ),
+        ),
+        ServerInteractiveRpcGroup.toLayer(
+          Struct.pick(
+            handlers,
+            Array.from(ServerInteractiveRpcGroup.requests.values(), (rpc) => rpc._tag),
+          ),
+        ),
+      );
     }),
   );
 

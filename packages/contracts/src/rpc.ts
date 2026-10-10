@@ -1976,7 +1976,8 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
   { error: EnvironmentAuthorizationError },
 ) {}
 
-export const WsRpcGroup = RpcGroup.make(
+// Keep handler inference below the compiler depth limit while retaining one complete wire group.
+export const WsEnvironmentRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
@@ -2048,6 +2049,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsIdentityClearClaimRpc,
   WsIdentityListClientClaimsRpc,
   WsIdentitySetClientClaimRpc,
+).middleware(RpcScopeAuthorization);
+
+export const WsPullRequestsRpcGroup = RpcGroup.make(
   WsPullRequestsListRpc,
   WsPullRequestsListStatsRpc,
   WsPullRequestsSummaryRpc,
@@ -2077,6 +2081,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsPullRequestsRequestReviewersRpc,
   WsPullRequestsLabelCandidatesRpc,
   WsPullRequestsSetLabelsRpc,
+).middleware(RpcScopeAuthorization);
+
+export const WsWorkspaceRpcGroup = RpcGroup.make(
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,
@@ -2125,6 +2132,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsVcsInitRpc,
   WsReviewGetDiffPreviewRpc,
   WsReviewGetDiffFileContentsRpc,
+).middleware(RpcScopeAuthorization);
+
+export const WsInteractiveRpcGroup = RpcGroup.make(
   WsTerminalOpenRpc,
   WsTerminalAttachRpc,
   WsTerminalObserveRpc,
@@ -2181,3 +2191,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2SubscribeShellRpc,
   WsOrchestrationV2SubscribeThreadRpc,
 ).middleware(RpcScopeAuthorization);
+
+export const WsRpcGroup = WsEnvironmentRpcGroup.merge(
+  WsPullRequestsRpcGroup,
+  WsWorkspaceRpcGroup,
+  WsInteractiveRpcGroup,
+);
