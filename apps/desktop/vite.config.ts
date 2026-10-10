@@ -17,6 +17,8 @@ const isolatedDesktopTestFiles = [
   "src/electron/ElectronTheme.test.ts",
   "src/electron/ElectronUpdater.test.ts",
   "src/electron/ElectronWindow.test.ts",
+  "src/electron/ElectronWindow.module.test.ts",
+  "src/electron/WindowsForegroundFocusWorker.test.ts",
   "src/electron/WindowsForegroundFocusThread.test.ts",
   "src/electron/MacApplicationIcon.test.ts",
   "src/ipc/methods/notificationBadge.test.ts",
@@ -27,6 +29,9 @@ const isolatedDesktopTestFiles = [
   "src/shell/DesktopShellEnvironment.test.ts",
   "src/preview/BrowserSession.test.ts",
   "src/preview/Manager.test.ts",
+  "src/preview/Passkeys.test.ts",
+  "src/preview/BrowserImport/ChromiumKeys.test.ts",
+  "src/preview/BrowserImport/ChromiumKeys.module.test.ts",
   // Window-capture tests mock electron/nativeImage/child_process. Under
   // isolate:false those mocks leak and later files see a half-applied vi.mock.
   "src/snapShot/ActiveWindow.test.ts",
