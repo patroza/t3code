@@ -158,6 +158,7 @@ export default mergeConfig(
               "src/cli/app.test.ts",
               "src/git/GitManager.test.ts",
               "src/observability/HeapSnapshot.test.ts",
+              "src/os-jank.test.ts",
               "src/provider/ClaudeCapabilitiesProbe.test.ts",
               "src/provider/ProviderRegistry.test.ts",
               "src/orchestration-v2/Adapters/CursorAgentSdk.test.ts",
@@ -204,6 +205,8 @@ export default mergeConfig(
               // earlier file binds the real v8 module and the partial-file
               // cleanup assertion never sees the mocked path.
               "src/observability/HeapSnapshot.test.ts",
+              // Mocks the synchronous login-shell probe used by shared/shell.
+              "src/os-jank.test.ts",
               // Wraps ChildProcessSpawner and drives SettingsWatcherLive
               // through TestClock. Under isolate:false a sibling file in
               // the same worker can swallow the second binaryPath probe.

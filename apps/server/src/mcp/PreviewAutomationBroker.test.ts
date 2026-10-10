@@ -647,7 +647,8 @@ it.effect("evicts an unresponsive host so its automation stream can reconnect", 
         .invoke<void>({ scope, operation: "status", input: {}, timeoutMs: 10 })
         .pipe(Effect.flip, Effect.forkScoped);
       yield* Effect.yieldNow;
-      yield* TestClock.adjust("10 millis");
+      // Include the host response grace period before declaring it unresponsive.
+      yield* TestClock.adjust(1_010);
       const timeout = yield* Fiber.join(pendingTimeout);
       expect(timeout).toBeInstanceOf(PreviewAutomationTimeoutError);
 
