@@ -129,7 +129,7 @@ const program = Effect.gen(function* () {
 
   app.on("message", async ({ activity, send, reply }) => {
     // Structural SDK activity type narrows to the fields read by the independent policy.
-    dispatcher.receive(activity as GatewayActivity, async (decision) => {
+    const outcome = dispatcher.receive(activity as GatewayActivity, async (decision) => {
       const { lease } = decision;
       const workspace = active(lease);
       const deliver = async (text: string, first = false) => {
@@ -247,6 +247,7 @@ const program = Effect.gen(function* () {
         }
       });
     });
+    console.info("Teams intake:", outcome);
     // Acknowledge immediately; T3 work and Teams delivery continue on the host queue.
   });
   app.on("install.remove", async ({ activity }) => {
