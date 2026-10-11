@@ -75,6 +75,11 @@ const buildSourcemap: boolean | "hidden" =
       : true;
 
 const isolatedUnitTestFiles = [
+  // Partial server mocks must not replace capability atoms used by browser restoration.
+  "src/hooks/useSettings.favorites.test.tsx",
+  "src/components/chat/ThreadAutomationsPanel.permissions.test.tsx",
+  "src/components/onboarding/WelcomeWizard.test.tsx",
+  "src/components/settings/TelemetryExportSettings.test.tsx",
   // Direct hook harnesses replace React hooks and compiler caches, requiring fresh module binding.
   "src/hooks/useThreadActions.undo.test.ts",
   "src/components/settings/ProjectFaviconPickerDialog.test.tsx",
