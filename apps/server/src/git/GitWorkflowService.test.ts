@@ -6,6 +6,11 @@ import * as Option from "effect/Option";
 
 import { VcsRepositoryDetectionError } from "@t3tools/contracts";
 
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as FileSystem from "effect/FileSystem";
+
+import * as ServerConfig from "../config.ts";
+import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as GitManager from "./GitManager.ts";
 import * as GitWorkflowService from "./GitWorkflowService.ts";
 import * as ProjectLifecycleScriptRunner from "../project/ProjectLifecycleScriptRunner.ts";
@@ -297,6 +302,29 @@ describe("GitWorkflowService", () => {
       );
     });
 
+    it.effect("finds a ref in a bare repository", () => {
+      let ran = false;
+      return Effect.gen(function* () {
+        const workflow = yield* GitWorkflowService.GitWorkflowService;
+        assert.isTrue(yield* workflow.hasRefNamed({ cwd: "/bare-repo", refName: "main" }));
+        assert.isTrue(ran);
+      }).pipe(
+        Effect.provide(
+          layer({
+            detect: () => Effect.succeed(bareHandle("/bare-repo")),
+            resolve: () => Effect.succeed(bareHandle("/bare-repo")),
+            driver: {
+              execute: () =>
+                Effect.sync(() => {
+                  ran = true;
+                  return { stdout: "refs/heads/main\n", stderr: "", exitCode: 0 };
+                }),
+            },
+          }),
+        ),
+      );
+    });
+
     it.effect("fetches into a bare repository", () => {
       let ran = false;
       const fetchRemote = () =>
@@ -416,4 +444,64 @@ describe("GitWorkflowService", () => {
       ),
     );
   });
+  it.effect("finds a name among the refs of every namespace", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-ref-named-" });
+      const workflow = yield* GitWorkflowService.GitWorkflowService;
+      const driver = yield* GitVcsDriver.GitVcsDriver;
+      for (const args of [
+        ["init", "-b", "main"],
+        [
+          "-c",
+          "user.email=t@t",
+          "-c",
+          "user.name=t",
+          "-c",
+          "commit.gpgSign=false",
+          "commit",
+          "--allow-empty",
+          "-m",
+          "init",
+        ],
+        ["update-ref", "refs/remotes/upstream/feature/topic", "HEAD"],
+        ["symbolic-ref", "refs/remotes/origin/alias", "refs/heads/main"],
+        ["update-ref", "refs/mirror/origin/mirrored", "HEAD"],
+      ]) {
+        yield* driver.execute({ operation: "test.setupRepo", cwd, args });
+      }
+      const found = yield* Effect.forEach(
+        ["main", "feature/topic", "alias", "mirrored", "t3/renamed", "feature/*"],
+        (refName) => workflow.hasRefNamed({ cwd, refName }),
+      );
+      assert.deepEqual(found, [true, true, true, true, false, false]);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        GitWorkflowService.layer.pipe(
+          Layer.provide(
+            Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({
+              resolve: ({ cwd }) => {
+                const handle = bareHandle(cwd);
+                return Effect.succeed({
+                  ...handle,
+                  repository: { ...handle.repository, bare: false },
+                });
+              },
+            }),
+          ),
+          Layer.provide(Layer.mock(GitManager.GitManager)({})),
+          Layer.provide(lifecycleScriptRunnerMock),
+          Layer.provideMerge(GitVcsDriver.layer),
+          Layer.provideMerge(VcsProcess.layer),
+          Layer.provideMerge(
+            ServerConfig.layerTest(process.cwd(), { prefix: "t3-ref-named-" }).pipe(
+              Layer.provide(NodeServices.layer),
+            ),
+          ),
+          Layer.provideMerge(NodeServices.layer),
+        ),
+      ),
+    ),
+  );
 });

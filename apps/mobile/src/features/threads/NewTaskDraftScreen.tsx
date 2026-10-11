@@ -113,6 +113,7 @@ import { sourceControlEnvironment } from "../../state/sourceControl";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { ProjectCloneBanner } from "../../components/ProjectCloneBanner";
 import {
+  describeUnavailableModelSelection,
   isModelSelectionUnavailable,
   resolveSelectableModelSelection,
 } from "../../lib/modelOptions";
@@ -1265,6 +1266,7 @@ export function NewTaskDraftScreen(props: {
       resolveSelectableModelSelection(
         selectedEnvironmentServerConfig,
         draft.modelSelection ?? null,
+        selectedProject.id,
       ) ?? flow.selectedModel;
     const workspaceMode = draft.workspaceSelection?.mode ?? flow.workspaceMode;
     const selectedBranchName = draft.workspaceSelection?.branch ?? flow.selectedBranchName;
@@ -1273,7 +1275,7 @@ export function NewTaskDraftScreen(props: {
     if (
       attachmentBlockReason !== null ||
       !modelSelection ||
-      initialMessageText.length === 0 ||
+      (initialMessageText.length === 0 && draft.attachments.length === 0) ||
       flow.submitting ||
       (workspaceMode === "worktree" && !selectedBranchName)
     ) {
@@ -1281,12 +1283,18 @@ export function NewTaskDraftScreen(props: {
     }
     if (
       environmentConnected &&
-      isModelSelectionUnavailable(selectedEnvironmentServerConfig, modelSelection)
+      isModelSelectionUnavailable(
+        selectedEnvironmentServerConfig,
+        modelSelection,
+        selectedProject.id,
+      )
     ) {
-      Alert.alert(
-        "Antigravity model unavailable",
-        "Set up Antigravity on web or desktop, or choose another model.",
+      const { title, detail } = describeUnavailableModelSelection(
+        selectedEnvironmentServerConfig,
+        modelSelection,
+        selectedProject.id,
       );
+      Alert.alert(title, detail);
       return;
     }
     // T3's own limits command is answered by the thread composer; a new task would
@@ -1426,7 +1434,7 @@ export function NewTaskDraftScreen(props: {
     !modelUnavailable &&
     Boolean(flow.selectedProject) &&
     Boolean(flow.selectedModel) &&
-    flow.prompt.trim().length > 0 &&
+    (flow.prompt.trim().length > 0 || flow.attachments.length > 0) &&
     isIncomingShareReady &&
     !isImportingShare &&
     !flow.submitting &&

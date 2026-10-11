@@ -11,6 +11,7 @@ import { extractJsonObject } from "@t3tools/shared/schemaJson";
 
 import { TextGenerationError } from "@t3tools/contracts";
 import * as TextGeneration from "./TextGeneration.ts";
+import { investigationUnsupported } from "@t3tools/provider-core/server/textGenerationOperations";
 import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
@@ -296,10 +297,14 @@ export const makeAcpTextGeneration = Effect.fn("makeAcpTextGeneration")(function
       } satisfies TextGeneration.ThreadTitleGenerationResult;
     });
 
+  const generateReviewGuide: TextGeneration.TextGeneration["Service"]["generateReviewGuide"] = () =>
+    Effect.fail(investigationUnsupported("generateReviewGuide", definition.providerName));
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateReviewGuide,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

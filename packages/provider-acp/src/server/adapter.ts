@@ -220,7 +220,9 @@ export interface AcpAdapterV2Flavor {
   readonly promptFailure?: (cause: unknown) => OrchestrationV2ProviderFailure;
   readonly driver: ProviderDriverKind;
   readonly capabilities: OrchestrationV2ProviderCapabilities;
-  readonly clientCapabilitiesMeta?: Record<string, boolean>;
+  readonly clientCapabilitiesMeta?: NonNullable<
+    EffectAcpSchema.InitializeRequest["clientCapabilities"]
+  >["_meta"];
   readonly normalizeSessionUpdate?: (
     notification: EffectAcpSchema.SessionNotification,
   ) => EffectAcpSchema.SessionNotification;
@@ -6298,6 +6300,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           modelSelection: ModelSelection,
           runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
         ) {
+          // A step failing below leaves the native config partly changed, so
+          // the previously applied selection no longer describes the session.
+          // Callers record the new selection only once this completes.
+          yield* Ref.set(activeSelection, null);
           const requestedModel = flavor.resolveModelId?.(modelSelection) ?? modelSelection.model;
           let appliedModel: string | undefined;
           if (flavor.applyModelSelection !== undefined) {
