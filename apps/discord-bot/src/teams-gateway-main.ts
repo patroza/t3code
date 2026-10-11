@@ -20,6 +20,7 @@ import { ThreadLinkStore, layer as linksLayer } from "./store/ThreadLinkStore.ts
 import { T3Session, layer as sessionLayer } from "./t3/T3Session.ts";
 import { readGatewayConfig, readPrivateCredential } from "./teams/gatewayConfig.ts";
 import { TeamsGatewayDispatcher } from "./teams/gatewayDispatcher.ts";
+import { startTeamsResponse } from "./teams/responseDelivery.ts";
 import { LoopbackTeamsAdapter, RedactedTeamsLogger } from "./teams/gatewayHttp.ts";
 import {
   TeamsGatewayPolicy,
@@ -216,24 +217,41 @@ const program = Effect.gen(function* () {
           stickyModelOnContinue: true,
           promptContext: { kind: "raw", value: enriched },
         });
-        yield* Effect.promise(() =>
-          deliver(
-            "[Open in T3 Code](" +
-              workspace.config.webUiBaseUrl +
-              "/?thread=" +
-              turn.threadId +
-              ")",
-            true,
-          ),
+        const deliverAnswer = yield* Effect.promise(() =>
+          startTeamsResponse({
+            send,
+            isNew: turn.isNew,
+            threadUrl: workspace.config.webUiBaseUrl + "/?thread=" + turn.threadId,
+            assertActive: () => {
+              active(lease);
+            },
+          }),
         );
         yield* Effect.forkDetach(
           waitForFinalAnswer({
             t3ThreadId: turn.threadId,
+            messageId: turn.messageId,
             baseline: snapshot === null ? "" : finalAnswerText(snapshot.thread),
             baselineTurnId: snapshot?.thread.latestTurn?.turnId ?? null,
-            send: (text) => deliver(text),
+            send: deliverAnswer,
             canDeliver: () => running && policy.isActive(lease),
-          }).pipe(Effect.timeout("1 hour"), Effect.ignoreCause),
+          }).pipe(
+            Effect.timeout("1 hour"),
+            Effect.catch(() =>
+              Effect.logWarning("Teams response delivery failed").pipe(
+                Effect.andThen(
+                  Effect.tryPromise({
+                    try: () =>
+                      deliverAnswer(
+                        "T3 response delivery did not complete. Open the linked thread to see the result.",
+                      ),
+                    catch: () => "teams-failure-notice-delivery-failed" as const,
+                  }),
+                ),
+              ),
+            ),
+            Effect.catch(() => Effect.logWarning("Teams failure notice delivery failed")),
+          ),
         );
       });
       await workspace.runtime.runPromise(processMessage).catch(async () => {
