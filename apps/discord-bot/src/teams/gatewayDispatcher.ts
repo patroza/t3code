@@ -18,6 +18,7 @@ export class TeamsGatewayDispatcher {
     execute: (decision: MentionDecision) => Promise<void>,
   ): string {
     const decision = this.policy.accept(activity);
+    if (decision.kind === "reject") return "reject:" + decision.reason;
     if (decision.kind !== "mention" || !decision.text) return decision.kind;
     const id = decision.lease.binding.workspace;
     const count = this.pending.get(id) ?? 0;

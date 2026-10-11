@@ -22,6 +22,7 @@ const Binding = Schema.Struct({
   scope: Schema.Literal("channel"),
   tenantId: Schema.String,
   teamId: Schema.String,
+  teamConversationId: Schema.optional(Schema.String),
   channelId: Schema.String,
   allowedActorIds: Schema.Array(Schema.String),
   projectShortName: Schema.optional(Schema.String),
@@ -131,6 +132,8 @@ export function parseGatewayConfig(value: unknown): TeamsGatewayConfig {
       !config.workspaces[binding.workspace]?.enabled ||
       !isUuid(binding.tenantId) ||
       !isUuid(binding.teamId) ||
+      (binding.teamConversationId !== undefined &&
+        !/^19:[^\s*]+@thread\.(?:tacv2|skype)$/u.test(binding.teamConversationId)) ||
       !binding.channelId ||
       binding.channelId.includes("*") ||
       !binding.projectShortName ||
