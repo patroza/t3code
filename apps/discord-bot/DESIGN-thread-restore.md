@@ -18,7 +18,7 @@ Mentions still **continue** the same T3 thread (lookup works). What is missing i
 ## Goals
 
 1. On bot boot (and T3 reconnect), re-establish bridges for the right set of links.
-2. If a turn finished offline, run the **normal finalize path**: remove in-progress stream tips (from **stored ids only**), post final answer + `stream-history.md` as today.
+2. If a turn finished offline, run the **normal finalize path**: remove in-progress stream tips (from **stored ids only**), post the final answer, and attach `stream-history.md` only when the channel topic contains `omegent-ips`.
 3. Cap concurrent bridges; prefer freshest activity.
 
 ## Non-goals (v1)
@@ -32,24 +32,24 @@ Mentions still **continue** the same T3 thread (lookup works). What is missing i
 
 ## Locked decisions
 
-| #   | Decision                                                                                                                                                                                                             |
-| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | **Restore set:** only threads that are **running** or **pending** (approval / user-input). Not idle/recent-by-default.                                                                                               |
-| 2   | **Missed finalize:** **auto-post** to Discord using the usual pipeline — find previous in-progress messages for that turn (via **stored** tip/stale ids), replace with final message(s) + stream-history transcript. |
-| 3   | **Orphan cleanup:** **only stored stream message ids**. Do not scan other channels/threads for Working.. markers.                                                                                                    |
-| 4   | **Cap:** max **50** concurrent bridges. When over capacity, **drop oldest by `lastActivityAt`** (do not restore / evict ensure).                                                                                     |
+| #   | Decision                                                                                                                                                                                                                                                                          |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | **Restore set:** only threads that are **running** or **pending** (approval / user-input). Not idle/recent-by-default.                                                                                                                                                            |
+| 2   | **Missed finalize:** **auto-post** to Discord using the usual pipeline — find previous in-progress messages for that turn (via **stored** tip/stale ids), replace with final message(s). Attach the stream-history transcript only when the channel topic contains `omegent-ips`. |
+| 3   | **Orphan cleanup:** **only stored stream message ids**. Do not scan other channels/threads for Working.. markers.                                                                                                                                                                 |
+| 4   | **Cap:** max **50** concurrent bridges. When over capacity, **drop oldest by `lastActivityAt`** (do not restore / evict ensure).                                                                                                                                                  |
 
 ---
 
 ## Current building blocks
 
-| Piece                | Location                                                                          | Notes                                                   |
-| -------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| Link store           | `apps/discord-bot/src/store/ThreadLinkStore.ts`                                   | `$T3_DISCORD_BOT_DATA_DIR/links.json`                   |
-| Link fields today    | `discordThreadId`, `t3ThreadId`, `projectId`, `channelId`, `guildId`, `createdAt` | Written on first worktree turn                          |
-| Bridge entry         | `bridgeThreadToDiscord` in `ResponseBridge.ts`                                    | In-memory `bridgeFibers` only                           |
-| Adopt-without-repost | `adoptedInitialSnapshot` in bridge                                                | Avoids re-posting completed answers on re-subscribe     |
-| Finalize             | `finalizeAssistantMessage`                                                        | Create final + delete stream tip ids; stream-history.md |
+| Piece                | Location                                                                          | Notes                                                                                       |
+| -------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Link store           | `apps/discord-bot/src/store/ThreadLinkStore.ts`                                   | `$T3_DISCORD_BOT_DATA_DIR/links.json`                                                       |
+| Link fields today    | `discordThreadId`, `t3ThreadId`, `projectId`, `channelId`, `guildId`, `createdAt` | Written on first worktree turn                                                              |
+| Bridge entry         | `bridgeThreadToDiscord` in `ResponseBridge.ts`                                    | In-memory `bridgeFibers` only                                                               |
+| Adopt-without-repost | `adoptedInitialSnapshot` in bridge                                                | Avoids re-posting completed answers on re-subscribe                                         |
+| Finalize             | `finalizeAssistantMessage`                                                        | Create final + delete stream tip ids; `stream-history.md` only with topic tag `omegent-ips` |
 
 Guest path today: `/var/lib/t3/discord-bot/links.json`.
 
@@ -182,7 +182,7 @@ then run the **same** finalize path as live turns:
 1. Load `openStreamMessageIds` from the link (and any in-memory state if fiber just started).
 2. **Delete only those ids** (decision 3) — no channel-wide Working.. scan.
 3. Post final answer text (use existing `finalAnswerText` / finalize rules) + attachments.
-4. Attach `stream-history.md` from accumulated progress text when available (from T3 messages this turn if stream text was not in memory).
+4. Attach `stream-history.md` from accumulated progress text only when the channel (or its parent, for a thread) topic contains `omegent-ips` and that text goes beyond the final answer.
 5. Persist `lastFinalizedAssistantId`, clear `openStreamMessageIds`, `touch` link.
 
 If turn is **still running**:

@@ -9,6 +9,20 @@ export const DISCORD_MAX_FILES_PER_MESSAGE = 10;
  */
 export const STREAM_HISTORY_MARKDOWN_NAME = "stream-history.md";
 
+/**
+ * Channel-topic tag that opts a channel into the in-progress stream attachment.
+ * Threads have no topic of their own; callers pass the parent channel topic.
+ */
+export const IN_PROGRESS_STREAM_TOPIC_TAG = "omegent-ips";
+
+const IN_PROGRESS_STREAM_TOPIC_TAG_PATTERN = /\bomegent-ips\b/iu;
+
+/** True when `topic` contains the `omegent-ips` opt-in tag. */
+export function channelTopicOptsIntoInProgressStream(topic: string | null | undefined): boolean {
+  if (topic === null || topic === undefined) return false;
+  return IN_PROGRESS_STREAM_TOPIC_TAG_PATTERN.test(topic);
+}
+
 export function imageAttachmentsOf(
   attachments: ReadonlyArray<ChatAttachment> | null | undefined,
 ): ReadonlyArray<ChatImageAttachment> {
@@ -37,6 +51,25 @@ export function streamHistoryHasAdditionalContent(historyText: string, finalText
   const history = historyText.trim();
   if (history === "" || history === "…") return false;
   return history !== finalText.trim();
+}
+
+/**
+ * Attach `stream-history.md` only for an opted-in channel, and only when the
+ * archived stream has intermediate progress beyond the final answer.
+ */
+export function shouldAttachStreamHistory(input: {
+  readonly channelTopicOptIn: boolean;
+  readonly alreadyPosted: boolean;
+  readonly hadStreamMessages: boolean;
+  readonly historyText: string;
+  readonly finalText: string;
+}): boolean {
+  return (
+    input.channelTopicOptIn &&
+    !input.alreadyPosted &&
+    input.hadStreamMessages &&
+    streamHistoryHasAdditionalContent(input.historyText, input.finalText)
+  );
 }
 
 /**
