@@ -11,13 +11,14 @@ export const STREAM_HISTORY_MARKDOWN_NAME = "stream-history.md";
 
 /**
  * Channel-topic tag that opts a channel into the in-progress stream attachment.
+ * `omegent-ips` is canonical. Legacy `t3-ips` still opts in.
  * Threads have no topic of their own; callers pass the parent channel topic.
  */
 export const IN_PROGRESS_STREAM_TOPIC_TAG = "omegent-ips";
 
-const IN_PROGRESS_STREAM_TOPIC_TAG_PATTERN = /\bomegent-ips\b/iu;
+const IN_PROGRESS_STREAM_TOPIC_TAG_PATTERN = /\b(?:omegent|t3)-ips\b/iu;
 
-/** True when `topic` contains the `omegent-ips` opt-in tag. */
+/** True when `topic` contains `omegent-ips` or the legacy `t3-ips` tag. */
 export function channelTopicOptsIntoInProgressStream(topic: string | null | undefined): boolean {
   if (topic === null || topic === undefined) return false;
   return IN_PROGRESS_STREAM_TOPIC_TAG_PATTERN.test(topic);

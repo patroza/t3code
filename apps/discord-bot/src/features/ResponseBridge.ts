@@ -3688,8 +3688,9 @@ export const runBridge = (
 
     /**
      * In-progress stream attachments are opt-in per channel.
-     * The `omegent-ips` tag lives on the channel topic. Threads have no topic,
-     * so they inherit the parent channel's. An unreadable topic fails closed.
+     * The `omegent-ips` tag lives on the channel topic (legacy `t3-ips` still
+     * counts). Threads have no topic, so they inherit the parent channel's.
+     * An unreadable topic fails closed.
      */
     const readInProgressStreamTopicOptIn = Effect.gen(function* () {
       const channelResult = yield* rest.getChannel(input.discordChannelId).pipe(Effect.result);
@@ -3747,7 +3748,8 @@ export const runBridge = (
      * 1. Post Discord markdown content (chunked if needed; links stay clickable)
      * 2. Always append · [T3](…#message-…) on the stats footer
      * 3. Attach stream-history.md when the channel topic contains `omegent-ips`
-     *    and the stream has intermediate progress, plus chat/local images
+     *    (or legacy `t3-ips`) and the stream has intermediate progress, plus
+     *    chat/local images
      * 4. Delete the in-progress stream messages so only the final answer remains visible
      */
     const finalizeAssistantMessage = (args: {
@@ -3877,8 +3879,9 @@ export const runBridge = (
         }
 
         // Archive in-progress stream as .md only when the channel topic opts in
-        // with `omegent-ips` and the stream has intermediate progress beyond the
-        // final answer (not a lone Working.. tip, and not message body === stream body).
+        // with `omegent-ips` (legacy `t3-ips` still counts) and the stream has
+        // intermediate progress beyond the final answer (not a lone Working..
+        // tip, and not message body === stream body).
         const historySource = stripWorkingIndicator(
           streamHistoryText.trim() !== ""
             ? streamHistoryText

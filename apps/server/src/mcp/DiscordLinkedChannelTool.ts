@@ -366,10 +366,32 @@ function resolveDiscordPostDestination(
   return linkedThreadId ?? linkedChannelId;
 }
 
+/** Feature tags that share the topic-tag shape but are not project short names. */
+const RESERVED_TOPIC_TAG_NAMES = new Set(["ips"]);
+
+const TOPIC_SHORT_NAME_PATTERN = String.raw`[a-z0-9]+(?:-[a-z0-9]+)*`;
+
+function firstUnreservedTopicShortName(topic: string, prefix: "omegent" | "t3"): string | null {
+  const pattern = new RegExp(String.raw`\b${prefix}-(${TOPIC_SHORT_NAME_PATTERN})\b`, "giu");
+  for (const match of topic.matchAll(pattern)) {
+    const shortName = match[1]?.toLowerCase();
+    if (shortName === undefined || RESERVED_TOPIC_TAG_NAMES.has(shortName)) continue;
+    return shortName;
+  }
+  return null;
+}
+
+/**
+ * Project short name from a Discord channel topic.
+ * Prefers `omegent-<shortName>`. Falls back to a legacy `t3-<shortName>`.
+ * Skips reserved feature tags (`omegent-ips`, `t3-ips`).
+ * Keep in sync with `parseTopicShortName` in `apps/discord-bot/src/presentation/mentions.ts`.
+ */
 function parseTopicShortName(topic: string | null | undefined): string | null {
   if (!topic) return null;
-  const match = /(?:^|\s)t3-([a-z0-9]+(?:-[a-z0-9]+)*)(?=\s|$)/iu.exec(topic);
-  return match?.[1]?.toLowerCase() ?? null;
+  return (
+    firstUnreservedTopicShortName(topic, "omegent") ?? firstUnreservedTopicShortName(topic, "t3")
+  );
 }
 
 function isSupportedLinkedChannel(channel: DiscordGuildChannel): boolean {
@@ -625,7 +647,7 @@ const discordPostFailure = (
 
 const DiscordPostTool = Tool.make("discord_post_to_linked_channel", {
   description:
-    "Post to the Discord thread linked to the active T3 thread, falling back to the repository channel linked via a `t3-<shortName>` topic tag. Supports file attachments, rich embeds, and polls.",
+    "Post to the Discord thread linked to the active T3 thread, falling back to the repository channel linked via an `omegent-<shortName>` topic tag (legacy `t3-<shortName>` still matches). Supports file attachments, rich embeds, and polls.",
   failure: OrchestratorMcpFailure,
   failureMode: "return",
   dependencies: [

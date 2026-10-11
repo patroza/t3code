@@ -87,8 +87,11 @@ describe("channelTopicOptsIntoInProgressStream", () => {
     expect(IN_PROGRESS_STREAM_TOPIC_TAG).toBe("omegent-ips");
     expect(channelTopicOptsIntoInProgressStream("t3-example omegent-ips")).toBe(true);
     expect(channelTopicOptsIntoInProgressStream("Notes OMEGENT-IPS here")).toBe(true);
+    expect(channelTopicOptsIntoInProgressStream("t3-ips")).toBe(true);
+    expect(channelTopicOptsIntoInProgressStream("legacy T3-IPS")).toBe(true);
     expect(channelTopicOptsIntoInProgressStream("t3-example")).toBe(false);
     expect(channelTopicOptsIntoInProgressStream("omegent-ipsum")).toBe(false);
+    expect(channelTopicOptsIntoInProgressStream("t3-ipsum")).toBe(false);
     expect(channelTopicOptsIntoInProgressStream(null)).toBe(false);
     expect(channelTopicOptsIntoInProgressStream(undefined)).toBe(false);
     expect(channelTopicOptsIntoInProgressStream("")).toBe(false);
