@@ -10,6 +10,7 @@ import { FetchHttpClient } from "effect/http";
 import { OtlpSerialization, OtlpTracer } from "effect/observability";
 
 import { DiscordBotConfig } from "./config.ts";
+import { layer as discordResponseTransportLayer } from "./discord/ResponseTransport.ts";
 import { makeDiscordLayer } from "./discord/DiscordLive.ts";
 import { runAlertWatchdog } from "./features/Alerts.ts";
 import { layer as bridgeHubLayer } from "./features/BridgeHub.ts";
@@ -74,6 +75,7 @@ const MainLayer = Layer.unwrap(
       projectAliasStoreLayer(botConfig.projectAliasesPath),
       identityMapStoreLayer(botConfig.identityMapPath),
       bridgeHub,
+      discordResponseTransportLayer,
     ).pipe(Layer.provideMerge(discord));
 
     const router = MentionRouterLive(botConfig).pipe(Layer.provide(core));

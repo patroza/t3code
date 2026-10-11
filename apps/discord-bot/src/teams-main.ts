@@ -6,6 +6,9 @@ import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 
 import { DiscordBotConfig } from "./config.ts";
+import { layer as bridgeHubLayer } from "./features/BridgeHub.ts";
+import { runBridge } from "./features/ResponseBridge.ts";
+import { layer as warmCacheLayer } from "./store/ThreadWarmCacheStore.ts";
 import { runTeamsNativeApp } from "./features/TeamsNativeApp.ts";
 import { layerFromOptionalPath as identityMapStoreLayer } from "./identityMap.ts";
 import { layerFromOptionalPath as projectAliasStoreLayer } from "./projectAliases.ts";
@@ -16,6 +19,8 @@ const TeamsMainLayer = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* DiscordBotConfig;
     return Layer.mergeAll(
+      bridgeHubLayer(runBridge),
+      warmCacheLayer(config.dataDir),
       t3SessionLayer(config),
       threadLinkStoreLayer(config.dataDir),
       projectAliasStoreLayer(config.projectAliasesPath),

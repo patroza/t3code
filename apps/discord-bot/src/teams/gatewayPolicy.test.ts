@@ -111,6 +111,17 @@ describe("shared Teams gateway", () => {
     );
   });
   afterEach(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
+  it("authorizes card invokes through the same envelope and actor policy without a mention", () => {
+    const invoke = activity({ type: "invoke", entities: [] });
+    expect(policy.authorizeAction(invoke)?.actorId).toBe(actor);
+    expect(policy.authorizeAction(invoke)).toBeNull();
+    expect(
+      policy.authorizeAction(
+        activity({ type: "invoke", from: { id: "stranger", aadObjectId: project } }),
+      ),
+    ).toBeNull();
+    expect(policy.authorizeAction(activity({ type: "message", entities: [] }))).toBeNull();
+  });
 
   it("routes the same actor to different workspaces exclusively by exact channel", () => {
     expect(policy.accept(activity())).toMatchObject({
