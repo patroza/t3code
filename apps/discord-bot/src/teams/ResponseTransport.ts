@@ -7,6 +7,7 @@ import * as NodeCrypto from "node:crypto";
 import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 import * as NodeBuffer from "node:buffer";
+import * as NodeTimersPromises from "node:timers/promises";
 import {
   BotTransportError,
   type BotMessage,
@@ -21,16 +22,13 @@ import {
 } from "../presentation/threadInfoPin.ts";
 import { ThreadLinkStore } from "../store/ThreadLinkStore.ts";
 
-const decodeLedger = Schema.decodeUnknownSync(
-  Schema.Array(
-    Schema.Struct({
-      id: Schema.String,
-      content: Schema.String,
-      author: Schema.optional(Schema.Struct({ id: Schema.String })),
-      timestamp: Schema.optional(Schema.String),
-    }),
-  ),
-);
+const ledgerRow = Schema.Struct({
+  id: Schema.String,
+  content: Schema.String,
+  author: Schema.optional(Schema.Struct({ id: Schema.String })),
+  timestamp: Schema.optional(Schema.String),
+});
+const decodeLedgerRow = Schema.decodeUnknownSync(ledgerRow);
 
 export interface TeamsResponseActivity {
   readonly type: "message";
@@ -49,7 +47,7 @@ export function teamsMessageFields(fields: BotMessageFields): TeamsResponseActiv
   return {
     type: "message",
     textFormat: "markdown",
-    text: fields.content,
+    text: fields.actions?.length ? "" : fields.content,
     attachments: fields.actions?.length
       ? [
           {
@@ -57,7 +55,7 @@ export function teamsMessageFields(fields: BotMessageFields): TeamsResponseActiv
             content: {
               type: "AdaptiveCard",
               version: "1.4",
-              body: [],
+              body: [{ type: "TextBlock", text: fields.content, wrap: true }],
               actions: fields.actions.map((action) => ({
                 type: "Action.Execute",
                 title: action.label,
@@ -98,10 +96,32 @@ export function graphMessage(message: {
   body?: { content?: string };
   from?: { application?: { id?: string }; user?: { id?: string } };
   createdDateTime?: string;
+  attachments?: Array<{ contentType?: string; content?: string }>;
 }): BotMessage {
   return {
     id: message.id,
-    content: teamsHistoryMarkdown(message.body?.content ?? ""),
+    content: [
+      teamsHistoryMarkdown(message.body?.content ?? ""),
+      ...(message.attachments ?? []).flatMap((attachment) => {
+        if (
+          attachment.contentType !== "application/vnd.microsoft.card.adaptive" ||
+          !attachment.content
+        )
+          return [];
+        try {
+          const card = JSON.parse(attachment.content) as {
+            body?: Array<{ type?: string; text?: string }>;
+          };
+          return (card.body ?? []).flatMap((element) =>
+            element.type === "TextBlock" && typeof element.text === "string" ? [element.text] : [],
+          );
+        } catch {
+          return [];
+        }
+      }),
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
     ...(message.from?.application?.id || message.from?.user?.id
       ? { author: { id: message.from.application?.id ?? message.from.user!.id! } }
       : {}),
@@ -120,7 +140,7 @@ export function makeTeamsResponseTransport(input: {
   readonly rootMessageId: string;
   readonly incomingMessage?: BotMessage;
   readonly assertActive: () => void;
-  readonly send: (activity: TeamsResponseActivity) => Promise<{ id: string }>;
+  readonly send: (activity: TeamsResponseActivity) => Promise<{ id?: string }>;
   readonly deleteMessage: (messageId: string) => Promise<unknown>;
   readonly fetch?: typeof globalThis.fetch;
 }): BotResponseTransportService {
@@ -134,26 +154,45 @@ export function makeTeamsResponseTransport(input: {
     ledgerDir,
     NodeCrypto.createHash("sha256").update(input.conversationId).digest("hex") + ".json",
   );
-  const readLedger = () =>
-    new Map<string, BotMessage>(
-      NodeFS.existsSync(ledgerPath)
-        ? decodeLedger(JSON.parse(NodeFS.readFileSync(ledgerPath, "utf8"))).map((message) => [
-            message.id,
-            message,
-          ])
-        : [],
-    );
+  const writeLedger = (rows: ReadonlyArray<BotMessage>) => {
+    const temporary = ledgerPath + ".tmp";
+    NodeFS.writeFileSync(temporary, JSON.stringify(rows), { mode: 0o600 });
+    NodeFS.renameSync(temporary, ledgerPath);
+  };
+  const readLedger = () => {
+    if (!NodeFS.existsSync(ledgerPath)) return new Map<string, BotMessage>();
+    const original = NodeFS.readFileSync(ledgerPath, "utf8");
+    const parsed: unknown = JSON.parse(original);
+    if (!Array.isArray(parsed)) throw new Error("Teams delivery ledger must be an array");
+    const rows = parsed.flatMap((row) => {
+      try {
+        const message = decodeLedgerRow(row);
+        return message.id.trim() ? [message] : [];
+      } catch {
+        return [];
+      }
+    });
+    if (rows.length !== parsed.length) {
+      // Retain the original privately, but never let an invalid row poison later accepted sends.
+      const digest = NodeCrypto.createHash("sha256").update(original).digest("hex");
+      NodeFS.writeFileSync(ledgerPath + ".invalid-" + digest, original, { mode: 0o600 });
+      writeLedger(rows);
+    }
+    return new Map<string, BotMessage>(rows.map((message) => [message.id, message]));
+  };
   const ownMessages = readLedger();
   const persist = (message?: BotMessage, deletedId?: string) => {
     const current = readLedger();
-    if (message) current.set(message.id, message);
+    if (message) {
+      if (typeof message.id !== "string" || !message.id.trim())
+        throw new Error("Teams delivery requires a nonempty activity ID");
+      current.set(message.id, message);
+    }
     if (deletedId) current.delete(deletedId);
     const rows = [...current.values()]
       .sort((a, b) => (b.timestamp ?? "").localeCompare(a.timestamp ?? ""))
       .slice(0, 500);
-    const temporary = ledgerPath + ".tmp";
-    NodeFS.writeFileSync(temporary, JSON.stringify(rows), { mode: 0o600 });
-    NodeFS.renameSync(temporary, ledgerPath);
+    writeLedger(rows);
   };
   if (input.incomingMessage) {
     ownMessages.set(input.incomingMessage.id, input.incomingMessage);
@@ -204,14 +243,36 @@ export function makeTeamsResponseTransport(input: {
     attachments?: TeamsResponseActivity["attachments"],
   ) => {
     input.assertActive();
+    const startedAt = Date.now();
     const wire = teamsMessageFields(fields);
     const sent = await input.send({
       ...wire,
       ...(id ? { id } : {}),
       ...(attachments ? { attachments } : {}),
     });
+    // An edit keeps its original identity even when the connector omits the response ID.
+    let messageId = id ?? (typeof sent?.id === "string" && sent.id.trim() ? sent.id : undefined);
+    if (!messageId && channelHistory) {
+      // A connector may accept a create without returning its ID. Adopt the unique fresh Graph
+      // message rather than writing an idless ledger row or creating another visible reply.
+      for (let attempt = 0; attempt < 3 && !messageId; attempt++) {
+        if (attempt) await NodeTimersPromises.setTimeout(250);
+        const history = await Effect.runPromise(
+          service.listMessages(input.conversationId, { limit: 25 }),
+        );
+        const candidates = history.filter(
+          (message) =>
+            message.author?.id === input.clientId &&
+            !ownMessages.has(message.id) &&
+            Date.parse(message.timestamp ?? "") >= startedAt - 2_000 &&
+            normalizeTeamsContent(message.content) === normalizeTeamsContent(fields.content),
+        );
+        if (candidates.length === 1) messageId = candidates[0]!.id;
+      }
+    }
+    if (!messageId) throw new Error("Teams accepted the send without a recoverable activity ID");
     const message: BotMessage = {
-      id: sent.id || id!,
+      id: messageId,
       content: fields.content,
       author: { id: input.clientId },
       timestamp: ownMessages.get(id ?? "")?.timestamp ?? new Date().toISOString(),

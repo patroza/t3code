@@ -6,6 +6,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { describe, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
 import * as ConfigProvider from "effect/ConfigProvider";
 import { DiscordBotConfig } from "../config.ts";
 import { findAlreadyPostedFinalChunkIds } from "../features/ResponseBridge.ts";
@@ -15,6 +16,7 @@ import {
   teamsMessageFields,
   normalizeTeamsContent,
   graphMessage,
+  type TeamsResponseActivity,
 } from "./ResponseTransport.ts";
 
 const options = {
@@ -57,13 +59,98 @@ describe("Teams response adapter", () => {
   });
   it("keeps one visible working text and removes controls on completion", () => {
     const working = teamsMessageFields(workingFields("Working…", "thread"));
-    expect(working.text).toBe("Working…");
+    expect(working.text).toBe("");
     expect(working.attachments?.[0]?.content).toMatchObject({
-      body: [],
+      body: [{ type: "TextBlock", text: "Working…", wrap: true }],
       actions: [{ data: { action: "omegent", command: "stop", threadId: "thread" } }],
     });
     expect(teamsMessageFields(idleFields("19:50")).attachments).toEqual([]);
   });
+  it.live("repairs idless rows and adopts a sent card before editing it in place", () =>
+    Effect.gen(function* () {
+      const config = yield* DiscordBotConfig.pipe(
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnvRecord({ T3_DISCORD_BOT_DATA_DIR: directory }),
+          ),
+        ),
+      );
+      const first = makeTeamsResponseTransport({ ...options, config });
+      yield* first.createMessage(options.conversationId, { content: "previous answer" });
+      const ledgerDir = NodePath.join(directory, "teams-response-ledger");
+      const ledgerPath = NodePath.join(ledgerDir, NodeFS.readdirSync(ledgerDir)[0]!);
+      NodeFS.writeFileSync(
+        ledgerPath,
+        JSON.stringify([
+          { id: "sent", content: "previous answer", author: { id: "bot" } },
+          { content: "Working..", author: { id: "bot" }, timestamp: "2026-10-11T21:08:39Z" },
+        ]),
+      );
+      const remoteId = "1791752939872";
+      const now = yield* DateTime.now;
+      const send = vi
+        .fn<(wire: TeamsResponseActivity) => Promise<{ id?: string }>>()
+        .mockResolvedValue({});
+      const fetch = vi
+        .fn<typeof globalThis.fetch>()
+        .mockResolvedValueOnce(Response.json({ access_token: "token", expires_in: 3600 }))
+        .mockResolvedValueOnce(
+          Response.json({
+            value: [
+              {
+                id: remoteId,
+                from: { application: { id: "bot" } },
+                createdDateTime: DateTime.formatIso(now),
+                body: { content: '<attachment id="card"></attachment>' },
+                attachments: [
+                  {
+                    contentType: "application/vnd.microsoft.card.adaptive",
+                    content: JSON.stringify({
+                      body: [{ type: "TextBlock", text: "Working…", wrap: true }],
+                    }),
+                  },
+                ],
+              },
+            ],
+          }),
+        );
+      const adapter = makeTeamsResponseTransport({ ...options, config, send, fetch });
+      const working = yield* adapter.createMessage(
+        options.conversationId,
+        workingFields("Working…", "thread"),
+      );
+      expect(working.id).toBe(remoteId);
+      yield* adapter.updateMessage(
+        options.conversationId,
+        working.id,
+        workingFields("Checking…", "thread"),
+      );
+      const final = yield* adapter.updateMessage(
+        options.conversationId,
+        working.id,
+        idleFields("It’s 21:08 UTC."),
+      );
+      expect(final.id).toBe(remoteId);
+      expect(send.mock.calls.map(([wire]) => wire.id)).toEqual([undefined, remoteId, remoteId]);
+      expect(send.mock.calls[1]?.[0].attachments?.[0]?.content).toMatchObject({
+        body: [{ type: "TextBlock", text: "Checking…", wrap: true }],
+      });
+      expect(send.mock.calls[2]?.[0].attachments).toEqual([]);
+      const rows = JSON.parse(NodeFS.readFileSync(ledgerPath, "utf8")) as Array<{
+        id: string;
+        content: string;
+      }>;
+      expect(rows.map((row) => row.id).sort()).toEqual([remoteId, "sent"].sort());
+      expect(rows.find((row) => row.id === remoteId)?.content).toBe("It’s 21:08 UTC.");
+      expect(
+        NodeFS.readdirSync(ledgerDir).filter((name) => name.includes(".invalid-")).length,
+      ).toBe(1);
+      const restored = makeTeamsResponseTransport({ ...options, config, send, fetch });
+      expect((yield* restored.getMessage(options.conversationId, remoteId)).content).toBe(
+        "It’s 21:08 UTC.",
+      );
+    }),
+  );
   it.effect("reads the newest replies across pages and preserves creation order when editing", () =>
     Effect.gen(function* () {
       const config = yield* DiscordBotConfig.pipe(
