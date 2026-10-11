@@ -352,7 +352,7 @@ export function pickLatestContentMessage<
 export type DiscordChannelMessageForTipScan = {
   readonly id: string;
   readonly type?: number | null;
-  readonly author?: { readonly id?: string | null } | null;
+  readonly author?: { readonly id?: string | null } | null | undefined;
   readonly content?: string | null;
 };
 

@@ -165,7 +165,10 @@ describe("shared response runner", () => {
           fetchThreadDetail: () => Effect.succeed({ thread: completed, snapshotSequence: 1 }),
           getProjectShell: () => Effect.succeed(null),
           refreshVcsStatus: () => Effect.succeed(null),
-          subscribeThread: (_id, onThread) =>
+          subscribeThread: (
+            _id: Parameters<T3SessionService["subscribeThread"]>[0],
+            onThread: Parameters<T3SessionService["subscribeThread"]>[1],
+          ) =>
             Effect.gen(function* () {
               yield* onThread(running);
               yield* Deferred.await(working);
@@ -190,6 +193,9 @@ describe("shared response runner", () => {
           Effect.provideService(BotResponseTransport, adapter),
           Effect.provideService(ThreadLinkStore, links),
           Effect.provideService(ThreadWarmCacheStore, warm),
+          Effect.provideService(ProjectAliasStore, makeProjectAliasStore([])),
+          // T3Session erases subscriber callback requirements; all bridge services are supplied.
+          (effect) => effect as Effect.Effect<void, unknown, Scope.Scope>,
           Effect.forkChild,
         );
         const answer = yield* Deferred.await(final);
