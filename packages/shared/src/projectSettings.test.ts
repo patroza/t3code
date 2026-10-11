@@ -177,6 +177,7 @@ describe("resolveProjectSettings", () => {
           providerInstances: {
             [codex]: { enabled: false },
             [ProviderInstanceId.make("claudeAgent")]: { enabled: false },
+            [ProviderInstanceId.make("kimi")]: { enabled: false },
           },
         },
       },
