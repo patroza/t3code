@@ -36,6 +36,7 @@ export interface TeamsResponseActivity {
   readonly type: "message";
   readonly id?: string;
   readonly text: string;
+  readonly textFormat: "markdown";
   readonly attachments?: Array<{
     contentType: string;
     content?: unknown;
@@ -47,6 +48,7 @@ export interface TeamsResponseActivity {
 export function teamsMessageFields(fields: BotMessageFields): TeamsResponseActivity {
   return {
     type: "message",
+    textFormat: "markdown",
     text: fields.content,
     attachments: fields.actions?.length
       ? [

@@ -229,7 +229,7 @@ const program = Effect.gen(function* () {
       const workspace = active(lease);
       references.remember(
         lease,
-        activity.serviceUrl,
+        activity.serviceUrl ?? "",
         lease.conversationId.split(";messageid=")[1] ?? activity.replyToId ?? activity.id,
       );
       const deliver = async (text: string, first = false) => {
@@ -402,12 +402,12 @@ const program = Effect.gen(function* () {
           await api.conversations.updateActivity(lease.conversationId, wire.id, wire);
           return { id: wire.id };
         }
-        return api.conversations.createActivity(lease.conversationId, {
+        const payload = {
           ...wire,
-          channelId: "msteams",
-          from: { id: "28:" + initial.identity.entraClientId, role: "bot" },
+          from: { id: "28:" + initial.identity.entraClientId, role: "bot" as const },
           conversation: { id: lease.conversationId },
-        });
+        };
+        return api.conversations.createActivity(lease.conversationId, payload);
       },
       deleteMessage: (id) => api.conversations.deleteActivity(lease.conversationId, id),
     });

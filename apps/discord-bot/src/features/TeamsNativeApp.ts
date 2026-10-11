@@ -1,6 +1,7 @@
 // @effect-diagnostics anyUnknownInErrorContext:off globalErrorInEffectCatch:off globalErrorInEffectFailure:off globalPromise:off missingEffectContext:off tryCatchInEffectGen:off preferSchemaOverJson:off
 import { App } from "@microsoft/teams.apps";
 import { ProviderUserInputAnswers } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -296,6 +297,7 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
           promptContext: { kind: "raw", value: prompt },
         });
 
+        const receivedAt = yield* DateTime.now.pipe(Effect.map(DateTime.formatIso));
         const transport = makeTeamsResponseTransport({
           config,
           clientId: config.teamsClientId!,
@@ -310,7 +312,7 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
             id: activity.id,
             content: activity.text ?? "",
             author: { id: activity.from.aadObjectId ?? activity.from.id },
-            timestamp: activity.timestamp?.toISOString() ?? new Date().toISOString(),
+            timestamp: activity.timestamp?.toISOString() ?? receivedAt,
           },
           assertActive: () => {
             if (!teamsActorAccess(identityMap.list(), activity.from).allowed)

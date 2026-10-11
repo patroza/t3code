@@ -2455,11 +2455,20 @@ export const bridgeThreadToPlatform = (input: {
   readonly sentUserMessageIds?: ReadonlyArray<string>;
   readonly workingAckMessageId?: string;
 }) =>
-  bridgeThreadToDiscord({
-    discordChannelId: input.conversationId,
-    t3ThreadId: input.threadId,
-    ...(input.sentUserMessageIds ? { sentDiscordUserMessageIds: input.sentUserMessageIds } : {}),
-    ...(input.workingAckMessageId ? { workingAckMessageId: input.workingAckMessageId } : {}),
+  Effect.gen(function* () {
+    const transport = yield* BotResponseTransport;
+    const workingAckMessageId =
+      input.workingAckMessageId ??
+      (yield* transport.createMessage(
+        input.conversationId,
+        workingFields(formatInProgressChunk("", true), input.threadId),
+      )).id;
+    yield* bridgeThreadToDiscord({
+      discordChannelId: input.conversationId,
+      t3ThreadId: input.threadId,
+      workingAckMessageId,
+      ...(input.sentUserMessageIds ? { sentDiscordUserMessageIds: input.sentUserMessageIds } : {}),
+    });
   });
 
 /**

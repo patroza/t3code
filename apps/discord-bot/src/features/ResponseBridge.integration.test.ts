@@ -4,6 +4,8 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { it } from "@effect/vitest";
 import { expect, describe } from "vite-plus/test";
+import type * as Scope from "effect/Scope";
+import { ProjectAliasStore, makeProjectAliasStore } from "../projectAliases.ts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
@@ -170,7 +172,7 @@ describe("shared response runner", () => {
               yield* onThread(completed);
               return yield* Effect.never;
             }),
-        } as T3SessionService;
+        } as unknown as T3SessionService;
         const fiber = yield* runBridge(
           {
             discordChannelId: "conversation",

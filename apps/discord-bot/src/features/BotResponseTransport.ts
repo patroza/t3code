@@ -23,8 +23,8 @@ export interface BotMessageFields {
 export interface BotMessage {
   readonly id: string;
   readonly content: string;
-  readonly author?: { readonly id: string };
-  readonly timestamp?: string;
+  readonly author?: { readonly id: string } | undefined;
+  readonly timestamp?: string | undefined;
 }
 
 export interface BotConversation {
