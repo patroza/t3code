@@ -7,7 +7,15 @@ import * as Schema from "effect/Schema";
 
 import type { DiscordBotConfig } from "../config.ts";
 import { classifyTeamsAgentAccess, IdentityMapStore, type PersonIdentity } from "../identityMap.ts";
+import {
+  activeTurnWakeNote,
+  formatInProgressChunk,
+  nextWorkingDotCount,
+  stripWorkingIndicator,
+  type WorkingDotCount,
+} from "../presentation/messages.ts";
 import { derivePendingInteractions } from "../presentation/pendingInteractions.ts";
+import { countTurnToolCalls } from "../presentation/toolCalls.ts";
 import { ProjectAliasStore } from "../projectAliases.ts";
 import { ThreadLinkStore } from "../store/ThreadLinkStore.ts";
 import { T3Session } from "../t3/T3Session.ts";
@@ -71,6 +79,49 @@ function teamsActorAccess(
   });
 }
 
+/**
+ * A Teams answer is final only when the T3 turn itself has left `running`.
+ * Session status returns to idle between assistant bubbles while tools are still
+ * running, and treating that bubble as the answer ends delivery early.
+ */
+export function teamsTurnSettled(thread: {
+  readonly session?: { readonly status?: string | null } | null;
+  readonly latestTurn?: { readonly state?: string | null } | null;
+}): boolean {
+  if (thread.latestTurn?.state === "running") return false;
+  if (thread.latestTurn == null) {
+    const status = thread.session?.status ?? null;
+    if (status === "running" || status === "starting") return false;
+    // No turn record yet. Idle or ready is the gap before start, not completion.
+    if (status === null || status === "idle" || status === "ready" || status === "") return false;
+    return true;
+  }
+  return true;
+}
+
+export function teamsVisibleText(input: {
+  readonly preface: string | null;
+  readonly body: string;
+  readonly inProgress: boolean;
+  readonly dotCount?: WorkingDotCount;
+  readonly toolCallCount?: number;
+  readonly wakeNote?: string | null;
+}): string {
+  const parts = [input.preface?.trim(), input.body.trim()].filter(
+    (part): part is string => part !== undefined && part.length > 0,
+  );
+  const combined = parts.join("\n\n");
+  if (!input.inProgress) return stripWorkingIndicator(combined);
+  return formatInProgressChunk(
+    combined,
+    true,
+    12_000,
+    input.dotCount ?? 2,
+    input.toolCallCount ?? 0,
+    input.wakeNote ?? null,
+  );
+}
+
 /** Provider readiness can occur between tools; completion belongs to the requested run. */
 export function teamsRunDelivery(
   thread: IntegrationThreadView,
@@ -127,13 +178,61 @@ export const waitForFinalAnswer = Effect.fn("waitForFinalAnswer")(function* (inp
   readonly messageId?: string;
   readonly baseline: string;
   readonly baselineTurnId: string | null;
+  readonly preface?: string | null;
   readonly send: (text: string) => Promise<unknown>;
+  /** Side channel for approvals and questions. Never edits the working ack. */
   readonly notify?: (text: string) => Promise<unknown>;
+  /** Edit the ack message in place. Absent callers only receive the final answer. */
+  readonly replaceProgress?: (text: string) => Promise<unknown>;
   readonly canDeliver?: () => boolean;
 }) {
   const t3 = yield* T3Session;
   const announcedRequests = new Set<string>();
   let emptyCompletedPolls = 0;
+  let dots: WorkingDotCount = 2;
+  let polls = 0;
+  let lastProgress = teamsVisibleText({
+    preface: input.preface ?? null,
+    body: "",
+    inProgress: true,
+  });
+  const post = (text: string) =>
+    Effect.tryPromise({
+      try: () => input.send(text),
+      catch: (cause) => new Error(String(cause)),
+    });
+  const announce = (text: string) =>
+    Effect.tryPromise({
+      try: () => (input.notify ?? input.send)(text),
+      catch: (cause) => new Error(String(cause)),
+    });
+  const edit = (text: string) => {
+    const replaceProgress = input.replaceProgress;
+    if (replaceProgress === undefined) return post(text);
+    return Effect.tryPromise({
+      try: () => replaceProgress(text),
+      catch: (cause) => new Error(String(cause)),
+    });
+  };
+  const publishFinal = (text: string) =>
+    Effect.gen(function* () {
+      const chunks = splitTeamsMessage(text);
+      const [first, ...rest] = chunks;
+      if (first !== undefined && input.replaceProgress !== undefined) {
+        yield* edit(first).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("Teams final update failed; sending a new message", {
+              threadId: input.t3ThreadId,
+              error: String(error),
+            }).pipe(Effect.andThen(post(first))),
+          ),
+        );
+      } else if (first !== undefined) {
+        yield* post(first);
+      }
+      for (const chunk of rest) yield* post(chunk);
+    });
+
   while (true) {
     yield* Effect.sleep("1 second");
     if (input.canDeliver !== undefined && !input.canDeliver()) return;
@@ -159,19 +258,15 @@ export const waitForFinalAnswer = Effect.fn("waitForFinalAnswer")(function* (inp
       if (announcedRequests.has(interaction.requestId)) continue;
       announcedRequests.add(interaction.requestId);
       if (interaction.kind === "approval") {
-        yield* Effect.tryPromise({
-          try: () =>
-            (input.notify ?? input.send)(
-              [
-                `T3 needs **${interaction.requestKind}** approval.`,
-                interaction.detail,
-                `Reply \`approve ${interaction.requestId}\` or \`deny ${interaction.requestId}\`.`,
-              ]
-                .filter((line): line is string => line !== null)
-                .join("\n\n"),
-            ),
-          catch: (cause) => new Error(String(cause)),
-        });
+        yield* announce(
+          [
+            `T3 needs **${interaction.requestKind}** approval.`,
+            interaction.detail,
+            `Reply \`approve ${interaction.requestId}\` or \`deny ${interaction.requestId}\`.`,
+          ]
+            .filter((line): line is string => line !== null)
+            .join("\n\n"),
+        );
       } else {
         const questions = interaction.questions
           .map(
@@ -183,50 +278,112 @@ export const waitForFinalAnswer = Effect.fn("waitForFinalAnswer")(function* (inp
               }`,
           )
           .join("\n");
-        yield* Effect.tryPromise({
-          try: () =>
-            (input.notify ?? input.send)(
-              [
-                "T3 needs more information:",
-                questions,
-                `Reply \`answer ${interaction.requestId} {"question-id":"answer"}\`.`,
-              ].join("\n\n"),
-            ),
-          catch: (cause) => new Error(String(cause)),
-        });
+        yield* announce(
+          [
+            "T3 needs more information:",
+            questions,
+            `Reply \`answer ${interaction.requestId} {"question-id":"answer"}\`.`,
+          ].join("\n\n"),
+        );
       }
     }
-    if (input.messageId !== undefined) {
+    const showProgress = (body: string, turnId: string | null) =>
+      Effect.gen(function* () {
+        if (input.replaceProgress === undefined) return;
+        polls += 1;
+        if (polls % 3 === 0) dots = nextWorkingDotCount(dots);
+        const progress = teamsVisibleText({
+          preface: input.preface ?? null,
+          body,
+          inProgress: true,
+          dotCount: dots,
+          toolCallCount: countTurnToolCalls(
+            snapshot.thread.activities,
+            turnId,
+            snapshot.thread.messages,
+          ),
+          wakeNote: activeTurnWakeNote({
+            latestTurnId: turnId,
+            messages: snapshot.thread.messages,
+            activities: snapshot.thread.activities,
+          }),
+        });
+        if (progress === lastProgress) return;
+        const updated = yield* edit(progress).pipe(
+          Effect.as(true),
+          Effect.catch((error) =>
+            Effect.logWarning("Teams progress update failed", {
+              threadId: input.t3ThreadId,
+              error: String(error),
+            }).pipe(Effect.as(false)),
+          ),
+        );
+        if (updated) lastProgress = progress;
+      });
+    if (input.messageId !== undefined && targetRun !== undefined) {
       const result = teamsRunDelivery(snapshot.thread, input.messageId);
-      if (result.kind === "pending") continue;
+      if (result.kind === "pending") {
+        const commentary = finalAnswerText({
+          ...snapshot.thread,
+          session: null,
+          latestTurn: {
+            turnId: TurnId.make(targetRun.id),
+            state: "running",
+            requestedAt: snapshot.thread.updatedAt,
+            startedAt: null,
+            completedAt: snapshot.thread.updatedAt,
+            assistantMessageId: null,
+          },
+          messages: snapshot.thread.messages.filter((message) => message.turnId === targetRun.id),
+        });
+        yield* showProgress(commentary, targetRun.id);
+        continue;
+      }
       // Allow one projection poll for the terminal assistant message to arrive.
       if (result.answer.length === 0 && ++emptyCompletedPolls < 2) continue;
-      for (const chunk of splitTeamsMessage(
-        result.answer ||
-          "T3 completed this run without an answer. Open the linked thread for details.",
-      )) {
-        yield* Effect.tryPromise({
-          try: () => input.send(chunk),
-          catch: (cause) => new Error(String(cause)),
-        });
-      }
+      yield* publishFinal(
+        teamsVisibleText({
+          preface: input.preface ?? null,
+          body:
+            result.answer ||
+            "T3 completed this run without an answer. Open the linked thread for details.",
+          inProgress: false,
+        }),
+      );
       return;
     }
     const answer = finalAnswerText(snapshot.thread);
     const latestTurnId = snapshot.thread.latestTurn?.turnId ?? null;
-    if (
-      answer.length === 0 ||
-      (answer === input.baseline && latestTurnId === input.baselineTurnId) ||
-      snapshot.thread.latestTurn?.state !== "completed"
-    ) {
+    const answerIsNew =
+      answer.length > 0 && !(answer === input.baseline && latestTurnId === input.baselineTurnId);
+    if (!teamsTurnSettled(snapshot.thread)) {
+      yield* showProgress(answerIsNew ? answer : "", latestTurnId);
       continue;
     }
-    for (const chunk of splitTeamsMessage(answer)) {
-      yield* Effect.tryPromise({
-        try: () => input.send(chunk),
-        catch: (cause) => new Error(String(cause)),
-      });
+    if (!answerIsNew) {
+      if (
+        snapshot.thread.latestTurn != null &&
+        latestTurnId !== input.baselineTurnId &&
+        answer.length === 0
+      ) {
+        yield* publishFinal(
+          teamsVisibleText({
+            preface: input.preface ?? null,
+            body: "T3 finished without a reply.",
+            inProgress: false,
+          }),
+        );
+        return;
+      }
+      continue;
     }
+    yield* publishFinal(
+      teamsVisibleText({
+        preface: input.preface ?? null,
+        body: answer,
+        inProgress: false,
+      }),
+    );
     return;
   }
 });
@@ -316,7 +473,7 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
     activity: { mentions: { stripText: true } },
   });
 
-  app.on("message", async ({ activity, send, reply }) => {
+  app.on("message", async ({ activity, api, send, reply }) => {
     await run(
       Effect.gen(function* () {
         const access = teamsActorAccess(identityMap.list(), activity.from);
@@ -414,25 +571,37 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
           config.webUiBaseUrl === undefined
             ? null
             : `${config.webUiBaseUrl.replace(/\/$/u, "")}/?thread=${turn.threadId}`;
-        yield* Effect.promise(() =>
-          reply(
-            [
-              turn.isNew
-                ? `Started T3 for **${projectShortName}**.`
-                : "Continued the linked T3 thread.",
-              webLink === null ? null : `[Open in T3 Code](${webLink})`,
-            ]
-              .filter((line): line is string => line !== null)
-              .join("\n"),
-          ),
-        );
+        const preface = [
+          turn.isNew
+            ? `Started T3 for **${projectShortName}**.`
+            : "Continued the linked T3 thread.",
+          webLink === null ? null : `[Open in T3 Code](${webLink})`,
+        ]
+          .filter((line): line is string => line !== null)
+          .join("\n");
+        const ack = teamsVisibleText({ preface, body: "", inProgress: true });
+        const sent = yield* Effect.promise(() => reply(ack));
+        const progressId = sent.id;
+        const conversationId = activity.conversation.id;
+        const progressUpdate =
+          progressId.length === 0
+            ? {}
+            : {
+                replaceProgress: (text: string) =>
+                  api.conversations.updateActivity(conversationId, progressId, {
+                    type: "message" as const,
+                    text,
+                  }),
+              };
         yield* Effect.forkDetach(
           waitForFinalAnswer({
             t3ThreadId: turn.threadId,
             messageId: turn.messageId,
             baseline,
             baselineTurnId,
+            preface,
             send: (text) => send(text),
+            ...progressUpdate,
           }).pipe(
             Effect.catchCause((cause) =>
               Effect.logError("Native Teams answer delivery failed", {

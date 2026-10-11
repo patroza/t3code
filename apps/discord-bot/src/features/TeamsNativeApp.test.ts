@@ -9,6 +9,8 @@ import {
   sourceConversationKey,
   splitTeamsMessage,
   teamsRunDelivery,
+  teamsTurnSettled,
+  teamsVisibleText,
   waitForFinalAnswer,
 } from "./TeamsNativeApp.ts";
 
@@ -33,6 +35,67 @@ describe("sourceConversationKey", () => {
         conversationId: "personal-chat",
       }),
     ).toBe("native/tenant/chat/chat/personal-chat");
+  });
+});
+
+describe("teamsTurnSettled", () => {
+  it("keeps an idle session in progress while the turn is still running", () => {
+    expect(
+      teamsTurnSettled({
+        session: { status: "idle" },
+        latestTurn: { state: "running" },
+      }),
+    ).toBe(false);
+  });
+
+  it("waits for a turn to appear", () => {
+    expect(teamsTurnSettled({ session: { status: "ready" }, latestTurn: null })).toBe(false);
+    expect(teamsTurnSettled({ session: { status: "starting" }, latestTurn: null })).toBe(false);
+  });
+
+  it("settles when the turn leaves running", () => {
+    expect(
+      teamsTurnSettled({
+        session: { status: "idle" },
+        latestTurn: { state: "completed" },
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("teamsVisibleText", () => {
+  it("acks with a working indicator before any assistant text", () => {
+    expect(
+      teamsVisibleText({
+        preface: "Started T3 for **omegent**.\n[Open in T3 Code](https://omega.example/?thread=1)",
+        body: "",
+        inProgress: true,
+      }),
+    ).toBe(
+      "Started T3 for **omegent**.\n[Open in T3 Code](https://omega.example/?thread=1)\n\n_Working.._",
+    );
+  });
+
+  it("keeps the interim reply marked as still working", () => {
+    const text = teamsVisibleText({
+      preface: "Started T3 for **omegent**.",
+      body: "I'll check the current time.",
+      inProgress: true,
+      dotCount: 3,
+      toolCallCount: 1,
+    });
+    expect(text).toContain("I'll check the current time.");
+    expect(text).toContain("_Working... · 1 tool call_");
+  });
+
+  it("replaces the working indicator with the final answer", () => {
+    expect(
+      teamsVisibleText({
+        preface: "Started T3 for **omegent**.",
+        body: "The time is 15:00 UTC.",
+        inProgress: false,
+      }),
+    ).toBe("Started T3 for **omegent**.\n\nThe time is 15:00 UTC.");
   });
 });
 
@@ -111,6 +174,51 @@ describe("Teams run delivery", () => {
       );
       expect(polls).toBe(2);
       expect(send).toHaveBeenCalledExactlyOnceWith("It’s 13:00 UTC.");
+    }),
+  );
+
+  effectIt.live("edits one ack from the working indicator to the final answer", () =>
+    Effect.gen(function* () {
+      let polls = 0;
+      const send = vi.fn(async (_text: string) => {});
+      const replaceProgress = vi.fn(async (_text: string) => {});
+      const preface = "Started T3 for **omegent**.";
+      yield* waitForFinalAnswer({
+        t3ThreadId: ThreadId.make("thread"),
+        messageId: request,
+        baseline: "",
+        baselineTurnId: null,
+        preface,
+        send,
+        replaceProgress,
+      }).pipe(
+        Effect.provideService(T3Session, {
+          fetchThreadDetail: () =>
+            Effect.sync(() => {
+              polls++;
+              expect(send).not.toHaveBeenCalled();
+              return {
+                thread:
+                  polls === 1
+                    ? snapshot("running", ["I’ll check the current time."])
+                    : snapshot("completed", ["I’ll check the current time.", "It’s 13:00 UTC."]),
+              };
+            }),
+        } as never),
+      );
+      expect(polls).toBe(2);
+      expect(send).not.toHaveBeenCalled();
+      expect(replaceProgress).toHaveBeenNthCalledWith(
+        1,
+        teamsVisibleText({
+          preface,
+          body: "I’ll check the current time.",
+          inProgress: true,
+        }),
+      );
+      expect(replaceProgress).toHaveBeenLastCalledWith(
+        "Started T3 for **omegent**.\n\nIt’s 13:00 UTC.",
+      );
     }),
   );
 
