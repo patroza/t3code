@@ -4,7 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { parseGatewayConfig, type TeamsGatewayConfig } from "./gatewayConfig.ts";
-import { TeamsGatewayDispatcher } from "./gatewayDispatcher.ts";
+import { TeamsGatewayDispatcher, type MentionDecision } from "./gatewayDispatcher.ts";
 import { TeamsGatewayPolicy, safeTeamsServiceUrl, type GatewayActivity } from "./gatewayPolicy.ts";
 
 const appId = "11111111-1111-4111-8111-111111111111";
@@ -128,6 +128,72 @@ describe("shared Teams gateway", () => {
         }),
       ),
     ).toMatchObject({ kind: "mention", lease: { binding: { workspace: "beta" } } });
+  });
+  it("dispatches real Teams channel data using the Entra group ID and revokes it on uninstall", async () => {
+    config = {
+      ...config,
+      bindings: config.bindings.map((binding) => ({
+        ...binding,
+        teamConversationId: "19:team-conversation@thread.tacv2",
+      })),
+    };
+    const channelData = {
+      tenant: { id: tenant },
+      team: { id: "19:team-conversation@thread.tacv2", aadGroupId: team },
+      channel: { id: "channel-alpha" },
+    };
+    const dispatcher = new TeamsGatewayDispatcher(policy);
+    const execute = vi.fn(async (decision: MentionDecision) => {
+      expect(decision).toMatchObject({
+        lease: { binding: { teamId: team, workspace: "alpha" } },
+      });
+    });
+    expect(dispatcher.receive(activity({ channelData }), execute)).toBe("queued");
+    expect(
+      dispatcher.receive(
+        activity({
+          channelData: { ...channelData, team: { id: "19:team-conversation@thread.tacv2" } },
+        }),
+        execute,
+      ),
+    ).toBe("queued");
+    await dispatcher.drain();
+    expect(execute).toHaveBeenCalledTimes(2);
+    policy.revoke(activity({ channelData }));
+    expect(dispatcher.receive(activity({ channelData }), execute)).toBe("reject:revoked-binding");
+    await dispatcher.drain();
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+  it("does not fall back to team.id when an explicit Entra group ID differs", () => {
+    expect(
+      policy.accept(
+        activity({
+          channelData: {
+            tenant: { id: tenant },
+            team: { id: team, aadGroupId: "66666666-6666-4666-8666-666666666666" },
+            channel: { id: "channel-alpha" },
+          },
+        }),
+      ),
+    ).toMatchObject({ kind: "reject", reason: "unbound-location" });
+    config = {
+      ...config,
+      bindings: config.bindings.map((binding) => ({
+        ...binding,
+        teamConversationId: "19:expected@thread.tacv2",
+      })),
+    };
+    expect(
+      policy.accept(
+        activity({
+          channelData: {
+            tenant: { id: tenant },
+            team: { id: "19:wrong@thread.tacv2", aadGroupId: team },
+            channel: { id: "channel-alpha" },
+          },
+        }),
+      ),
+    ).toMatchObject({ kind: "reject", reason: "unbound-location" });
   });
   it("rejects unknown channels, tenants and personal chats without storing content", () => {
     for (const channelData of [
