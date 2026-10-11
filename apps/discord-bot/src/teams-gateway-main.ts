@@ -426,14 +426,12 @@ const program = Effect.gen(function* () {
         if (link === null) return;
         const session = yield* T3Session;
         // Startup connection runs in another fiber; rehydration must not subscribe before it is ready.
-        yield* session
-          .waitUntilReady()
-          .pipe(
-            Effect.retry({
-              schedule: Schedule.spaced("1 second"),
-              while: () => policy.isActive(lease),
-            }),
-          );
+        yield* session.waitUntilReady().pipe(
+          Effect.retry({
+            schedule: Schedule.spaced("1 second"),
+            while: () => policy.isActive(lease),
+          }),
+        );
         if (!policy.isActive(lease)) return;
         const hub = yield* BridgeHub;
         yield* hub
