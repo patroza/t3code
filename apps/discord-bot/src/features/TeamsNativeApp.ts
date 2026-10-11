@@ -77,6 +77,50 @@ function teamsActorAccess(
  * Native Teams SDK endpoint. This is independent from Discord gateway/services and can be
  * deployed with only Teams + T3 credentials.
  */
+function messageActionCard(defaultProject: string | undefined) {
+  return {
+    contentType: "application/vnd.microsoft.card.adaptive",
+    content: {
+      type: "AdaptiveCard",
+      version: "1.5",
+      body: [
+        {
+          type: "TextBlock",
+          text: "Start a T3 investigation from this Teams message",
+          weight: "Bolder",
+          wrap: true,
+        },
+        {
+          type: "Input.Text",
+          id: "projectShortName",
+          label: "Project alias",
+          value: defaultProject ?? "",
+          isRequired: true,
+          errorMessage: "Enter a project alias configured in T3_PROJECT_ALIASES_PATH.",
+        },
+        {
+          type: "Input.Text",
+          id: "instructions",
+          label: "Additional instructions",
+          isMultiline: true,
+          placeholder: "Optional context or desired outcome",
+        },
+        {
+          type: "ActionSet",
+          actions: [
+            {
+              type: "Action.Submit",
+              title: "Start investigation",
+              data: { action: "startT3Investigation" },
+            },
+          ],
+        },
+      ],
+      $schema: "https://adaptivecards.io/schemas/adaptive-card.json",
+    },
+  } as const;
+}
+
 export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
   config: DiscordBotConfig,
 ) {

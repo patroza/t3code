@@ -230,6 +230,16 @@ const program = Effect.gen(function* () {
           const snapshot = yield* t3.fetchThreadDetail(existing.t3ThreadId);
           if (snapshot !== null && snapshot.thread.projectId !== project.id)
             return yield* Effect.fail("Linked thread belongs to another project" as const);
+          // Adopt the last answer delivered by the legacy poller before starting the first shared turn.
+          if (
+            snapshot?.thread.latestTurn?.state === "completed" &&
+            existing.lastFinalizedAssistantId === null
+          ) {
+            yield* links.updateBridgeHints(lease.conversationId, {
+              lastSeenTurnId: snapshot.thread.latestTurn.turnId,
+              lastFinalizedAssistantId: snapshot.thread.latestTurn.assistantMessageId,
+            });
+          }
         }
         active(lease);
         const prompt = decision.text;
