@@ -4,7 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { parseGatewayConfig, type TeamsGatewayConfig } from "./gatewayConfig.ts";
-import { TeamsGatewayDispatcher } from "./gatewayDispatcher.ts";
+import { TeamsGatewayDispatcher, type MentionDecision } from "./gatewayDispatcher.ts";
 import { TeamsGatewayPolicy, safeTeamsServiceUrl, type GatewayActivity } from "./gatewayPolicy.ts";
 
 const appId = "11111111-1111-4111-8111-111111111111";
@@ -136,13 +136,14 @@ describe("shared Teams gateway", () => {
       channel: { id: "channel-alpha" },
     };
     const dispatcher = new TeamsGatewayDispatcher(policy);
-    const execute = vi.fn(async () => {});
+    const execute = vi.fn(async (decision: MentionDecision) => {
+      expect(decision).toMatchObject({
+        lease: { binding: { teamId: team, workspace: "alpha" } },
+      });
+    });
     expect(dispatcher.receive(activity({ channelData }), execute)).toBe("queued");
     await dispatcher.drain();
     expect(execute).toHaveBeenCalledOnce();
-    expect(execute.mock.calls[0]?.[0]).toMatchObject({
-      lease: { binding: { teamId: team, workspace: "alpha" } },
-    });
     policy.revoke(activity({ channelData }));
     expect(dispatcher.receive(activity({ channelData }), execute)).toBe("reject:revoked-binding");
     await dispatcher.drain();

@@ -30,7 +30,9 @@ export class LoopbackTeamsAdapter implements IHttpServerAdapter {
         response.writeHead(405, { Allow: "POST" }).end();
         return;
       }
-      response.once("finish", () => console.info("Teams callback status:", response.statusCode));
+      response.once("finish", () =>
+        process.stderr.write("Teams callback status: " + response.statusCode + "\n"),
+      );
       if (!/^application\/json(?:;|$)/iu.test(request.headers["content-type"] ?? "")) {
         response.writeHead(415).end();
         return;

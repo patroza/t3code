@@ -5,7 +5,7 @@ import { LoopbackTeamsAdapter, RedactedTeamsLogger } from "./gatewayHttp.ts";
 
 describe("Teams gateway ingress", () => {
   it("reports callback status without logging request content or credentials", async () => {
-    const log = vi.spyOn(console, "info").mockImplementation(() => {});
+    const log = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     const adapter = new LoopbackTeamsAdapter();
     adapter.registerRoute("POST", "/api/messages", async () => ({ status: 401 }));
     await adapter.start(0);
@@ -15,7 +15,7 @@ describe("Teams gateway ingress", () => {
         headers: { "Content-Type": "application/json", Authorization: "Bearer private-token" },
         body: JSON.stringify({ text: "private message" }),
       });
-      expect(log.mock.calls).toEqual([["Teams callback status:", 401]]);
+      expect(log.mock.calls).toEqual([["Teams callback status: 401\n"]]);
     } finally {
       await adapter.stop();
       log.mockRestore();

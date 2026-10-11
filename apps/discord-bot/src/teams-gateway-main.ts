@@ -247,7 +247,7 @@ const program = Effect.gen(function* () {
         }
       });
     });
-    console.info("Teams intake:", outcome);
+    Effect.runSync(Effect.logInfo("Teams intake:", outcome));
     // Acknowledge immediately; T3 work and Teams delivery continue on the host queue.
   });
   app.on("install.remove", async ({ activity }) => {
