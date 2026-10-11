@@ -690,7 +690,7 @@ const make = (botConfig: DiscordBotConfig) =>
 
     /**
      * Resolve project-binding topic for a channel or thread.
-     * Retries parent GET; never confuses a failed parent fetch with a missing `t3-*` tag.
+     * Retries parent GET; never confuses a failed parent fetch with a missing `omegent-link-*` tag.
      */
     const resolveProjectTopic = (channel: {
       readonly type?: number | undefined;
@@ -796,7 +796,7 @@ const make = (botConfig: DiscordBotConfig) =>
       Effect.gen(function* () {
         const shortName = parseTopicShortName(topic);
         if (shortName === null) {
-          return yield* Effect.fail("Channel topic has no t3-<shortName> tag." as const);
+          return yield* Effect.fail("Channel topic has no omegent-link-<shortName> tag." as const);
         }
         const alias = aliases.resolve(shortName);
         if (alias === null) {
@@ -1105,7 +1105,7 @@ const make = (botConfig: DiscordBotConfig) =>
         }
 
         // Topic is preferred; during Discord outages fall back to the project already on the
-        // Discord↔T3 link so continue turns still work instead of "no t3-<shortName> tag".
+        // Discord↔T3 link so continue turns still work instead of "no omegent-link-<shortName> tag".
         const fromTopic = yield* resolveProjectFromTopic(input.topic).pipe(Effect.result);
         const resolved = yield* Effect.gen(function* () {
           if (Result.isSuccess(fromTopic)) return fromTopic.success;
@@ -1915,7 +1915,7 @@ const make = (botConfig: DiscordBotConfig) =>
             // Creating a Discord thread from a bare channel requires a project topic
             // so the thread lives in the right place.
             return yield* postReply(
-              "This channel is not linked to a T3 project. Set the channel topic to include `t3-<shortName>` (e.g. `t3-example-project`).",
+              missingProjectBindingMessage({ inThread: false, parentUnavailable: false }),
             );
           }
 

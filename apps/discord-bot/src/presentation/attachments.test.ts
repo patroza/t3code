@@ -4,7 +4,10 @@ import {
   appendT3DeepLinkToChunks,
   attachmentKey,
   buildStreamHistoryMarkdownText,
+  channelTopicOptsIntoInProgressStream,
   imageAttachmentsOf,
+  IN_PROGRESS_STREAM_TOPIC_TAG,
+  shouldAttachStreamHistory,
   STREAM_HISTORY_MARKDOWN_NAME,
   streamHistoryHasAdditionalContent,
   unpostedAttachments,
@@ -76,6 +79,81 @@ describe("streamHistoryHasAdditionalContent", () => {
         "👍 Sounds good. Ping this thread anytime.",
       ),
     ).toBe(true);
+  });
+});
+
+describe("channelTopicOptsIntoInProgressStream", () => {
+  it("is opt-in via the omegent-ips topic tag", () => {
+    expect(IN_PROGRESS_STREAM_TOPIC_TAG).toBe("omegent-ips");
+    expect(channelTopicOptsIntoInProgressStream("t3-example omegent-ips")).toBe(true);
+    expect(channelTopicOptsIntoInProgressStream("Notes OMEGENT-IPS here")).toBe(true);
+    expect(channelTopicOptsIntoInProgressStream("t3-ips")).toBe(true);
+    expect(channelTopicOptsIntoInProgressStream("legacy T3-IPS")).toBe(true);
+    expect(channelTopicOptsIntoInProgressStream("t3-example")).toBe(false);
+    expect(channelTopicOptsIntoInProgressStream("omegent-ipsum")).toBe(false);
+    expect(channelTopicOptsIntoInProgressStream("t3-ipsum")).toBe(false);
+    expect(channelTopicOptsIntoInProgressStream(null)).toBe(false);
+    expect(channelTopicOptsIntoInProgressStream(undefined)).toBe(false);
+    expect(channelTopicOptsIntoInProgressStream("")).toBe(false);
+  });
+});
+
+describe("shouldAttachStreamHistory", () => {
+  const history = "Checking PR…\n\nDone.";
+  const finalText = "Done.";
+
+  it("attaches only when the channel opted in and the stream has extra progress", () => {
+    expect(
+      shouldAttachStreamHistory({
+        channelTopicOptIn: true,
+        alreadyPosted: false,
+        hadStreamMessages: true,
+        historyText: history,
+        finalText,
+      }),
+    ).toBe(true);
+  });
+
+  it("stays off without the topic opt-in, even when the stream has extra progress", () => {
+    expect(
+      shouldAttachStreamHistory({
+        channelTopicOptIn: false,
+        alreadyPosted: false,
+        hadStreamMessages: true,
+        historyText: history,
+        finalText,
+      }),
+    ).toBe(false);
+  });
+
+  it("stays off when already posted, when there were no stream tips, or when history is the final answer", () => {
+    expect(
+      shouldAttachStreamHistory({
+        channelTopicOptIn: true,
+        alreadyPosted: true,
+        hadStreamMessages: true,
+        historyText: history,
+        finalText,
+      }),
+    ).toBe(false);
+    expect(
+      shouldAttachStreamHistory({
+        channelTopicOptIn: true,
+        alreadyPosted: false,
+        hadStreamMessages: false,
+        historyText: history,
+        finalText,
+      }),
+    ).toBe(false);
+    expect(
+      shouldAttachStreamHistory({
+        channelTopicOptIn: true,
+        alreadyPosted: false,
+        hadStreamMessages: true,
+        historyText: finalText,
+        finalText,
+      }),
+    ).toBe(false);
   });
 });
 

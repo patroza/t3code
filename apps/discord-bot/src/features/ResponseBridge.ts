@@ -30,8 +30,11 @@ import { DiscordBotConfig } from "../config.ts";
 import {
   appendT3DeepLinkToChunks,
   buildStreamHistoryMarkdownText,
+  channelTopicOptsIntoInProgressStream,
   DISCORD_MAX_FILES_PER_MESSAGE,
   imageAttachmentsOf,
+  IN_PROGRESS_STREAM_TOPIC_TAG,
+  shouldAttachStreamHistory,
   STREAM_HISTORY_MARKDOWN_NAME,
   streamHistoryHasAdditionalContent,
   unpostedAttachments,
@@ -3684,10 +3687,69 @@ export const runBridge = (
     };
 
     /**
+     * In-progress stream attachments are opt-in per channel.
+     * The `omegent-ips` tag lives on the channel topic (legacy `t3-ips` still
+     * counts). Threads have no topic, so they inherit the parent channel's.
+     * An unreadable topic fails closed.
+     */
+    const readInProgressStreamTopicOptIn = Effect.gen(function* () {
+      const channelResult = yield* rest.getChannel(input.discordChannelId).pipe(Effect.result);
+      if (Result.isFailure(channelResult)) {
+        yield* Effect.logWarning("In-progress stream topic unreadable", {
+          discordChannelId: input.discordChannelId,
+          t3ThreadId: input.t3ThreadId,
+          tag: IN_PROGRESS_STREAM_TOPIC_TAG,
+          cause: formatAlertCause(channelResult.failure, 200),
+        });
+        return { optedIn: false, reason: "topic-unreadable" as const };
+      }
+
+      const channel = channelResult.success;
+      let topic: string | null = null;
+      if (channel.type === 10 || channel.type === 11 || channel.type === 12) {
+        const parentId = channel.parent_id;
+        if (typeof parentId !== "string" || parentId.length === 0) {
+          yield* Effect.logWarning("In-progress stream topic unreadable; thread has no parent", {
+            discordChannelId: input.discordChannelId,
+            t3ThreadId: input.t3ThreadId,
+            tag: IN_PROGRESS_STREAM_TOPIC_TAG,
+          });
+          return { optedIn: false, reason: "topic-unreadable" as const };
+        }
+        const parentResult = yield* rest.getChannel(parentId).pipe(Effect.result);
+        if (Result.isFailure(parentResult)) {
+          yield* Effect.logWarning(
+            "In-progress stream topic unreadable; parent channel fetch failed",
+            {
+              discordChannelId: input.discordChannelId,
+              parentId,
+              t3ThreadId: input.t3ThreadId,
+              tag: IN_PROGRESS_STREAM_TOPIC_TAG,
+              cause: formatAlertCause(parentResult.failure, 200),
+            },
+          );
+          return { optedIn: false, reason: "topic-unreadable" as const };
+        }
+        const parent = parentResult.success;
+        topic = "topic" in parent ? (parent.topic ?? null) : null;
+      } else {
+        topic = "topic" in channel ? (channel.topic ?? null) : null;
+      }
+
+      const optedIn = channelTopicOptsIntoInProgressStream(topic);
+      return {
+        optedIn,
+        reason: optedIn ? ("opted-in" as const) : ("not-opted-in" as const),
+      };
+    });
+
+    /**
      * Final delivery for a completed assistant turn:
      * 1. Post Discord markdown content (chunked if needed; links stay clickable)
      * 2. Always append · [T3](…#message-…) on the stats footer
-     * 3. Attach stream-history.md + chat/local images as files
+     * 3. Attach stream-history.md when the channel topic contains `omegent-ips`
+     *    (or legacy `t3-ips`) and the stream has intermediate progress, plus
+     *    chat/local images
      * 4. Delete the in-progress stream messages so only the final answer remains visible
      */
     const finalizeAssistantMessage = (args: {
@@ -3816,8 +3878,10 @@ export const runBridge = (
           return;
         }
 
-        // Archive in-progress stream as .md only when it has intermediate progress beyond the
-        // final answer (not a lone Working.. tip, and not message body === stream body).
+        // Archive in-progress stream as .md only when the channel topic opts in
+        // with `omegent-ips` (legacy `t3-ips` still counts) and the stream has
+        // intermediate progress beyond the final answer (not a lone Working..
+        // tip, and not message body === stream body).
         const historySource = stripWorkingIndicator(
           streamHistoryText.trim() !== ""
             ? streamHistoryText
@@ -3827,13 +3891,24 @@ export const runBridge = (
         );
         const hadStreamMessages = allStreamIds(state).length > 0;
         const finalSource = stripWorkingIndicator(text);
-        const shouldAttachStreamHistory =
-          !state.streamHistoryPosted &&
-          hadStreamMessages &&
-          streamHistoryHasAdditionalContent(historySource, finalSource);
+        const streamHasExtraProgress = streamHistoryHasAdditionalContent(
+          historySource,
+          finalSource,
+        );
+        const inProgressStreamOptIn =
+          !state.streamHistoryPosted && hadStreamMessages && streamHasExtraProgress
+            ? yield* readInProgressStreamTopicOptIn
+            : null;
+        const attachStreamHistory = shouldAttachStreamHistory({
+          channelTopicOptIn: inProgressStreamOptIn?.optedIn === true,
+          alreadyPosted: state.streamHistoryPosted,
+          hadStreamMessages,
+          historyText: historySource,
+          finalText: finalSource,
+        });
 
         let streamHistoryTextBody: string | null = null;
-        if (shouldAttachStreamHistory) {
+        if (attachStreamHistory) {
           const historyMarkdownFiles = extractMarkdownLocalFileLinks(historySource).filter((ref) =>
             isLocalFileSrc(ref.src),
           );
@@ -3884,6 +3959,10 @@ export const runBridge = (
         yield* Effect.logInfo("Discord finalize attachments ready", {
           fileCount: files.length,
           names: files.map((f) => f.name),
+          inProgressStream:
+            streamHistoryTextBody !== null
+              ? "attached"
+              : (inProgressStreamOptIn?.reason ?? "no-extra-content"),
           totalBytes: files.reduce((sum, f) => sum + f.data.byteLength, 0),
         });
 

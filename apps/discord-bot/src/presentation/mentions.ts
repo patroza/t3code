@@ -166,10 +166,32 @@ export function parseMentionIntent(raw: string): ParsedMentionIntent {
   return { kind: "prompt", ...parsed };
 }
 
+/** Legacy `t3-ips` is the stream opt-in, not a project short name. */
+const LEGACY_RESERVED_TOPIC_TAG_NAMES = new Set(["ips"]);
+
+const TOPIC_SHORT_NAME_PATTERN = String.raw`[a-z0-9]+(?:-[a-z0-9]+)*`;
+
+function firstTopicShortName(topic: string, prefix: "omegent-link" | "t3"): string | null {
+  const pattern = new RegExp(String.raw`\b${prefix}-(${TOPIC_SHORT_NAME_PATTERN})\b`, "giu");
+  const reserved = prefix === "t3" ? LEGACY_RESERVED_TOPIC_TAG_NAMES : null;
+  for (const match of topic.matchAll(pattern)) {
+    const shortName = match[1]?.toLowerCase();
+    if (shortName === undefined || reserved?.has(shortName) === true) continue;
+    return shortName;
+  }
+  return null;
+}
+
+/**
+ * Project short name from a Discord channel topic.
+ * Prefers `omegent-link-<shortName>`. Falls back to a legacy `t3-<shortName>`.
+ * `omegent-ips` is a feature tag, so it does not match the link prefix.
+ * Legacy `t3-ips` is reserved the same way.
+ * Keep in sync with `parseTopicShortName` in `DiscordLinkedChannelTool.ts`.
+ */
 export function parseTopicShortName(topic: string | null | undefined): string | null {
-  if (topic === null || topic === undefined) return null;
-  const match = /\bt3-([a-z0-9]+(?:-[a-z0-9]+)*)\b/i.exec(topic);
-  return match?.[1]?.toLowerCase() ?? null;
+  if (topic === null || topic === undefined || topic.length === 0) return null;
+  return firstTopicShortName(topic, "omegent-link") ?? firstTopicShortName(topic, "t3");
 }
 
 /** Read Discord channel.topic when present (threads usually have none). */
@@ -181,7 +203,7 @@ export function readChannelTopic(channel: unknown): string | null | undefined {
 
 /**
  * Result of resolving the project-binding topic for a mention/slash command.
- * Distinguishes a missing `t3-*` tag from a failed parent-channel fetch (Discord outage).
+ * Distinguishes a missing `omegent-link-*` tag from a failed parent-channel fetch (Discord outage).
  */
 export type ProjectTopicLookup =
   | {
@@ -198,7 +220,7 @@ export type ProjectTopicLookup =
 /**
  * Pure merge of thread channel + optional parent GET outcome into a topic lookup.
  * When `parentId` is set, the parent response is authoritative; a failed parent GET
- * must not be confused with "channel has no t3-* tag".
+ * must not be confused with "channel has no omegent-link-* tag".
  */
 export function projectTopicFromParentLookup(input: {
   readonly channel: unknown;
@@ -240,8 +262,8 @@ export function missingProjectBindingMessage(input: {
       : "Couldn't read the channel topic (Discord API may be degraded). Please try again in a moment.";
   }
   return input.inThread
-    ? "This channel is not linked to a T3 project. Set the parent channel topic to include `t3-<shortName>` (e.g. `t3-example-project`)."
-    : "This channel is not linked to a T3 project. Set the channel topic to include `t3-<shortName>` (e.g. `t3-example-project`).";
+    ? "This channel is not linked to a T3 project. Set the parent channel topic to include `omegent-link-<shortName>` (e.g. `omegent-link-example-project`)."
+    : "This channel is not linked to a T3 project. Set the channel topic to include `omegent-link-<shortName>` (e.g. `omegent-link-example-project`).";
 }
 
 /**
