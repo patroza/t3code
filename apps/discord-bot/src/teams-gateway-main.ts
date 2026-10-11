@@ -234,6 +234,7 @@ const program = Effect.gen(function* () {
             baseline: snapshot === null ? "" : finalAnswerText(snapshot.thread),
             baselineTurnId: snapshot?.thread.latestTurn?.turnId ?? null,
             send: deliverAnswer,
+            notify: (text) => deliver(text),
             canDeliver: () => running && policy.isActive(lease),
           }).pipe(
             Effect.timeout("1 hour"),

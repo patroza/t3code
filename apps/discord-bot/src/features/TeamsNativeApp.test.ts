@@ -1,8 +1,16 @@
-import { MessageId, TurnId } from "@t3tools/contracts";
+import { it as effectIt } from "@effect/vitest";
+import { MessageId, ThreadId, TurnId } from "@t3tools/contracts";
 import type { IntegrationThreadView } from "@t3tools/shared/integrationThreadView";
-import { describe, expect, it } from "vite-plus/test";
+import * as Effect from "effect/Effect";
+import { T3Session } from "../t3/T3Session.ts";
+import { describe, expect, it, vi } from "vite-plus/test";
 
-import { sourceConversationKey, splitTeamsMessage, teamsRunDelivery } from "./TeamsNativeApp.ts";
+import {
+  sourceConversationKey,
+  splitTeamsMessage,
+  teamsRunDelivery,
+  waitForFinalAnswer,
+} from "./TeamsNativeApp.ts";
 
 describe("sourceConversationKey", () => {
   it("keeps native Teams conversations distinct by tenant and location", () => {
@@ -48,6 +56,7 @@ describe("Teams run delivery", () => {
   const snapshot = (status: string, texts: string[]): IntegrationThreadView =>
     ({
       updatedAt: "2026-10-11T13:00:49Z",
+      activities: [],
       runStatuses: [{ id: "run-1", status, userMessageId: request }],
       session: { status: "ready", activeTurnId: null },
       latestTurn: {
@@ -74,6 +83,36 @@ describe("Teams run delivery", () => {
       ),
     ).toEqual({ kind: "completed", answer: "It’s 13:00 UTC." });
   });
+
+  effectIt.live("polls past interim commentary and sends only the completed answer", () =>
+    Effect.gen(function* () {
+      let polls = 0;
+      const send = vi.fn(async (_text: string) => {});
+      yield* waitForFinalAnswer({
+        t3ThreadId: ThreadId.make("thread"),
+        messageId: request,
+        baseline: "",
+        baselineTurnId: null,
+        send,
+      }).pipe(
+        Effect.provideService(T3Session, {
+          fetchThreadDetail: () =>
+            Effect.sync(() => {
+              polls++;
+              expect(send).not.toHaveBeenCalled();
+              return {
+                thread:
+                  polls === 1
+                    ? snapshot("running", ["I’ll check the current time."])
+                    : snapshot("completed", ["I’ll check the current time.", "It’s 13:00 UTC."]),
+              };
+            }),
+        } as never),
+      );
+      expect(polls).toBe(2);
+      expect(send).toHaveBeenCalledExactlyOnceWith("It’s 13:00 UTC.");
+    }),
+  );
 
   it("cannot deliver an old answer to a queued follow-up", () => {
     const thread = snapshot("completed", ["It’s 13:00 UTC."]);
