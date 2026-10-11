@@ -280,6 +280,7 @@ const make = Effect.gen(function* () {
   ) {
     const failure = (detail: string) =>
       new GitCommandError({
+        failureKind: "unknown",
         operation: "StorageCleanup.branchChanged",
         command: "git",
         cwd,

@@ -1447,6 +1447,7 @@ it.effect.each(["fails", "is interrupted"] as const)(
                 Effect.andThen(
                   Effect.fail(
                     new GitCommandError({
+                      failureKind: "unknown",
                       operation: "GitVcsDriver.fetchRemote",
                       command: "git",
                       cwd: project.workspaceRoot,
@@ -1529,6 +1530,7 @@ it.effect.each(["failed", "interrupted"] as const)(
           ? Deferred.succeed(fetchEntered!, undefined).pipe(Effect.andThen(Effect.never))
           : Effect.fail(
               new GitCommandError({
+                failureKind: "unknown",
                 operation: "GitVcsDriver.fetchRemote",
                 command: "git",
                 cwd: project.workspaceRoot,
@@ -2523,6 +2525,7 @@ it.effect.each([
         commits === null
           ? Effect.fail(
               new GitCommandError({
+                failureKind: "unknown",
                 operation: "GitWorkflowService.hasCommit",
                 command: "git rev-parse",
                 cwd: "/repo",

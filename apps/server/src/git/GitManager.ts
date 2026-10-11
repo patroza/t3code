@@ -1778,6 +1778,7 @@ export const make = Effect.gen(function* () {
                 if (result.exitCode === 0) return Effect.succeed(remote.name);
                 if (result.exitCode === 1) return Effect.succeed(null);
                 return new GitCommandError({
+                  failureKind: "unknown",
                   operation: "GitManager.findPublishedBranchRemote.ancestor",
                   command: "git merge-base --is-ancestor",
                   cwd,

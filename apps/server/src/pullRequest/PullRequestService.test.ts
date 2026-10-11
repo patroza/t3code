@@ -5396,7 +5396,7 @@ it.effect("reads a fork pull request against origin, not the upstream identity",
     const service = yield* makeService({
       projects: [withRemotes],
       providers: [
-        fakeProvider("github", {
+        fakeProvider(SourceControlProviderKind.make("github"), {
           getChangeRequest: (input) => {
             requested = input.repository;
             return Effect.succeed({
