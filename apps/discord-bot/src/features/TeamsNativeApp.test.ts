@@ -61,7 +61,7 @@ describe("Teams run delivery", () => {
         text,
         streaming: false,
       })),
-    }) as IntegrationThreadView;
+    }) as unknown as IntegrationThreadView;
 
   it("waits through provider readiness between commentary and a final answer", () => {
     expect(
