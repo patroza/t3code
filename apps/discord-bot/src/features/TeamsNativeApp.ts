@@ -161,7 +161,7 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
     activity: { mentions: { stripText: true } },
   });
 
-  app.on("card.action.omegent", async ({ activity }) => {
+  app.on("card.action.omegent", async ({ activity, send, api }) => {
     const access = teamsActorAccess(identityMap.list(), activity.from);
     const location = coordinates(activity);
     const data = activity.value.action.data as {
@@ -188,8 +188,8 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
             data.requestId,
             data.command === "approve" ? "accept" : "decline",
           );
-        else if (data.command === "continue")
-          yield* startOrContinueT3Turn(config, {
+        else if (data.command === "continue") {
+          const turn = yield* startOrContinueT3Turn(config, {
             source: { sourceKind: "teams", sourceThreadId: sourceKey },
             externalConversationId: location.conversationId,
             externalParentId: `${location.teamId}/${location.channelId}`,
@@ -200,7 +200,29 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
             stickyModelOnContinue: true,
             promptContext: { kind: "raw", value: "Continue" },
           });
-        else return "Unsupported control.";
+          const transport = makeTeamsResponseTransport({
+            config,
+            clientId: config.teamsClientId!,
+            tenantId: location.tenantId,
+            clientSecret: config.teamsClientSecret!,
+            teamId: location.teamId ?? "",
+            channelId: location.channelId ?? "",
+            conversationId: location.conversationId,
+            rootMessageId:
+              location.conversationId.split(";messageid=")[1] ?? activity.replyToId ?? activity.id,
+            assertActive: () => {
+              if (!teamsActorAccess(identityMap.list(), activity.from).allowed)
+                throw new Error("Teams actor access revoked");
+            },
+            send: (wire) => send(wire),
+            deleteMessage: (id) => api.conversations.deleteActivity(location.conversationId, id),
+          });
+          yield* bridgeThreadToPlatform({
+            conversationId: location.conversationId,
+            threadId: turn.threadId,
+            sentUserMessageIds: [turn.messageId],
+          }).pipe(Effect.provideService(BotResponseTransport, transport));
+        } else return "Unsupported control.";
         return "Submitted.";
       }),
     ).catch(() => "The control could not be submitted.");
