@@ -102,6 +102,7 @@ import {
 import { ScheduledTaskEditorProvider } from "./features/settings/scheduled-task-editor";
 import { SettingsKeyboardRouteScreen } from "./features/settings/SettingsKeyboardRouteScreen";
 import { SettingsLegalRouteScreen } from "./features/settings/SettingsLegalRouteScreen";
+import { SettingsMicrophoneRouteScreen } from "./features/settings/SettingsMicrophoneRouteScreen";
 import {
   SettingsOpenSourceLicenseRouteScreen,
   SettingsOpenSourceLicensesRouteScreen,
@@ -308,6 +309,13 @@ const SettingsContentStack = createV5SheetStackNavigator({
       linking: "keyboard",
       options: {
         title: "Keyboard",
+      },
+    }),
+    SettingsMicrophone: createNativeStackScreen({
+      screen: SettingsMicrophoneRouteScreen,
+      linking: "microphone",
+      options: {
+        title: "Microphone",
       },
     }),
     SettingsFollowUp: createNativeStackScreen({
@@ -897,6 +905,10 @@ const RootStackConfig = createWorkspaceStackNavigator({
       screen: ConnectionsNewRouteScreen,
       linking: "connections/new",
       options: {
+        // Keep the iOS header visible from the first render so the sheet's
+        // native header stack mounts without remounting the pairing form.
+        ...(Platform.OS === "ios" ? SHEET_GLASS_HEADER_OPTIONS : undefined),
+        title: "Add Environment",
         ...FORM_SHEET_PRESENTATION_OPTIONS,
         sheetAllowedDetents: [0.55, 0.7],
         sheetGrabberVisible: true,

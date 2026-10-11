@@ -399,6 +399,7 @@ export const OrchestratorMcpThreadTimelineItem = Schema.Struct({
   visibility: Schema.Literals(["local", "inherited", "synthetic"]),
   sourceThreadId: ThreadId,
   itemId: TurnItemId,
+  subagentId: Schema.optional(NodeId),
   runId: Schema.NullOr(RunId),
   messageId: Schema.NullOr(MessageId),
   createdBy: Schema.NullOr(OrchestrationV2Actor),
@@ -487,6 +488,8 @@ export const OrchestratorMcpProviderCapability = Schema.Struct({
       options: Schema.optional(Schema.Array(ProviderOptionDescriptor)),
     }),
   ),
+  /** Runtime modes the provider offers; omitted when it offers all of them. */
+  runtimeModes: Schema.optional(Schema.Array(RuntimeMode)),
   canRunChildTask: Schema.Boolean,
   canRunCrossProviderChildTask: Schema.Boolean,
   constraints: Schema.Array(Schema.String),

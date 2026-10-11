@@ -71,7 +71,7 @@ layer("smart migration namespace repair", (it) => {
       const upstream = yield* sql<LedgerRow>`
         SELECT migration_id, name FROM ${sql(upstreamMigrationTable)} ORDER BY migration_id
       `;
-      assert.deepStrictEqual(upstream.slice(-9), [
+      assert.deepStrictEqual(upstream.slice(-10), [
         { migration_id: 52, name: "ProjectionThreadTitleState" },
         { migration_id: 53, name: "PullRequestFilesViewed" },
         { migration_id: 54, name: "ProjectionThreadsAutoSettleDisabledAt" },
@@ -81,6 +81,7 @@ layer("smart migration namespace repair", (it) => {
         { migration_id: 58, name: "WebhookRelayDeliveries" },
         { migration_id: 59, name: "McpAppModelContext" },
         { migration_id: 60, name: "ThreadSnapshotWindowIndexes" },
+        { migration_id: 61, name: "PullRequestReviewGuides" },
       ]);
       const fork = yield* sql<LedgerRow>`
         SELECT migration_id, name FROM ${sql(forkMigrationTable)} ORDER BY migration_id

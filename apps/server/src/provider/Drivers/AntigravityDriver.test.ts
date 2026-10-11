@@ -15,6 +15,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import { HttpClient } from "effect/http";
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import * as ServerConfig from "../../config.ts";
@@ -186,7 +187,7 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
   const instance = yield* AntigravityDriver.create({
     instanceId,
     displayName: "Google test account",
-    enabled: options.enabled ?? false,
+    enabled: options.enabled ?? true,
     config: { ...AntigravityDriver.defaultConfig(), ...options.config },
     environment: [
       { name: "PATH", value: instancePath },
@@ -246,6 +247,12 @@ const layerDeps = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-antigravity-driver-config-",
 }).pipe(
   Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(
+    Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make(() => Effect.die("Unexpected quota request")),
+    ),
+  ),
   Layer.provideMerge(ServerSettings.layerTest()),
   Layer.provideMerge(
     Layer.mock(BackgroundPolicy.BackgroundPolicy)({
@@ -285,7 +292,7 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
 
   it.effect.skipIf(windowsHost)("does not launch a process for a disabled instance", () =>
     Effect.gen(function* () {
-      const h = yield* makeHarness();
+      const h = yield* makeHarness({ enabled: false });
       const snapshot = yield* h.instance.snapshot.refresh;
       expect(snapshot.status).toBe("disabled");
       expect(h.acquisitions).toEqual([]);
@@ -315,13 +322,13 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
   );
 
   it.effect.skipIf(windowsHost)(
-    "refreshes a disabled instance through the selected executable and personal Google ACP",
+    "refreshes through the selected executable and personal Google ACP",
     () =>
       Effect.gen(function* () {
         const h = yield* makeHarness();
         yield* h.refresh();
         const snapshot = yield* h.instance.snapshot.getSnapshot;
-        expect(snapshot.status).toBe("disabled");
+        expect(snapshot.status).toBe("ready");
         expect(snapshot.auth.status).toBe("authenticated");
         expect(snapshot.models.map((model) => model.slug)).toEqual([
           "gemini-test-low",

@@ -1,4 +1,6 @@
 import {
+  extractCopilotSubagentUpdate,
+  makeCopilotSubagentRouting,
   normalizeDevinSessionUpdate,
   normalizeDevinToolCall,
   extractDevinSubagentUpdate,
@@ -56,6 +58,7 @@ import type * as EffectAcpSchema from "effect-acp/compat";
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
+import { ACP_SESSION_MODE_OPTION_ID } from "@t3tools/provider-acp/server/sessionConfig";
 import {
   extractXAiAcpSubagentEndNotice,
   extractXAiAcpSubagentUpdate,
@@ -878,6 +881,95 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
+  it.live("reapplies a selection after a switch away from it failed partway", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const path = yield* Path.Path;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
+      const instanceId = ProviderInstanceId.make("acp-test-partial-selection-reapply");
+      const threadId = ThreadId.make("thread-acp-partial-selection-reapply");
+      const adapter = yield* makeAcpAdapterV2({
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath,
+            protocolEvents,
+            // The model switch lands, then the agent rejects the mode step.
+            environment: { T3_ACP_FAIL_SET_MODE_CONFIG_OPTION: "1" },
+          }),
+        },
+        selfInvocation: yield* resolveSelfInvocation(),
+      });
+      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const selectionA = { instanceId, model: "composer-2" } as const;
+      const selectionB = {
+        instanceId,
+        model: "composer-2[fast=true]",
+        options: [{ id: ACP_SESSION_MODE_OPTION_ID, value: "code" }],
+      } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-partial-selection"),
+        modelSelection: selectionA,
+        runtimePolicy,
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection: selectionA,
+        runtimePolicy,
+      });
+      const now = yield* DateTime.now;
+      const turnInput = (ordinal: number, modelSelection: ModelSelection) =>
+        makeTurnInput({
+          threadId,
+          providerThread,
+          instanceId,
+          runtimePolicy,
+          now,
+          ordinal,
+          modelSelection,
+        });
+
+      const switchToB = yield* Effect.exit(runtime.startTurn(turnInput(1, selectionB)));
+      assert.isTrue(Exit.isFailure(switchToB), "the agent rejected B's mode step");
+      yield* Queue.clear(protocolEvents);
+
+      yield* runtime.startTurn(turnInput(2, selectionA));
+      yield* runtime.events.pipe(
+        Stream.takeUntil((event) => event.type === "turn.terminal"),
+        Stream.runDrain,
+      );
+      const modelSetsBeforePrompt: Array<unknown> = [];
+      while (true) {
+        const event = yield* Queue.take(protocolEvents);
+        if (event.direction !== "outgoing") continue;
+        const method = rawProtocolMethod(event);
+        if (method === "session/prompt") break;
+        if (
+          method === "session/set_config_option" &&
+          rawProtocolRequestParam(event, "configId") === "model"
+        ) {
+          modelSetsBeforePrompt.push(rawProtocolRequestParam(event, "value"));
+        }
+      }
+      assert.deepEqual(
+        modelSetsBeforePrompt,
+        ["composer-2"],
+        "the native model was left on B, so the turn on A must set it back first",
+      );
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
   it.effect("starts a new replay message after ACP v2 plan boundaries", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -1461,6 +1553,206 @@ describe("AcpAdapterV2", () => {
       );
       assert.equal(parentTools.length, 2);
       assert.equal(parentTools[0]?.title, "Parent tool finished");
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it.effect("routes interleaved Copilot subagent output into subagent threads", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const path = yield* Path.Path;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      type Runtime = AcpSessionRuntime.AcpSessionRuntime["Service"];
+      let handler: Parameters<Runtime["handleSessionUpdate"]>[0] | undefined;
+      let sessionEvent:
+        | ((event: unknown) => Effect.Effect<void, EffectAcpErrors.AcpError>)
+        | undefined;
+      const routing = makeCopilotSubagentRouting();
+      const instanceId = ProviderInstanceId.make("copilot-replay");
+      const adapter = yield* makeAcpAdapterV2({
+        instanceId,
+        selfInvocation: yield* resolveSelfInvocation(),
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          registerExtensions: routing.registerExtensions,
+          normalizeSessionUpdate: routing.normalizeSessionUpdate,
+          extractSubagentUpdate: extractCopilotSubagentUpdate,
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath,
+            wrapRuntime: (runtime) => ({
+              ...runtime,
+              handleSessionUpdate: (next) =>
+                Effect.sync(() => {
+                  handler = next;
+                }).pipe(Effect.andThen(runtime.handleSessionUpdate(next))),
+              handleExtNotification: (method, payload, next) =>
+                Effect.sync(() => {
+                  if (method === "github.com/copilot/sessionEvent") {
+                    sessionEvent = next as typeof sessionEvent;
+                  }
+                }).pipe(Effect.andThen(runtime.handleExtNotification(method, payload, next))),
+              prompt: () =>
+                Effect.gen(function* () {
+                  assert.isDefined(handler);
+                  assert.isDefined(sessionEvent);
+                  const sessionId = "mock-session-1";
+                  const raw = (type: string, data: object, agentId?: string) =>
+                    sessionEvent!({ sessionId, type, data, ...(agentId ? { agentId } : {}) });
+                  const update = (next: EffectAcpSchema.SessionUpdate) =>
+                    handler!({ sessionId, update: next });
+                  // Copilot sends each chunk's raw delta just before the chunk.
+                  const chunk = (text: string, task?: string) =>
+                    raw("assistant.message_delta", {
+                      deltaContent: text,
+                      ...(task ? { parentToolCallId: task } : {}),
+                    }).pipe(
+                      Effect.andThen(
+                        update({
+                          sessionUpdate: "agent_message_chunk",
+                          content: { type: "text", text },
+                        }),
+                      ),
+                    );
+                  const launch = (toolCallId: string, description: string, mode: string) =>
+                    update({
+                      sessionUpdate: "tool_call",
+                      toolCallId,
+                      title: description,
+                      kind: "other",
+                      status: "pending",
+                      rawInput: {
+                        description,
+                        prompt: `${description}.`,
+                        agent_type: "explore",
+                        mode,
+                      },
+                    });
+                  // Shapes captured from Copilot CLI 1.0.95 with two sync and one
+                  // background subagent launched in one batch.
+                  yield* chunk("Launching ");
+                  yield* launch("task-a", "Describe a.txt", "sync");
+                  yield* launch("task-b", "Describe b.txt", "sync");
+                  yield* launch("task-bg", "List directory", "background");
+                  yield* raw("subagent.started", { toolCallId: "task-a" }, "agent-a");
+                  yield* raw("subagent.started", { toolCallId: "task-b" }, "agent-b");
+                  yield* raw("subagent.started", { toolCallId: "task-bg" }, "agent-bg");
+                  yield* update({
+                    sessionUpdate: "tool_call_update",
+                    toolCallId: "task-bg",
+                    status: "completed",
+                    rawOutput: { content: "Agent started in background with agent_id: agent-bg." },
+                  });
+                  yield* update({
+                    sessionUpdate: "tool_call",
+                    toolCallId: "view-a",
+                    title: "Viewing a.txt",
+                    kind: "read",
+                    status: "completed",
+                    rawInput: { path: "a.txt" },
+                    _meta: { "github.com/copilot": { agentId: "agent-a" } },
+                  });
+                  yield* chunk("`a.txt` says", "task-a");
+                  yield* chunk("`b.txt` has", "task-b");
+                  yield* chunk(" hello.", "task-a");
+                  yield* chunk("a.txt b.txt", "task-bg");
+                  yield* chunk(" three lines.", "task-b");
+                  for (const [task, agent, text] of [
+                    ["task-a", "agent-a", "`a.txt` says hello."],
+                    ["task-b", "agent-b", "`b.txt` has three lines."],
+                  ] as const) {
+                    yield* update({
+                      sessionUpdate: "tool_call_update",
+                      toolCallId: task,
+                      status: "completed",
+                      rawOutput: { content: text },
+                    });
+                    yield* raw("subagent.completed", { toolCallId: task }, agent);
+                  }
+                  yield* raw("subagent.completed", { toolCallId: "task-bg" }, "agent-bg");
+                  yield* chunk("all done.");
+                  return { stopReason: "end_turn" as const };
+                }),
+            }),
+          }),
+        },
+      });
+      const threadId = ThreadId.make("copilot-replay-parent");
+      const modelSelection = { instanceId, model: "default" };
+      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("copilot-replay-session"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      yield* runtime.startTurn(
+        makeTurnInput({
+          threadId,
+          providerThread,
+          instanceId,
+          runtimePolicy,
+          now: yield* DateTime.now,
+        }),
+      );
+      const events = Array.from(
+        yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        ),
+      );
+      const items = events.flatMap((event) =>
+        event.type === "turn_item.updated" ? [event.turnItem] : [],
+      );
+      const lastText = (thread: string | null | undefined) =>
+        new Map(
+          items.flatMap((item) =>
+            item.threadId === thread && item.type === "assistant_message"
+              ? [[item.id, item.text] as const]
+              : [],
+          ),
+        );
+      assert.deepEqual([...lastText(threadId).values()].join(""), "Launching all done.");
+      const tasks = new Map(
+        events.flatMap((event) =>
+          event.type === "subagent.updated"
+            ? [[event.subagent.nativeTaskRef?.nativeId, event.subagent] as const]
+            : [],
+        ),
+      );
+      const outputs = Object.fromEntries(
+        [...tasks].map(([id, task]) => [
+          id,
+          [task.status, [...lastText(task.childThreadId).values()].join("")],
+        ]),
+      );
+      assert.deepEqual(outputs, {
+        "task-a": ["completed", "`a.txt` says hello."],
+        "task-b": ["completed", "`b.txt` has three lines."],
+        "task-bg": ["completed", "a.txt b.txt"],
+      });
+      assert.isTrue(
+        items.some(
+          (item) =>
+            item.threadId === tasks.get("task-a")?.childThreadId &&
+            item.type === "dynamic_tool" &&
+            item.title === "Read a.txt",
+        ),
+      );
+      assert.isFalse(
+        items.some((item) => item.threadId === threadId && item.type === "dynamic_tool"),
+      );
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
@@ -12024,7 +12316,11 @@ describe("AcpAdapterV2", () => {
       });
       assert.equal(taskkillCommands.length, 1);
       yield* Scope.close(runtimeScope, Exit.void);
-      assert.equal(taskkillCommands.length, 1);
+      // The scope finalizer picks its kill path from the host, not processGroupPlatform,
+      // so only a Windows host sends it through taskkill a second time.
+      const finalizerTaskkills = (yield* HostProcess.Platform) === "win32" ? 1 : 0;
+      assert.equal(taskkillCommands.length, 1 + finalizerTaskkills);
+      assert.deepEqual(taskkillCommands.at(-1), taskkillCommands[0]);
     }).pipe(Effect.provide(layerTest)),
   );
 
@@ -12141,6 +12437,7 @@ describe("AcpAdapterV2", () => {
 
   it.live("poisons the session when hard teardown defects and blocks replacement work", () =>
     Effect.gen(function* () {
+      if ((yield* HostProcess.Platform) !== "linux") return;
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const fileSystem = yield* FileSystem.FileSystem;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;

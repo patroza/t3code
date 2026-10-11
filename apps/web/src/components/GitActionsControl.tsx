@@ -1,7 +1,9 @@
+import { ThreadDetailsControl } from "./chat/ThreadDetailsControl";
 import { useAtomValue } from "@effect/atom-react";
 import {
   AuthOrchestrationOperateScope,
   AuthSourceControlWriteScope,
+  SourceControlProviderKind,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 import {
@@ -18,7 +20,6 @@ import type {
   GitStackedAction,
   SourceControlCloneProtocol,
   SourceControlProviderDiscoveryItem,
-  SourceControlProviderKind,
   SourceControlPublishRepositoryResult,
   SourceControlRepositoryVisibility,
   VcsStatusResult,
@@ -41,6 +42,7 @@ import {
   CloudDownloadIcon,
   CloudUploadIcon,
   ExternalLinkIcon,
+  FileDiffIcon,
   GitBranchPlusIcon,
   GitCommitIcon,
   InfoIcon,
@@ -48,14 +50,7 @@ import {
   GlobeIcon,
 } from "lucide-react";
 import { Radio as RadioPrimitive } from "@base-ui/react/radio";
-import {
-  AzureDevOpsIcon,
-  BitbucketIcon,
-  GitHubIcon,
-  GitLabIcon,
-  ForgejoIcon,
-  GitCafeIcon,
-} from "~/components/Icons";
+import { GitHubIcon } from "~/components/Icons";
 import { repositoryFromChangeRequestUrl } from "~/components/pullRequest/pullRequestDetail.logic";
 import { RadioGroup } from "~/components/ui/radio-group";
 import { Spinner } from "~/components/ui/spinner";
@@ -125,7 +120,16 @@ import { vcsEnvironment } from "~/state/vcs";
 import { randomUUID } from "~/lib/utils";
 import { resolvePathLinkTarget } from "@t3tools/shared/fileLinks";
 import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
-import { getSourceControlPresentation } from "~/sourceControlPresentation";
+import {
+  THREAD_DETAILS_PANEL_CHEVRON_CLASS,
+  THREAD_DETAILS_PANEL_ICON_CLASS,
+  THREAD_DETAILS_PANEL_LABEL_CLASS,
+  THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS,
+  THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS,
+} from "./chat/threadDetailsPanelStyles";
+import { getSourceControlPresentation, sourceControlIcon } from "~/sourceControlPresentation";
+import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
+import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
 import { useOpenLink } from "~/browser/useOpenLink";
 import { useOpenPrLink } from "~/lib/openPullRequestLink";
 
@@ -153,11 +157,6 @@ interface PendingDefaultBranchAction {
   onConfirmed?: () => void;
   filePaths?: ReadonlyArray<string>;
 }
-
-type PublishProviderKind = Extract<
-  SourceControlProviderKind,
-  "github" | "gitlab" | "forgejo" | "bitbucket" | "azure-devops" | "gitcafe"
->;
 
 type GitActionToastId = ReturnType<typeof toastManager.add>;
 
@@ -204,79 +203,25 @@ function requestVcsStatusRefresh(
 }
 const RUNNING_SOURCE_CONTROL_ACTIONS = ["runStackedAction", "pull", "publishRepository"] as const;
 
-const PUBLISH_PROVIDER_OPTIONS = [
-  {
-    value: "forgejo",
-    label: "Forgejo / Gitea",
-    description: "Your signed-in server",
-    host: "your server",
-    pathPlaceholder: "owner/repo",
-    Icon: ForgejoIcon,
-  },
-  {
-    value: "github",
-    label: "GitHub",
-    description: "github.com",
-    host: "github.com",
-    pathPlaceholder: "owner/repo",
-    Icon: GitHubIcon,
-  },
-  {
-    value: "gitlab",
-    label: "GitLab",
-    description: "gitlab.com",
-    host: "gitlab.com",
-    pathPlaceholder: "group/project",
-    Icon: GitLabIcon,
-  },
-  {
-    value: "bitbucket",
-    label: "Bitbucket",
-    description: "bitbucket.org",
-    host: "bitbucket.org",
-    pathPlaceholder: "workspace/repository",
-    Icon: BitbucketIcon,
-  },
-  {
-    value: "azure-devops",
-    label: "Azure DevOps",
-    description: "dev.azure.com",
-    host: "dev.azure.com",
-    pathPlaceholder: "project/repository",
-    Icon: AzureDevOpsIcon,
-  },
-  {
-    value: "gitcafe",
-    label: "GitCafe",
-    description: "git.cafe",
-    host: "git.cafe",
-    pathPlaceholder: "owner/repo",
-    Icon: GitCafeIcon,
-  },
-] as const satisfies ReadonlyArray<{
-  readonly value: PublishProviderKind;
-  readonly label: string;
-  readonly description: string;
-  readonly host: string;
-  readonly pathPlaceholder: string;
-  readonly Icon: typeof GitHubIcon;
-}>;
+/** Every built-in host, in the order the built-in definitions list them. */
+const PUBLISH_PROVIDER_OPTIONS = sourceControlClients.definitions.map((definition) => ({
+  value: definition.kind,
+  label: definition.pickerLabel,
+  description: definition.publishDescription,
+  pathPlaceholder: definition.repositoryPathHint,
+  definition,
+  Icon: sourceControlIcon(definition),
+}));
 
-function publishProviderOption(provider: PublishProviderKind) {
+function publishProviderOption(provider: SourceControlProviderKind) {
   return (
     PUBLISH_PROVIDER_OPTIONS.find((option) => option.value === provider) ??
-    PUBLISH_PROVIDER_OPTIONS[0]
+    PUBLISH_PROVIDER_OPTIONS[0]!
   );
 }
 
-function isPublishProviderKind(
-  provider: SourceControlProviderKind,
-): provider is PublishProviderKind {
-  return PUBLISH_PROVIDER_OPTIONS.some((option) => option.value === provider);
-}
-
 function getPublishProviderReadiness(input: {
-  provider: PublishProviderKind;
+  provider: SourceControlProviderKind;
   sourceControlProviders: ReadonlyArray<SourceControlProviderDiscoveryItem>;
 }): { readonly ready: boolean; readonly hint: string | null } {
   const discovered = input.sourceControlProviders.find(
@@ -448,7 +393,7 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
         }),
   );
   const [selectedPublishProvider, setSelectedPublishProvider] =
-    useState<PublishProviderKind | null>(null);
+    useState<SourceControlProviderKind | null>(null);
   const [publishRepositoryOverride, setPublishRepositoryOverride] = useState<string | null>(null);
   const [publishVisibility, setPublishVisibility] =
     useState<SourceControlRepositoryVisibility>("private");
@@ -469,42 +414,32 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
   );
   const publishRepositoryAction = useSourceControlPublishRepositoryAction(sourceControlScope);
   const publishAccountByProvider = useMemo(() => {
-    const accounts: Record<PublishProviderKind, string | null> = {
-      github: null,
-      gitlab: null,
-      forgejo: null,
-      bitbucket: null,
-      "azure-devops": null,
-      gitcafe: null,
-    };
+    const accounts = new Map<string, string | null>();
     for (const provider of sourceControlDiscovery.data?.sourceControlProviders ?? []) {
-      if (isPublishProviderKind(provider.kind)) {
-        accounts[provider.kind] = Option.getOrNull(provider.auth.account);
-      }
+      accounts.set(provider.kind, Option.getOrNull(provider.auth.account));
     }
     return accounts;
   }, [sourceControlDiscovery.data]);
   const publishProviderReadiness = useMemo(() => {
     const sourceControlProviders = sourceControlDiscovery.data?.sourceControlProviders ?? [];
-    return Object.fromEntries(
+    const readiness = new Map(
       PUBLISH_PROVIDER_OPTIONS.map((option) => [
         option.value,
-        getPublishProviderReadiness({
-          provider: option.value,
-          sourceControlProviders,
-        }),
+        getPublishProviderReadiness({ provider: option.value, sourceControlProviders }),
       ]),
-    ) as Record<PublishProviderKind, { readonly ready: boolean; readonly hint: string | null }>;
+    );
+    return (provider: SourceControlProviderKind) =>
+      readiness.get(provider) ?? { ready: false, hint: null };
   }, [sourceControlDiscovery.data]);
   const hasReadyPublishProvider = useMemo(
-    () => PUBLISH_PROVIDER_OPTIONS.some((option) => publishProviderReadiness[option.value].ready),
+    () => PUBLISH_PROVIDER_OPTIONS.some((option) => publishProviderReadiness(option.value).ready),
     [publishProviderReadiness],
   );
   const sortedPublishProviderOptions = useMemo(
     () =>
       PUBLISH_PROVIDER_OPTIONS.toSorted((left, right) => {
-        const leftReady = publishProviderReadiness[left.value].ready;
-        const rightReady = publishProviderReadiness[right.value].ready;
+        const leftReady = publishProviderReadiness(left.value).ready;
+        const rightReady = publishProviderReadiness(right.value).ready;
         if (leftReady !== rightReady) {
           return leftReady ? -1 : 1;
         }
@@ -513,26 +448,26 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
     [publishProviderReadiness],
   );
   const firstReadyPublishProvider = sortedPublishProviderOptions.find(
-    (option) => publishProviderReadiness[option.value].ready,
+    (option) => publishProviderReadiness(option.value).ready,
   )?.value;
   const publishProvider =
-    selectedPublishProvider !== null && publishProviderReadiness[selectedPublishProvider].ready
+    selectedPublishProvider !== null && publishProviderReadiness(selectedPublishProvider).ready
       ? selectedPublishProvider
-      : (firstReadyPublishProvider ?? selectedPublishProvider ?? "github");
-  const selectedPublishProviderReadiness = publishProviderReadiness[publishProvider];
-  const publishRepositoryPrefill = publishAccountByProvider[publishProvider]
-    ? `${publishAccountByProvider[publishProvider]}/`
-    : "";
+      : (firstReadyPublishProvider ??
+        selectedPublishProvider ??
+        sourceControlClients.get(undefined).kind);
+  const selectedPublishProviderReadiness = publishProviderReadiness(publishProvider);
+  const publishAccount = publishAccountByProvider.get(publishProvider) ?? null;
+  const publishRepositoryPrefill = publishAccount ? `${publishAccount}/` : "";
   const publishRepository = publishRepositoryOverride ?? publishRepositoryPrefill;
   const currentPublishProvider = publishProviderOption(publishProvider);
-  const publishHost =
-    publishProvider === "forgejo"
-      ? (Option.getOrNull(
-          sourceControlDiscovery.data?.sourceControlProviders.find(
-            (provider) => provider.kind === "forgejo",
-          )?.auth.host ?? Option.none(),
-        ) ?? currentPublishProvider.host)
-      : currentPublishProvider.host;
+  const publishHost = currentPublishProvider.definition.publishHost(
+    Option.getOrNull(
+      sourceControlDiscovery.data?.sourceControlProviders.find(
+        (provider) => provider.kind === publishProvider,
+      )?.auth.host ?? Option.none(),
+    ),
+  );
   const publishPathPlaceholder = currentPublishProvider.pathPlaceholder;
   const publishProviderLabel = currentPublishProvider.label;
   const publishWizardSteps = ["Provider", "Repository", "Summary"] as const;
@@ -651,14 +586,14 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
             <RadioGroup
               value={publishProvider}
               onValueChange={(value) => {
-                setSelectedPublishProvider(value as PublishProviderKind);
+                setSelectedPublishProvider(value as SourceControlProviderKind);
                 setPublishRepositoryOverride(null);
               }}
               aria-labelledby="publish-provider-cards-label"
               className="grid grid-cols-2"
             >
               {sortedPublishProviderOptions.map((option) => {
-                const readiness = publishProviderReadiness[option.value];
+                const readiness = publishProviderReadiness(option.value);
                 const isSelected = publishProvider === option.value && readiness.ready;
                 if (!readiness.ready) {
                   return (
@@ -972,12 +907,18 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
 
 export default function GitActionsControl({
   presentation = "toolbar",
+  displayMode = "toolbar",
+  compact = false,
+  onOpenChanges,
   gitCwd,
   activeThreadRef,
   draftId,
   isPreparingWorktree = false,
   onOpenPullRequest,
 }: GitActionsControlProps) {
+  const isPanel = displayMode === "panel";
+  const ActionGroup = isPanel ? "div" : Group;
+  const panelAnchorRef = useRef<HTMLDivElement | null>(null);
   const updateThreadMetadata = useAtomCommand(
     threadEnvironment.updateMetadata,
     "thread branch metadata update",
@@ -1126,6 +1067,7 @@ export default function GitActionsControl({
   const isRepo = gitStatus?.isRepo ?? true;
   const hasPrimaryRemote = gitStatus?.hasPrimaryRemote ?? false;
   const gitStatusForActions = gitStatus;
+  const changesTotals = gitStatusForActions?.branchChanges ?? gitStatusForActions?.workingTree;
 
   const allFiles = gitStatusForActions?.workingTree.files ?? [];
   const selectedFiles = allFiles.filter((f) => !excludedFiles.has(f.path));
@@ -1792,7 +1734,7 @@ export default function GitActionsControl({
               <PopoverTrigger
                 openOnHover
                 nativeButton={false}
-                render={<span className="block w-max cursor-not-allowed" />}
+                render={<span className="block w-full cursor-not-allowed" />}
               >
                 <MenuItem
                   density={presentation === "menu" ? "touch" : "default"}
@@ -1915,30 +1857,51 @@ export default function GitActionsControl({
           </>
         )
       ) : !isRepo ? (
-        <Button
-          variant="outline"
+        <ThreadDetailsControl
           size="xs"
+          variant={isPanel ? "ghost" : "outline"}
+          part="row"
+          panel={isPanel}
           disabled={!canWriteSourceControl || initAction.isPending}
           onClick={initializeGit}
         >
           <GitBranchPlusIcon className="size-3.5" aria-hidden />
-          <span className="ml-0.5">
+          <span className={cn("ml-0.5", isPanel && THREAD_DETAILS_PANEL_LABEL_CLASS)}>
             {initAction.isPending ? "Initializing..." : "Initialize Git"}
           </span>
-        </Button>
-      ) : (
-        <Group aria-label="Git actions" className="shrink-0">
+        </ThreadDetailsControl>
+      ) : compact ? null : (
+        <ActionGroup
+          role="group"
+          aria-label="Git actions"
+          {...(isPanel ? { ref: panelAnchorRef } : {})}
+          className={cn("shrink-0", isPanel && THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS)}
+        >
           {quickActionDisabledReason ? (
             <Popover>
               <PopoverTrigger
                 openOnHover
-                render={<Button aria-disabled="true" size="xs" variant="outline" />}
+                render={
+                  <ThreadDetailsControl
+                    aria-disabled="true"
+                    part="primary"
+                    panel={isPanel}
+                    size="xs"
+                    variant={isPanel ? "ghost" : "outline"}
+                  />
+                }
               >
                 <GitQuickActionIcon
                   quickAction={quickAction}
                   SourceControlIcon={SourceControlIcon}
+                  {...(isPanel ? { className: THREAD_DETAILS_PANEL_ICON_CLASS } : {})}
                 />
-                <span className="sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5">
+                <span
+                  className={cn(
+                    "sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5",
+                    isPanel && cn("not-sr-only ml-0 truncate", THREAD_DETAILS_PANEL_LABEL_CLASS),
+                  )}
+                >
                   {quickAction.label}
                 </span>
               </PopoverTrigger>
@@ -1947,36 +1910,90 @@ export default function GitActionsControl({
               </PopoverPopup>
             </Popover>
           ) : (
-            <Button
-              variant="outline"
+            <ThreadDetailsControl
+              variant={isPanel ? "ghost" : "outline"}
               size="xs"
+              part="primary"
+              panel={isPanel}
               disabled={!canWriteSourceControl || isGitActionRunning || quickAction.disabled}
               onClick={runQuickAction}
             >
-              <GitQuickActionIcon quickAction={quickAction} SourceControlIcon={SourceControlIcon} />
-              <span className="sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5">
+              <GitQuickActionIcon
+                quickAction={quickAction}
+                SourceControlIcon={SourceControlIcon}
+                {...(isPanel ? { className: THREAD_DETAILS_PANEL_ICON_CLASS } : {})}
+              />
+              <span
+                className={cn(
+                  "sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5",
+                  isPanel && cn("not-sr-only ml-0 truncate", THREAD_DETAILS_PANEL_LABEL_CLASS),
+                )}
+              >
                 {quickAction.label}
               </span>
-            </Button>
+            </ThreadDetailsControl>
           )}
-          <GroupSeparator className="hidden @3xl/header-actions:block" />
-          <Menu
-            onOpenChange={(open) => {
-              if (open) {
-                requestVcsStatusRefresh(refreshVcsStatus, activeEnvironmentId, gitCwd);
-              }
-            }}
-          >
-            <MenuTrigger
-              render={<Button aria-label="Git action options" size="icon-xs" variant="outline" />}
-              disabled={isGitActionRunning}
+          <>
+            {isPanel ? (
+              <span aria-hidden="true" className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS} />
+            ) : (
+              <GroupSeparator className="hidden @3xl/header-actions:block" />
+            )}
+            <Menu
+              onOpenChange={(open) => {
+                if (open) {
+                  requestVcsStatusRefresh(refreshVcsStatus, activeEnvironmentId, gitCwd);
+                }
+              }}
             >
-              <ChevronDownIcon aria-hidden="true" className="size-4" />
-            </MenuTrigger>
-            <MenuPopup align="end">{gitItems}</MenuPopup>
-          </Menu>
-        </Group>
+              <MenuTrigger
+                render={
+                  <ThreadDetailsControl
+                    aria-label="Git action options"
+                    size={isPanel ? "sm" : "icon-xs"}
+                    variant={isPanel ? "ghost" : "outline"}
+                    part="secondary"
+                    panel={isPanel}
+                  />
+                }
+                disabled={isGitActionRunning}
+              >
+                <ChevronDownIcon
+                  aria-hidden="true"
+                  className={isPanel ? THREAD_DETAILS_PANEL_CHEVRON_CLASS : "size-4"}
+                />
+              </MenuTrigger>
+              <MenuPopup
+                align="end"
+                {...(isPanel ? { anchor: panelAnchorRef } : {})}
+                className={isPanel ? "w-(--anchor-width)" : "w-full"}
+              >
+                {gitItems}
+              </MenuPopup>
+            </Menu>
+          </>
+        </ActionGroup>
       )}
+
+      {isPanel && isRepo ? (
+        <ThreadDetailsControl
+          type="button"
+          variant="ghost"
+          size="sm"
+          part="row"
+          disabled={!onOpenChanges}
+          onClick={onOpenChanges}
+        >
+          <FileDiffIcon className={THREAD_DETAILS_PANEL_ICON_CLASS} aria-hidden />
+          <span className={cn("flex-1 text-left", THREAD_DETAILS_PANEL_LABEL_CLASS)}>Changes</span>
+          <span className="flex items-center gap-1 font-mono text-2xs tabular-nums">
+            <span className="text-success">+{formatDiffCount(changesTotals?.insertions ?? 0)}</span>
+            <span className="text-destructive">
+              -{formatDiffCount(changesTotals?.deletions ?? 0)}
+            </span>
+          </span>
+        </ThreadDetailsControl>
+      ) : null}
 
       <Dialog
         open={isCommitDialogOpen}
@@ -2083,11 +2100,11 @@ export default function GitActionsControl({
                                     ) : (
                                       <>
                                         <span className="text-diff-addition">
-                                          +{file.insertions}
+                                          +{formatDiffCount(file.insertions)}
                                         </span>
                                         <span className="text-muted-foreground"> / </span>
                                         <span className="text-diff-deletion">
-                                          -{file.deletions}
+                                          -{formatDiffCount(file.deletions)}
                                         </span>
                                       </>
                                     )}
@@ -2101,11 +2118,11 @@ export default function GitActionsControl({
                     </div>
                     <div className="flex justify-end font-mono">
                       <span className="text-diff-addition">
-                        +{selectedFiles.reduce((sum, f) => sum + f.insertions, 0)}
+                        +{formatDiffCount(selectedFiles.reduce((sum, f) => sum + f.insertions, 0))}
                       </span>
                       <span className="text-muted-foreground"> / </span>
                       <span className="text-diff-deletion">
-                        -{selectedFiles.reduce((sum, f) => sum + f.deletions, 0)}
+                        -{formatDiffCount(selectedFiles.reduce((sum, f) => sum + f.deletions, 0))}
                       </span>
                     </div>
                   </div>
