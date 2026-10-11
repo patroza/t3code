@@ -66,7 +66,7 @@ describe("Teams response adapter", () => {
     });
     expect(teamsMessageFields(idleFields("19:50")).attachments).toEqual([]);
   });
-  it.effect("repairs idless rows and adopts a sent card before editing it in place", () =>
+  it.live("repairs idless rows and adopts a sent card before editing it in place", () =>
     Effect.gen(function* () {
       const config = yield* DiscordBotConfig.pipe(
         Effect.provide(
