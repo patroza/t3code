@@ -130,6 +130,13 @@ describe("shared Teams gateway", () => {
     ).toMatchObject({ kind: "mention", lease: { binding: { workspace: "beta" } } });
   });
   it("dispatches real Teams channel data using the Entra group ID and revokes it on uninstall", async () => {
+    config = {
+      ...config,
+      bindings: config.bindings.map((binding) => ({
+        ...binding,
+        teamConversationId: "19:team-conversation@thread.tacv2",
+      })),
+    };
     const channelData = {
       tenant: { id: tenant },
       team: { id: "19:team-conversation@thread.tacv2", aadGroupId: team },
@@ -142,12 +149,20 @@ describe("shared Teams gateway", () => {
       });
     });
     expect(dispatcher.receive(activity({ channelData }), execute)).toBe("queued");
+    expect(
+      dispatcher.receive(
+        activity({
+          channelData: { ...channelData, team: { id: "19:team-conversation@thread.tacv2" } },
+        }),
+        execute,
+      ),
+    ).toBe("queued");
     await dispatcher.drain();
-    expect(execute).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledTimes(2);
     policy.revoke(activity({ channelData }));
     expect(dispatcher.receive(activity({ channelData }), execute)).toBe("reject:revoked-binding");
     await dispatcher.drain();
-    expect(execute).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledTimes(2);
   });
   it("does not fall back to team.id when an explicit Entra group ID differs", () => {
     expect(
@@ -156,6 +171,24 @@ describe("shared Teams gateway", () => {
           channelData: {
             tenant: { id: tenant },
             team: { id: team, aadGroupId: "66666666-6666-4666-8666-666666666666" },
+            channel: { id: "channel-alpha" },
+          },
+        }),
+      ),
+    ).toMatchObject({ kind: "reject", reason: "unbound-location" });
+    config = {
+      ...config,
+      bindings: config.bindings.map((binding) => ({
+        ...binding,
+        teamConversationId: "19:expected@thread.tacv2",
+      })),
+    };
+    expect(
+      policy.accept(
+        activity({
+          channelData: {
+            tenant: { id: tenant },
+            team: { id: "19:wrong@thread.tacv2", aadGroupId: team },
             channel: { id: "channel-alpha" },
           },
         }),

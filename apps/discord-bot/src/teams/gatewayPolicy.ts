@@ -50,8 +50,15 @@ const fingerprint = (config: TeamsGatewayConfig, binding: TeamsGatewayBinding) =
   digest([config.identity, binding, config.workspaces[binding.workspace]]);
 const botId = (value: string | undefined) => value?.replace(/^28:/u, "").toLowerCase();
 // Bot activities use a conversation ID in team.id; bindings use the Entra group ID.
-const groupId = (activity: GatewayActivity) =>
-  activity.channelData?.team?.aadGroupId ?? activity.channelData?.team?.id;
+const matchesTeam = (binding: TeamsGatewayBinding, activity: GatewayActivity) => {
+  const team = activity.channelData?.team;
+  if (!team) return false;
+  if (team.aadGroupId !== undefined) {
+    if (team.aadGroupId !== binding.teamId) return false;
+    return binding.teamConversationId === undefined || team.id === binding.teamConversationId;
+  }
+  return team.id === (binding.teamConversationId ?? binding.teamId);
+};
 
 export function safeTeamsServiceUrl(value: string): boolean {
   try {
@@ -181,10 +188,10 @@ export class TeamsGatewayPolicy {
   revoke(activity: GatewayActivity): void {
     if (activity.channelId !== "msteams" || !safeTeamsServiceUrl(activity.serviceUrl)) return;
     const tenant = activity.channelData?.tenant?.id ?? activity.conversation.tenantId;
-    const team = groupId(activity);
+    const team = activity.channelData?.team;
     const config = this.config();
     for (const binding of config.bindings) {
-      if (binding.tenantId === tenant && (team === undefined || binding.teamId === team)) {
+      if (binding.tenantId === tenant && (team === undefined || matchesTeam(binding, activity))) {
         this.revoked.add(teamKey(binding.tenantId, binding.teamId));
       }
     }
@@ -229,7 +236,7 @@ export class TeamsGatewayPolicy {
       (binding) =>
         binding.enabled &&
         binding.tenantId === tenant &&
-        binding.teamId === groupId(activity) &&
+        matchesTeam(binding, activity) &&
         binding.channelId === activity.channelData?.channel?.id &&
         config.workspaces[binding.workspace]?.enabled,
     );
