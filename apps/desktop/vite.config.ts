@@ -6,6 +6,8 @@ import { isDesktopRuntimeExternalDependency } from "../../scripts/lib/desktop-ex
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 
 const isolatedDesktopTestFiles = [
+  // This suite replaces Electron net/nativeImage/clipboard used by image capture.
+  "src/window/ContextMenuImage.test.ts",
   "src/app/DesktopClerk.test.ts",
   "src/app/DesktopPreReadyPlatform.test.ts",
   "src/backend/DesktopNetworkInterfaces.test.ts",
