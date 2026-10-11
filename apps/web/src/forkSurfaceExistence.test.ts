@@ -278,4 +278,18 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(sidebar).toContain("vcsEnvironment.listStatus({");
     expect(sidebar).not.toContain("vcsEnvironment.status({");
   });
+
+  it("keeps project-scoped provider switches and reset controls reachable", () => {
+    const route = readSrc("routes/settings.providers.tsx");
+    const panel = readSrc("components/settings/ProviderSettingsPanel.tsx");
+    const card = readSrc("components/settings/ProviderInstanceCard.tsx");
+    expect(route).toContain('scope.kind === "project" || scope.kind === "checkout"');
+    expect(route).toContain("projectIds={");
+    expect(panel).toContain("projectOverride={projectOverride}");
+    expect(card).toContain(
+      'aria-label="Overridden for this project. Show where this value comes from"',
+    );
+    expect(card).toContain('tooltip="Reset to the device setting"');
+    expect(card).toContain("aria-label={`Enable ${displayName}`}");
+  });
 });

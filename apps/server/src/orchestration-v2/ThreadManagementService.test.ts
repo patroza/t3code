@@ -33,6 +33,9 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
@@ -283,6 +286,210 @@ it("derives thread management messages from structural error attributes", () => 
   );
 });
 
+const layerReceiptsTest = CommandReceiptStore.layer.pipe(
+  Layer.provide(SqlitePersistence.layerMemory),
+);
+
+const layerThreadManagementTest = (settingsLayer: ReturnType<typeof ServerSettings.layerTest>) =>
+  threadManagementLayer.pipe(
+    Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+    Layer.provide(Layer.mock(Orchestrator.OrchestratorV2)({})),
+    Layer.provide(settingsLayer),
+    Layer.provide(layerReceiptsTest),
+  );
+
+it.effect("refuses a new turn when the project effectively disables the instance", () => {
+  const projectId = ProjectId.make("project:thread-management:gate-disabled");
+  const instanceId = ProviderInstanceId.make("codex_work");
+  const commandId = CommandId.make("command:thread-management:gate-disabled");
+  const layerTest = layerThreadManagementTest(
+    ServerSettings.layerTest({
+      providerInstances: { [instanceId]: { driver: "codex", enabled: true } },
+      projectSettingsOverrides: {
+        [projectId]: { providerInstances: { [instanceId]: { enabled: false } } },
+      },
+    }),
+  );
+
+  return Effect.gen(function* () {
+    const threads = yield* ThreadManagementService.ThreadManagementService;
+    const error = yield* Effect.flip(
+      threads.assertProviderInstanceEnabled({ projectId, commandId, instanceId }),
+    );
+
+    expect(error).toBeInstanceOf(
+      ThreadManagementService.ThreadManagementProviderInstanceDisabledError,
+    );
+    expect(error).toMatchObject({ projectId, instanceId });
+    expect(error.message).toBe(
+      `Provider instance "${instanceId}" is disabled for project ${projectId}.`,
+    );
+  }).pipe(Effect.provide(layerTest));
+});
+
+it.effect("allows a new turn when the project enables an instance the machine disabled", () => {
+  const projectId = ProjectId.make("project:thread-management:gate-enabled");
+  const instanceId = ProviderInstanceId.make("codex_work");
+  const commandId = CommandId.make("command:thread-management:gate-enabled");
+  const layerTest = layerThreadManagementTest(
+    ServerSettings.layerTest({
+      providerInstances: { [instanceId]: { driver: "codex", enabled: false } },
+      projectSettingsOverrides: {
+        [projectId]: { providerInstances: { [instanceId]: { enabled: true } } },
+      },
+    }),
+  );
+
+  return Effect.gen(function* () {
+    const threads = yield* ThreadManagementService.ThreadManagementService;
+    yield* threads.assertProviderInstanceEnabled({ projectId, commandId, instanceId });
+  }).pipe(Effect.provide(layerTest));
+});
+
+it.effect("inherits the machine value when the project has no override", () => {
+  const projectId = ProjectId.make("project:thread-management:gate-inherit");
+  const instanceId = ProviderInstanceId.make("codex_work");
+  const commandId = CommandId.make("command:thread-management:gate-inherit");
+  const layerTest = layerThreadManagementTest(
+    ServerSettings.layerTest({
+      providerInstances: { [instanceId]: { driver: "codex", enabled: false } },
+    }),
+  );
+
+  return Effect.gen(function* () {
+    const threads = yield* ThreadManagementService.ThreadManagementService;
+    const error = yield* Effect.flip(
+      threads.assertProviderInstanceEnabled({ projectId, commandId, instanceId }),
+    );
+
+    expect(error).toBeInstanceOf(
+      ThreadManagementService.ThreadManagementProviderInstanceDisabledError,
+    );
+  }).pipe(Effect.provide(layerTest));
+});
+
+const layerDispatchChokepointTest =
+  (settingsLayer: ReturnType<typeof ServerSettings.layerTest>) => (dispatched: Array<string>) =>
+    threadManagementLayer.pipe(
+      Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+      Layer.provide(
+        Layer.mock(Orchestrator.OrchestratorV2)({
+          getThreadShell: () =>
+            Effect.succeed({
+              projectId: ProjectId.make("project:thread-management:chokepoint"),
+            } as OrchestrationV2ThreadShell),
+          getThreadRecords: () =>
+            Effect.succeed({
+              thread: {
+                id: ThreadId.make("thread:thread-management:chokepoint"),
+                projectId: ProjectId.make("project:thread-management:chokepoint"),
+                deletedAt: null,
+                modelSelection: {
+                  instanceId: ProviderInstanceId.make("codex_work"),
+                  model: "test",
+                },
+              },
+            } as unknown as OrchestrationV2ThreadProjection),
+          dispatch: (command) =>
+            Effect.sync(() => {
+              dispatched.push(command.type);
+              return { sequence: 1, storedEvents: [] } as never;
+            }),
+        }),
+      ),
+      Layer.provide(settingsLayer),
+      Layer.provideMerge(layerReceiptsTest),
+    );
+
+it.effect(
+  "the dispatch chokepoint refuses a continuation message.dispatch on a project-disabled instance before reaching the orchestrator",
+  () => {
+    const projectId = ProjectId.make("project:thread-management:chokepoint");
+    const threadId = ThreadId.make("thread:thread-management:chokepoint");
+    const instanceId = ProviderInstanceId.make("codex_work");
+    const commandId = CommandId.make("command:thread-management:chokepoint-disabled");
+    const dispatched: Array<string> = [];
+    const layerTest = layerDispatchChokepointTest(
+      ServerSettings.layerTest({
+        providerInstances: { [instanceId]: { driver: "codex", enabled: true } },
+        projectSettingsOverrides: {
+          [projectId]: { providerInstances: { [instanceId]: { enabled: false } } },
+        },
+      }),
+    )(dispatched);
+
+    return Effect.gen(function* () {
+      const threads = yield* ThreadManagementService.ThreadManagementService;
+      const error = yield* Effect.flip(
+        threads.dispatch({
+          type: "message.dispatch",
+          commandId,
+          threadId,
+          messageId: MessageId.make("message:thread-management:chokepoint-disabled"),
+          text: "Background task completed.",
+          attachments: [],
+          dispatchMode: { type: "queue_after_active" },
+          createdBy: "agent",
+          creationSource: "server",
+        }),
+      );
+
+      expect(error).toBeInstanceOf(
+        ThreadManagementService.ThreadManagementProviderInstanceDisabledError,
+      );
+      expect(error).toMatchObject({ projectId, instanceId });
+      expect(dispatched).toEqual([]);
+    }).pipe(Effect.provide(layerTest));
+  },
+);
+
+it.effect(
+  "a replay of an already-accepted command id dispatches despite the instance now being disabled",
+  () => {
+    const projectId = ProjectId.make("project:thread-management:chokepoint");
+    const threadId = ThreadId.make("thread:thread-management:chokepoint");
+    const instanceId = ProviderInstanceId.make("codex_work");
+    const commandId = CommandId.make("command:thread-management:chokepoint-replay");
+    const dispatched: Array<string> = [];
+    const layerTest = layerDispatchChokepointTest(
+      ServerSettings.layerTest({
+        providerInstances: { [instanceId]: { driver: "codex", enabled: true } },
+        projectSettingsOverrides: {
+          [projectId]: { providerInstances: { [instanceId]: { enabled: false } } },
+        },
+      }),
+    )(dispatched);
+
+    return Effect.gen(function* () {
+      const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
+      yield* receipts.insertIfAbsent({
+        commandId,
+        threadId,
+        commandType: "message.dispatch",
+        acceptedAt: yield* DateTime.now,
+        resultSequence: 1,
+        status: "accepted",
+        error: null,
+      });
+
+      const threads = yield* ThreadManagementService.ThreadManagementService;
+      yield* threads.dispatch({
+        type: "message.dispatch",
+        commandId,
+        threadId,
+        messageId: MessageId.make("message:thread-management:chokepoint-replay"),
+        text: "Background task completed.",
+        attachments: [],
+        dispatchMode: { type: "queue_after_active" },
+        createdBy: "agent",
+        creationSource: "server",
+      });
+
+      expect(dispatched).toEqual(["message.dispatch"]);
+    }).pipe(Effect.provide(layerTest));
+  },
+);
+
 it.effect("classifies projection infrastructure failures separately from a missing thread", () => {
   const projectId = ProjectId.make("project:thread-management:projection-failure");
   const threadId = ThreadId.make("thread:thread-management:projection-failure");
@@ -298,6 +505,8 @@ it.effect("classifies projection infrastructure failures separately from a missi
         getThreadProjection: () => Effect.fail(projectionError),
       }),
     ),
+    Layer.provide(ServerSettings.layerTest()),
+    Layer.provide(layerReceiptsTest),
   );
 
   return Effect.gen(function* () {
@@ -332,6 +541,8 @@ it.effect("uses thread-not-found only after a projection loads outside the proje
         getThreadProjection: () => Effect.succeed(projection),
       }),
     ),
+    Layer.provide(ServerSettings.layerTest()),
+    Layer.provide(layerReceiptsTest),
   );
 
   return Effect.gen(function* () {
@@ -364,6 +575,8 @@ it.effect("preserves failed legacy materialization when reading checkpoint conte
         }),
       ),
     ),
+    Layer.provide(ServerSettings.layerTest()),
+    Layer.provide(layerReceiptsTest),
   );
   return Effect.gen(function* () {
     const service = yield* ThreadManagementService.ThreadManagementService;
@@ -412,6 +625,8 @@ it.effect.each([
             }),
         }),
       ),
+      Layer.provide(ServerSettings.layerTest()),
+      Layer.provide(layerReceiptsTest),
     );
     const service = yield* ThreadManagementService.ThreadManagementService.pipe(
       Effect.provide(layerTest),
@@ -534,6 +749,8 @@ it.effect.each([createDuringCloneCommand, sendDuringCloneCommand])(
     Effect.gen(function* () {
       let dispatched = false;
       const layerTest = ThreadManagementService.layer.pipe(
+        Layer.provide(ServerSettings.layerTest()),
+        Layer.provide(layerReceiptsTest),
         Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
         Layer.provide(
           Layer.mergeAll(
@@ -585,6 +802,8 @@ it.effect("refuses service sends used by MCP and schedules while the project is 
       updatedAt: NOW,
     };
     const layerTest = ThreadManagementService.layer.pipe(
+      Layer.provide(ServerSettings.layerTest()),
+      Layer.provide(layerReceiptsTest),
       Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
       Layer.provide(
         Layer.mergeAll(
@@ -651,6 +870,8 @@ it.effect("waitForThread reads the run again only when the run updates", () =>
             }),
         }),
       ),
+      Layer.provide(ServerSettings.layerTest()),
+      Layer.provide(layerReceiptsTest),
     );
     const service = yield* ThreadManagementService.ThreadManagementService.pipe(
       Effect.provide(layerTest),
@@ -795,6 +1016,8 @@ it.effect.each([
           }),
         ),
       ),
+      Layer.provide(ServerSettings.layerTest()),
+      Layer.provide(layerReceiptsTest),
     );
     yield* Effect.gen(function* () {
       const service = yield* ThreadManagementService.ThreadManagementService;
@@ -913,6 +1136,8 @@ it.effect.each([
             }),
         }),
       ),
+      Layer.provide(ServerSettings.layerTest()),
+      Layer.provide(layerReceiptsTest),
     );
     const service = yield* ThreadManagementService.ThreadManagementService.pipe(
       Effect.provide(layerTest),
