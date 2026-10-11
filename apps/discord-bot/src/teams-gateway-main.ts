@@ -1,6 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off globalPromise:off missingEffectContext:off anyUnknownInErrorContext:off unsafeEffectTypeAssertion:off layerMergeAllWithDependencies:off
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
+import { ApiClient } from "@microsoft/teams.apps/dist/api.js";
+import { TeamsResponseReferences } from "./teams/responseReferences.ts";
+import { BridgeHub } from "./features/BridgeHub.ts";
 import { App } from "@microsoft/teams.apps";
 import { NodeRuntime } from "@effect/platform-node";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -12,15 +15,17 @@ import * as Schema from "effect/Schema";
 import { ProviderUserInputAnswers } from "@t3tools/contracts";
 import { DiscordBotConfig } from "./config.ts";
 import { resolveProjectFromShortName, startOrContinueT3Turn } from "./features/LinkedTurnRouter.ts";
-import { waitForFinalAnswer } from "./features/TeamsNativeApp.ts";
-import { finalAnswerText } from "./features/ResponseBridge.ts";
+import { bridgeThreadToPlatform, runBridge } from "./features/ResponseBridge.ts";
+import { layer as bridgeHubLayer } from "./features/BridgeHub.ts";
+import { BotResponseTransport } from "./features/BotResponseTransport.ts";
+import { layer as warmCacheLayer } from "./store/ThreadWarmCacheStore.ts";
+import { makeTeamsResponseTransport } from "./teams/ResponseTransport.ts";
 import { IdentityMapStore, layerFromOptionalPath as identityMapLayer } from "./identityMap.ts";
 import { layerFromOptionalPath as aliasesLayer } from "./projectAliases.ts";
 import { ThreadLinkStore, layer as linksLayer } from "./store/ThreadLinkStore.ts";
 import { T3Session, layer as sessionLayer } from "./t3/T3Session.ts";
 import { readGatewayConfig, readPrivateCredential } from "./teams/gatewayConfig.ts";
 import { TeamsGatewayDispatcher } from "./teams/gatewayDispatcher.ts";
-import { startTeamsResponse } from "./teams/responseDelivery.ts";
 import { LoopbackTeamsAdapter, RedactedTeamsLogger } from "./teams/gatewayHttp.ts";
 import {
   TeamsGatewayPolicy,
@@ -70,6 +75,8 @@ const program = Effect.gen(function* () {
         return yield* Effect.die(new Error("Workspace state must be private"));
       const runtime = ManagedRuntime.make(
         Layer.mergeAll(
+          bridgeHubLayer(runBridge),
+          warmCacheLayer(config.dataDir),
           sessionLayer(config),
           linksLayer(config.dataDir),
           aliasesLayer(config.projectAliasesPath),
@@ -122,17 +129,109 @@ const program = Effect.gen(function* () {
     }),
   );
 
+  const references = new TeamsResponseReferences(stateDir);
   const active = (lease: GatewayLease) => {
     if (!running || !policy.isActive(lease))
       throw new Error("Teams binding was revoked or changed");
     return workspaces.get(lease.binding.workspace)!;
   };
 
-  app.on("message", async ({ activity, send, reply }) => {
+  app.on("card.action.omegent", async ({ activity, send, api }) => {
+    const lease = policy.authorizeAction(activity as GatewayActivity);
+    if (lease === null)
+      return {
+        statusCode: 200,
+        type: "application/vnd.microsoft.activity.message" as const,
+        value: "This action is no longer authorized.",
+      };
+    const workspace = active(lease);
+    const data = activity.value.action.data as {
+      command?: unknown;
+      threadId?: unknown;
+      requestId?: unknown;
+    };
+    const result = await workspace.runtime
+      .runPromise(
+        Effect.gen(function* () {
+          const links = yield* ThreadLinkStore;
+          const t3 = yield* T3Session;
+          const sourceKey =
+            "native/" +
+            [
+              lease.binding.tenantId,
+              lease.binding.teamId,
+              lease.binding.channelId,
+              lease.conversationId,
+            ].join("/");
+          const link = yield* links.getBySourceThread("teams", sourceKey);
+          if (link === null || data.threadId !== link.t3ThreadId)
+            return "This control belongs to another thread.";
+          active(lease);
+          if (data.command === "stop") yield* t3.interrupt(link.t3ThreadId);
+          else if (
+            (data.command === "approve" || data.command === "deny") &&
+            typeof data.requestId === "string"
+          )
+            yield* t3.respondToApproval(
+              link.t3ThreadId,
+              data.requestId,
+              data.command === "approve" ? "accept" : "decline",
+            );
+          else if (data.command === "continue") {
+            const turn = yield* startOrContinueT3Turn(workspace.config, {
+              source: { sourceKind: "teams", sourceThreadId: sourceKey },
+              externalConversationId: lease.conversationId,
+              externalParentId: lease.binding.teamId + "/" + lease.binding.channelId,
+              externalTenantId: lease.binding.tenantId,
+              projectShortName: lease.binding.projectShortName!,
+              prompt: "Continue",
+              flags: {},
+              stickyModelOnContinue: true,
+              promptContext: { kind: "raw", value: "Authorized Teams request: Continue" },
+            });
+            const transport = makeTeamsResponseTransport({
+              config: workspace.config,
+              clientId: initial.identity.entraClientId,
+              tenantId: lease.binding.tenantId,
+              clientSecret: readPrivateCredential(secretPath),
+              teamId: lease.binding.teamId,
+              channelId: lease.binding.channelId,
+              conversationId: lease.conversationId,
+              rootMessageId:
+                lease.conversationId.split(";messageid=")[1] ?? activity.replyToId ?? activity.id,
+              assertActive: () => {
+                active(lease);
+              },
+              send: (wire) => send(wire),
+              deleteMessage: (id) => api.conversations.deleteActivity(lease.conversationId, id),
+            });
+            yield* bridgeThreadToPlatform({
+              conversationId: lease.conversationId,
+              threadId: turn.threadId,
+              sentUserMessageIds: [turn.messageId],
+            }).pipe(Effect.provideService(BotResponseTransport, transport));
+          } else return "Unsupported control.";
+          return "Submitted.";
+        }),
+      )
+      .catch(() => "The control could not be submitted.");
+    return {
+      statusCode: 200,
+      type: "application/vnd.microsoft.activity.message" as const,
+      value: result,
+    };
+  });
+
+  app.on("message", async ({ activity, send, reply, api }) => {
     // Structural SDK activity type narrows to the fields read by the independent policy.
     const outcome = dispatcher.receive(activity as GatewayActivity, async (decision) => {
       const { lease } = decision;
       const workspace = active(lease);
+      references.remember(
+        lease,
+        activity.serviceUrl ?? "",
+        lease.conversationId.split(";messageid=")[1] ?? activity.replyToId ?? activity.id,
+      );
       const deliver = async (text: string, first = false) => {
         active(lease);
         return first ? reply(text) : send(text);
@@ -157,10 +256,21 @@ const program = Effect.gen(function* () {
         const existing = yield* links.getBySourceThread("teams", sourceKey);
         if (existing !== null && existing.projectId !== project.id)
           return yield* Effect.fail("Existing Teams link belongs to another project" as const);
-        const snapshot =
-          existing === null ? null : yield* t3.fetchThreadDetail(existing.t3ThreadId);
-        if (snapshot !== null && snapshot.thread.projectId !== project.id)
-          return yield* Effect.fail("Linked thread belongs to another project" as const);
+        if (existing !== null) {
+          const snapshot = yield* t3.fetchThreadDetail(existing.t3ThreadId);
+          if (snapshot !== null && snapshot.thread.projectId !== project.id)
+            return yield* Effect.fail("Linked thread belongs to another project" as const);
+          // Adopt the last answer delivered by the legacy poller before starting the first shared turn.
+          if (
+            snapshot?.thread.latestTurn?.state === "completed" &&
+            existing.lastFinalizedAssistantId === null
+          ) {
+            yield* links.updateBridgeHints(lease.conversationId, {
+              lastSeenTurnId: snapshot.thread.latestTurn.turnId,
+              lastFinalizedAssistantId: snapshot.thread.latestTurn.assistantMessageId,
+            });
+          }
+        }
         active(lease);
         const prompt = decision.text;
         if (/^(?:\/?stop|cancel)$/iu.test(prompt)) {
@@ -217,43 +327,27 @@ const program = Effect.gen(function* () {
           stickyModelOnContinue: true,
           promptContext: { kind: "raw", value: enriched },
         });
-        const deliverAnswer = yield* Effect.promise(() =>
-          startTeamsResponse({
-            send,
-            isNew: turn.isNew,
-            threadUrl: workspace.config.webUiBaseUrl + "/?thread=" + turn.threadId,
-            assertActive: () => {
-              active(lease);
-            },
-          }),
-        );
-        yield* Effect.forkDetach(
-          waitForFinalAnswer({
-            t3ThreadId: turn.threadId,
-            messageId: turn.messageId,
-            baseline: snapshot === null ? "" : finalAnswerText(snapshot.thread),
-            baselineTurnId: snapshot?.thread.latestTurn?.turnId ?? null,
-            send: deliverAnswer,
-            notify: (text) => deliver(text),
-            canDeliver: () => running && policy.isActive(lease),
-          }).pipe(
-            Effect.timeout("1 hour"),
-            Effect.catch(() =>
-              Effect.logWarning("Teams response delivery failed").pipe(
-                Effect.andThen(
-                  Effect.tryPromise({
-                    try: () =>
-                      deliverAnswer(
-                        "T3 response delivery did not complete. Open the linked thread to see the result.",
-                      ),
-                    catch: () => "teams-failure-notice-delivery-failed" as const,
-                  }),
-                ),
-              ),
-            ),
-            Effect.catch(() => Effect.logWarning("Teams failure notice delivery failed")),
-          ),
-        );
+        const transport = makeTeamsResponseTransport({
+          config: workspace.config,
+          clientId: initial.identity.entraClientId,
+          tenantId: lease.binding.tenantId,
+          clientSecret: readPrivateCredential(secretPath),
+          teamId: lease.binding.teamId,
+          channelId: lease.binding.channelId,
+          conversationId: lease.conversationId,
+          rootMessageId:
+            lease.conversationId.split(";messageid=")[1] ?? activity.replyToId ?? activity.id,
+          assertActive: () => {
+            active(lease);
+          },
+          send: (wire) => send(wire),
+          deleteMessage: (id) => api.conversations.deleteActivity(lease.conversationId, id),
+        });
+        yield* bridgeThreadToPlatform({
+          conversationId: lease.conversationId,
+          threadId: turn.threadId,
+          sentUserMessageIds: [turn.messageId],
+        }).pipe(Effect.provideService(BotResponseTransport, transport));
       });
       await workspace.runtime.runPromise(processMessage).catch(async () => {
         try {
@@ -286,6 +380,62 @@ const program = Effect.gen(function* () {
     },
   }));
   yield* Effect.promise(() => app.start(Number(initial.ingress.dispatcherListen.split(":")[1])));
+  for (const reference of references.restore(initial, (lease) => policy.isActive(lease))) {
+    const { lease } = reference;
+    const workspace = active(lease);
+    const api = new ApiClient(reference.serviceUrl, app.api.http);
+    const transport = makeTeamsResponseTransport({
+      config: workspace.config,
+      clientId: initial.identity.entraClientId,
+      tenantId: lease.binding.tenantId,
+      clientSecret: readPrivateCredential(secretPath),
+      teamId: lease.binding.teamId,
+      channelId: lease.binding.channelId,
+      conversationId: lease.conversationId,
+      rootMessageId: reference.rootMessageId,
+      assertActive: () => {
+        active(lease);
+      },
+      send: async (wire) => {
+        active(lease);
+        if (wire.id) {
+          await api.conversations.updateActivity(lease.conversationId, wire.id, wire);
+          return { id: wire.id };
+        }
+        const payload = {
+          ...wire,
+          from: { id: "28:" + initial.identity.entraClientId, role: "bot" as const },
+          conversation: { id: lease.conversationId },
+        };
+        return api.conversations.createActivity(lease.conversationId, payload);
+      },
+      deleteMessage: (id) => api.conversations.deleteActivity(lease.conversationId, id),
+    });
+    workspace.runtime.runFork(
+      Effect.gen(function* () {
+        const links = yield* ThreadLinkStore;
+        const sourceKey =
+          "native/" +
+          [
+            lease.binding.tenantId,
+            lease.binding.teamId,
+            lease.binding.channelId,
+            lease.conversationId,
+          ].join("/");
+        const link = yield* links.getBySourceThread("teams", sourceKey);
+        if (link === null) return;
+        const hub = yield* BridgeHub;
+        yield* hub
+          .ensure({
+            discordChannelId: lease.conversationId,
+            t3ThreadId: link.t3ThreadId,
+            mode: "rehydrate",
+            lastActivityAt: link.lastActivityAt,
+          })
+          .pipe(Effect.provideService(BotResponseTransport, transport));
+      }).pipe(Effect.catchCause(() => Effect.logWarning("Teams response restore failed"))),
+    );
+  }
   yield* Effect.logInfo("Shared Teams gateway started", { workspaces: entries.map(([id]) => id) });
   return yield* Effect.never;
 });

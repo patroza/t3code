@@ -7,6 +7,7 @@ import type { TeamsGatewayBinding, TeamsGatewayConfig } from "./gatewayConfig.ts
 /** Only pass activities here after the Microsoft SDK has authenticated the request. */
 export interface GatewayActivity {
   readonly id: string;
+  readonly type?: string;
   readonly channelId: string;
   readonly serviceUrl: string;
   readonly timestamp?: string | Date;
@@ -200,7 +201,14 @@ export class TeamsGatewayPolicy {
     this.persist();
   }
 
-  accept(activity: GatewayActivity): IntakeDecision {
+  /** Card invokes share all envelope, binding, actor, replay and revocation checks. */
+  authorizeAction(activity: GatewayActivity): GatewayLease | null {
+    if (activity.type !== "invoke") return null;
+    const decision = this.accept(activity, true);
+    return decision.kind === "mention" ? decision.lease : null;
+  }
+
+  accept(activity: GatewayActivity, cardAction = false): IntakeDecision {
     const reject = (reason: string): IntakeDecision => ({ kind: "reject", reason });
     let config: TeamsGatewayConfig;
     try {
@@ -280,6 +288,7 @@ export class TeamsGatewayPolicy {
       return reject("receipt-capacity");
     this.receipts.set(receipt, { at: now, workspace: binding.workspace });
     this.persist(); // Commit before work: retries/restarts never start the same activity twice.
+    if (cardAction) return { kind: "mention", lease, text: "", context: "" };
     const ttl = config.messageIntake.contextTtlSeconds * 1000;
     for (const [key, context] of this.contexts) {
       const live = context.rows.filter(

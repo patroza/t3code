@@ -5,6 +5,7 @@ import * as NodePath from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { parseGatewayConfig, type TeamsGatewayConfig } from "./gatewayConfig.ts";
 import { TeamsGatewayDispatcher, type MentionDecision } from "./gatewayDispatcher.ts";
+import { TeamsResponseReferences } from "./responseReferences.ts";
 import { TeamsGatewayPolicy, safeTeamsServiceUrl, type GatewayActivity } from "./gatewayPolicy.ts";
 
 const appId = "11111111-1111-4111-8111-111111111111";
@@ -111,6 +112,37 @@ describe("shared Teams gateway", () => {
     );
   });
   afterEach(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
+  it("restores private response references only while their original authorization is active", () => {
+    const decision = policy.accept(activity());
+    expect(decision.kind).toBe("mention");
+    if (decision.kind !== "mention") return;
+    const references = new TeamsResponseReferences(directory);
+    references.remember(decision.lease, "https://smba.trafficmanager.net/emea/", "root");
+    const restored = new TeamsResponseReferences(directory);
+    expect(restored.restore(config, (lease) => policy.isActive(lease))).toHaveLength(1);
+    expect(NodeFS.statSync(NodePath.join(directory, "response-references.json")).mode & 0o077).toBe(
+      0,
+    );
+    config = {
+      ...config,
+      bindings: config.bindings.map((binding) => ({ ...binding, enabled: false })),
+    };
+    expect(restored.restore(config, (lease) => policy.isActive(lease))).toEqual([]);
+    expect(() =>
+      references.remember(decision.lease, "https://attacker.invalid/", "root"),
+    ).toThrow();
+  });
+  it("authorizes card invokes through the same envelope and actor policy without a mention", () => {
+    const invoke = activity({ type: "invoke", entities: [] });
+    expect(policy.authorizeAction(invoke)?.actorId).toBe(actor);
+    expect(policy.authorizeAction(invoke)).toBeNull();
+    expect(
+      policy.authorizeAction(
+        activity({ type: "invoke", from: { id: "stranger", aadObjectId: project } }),
+      ),
+    ).toBeNull();
+    expect(policy.authorizeAction(activity({ type: "message", entities: [] }))).toBeNull();
+  });
 
   it("routes the same actor to different workspaces exclusively by exact channel", () => {
     expect(policy.accept(activity())).toMatchObject({

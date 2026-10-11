@@ -16,22 +16,18 @@ import {
   appendStatsToMessageChunks,
   formatTurnResponseStatsLine,
 } from "@t3tools/shared/turnResponseStats";
-import { Discord, DiscordConfig, DiscordREST, UI } from "dfx";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Semaphore from "effect/Semaphore";
 
-import { DiscordBotConfig } from "../config.ts";
 import {
   appendT3DeepLinkToChunks,
   buildStreamHistoryMarkdownText,
   channelTopicOptsIntoInProgressStream,
-  DISCORD_MAX_FILES_PER_MESSAGE,
   imageAttachmentsOf,
   IN_PROGRESS_STREAM_TOPIC_TAG,
   shouldAttachStreamHistory,
@@ -40,12 +36,7 @@ import {
   unpostedAttachments,
 } from "../presentation/attachments.ts";
 import { buildOmegentThreadMessageUrl } from "../presentation/discordPrAttribution.ts";
-import {
-  createMessageWithAttachments,
-  DiscordUploadError,
-  textFile,
-  type DiscordUploadFile,
-} from "../presentation/discordFiles.ts";
+import { textFile, type DiscordUploadFile } from "../presentation/discordFiles.ts";
 import { formatModelSelectionLine } from "../presentation/threadInfoPin.ts";
 import {
   assertFilesystemPath as assertFilesystemFilePath,
@@ -80,13 +71,10 @@ import {
   formatInProgressChunk,
   formatWakeUpTipContent,
   inProgressChunkLimit,
-  idleMessageFields,
   nextWorkingDotCount,
   decorateDiscordThreadTitle,
   stripWorkingIndicator,
   type WorkingDotCount,
-  wakeUpMessageFields,
-  workingMessageFields,
 } from "../presentation/messages.ts";
 import {
   derivePendingInteractions,
@@ -110,11 +98,15 @@ import {
   unfinalizedPriorAssistantForCatchUp,
   type DeliveryEpochState,
 } from "./DiscordDelivery.ts";
-import { upsertThreadInfoPin } from "./ThreadInfoPin.ts";
+import {
+  BotResponseTransport,
+  idleFields,
+  wakeUpFields,
+  workingFields,
+} from "./BotResponseTransport.ts";
 
 const DISCORD_LIMIT = 2000;
 const STREAM_CHUNK_LIMIT = inProgressChunkLimit(DISCORD_LIMIT);
-const DISCORD_CONSERVATIVE_UPLOAD_LIMIT_BYTES = 10_000_000;
 
 interface BridgeState {
   /** T3 orchestration turn currently tracked by this bridge. */
@@ -261,9 +253,11 @@ export function findAlreadyPostedFinalChunkIds(input: {
   readonly botUserId: string;
   readonly finalChunks: ReadonlyArray<string>;
   readonly excludeMessageIds?: ReadonlyArray<string>;
+  readonly normalizeContent?: (content: string) => string;
 }): ReadonlyArray<string> | null {
+  const normalizeContent = input.normalizeContent ?? normalizeDiscordContentForIdempotency;
   const chunks = input.finalChunks
-    .map((chunk) => normalizeDiscordContentForIdempotency(chunk.trim() !== "" ? chunk : "_(done)_"))
+    .map((chunk) => normalizeContent(chunk.trim() !== "" ? chunk : "_(done)_"))
     .filter((chunk) => chunk !== "");
   if (chunks.length === 0) return null;
 
@@ -274,7 +268,7 @@ export function findAlreadyPostedFinalChunkIds(input: {
       (message) =>
         message.authorId === input.botUserId &&
         !exclude.has(message.id) &&
-        normalizeDiscordContentForIdempotency(message.content) !== "",
+        normalizeContent(message.content) !== "",
     )
     .slice()
     .reverse();
@@ -286,7 +280,7 @@ export function findAlreadyPostedFinalChunkIds(input: {
     const ids: string[] = [];
     for (let offset = 0; offset < chunks.length; offset += 1) {
       const message = botMessages[start + offset]!;
-      const body = normalizeDiscordContentForIdempotency(message.content);
+      const body = normalizeContent(message.content);
       if (body !== chunks[offset]) {
         matched = false;
         break;
@@ -358,7 +352,7 @@ export function pickLatestContentMessage<
 export type DiscordChannelMessageForTipScan = {
   readonly id: string;
   readonly type?: number | null;
-  readonly author?: { readonly id?: string | null } | null;
+  readonly author?: { readonly id?: string | null } | null | undefined;
   readonly content?: string | null;
 };
 
@@ -1167,7 +1161,7 @@ export function firstSnapshotBridgeAction(input: {
  * {@link formatTasksForDiscord} / `taskDiscordMessageId` — never from user-message echo.
  * Tasks posts must stay bot-owned (do not freeze Working tips) and keep updating mid-turn.
  */
-export type UserMessageIngressSurface = "discord" | "github" | "t3-client" | "internal";
+export type UserMessageIngressSurface = "discord" | "teams" | "github" | "t3-client" | "internal";
 
 /** Surfaces Discord may post as External User Input (whitelist). */
 export const DISCORD_EXTERNAL_ECHO_SURFACES: ReadonlySet<UserMessageIngressSurface> = new Set([
@@ -1200,6 +1194,7 @@ export function classifyUserMessageIngress(text: string): UserMessageIngressSurf
 
   // Discord mention / bootstrap path (buildDiscordTurnPrompt / buildSentryBootstrapPrompt).
   if (isDiscordOriginatedUserPrompt(body)) return "discord";
+  if (body.includes("Authorized Teams request:")) return "teams";
 
   // GitHub PR bridge (buildGitHubTurnPrompt).
   if (isGitHubOriginatedUserPrompt(body)) return "github";
@@ -2137,15 +2132,6 @@ export function seedStreamMessageIds(input: {
   };
 }
 
-/** Concatenate this turn's assistant bubbles — for live stream tip + stream-history.md. */
-function turnProgressText(thread: OrchestrationThread): string {
-  return assistantMessagesThisTurn(thread)
-    .map((message) => message.text.trimEnd())
-    .filter((text) => text.trim() !== "")
-    .join("\n\n")
-    .trimEnd();
-}
-
 /**
  * User-visible final Discord answer (not the live tip).
  *
@@ -2462,6 +2448,29 @@ export const bridgeThreadToDiscord = (input: {
     });
   });
 
+/** Both adapters enter the same hub and runner; legacy storage fields retain their names. */
+export const bridgeThreadToPlatform = (input: {
+  readonly conversationId: string;
+  readonly threadId: string;
+  readonly sentUserMessageIds?: ReadonlyArray<string>;
+  readonly workingAckMessageId?: string;
+}) =>
+  Effect.gen(function* () {
+    const transport = yield* BotResponseTransport;
+    const workingAckMessageId =
+      input.workingAckMessageId ??
+      (yield* transport.createMessage(
+        input.conversationId,
+        workingFields(formatInProgressChunk("", true), input.threadId),
+      )).id;
+    yield* bridgeThreadToDiscord({
+      discordChannelId: input.conversationId,
+      t3ThreadId: input.threadId,
+      workingAckMessageId,
+      ...(input.sentUserMessageIds ? { sentDiscordUserMessageIds: input.sentUserMessageIds } : {}),
+    });
+  });
+
 /**
  * Bridge fiber body — owned by ResponseBridge, started via BridgeHub.
  * Exported for {@link BridgeHub} layer wiring only.
@@ -2482,8 +2491,11 @@ export const runBridge = (
     });
 
     const t3 = yield* T3Session;
-    const rest = yield* DiscordREST;
-    const discordConfig = yield* DiscordConfig.DiscordConfig;
+    const rest = yield* BotResponseTransport;
+    const DISCORD_LIMIT = rest.contentLimit;
+    const STREAM_CHUNK_LIMIT = inProgressChunkLimit(DISCORD_LIMIT);
+    const DISCORD_MAX_FILES_PER_MESSAGE = rest.fileLimit;
+    const DISCORD_CONSERVATIVE_UPLOAD_LIMIT_BYTES = rest.uploadLimitBytes;
     const links = yield* ThreadLinkStore;
     const warmCache = yield* ThreadWarmCacheStore;
     const me = yield* rest.getMyUser();
@@ -2709,7 +2721,7 @@ export const runBridge = (
             }
             yield* rest
               .updateMessage(input.discordChannelId, id, {
-                ...idleMessageFields(body),
+                ...idleFields(body),
               })
               .pipe(
                 Effect.catchCause((cause) =>
@@ -2834,7 +2846,7 @@ export const runBridge = (
           const content = formatWakeUpTipContent(
             existingContent.trim() !== "" ? existingContent : state.lastAssistantText,
           );
-          const fields = wakeUpMessageFields(content, input.t3ThreadId);
+          const fields = wakeUpFields(content, input.t3ThreadId);
 
           const updated = yield* rest
             .updateMessage(input.discordChannelId, tipId, { ...fields })
@@ -2861,7 +2873,7 @@ export const runBridge = (
                 yield* rest.getMessage(input.discordChannelId, id).pipe(
                   Effect.flatMap((message) =>
                     rest.updateMessage(input.discordChannelId, id, {
-                      ...idleMessageFields(stripWorkingIndicator(message.content ?? "")),
+                      ...idleFields(stripWorkingIndicator(message.content ?? "")),
                     }),
                   ),
                   Effect.catchCause(() => Effect.void),
@@ -3280,20 +3292,7 @@ export const runBridge = (
           })),
         });
 
-        const message = yield* Effect.tryPromise({
-          try: () =>
-            createMessageWithAttachments({
-              baseUrl: discordConfig.rest.baseUrl,
-              botToken: Redacted.value(discordConfig.token),
-              channelId: input.discordChannelId,
-              content: body,
-              files,
-            }),
-          catch: (cause) =>
-            cause instanceof DiscordUploadError
-              ? cause
-              : new DiscordUploadError(cause instanceof Error ? cause.message : String(cause)),
-        });
+        const message = yield* rest.createMessageWithFiles(input.discordChannelId, body, files);
 
         yield* Effect.logInfo("Discord multipart createMessage ok", {
           messageId: message.id,
@@ -3541,8 +3540,8 @@ export const runBridge = (
                 // Edit the original tip in place even if humans posted below it.
                 // After bot restart, durable tip ids may point at deleted messages — recreate.
                 const fields = isLastChunk
-                  ? workingMessageFields(content, input.t3ThreadId)
-                  : idleMessageFields(content);
+                  ? workingFields(content, input.t3ThreadId)
+                  : idleFields(content);
                 const updated = yield* rest
                   .updateMessage(input.discordChannelId, existingId, { ...fields })
                   .pipe(Effect.result);
@@ -3579,9 +3578,7 @@ export const runBridge = (
               }
             } else {
               const created = yield* rest.createMessage(input.discordChannelId, {
-                ...(isLastChunk
-                  ? workingMessageFields(content, input.t3ThreadId)
-                  : idleMessageFields(content)),
+                ...(isLastChunk ? workingFields(content, input.t3ThreadId) : idleFields(content)),
               });
               discordMessageIds = [...discordMessageIds, created.id];
             }
@@ -4029,7 +4026,7 @@ export const runBridge = (
         });
         let finalChunks = appendStatsToMessageChunks(baseFinalChunks, statsLine, DISCORD_LIMIT);
 
-        const botConfig = yield* DiscordBotConfig;
+        const botConfig = rest.config;
         const t3Url = buildOmegentThreadMessageUrl({
           webUiBaseUrl: botConfig.webUiBaseUrl,
           threadId: input.t3ThreadId,
@@ -4157,6 +4154,7 @@ export const runBridge = (
           ),
         );
         const adoptedFinalIds = findAlreadyPostedFinalChunkIds({
+          normalizeContent: rest.normalizeContent,
           recentMessages: recent.map((message) => ({
             id: message.id,
             authorId: message.author?.id ?? "",
@@ -4203,6 +4201,7 @@ export const runBridge = (
                 ),
               );
             const adoptedAfterTimeout = findAlreadyPostedFinalChunkIds({
+              normalizeContent: rest.normalizeContent,
               recentMessages: recentAfterTimeout.map((message) => ({
                 id: message.id,
                 authorId: message.author?.id ?? "",
@@ -4297,23 +4296,25 @@ export const runBridge = (
         // Collect any GitHub PR URLs from the finalized answer into the pinned thread-info.
         const prUrlsFromAnswer = extractPullRequestUrls(text);
         if (prUrlsFromAnswer.length > 0) {
-          const botConfig = yield* DiscordBotConfig;
-          yield* upsertThreadInfoPin({
-            discordThreadId: input.discordChannelId,
-            t3ThreadId: input.t3ThreadId,
-            botConfig,
-            incomingPrUrls: prUrlsFromAnswer,
-            worktreePath,
-            local: worktreePath === null,
-          }).pipe(
-            Effect.catch((error) =>
-              Effect.logWarning("Failed to refresh thread info pin with PR links", {
-                discordChannelId: input.discordChannelId,
-                t3ThreadId: input.t3ThreadId,
-                error: String(error),
-              }),
-            ),
-          );
+          const botConfig = rest.config;
+          yield* rest
+            .upsertThreadInfo({
+              conversationId: input.discordChannelId,
+              threadId: input.t3ThreadId,
+              config: botConfig,
+              incomingPrUrls: prUrlsFromAnswer,
+              worktreePath,
+              local: worktreePath === null,
+            })
+            .pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("Failed to refresh thread info pin with PR links", {
+                  discordChannelId: input.discordChannelId,
+                  t3ThreadId: input.t3ThreadId,
+                  error: String(error),
+                }),
+              ),
+            );
         }
 
         yield* Effect.logInfo("Discord assistant delivery finalized", {
@@ -4341,20 +4342,20 @@ export const runBridge = (
               `**Approval required** (${approval.requestKind})`,
               approval.detail ?? "_No detail provided_",
             ].join("\n"),
-            components: UI.grid([
-              [
-                UI.button({
-                  custom_id: `t3_approve:${input.t3ThreadId}:${approval.requestId}`,
-                  label: "Allow",
-                  style: Discord.ButtonStyleTypes.SUCCESS,
-                }),
-                UI.button({
-                  custom_id: `t3_deny:${input.t3ThreadId}:${approval.requestId}`,
-                  label: "Deny",
-                  style: Discord.ButtonStyleTypes.DANGER,
-                }),
-              ],
-            ]),
+            actions: [
+              {
+                command: "approve",
+                threadId: input.t3ThreadId,
+                requestId: approval.requestId,
+                label: "Allow",
+              },
+              {
+                command: "deny",
+                threadId: input.t3ThreadId,
+                requestId: approval.requestId,
+                label: "Deny",
+              },
+            ],
           });
         }
 
@@ -4945,7 +4946,7 @@ export const runBridge = (
           wakeNote,
         );
         const created = yield* rest.createMessage(input.discordChannelId, {
-          ...workingMessageFields(hopContent, input.t3ThreadId),
+          ...workingFields(hopContent, input.t3ThreadId),
         });
         const moved = nextStateAfterMovingWorkingTip({
           priorDiscordMessageIds: [tipId],
@@ -5024,7 +5025,7 @@ export const runBridge = (
               wakeNote,
             );
             const created = yield* rest.createMessage(input.discordChannelId, {
-              ...workingMessageFields(content, input.t3ThreadId),
+              ...workingFields(content, input.t3ThreadId),
             });
             yield* Ref.update(stateRef, (current) => ({
               ...current,
@@ -5071,7 +5072,7 @@ export const runBridge = (
             toolCallCount,
             wakeNote,
           );
-          const fields = workingMessageFields(content, input.t3ThreadId);
+          const fields = workingFields(content, input.t3ThreadId);
           const updated = yield* rest
             .updateMessage(input.discordChannelId, tipId, { ...fields })
             .pipe(Effect.result);
@@ -5140,18 +5141,18 @@ export const runBridge = (
         if (link === null) return;
         if (link.currentModelLine === modelLine) return;
 
-        const botConfig = yield* DiscordBotConfig;
-        yield* upsertThreadInfoPin({
-          discordThreadId: input.discordChannelId,
-          t3ThreadId: input.t3ThreadId,
-          botConfig,
+        const botConfig = rest.config;
+        yield* rest.upsertThreadInfo({
+          conversationId: input.discordChannelId,
+          threadId: input.t3ThreadId,
+          config: botConfig,
           modelSelection,
           worktreePath: thread.worktreePath,
           local: thread.worktreePath === null,
         });
         yield* Effect.logInfo("Thread info pin model updated", {
           discordChannelId: input.discordChannelId,
-          t3ThreadId: input.t3ThreadId,
+          threadId: input.t3ThreadId,
           previousModel: link.currentModelLine ?? null,
           nextModel: modelLine,
         });
