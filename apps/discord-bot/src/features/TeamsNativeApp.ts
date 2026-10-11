@@ -1,6 +1,7 @@
 // @effect-diagnostics anyUnknownInErrorContext:off globalErrorInEffectCatch:off globalErrorInEffectFailure:off globalPromise:off missingEffectContext:off tryCatchInEffectGen:off preferSchemaOverJson:off
 import { App } from "@microsoft/teams.apps";
-import { ProviderUserInputAnswers, type ThreadId } from "@t3tools/contracts";
+import { ProviderUserInputAnswers, TurnId, type ThreadId } from "@t3tools/contracts";
+import type { IntegrationThreadView } from "@t3tools/shared/integrationThreadView";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -70,8 +71,39 @@ function teamsActorAccess(
   });
 }
 
-function settled(status: string | null | undefined): boolean {
-  return status !== "starting" && status !== "running";
+/** Provider readiness can occur between tools; completion belongs to the requested run. */
+export function teamsRunDelivery(
+  thread: IntegrationThreadView,
+  messageId: string,
+):
+  | { readonly kind: "pending" }
+  | { readonly kind: "completed"; readonly answer: string }
+  | { readonly kind: "failed"; readonly answer: string } {
+  const run = thread.runStatuses?.find((item) => item.userMessageId === messageId);
+  if (run === undefined) return { kind: "pending" };
+  if (["failed", "interrupted", "cancelled", "rolled_back"].includes(run.status)) {
+    return {
+      kind: "failed",
+      answer:
+        "This T3 run stopped before completing. Open the linked thread for details or send a new mention.",
+    };
+  }
+  if (run.status !== "completed") return { kind: "pending" };
+  const messages = thread.messages.filter((message) => message.turnId === run.id);
+  const answer = finalAnswerText({
+    ...thread,
+    session: null,
+    latestTurn: {
+      turnId: TurnId.make(run.id),
+      state: "completed",
+      requestedAt: thread.updatedAt,
+      startedAt: null,
+      completedAt: thread.updatedAt,
+      assistantMessageId: null,
+    },
+    messages,
+  });
+  return { kind: "completed", answer };
 }
 
 export function splitTeamsMessage(text: string): ReadonlyArray<string> {
@@ -92,13 +124,16 @@ export function splitTeamsMessage(text: string): ReadonlyArray<string> {
 
 export const waitForFinalAnswer = Effect.fn("waitForFinalAnswer")(function* (input: {
   readonly t3ThreadId: ThreadId;
+  readonly messageId?: string;
   readonly baseline: string;
   readonly baselineTurnId: string | null;
   readonly send: (text: string) => Promise<unknown>;
+  readonly notify?: (text: string) => Promise<unknown>;
   readonly canDeliver?: () => boolean;
 }) {
   const t3 = yield* T3Session;
   const announcedRequests = new Set<string>();
+  let emptyCompletedPolls = 0;
   while (true) {
     yield* Effect.sleep("1 second");
     if (input.canDeliver !== undefined && !input.canDeliver()) return;
@@ -111,13 +146,22 @@ export const waitForFinalAnswer = Effect.fn("waitForFinalAnswer")(function* (inp
       ),
     );
     if (snapshot === null) continue;
-    for (const interaction of derivePendingInteractions(snapshot.thread.activities)) {
+    const targetRun =
+      input.messageId === undefined
+        ? undefined
+        : snapshot.thread.runStatuses?.find((run) => run.userMessageId === input.messageId);
+    if (input.messageId !== undefined && targetRun === undefined) continue;
+    const activities =
+      targetRun === undefined
+        ? snapshot.thread.activities
+        : snapshot.thread.activities.filter((activity) => activity.turnId === targetRun.id);
+    for (const interaction of derivePendingInteractions(activities)) {
       if (announcedRequests.has(interaction.requestId)) continue;
       announcedRequests.add(interaction.requestId);
       if (interaction.kind === "approval") {
         yield* Effect.tryPromise({
           try: () =>
-            input.send(
+            (input.notify ?? input.send)(
               [
                 `T3 needs **${interaction.requestKind}** approval.`,
                 interaction.detail,
@@ -141,7 +185,7 @@ export const waitForFinalAnswer = Effect.fn("waitForFinalAnswer")(function* (inp
           .join("\n");
         yield* Effect.tryPromise({
           try: () =>
-            input.send(
+            (input.notify ?? input.send)(
               [
                 "T3 needs more information:",
                 questions,
@@ -152,12 +196,28 @@ export const waitForFinalAnswer = Effect.fn("waitForFinalAnswer")(function* (inp
         });
       }
     }
+    if (input.messageId !== undefined) {
+      const result = teamsRunDelivery(snapshot.thread, input.messageId);
+      if (result.kind === "pending") continue;
+      // Allow one projection poll for the terminal assistant message to arrive.
+      if (result.answer.length === 0 && ++emptyCompletedPolls < 2) continue;
+      for (const chunk of splitTeamsMessage(
+        result.answer ||
+          "T3 completed this run without an answer. Open the linked thread for details.",
+      )) {
+        yield* Effect.tryPromise({
+          try: () => input.send(chunk),
+          catch: (cause) => new Error(String(cause)),
+        });
+      }
+      return;
+    }
     const answer = finalAnswerText(snapshot.thread);
     const latestTurnId = snapshot.thread.latestTurn?.turnId ?? null;
     if (
       answer.length === 0 ||
       (answer === input.baseline && latestTurnId === input.baselineTurnId) ||
-      !settled(snapshot.thread.session?.status)
+      snapshot.thread.latestTurn?.state !== "completed"
     ) {
       continue;
     }
@@ -369,6 +429,7 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
         yield* Effect.forkDetach(
           waitForFinalAnswer({
             t3ThreadId: turn.threadId,
+            messageId: turn.messageId,
             baseline,
             baselineTurnId,
             send: (text) => send(text),
