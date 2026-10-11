@@ -12,12 +12,13 @@ describe("extractEnvAssignment", () => {
 });
 
 describe("parseTopicShortName", () => {
-  it("prefers omegent- project tags and still reads legacy t3- tags", () => {
-    expect(__testing.parseTopicShortName("ops omegent-example-project channel")).toBe(
+  it("prefers omegent-link- project tags and still reads legacy t3- tags", () => {
+    expect(__testing.parseTopicShortName("ops omegent-link-example-project channel")).toBe(
       "example-project",
     );
     expect(__testing.parseTopicShortName("ops t3-example-project channel")).toBe("example-project");
-    expect(__testing.parseTopicShortName("omegent-scanner t3-other")).toBe("scanner");
+    expect(__testing.parseTopicShortName("omegent-link-scanner t3-other")).toBe("scanner");
+    expect(__testing.parseTopicShortName("omegent-example-project")).toBeNull();
     expect(__testing.parseTopicShortName("omegent-ips")).toBeNull();
     expect(__testing.parseTopicShortName("notes omegent-ips t3-example")).toBe("example");
     expect(__testing.parseTopicShortName("no tag")).toBeNull();

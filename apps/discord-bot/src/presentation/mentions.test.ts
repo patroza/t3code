@@ -23,20 +23,21 @@ import {
 } from "./messages.ts";
 
 describe("parseTopicShortName", () => {
-  it("prefers omegent- project tags and still reads legacy t3- tags", () => {
-    expect(parseTopicShortName("omegent-example-project")).toBe("example-project");
-    expect(parseTopicShortName("Project channel omegent-example-project please")).toBe(
+  it("prefers omegent-link- project tags and still reads legacy t3- tags", () => {
+    expect(parseTopicShortName("omegent-link-example-project")).toBe("example-project");
+    expect(parseTopicShortName("Project channel omegent-link-example-project please")).toBe(
       "example-project",
     );
-    expect(parseTopicShortName("OMEGENT-Example-Project")).toBe("example-project");
-    expect(parseTopicShortName("omegent-t3-code")).toBe("t3-code");
+    expect(parseTopicShortName("OMEGENT-LINK-Example-Project")).toBe("example-project");
+    expect(parseTopicShortName("omegent-link-t3-code")).toBe("t3-code");
     expect(parseTopicShortName("t3-example-project")).toBe("example-project");
     expect(parseTopicShortName("Project channel t3-example-project please")).toBe(
       "example-project",
     );
     expect(parseTopicShortName("T3-Example-Project")).toBe("example-project");
     expect(parseTopicShortName("t3-t3-code")).toBe("t3-code");
-    expect(parseTopicShortName("omegent-scanner t3-other")).toBe("scanner");
+    expect(parseTopicShortName("omegent-link-scanner t3-other")).toBe("scanner");
+    expect(parseTopicShortName("omegent-example-project")).toBeNull();
     expect(parseTopicShortName("no alias here")).toBeNull();
     expect(parseTopicShortName(null)).toBeNull();
     expect(parseTopicShortName("")).toBeNull();
@@ -46,8 +47,8 @@ describe("parseTopicShortName", () => {
     expect(parseTopicShortName("omegent-ips")).toBeNull();
     expect(parseTopicShortName("t3-ips")).toBeNull();
     expect(parseTopicShortName("notes omegent-ips t3-example")).toBe("example");
-    expect(parseTopicShortName("omegent-ips omegent-example")).toBe("example");
-    expect(parseTopicShortName("omegent-ipsum")).toBe("ipsum");
+    expect(parseTopicShortName("omegent-ips omegent-link-example")).toBe("example");
+    expect(parseTopicShortName("omegent-ipsum")).toBeNull();
   });
 });
 
@@ -106,14 +107,14 @@ describe("project topic lookup", () => {
       "Discord API may be degraded",
     );
     expect(missingProjectBindingMessage({ inThread: true, parentUnavailable: false })).toContain(
-      "omegent-<shortName>",
+      "omegent-link-<shortName>",
     );
     expect(missingProjectBindingMessage({ inThread: false, parentUnavailable: false })).toContain(
-      "omegent-example-project",
+      "omegent-link-example-project",
     );
     expect(
       bridgedTurnTopicResolutionError({
-        topicError: "Channel topic has no omegent-<shortName> tag.",
+        topicError: "Channel topic has no omegent-link-<shortName> tag.",
         parentUnavailable: true,
         hasExistingLink: false,
         recoveredFromLink: false,
@@ -121,7 +122,7 @@ describe("project topic lookup", () => {
     ).toContain("Discord API may be degraded");
     expect(
       bridgedTurnTopicResolutionError({
-        topicError: "Channel topic has no omegent-<shortName> tag.",
+        topicError: "Channel topic has no omegent-link-<shortName> tag.",
         parentUnavailable: true,
         hasExistingLink: true,
         recoveredFromLink: true,

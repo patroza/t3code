@@ -366,16 +366,17 @@ function resolveDiscordPostDestination(
   return linkedThreadId ?? linkedChannelId;
 }
 
-/** Feature tags that share the topic-tag shape but are not project short names. */
-const RESERVED_TOPIC_TAG_NAMES = new Set(["ips"]);
+/** Legacy `t3-ips` is the stream opt-in, not a project short name. */
+const LEGACY_RESERVED_TOPIC_TAG_NAMES = new Set(["ips"]);
 
 const TOPIC_SHORT_NAME_PATTERN = String.raw`[a-z0-9]+(?:-[a-z0-9]+)*`;
 
-function firstUnreservedTopicShortName(topic: string, prefix: "omegent" | "t3"): string | null {
+function firstTopicShortName(topic: string, prefix: "omegent-link" | "t3"): string | null {
   const pattern = new RegExp(String.raw`\b${prefix}-(${TOPIC_SHORT_NAME_PATTERN})\b`, "giu");
+  const reserved = prefix === "t3" ? LEGACY_RESERVED_TOPIC_TAG_NAMES : null;
   for (const match of topic.matchAll(pattern)) {
     const shortName = match[1]?.toLowerCase();
-    if (shortName === undefined || RESERVED_TOPIC_TAG_NAMES.has(shortName)) continue;
+    if (shortName === undefined || reserved?.has(shortName) === true) continue;
     return shortName;
   }
   return null;
@@ -383,15 +384,14 @@ function firstUnreservedTopicShortName(topic: string, prefix: "omegent" | "t3"):
 
 /**
  * Project short name from a Discord channel topic.
- * Prefers `omegent-<shortName>`. Falls back to a legacy `t3-<shortName>`.
- * Skips reserved feature tags (`omegent-ips`, `t3-ips`).
+ * Prefers `omegent-link-<shortName>`. Falls back to a legacy `t3-<shortName>`.
+ * `omegent-ips` is a feature tag, so it does not match the link prefix.
+ * Legacy `t3-ips` is reserved the same way.
  * Keep in sync with `parseTopicShortName` in `apps/discord-bot/src/presentation/mentions.ts`.
  */
 function parseTopicShortName(topic: string | null | undefined): string | null {
   if (!topic) return null;
-  return (
-    firstUnreservedTopicShortName(topic, "omegent") ?? firstUnreservedTopicShortName(topic, "t3")
-  );
+  return firstTopicShortName(topic, "omegent-link") ?? firstTopicShortName(topic, "t3");
 }
 
 function isSupportedLinkedChannel(channel: DiscordGuildChannel): boolean {
@@ -647,7 +647,7 @@ const discordPostFailure = (
 
 const DiscordPostTool = Tool.make("discord_post_to_linked_channel", {
   description:
-    "Post to the Discord thread linked to the active T3 thread, falling back to the repository channel linked via an `omegent-<shortName>` topic tag (legacy `t3-<shortName>` still matches). Supports file attachments, rich embeds, and polls.",
+    "Post to the Discord thread linked to the active T3 thread, falling back to the repository channel linked via an `omegent-link-<shortName>` topic tag (legacy `t3-<shortName>` still matches). Supports file attachments, rich embeds, and polls.",
   failure: OrchestratorMcpFailure,
   failureMode: "return",
   dependencies: [
