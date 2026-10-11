@@ -160,6 +160,7 @@ export default mergeConfig(
               "src/observability/HeapSnapshot.test.ts",
               "src/os-jank.test.ts",
               "src/provider/ClaudeCapabilitiesProbe.test.ts",
+              "src/orchestration-v2/Adapters/ClaudeAgentSdkQueryRunner.test.ts",
               "src/provider/ProviderRegistry.test.ts",
               "src/orchestration-v2/Adapters/CursorAgentSdk.test.ts",
               "src/textGeneration/CursorTextGeneration.test.ts",
@@ -240,6 +241,7 @@ export default mergeConfig(
               // ClaudeProvider already bound the real query. Keep this file out
               // of other module mocks so the real query is never cached first.
               "src/provider/ClaudeCapabilitiesProbe.test.ts",
+              "src/orchestration-v2/Adapters/ClaudeAgentSdkQueryRunner.test.ts",
             ],
           },
         },

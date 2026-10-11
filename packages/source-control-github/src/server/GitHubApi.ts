@@ -1,3 +1,4 @@
+import { SourceControlProviderKind } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -389,7 +390,7 @@ export const make = Effect.gen(function* () {
     // this reads today is `core`; a `search/` read would need its own resource here. A refusal
     // still pauses the whole host, the key PullRequestService records its own backoff under.
     const resource = input.graphql === true ? "graphql" : "core";
-    const key = { provider: "github" as const, host };
+    const key = { provider: SourceControlProviderKind.make("github"), host };
     const run = Effect.gen(function* () {
       const lease = yield* quota
         .admit(host, resource, { allowReserve: input.allowReserve })
@@ -533,8 +534,6 @@ export const make = Effect.gen(function* () {
   const graphql: GitHubApi["Service"]["graphql"] = Effect.fn("GitHubApi.graphql")(
     function* (input) {
       const host = normalizeHost(input.host);
-      const { fingerprint } = yield* credential(host);
-      const scope = (yield* SourceControlRateLimit.CredentialScope) || fingerprint;
       const allowReserve = input.allowReserve ?? (yield* SourceControlRateLimit.Interactive);
       // The document, never its variables: user text (bodies, search terms) travels as variables.
       yield* Effect.annotateCurrentSpan({
@@ -545,32 +544,30 @@ export const make = Effect.gen(function* () {
             ? `${input.query.slice(0, TRACED_QUERY_MAX_CHARS)}…`
             : input.query,
       });
-      return yield* Effect.gen(function* () {
-        const response = yield* send({
+      const response = yield* send({
+        host,
+        operation: input.operation,
+        request: HttpClientRequest.post(gitHubApiUrls(host).graphql).pipe(
+          HttpClientRequest.acceptJson,
+          HttpClientRequest.bodyJsonUnsafe({
+            query: input.query,
+            variables: input.variables ?? {},
+          }),
+        ),
+        maxResponseBytes: input.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES,
+        allowReserve,
+        acceptNotModified: false,
+        graphql: true,
+      });
+      // A body cut at the byte cap hides any `errors` past the cut and cannot be decoded.
+      if (response.truncated) {
+        return yield* new GitHubApiResponseError({
           host,
           operation: input.operation,
-          request: HttpClientRequest.post(gitHubApiUrls(host).graphql).pipe(
-            HttpClientRequest.acceptJson,
-            HttpClientRequest.bodyJsonUnsafe({
-              query: input.query,
-              variables: input.variables ?? {},
-            }),
-          ),
-          maxResponseBytes: input.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES,
-          allowReserve,
-          acceptNotModified: false,
-          graphql: true,
+          status: response.status,
         });
-        // A body cut at the byte cap hides any `errors` past the cut and cannot be decoded.
-        if (response.truncated) {
-          return yield* new GitHubApiResponseError({
-            host,
-            operation: input.operation,
-            status: response.status,
-          });
-        }
-        return response.body;
-      }).pipe(Effect.provideService(SourceControlRateLimit.CredentialScope, scope));
+      }
+      return response.body;
     },
   );
 
