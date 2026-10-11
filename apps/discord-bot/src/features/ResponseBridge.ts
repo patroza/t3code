@@ -1161,7 +1161,7 @@ export function firstSnapshotBridgeAction(input: {
  * {@link formatTasksForDiscord} / `taskDiscordMessageId` — never from user-message echo.
  * Tasks posts must stay bot-owned (do not freeze Working tips) and keep updating mid-turn.
  */
-export type UserMessageIngressSurface = "discord" | "github" | "t3-client" | "internal";
+export type UserMessageIngressSurface = "discord" | "teams" | "github" | "t3-client" | "internal";
 
 /** Surfaces Discord may post as External User Input (whitelist). */
 export const DISCORD_EXTERNAL_ECHO_SURFACES: ReadonlySet<UserMessageIngressSurface> = new Set([
@@ -1194,6 +1194,7 @@ export function classifyUserMessageIngress(text: string): UserMessageIngressSurf
 
   // Discord mention / bootstrap path (buildDiscordTurnPrompt / buildSentryBootstrapPrompt).
   if (isDiscordOriginatedUserPrompt(body)) return "discord";
+  if (body.includes("Authorized Teams request:")) return "teams";
 
   // GitHub PR bridge (buildGitHubTurnPrompt).
   if (isGitHubOriginatedUserPrompt(body)) return "github";
@@ -2445,6 +2446,20 @@ export const bridgeThreadToDiscord = (input: {
       ...(input.lastActivityAt === undefined ? {} : { lastActivityAt: input.lastActivityAt }),
       ...(input.preferred === undefined ? {} : { preferred: input.preferred }),
     });
+  });
+
+/** Both adapters enter the same hub and runner; legacy storage fields retain their names. */
+export const bridgeThreadToPlatform = (input: {
+  readonly conversationId: string;
+  readonly threadId: string;
+  readonly sentUserMessageIds?: ReadonlyArray<string>;
+  readonly workingAckMessageId?: string;
+}) =>
+  bridgeThreadToDiscord({
+    discordChannelId: input.conversationId,
+    t3ThreadId: input.threadId,
+    ...(input.sentUserMessageIds ? { sentDiscordUserMessageIds: input.sentUserMessageIds } : {}),
+    ...(input.workingAckMessageId ? { workingAckMessageId: input.workingAckMessageId } : {}),
   });
 
 /**

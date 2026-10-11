@@ -1,5 +1,10 @@
 // @effect-diagnostics globalPromise:off globalFetch:off nodeBuiltinImport:off preferSchemaOverJson:off globalDate:off
 import type { DiscordBotConfig } from "../config.ts";
+import * as NodeOS from "node:os";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+import * as NodeCrypto from "node:crypto";
+import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 import * as NodeBuffer from "node:buffer";
 import {
@@ -15,6 +20,17 @@ import {
   renderThreadInfoPin,
 } from "../presentation/threadInfoPin.ts";
 import { ThreadLinkStore } from "../store/ThreadLinkStore.ts";
+
+const decodeLedger = Schema.decodeUnknownSync(
+  Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      content: Schema.String,
+      author: Schema.optional(Schema.Struct({ id: Schema.String })),
+      timestamp: Schema.optional(Schema.String),
+    }),
+  ),
+);
 
 export interface TeamsResponseActivity {
   readonly type: "message";
@@ -68,7 +84,12 @@ export function teamsHistoryMarkdown(content: string): string {
     .trim();
 }
 export function normalizeTeamsContent(content: string): string {
-  return teamsHistoryMarkdown(content).replace(/[*_`]/gu, "").replace(/\s+/gu, " ").trim();
+  return teamsHistoryMarkdown(content)
+    .replace(/(\*\*|__)(.*?)\1/gsu, "$2")
+    .replace(/(?<!\w)[*_]([^*_]+)[*_](?!\w)/gu, "$1")
+    .replace(/`([^`]+)`/gu, "$1")
+    .replace(/\s+/gu, " ")
+    .trim();
 }
 export function graphMessage(message: {
   id: string;
@@ -95,13 +116,48 @@ export function makeTeamsResponseTransport(input: {
   readonly channelId: string;
   readonly conversationId: string;
   readonly rootMessageId: string;
+  readonly incomingMessage?: BotMessage;
   readonly assertActive: () => void;
   readonly send: (activity: TeamsResponseActivity) => Promise<{ id: string }>;
   readonly deleteMessage: (messageId: string) => Promise<unknown>;
   readonly fetch?: typeof globalThis.fetch;
 }): BotResponseTransportService {
   const fetch = input.fetch ?? globalThis.fetch;
-  const ownMessages = new Map<string, BotMessage>();
+  const dataDir = input.config.dataDir.startsWith("~/")
+    ? NodePath.join(NodeOS.homedir(), input.config.dataDir.slice(2))
+    : input.config.dataDir;
+  const ledgerDir = NodePath.join(dataDir, "teams-response-ledger");
+  NodeFS.mkdirSync(ledgerDir, { recursive: true, mode: 0o700 });
+  const ledgerPath = NodePath.join(
+    ledgerDir,
+    NodeCrypto.createHash("sha256").update(input.conversationId).digest("hex") + ".json",
+  );
+  const readLedger = () =>
+    new Map<string, BotMessage>(
+      NodeFS.existsSync(ledgerPath)
+        ? decodeLedger(JSON.parse(NodeFS.readFileSync(ledgerPath, "utf8"))).map((message) => [
+            message.id,
+            message,
+          ])
+        : [],
+    );
+  const ownMessages = readLedger();
+  const persist = (message?: BotMessage, deletedId?: string) => {
+    const current = readLedger();
+    if (message) current.set(message.id, message);
+    if (deletedId) current.delete(deletedId);
+    const rows = [...current.values()]
+      .sort((a, b) => (b.timestamp ?? "").localeCompare(a.timestamp ?? ""))
+      .slice(0, 500);
+    const temporary = ledgerPath + ".tmp";
+    NodeFS.writeFileSync(temporary, JSON.stringify(rows), { mode: 0o600 });
+    NodeFS.renameSync(temporary, ledgerPath);
+  };
+  if (input.incomingMessage) {
+    ownMessages.set(input.incomingMessage.id, input.incomingMessage);
+    persist(input.incomingMessage);
+  }
+  const channelHistory = !!input.teamId && !!input.channelId;
   let token: { value: string; expires: number } | null = null;
   const request = <A>(run: () => Promise<A>) =>
     Effect.tryPromise({
@@ -159,6 +215,7 @@ export function makeTeamsResponseTransport(input: {
       timestamp: ownMessages.get(id ?? "")?.timestamp ?? new Date().toISOString(),
     };
     ownMessages.set(message.id, message);
+    persist(message);
     return message;
   };
   const service: BotResponseTransportService = {
@@ -173,22 +230,24 @@ export function makeTeamsResponseTransport(input: {
     getChannel: (id) => Effect.succeed({ id, type: 0, topic: "omegent-ips" }),
     updateChannel: () => Effect.void,
     getMessage: (_, id) =>
-      request(
-        async () =>
-          ownMessages.get(id) ??
-          graphMessage(
-            await graph(
-              id === input.rootMessageId
-                ? graphBase
-                : `${graphBase}/replies/${encodeURIComponent(id)}`,
-            ),
+      request(async () => {
+        const known = channelHistory ? ownMessages.get(id) : readLedger().get(id);
+        if (known) return known;
+        if (!channelHistory)
+          throw new Error("Message is not present in the private Teams delivery ledger");
+        return graphMessage(
+          await graph(
+            id === input.rootMessageId
+              ? graphBase
+              : `${graphBase}/replies/${encodeURIComponent(id)}`,
           ),
-      ),
+        );
+      }),
     listMessages: (_, options) =>
       request(async () => {
-        const found = new Map<string, BotMessage>();
-        let url: string | undefined = `${graphBase}/replies?$top=50`;
-        // A bounded history window covers the bridge's 15/25-message reconciliation scans.
+        const found = channelHistory ? new Map<string, BotMessage>() : readLedger();
+        let url: string | undefined = channelHistory ? `${graphBase}/replies?$top=50` : undefined;
+        // Graph returns replies in oldest-first pages; read all pages before selecting the latest window.
         while (url) {
           const body = (await graph(url)) as {
             value: Array<Parameters<typeof graphMessage>[0]>;
@@ -197,7 +256,7 @@ export function makeTeamsResponseTransport(input: {
           for (const row of body.value) found.set(row.id, graphMessage(row));
           url = body["@odata.nextLink"];
         }
-        for (const [id, message] of ownMessages) {
+        for (const [id, message] of channelHistory ? ownMessages : []) {
           const remote = found.get(id);
           found.set(id, remote?.timestamp ? { ...message, timestamp: remote.timestamp } : message);
         }
@@ -216,6 +275,7 @@ export function makeTeamsResponseTransport(input: {
       request(async () => {
         await input.deleteMessage(id);
         ownMessages.delete(id);
+        persist(undefined, id);
       }),
     createMessageWithFiles: (_, content, files) =>
       request(async () => {

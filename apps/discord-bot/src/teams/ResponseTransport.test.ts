@@ -1,6 +1,10 @@
+// @effect-diagnostics nodeBuiltinImport:off
 // @effect-diagnostics globalPromise:off globalFetch:off
 import { it } from "@effect/vitest";
-import { describe, expect, vi } from "vite-plus/test";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+import { describe, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import * as Effect from "effect/Effect";
 import * as ConfigProvider from "effect/ConfigProvider";
 import { DiscordBotConfig } from "../config.ts";
@@ -27,6 +31,11 @@ const options = {
 };
 
 describe("Teams response adapter", () => {
+  let directory: string;
+  beforeEach(() => {
+    directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "teams-adapter-"));
+  });
+  afterEach(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
   it("adopts an accepted final after a send timeout with Graph's HTML body", () => {
     const final = "**It’s 19:50.**\n\n[Open in T3 Code](https://example.com/?thread=t)";
     const remote = graphMessage({
@@ -58,7 +67,11 @@ describe("Teams response adapter", () => {
   it.effect("reads the newest replies across pages and preserves creation order when editing", () =>
     Effect.gen(function* () {
       const config = yield* DiscordBotConfig.pipe(
-        Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnvRecord({}))),
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnvRecord({ T3_DISCORD_BOT_DATA_DIR: directory }),
+          ),
+        ),
       );
       const fetch = vi
         .fn<typeof globalThis.fetch>()
@@ -100,10 +113,52 @@ describe("Teams response adapter", () => {
       expect(history[1]?.timestamp).toBe("2026-10-11T17:00:00Z");
     }),
   );
+  it.effect("retains personal-chat replies and incoming messages across adapter recreation", () =>
+    Effect.gen(function* () {
+      const config = yield* DiscordBotConfig.pipe(
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnvRecord({ T3_DISCORD_BOT_DATA_DIR: directory }),
+          ),
+        ),
+      );
+      const fetch = vi.fn<typeof globalThis.fetch>();
+      const first = makeTeamsResponseTransport({
+        ...options,
+        config,
+        teamId: "",
+        channelId: "",
+        fetch,
+      });
+      yield* first.createMessage(options.conversationId, { content: "answer" });
+      const restored = makeTeamsResponseTransport({
+        ...options,
+        config,
+        teamId: "",
+        channelId: "",
+        fetch,
+        incomingMessage: {
+          id: "human",
+          content: "followup",
+          timestamp: "2099-01-01T00:00:00Z",
+          author: { id: "person" },
+        },
+      });
+      yield* first.updateMessage(options.conversationId, "sent", { content: "updated answer" });
+      const history = yield* restored.listMessages(options.conversationId, { limit: 25 });
+      expect(history.map((message) => message.id)).toEqual(["human", "sent"]);
+      expect(history[1]?.content).toBe("updated answer");
+      expect(fetch).not.toHaveBeenCalled();
+    }),
+  );
   it.effect("fails closed when the binding is revoked before a send", () =>
     Effect.gen(function* () {
       const config = yield* DiscordBotConfig.pipe(
-        Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnvRecord({}))),
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnvRecord({ T3_DISCORD_BOT_DATA_DIR: directory }),
+          ),
+        ),
       );
       const send = vi.fn(options.send);
       const adapter = makeTeamsResponseTransport({

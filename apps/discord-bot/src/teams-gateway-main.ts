@@ -1,6 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off globalPromise:off missingEffectContext:off anyUnknownInErrorContext:off unsafeEffectTypeAssertion:off layerMergeAllWithDependencies:off
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
+import { ApiClient } from "@microsoft/teams.apps/dist/api.js";
+import { TeamsResponseReferences } from "./teams/responseReferences.ts";
+import { BridgeHub } from "./features/BridgeHub.ts";
 import { App } from "@microsoft/teams.apps";
 import { NodeRuntime } from "@effect/platform-node";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -12,7 +15,7 @@ import * as Schema from "effect/Schema";
 import { ProviderUserInputAnswers } from "@t3tools/contracts";
 import { DiscordBotConfig } from "./config.ts";
 import { resolveProjectFromShortName, startOrContinueT3Turn } from "./features/LinkedTurnRouter.ts";
-import { bridgeThreadToDiscord, runBridge } from "./features/ResponseBridge.ts";
+import { bridgeThreadToPlatform, runBridge } from "./features/ResponseBridge.ts";
 import { layer as bridgeHubLayer } from "./features/BridgeHub.ts";
 import { BotResponseTransport } from "./features/BotResponseTransport.ts";
 import { layer as warmCacheLayer } from "./store/ThreadWarmCacheStore.ts";
@@ -126,13 +129,14 @@ const program = Effect.gen(function* () {
     }),
   );
 
+  const references = new TeamsResponseReferences(stateDir);
   const active = (lease: GatewayLease) => {
     if (!running || !policy.isActive(lease))
       throw new Error("Teams binding was revoked or changed");
     return workspaces.get(lease.binding.workspace)!;
   };
 
-  app.on("card.action.omegent", async ({ activity }) => {
+  app.on("card.action.omegent", async ({ activity, send, api }) => {
     const lease = policy.authorizeAction(activity as GatewayActivity);
     if (lease === null)
       return {
@@ -174,7 +178,7 @@ const program = Effect.gen(function* () {
               data.command === "approve" ? "accept" : "decline",
             );
           else if (data.command === "continue") {
-            yield* startOrContinueT3Turn(workspace.config, {
+            const turn = yield* startOrContinueT3Turn(workspace.config, {
               source: { sourceKind: "teams", sourceThreadId: sourceKey },
               externalConversationId: lease.conversationId,
               externalParentId: lease.binding.teamId + "/" + lease.binding.channelId,
@@ -185,6 +189,27 @@ const program = Effect.gen(function* () {
               stickyModelOnContinue: true,
               promptContext: { kind: "raw", value: "Authorized Teams request: Continue" },
             });
+            const transport = makeTeamsResponseTransport({
+              config: workspace.config,
+              clientId: initial.identity.entraClientId,
+              tenantId: lease.binding.tenantId,
+              clientSecret: readPrivateCredential(secretPath),
+              teamId: lease.binding.teamId,
+              channelId: lease.binding.channelId,
+              conversationId: lease.conversationId,
+              rootMessageId:
+                lease.conversationId.split(";messageid=")[1] ?? activity.replyToId ?? activity.id,
+              assertActive: () => {
+                active(lease);
+              },
+              send: (wire) => send(wire),
+              deleteMessage: (id) => api.conversations.deleteActivity(lease.conversationId, id),
+            });
+            yield* bridgeThreadToPlatform({
+              conversationId: lease.conversationId,
+              threadId: turn.threadId,
+              sentUserMessageIds: [turn.messageId],
+            }).pipe(Effect.provideService(BotResponseTransport, transport));
           } else return "Unsupported control.";
           return "Submitted.";
         }),
@@ -202,6 +227,11 @@ const program = Effect.gen(function* () {
     const outcome = dispatcher.receive(activity as GatewayActivity, async (decision) => {
       const { lease } = decision;
       const workspace = active(lease);
+      references.remember(
+        lease,
+        activity.serviceUrl,
+        lease.conversationId.split(";messageid=")[1] ?? activity.replyToId ?? activity.id,
+      );
       const deliver = async (text: string, first = false) => {
         active(lease);
         return first ? reply(text) : send(text);
@@ -306,18 +336,17 @@ const program = Effect.gen(function* () {
           channelId: lease.binding.channelId,
           conversationId: lease.conversationId,
           rootMessageId:
-            activity.replyToId ?? lease.conversationId.split(";messageid=")[1] ?? activity.id,
+            lease.conversationId.split(";messageid=")[1] ?? activity.replyToId ?? activity.id,
           assertActive: () => {
             active(lease);
           },
           send: (wire) => send(wire),
           deleteMessage: (id) => api.conversations.deleteActivity(lease.conversationId, id),
         });
-        yield* bridgeThreadToDiscord({
-          discordChannelId: lease.conversationId,
-          t3ThreadId: turn.threadId,
-          sentDiscordUserMessageIds: [turn.messageId],
-          presentationMode: "full",
+        yield* bridgeThreadToPlatform({
+          conversationId: lease.conversationId,
+          threadId: turn.threadId,
+          sentUserMessageIds: [turn.messageId],
         }).pipe(Effect.provideService(BotResponseTransport, transport));
       });
       await workspace.runtime.runPromise(processMessage).catch(async () => {
@@ -351,6 +380,62 @@ const program = Effect.gen(function* () {
     },
   }));
   yield* Effect.promise(() => app.start(Number(initial.ingress.dispatcherListen.split(":")[1])));
+  for (const reference of references.restore(initial, (lease) => policy.isActive(lease))) {
+    const { lease } = reference;
+    const workspace = active(lease);
+    const api = new ApiClient(reference.serviceUrl, app.api.http);
+    const transport = makeTeamsResponseTransport({
+      config: workspace.config,
+      clientId: initial.identity.entraClientId,
+      tenantId: lease.binding.tenantId,
+      clientSecret: readPrivateCredential(secretPath),
+      teamId: lease.binding.teamId,
+      channelId: lease.binding.channelId,
+      conversationId: lease.conversationId,
+      rootMessageId: reference.rootMessageId,
+      assertActive: () => {
+        active(lease);
+      },
+      send: async (wire) => {
+        active(lease);
+        if (wire.id) {
+          await api.conversations.updateActivity(lease.conversationId, wire.id, wire);
+          return { id: wire.id };
+        }
+        return api.conversations.createActivity(lease.conversationId, {
+          ...wire,
+          channelId: "msteams",
+          from: { id: "28:" + initial.identity.entraClientId, role: "bot" },
+          conversation: { id: lease.conversationId },
+        });
+      },
+      deleteMessage: (id) => api.conversations.deleteActivity(lease.conversationId, id),
+    });
+    workspace.runtime.runFork(
+      Effect.gen(function* () {
+        const links = yield* ThreadLinkStore;
+        const sourceKey =
+          "native/" +
+          [
+            lease.binding.tenantId,
+            lease.binding.teamId,
+            lease.binding.channelId,
+            lease.conversationId,
+          ].join("/");
+        const link = yield* links.getBySourceThread("teams", sourceKey);
+        if (link === null) return;
+        const hub = yield* BridgeHub;
+        yield* hub
+          .ensure({
+            discordChannelId: lease.conversationId,
+            t3ThreadId: link.t3ThreadId,
+            mode: "rehydrate",
+            lastActivityAt: link.lastActivityAt,
+          })
+          .pipe(Effect.provideService(BotResponseTransport, transport));
+      }).pipe(Effect.catchCause(() => Effect.logWarning("Teams response restore failed"))),
+    );
+  }
   yield* Effect.logInfo("Shared Teams gateway started", { workspaces: entries.map(([id]) => id) });
   return yield* Effect.never;
 });

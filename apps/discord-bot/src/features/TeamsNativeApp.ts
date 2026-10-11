@@ -12,7 +12,7 @@ import { T3Session } from "../t3/T3Session.ts";
 import { loadTeamsChannelConfigsFromFileSync, type TeamsChannelConfig } from "../teams/config.ts";
 import { teamsMessageText } from "../teams/presentation.ts";
 import { startOrContinueT3Turn } from "./LinkedTurnRouter.ts";
-import { bridgeThreadToDiscord } from "./ResponseBridge.ts";
+import { bridgeThreadToPlatform } from "./ResponseBridge.ts";
 import { BridgeHub } from "./BridgeHub.ts";
 import { ThreadWarmCacheStore } from "../store/ThreadWarmCacheStore.ts";
 import { BotResponseTransport } from "./BotResponseTransport.ts";
@@ -296,20 +296,22 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
           promptContext: { kind: "raw", value: prompt },
         });
 
-        if (!location.teamId || !location.channelId)
-          return yield* Effect.fail(
-            new Error("Shared Teams response delivery requires a channel binding."),
-          );
         const transport = makeTeamsResponseTransport({
           config,
           clientId: config.teamsClientId!,
           tenantId: location.tenantId,
           clientSecret: config.teamsClientSecret!,
-          teamId: location.teamId,
-          channelId: location.channelId,
+          teamId: location.teamId ?? "",
+          channelId: location.channelId ?? "",
           conversationId: location.conversationId,
           rootMessageId:
             activity.replyToId ?? location.conversationId.split(";messageid=")[1] ?? activity.id,
+          incomingMessage: {
+            id: activity.id,
+            content: activity.text ?? "",
+            author: { id: activity.from.aadObjectId ?? activity.from.id },
+            timestamp: activity.timestamp?.toISOString() ?? new Date().toISOString(),
+          },
           assertActive: () => {
             if (!teamsActorAccess(identityMap.list(), activity.from).allowed)
               throw new Error("Teams actor access revoked");
@@ -317,10 +319,10 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
           send: (wire) => send(wire),
           deleteMessage: (id) => api.conversations.deleteActivity(location.conversationId, id),
         });
-        yield* bridgeThreadToDiscord({
-          discordChannelId: location.conversationId,
-          t3ThreadId: turn.threadId,
-          sentDiscordUserMessageIds: [turn.messageId],
+        yield* bridgeThreadToPlatform({
+          conversationId: location.conversationId,
+          threadId: turn.threadId,
+          sentUserMessageIds: [turn.messageId],
         }).pipe(Effect.provideService(BotResponseTransport, transport));
       }).pipe(
         Effect.catch((error) =>
