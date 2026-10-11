@@ -424,6 +424,15 @@ const program = Effect.gen(function* () {
           ].join("/");
         const link = yield* links.getBySourceThread("teams", sourceKey);
         if (link === null) return;
+        const session = yield* T3Session;
+        // Startup connection runs in another fiber; rehydration must not subscribe before it is ready.
+        yield* session.waitUntilReady().pipe(
+          Effect.retry({
+            schedule: Schedule.spaced("1 second"),
+            while: () => policy.isActive(lease),
+          }),
+        );
+        if (!policy.isActive(lease)) return;
         const hub = yield* BridgeHub;
         yield* hub
           .ensure({
@@ -433,6 +442,10 @@ const program = Effect.gen(function* () {
             lastActivityAt: link.lastActivityAt,
           })
           .pipe(Effect.provideService(BotResponseTransport, transport));
+        yield* Effect.logInfo("Teams response bridge restored after T3 readiness", {
+          workspace: lease.binding.workspace,
+          threadId: link.t3ThreadId,
+        });
       }).pipe(Effect.catchCause(() => Effect.logWarning("Teams response restore failed"))),
     );
   }
