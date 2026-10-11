@@ -141,7 +141,7 @@ export const startOrContinueT3Turn = Effect.fn("startOrContinueT3Turn")(function
             discordThreadId: input.externalConversationId,
           })
         : undefined;
-    yield* t3.startTurn({
+    const { messageId } = yield* t3.startTurn({
       threadId: existing.t3ThreadId,
       prompt: input.prompt,
       ...(continueModelSelection === undefined ? {} : { modelSelection: continueModelSelection }),
@@ -149,7 +149,7 @@ export const startOrContinueT3Turn = Effect.fn("startOrContinueT3Turn")(function
       ...(attachments.length > 0 ? { attachments } : {}),
       ...(sourceHint === undefined ? {} : { sourceHint }),
     });
-    return { threadId: existing.t3ThreadId, isNew: false } as const;
+    return { threadId: existing.t3ThreadId, messageId, isNew: false } as const;
   }
 
   const modelSelection = yield* t3.resolveModelSelection({
@@ -178,7 +178,7 @@ export const startOrContinueT3Turn = Effect.fn("startOrContinueT3Turn")(function
           discordThreadId: input.externalConversationId,
         })
       : undefined;
-  const { threadId } = yield* t3.startTurnWithWorktree({
+  const { threadId, messageId } = yield* t3.startTurnWithWorktree({
     project: resolved.project,
     prompt: enrichedPrompt,
     modelSelection,
@@ -199,7 +199,7 @@ export const startOrContinueT3Turn = Effect.fn("startOrContinueT3Turn")(function
     guildId: input.externalTenantId,
     createdAt: DateTime.formatIso(DateTime.nowUnsafe()),
   });
-  return { threadId, isNew: true } as const;
+  return { threadId, messageId, isNew: true } as const;
 });
 
 function resolveInitialPrompt(input: {
