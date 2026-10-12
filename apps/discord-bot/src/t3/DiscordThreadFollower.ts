@@ -96,6 +96,9 @@ export function applyDiscordThreadStreamItem(
 ): DiscordThreadFollowerApplyResult {
   if (item.kind === "snapshot") {
     const sequence = item.snapshotSequence;
+    if (state.current !== null && sequence < state.lastSequence) {
+      return { _tag: "none", state };
+    }
     const thread = item.projection;
     return {
       _tag: "deliver",

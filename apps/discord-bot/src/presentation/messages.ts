@@ -65,18 +65,19 @@ export function nextWorkingDotCount(current: WorkingDotCount): WorkingDotCount {
 export function stripWorkingIndicator(content: string): string {
   // Optional wake note, then optional " · N tool call(s)", inside the marker (italic or plain).
   // Notes are sanitized so they contain neither `_` nor `·`.
+  const label = "(?:Working|Starting|Waiting(?: for approval)?)";
   const wakeSuffix = "(?:\\s*·\\s*[^_\\r\\n·]+)?";
   const toolSuffix = "(?:\\s*·\\s*\\d+\\s+tool calls?)?";
   const workingTail = new RegExp(
-    `(?:\\r?\\n)+\\s*_Working\\.{2,4}${wakeSuffix}${toolSuffix}_\\s*$`,
+    `(?:\\r?\\n)+\\s*_${label}\\.{2,4}${wakeSuffix}${toolSuffix}_\\s*$`,
     "u",
   );
   const workingTailPlain = new RegExp(
-    `(?:\\r?\\n)+\\s*Working\\.{2,4}${wakeSuffix}${toolSuffix}\\s*$`,
+    `(?:\\r?\\n)+\\s*${label}\\.{2,4}${wakeSuffix}${toolSuffix}\\s*$`,
     "u",
   );
-  const workingInline = new RegExp(`\\s*_Working\\.{2,4}${wakeSuffix}${toolSuffix}_\\s*$`, "u");
-  const workingInlinePlain = new RegExp(`\\s*Working\\.{2,4}${wakeSuffix}${toolSuffix}\\s*$`, "u");
+  const workingInline = new RegExp(`\\s*_${label}\\.{2,4}${wakeSuffix}${toolSuffix}_\\s*$`, "u");
+  const workingInlinePlain = new RegExp(`\\s*${label}\\.{2,4}${wakeSuffix}${toolSuffix}\\s*$`, "u");
   return content
     .replace(workingTail, "")
     .replace(workingTailPlain, "")

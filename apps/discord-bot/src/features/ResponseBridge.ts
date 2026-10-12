@@ -1,6 +1,7 @@
 import type { OrchestrationV2ThreadProjection } from "@t3tools/contracts";
 import { type IntegrationThreadView as OrchestrationThread } from "@t3tools/shared/integrationThreadView";
 // @effect-diagnostics anyUnknownInErrorContext:off missingEffectContext:off globalFetchInEffect:off unknownInEffectCatch:off nodeBuiltinImport:off
+import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import type {
@@ -82,24 +83,25 @@ import {
 } from "../presentation/pendingInteractions.ts";
 import { formatTasksForDiscord, presentTasks } from "../presentation/tasks.ts";
 import { countTurnToolCalls } from "../presentation/toolCalls.ts";
-import { ThreadLinkStore } from "../store/ThreadLinkStore.ts";
+import { ThreadLinkStore, type ChatDeliveryReceipt } from "../store/ThreadLinkStore.ts";
 import { ThreadWarmCacheStore } from "../store/ThreadWarmCacheStore.ts";
 import { T3Session } from "../t3/T3Session.ts";
 import { formatAlertCause, postBridgeAlert, postFatalAlert } from "./Alerts.ts";
 import { BridgeHub, type BridgeControlSlot, type BridgeEnsureInput } from "./BridgeHub.ts";
 import {
   assistantMessagesForDelivery,
+  chatProgressLabel,
   beginDeliveryEpoch,
   decideAssistantDelivery,
   decideHeartbeat,
   initialDeliveryEpochState,
-  retainUnfinalizedStreamText,
   shouldRecreateTip,
   unfinalizedPriorAssistantForCatchUp,
   type DeliveryEpochState,
-} from "./DiscordDelivery.ts";
+} from "./ChatDelivery.ts";
 import {
   BotResponseTransport,
+  BotTransportError,
   idleFields,
   wakeUpFields,
   workingFields,
@@ -169,7 +171,7 @@ interface BridgeState {
   /** User message ids sent into T3 by this Discord bot and therefore not echoed back. */
   readonly sentDiscordUserMessageIds: ReadonlyArray<string>;
   /**
-   * Structural delivery epoch FSM (see DiscordDelivery.ts). Gates stream / finalize /
+   * Structural delivery epoch FSM (see ChatDelivery.ts). Gates stream / finalize /
    * heartbeat so a finalized answer cannot reappear as Working.. under itself.
    */
   readonly delivery: DeliveryEpochState;
@@ -916,8 +918,9 @@ export function nextBridgeStateAfterAdoptWorkingAck(input: {
 export function shouldRecreateStreamTipOnUpdateFailure(input: {
   readonly turnInProgress: boolean;
   readonly updateFailed: boolean;
+  readonly messageNotFound: boolean;
 }): boolean {
-  return input.updateFailed && input.turnInProgress;
+  return input.updateFailed && input.messageNotFound && input.turnInProgress;
 }
 
 /**
@@ -2537,6 +2540,7 @@ export const runBridge = (
         epoch: freshWorkingTurn ? 1 : 0,
         phase: freshWorkingTurn ? "awaiting" : "idle",
         lastFinalizedAssistantId: seedLastFinalized,
+        lastFinalizedText: persistedLink?.deliveryReceipt?.text ?? null,
       }),
     });
     const latestThreadRef = yield* Ref.make<OrchestrationThread | null>(null);
@@ -2617,6 +2621,13 @@ export const runBridge = (
         );
     const persistStreamMessageIds = (ids: ReadonlyArray<string>) =>
       links.setStreamDiscordMessageIds(input.discordChannelId, uniqueDiscordMessageIds(ids));
+    const deliveryReceiptRef = yield* Ref.make<ChatDeliveryReceipt | undefined>(
+      persistedLink?.deliveryReceipt,
+    );
+    const persistDeliveryReceipt = (receipt: ChatDeliveryReceipt) =>
+      links
+        .updateBridgeHints(input.discordChannelId, { deliveryReceipt: receipt })
+        .pipe(Effect.andThen(Ref.set(deliveryReceiptRef, receipt)));
     const persistFinalizedAssistant = (assistantId: string) =>
       Effect.gen(function* () {
         deliveredMemoryTrim.lastFinalizedAssistantId = assistantId;
@@ -2786,10 +2797,10 @@ export const runBridge = (
         for (const id of unique) {
           yield* rest.deleteMessage(input.discordChannelId, id).pipe(
             Effect.tap(() => Effect.logInfo("Deleted stream message", { id })),
-            Effect.catchCause((cause) =>
-              Effect.logWarning("Failed to delete stream message", { id }).pipe(
-                Effect.andThen(Effect.logError(cause)),
-              ),
+            Effect.catch((error) =>
+              error instanceof BotTransportError && error.reason === "message-not-found"
+                ? Effect.void
+                : Effect.fail(error),
             ),
             Effect.asVoid,
           );
@@ -3316,6 +3327,19 @@ export const runBridge = (
       );
     };
 
+    const progressFields = (content: string) =>
+      Effect.gen(function* () {
+        const thread = yield* Ref.get(latestThreadRef);
+        return workingFields(
+          content,
+          input.t3ThreadId,
+          chatProgressLabel({
+            runStatus: thread?.latestTurn?.runStatus ?? thread?.session?.status,
+            hasPendingApprovals: thread?.hasPendingApprovals === true,
+          }),
+        );
+      });
+
     const currentTurnWakeNote = (thread: OrchestrationThread | null): string | null => {
       if (thread === null) return null;
       return activeTurnWakeNote({
@@ -3346,12 +3370,15 @@ export const runBridge = (
       Effect.gen(function* () {
         const { turnId, t3MessageId, text, streaming, images, worktreePath } = args;
         let state = yield* Ref.get(stateRef);
-        const reopensFinalizedDelivery = shouldReopenFinalizedDelivery({
-          finalizedTurnId: state.finalizedTurnId,
-          currentAssistantMessageId: state.t3AssistantMessageId,
-          turnId,
-          nextAssistantMessageId: t3MessageId,
-        });
+        const receipt = yield* Ref.get(deliveryReceiptRef);
+        const reopensFinalizedDelivery =
+          (receipt?.turnId === turnId && receipt.text !== text) ||
+          shouldReopenFinalizedDelivery({
+            finalizedTurnId: state.finalizedTurnId,
+            currentAssistantMessageId: state.t3AssistantMessageId,
+            turnId,
+            nextAssistantMessageId: t3MessageId,
+          });
 
         if (
           state.currentTurnId === turnId &&
@@ -3414,10 +3441,19 @@ export const runBridge = (
         }
 
         if (streaming) {
+          const resumesSameTurn =
+            receipt !== undefined &&
+            turnId !== null &&
+            receipt.turnId === turnId &&
+            !state.seededWorkingAckPending;
+          if (resumesSameTurn && state.discordMessageIds.length === 0) {
+            state = { ...state, discordMessageIds: receipt.messageIds, finalizedTurnId: null };
+            yield* Ref.set(stateRef, state);
+          }
           const startsNewDelivery = startsNewStreamDelivery({
             currentTurnId: state.currentTurnId,
             nextTurnId: turnId,
-            reopensFinalizedDelivery,
+            reopensFinalizedDelivery: reopensFinalizedDelivery && !resumesSameTurn,
             seededWorkingAckPending: state.seededWorkingAckPending,
           });
 
@@ -3539,9 +3575,7 @@ export const runBridge = (
               if (contentChanged || isLastChunk || stopButtonVisibilityChanged) {
                 // Edit the original tip in place even if humans posted below it.
                 // After bot restart, durable tip ids may point at deleted messages — recreate.
-                const fields = isLastChunk
-                  ? workingFields(content, input.t3ThreadId)
-                  : idleFields(content);
+                const fields = isLastChunk ? yield* progressFields(content) : idleFields(content);
                 const updated = yield* rest
                   .updateMessage(input.discordChannelId, existingId, { ...fields })
                   .pipe(Effect.result);
@@ -3549,6 +3583,10 @@ export const runBridge = (
                   shouldRecreateStreamTipOnUpdateFailure({
                     turnInProgress: true,
                     updateFailed: Result.isFailure(updated),
+                    messageNotFound:
+                      Result.isFailure(updated) &&
+                      updated.failure instanceof BotTransportError &&
+                      updated.failure.reason === "message-not-found",
                   })
                 ) {
                   yield* Effect.logWarning(
@@ -3574,21 +3612,31 @@ export const runBridge = (
                     created.id,
                     ...discordMessageIds.slice(index + 1),
                   ];
+                } else if (Result.isFailure(updated)) {
+                  return yield* Effect.fail(updated.failure);
                 }
               }
             } else {
               const created = yield* rest.createMessage(input.discordChannelId, {
-                ...(isLastChunk ? workingFields(content, input.t3ThreadId) : idleFields(content)),
+                ...(isLastChunk ? yield* progressFields(content) : idleFields(content)),
               });
               discordMessageIds = [...discordMessageIds, created.id];
             }
+            // Persist successful slots even if a later slot fails. Delivered body advances
+            // only when the complete write below succeeds.
+            yield* Ref.update(stateRef, (current) => ({
+              ...current,
+              discordMessageIds,
+              staleStreamMessageIds,
+            }));
+            yield* persistStreamMessageIds([...discordMessageIds, ...staleStreamMessageIds]);
           }
 
           // Messages beyond the new post-break chunk count are obsolete (shorter rewrite).
           // Mark stale for finalize cleanup — do not delete mid-turn (preserves order).
           if (discordMessageIds.length > desiredChunks.length) {
             const extra = discordMessageIds.slice(desiredChunks.length);
-            staleStreamMessageIds = uniqueDiscordMessageIds([...staleStreamMessageIds, ...extra]);
+            yield* deleteMessages(extra);
             discordMessageIds = discordMessageIds.slice(0, desiredChunks.length);
           }
 
@@ -3619,7 +3667,10 @@ export const runBridge = (
           presentationMode: input.presentationMode ?? "full",
           hasStreamMessages: allStreamIds(prior).length > 0,
         })
-          ? prior.lastAssistantText
+          ? ((yield* Ref.get(latestThreadRef))?.messages
+              .filter((message) => message.role === "assistant" && message.turnId === turnId)
+              .map((message) => message.text)
+              .join("\n\n") ?? prior.lastAssistantText)
           : "";
 
         yield* Ref.update(stateRef, (current) => {
@@ -3678,6 +3729,7 @@ export const runBridge = (
               timeout: BRIDGE_STREAM_DISCORD_TIMEOUT,
               cause: formatAlertCause(outcome.failure, 300),
             });
+            return yield* Effect.fail(outcome.failure);
           }
         }),
       );
@@ -3800,13 +3852,19 @@ export const runBridge = (
         const durableLink = yield* links
           .getByDiscordThreadId(input.discordChannelId)
           .pipe(Effect.catchCause(() => Effect.succeed(null)));
-        const alreadyFinalized = isAssistantAlreadyFinalizedOnDiscord({
-          assistantId: t3MessageId,
-          finalizedTurnId: state.finalizedTurnId,
-          turnId,
-          lastFinalizedAssistantId: state.delivery.lastFinalizedAssistantId,
-          durableLastFinalizedAssistantId: durableLink?.lastFinalizedAssistantId ?? null,
-        });
+        const receipt = yield* Ref.get(deliveryReceiptRef);
+        const sameDelivery =
+          receipt !== undefined &&
+          (receipt.assistantId === t3MessageId || (turnId !== null && receipt.turnId === turnId));
+        const alreadyFinalized = sameDelivery
+          ? receipt.completed && receipt.assistantId === t3MessageId && receipt.text === text
+          : isAssistantAlreadyFinalizedOnDiscord({
+              assistantId: t3MessageId,
+              finalizedTurnId: state.finalizedTurnId,
+              turnId,
+              lastFinalizedAssistantId: state.delivery.lastFinalizedAssistantId,
+              durableLastFinalizedAssistantId: durableLink?.lastFinalizedAssistantId ?? null,
+            });
 
         // Nothing left to do.
         if (
@@ -4079,41 +4137,83 @@ export const runBridge = (
           staleIds,
         });
 
-        /**
-         * Always create final message(s) then delete every in-progress tip.
-         * Never edit stream tips in place: multi-bubble turns leave long interim
-         * narration in those tips, and "edit to final" either keeps that text or
-         * fails to drop extra Working.. chunks. Discord cannot add attachments via edit.
-         *
-         * Accept-without-ack: if a prior attempt already landed text chunks (timeout
-         * before we recorded ids), adopt those message ids instead of createMessage again.
-         */
+        // Final text promotes the same editable slots. Keep each successful receipt before
+        // advancing so a later chunk failure retries those slots without appending duplicates.
+        let nextReceipt: ChatDeliveryReceipt = {
+          assistantId: t3MessageId,
+          turnId,
+          text,
+          messageIds: sameDelivery ? receipt.messageIds : [],
+          uploads: sameDelivery ? receipt.uploads : [],
+          completed: false,
+        };
         const createFinalWithAttachments = Effect.gen(function* () {
           const ids: string[] = [];
           for (let index = 0; index < finalChunks.length; index += 1) {
             const chunk = finalChunks[index] ?? "";
-            const content = chunk.trim() !== "" ? chunk : "_(done)_";
-            const created = yield* createMessageWithFiles(content, []);
-            ids.push(created.id);
-            // Persist durable finalize marker as soon as the first text chunk lands so a
-            // later timeout cannot treat this assistant as undelivered and re-post.
-            if (index === 0) {
-              yield* persistFinalizedAssistant(t3MessageId);
-              yield* Ref.update(stateRef, (current) => ({
-                ...current,
-                finalizedTurnId: turnId,
-                t3AssistantMessageId: t3MessageId,
-                delivery: {
-                  ...current.delivery,
-                  lastFinalizedAssistantId: t3MessageId,
-                  lastFinalizedText: text,
-                  phase: "finalized" as const,
-                },
-              }));
-            }
+            const fields = idleFields(chunk.trim() !== "" ? chunk : "_(done)_");
+            const current = yield* Ref.get(stateRef);
+            const existingId = nextReceipt.messageIds[index] ?? current.discordMessageIds[index];
+            const recent =
+              existingId === undefined
+                ? yield* rest.listMessages(input.discordChannelId, { limit: 25 })
+                : [];
+            const adopted = findAlreadyPostedFinalChunkIds({
+              normalizeContent: rest.normalizeContent,
+              recentMessages: recent.map((message) => ({
+                id: message.id,
+                authorId: message.author?.id ?? "",
+                content: message.content,
+              })),
+              botUserId,
+              finalChunks: [fields.content],
+              excludeMessageIds: ids,
+            });
+            const written =
+              existingId === undefined
+                ? adopted?.[0] !== undefined
+                  ? { id: adopted[0] }
+                  : yield* rest.createMessage(input.discordChannelId, fields)
+                : yield* rest
+                    .updateMessage(input.discordChannelId, existingId, fields)
+                    .pipe(
+                      Effect.catch((error) =>
+                        error instanceof BotTransportError && error.reason === "message-not-found"
+                          ? rest.createMessage(input.discordChannelId, fields)
+                          : Effect.fail(error),
+                      ),
+                    );
+            ids.push(written.id);
+            nextReceipt = Object.assign({}, nextReceipt, {
+              messageIds: [...ids, ...nextReceipt.messageIds.slice(index + 1)],
+            });
+            yield* persistDeliveryReceipt(nextReceipt);
+            yield* Ref.update(stateRef, (current) => ({
+              ...current,
+              discordMessageIds: [
+                ...current.discordMessageIds.slice(0, index),
+                written.id,
+                ...current.discordMessageIds.slice(index + 1),
+              ],
+            }));
+            yield* persistStreamMessageIds((yield* Ref.get(stateRef)).discordMessageIds);
           }
 
           for (const batch of uploadBatches) {
+            const hash = NodeCrypto.createHash("sha256");
+            for (const file of batch)
+              hash
+                .update(file.name)
+                .update("\0")
+                .update(file.mimeType)
+                .update("\0")
+                .update(file.data);
+            const key = hash.digest("hex");
+            const uploaded = nextReceipt.uploads.find((upload) => upload.key === key);
+            if (uploaded !== undefined) {
+              ids.push(uploaded.messageId);
+              continue;
+            }
             yield* Effect.logInfo("Creating Discord attachment batch", {
               files: batch.map((f) => ({
                 name: f.name,
@@ -4124,6 +4224,11 @@ export const runBridge = (
             });
             const created = yield* createMessageWithFiles("", batch);
             ids.push(created.id);
+            nextReceipt = {
+              ...nextReceipt,
+              uploads: [...nextReceipt.uploads, { key, messageId: created.id }],
+            };
+            yield* persistDeliveryReceipt(nextReceipt);
           }
 
           if (oversizedFiles.length > 0) {
@@ -4139,126 +4244,20 @@ export const runBridge = (
           return ids;
         });
 
-        let createdIds: ReadonlyArray<string> = [];
-
-        // Scan recent channel messages for an already-landed final (retry after timeout).
-        const recent = yield* rest.listMessages(input.discordChannelId, { limit: 25 }).pipe(
-          Effect.catchCause(() =>
-            Effect.succeed(
-              [] as ReadonlyArray<{
-                readonly id: string;
-                readonly content?: string;
-                readonly author?: { readonly id: string };
-              }>,
-            ),
-          ),
+        const createdIds = yield* createFinalWithAttachments.pipe(
+          Effect.timeout(BRIDGE_FINALIZE_DISCORD_TIMEOUT),
         );
-        const adoptedFinalIds = findAlreadyPostedFinalChunkIds({
-          normalizeContent: rest.normalizeContent,
-          recentMessages: recent.map((message) => ({
-            id: message.id,
-            authorId: message.author?.id ?? "",
-            content: message.content ?? "",
-          })),
-          botUserId,
-          finalChunks,
-          excludeMessageIds: toDelete,
-        });
-        if (adoptedFinalIds !== null) {
-          yield* Effect.logInfo(
-            "Finalize adopting already-posted Discord final chunks (idempotent retry)",
-            {
-              t3ThreadId: input.t3ThreadId,
-              turnId,
-              t3MessageId,
-              adoptedIds: adoptedFinalIds,
-            },
-          );
-          createdIds = adoptedFinalIds;
-          // Claim durable finalize before tip cleanup so concurrent recover cannot re-create.
-          yield* persistFinalizedAssistant(t3MessageId);
-        } else {
-          const primary = yield* createFinalWithAttachments.pipe(
-            Effect.timeout(BRIDGE_FINALIZE_DISCORD_TIMEOUT),
-            Effect.result,
-          );
-          if (Result.isSuccess(primary)) {
-            createdIds = primary.success;
-          } else {
-            yield* Effect.logError(primary.failure);
-            // Re-scan before fallback create — primary may have partially landed.
-            const recentAfterTimeout = yield* rest
-              .listMessages(input.discordChannelId, { limit: 25 })
-              .pipe(
-                Effect.catchCause(() =>
-                  Effect.succeed(
-                    [] as ReadonlyArray<{
-                      readonly id: string;
-                      readonly content?: string;
-                      readonly author?: { readonly id: string };
-                    }>,
-                  ),
-                ),
-              );
-            const adoptedAfterTimeout = findAlreadyPostedFinalChunkIds({
-              normalizeContent: rest.normalizeContent,
-              recentMessages: recentAfterTimeout.map((message) => ({
-                id: message.id,
-                authorId: message.author?.id ?? "",
-                content: message.content ?? "",
-              })),
-              botUserId,
-              finalChunks,
-              excludeMessageIds: toDelete,
-            });
-            if (adoptedAfterTimeout !== null) {
-              yield* Effect.logInfo(
-                "Finalize adopting partial Discord final after timeout (skip fallback create)",
-                {
-                  t3ThreadId: input.t3ThreadId,
-                  adoptedIds: adoptedAfterTimeout,
-                },
-              );
-              createdIds = adoptedAfterTimeout;
-              yield* persistFinalizedAssistant(t3MessageId);
-            } else {
-              // Last resort: text createMessages, then a separate multipart create for files only.
-              // Also bounded so a hung Discord REST call cannot pin the bridge forever.
-              const fallback = Effect.gen(function* () {
-                const ids: string[] = [];
-                for (const chunk of finalChunks.length > 0 ? finalChunks : ([] as string[])) {
-                  const created = yield* rest.createMessage(input.discordChannelId, {
-                    content: stripWorkingIndicator(chunk.trim() !== "" ? chunk : "_(done)_"),
-                  });
-                  ids.push(created.id);
-                  if (ids.length === 1) {
-                    yield* persistFinalizedAssistant(t3MessageId);
-                  }
-                }
-                if (files.length > 0) {
-                  const fileResult = yield* createMessageWithFiles("", files).pipe(Effect.result);
-                  if (Result.isSuccess(fileResult)) {
-                    ids.push(fileResult.success.id);
-                  } else {
-                    yield* Effect.logError(fileResult.failure);
-                  }
-                }
-                return ids;
-              }).pipe(Effect.timeout(BRIDGE_FINALIZE_DISCORD_TIMEOUT), Effect.result);
-              const fallbackResult = yield* fallback;
-              if (Result.isSuccess(fallbackResult)) {
-                createdIds = fallbackResult.success;
-              } else {
-                yield* Effect.logError(fallbackResult.failure);
-                createdIds = [];
-              }
-            }
-          }
-        }
-
-        // Always wipe in-progress tips (including Working.. ack), even if create failed
-        // partially — better empty channel than a stuck interim stream.
-        yield* deleteMessages(toDelete);
+        // Delete only obsolete slots, never the slots promoted to the final answer.
+        const finalIds = new Set(createdIds);
+        yield* deleteMessages(
+          [...toDelete, ...nextReceipt.messageIds].filter((id) => !finalIds.has(id)),
+        );
+        nextReceipt = {
+          ...nextReceipt,
+          messageIds: createdIds.slice(0, finalChunks.length),
+          completed: true,
+        };
+        yield* persistDeliveryReceipt(nextReceipt);
 
         yield* Ref.update(stateRef, (current) => ({
           ...current,
@@ -4946,7 +4945,7 @@ export const runBridge = (
           wakeNote,
         );
         const created = yield* rest.createMessage(input.discordChannelId, {
-          ...workingFields(hopContent, input.t3ThreadId),
+          ...(yield* progressFields(hopContent)),
         });
         const moved = nextStateAfterMovingWorkingTip({
           priorDiscordMessageIds: [tipId],
@@ -5025,7 +5024,7 @@ export const runBridge = (
               wakeNote,
             );
             const created = yield* rest.createMessage(input.discordChannelId, {
-              ...workingFields(content, input.t3ThreadId),
+              ...(yield* progressFields(content)),
             });
             yield* Ref.update(stateRef, (current) => ({
               ...current,
@@ -5072,14 +5071,17 @@ export const runBridge = (
             toolCallCount,
             wakeNote,
           );
-          const fields = workingFields(content, input.t3ThreadId);
+          const fields = yield* progressFields(content);
           const updated = yield* rest
             .updateMessage(input.discordChannelId, tipId, { ...fields })
             .pipe(Effect.result);
           if (
             shouldRecreateTip({
               state: state.delivery,
-              updateFailed: Result.isFailure(updated),
+              updateFailed:
+                Result.isFailure(updated) &&
+                updated.failure instanceof BotTransportError &&
+                updated.failure.reason === "message-not-found",
               turnInProgress: turnRunning,
             })
           ) {
@@ -5328,9 +5330,10 @@ export const runBridge = (
           );
           const streaming =
             turnInProgressNow ||
-            turnAssistants.some(
-              (message) => isAssistantStreaming(thread, message.id) || message.streaming === true,
-            );
+            (thread.latestTurn == null &&
+              turnAssistants.some(
+                (message) => isAssistantStreaming(thread, message.id) || message.streaming === true,
+              ));
 
           const decision = decideAssistantDelivery({
             state: {
@@ -5385,17 +5388,10 @@ export const runBridge = (
               delivery: decision.state,
               adoptedInitialSnapshot: true,
               seededWorkingAckPending: decision.state.phase === "awaiting",
-              lastAssistantText: retainUnfinalizedStreamText({
-                phase: decision.state.phase,
-                streamText: decision.state.streamText,
-                priorLastAssistantText: current.lastAssistantText,
-              }),
               finalizedTurnId:
                 decision.state.phase === "awaiting" || reopenedAfterPrematureFinal
                   ? null
                   : current.finalizedTurnId,
-              currentTurnId: decision.state.turnId ?? current.currentTurnId,
-              t3AssistantMessageId: decision.state.assistantId ?? current.t3AssistantMessageId,
             }));
           } else {
             yield* Ref.update(stateRef, (current) => ({
@@ -5412,7 +5408,7 @@ export const runBridge = (
               streaming: true,
               images,
               worktreePath: thread.worktreePath,
-            }).pipe(Effect.catchCause(alertStreamFailure("live-stream")), Effect.asVoid);
+            }).pipe(Effect.tapCause(alertStreamFailure("live-stream")), Effect.asVoid);
           } else if (decision.intent._tag === "finalize") {
             yield* postOrEditAssistant({
               turnId: decision.intent.turnId,
@@ -5421,17 +5417,7 @@ export const runBridge = (
               streaming: false,
               images,
               worktreePath: thread.worktreePath,
-            }).pipe(Effect.catchCause(alertStreamFailure("finalize")), Effect.asVoid);
-            // Commit terminal epoch only after finalize attempt (success path updates tips).
-            yield* Ref.update(stateRef, (current) => ({
-              ...current,
-              delivery: decision.state,
-              seededWorkingAckPending: false,
-              lastAssistantText: "",
-              finalizedTurnId: decision.state.turnId ?? activeTurnId,
-              currentTurnId: decision.state.turnId ?? current.currentTurnId,
-              t3AssistantMessageId: decision.state.assistantId,
-            }));
+            }).pipe(Effect.tapCause(alertStreamFailure("finalize")), Effect.asVoid);
           } else if (
             decision.intent._tag === "noop" &&
             decision.intent.reason === "settled-without-content" &&
@@ -6096,7 +6082,7 @@ export const runBridge = (
               );
             } else if (openTips.length > 0) {
               // Idle bridge replacement: drop leftover tips so they do not linger.
-              yield* streamWriteLock.withPermit(deleteMessages(openTips));
+              yield* streamWriteLock.withPermit(deleteMessages(openTips)).pipe(Effect.ignore);
               yield* persistStreamMessageIds([]);
               yield* Effect.logInfo("Discord↔T3 bridge stopped; cleared idle stream tips", {
                 discordChannelId: input.discordChannelId,
