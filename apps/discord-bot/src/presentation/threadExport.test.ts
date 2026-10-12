@@ -72,12 +72,12 @@ describe("export history paging", () => {
     expect(
       nextExportHistoryCursor({
         target: EXPORT_HISTORY_CAP,
-        collected: 4980,
+        collected: EXPORT_HISTORY_CAP - 20,
         pageCount: 100,
         pageLimit: 100,
-        oldestId: "4980",
+        oldestId: "480",
       }),
-    ).toEqual({ limit: 20, before: "4980" });
+    ).toEqual({ limit: 20, before: "480" });
     expect(
       nextExportHistoryCursor({
         target: EXPORT_HISTORY_CAP,

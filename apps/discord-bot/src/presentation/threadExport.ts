@@ -12,7 +12,7 @@ export const EXPORT_HISTORY_PAGE_SIZE = 100;
  * Safety stop for a channel with a huge history. A normal thread finishes
  * before this, and the transcript says when older messages were left out.
  */
-export const EXPORT_HISTORY_CAP = 5000;
+export const EXPORT_HISTORY_CAP = 500;
 export const EXPORT_MARKDOWN_NAME = "export.md";
 export const EXPORT_MESSAGE_LIMIT = 2000;
 

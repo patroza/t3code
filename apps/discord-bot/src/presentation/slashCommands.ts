@@ -19,7 +19,7 @@ export const OMEGENT_SLASH_COMMAND_ALIAS = "agent" as const;
 const EXPORT_COUNT_OPTION = {
   type: Discord.ApplicationCommandOptionType.INTEGER,
   name: "count",
-  description: "How many latest messages. Omit to copy the whole chat.",
+  description: `How many latest messages. Omit to copy the chat, up to ${EXPORT_HISTORY_CAP}.`,
   required: false,
   min_value: 1,
   max_value: EXPORT_HISTORY_CAP,
