@@ -15,6 +15,9 @@ export function teamsMessageActionPrompt(input: {
     "Investigate the following Microsoft Teams message.",
     `Requested by: ${input.requester.name}`,
     `Selected message author: ${authorName}${author?.id ? ` (Teams ID: ${author.id})` : ""}`,
+    !access.allowed && author?.displayName
+      ? `Unmapped Teams display name: ${author.displayName}`
+      : null,
     `Selected message ID: ${input.message.id}`,
     input.message.replyToId ? `Reply to message ID: ${input.message.replyToId}` : null,
     teamsMessageText(input.message),

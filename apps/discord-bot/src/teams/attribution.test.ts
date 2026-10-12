@@ -31,6 +31,18 @@ describe("Teams message action attribution", () => {
     expect(prompt).toContain("Fix this");
   });
 
+  it("labels unverified display names without claiming a mapped author", () => {
+    const prompt = teamsMessageActionPrompt({
+      message: { id: "selected", from: { user: { id: "unknown-id", displayName: author.name } } },
+      requester,
+      people: [author, requester],
+      instructions: "",
+    });
+    expect(prompt).toContain("Selected message author: Unknown");
+    expect(prompt).toContain("Unmapped Teams display name: Mapped author");
+    expect(prompt).not.toContain("Selected message author: Mapped author");
+  });
+
   it("does not invent a mapped author for an unknown selected message", () => {
     const prompt = teamsMessageActionPrompt({
       message: { id: "selected", body: { content: "Please investigate" } },
