@@ -267,10 +267,14 @@ export const DiscordBotConfig: Effect.Effect<DiscordBotConfig, Config.ConfigErro
 
 /**
  * Discord bot model selection (conservative defaults):
- * 1. Explicit mention overrides (`--provider` / `--model`)
+ * 1. Explicit mention overrides (`--provider` / `--model`, including `—model`)
+ *    - Short names (`opus-5.5`) and prefixed names (`claude-opus-5.5`) both
+ *      resolve to the catalog slug. Prefixes are compatibility only.
  *    - Model-only (`--model` without `--provider`) picks the best cataloged
  *      native provider for that model (e.g. gpt-5.6 → codex, not sticky Grok)
  *    - Sticky/current provider still wins when it catalogs the requested model
+ *    - An explicit model that matches nothing returns null. Callers must report
+ *      the error. Do not start the turn on the default model.
  * 2. Bot env defaults (default: codex + gpt-5.4, same as T3 web)
  * 3. Project defaultModelSelection if that provider is available
  * 4. First enabled installed provider
@@ -285,7 +289,7 @@ export function preferredModelSelection(input: {
   readonly stickyModelSelection?: ModelSelection | null;
   readonly overrideInstanceId?: string;
   readonly overrideModel?: string;
-}): ModelSelection {
+}): ModelSelection | null {
   const fallbackSelection = {
     instanceId: DEFAULT_BOT_INSTANCE_ID as ProviderInstanceId,
     model: DEFAULT_BOT_MODEL,
@@ -294,6 +298,19 @@ export function preferredModelSelection(input: {
     instanceId: (input.config.t3DefaultInstanceId ?? DEFAULT_BOT_INSTANCE_ID) as ProviderInstanceId,
     model: input.config.t3DefaultModel ?? DEFAULT_BOT_MODEL,
   };
+  if (input.overrideModel !== undefined) {
+    return resolveProviderModelSelection({
+      providers: input.providers,
+      ...(input.projectDefault === undefined ? {} : { projectDefault: input.projectDefault }),
+      preferredSelection,
+      fallbackSelection,
+      ...(input.overrideInstanceId === undefined
+        ? {}
+        : { overrideInstanceId: input.overrideInstanceId }),
+      overrideModel: input.overrideModel,
+      rejectUnknownOverride: true,
+    });
+  }
   return resolveProviderModelSelection({
     providers: input.providers,
     ...(input.projectDefault === undefined ? {} : { projectDefault: input.projectDefault }),
@@ -302,6 +319,5 @@ export function preferredModelSelection(input: {
     ...(input.overrideInstanceId === undefined
       ? {}
       : { overrideInstanceId: input.overrideInstanceId }),
-    ...(input.overrideModel === undefined ? {} : { overrideModel: input.overrideModel }),
   });
 }

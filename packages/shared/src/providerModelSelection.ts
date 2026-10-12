@@ -54,11 +54,34 @@ export interface ProviderModelCatalogEntry {
     readonly slug: string;
     readonly name: string;
     readonly shortName?: string | undefined;
+    readonly aliases?: ReadonlyArray<string> | undefined;
   }>;
 }
 
 function modelHaystack(model: ProviderModelCatalogEntry["models"][number]): string {
   return `${model.slug} ${model.name} ${model.shortName ?? ""}`.toLowerCase();
+}
+
+/**
+ * Compare model queries independent of a `claude-` / `codex-` prefix and of
+ * `.` vs `-` in versions. `opus-5.5`, `opus-5-5`, and `claude-opus-5.5` all
+ * share the key `opus-5-5`. Prefixed names stay valid; they are not required.
+ */
+function canonicalModelKey(value: string): string {
+  const normalized = value.trim().toLowerCase().replaceAll(/[._]/gu, "-");
+  return normalized.replace(/^(?:claude|codex)-/u, "");
+}
+
+function isCanonicalModelMatch(
+  model: ProviderModelCatalogEntry["models"][number],
+  desired: string,
+): boolean {
+  const needle = canonicalModelKey(desired);
+  if (needle.length === 0) return false;
+  const candidates = [model.slug, model.name, model.shortName, ...(model.aliases ?? [])];
+  return candidates.some(
+    (candidate) => candidate !== undefined && canonicalModelKey(candidate) === needle,
+  );
 }
 
 /**
@@ -101,9 +124,9 @@ function matchModelOnProvider(
   const needle = desired.toLowerCase().trim();
   if (needle === "") return undefined;
 
-  const exactSlug = provider.models.find((model) => model.slug.toLowerCase() === needle);
-  if (exactSlug !== undefined) {
-    return { provider, slug: exactSlug.slug, exactSlug: true, catalogIndex };
+  const canonical = provider.models.find((model) => isCanonicalModelMatch(model, desired));
+  if (canonical !== undefined) {
+    return { provider, slug: canonical.slug, exactSlug: true, catalogIndex };
   }
 
   const fuzzy = provider.models.find((model) => modelHaystack(model).includes(needle));
@@ -147,11 +170,13 @@ function resolveModelOnlySelection(input: {
     const isNativeDriver = nativeDriver !== undefined && match.provider.driver === nativeDriver;
     const isDefaultInstance = match.provider.instanceId === match.provider.driver;
 
-    // Lower is better. Preferred instance wins so sticky same-provider model
-    // switches stay put even when another provider also lists the model.
+    // Lower is better. An exact catalog match (slug, alias, short name, or the
+    // same name with the claude-/codex- prefix and ./- spelling ignored) beats
+    // a fuzzy match on any provider, including the sticky one. Among exact
+    // matches, the sticky provider still wins.
     let score = 0;
+    if (!match.exactSlug) score += 10_000;
     if (!isPreferredInstance) score += 1_000;
-    if (!match.exactSlug) score += 100;
     if (!isNativeDriver) score += 40;
     if (!isPreferredDriver) score += 20;
     if (!isDefaultInstance) score += 10;
@@ -179,24 +204,49 @@ function resolveModelSlug(
   );
 }
 
-export function resolveProviderModelSelection(input: {
+export interface ResolveProviderModelSelectionInput {
   readonly providers: ReadonlyArray<ProviderModelCatalogEntry>;
   readonly projectDefault?: ModelSelection | null;
   readonly preferredSelection?: ModelSelection | null;
   readonly fallbackSelection: ModelSelection;
   readonly overrideInstanceId?: string;
   readonly overrideModel?: string;
-}): ModelSelection {
+  /**
+   * When an explicit model matches nothing in the catalog, return null instead
+   * of the default model. Discord uses this so a typo does not start a turn.
+   */
+  readonly rejectUnknownOverride?: boolean;
+}
+
+export function resolveProviderModelSelection(
+  input: ResolveProviderModelSelectionInput & { readonly rejectUnknownOverride: true },
+): ModelSelection | null;
+export function resolveProviderModelSelection(
+  input: ResolveProviderModelSelectionInput,
+): ModelSelection;
+export function resolveProviderModelSelection(
+  input: ResolveProviderModelSelectionInput,
+): ModelSelection | null {
+  const available = input.providers.filter(
+    (provider) => provider.enabled && provider.installed && provider.models.length > 0,
+  );
+
   if (input.overrideInstanceId !== undefined && input.overrideModel !== undefined) {
+    const provider =
+      available.find((entry) => entry.instanceId === input.overrideInstanceId) ??
+      available.find((entry) => entry.driver === input.overrideInstanceId);
+    const match =
+      provider === undefined ? undefined : matchModelOnProvider(provider, input.overrideModel, 0);
+    if (match !== undefined) {
+      return { instanceId: match.provider.instanceId, model: match.slug };
+    }
+    if (input.rejectUnknownOverride === true) return null;
     return {
       instanceId: input.overrideInstanceId as ProviderInstanceId,
       model: input.overrideModel,
     };
   }
 
-  const available = input.providers.filter(
-    (provider) => provider.enabled && provider.installed && provider.models.length > 0,
-  );
   const desiredInstance =
     input.overrideInstanceId ??
     input.preferredSelection?.instanceId ??
@@ -213,6 +263,7 @@ export function resolveProviderModelSelection(input: {
       preferredInstanceId: desiredInstance,
     });
     if (modelOnly !== undefined) return modelOnly;
+    if (input.rejectUnknownOverride === true) return null;
   }
 
   const preferredProvider =
