@@ -1398,7 +1398,11 @@ it.effect("routing verifies the current account on the requested host without ca
       providers: [
         fakeProvider(SourceControlProviderKind.make("github"), {
           getRoutingIdentity: (input) => {
-            assert.deepStrictEqual(input, { cwd: "/a", host: "github.example.test" });
+            assert.deepStrictEqual(input, {
+              cwd: "/a",
+              host: "github.example.test",
+              repository: "acme/web",
+            });
             return Effect.succeed({
               viewer,
               accountId: viewer === "first-account" ? "123" : "456",

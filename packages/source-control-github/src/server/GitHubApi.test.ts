@@ -24,12 +24,14 @@ function harness(respond: (request: HttpClientRequest.HttpClientRequest) => Resp
   let tokens = ["first", "second"];
   let invalidations = 0;
   let credentialReads = 0;
+  const targets: Array<GitHubCredentials.GitHubCredentialTarget | undefined> = [];
   const credentials = Layer.succeed(
     GitHubCredentials.GitHubCredentials,
     GitHubCredentials.GitHubCredentials.of({
-      get: (host) =>
+      get: (host, target) =>
         Effect.sync(() => {
           credentialReads++;
+          targets.push(target);
           return {
             host,
             token: Redacted.make(tokens[0]!),
@@ -59,6 +61,7 @@ function harness(respond: (request: HttpClientRequest.HttpClientRequest) => Resp
   return {
     layer,
     requests,
+    targets,
     invalidations: () => invalidations,
     credentialReads: () => credentialReads,
   };
@@ -124,6 +127,31 @@ describe("GitHubApi", () => {
       expect(sent._tag === "Uint8Array" ? new TextDecoder().decode(sent.body) : "").toContain(
         '"query":"query { viewer { login } }"',
       );
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("selects repository credentials for both GraphQL and REST reads", () => {
+    const { layer, targets } = harness(() => json({ data: {} }));
+    return Effect.gen(function* () {
+      const api = yield* GitHubApi.GitHubApi;
+      yield* api.graphql({
+        host: "github.com",
+        repository: "organization/scanner",
+        cwd: "/scanner",
+        operation: "detail",
+        query: "query { viewer { login } }",
+      });
+      yield* api.rest({
+        host: "github.com",
+        repository: "owner/fork",
+        operation: "diff",
+        path: "repos/owner/fork/pulls/1",
+      });
+      expect(targets.map((target) => target?.repository)).toEqual([
+        "organization/scanner",
+        "owner/fork",
+      ]);
+      expect(targets[0]?.cwd).toBe("/scanner");
     }).pipe(Effect.provide(layer));
   });
 
