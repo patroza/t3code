@@ -6,6 +6,7 @@ import {
 } from "@t3tools/shared/integrationThreadView";
 // @effect-diagnostics globalDate:off globalFetch:off globalFetchInEffect:off globalTimers:off globalErrorInEffectCatch:off globalErrorInEffectFailure:off anyUnknownInErrorContext:off missingEffectContext:off missingEffectError:off preferSchemaOverJson:off tryCatchInEffectGen:off deterministicKeys:off
 import {
+  type ClientSourceHint,
   EnvironmentId,
   ORCHESTRATION_V2_WS_METHODS,
   OrchestrationV2ThreadDetailSnapshot,
@@ -31,7 +32,6 @@ import {
   type VcsStatusStreamEvent,
 } from "@t3tools/contracts";
 import { applyFastModeSelection } from "../presentation/fastMode.ts";
-import { type DiscordClientSourceHint } from "./sourceHint.ts";
 import {
   PrimaryConnectionTarget,
   type PreparedConnection,
@@ -247,7 +247,7 @@ export interface T3SessionService {
      * Discord human who triggered the turn. Server identity map resolves this
      * into personId/username when the identity overlay is composed.
      */
-    readonly sourceHint?: DiscordClientSourceHint;
+    readonly sourceHint?: ClientSourceHint;
   }) => Effect.Effect<{ readonly threadId: ThreadId; readonly messageId: string }, T3SessionError>;
   readonly startTurn: (input: {
     readonly threadId: ThreadId;
@@ -257,7 +257,7 @@ export interface T3SessionService {
     readonly runtimeMode?: RuntimeMode;
     readonly interactionMode?: ProviderInteractionMode;
     readonly attachments?: ReadonlyArray<UploadChatAttachment>;
-    readonly sourceHint?: DiscordClientSourceHint;
+    readonly sourceHint?: ClientSourceHint;
   }) => Effect.Effect<{ readonly messageId: string }, T3SessionError>;
   /**
    * Inject a server-queued follow-up into the active turn (or start a turn if

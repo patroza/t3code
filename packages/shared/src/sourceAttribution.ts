@@ -20,6 +20,7 @@ import {
   findPersonByGithubLogin,
   findPersonByJiraAccountId,
   findPersonByJiraEmail,
+  findPersonByTeamsActor,
   type IdentityMapPerson,
 } from "./identityMap.ts";
 
@@ -191,7 +192,7 @@ export function nextOriginSource(input: {
 
 /**
  * Fill personId/username on a channel+actor stamp when the identity map
- * knows that Discord/GitHub/Jira actor. Old Discord threads often stored
+ * knows that Discord/Teams/GitHub/Jira actor. Old Discord threads often stored
  * `actor.platformId` without a person because the map was empty at create
  * time; Mine then treated them as unattributed.
  */
@@ -215,6 +216,9 @@ export function resolvePersonForSource(
         null
       );
     }
+  }
+  if (source.channel === "teams" && platformId.length > 0) {
+    return findPersonByTeamsActor(people, { aadObjectId: platformId, userId: platformId });
   }
   if (source.channel === "github") {
     if (platformId.length > 0) {

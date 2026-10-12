@@ -91,6 +91,7 @@ describe("withMappedPerson", () => {
       "147977704522645504": {
         username: "enricopolanski",
         name: "Enrico Polanski",
+        teamsAadObjectId: "00000000-0000-4000-8000-000000000001",
       },
     },
   });
@@ -122,8 +123,34 @@ describe("enrichThreadAttribution", () => {
       "147977704522645504": {
         username: "enricopolanski",
         name: "Enrico Polanski",
+        teamsAadObjectId: "00000000-0000-4000-8000-000000000001",
       },
     },
+  });
+
+  it("resolves an existing Teams origin and message through the current map", () => {
+    const enriched = enrichThreadAttribution({
+      originSource: {
+        channel: "teams",
+        actor: { platformId: "00000000-0000-4000-8000-000000000001" },
+      },
+      participantSummaries: [],
+      createdAt: "2026-09-18T00:00:00.000Z",
+      people,
+    });
+    expect(enriched.originSource?.personId).toBe("enricopolanski");
+    expect(enriched.participantSummaries[0]?.firstChannel).toBe("teams");
+  });
+
+  it("does not claim a Teams origin from an unverified display name", () => {
+    const enriched = enrichThreadAttribution({
+      originSource: { channel: "teams", actor: { displayName: "enricopolanski" } },
+      participantSummaries: [],
+      createdAt: "2026-09-18T00:00:00.000Z",
+      people,
+    });
+    expect(enriched.originSource?.personId).toBeUndefined();
+    expect(enriched.participantSummaries).toEqual([]);
   });
 
   it("attributes a Discord-origin thread that stored actor.platformId without personId", () => {

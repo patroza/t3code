@@ -180,6 +180,7 @@ const program = Effect.gen(function* () {
           else if (data.command === "continue") {
             const turn = yield* startOrContinueT3Turn(workspace.config, {
               source: { sourceKind: "teams", sourceThreadId: sourceKey },
+              sourceActor: { platformId: lease.actorId },
               externalConversationId: lease.conversationId,
               externalParentId: lease.binding.teamId + "/" + lease.binding.channelId,
               externalTenantId: lease.binding.tenantId,
@@ -318,6 +319,7 @@ const program = Effect.gen(function* () {
           .join("\n\n");
         const turn = yield* startOrContinueT3Turn(workspace.config, {
           source: { sourceKind: "teams", sourceThreadId: sourceKey },
+          sourceActor: { platformId: lease.actorId },
           externalConversationId: lease.conversationId,
           externalParentId: lease.binding.teamId + "/" + lease.binding.channelId,
           externalTenantId: lease.binding.tenantId,

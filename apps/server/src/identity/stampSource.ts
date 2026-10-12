@@ -1,6 +1,6 @@
 /**
  * Server-only: stamp SourceRef onto operate commands from session claim
- * or platform sourceHint (Discord / GitHub / Jira bots and bridges).
+ * or platform sourceHint (Discord / Teams / GitHub / Jira bots and bridges).
  * Never trusts client personId/username.
  */
 import * as Effect from "effect/Effect";
@@ -20,6 +20,7 @@ import {
   findPersonByGithubLogin,
   findPersonByJiraAccountId,
   findPersonByJiraEmail,
+  findPersonByTeamsActor,
   type IdentityMapPerson,
 } from "@t3tools/shared/identityMap";
 import {
@@ -96,6 +97,9 @@ export function resolvePersonFromSourceHint(
 
   if (channel === "discord" && platformId.length > 0) {
     return findPersonByDiscordId(people, platformId);
+  }
+  if (channel === "teams" && platformId.length > 0) {
+    return findPersonByTeamsActor(people, { aadObjectId: platformId, userId: platformId });
   }
   if (channel === "github") {
     if (platformId.length > 0) {

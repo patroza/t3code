@@ -11,7 +11,7 @@ import { ProjectAliasStore } from "../projectAliases.ts";
 import { ThreadLinkStore } from "../store/ThreadLinkStore.ts";
 import { T3Session } from "../t3/T3Session.ts";
 import { loadTeamsChannelConfigsFromFileSync, type TeamsChannelConfig } from "../teams/config.ts";
-import { teamsMessageText } from "../teams/presentation.ts";
+import { teamsMessageActionPrompt } from "../teams/attribution.ts";
 import { startOrContinueT3Turn } from "./LinkedTurnRouter.ts";
 import { bridgeThreadToPlatform } from "./ResponseBridge.ts";
 import { BridgeHub } from "./BridgeHub.ts";
@@ -191,6 +191,10 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
         else if (data.command === "continue") {
           const turn = yield* startOrContinueT3Turn(config, {
             source: { sourceKind: "teams", sourceThreadId: sourceKey },
+            sourceActor: {
+              platformId: activity.from.aadObjectId ?? activity.from.id,
+              displayName: access.person.name,
+            },
             externalConversationId: location.conversationId,
             externalParentId: `${location.teamId}/${location.channelId}`,
             externalTenantId: location.tenantId,
@@ -309,6 +313,10 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
 
         const turn = yield* startOrContinueT3Turn(config, {
           source: { sourceKind: "teams", sourceThreadId: sourceKey },
+          sourceActor: {
+            platformId: activity.from.aadObjectId ?? activity.from.id,
+            displayName: access.person.name,
+          },
           externalConversationId: location.conversationId,
           externalParentId: `${location.teamId ?? "chat"}/${location.channelId ?? "chat"}`,
           externalTenantId: location.tenantId,
@@ -397,19 +405,19 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
     if (projectShortName.length === 0) {
       return { task: { type: "message", value: "A project alias is required." } };
     }
-    const sourceMessage = teamsMessageText({
-      id: activity.value.messagePayload?.id ?? activity.id,
-      body: activity.value.messagePayload?.body,
-      from: activity.value.messagePayload?.from,
-    });
+    const selectedMessage = activity.value.messagePayload;
     const instructions = typeof data?.instructions === "string" ? data.instructions.trim() : "";
-    const prompt = [
-      "Investigate the following Microsoft Teams message.",
-      sourceMessage,
-      instructions.length === 0 ? null : `Additional instructions: ${instructions}`,
-    ]
-      .filter((line): line is string => line !== null && line.length > 0)
-      .join("\n\n");
+    const prompt = teamsMessageActionPrompt({
+      message: {
+        id: selectedMessage?.id ?? activity.id,
+        replyToId: selectedMessage?.replyToId,
+        body: selectedMessage?.body,
+        from: selectedMessage?.from,
+      },
+      requester: access.person,
+      people: identityMap.list(),
+      instructions,
+    });
     const location = coordinates(activity);
     const messageId = activity.value.messagePayload?.id ?? activity.id;
     const sourceKey = `message-action/${location.tenantId}/${messageId}`;
@@ -417,6 +425,10 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
     Effect.runForkWith(services)(
       startOrContinueT3Turn(config, {
         source: { sourceKind: "teams", sourceThreadId: sourceKey },
+        sourceActor: {
+          platformId: activity.from.aadObjectId ?? activity.from.id,
+          displayName: access.person.name,
+        },
         externalConversationId: sourceKey,
         externalParentId: `${location.teamId ?? "chat"}/${location.channelId ?? "chat"}`,
         externalTenantId: location.tenantId,
