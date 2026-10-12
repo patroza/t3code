@@ -9,6 +9,7 @@
  * @module GrokKimiHome
  */
 import * as NodeOS from "node:os";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
@@ -30,5 +31,5 @@ export const resolveKimiHomePath = Effect.fn("resolveKimiHomePath")(function* ()
   Path.Path
 > {
   const path = yield* Path.Path;
-  return path.join(NodeOS.homedir(), ".kimi");
+  return path.join(yield* HostProcess.HomeDirectory, ".kimi");
 });
