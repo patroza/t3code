@@ -1168,7 +1168,7 @@ export const make = Effect.gen(function* () {
                       allowReserve: true,
                     })
                     .pipe(
-                      Effect.flatMap(
+                      Effect.flatMap((raw) =>
                         Schema.decodeUnknownEffect(
                           Schema.fromJsonString(
                             Schema.Struct({
@@ -1180,13 +1180,12 @@ export const make = Effect.gen(function* () {
                               }),
                             }),
                           ),
-                        ),
+                        )(raw).pipe(Effect.mapError(unavailable)),
                       ),
                       Effect.map(({ data }) => ({
                         id: data.viewer.databaseId,
                         login: data.viewer.login,
                       })),
-                      Effect.mapError(unavailable),
                     )
                 : api
                     .rest({
