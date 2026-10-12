@@ -109,7 +109,7 @@ describe("export history paging", () => {
 });
 
 describe("renderThreadExport", () => {
-  it("labels humans user-n, shows display names, and calls the bot omegent", () => {
+  it("labels humans user-n and calls the bot omegent", () => {
     const markdown = renderThreadExport({
       botUserId: BOT_ID,
       messages: [
@@ -133,8 +133,9 @@ describe("renderThreadExport", () => {
       ],
     });
 
-    expect(markdown).toContain("Participants: user-1 (Joshua Dimaunahan), omegent");
-    expect(markdown).toContain("user-1 (Joshua Dimaunahan) — 2026-10-12 09:01 UTC");
+    expect(markdown).toContain("Participants: user-1, omegent");
+    expect(markdown).toContain("user-1 — 2026-10-12 09:01 UTC");
+    expect(markdown).not.toContain("Joshua Dimaunahan");
     expect(markdown).toContain("attached .md got removed last week right?");
     expect(markdown).toContain("omegent — 2026-10-12 09:02 UTC");
     expect(markdown).toContain("Yes. See user-1.");
@@ -157,17 +158,18 @@ describe("renderThreadExport", () => {
         }),
         message({
           id: "101",
-          content: "role <@&123> in <#456> :smile: <@123456789012345678>",
+          content: "ask Patrick Roza about role <@&123> in <#456> :smile: <@123456789012345678>",
           author: { id: PATRICK_ID, username: "patroza", global_name: "Patrick Roza" },
         }),
       ],
     });
 
     expect(markdown).toContain("user-1 — ");
-    expect(markdown).not.toContain("user-1 (joshuadima)");
-    expect(markdown).toContain("user-2 (Patrick Roza)");
+    expect(markdown).toContain("Participants: user-1, user-2");
     expect(markdown).toContain("ping user-2 and user-2 user-1");
-    expect(markdown).toContain("role role in channel :smile: user");
+    expect(markdown).toContain("ask user-2 about role role in channel :smile: user");
+    expect(markdown).not.toContain("Patrick Roza");
+    expect(markdown).not.toContain("joshuadima");
     expect(markdown).not.toContain("patroza");
     expect(markdown).not.toContain(PATRICK_ID);
     expect(markdown).not.toContain(JOSHUA_ID);
@@ -186,7 +188,8 @@ describe("renderThreadExport", () => {
     });
 
     expect(markdown).toContain("markdown is fine");
-    expect(markdown).toContain("user-1 (Joshua)");
+    expect(markdown).toContain("user-1 — ");
+    expect(markdown).not.toContain("Joshua");
   });
 
   it("notes replies, files, and stickers without attachment urls", () => {
@@ -240,7 +243,8 @@ describe("renderThreadExport", () => {
       ],
     });
 
-    expect(markdown).toContain("bot-1 (Sentry)");
+    expect(markdown).toContain("bot-1 — ");
+    expect(markdown).not.toContain("Sentry");
     expect(markdown).toContain("Build failed");
     expect(markdown).toContain("see user-1");
     expect(markdown).not.toContain("getsentry");
@@ -262,12 +266,14 @@ describe("renderThreadExport", () => {
       }),
     ];
     const whole = renderThreadExport({ botUserId: BOT_ID, messages });
-    expect(whole).toContain("1 message. Discord usernames and user ids are omitted.");
+    expect(whole).toContain(
+      "1 message. Discord usernames, display names, and user ids are omitted.",
+    );
     expect(whole).not.toContain("left out");
 
     const truncated = renderThreadExport({ botUserId: BOT_ID, messages, truncated: true });
     expect(truncated).toContain(
-      "Latest 1 message. Older messages were left out. Discord usernames and user ids are omitted.",
+      "Latest 1 message. Older messages were left out. Discord usernames, display names, and user ids are omitted.",
     );
   });
 });
