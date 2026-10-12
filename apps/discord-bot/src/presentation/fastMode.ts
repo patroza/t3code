@@ -11,7 +11,14 @@ import type {
  */
 export const FAST_MODE_TOPIC_TAG = "omegent-fast-mode";
 
+/** `omegent-default-model-<name>`. The rest of the token is the model name. */
+export const DEFAULT_MODEL_TOPIC_PREFIX = "omegent-default-model-";
+
 const GROK_FAST_MODEL_SUFFIX = "-build-fast";
+
+function normalizeTopicToken(token: string): string {
+  return token.replace(/^[^a-z0-9]+|[^a-z0-9]+$/giu, "").toLowerCase();
+}
 
 /**
  * Structural slice of a provider snapshot. `capabilities` uses the contract
@@ -29,10 +36,24 @@ export interface FastModeCatalogProvider {
 /** True when a channel topic includes the fast-mode tag as its own token. */
 export function topicRequestsFastMode(topic: string | null | undefined): boolean {
   if (topic === null || topic === undefined || topic.length === 0) return false;
-  return topic.split(/\s+/u).some((token) => {
-    const normalized = token.replace(/^[^a-z0-9]+|[^a-z0-9]+$/giu, "").toLowerCase();
-    return normalized === FAST_MODE_TOPIC_TAG;
-  });
+  return topic.split(/\s+/u).some((token) => normalizeTopicToken(token) === FAST_MODE_TOPIC_TAG);
+}
+
+/**
+ * Model name from `omegent-default-model-<name>`, or null when the tag is absent.
+ * The name may contain hyphens and dots (`opus-5.5`, `gpt-6.1-sol`). The first
+ * tag wins. A bare `omegent-default-model` is not a tag.
+ */
+export function topicDefaultModel(topic: string | null | undefined): string | null {
+  if (topic === null || topic === undefined || topic.length === 0) return null;
+  for (const token of topic.split(/\s+/u)) {
+    const normalized = normalizeTopicToken(token);
+    if (!normalized.startsWith(DEFAULT_MODEL_TOPIC_PREFIX)) continue;
+    const model = normalized.slice(DEFAULT_MODEL_TOPIC_PREFIX.length);
+    if (model.length === 0) continue;
+    return model;
+  }
+  return null;
 }
 
 function withOption(selection: ModelSelection, option: ProviderOptionSelection): ModelSelection {

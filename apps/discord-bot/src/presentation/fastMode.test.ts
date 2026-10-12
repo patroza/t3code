@@ -1,7 +1,7 @@
 import { ProviderInstanceId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { applyFastModeSelection, topicRequestsFastMode } from "./fastMode.ts";
+import { applyFastModeSelection, topicDefaultModel, topicRequestsFastMode } from "./fastMode.ts";
 
 const claude = ProviderInstanceId.make("claudeAgent");
 const codex = ProviderInstanceId.make("codex");
@@ -17,6 +17,27 @@ describe("topicRequestsFastMode", () => {
     expect(topicRequestsFastMode("omegent-link-fast-mode")).toBe(false);
     expect(topicRequestsFastMode(null)).toBe(false);
     expect(topicRequestsFastMode("")).toBe(false);
+  });
+});
+
+describe("topicDefaultModel", () => {
+  it("reads the model name and ignores lookalikes", () => {
+    expect(topicDefaultModel("omegent-link-scanner omegent-default-model-opus-5.5")).toBe(
+      "opus-5.5",
+    );
+    expect(topicDefaultModel("Alerts | OMEGENT-DEFAULT-MODEL-GPT-6.1-SOL")).toBe("gpt-6.1-sol");
+    expect(topicDefaultModel("see omegent-default-model-grok-4.7.")).toBe("grok-4.7");
+    expect(topicDefaultModel("(omegent-default-model-claude-opus-5-5)")).toBe("claude-opus-5-5");
+    expect(topicDefaultModel("omegent-default-model-opus-5.5 omegent-default-model-grok-4.7")).toBe(
+      "opus-5.5",
+    );
+    expect(topicDefaultModel("omegent-default-model")).toBeNull();
+    expect(topicDefaultModel("omegent-default-model-")).toBeNull();
+    expect(topicDefaultModel("omegent-fast-mode")).toBeNull();
+    expect(topicDefaultModel("omegent-link-default-model-opus")).toBeNull();
+    expect(topicDefaultModel("omegent-default-modelx-opus")).toBeNull();
+    expect(topicDefaultModel(null)).toBeNull();
+    expect(topicDefaultModel("")).toBeNull();
   });
 });
 
