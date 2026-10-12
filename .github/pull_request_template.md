@@ -58,9 +58,24 @@ the change. Upload evidence to GitHub and embed or link it here. Never commit PR
 
 <!-- If you used an agent, end with the model and harness that did the work. -->
 
+## Existing product
+
+Checked and confirmed against the current product.
+
+<!-- Required. Fill in all four lines. See docs/operations/new-features.md.
+     Name the existing feature, UX, UI, or process this change extends.
+     For a fix that only restores current behavior, name that behavior and write
+     "No new feature, UX, or process." The checklist tick does not replace this report. -->
+
+- Closest existing behavior:
+- Reused:
+- New, and why the existing basis could not carry it:
+- Surfaces compared:
+
 ## Checklist
 
 - [ ] This PR is small and focused
 - [ ] I explained what changed and why
+- [ ] I filled in Existing product and confirmed this extends the current product
 - [ ] I included before/after screenshots for any UI changes
 - [ ] I included a video for animation/interaction changes

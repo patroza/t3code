@@ -79,6 +79,19 @@ Follow the [documentation rules](AGENTS.md#documentation). Keep internal docs fo
 hard-to-discover constraints. Update user guides when how to use a feature changes; skip descriptions
 of obvious controls and cosmetic changes.
 
+<a id="existing-product"></a>
+
+## Build on the existing product
+
+New features and new processes start from what already exists. Existing features, UX, and UI are the
+basis of new work. A new process extends a process the project already runs. The rules live in
+[New features and processes](docs/operations/new-features.md).
+
+Every pull request includes an **Existing product** report that this was checked and confirmed: the
+closest existing behavior, what was reused, anything new and why the existing basis could not carry
+it, and which surfaces were compared. A fix that only restores current behavior names that behavior.
+A checklist tick without the report does not meet this rule.
+
 <a id="verification"></a>
 
 ## Provide evidence for the changed behavior

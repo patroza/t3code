@@ -58,6 +58,7 @@ source alone does not explain. Most code changes do not need an internal documen
 
 ### Runbooks
 
+- [New features and processes](./operations/new-features.md)
 - [Development and local builds](./operations/development.md)
 - [T3 Connect setup](./operations/connect-setup.md)
 - [CI quality gates](./operations/ci.md)

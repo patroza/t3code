@@ -120,6 +120,12 @@ The most common defect in this repo is a change that works on the path you teste
 - **Connection modes.** Local, remote/relay, and tunnel behave differently. Multi-device and multi-environment cases are real.
 - **Docs.** Check whether the change makes existing guidance inaccurate. Apply the [documentation rules](#documentation) before adding anything.
 
+## New features and processes
+
+New features and new processes start from what the product already does. Existing features, UX, and UI are the basis. Read [New features and processes](docs/operations/new-features.md) before adding either.
+
+Every pull request includes a filled-in **Existing product** report from that page. The report is the confirmation that this was checked. A bug fix that only restores current behavior still includes it, and names the behavior it restores.
+
 ## Pull requests (required handoff)
 
 When implementation work for a user request is done (code, docs, config — not pure Q&A):
@@ -353,7 +359,7 @@ Most code changes do not need an internal documentation change. Agents can read 
 - When a documented decision or constraint changes, rewrite or remove the affected text. Do not append another account of the new behavior. A new internal page needs a distinct, durable reason to exist.
 - `docs/user/` helps users accomplish tasks. Give each major feature a concise section explaining what it does, how to start, and anything unintuitive. A settings path is useful; descriptions of visible buttons, icons, layouts, animations, or every UI state are not. Before adding text, ask what task or decision it helps the user with.
 - Keep user docs in the shipped product's voice, without implementation details or contributor tooling. Update the relevant feature section when how to use it changes. A UI tweak does not need a documentation entry, and a new control does not need its own page.
-- `docs/operations/` holds maintainer setup, release, and debugging procedures. Keep instructions for operating an installed T3 Code server in the user guides.
+- `docs/operations/` holds maintainer setup, release, and debugging procedures, and the [rules for new features and processes](docs/operations/new-features.md). Keep instructions for operating an installed T3 Code server in the user guides.
 
 ## Plans and work artifacts
 
