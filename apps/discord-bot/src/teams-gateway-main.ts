@@ -2,6 +2,10 @@
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import { ApiClient } from "@microsoft/teams.apps/dist/api.js";
+import {
+  makeTeamsChannelDescriptionReader,
+  teamsDescriptionProject,
+} from "./teams/channelDescription.ts";
 import { TeamsResponseReferences } from "./teams/responseReferences.ts";
 import { BridgeHub } from "./features/BridgeHub.ts";
 import { App } from "@microsoft/teams.apps";
@@ -130,10 +134,28 @@ const program = Effect.gen(function* () {
   );
 
   const references = new TeamsResponseReferences(stateDir);
+  const readDescription = makeTeamsChannelDescriptionReader({
+    clientId: initial.identity.entraClientId,
+    clientSecret: readPrivateCredential(secretPath),
+  });
   const active = (lease: GatewayLease) => {
     if (!running || !policy.isActive(lease))
       throw new Error("Teams binding was revoked or changed");
     return workspaces.get(lease.binding.workspace)!;
+  };
+  const channelTopic = async (lease: GatewayLease) => {
+    active(lease);
+    if (lease.binding.useChannelDescription !== true) return "";
+    const description = await readDescription({
+      tenantId: lease.binding.tenantId,
+      teamId: lease.binding.teamId,
+      channelId: lease.binding.channelId,
+      assertActive: () => {
+        active(lease);
+      },
+    });
+    teamsDescriptionProject(description, lease.binding);
+    return description;
   };
 
   app.on("card.action.omegent", async ({ activity, send, api }) => {
@@ -178,13 +200,15 @@ const program = Effect.gen(function* () {
               data.command === "approve" ? "accept" : "decline",
             );
           else if (data.command === "continue") {
+            const topic = yield* Effect.tryPromise(() => channelTopic(lease));
             const turn = yield* startOrContinueT3Turn(workspace.config, {
               source: { sourceKind: "teams", sourceThreadId: sourceKey },
               sourceActor: { platformId: lease.actorId },
               externalConversationId: lease.conversationId,
               externalParentId: lease.binding.teamId + "/" + lease.binding.channelId,
               externalTenantId: lease.binding.tenantId,
-              projectShortName: lease.binding.projectShortName!,
+              projectShortName: teamsDescriptionProject(topic, lease.binding)!,
+              channelTopic: topic,
               prompt: "Continue",
               flags: {},
               stickyModelOnContinue: true,
@@ -199,6 +223,7 @@ const program = Effect.gen(function* () {
               channelId: lease.binding.channelId,
               fileDestination: lease.binding.fileDestination,
               includeProgressHistory: lease.binding.includeProgressHistory,
+              getChannelTopic: () => channelTopic(lease),
               conversationId: lease.conversationId,
               rootMessageId:
                 lease.conversationId.split(";messageid=")[1] ?? activity.replyToId ?? activity.id,
@@ -245,8 +270,13 @@ const program = Effect.gen(function* () {
         const links = yield* ThreadLinkStore;
         yield* t3.waitUntilReady({ timeoutMs: 15000 });
         active(lease);
-        const { project } = yield* resolveProjectFromShortName(lease.binding.projectShortName!);
-        if (project.id !== lease.binding.projectId)
+        const topic = yield* Effect.tryPromise(() => channelTopic(lease));
+        const projectShortName = teamsDescriptionProject(topic, lease.binding)!;
+        const { project } = yield* resolveProjectFromShortName(projectShortName);
+        if (
+          projectShortName === lease.binding.projectShortName &&
+          project.id !== lease.binding.projectId
+        )
           return yield* Effect.fail("Teams project binding mismatch" as const);
         const sourceKey =
           "native/" +
@@ -325,7 +355,8 @@ const program = Effect.gen(function* () {
           externalConversationId: lease.conversationId,
           externalParentId: lease.binding.teamId + "/" + lease.binding.channelId,
           externalTenantId: lease.binding.tenantId,
-          projectShortName: lease.binding.projectShortName!,
+          projectShortName,
+          channelTopic: topic,
           prompt: enriched,
           flags: {},
           stickyModelOnContinue: true,
@@ -340,6 +371,7 @@ const program = Effect.gen(function* () {
           channelId: lease.binding.channelId,
           fileDestination: lease.binding.fileDestination,
           includeProgressHistory: lease.binding.includeProgressHistory,
+          getChannelTopic: () => channelTopic(lease),
           conversationId: lease.conversationId,
           rootMessageId:
             lease.conversationId.split(";messageid=")[1] ?? activity.replyToId ?? activity.id,
@@ -399,6 +431,7 @@ const program = Effect.gen(function* () {
       channelId: lease.binding.channelId,
       fileDestination: lease.binding.fileDestination,
       includeProgressHistory: lease.binding.includeProgressHistory,
+      getChannelTopic: () => channelTopic(lease),
       conversationId: lease.conversationId,
       rootMessageId: reference.rootMessageId,
       assertActive: () => {

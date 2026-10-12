@@ -11,6 +11,10 @@ import { ProjectAliasStore } from "../projectAliases.ts";
 import { ThreadLinkStore } from "../store/ThreadLinkStore.ts";
 import { T3Session } from "../t3/T3Session.ts";
 import { loadTeamsChannelConfigsFromFileSync, type TeamsChannelConfig } from "../teams/config.ts";
+import {
+  makeTeamsChannelDescriptionReader,
+  teamsDescriptionProject,
+} from "../teams/channelDescription.ts";
 import { teamsMessageActionPrompt } from "../teams/attribution.ts";
 import { startOrContinueT3Turn } from "./LinkedTurnRouter.ts";
 import { bridgeThreadToPlatform } from "./ResponseBridge.ts";
@@ -153,6 +157,25 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
   >();
   const run = Effect.runPromiseWith(services);
 
+  const readDescription = makeTeamsChannelDescriptionReader({
+    clientId: config.teamsClientId!,
+    clientSecret: config.teamsClientSecret!,
+  });
+  const channelTopic = async (
+    channel: TeamsChannelConfig | undefined,
+    location: TeamsConversationCoordinates,
+    assertActive: () => void,
+  ) => {
+    if (!channel?.useChannelDescription || !location.teamId || !location.channelId) return "";
+    const description = await readDescription({
+      tenantId: location.tenantId,
+      teamId: location.teamId,
+      channelId: location.channelId,
+      assertActive,
+    });
+    teamsDescriptionProject(description, channel);
+    return description;
+  };
   const app = new App({
     clientId: config.teamsClientId,
     clientSecret: config.teamsClientSecret,
@@ -189,6 +212,12 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
             data.command === "approve" ? "accept" : "decline",
           );
         else if (data.command === "continue") {
+          const topic = yield* Effect.tryPromise(() =>
+            channelTopic(channel, location, () => {
+              if (!teamsActorAccess(identityMap.list(), activity.from).allowed)
+                throw new Error("Teams actor access revoked");
+            }),
+          );
           const turn = yield* startOrContinueT3Turn(config, {
             source: { sourceKind: "teams", sourceThreadId: sourceKey },
             sourceActor: {
@@ -198,7 +227,8 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
             externalConversationId: location.conversationId,
             externalParentId: `${location.teamId}/${location.channelId}`,
             externalTenantId: location.tenantId,
-            projectShortName: channel.projectShortName,
+            projectShortName: teamsDescriptionProject(topic, channel)!,
+            channelTopic: topic,
             prompt: "Continue",
             flags: {},
             stickyModelOnContinue: true,
@@ -213,6 +243,11 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
             channelId: location.channelId ?? "",
             fileDestination: channel?.fileDestination,
             includeProgressHistory: channel?.includeProgressHistory,
+            getChannelTopic: () =>
+              channelTopic(channel, location, () => {
+                if (!teamsActorAccess(identityMap.list(), activity.from).allowed)
+                  throw new Error("Teams actor access revoked");
+              }),
             conversationId: location.conversationId,
             rootMessageId:
               location.conversationId.split(";messageid=")[1] ?? activity.replyToId ?? activity.id,
@@ -256,7 +291,15 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
         const location = coordinates(activity);
         const sourceKey = sourceConversationKey(location);
         const channel = channelForCoordinates(channels, location);
-        const projectShortName = channel?.projectShortName ?? config.teamsDefaultProjectShortName;
+        const topic = yield* Effect.tryPromise(() =>
+          channelTopic(channel, location, () => {
+            if (!teamsActorAccess(identityMap.list(), activity.from).allowed)
+              throw new Error("Teams actor access revoked");
+          }),
+        );
+        const projectShortName = channel
+          ? teamsDescriptionProject(topic, channel)
+          : config.teamsDefaultProjectShortName;
         const prompt = (activity.text ?? "").trim();
         const existing = yield* links.getBySourceThread("teams", sourceKey);
 
@@ -323,6 +366,7 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
           externalParentId: `${location.teamId ?? "chat"}/${location.channelId ?? "chat"}`,
           externalTenantId: location.tenantId,
           projectShortName,
+          channelTopic: topic,
           prompt,
           flags: {},
           stickyModelOnContinue: true,
@@ -339,6 +383,11 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
           channelId: location.channelId ?? "",
           fileDestination: channel?.fileDestination,
           includeProgressHistory: channel?.includeProgressHistory,
+          getChannelTopic: () =>
+            channelTopic(channel, location, () => {
+              if (!teamsActorAccess(identityMap.list(), activity.from).allowed)
+                throw new Error("Teams actor access revoked");
+            }),
           conversationId: location.conversationId,
           rootMessageId:
             activity.replyToId ?? location.conversationId.split(";messageid=")[1] ?? activity.id,

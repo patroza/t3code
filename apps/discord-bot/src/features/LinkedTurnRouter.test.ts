@@ -21,6 +21,7 @@ describe("Teams linked turn attribution", () => {
         (path) => Effect.promise(() => NodeFSP.rm(path, { recursive: true, force: true })),
       );
       const dispatched: Array<ClientSourceHint | undefined> = [];
+      const selections: Array<Parameters<T3SessionService["resolveModelSelection"]>[0]> = [];
       const threadId = ThreadId.make("thread:teams-attribution");
       const session = {
         findProjectByWorkspaceRoot: () =>
@@ -28,7 +29,11 @@ describe("Teams linked turn attribution", () => {
             id: ProjectId.make("project:teams"),
             workspaceRoot: "/workspace/omega",
           }),
-        resolveModelSelection: () => Effect.succeed({ instanceId: "codex", model: "test-model" }),
+        resolveModelSelection: (input: Parameters<T3SessionService["resolveModelSelection"]>[0]) =>
+          Effect.sync(() => {
+            selections.push(input);
+            return { instanceId: "codex", model: "test-model" };
+          }),
         startTurnWithWorktree: (input: Parameters<T3SessionService["startTurnWithWorktree"]>[0]) =>
           Effect.sync(() => {
             dispatched.push(input.sourceHint);
@@ -54,6 +59,7 @@ describe("Teams linked turn attribution", () => {
           externalParentId: "team/channel",
           externalTenantId: "tenant",
           projectShortName: "omega",
+          channelTopic: "omegent-default-model-grok-4.7 omegent-fast-mode",
           prompt: "Investigate",
           promptContext: { kind: "raw" as const, value: "Investigate" },
           flags: {},
@@ -73,7 +79,13 @@ describe("Teams linked turn attribution", () => {
           );
         expect((yield* dispatch("starter-aad-id")).isNew).toBe(true);
         expect((yield* dispatch("second-aad-id")).isNew).toBe(false);
+        const linked = yield* links.getBySourceThread("teams", input.source.sourceThreadId);
+        yield* links.put({ ...linked!, projectId: ProjectId.make("project:other") });
+        const retarget = yield* Effect.result(dispatch("third-aad-id"));
+        expect(retarget._tag).toBe("Failure");
       });
+      expect(selections).toHaveLength(1); // Description defaults apply on launch, never a sticky continue.
+      expect(selections[0]).toMatchObject({ overrideModel: "grok-4.7", fastMode: true });
       expect(dispatched).toEqual([
         {
           channel: "teams",

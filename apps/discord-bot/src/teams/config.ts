@@ -3,6 +3,10 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as Schema from "effect/Schema";
 import { TeamsFileDestination, validateTeamsFileDestination } from "./channelFiles.ts";
+import {
+  validateTeamsDescriptionPolicy,
+  type TeamsDescriptionPolicy,
+} from "./channelDescription.ts";
 
 import { expandHomePath } from "../projectAliases.ts";
 
@@ -16,7 +20,7 @@ function isFileDestination(value: unknown): value is TeamsFileDestination {
   }
 }
 
-export interface TeamsChannelConfig {
+export interface TeamsChannelConfig extends TeamsDescriptionPolicy {
   readonly fileDestination?: TeamsFileDestination | undefined;
   readonly includeProgressHistory?: boolean | undefined;
   readonly teamId: string;
@@ -54,6 +58,10 @@ function isChannelConfig(value: unknown): value is TeamsChannelConfig {
     (candidate.fileDestination === undefined || isFileDestination(candidate.fileDestination)) &&
     (candidate.includeProgressHistory === undefined ||
       typeof candidate.includeProgressHistory === "boolean") &&
+    (candidate.useChannelDescription === undefined ||
+      typeof candidate.useChannelDescription === "boolean") &&
+    (candidate.descriptionProjectShortNames === undefined ||
+      isStringArray(candidate.descriptionProjectShortNames)) &&
     typeof candidate.teamId === "string" &&
     typeof candidate.channelId === "string" &&
     typeof candidate.channelName === "string" &&
@@ -100,6 +108,7 @@ export function loadTeamsChannelConfigsFromFileSync(
   if (channels === null || !channels.every(isChannelConfig)) {
     throw new Error("Teams channel config file must be an array of valid channel objects.");
   }
+  for (const channel of channels) validateTeamsDescriptionPolicy(channel);
 
   return channels.map((channel) => ({
     ...channel,

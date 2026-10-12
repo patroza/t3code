@@ -143,6 +143,7 @@ export function makeTeamsResponseTransport(input: {
   readonly incomingMessage?: BotMessage;
   readonly fileDestination?: TeamsFileDestination | undefined;
   readonly includeProgressHistory?: boolean | undefined;
+  readonly getChannelTopic?: (() => Promise<string>) | undefined;
   readonly assertActive: () => void;
   readonly send: (activity: TeamsResponseActivity) => Promise<{ id?: string }>;
   readonly deleteMessage: (messageId: string) => Promise<unknown>;
@@ -302,7 +303,15 @@ export function makeTeamsResponseTransport(input: {
     getMyUser: () => Effect.succeed({ id: input.clientId }),
     // Teams topics and names belong to the channel; the bridge must never rename it per turn.
     getChannel: (id) =>
-      Effect.succeed({ id, type: 0, topic: input.includeProgressHistory ? "omegent-ips" : null }),
+      request(async () => {
+        input.assertActive();
+        const description = await input.getChannelTopic?.();
+        input.assertActive();
+        const topic = [description, input.includeProgressHistory ? "omegent-ips" : ""]
+          .filter(Boolean)
+          .join("\n");
+        return { id, type: 0, topic: topic || null };
+      }),
     updateChannel: () => Effect.void,
     getMessage: (_, id) =>
       request(async () => {
