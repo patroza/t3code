@@ -3,15 +3,16 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
+import { TeamsResponseReferences } from "./responseReferences.ts";
 import { parseGatewayConfig } from "./gatewayConfig.ts";
 import { TeamsGatewayDispatcher } from "./gatewayDispatcher.ts";
 import { TeamsGatewayPolicy, type GatewayActivity } from "./gatewayPolicy.ts";
 
 const app = "11111111-1111-4111-8111-111111111111";
-const tenant = "22222222-2222-4222-8222-222222222222";
+const tenant = "abcdefab-2222-4222-8222-222222222222";
 const actor = "33333333-3333-4333-8333-333333333333";
 const secondActor = "66666666-6666-4666-8666-666666666666";
-const team = "44444444-4444-4444-8444-444444444444";
+const team = "abcdefab-4444-4444-8444-444444444444";
 const project = "55555555-5555-4555-8555-555555555555";
 function fixture(directory: string) {
   return {
@@ -94,6 +95,45 @@ describe("Teams team installations", () => {
     );
   });
   afterEach(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
+
+  it("matches UUID casing and revokes the entire installation on uninstall", () => {
+    const incoming = activity();
+    const mixedCase = {
+      ...incoming,
+      conversation: { ...incoming.conversation, tenantId: tenant.toUpperCase() },
+      channelData: {
+        ...incoming.channelData,
+        team: { id: team.toUpperCase(), aadGroupId: team.toUpperCase() },
+      },
+    };
+    const accepted = policy.accept(mixedCase);
+    expect(accepted.kind).toBe("mention");
+    policy.revoke(mixedCase);
+    expect(policy.accept(activity("two"))).toMatchObject({
+      kind: "reject",
+      reason: "revoked-binding",
+    });
+  });
+
+  it("reauthorizes persisted response references after actor removal and uninstall", () => {
+    config.teamInstallations[0]!.allowedActorIds.push(secondActor);
+    const references = new TeamsResponseReferences(directory);
+    for (const channel of ["one", "two"]) {
+      const accepted = policy.accept(activity(channel));
+      expect(accepted.kind).toBe("mention");
+      if (accepted.kind === "mention")
+        references.remember(accepted.lease, "https://smba.trafficmanager.net/emea/", "root");
+    }
+    const restored = new TeamsResponseReferences(directory);
+    const restore = () =>
+      restored.restore(parseGatewayConfig(config), (lease) => policy.isActive(lease));
+    expect(restore()).toHaveLength(2);
+    config.teamInstallations[0]!.allowedActorIds = [secondActor];
+    expect(restore()).toEqual([]);
+    config.teamInstallations[0]!.allowedActorIds.push(actor);
+    policy.revoke(activity());
+    expect(restore()).toEqual([]);
+  });
 
   it("inherits one team's actors and workspace across both project routes", () => {
     for (const channel of ["one", "two"]) {
