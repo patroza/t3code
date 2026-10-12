@@ -204,6 +204,16 @@ function totalOutputTokens(summary: { buckets: readonly { totals: { outputTokens
   return summary.buckets.reduce((sum, bucket) => sum + bucket.totals.outputTokens, 0);
 }
 
+/** Cursor account rows only. A developer machine's `~/.kimi` history is another source. */
+function cursorOutputTokens(summary: {
+  readonly buckets: readonly { provider: string; totals: { outputTokens: number } }[];
+}) {
+  return summary.buckets.reduce(
+    (sum, bucket) => sum + (bucket.provider === "cursor" ? bucket.totals.outputTokens : 0),
+    0,
+  );
+}
+
 /** Inside `WINDOW`: the time Cursor tests run at. */
 const CURSOR_NOW = Date.parse("2026-08-02T12:00:00Z");
 const HOUR_MS = 60 * 60 * 1000;
@@ -776,9 +786,10 @@ describe("UsageService", () => {
           { sinceMs: CURSOR_NOW - CURSOR_RETENTION_MS, untilMs: CURSOR_NOW },
         ]);
 
-        // A wider window is answered from the same cache.
+        // A wider window is answered from the same cache. Count Cursor only so a
+        // developer machine's `~/.kimi` history in this range does not fail the assert.
         const wide = { ...WINDOW, sinceDay: UsageDay.make("2026-07-01") };
-        assert.strictEqual(totalOutputTokens(yield* read(wide)), 36);
+        assert.strictEqual(cursorOutputTokens(yield* read(wide)), 36);
         assert.strictEqual(cursor.state.calls.length, 1);
 
         // An event finalized late, inside the overlap, and a new one.
@@ -796,7 +807,7 @@ describe("UsageService", () => {
         // Another login replaces the cached account's history instead of adding to it.
         cursor.state.accountKey = "account-b";
         yield* TestClock.adjust(Duration.minutes(2));
-        assert.strictEqual(totalOutputTokens(yield* read(wide)), 60);
+        assert.strictEqual(cursorOutputTokens(yield* read(wide)), 60);
         assert.strictEqual(cursor.state.calls.length, 4);
         assert.strictEqual(cursorSource(yield* read(wide))?.fingerprint.volumeId, "account-b");
       }).pipe(
