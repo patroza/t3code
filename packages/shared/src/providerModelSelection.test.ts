@@ -27,6 +27,12 @@ const providers = [
         isCustom: false,
         capabilities: null,
       },
+      {
+        slug: "gpt-5.5",
+        name: "GPT-5.5",
+        isCustom: false,
+        capabilities: null,
+      },
     ],
   },
   {
@@ -38,6 +44,13 @@ const providers = [
       {
         slug: "claude-opus-4-6",
         name: "Claude Opus 4.6",
+        isCustom: false,
+        capabilities: null,
+      },
+      {
+        slug: "claude-opus-5-5",
+        name: "Claude Opus 5.5",
+        aliases: ["opus", "opus-5.5", "claude-opus-5.5"],
         isCustom: false,
         capabilities: null,
       },
@@ -149,6 +162,117 @@ describe("provider/model message settings", () => {
     ).toEqual({
       instanceId: "claudeAgent",
       model: "claude-opus-4-6",
+    });
+  });
+
+  it("resolves a short model name and keeps prefixed names working", () => {
+    expect(
+      resolveProviderModelSelection({
+        providers,
+        preferredSelection: fallbackSelection,
+        fallbackSelection,
+        overrideModel: "opus-5.5",
+      }),
+    ).toEqual({
+      instanceId: "claudeAgent",
+      model: "claude-opus-5-5",
+    });
+    expect(
+      resolveProviderModelSelection({
+        providers,
+        preferredSelection: fallbackSelection,
+        fallbackSelection,
+        overrideModel: "claude-opus-5.5",
+      }),
+    ).toEqual({
+      instanceId: "claudeAgent",
+      model: "claude-opus-5-5",
+    });
+    expect(
+      resolveProviderModelSelection({
+        providers,
+        preferredSelection: fallbackSelection,
+        fallbackSelection,
+        overrideModel: "claude-opus-5-5",
+      }),
+    ).toEqual({
+      instanceId: "claudeAgent",
+      model: "claude-opus-5-5",
+    });
+  });
+
+  it("treats a codex- prefix as optional compatibility spelling", () => {
+    expect(
+      resolveProviderModelSelection({
+        providers,
+        preferredSelection: {
+          instanceId: ProviderInstanceId.make("grok"),
+          model: "grok-build",
+        },
+        fallbackSelection,
+        overrideModel: "codex-gpt-5.5",
+      }),
+    ).toEqual({
+      instanceId: "codex",
+      model: "gpt-5.5",
+    });
+  });
+
+  it("prefers an exact short alias over a fuzzy match on the sticky provider", () => {
+    expect(
+      resolveProviderModelSelection({
+        providers,
+        preferredSelection: {
+          instanceId: ProviderInstanceId.make("cursor"),
+          model: "composer-2",
+        },
+        fallbackSelection,
+        overrideModel: "opus",
+      }),
+    ).toEqual({
+      instanceId: "claudeAgent",
+      model: "claude-opus-5-5",
+    });
+  });
+
+  it("canonicalizes a short name when the provider is explicit", () => {
+    expect(
+      resolveProviderModelSelection({
+        providers,
+        preferredSelection: fallbackSelection,
+        fallbackSelection,
+        overrideInstanceId: "claudeAgent",
+        overrideModel: "opus-5.5",
+      }),
+    ).toEqual({
+      instanceId: "claudeAgent",
+      model: "claude-opus-5-5",
+    });
+  });
+
+  it("returns null instead of the default model when an unknown override is rejected", () => {
+    expect(
+      resolveProviderModelSelection({
+        providers,
+        preferredSelection: fallbackSelection,
+        fallbackSelection,
+        overrideModel: "opus-9",
+        rejectUnknownOverride: true,
+      }),
+    ).toBeNull();
+  });
+
+  it("still falls back to the default model when an unknown override is allowed", () => {
+    expect(
+      resolveProviderModelSelection({
+        providers,
+        preferredSelection: fallbackSelection,
+        fallbackSelection,
+        overrideModel: "opus-9",
+      }),
+    ).toEqual({
+      instanceId: "codex",
+      model: "gpt-5.4",
     });
   });
 

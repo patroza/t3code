@@ -15,6 +15,9 @@ export const OMEGENT_SLASH_COMMAND_NAME = "omegent" as const;
  */
 export const OMEGENT_SLASH_COMMAND_ALIAS = "agent" as const;
 
+/** Discord option descriptions must stay within 100 characters. */
+const MODEL_OPTION_DESCRIPTION = "Short name (opus-5.5). claude- and codex- prefixes still work.";
+
 export const OMEGENT_SLASH_COMMAND = {
   name: OMEGENT_SLASH_COMMAND_NAME,
   description: "Omegent bot commands (mentions still work for prompts)",
@@ -33,7 +36,7 @@ export const OMEGENT_SLASH_COMMAND = {
         {
           type: Discord.ApplicationCommandOptionType.STRING,
           name: "model",
-          description: "Model slug (e.g. gpt-5.4)",
+          description: MODEL_OPTION_DESCRIPTION,
           required: false,
         },
         {
@@ -88,7 +91,7 @@ export const OMEGENT_SLASH_COMMAND = {
         {
           type: Discord.ApplicationCommandOptionType.STRING,
           name: "model",
-          description: "Model slug (e.g. gpt-5.4)",
+          description: MODEL_OPTION_DESCRIPTION,
           required: false,
         },
         {
@@ -119,7 +122,7 @@ export const OMEGENT_SLASH_COMMAND = {
         {
           type: Discord.ApplicationCommandOptionType.STRING,
           name: "model",
-          description: "Model slug (e.g. gpt-5.4)",
+          description: MODEL_OPTION_DESCRIPTION,
           required: false,
         },
         {

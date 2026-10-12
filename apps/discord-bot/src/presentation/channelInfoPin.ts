@@ -37,6 +37,43 @@ function shortenModelSlug(slug: string): string {
   return slashIndex >= 0 ? trimmed.slice(slashIndex + 1) : trimmed;
 }
 
+const COMPAT_MODEL_PREFIX = /^(?:claude|codex)-/iu;
+
+/**
+ * Name to show and accept for `--model`. Prefer a versioned short alias
+ * (`opus-5.5`) over the catalog slug. `claude-` and `codex-` prefixes stay
+ * resolvable, but the pin documents the short form.
+ */
+export function discordModelLabel(model: {
+  readonly slug: string;
+  readonly shortName?: string | undefined;
+  readonly aliases?: ReadonlyArray<string> | undefined;
+}): string {
+  const shortAliases = (model.aliases ?? [])
+    .map((alias) => alias.trim())
+    .filter((alias) => alias.length > 0 && !COMPAT_MODEL_PREFIX.test(alias));
+  const versioned = shortAliases
+    .filter((alias) => /\d/u.test(alias))
+    .toSorted((left, right) => right.length - left.length);
+  const preferred = versioned[0] ?? shortAliases[0];
+  if (preferred !== undefined) return preferred;
+  const leaf = shortenModelSlug(model.slug);
+  const stripped = leaf.replace(COMPAT_MODEL_PREFIX, "");
+  return stripped.length > 0 ? stripped : leaf;
+}
+
+/** Reply when `--model` matches nothing. Include the pin link when we have one. */
+export function formatUnknownDiscordModelMessage(input: {
+  readonly requestedModel: string;
+  readonly channelInfoUrl: string | null;
+}): string {
+  const where =
+    input.channelInfoUrl === null
+      ? "the pinned channel info message in this channel"
+      : `the pinned channel info: ${input.channelInfoUrl}`;
+  return `Unknown model \`${input.requestedModel}\`. See ${where}.`;
+}
+
 function wrapItems(
   prefix: string,
   items: ReadonlyArray<string>,
@@ -81,7 +118,7 @@ function renderProviderLines(
 
   return providers.flatMap((provider, index) => {
     const label = labels[index]!.padEnd(labelWidth, " ");
-    const allModels = provider.models.map((model) => shortenModelSlug(model.slug));
+    const allModels = provider.models.map((model) => discordModelLabel(model));
     const models =
       maxModels === undefined || allModels.length <= maxModels
         ? allModels
@@ -110,10 +147,17 @@ function buildChannelInfoPinBody(input: {
       ? {}
       : { maxModelsPerProvider: input.maxModelsPerProvider },
   );
+  const defaultModel = input.providers
+    .find((provider) => provider.instanceId === input.defaultModelSelection?.instanceId)
+    ?.models.find((model) => model.slug === input.defaultModelSelection?.model);
   const defaultLine =
     input.defaultModelSelection === null
       ? "(unable to resolve)"
-      : `${input.defaultModelSelection.instanceId}/${input.defaultModelSelection.model}`;
+      : `${input.defaultModelSelection.instanceId}/${
+          defaultModel === undefined
+            ? input.defaultModelSelection.model
+            : discordModelLabel(defaultModel)
+        }`;
 
   // Keep the command block compact — every line counts against Discord's 2000 limit.
   // Prefer /omegent slash commands (/agent is an alias); @Omegent mentions are a fallback.
@@ -142,7 +186,9 @@ function buildChannelInfoPinBody(input: {
     "/omegent refresh-indicators",
     "/omegent assign [github:login]  Assign linked PR(s) (default: you)",
     "@Omegent …                      Same actions (fallback)",
-    "  flags: --plan --local --base <b> --provider <id> --model <slug>",
+    "  flags: --plan --local --base <b> --provider <id> --model <name>",
+    "         —model works too. Short names (opus-5.5).",
+    "         claude- and codex- prefixes still work.",
     "         --steer (inject now) --queue (park; default mid-turn)",
     "  queued: 📥 badge · delete your message to cancel · /steernow to flush",
     "```",

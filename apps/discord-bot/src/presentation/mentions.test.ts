@@ -146,6 +146,23 @@ describe("parseMentionFlags", () => {
     });
   });
 
+  it("accepts an em dash or en dash in place of --", () => {
+    expect(parseMentionFlags("—model opus-5.5 fix the packer")).toMatchObject({
+      model: "opus-5.5",
+      prompt: "fix the packer",
+    });
+    expect(parseMentionFlags("–model claude-opus-5.5 why")).toMatchObject({
+      model: "claude-opus-5.5",
+      prompt: "why",
+    });
+    expect(parseMentionFlags("—provider claudeAgent —plan investigate").provider).toBe(
+      "claudeAgent",
+    );
+    expect(parseMentionFlags("—provider claudeAgent —plan investigate").plan).toBe(true);
+    expect(parseMentionFlags("ship it — now").prompt).toBe("ship it — now");
+    expect(parseMentionFlags("ship it — now").model).toBeUndefined();
+  });
+
   it("parses --steer and --queue with last-wins when both appear", () => {
     expect(parseMentionFlags("--steer also check the race").followUpDelivery).toBe("steer");
     expect(parseMentionFlags("--queue park this for later").followUpDelivery).toBe("queue");
