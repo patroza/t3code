@@ -90,7 +90,6 @@ interface DiscordUploadFile {
 interface DiscordProjectAlias {
   readonly shortName: string;
   readonly workspaceRoot: string;
-  readonly jiraProjects?: readonly string[];
 }
 
 interface DiscordThreadLinkRecord {
@@ -141,7 +140,7 @@ function stripYamlScalar(value: string): string {
 function parseDiscordProjectAliasesYaml(raw: string): unknown {
   const lines = raw.split(/\r?\n/);
   const flat: Record<string, string> = {};
-  const nested: Record<string, { workspaceRoot?: string; jiraProjects?: string }> = {};
+  const nested: Record<string, { workspaceRoot: string }> = {};
   let inAliasesBlock = false;
   let currentKey: string | null = null;
 
@@ -151,15 +150,14 @@ function parseDiscordProjectAliasesYaml(raw: string): unknown {
 
     if (/^aliases:\s*$/.test(trimmed)) {
       inAliasesBlock = true;
-      currentKey = null;
       continue;
     }
 
-    const nestedValueMatch = /^\s+(workspaceRoot|jiraProjects):\s*(.+)\s*$/.exec(line);
-    if (nestedValueMatch && currentKey !== null) {
-      const field = nestedValueMatch[1]! as "workspaceRoot" | "jiraProjects";
-      const value = stripYamlScalar(nestedValueMatch[2]!);
-      nested[currentKey] = { ...nested[currentKey], [field]: value };
+    const workspaceRootMatch = /^\s+workspaceRoot:\s*(.+)\s*$/.exec(line);
+    if (workspaceRootMatch && currentKey !== null) {
+      const value = stripYamlScalar(workspaceRootMatch[1]!);
+      nested[currentKey] = { workspaceRoot: value };
+      currentKey = null;
       continue;
     }
 
@@ -168,14 +166,6 @@ function parseDiscordProjectAliasesYaml(raw: string): unknown {
       currentKey = nestedKeyMatch[1]!;
       continue;
     }
-
-    const topLevelKey = /^([A-Za-z0-9][A-Za-z0-9_-]*):\s*$/.exec(trimmed);
-    if (topLevelKey && !/^\s/u.test(line)) {
-      currentKey = topLevelKey[1]!;
-      continue;
-    }
-
-    if (currentKey !== null && /^\s+\S/u.test(line)) continue;
 
     const flatMatch = /^([A-Za-z0-9][A-Za-z0-9_-]*):\s*(.+)\s*$/.exec(trimmed);
     if (flatMatch) {
@@ -187,37 +177,10 @@ function parseDiscordProjectAliasesYaml(raw: string): unknown {
     }
   }
 
-  if (Object.keys(nested).length === 0) return flat;
-  return { aliases: { ...flat, ...nested } };
-}
-
-const JIRA_PROJECT_PREFIX = /^[A-Z][A-Z0-9]{1,9}$/u;
-
-function normalizeJiraProjectPrefixes(raw: unknown): readonly string[] {
-  if (raw === undefined || raw === null) return [];
-  const tokens: string[] = [];
-  const push = (value: string) => {
-    for (const part of value.split(/[^A-Za-z0-9]+/u)) {
-      if (part.length === 0) continue;
-      const prefix = part.toUpperCase();
-      if (!JIRA_PROJECT_PREFIX.test(prefix)) {
-        throw new Error(`Invalid Jira project prefix '${part}'.`);
-      }
-      if (!tokens.includes(prefix)) tokens.push(prefix);
-    }
-  };
-  if (typeof raw === "string") {
-    push(raw);
-    return tokens;
+  if (Object.keys(nested).length > 0) {
+    return { aliases: nested };
   }
-  if (Array.isArray(raw)) {
-    for (const item of raw) {
-      if (typeof item !== "string") throw new Error("jiraProjects entries must be strings.");
-      push(item);
-    }
-    return tokens;
-  }
-  throw new Error("jiraProjects must be a string or a list of strings.");
+  return flat;
 }
 
 function parseDiscordProjectAliasesDocument(
@@ -234,9 +197,8 @@ function parseDiscordProjectAliasesDocument(
   };
 
   const entries = new Map<string, string>();
-  const jiraProjectsByAlias = new Map<string, readonly string[]>();
 
-  const add = (shortNameRaw: string, workspaceRootRaw: string, jiraProjectsRaw?: unknown) => {
+  const add = (shortNameRaw: string, workspaceRootRaw: string) => {
     const shortName = normalizeDiscordProjectAliasShortName(shortNameRaw);
     if (shortName === null) {
       throw new Error(`Invalid project alias shortName '${shortNameRaw}'.`);
@@ -249,10 +211,6 @@ function parseDiscordProjectAliasesDocument(
       throw new Error(`Duplicate project alias shortName '${shortName}'.`);
     }
     entries.set(shortName, workspaceRoot);
-    if (jiraProjectsRaw !== undefined) {
-      const prefixes = normalizeJiraProjectPrefixes(jiraProjectsRaw);
-      if (prefixes.length > 0) jiraProjectsByAlias.set(shortName, prefixes);
-    }
   };
 
   if (Array.isArray(document)) {
@@ -265,7 +223,7 @@ function parseDiscordProjectAliasesDocument(
       if (typeof shortName !== "string" || typeof workspaceRoot !== "string") {
         throw new Error("Each project alias must include string shortName and workspaceRoot.");
       }
-      add(shortName, workspaceRoot, item.jiraProjects);
+      add(shortName, workspaceRoot);
     }
   } else if (isRecord(document)) {
     const aliasesNode = document.aliases;
@@ -277,7 +235,7 @@ function parseDiscordProjectAliasesDocument(
         continue;
       }
       if (isRecord(value) && typeof value.workspaceRoot === "string") {
-        add(key, value.workspaceRoot, value.jiraProjects);
+        add(key, value.workspaceRoot);
         continue;
       }
       throw new Error(
@@ -289,13 +247,7 @@ function parseDiscordProjectAliasesDocument(
   }
 
   return [...entries.entries()]
-    .map(([shortName, workspaceRoot]) => ({
-      shortName,
-      workspaceRoot,
-      ...(jiraProjectsByAlias.has(shortName)
-        ? { jiraProjects: jiraProjectsByAlias.get(shortName)! }
-        : {}),
-    }))
+    .map(([shortName, workspaceRoot]) => ({ shortName, workspaceRoot }))
     .toSorted((left, right) => left.shortName.localeCompare(right.shortName));
 }
 
@@ -313,42 +265,6 @@ function loadDiscordProjectAliasesFromFileSync(
   return parseDiscordProjectAliasesDocument(document, {
     resolveRelativeTo: NodePath.dirname(resolvedPath),
   });
-}
-
-function aliasesPathSync(override?: string): string | null {
-  if (override !== undefined && override.trim().length > 0) return override.trim();
-  const fromEnv = process.env.T3_PROJECT_ALIASES_PATH?.trim();
-  if (fromEnv) return fromEnv;
-  return NodeFS.existsSync(DISCORD_DEFAULT_ALIASES_PATH) ? DISCORD_DEFAULT_ALIASES_PATH : null;
-}
-
-/**
- * Bare Jira prefixes configured for these workspace roots in the host alias file.
- * Missing file or unconfigured project yields none, so only Atlassian links count.
- */
-export function jiraBareKeyProjectsForWorkspaceRoots(
-  workspaceRoots: ReadonlyArray<string>,
-  aliasesPath?: string,
-): ReadonlyArray<string> {
-  const path = aliasesPathSync(aliasesPath);
-  if (path === null || !NodeFS.existsSync(path)) return [];
-  let aliases: ReadonlyArray<DiscordProjectAlias>;
-  try {
-    aliases = loadDiscordProjectAliasesFromFileSync(path);
-  } catch {
-    return [];
-  }
-  const found: string[] = [];
-  const seen = new Set<string>();
-  for (const workspaceRoot of workspaceRoots) {
-    const alias = findDiscordProjectAliasByWorkspaceRoot(aliases, workspaceRoot);
-    for (const prefix of alias?.jiraProjects ?? []) {
-      if (seen.has(prefix)) continue;
-      seen.add(prefix);
-      found.push(prefix);
-    }
-  }
-  return found;
 }
 
 function findDiscordProjectAliasByWorkspaceRoot(

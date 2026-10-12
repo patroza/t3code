@@ -7,6 +7,7 @@ import {
   type ThreadId,
   type UploadChatAttachment,
 } from "@t3tools/contracts";
+import { readJiraBareKeyProjects } from "@t3tools/shared/jiraBareKeyProjects";
 import { DISCORD_LINK_REQUEST_MARKER } from "@t3tools/shared/providerModelSelection";
 import { makeKeyedDrainableWorker } from "@t3tools/shared/KeyedDrainableWorker";
 import { Discord, DiscordREST, Ix } from "dfx";
@@ -176,7 +177,7 @@ import {
 } from "../presentation/threadContext.ts";
 import { classifyDiscordAgentAccess, IdentityMapStore } from "../identityMap.ts";
 import { discordSourceHint } from "../t3/sourceHint.ts";
-import { normalizeWorkspaceRootPath, ProjectAliasStore } from "../projectAliases.ts";
+import { ProjectAliasStore } from "../projectAliases.ts";
 import { type ThreadLink, ThreadLinkStore } from "../store/ThreadLinkStore.ts";
 import { newMessageId } from "../t3/ids.ts";
 import {
@@ -1129,8 +1130,9 @@ const make = (botConfig: DiscordBotConfig) =>
 
         let existing = yield* links.getByDiscordThreadId(input.discordThreadId);
         const topicShortName = parseTopicShortName(input.topic);
+        const topicAlias = topicShortName === null ? null : aliases.resolve(topicShortName);
         const topicBareKeyProjects =
-          topicShortName === null ? [] : (aliases.resolve(topicShortName)?.jiraProjects ?? []);
+          topicAlias === null ? [] : (readJiraBareKeyProjects(topicAlias.workspaceRoot) ?? []);
 
         // First-time Discord channel: follow a Jira or GitHub webhook association to
         // the one T3 thread those systems recorded. A key or PR that only appeared
@@ -1206,14 +1208,12 @@ const make = (botConfig: DiscordBotConfig) =>
                   topicError: fromTopic.failure,
                 },
               );
-              const workspaceRoot = normalizeWorkspaceRootPath(project.workspaceRoot);
-              const fromWorkspace =
-                aliases.list().find((alias) => alias.workspaceRoot === workspaceRoot) ?? null;
-              const shortName =
-                fromWorkspace?.shortName ?? parseTopicShortName(input.topic) ?? "linked";
               return {
-                shortName,
-                alias: fromWorkspace ?? { shortName, workspaceRoot: project.workspaceRoot },
+                shortName: parseTopicShortName(input.topic) ?? "linked",
+                alias: {
+                  shortName: parseTopicShortName(input.topic) ?? "linked",
+                  workspaceRoot: project.workspaceRoot,
+                },
                 project,
               };
             }
@@ -1260,12 +1260,14 @@ const make = (botConfig: DiscordBotConfig) =>
           ];
           // Re-inject durable thread Jira keys so later turns (e.g. create PR) still see them.
           // Drop Sentry short ids that were previously stored as Jira (SCANNER-313 etc.).
-          const bareKeyProjects = resolved.alias.jiraProjects ?? topicBareKeyProjects;
+          // A null read means the project file could not be trusted, so stored keys stay.
+          const configuredBareKeyProjects = readJiraBareKeyProjects(resolved.project.workspaceRoot);
+          const bareKeyProjects = configuredBareKeyProjects ?? [];
           const turnJiraIssueKeys = jiraIssueKeysAfterExcludingSentryFalsePositives(
             existing.jiraIssueKeys,
             jiraKeysFromMessages(bareKeyProjects, ...continueWorkItemMessages),
             jiraIssueKeysMaskedBySentryFromMessages(continueWorkItemMessages, bareKeyProjects),
-            bareKeyProjects,
+            configuredBareKeyProjects,
           );
           const turnSentryIssueUrls = mergeSentryIssueUrls(
             existing.sentryIssueUrls,
@@ -1616,7 +1618,8 @@ const make = (botConfig: DiscordBotConfig) =>
           input.referencedMessage,
           { content: input.prompt },
         ];
-        const bareKeyProjects = resolved.alias.jiraProjects ?? topicBareKeyProjects;
+        const bareKeyProjects =
+          readJiraBareKeyProjects(resolved.project.workspaceRoot) ?? topicBareKeyProjects;
         const firstTurnJiraIssueKeys = jiraKeysFromMessages(
           bareKeyProjects,
           ...firstTurnWorkItemMessages,

@@ -38,10 +38,10 @@ import {
   type IntegrationThreadView as OrchestrationThread,
   type IntegrationThreadShellView as OrchestrationThreadShell,
 } from "@t3tools/shared/integrationThreadView";
+import { readJiraBareKeyProjectsForWorkspaceRoots } from "@t3tools/shared/jiraBareKeyProjects";
 import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
 import { ProviderRegistry } from "../provider/ProviderRegistry.ts";
 import { getAutoBootstrapThreadModelSelection } from "../serverRuntimeStartup.ts";
-import { jiraBareKeyProjectsForWorkspaceRoots } from "../mcp/DiscordLinkedChannelTool.ts";
 import {
   extractJiraIssueKeysFromText,
   ThreadWorkItemStore,
@@ -996,7 +996,7 @@ export const make = Effect.gen(function* () {
         ) ?? [];
       const jiraKeys = extractJiraIssueKeysFromGitHubInvocation(
         invocation,
-        jiraBareKeyProjectsForWorkspaceRoots(
+        readJiraBareKeyProjectsForWorkspaceRoots(
           projectsForKeys.map((project) => project.workspaceRoot),
         ),
       );
@@ -1412,7 +1412,7 @@ export const make = Effect.gen(function* () {
     );
     const jiraIssueKeys = extractJiraIssueKeysFromGitHubInvocation(
       input.invocation,
-      jiraBareKeyProjectsForWorkspaceRoots(
+      readJiraBareKeyProjectsForWorkspaceRoots(
         projectForKeys === undefined ? [] : [projectForKeys.workspaceRoot],
       ),
     );

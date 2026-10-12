@@ -1,37 +1,6 @@
-// @effect-diagnostics nodeBuiltinImport:off
-import * as NodeFSP from "node:fs/promises";
-import * as NodeOS from "node:os";
-import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 
-import { jiraBareKeyProjectsForWorkspaceRoots, __testing } from "./DiscordLinkedChannelTool.ts";
-
-describe("jiraBareKeyProjectsForWorkspaceRoots", () => {
-  it("reads prefixes for the matching host project", async () => {
-    const dir = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-jira-prefixes-"));
-    const aliasesPath = NodePath.join(dir, "aliases.yaml");
-    await NodeFSP.writeFile(
-      aliasesPath,
-      [
-        "skunkworks: /tmp/skunkworks",
-        "macs-scanner:",
-        "  workspaceRoot: /tmp/scanner",
-        "  jiraProjects: SA",
-        "macs-configurator:",
-        "  workspaceRoot: /tmp/configurator",
-        "  jiraProjects: CFG",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    expect(jiraBareKeyProjectsForWorkspaceRoots(["/tmp/scanner/"], aliasesPath)).toEqual(["SA"]);
-    expect(
-      jiraBareKeyProjectsForWorkspaceRoots(["/tmp/scanner", "/tmp/configurator"], aliasesPath),
-    ).toEqual(["SA", "CFG"]);
-    expect(jiraBareKeyProjectsForWorkspaceRoots(["/tmp/skunkworks"], aliasesPath)).toEqual([]);
-    expect(jiraBareKeyProjectsForWorkspaceRoots(["/tmp/missing"], aliasesPath)).toEqual([]);
-  });
-});
+import { __testing } from "./DiscordLinkedChannelTool.ts";
 
 describe("extractEnvAssignment", () => {
   it("reads values from dotenv-like content", () => {

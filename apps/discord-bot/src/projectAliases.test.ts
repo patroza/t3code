@@ -5,12 +5,9 @@ import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  jiraProjectsForWorkspaceRoot,
   loadProjectAliasesFromFileSync,
-  normalizeJiraProjectPrefixes,
   normalizeProjectAliasShortName,
   parseProjectAliasesDocument,
-  parseSimpleAliasesYaml,
 } from "./projectAliases.ts";
 
 describe("normalizeProjectAliasShortName", () => {
@@ -45,20 +42,6 @@ describe("parseProjectAliasesDocument", () => {
     expect(aliases).toEqual([{ shortName: "example-project", workspaceRoot: "/tmp/scanner" }]);
   });
 
-  it("reads jira project prefixes for one host project", () => {
-    const aliases = parseProjectAliasesDocument({
-      aliases: {
-        "macs-scanner": { workspaceRoot: "/tmp/scanner", jiraProjects: ["SA"] },
-        "macs-configurator": { workspaceRoot: "/tmp/configurator", jiraProjects: "CFG" },
-        skunkworks: { workspaceRoot: "/tmp/skunkworks" },
-      },
-    });
-    expect(jiraProjectsForWorkspaceRoot(aliases, "/tmp/scanner")).toEqual(["SA"]);
-    expect(jiraProjectsForWorkspaceRoot(aliases, "/tmp/configurator/")).toEqual(["CFG"]);
-    expect(jiraProjectsForWorkspaceRoot(aliases, "/tmp/skunkworks")).toEqual([]);
-    expect(normalizeJiraProjectPrefixes("sa, CFG")).toEqual(["SA", "CFG"]);
-  });
-
   it("parses a Discord mirror channel for GitHub-created threads", () => {
     const aliases = parseProjectAliasesDocument({
       aliases: {
@@ -82,32 +65,10 @@ describe("loadProjectAliasesFromFileSync", () => {
   it("loads yaml files", async () => {
     const dir = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-bot-aliases-"));
     const yamlPath = NodePath.join(dir, "aliases.yaml");
-    await NodeFSP.writeFile(
-      yamlPath,
-      [
-        "skunkworks: /tmp/skunkworks",
-        "macs-scanner:",
-        "  workspaceRoot: /tmp/scanner",
-        "  jiraProjects: SA",
-        "macs-configurator:",
-        "  workspaceRoot: /tmp/configurator",
-        "  jiraProjects: CFG",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
+    await NodeFSP.writeFile(yamlPath, "example-project: /tmp/example-project\n", "utf8");
     const aliases = loadProjectAliasesFromFileSync(yamlPath);
     expect(aliases).toEqual([
-      {
-        shortName: "macs-configurator",
-        workspaceRoot: "/tmp/configurator",
-        jiraProjects: ["CFG"],
-      },
-      { shortName: "macs-scanner", workspaceRoot: "/tmp/scanner", jiraProjects: ["SA"] },
-      { shortName: "skunkworks", workspaceRoot: "/tmp/skunkworks" },
+      { shortName: "example-project", workspaceRoot: "/tmp/example-project" },
     ]);
-    expect(parseSimpleAliasesYaml("example-project: /tmp/example-project\n")).toEqual({
-      "example-project": "/tmp/example-project",
-    });
   });
 });

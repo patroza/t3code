@@ -15,6 +15,19 @@ const T3_PROJECT_FILE_PATH_MAX_LENGTH = 512;
 const T3_PROJECT_FILE_MAX_SCRIPTS = 50;
 const T3_PROJECT_FILE_MAX_DEV_STACK_CONSUMERS = 20;
 const T3_PROJECT_FILE_MAX_DEV_STACK_ROLES = 10;
+const T3_PROJECT_FILE_MAX_JIRA_PROJECTS = 20;
+const JIRA_PROJECT_PREFIX_PATTERN = /^[A-Z][A-Z0-9]{1,9}$/u;
+
+const JiraProjectPrefix = Schema.String.pipe(
+  Schema.decodeTo(
+    Schema.String.check(Schema.isPattern(JIRA_PROJECT_PREFIX_PATTERN)),
+    SchemaTransformation.trim().pipe(
+      SchemaTransformation.composeTransformation(SchemaTransformation.toUpperCase()),
+    ),
+  ),
+).annotate({
+  description: "A Jira project key, 2–10 letters or digits, such as SA or CFG.",
+});
 
 // Annotations go on the encoded (string) side so they survive into the
 // published JSON Schema; decoding still trims and re-validates non-emptiness.
@@ -166,6 +179,14 @@ export const T3ProjectFile = Schema.Struct({
       description:
         "Opt in to T3 supervising the dev stacks this repository registers under $TMPDIR/dev-stacks. Omit it and T3 leaves them alone.",
     }),
+  ),
+  jiraProjects: Schema.optionalKey(
+    Schema.Array(JiraProjectPrefix)
+      .annotate({
+        description:
+          "Jira project keys whose bare PROJ-123 tokens count in Discord and GitHub for this repository. List every key this repo should accept, for example SA and CFG. A pasted Jira link still counts either way. Omit the field and only links count.",
+      })
+      .check(Schema.isMaxLength(T3_PROJECT_FILE_MAX_JIRA_PROJECTS)),
   ),
 }).annotate({
   title: "T3 project file",

@@ -1,11 +1,11 @@
 // @effect-diagnostics globalFetch:off globalFetchInEffect:off unknownInEffectCatch:off anyUnknownInErrorContext:off outdatedApi:off
 import type { ProjectId, ThreadId } from "@t3tools/contracts";
+import { readJiraBareKeyProjects } from "@t3tools/shared/jiraBareKeyProjects";
 import { DiscordConfig, DiscordREST } from "dfx";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 
 import type { DiscordBotConfig } from "../config.ts";
-import { jiraProjectsForWorkspaceRoot, ProjectAliasStore } from "../projectAliases.ts";
 import { resolveGitHubUrlForWorkspace } from "../presentation/githubLinks.ts";
 import {
   excludeBotOnlyKeysAcrossLinks,
@@ -540,17 +540,17 @@ export const ensureThreadInfoPin = (input: {
   });
 
 /**
- * Prefixes for the host project this Discord link is bound to.
- * `null` when the project cannot be resolved, so a pin refresh does not drop stored keys.
+ * Prefixes from the linked project's t3.json.
+ * `null` when the project or its file cannot be read, so a pin refresh does not drop stored keys.
+ * A resolved project with no file, or a file that omits `jiraProjects`, is `[]` (links only).
  */
 const bareKeyProjectsForDiscordLink = (projectId: string | undefined) =>
   Effect.gen(function* () {
     if (projectId === undefined || projectId.length === 0) return null;
     const t3 = yield* T3Session;
-    const aliases = yield* ProjectAliasStore;
     const project = yield* t3.getProjectShell(projectId as ProjectId);
     if (project === null) return null;
-    return [...jiraProjectsForWorkspaceRoot(aliases.list(), project.workspaceRoot)];
+    return readJiraBareKeyProjects(project.workspaceRoot);
   });
 
 /**
