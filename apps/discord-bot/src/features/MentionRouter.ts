@@ -184,8 +184,10 @@ import {
   T3_STILL_CONNECTING_MESSAGE,
   T3Session,
   T3SessionError,
+  UnknownDiscordModelError,
 } from "../t3/T3Session.ts";
 import { formatAlertCause } from "./Alerts.ts";
+import { formatUnknownDiscordModelMessage } from "../presentation/channelInfoPin.ts";
 import { ensureChannelInfoPin } from "./ChannelInfoPin.ts";
 import { makeDiscordThreadTurnCoordinator } from "./DiscordThreadTurnCoordinator.ts";
 import {
@@ -1003,6 +1005,62 @@ const make = (botConfig: DiscordBotConfig) =>
         return input.mentionMessage ?? null;
       });
 
+    const clearBootstrapReaction = (
+      pending: BridgedTurnInput["pendingReadyReaction"] | undefined,
+    ) => {
+      if (pending === undefined) return Effect.void;
+      return rest
+        .deleteMyMessageReaction(
+          pending.channelId,
+          pending.messageId,
+          THREAD_BOOTSTRAP_REACTION_EMOJI,
+        )
+        .pipe(
+          (operation) => retryTransientDiscordOperation(operation, DISCORD_MESSAGE_RETRY_DELAYS_MS),
+          Effect.catch(() => Effect.void),
+        );
+    };
+
+    /**
+     * Explicit model with no catalog match. Returns the user-facing reply, or
+     * null when the model resolved (or was omitted). Does not start a turn.
+     */
+    const unknownModelMessage = (input: {
+      readonly model?: string | undefined;
+      readonly provider?: string | undefined;
+      readonly guildId: string;
+      readonly pinChannelId: string | null;
+      readonly topic: string | null | undefined;
+    }) =>
+      Effect.gen(function* () {
+        const requested = input.model?.trim() ?? "";
+        if (requested.length === 0) return null;
+        const resolved = yield* t3
+          .resolveModelSelection({
+            ...(input.provider === undefined || input.provider.trim().length === 0
+              ? {}
+              : { overrideInstanceId: input.provider }),
+            overrideModel: requested,
+          })
+          .pipe(Effect.result);
+        if (Result.isSuccess(resolved)) return null;
+        if (!(resolved.failure instanceof UnknownDiscordModelError)) {
+          return yield* Effect.fail(resolved.failure);
+        }
+        const pin =
+          input.pinChannelId === null
+            ? null
+            : yield* refreshChannelInfoPin(input.pinChannelId, input.topic);
+        const channelInfoUrl =
+          pin !== null && pin.messageId.length > 0
+            ? discordMessageUrl(input.guildId, pin.channelId, pin.messageId)
+            : null;
+        return formatUnknownDiscordModelMessage({
+          requestedModel: resolved.failure.requestedModel,
+          channelInfoUrl,
+        });
+      });
+
     const startBridgedTurnUnlocked = (input: BridgedTurnInput) =>
       Effect.gen(function* () {
         // Fail-closed identity gate: empty map or unmapped requester → no agent turn.
@@ -1038,6 +1096,26 @@ const make = (botConfig: DiscordBotConfig) =>
             : {}),
           reason: "startBridgedTurn",
         });
+
+        if (input.flags.model !== undefined) {
+          const unknownModel = yield* unknownModelMessage({
+            model: input.flags.model,
+            provider: input.flags.provider,
+            guildId: input.guildId,
+            pinChannelId: input.parentChannelId ?? input.channelId,
+            topic: input.topic,
+          });
+          if (unknownModel !== null) {
+            yield* clearBootstrapReaction(input.pendingReadyReaction);
+            yield* rest.createMessage(input.discordThreadId, {
+              content: unknownModel,
+              ...(typeof input.mentionMessage?.id === "string"
+                ? { message_reference: { message_id: input.mentionMessage.id } }
+                : {}),
+            });
+            return;
+          }
+        }
 
         // Only --provider / --model count as an explicit model change. Bare mentions must
         // NOT re-apply bot defaults (codex/gpt-5.4) on continue — Grok (and others) refuse
@@ -1693,9 +1771,14 @@ const make = (botConfig: DiscordBotConfig) =>
     const reportError = (channelId: string, error: unknown) => {
       const raw = error instanceof Error ? error.message : String(error);
       const content =
-        raw === T3_STILL_CONNECTING_MESSAGE || /not connected|still connecting/i.test(raw)
-          ? T3_STILL_CONNECTING_MESSAGE
-          : `Could not start T3 turn: ${raw}`;
+        error instanceof UnknownDiscordModelError
+          ? formatUnknownDiscordModelMessage({
+              requestedModel: error.requestedModel,
+              channelInfoUrl: null,
+            })
+          : raw === T3_STILL_CONNECTING_MESSAGE || /not connected|still connecting/i.test(raw)
+            ? T3_STILL_CONNECTING_MESSAGE
+            : `Could not start T3 turn: ${raw}`;
       return rest
         .createMessage(channelId, { content })
         .pipe(Effect.catchCause(Effect.logError), Effect.asVoid);
@@ -2614,7 +2697,7 @@ const make = (botConfig: DiscordBotConfig) =>
             content:
               content.length === 0
                 ? "I saw your mention but message content is empty. Enable **Message Content Intent** for this bot in the Discord Developer Portal, then restart me."
-                : "Send a prompt after mentioning me (or attach a file). Optional flags: `--model` `--provider` `--base` `--local` `--plan` `--steer` `--queue`. Mid-turn follow-ups **queue** by default (📥); delete your message to cancel, or `/omegent steernow` to inject the queue. Use `--steer` to inject immediately.",
+                : "Send a prompt after mentioning me (or attach a file). Optional flags: `--model` or `—model` `<short name>` (`opus-5.5`; `claude-` and `codex-` prefixes still work) `--provider` `--base` `--local` `--plan` `--steer` `--queue`. An unknown model stops immediately and links the pinned channel info. Mid-turn follow-ups **queue** by default (📥); delete your message to cancel, or `/omegent steernow` to inject the queue. Use `--steer` to inject immediately.",
             message_reference: { message_id: event.id },
           });
           return;
@@ -3008,6 +3091,27 @@ const make = (botConfig: DiscordBotConfig) =>
             message_reference: { message_id: event.id },
           });
           return;
+        }
+
+        if (flagsWithPrompt.model !== undefined) {
+          const ready = yield* t3.isReady();
+          if (ready) {
+            const unknownModel = yield* unknownModelMessage({
+              model: flagsWithPrompt.model,
+              provider: flagsWithPrompt.provider,
+              guildId: event.guild_id ?? "",
+              pinChannelId: event.channel_id,
+              topic,
+            });
+            if (unknownModel !== null) {
+              yield* clearBootstrapReaction(pendingReadyReaction);
+              yield* rest.createMessage(event.channel_id, {
+                content: unknownModel,
+                message_reference: { message_id: event.id },
+              });
+              return;
+            }
+          }
         }
 
         const discordThread = yield* openOrReuseThread(
@@ -3445,6 +3549,22 @@ const make = (botConfig: DiscordBotConfig) =>
                   return slashReply(missingProjectBindingMessage({ inThread, parentUnavailable }), {
                     ephemeral: true,
                   });
+                }
+              }
+
+              if (model.length > 0) {
+                const ready = yield* t3.isReady();
+                if (ready) {
+                  const unknownModel = yield* unknownModelMessage({
+                    model,
+                    ...(provider.length > 0 ? { provider } : {}),
+                    guildId: interaction.guild_id ?? "",
+                    pinChannelId: parentId ?? channelId,
+                    topic,
+                  });
+                  if (unknownModel !== null) {
+                    return slashReply(unknownModel);
+                  }
                 }
               }
 

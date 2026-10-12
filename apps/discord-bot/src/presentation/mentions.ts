@@ -75,14 +75,25 @@ const REFRESH_INDICATORS_PROMPTS = new Set([
 ]);
 
 /**
+ * iOS and macOS smart punctuation turn a leading `--` into one em dash (`—`)
+ * or en dash (`–`), so `—model opus-5.5` never reached the flag parser.
+ * Rewrite those flag dashes back to `--` before tokenizing. An em dash in
+ * prose (`ship it — now`) is left alone.
+ */
+export function normalizeSmartFlagDashes(raw: string): string {
+  return raw.replaceAll(/(^|\s)[—–―](?=[A-Za-z])/gu, "$1--");
+}
+
+/**
  * Parse optional flags from a bot mention body (after stripping the mention).
- * Flags: --model <slug> --provider <instanceId> --base <branch> --local --plan
+ * Flags: --model <name> --provider <instanceId> --base <branch> --local --plan
  *        --steer --queue
+ * `—model` / `–model` are accepted as `--model` (same for the other flags).
  *
  * `--steer` / `--queue` last-wins when both appear.
  */
 export function parseMentionFlags(raw: string): ParsedMentionFlags {
-  const providerModel = parseProviderModelFlags(raw);
+  const providerModel = parseProviderModelFlags(normalizeSmartFlagDashes(raw));
   const tokens = providerModel.prompt
     .trim()
     .split(/\s+/u)
