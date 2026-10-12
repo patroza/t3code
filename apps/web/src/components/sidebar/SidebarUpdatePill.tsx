@@ -8,6 +8,7 @@ import { cn } from "../../lib/utils";
 import { ensureLocalApi } from "../../localApi";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { stackedThreadToast, toastManager } from "../ui/toast";
+import { showDesktopUpdateDownloadedToast } from "../desktopUpdate.toast";
 import {
   canCheckForUpdate,
   getArm64IntelBuildWarningDescription,
