@@ -33,6 +33,22 @@ const FALSE_POSITIVE_KEYS = new Set([
   "TLS-1",
 ]);
 
+/**
+ * Bare text such as "SA-465" counts only for these projects.
+ * A key inside an Atlassian browse or selectedIssue URL still counts for any
+ * project, so a pasted link works when the prefix is not listed.
+ *
+ * macs-holding Jira as of 2026-10-12: BZOS, CFG, HAUSFUX, HPM, OM, SA, TC.
+ * Keep in sync with apps/server/src/workItems/ThreadWorkItemStore.ts.
+ */
+const JIRA_BARE_KEY_PROJECTS = new Set(["BZOS", "CFG", "HAUSFUX", "HPM", "OM", "SA", "TC"]);
+
+function isAllowlistedJiraProject(key: string): boolean {
+  const dash = key.lastIndexOf("-");
+  if (dash <= 0) return false;
+  return JIRA_BARE_KEY_PROJECTS.has(key.slice(0, dash));
+}
+
 export function normalizeJiraIssueKey(raw: string): string | null {
   const key = raw.trim().toUpperCase();
   if (!/^[A-Z][A-Z0-9]{1,9}-\d{1,7}$/u.test(key)) return null;
@@ -86,6 +102,7 @@ function collectJiraKeyHits(
   patterns: ReadonlyArray<RegExp>,
   sentryRanges: ReadonlyArray<{ readonly start: number; readonly end: number }>,
   skipSentryUrls: boolean,
+  requireProjectAllowlist: boolean,
 ): JiraKeyHit[] {
   const hits: JiraKeyHit[] = [];
   for (const pattern of patterns) {
@@ -101,15 +118,14 @@ function collectJiraKeyHits(
       }
       const key = normalizeJiraIssueKey(match[1] ?? "");
       if (key === null) continue;
+      if (requireProjectAllowlist && !isAllowlistedJiraProject(key)) continue;
       hits.push({ index: matchIndex, key });
     }
   }
-  hits.sort((a, b) => a.index - b.index || a.key.localeCompare(b.key));
   return hits;
 }
 
 const ATLASSIAN_KEY_PATTERNS = [JIRA_BROWSE_URL_PATTERN, JIRA_SELECTED_ISSUE_PATTERN];
-const ALL_KEY_PATTERNS = [...ATLASSIAN_KEY_PATTERNS, JIRA_ISSUE_KEY_PATTERN];
 
 /**
  * Extract issue keys from free text (message content, embed fields, etc.)
@@ -127,10 +143,17 @@ export function extractJiraIssueKeys(
   const includeBareKeys =
     options?.includeBareKeys ?? (skipSentryUrls ? sentryRanges.length === 0 : true);
 
+  const hits = [
+    ...collectJiraKeyHits(text, ATLASSIAN_KEY_PATTERNS, sentryRanges, skipSentryUrls, false),
+    ...(includeBareKeys
+      ? collectJiraKeyHits(text, [JIRA_ISSUE_KEY_PATTERN], sentryRanges, skipSentryUrls, true)
+      : []),
+  ];
+  hits.sort((a, b) => a.index - b.index || a.key.localeCompare(b.key));
+
   const found: string[] = [];
   const seen = new Set<string>();
-  const patterns = includeBareKeys ? ALL_KEY_PATTERNS : ATLASSIAN_KEY_PATTERNS;
-  for (const hit of collectJiraKeyHits(text, patterns, sentryRanges, skipSentryUrls)) {
+  for (const hit of hits) {
     if (seen.has(hit.key)) continue;
     seen.add(hit.key);
     found.push(hit.key);
@@ -213,7 +236,12 @@ export function jiraIssueKeysAfterExcludingSentryFalsePositives(
 ): ReadonlyArray<string> {
   const keptExtracted = mergeJiraIssueKeys([], extracted);
   const drop = omitJiraIssueKeys(sentryMasked, keptExtracted);
-  return omitJiraIssueKeys(mergeJiraIssueKeys(existing, keptExtracted), drop);
+  const fresh = new Set(keptExtracted);
+  // Drop a stored token such as GPT-6 once nothing in this pass extracted it.
+  // A key just taken from an Atlassian URL is in `fresh` and stays.
+  return omitJiraIssueKeys(mergeJiraIssueKeys(existing, keptExtracted), drop).filter(
+    (key) => isAllowlistedJiraProject(key) || fresh.has(key),
+  );
 }
 
 /** Append newly seen keys preserving first-seen order; never duplicates. */

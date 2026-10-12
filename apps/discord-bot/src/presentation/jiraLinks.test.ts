@@ -46,9 +46,26 @@ describe("resolveJiraBrowseBaseUrl", () => {
 
 describe("extractJiraIssueKeys", () => {
   it("extracts bare keys in first-seen order without duplicates", () => {
+    expect(extractJiraIssueKeys("Please look at SA-367 then CFG-400 and SA-367 again")).toEqual([
+      "SA-367",
+      "CFG-400",
+    ]);
+  });
+
+  it("ignores Jira-shaped tokens that are not a known project", () => {
     expect(
-      extractJiraIssueKeys("Please look at PROJ-367 then PROJ-400 and PROJ-367 again"),
-    ).toEqual(["PROJ-367", "PROJ-400"]);
+      extractJiraIssueKeys(
+        "GPT-6 is not a ticket. Also SHA-256, EAN-13, and GPT-6.1. See SA-465 and CFG-12.",
+      ),
+    ).toEqual(["SA-465", "CFG-12"]);
+  });
+
+  it("keeps a key from an Atlassian URL even when the project is not allowlisted", () => {
+    expect(
+      extractJiraIssueKeys(
+        "bare OTHER-9 vs https://example.atlassian.net/browse/OTHER-9 and GPT-6",
+      ),
+    ).toEqual(["OTHER-9"]);
   });
 
   it("extracts keys from browse URLs and selectedIssue params", () => {
@@ -110,7 +127,18 @@ describe("extractJiraIssueKeys", () => {
 });
 
 describe("sentry-masked Jira false positives", () => {
-  it("returns the Sentry short id so stored Jira keys can be dropped", () => {
+  it("returns an allowlisted Sentry short id so stored Jira keys can be dropped", () => {
+    expect(
+      jiraIssueKeysMaskedBySentryContext({
+        author: { username: "Sentry", bot: true },
+        embeds: [
+          {
+            url: "https://macs-scanner.sentry.io/issues/7506163172/",
+            footer: { text: "SA-313" },
+          },
+        ],
+      }),
+    ).toEqual(["SA-313"]);
     expect(
       jiraIssueKeysMaskedBySentryContext({
         author: { username: "Sentry", bot: true },
@@ -121,7 +149,7 @@ describe("sentry-masked Jira false positives", () => {
           },
         ],
       }),
-    ).toEqual(["SCANNER-313"]);
+    ).toEqual([]);
   });
 
   it("drops stored Sentry short ids unless they were also extracted as real Jira", () => {
@@ -139,6 +167,15 @@ describe("sentry-masked Jira false positives", () => {
         ["SCANNER-313"],
       ),
     ).toEqual(["SCANNER-313"]);
+  });
+
+  it("drops a stored key that is not a known project and was not extracted again", () => {
+    expect(jiraIssueKeysAfterExcludingSentryFalsePositives(["GPT-6", "SA-465"], [], [])).toEqual([
+      "SA-465",
+    ]);
+    expect(jiraIssueKeysAfterExcludingSentryFalsePositives(["GPT-6"], ["OTHER-9"], [])).toEqual([
+      "OTHER-9",
+    ]);
   });
 });
 

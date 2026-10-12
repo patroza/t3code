@@ -20,6 +20,10 @@ describe("ThreadWorkItemStore helpers", () => {
     expect(extractJiraIssueKeysFromText("Fixes SA-401 and cfg-12")).toEqual(["SA-401", "CFG-12"]);
     expect(extractJiraIssueKeysFromText("UTF-8 encoding")).toEqual([]);
     expect(extractJiraIssueKeysFromText("SA-401 then SA-401 again")).toEqual(["SA-401"]);
+    expect(extractJiraIssueKeysFromText("GPT-6 and SHA-256 are not tickets")).toEqual([]);
+    expect(extractJiraIssueKeysFromText("https://example.atlassian.net/browse/OTHER-9")).toEqual([
+      "OTHER-9",
+    ]);
   });
 
   it("normalizes GitHub PR URLs and short refs", () => {
