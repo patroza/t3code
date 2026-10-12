@@ -117,9 +117,10 @@ interface BridgeState {
   readonly t3AssistantMessageId: string | null;
   /** Full assistant text last applied to the in-progress Discord stream. */
   readonly lastAssistantText: string;
+  readonly lastProgressLabel: string | null;
   /**
    * Discord messages that carry the current turn's *in-progress* stream (ordered tip slots).
-   * On finalize these are deleted; their content is archived as stream-history.md.
+   * Final text promotes these slots in place; only obsolete slots are deleted.
    * May include the pre-bridge Working.. ack (seeded at start).
    */
   readonly discordMessageIds: ReadonlyArray<string>;
@@ -954,6 +955,7 @@ const emptyState = (seed?: {
     currentTurnId: null,
     t3AssistantMessageId: null,
     lastAssistantText: "",
+    lastProgressLabel: null,
     // Reuse the router's Working.. ack as the first stream tip so it is edited/deleted.
     discordMessageIds: hasWorkingAck ? [seed!.workingAckMessageId!] : [],
     staleStreamMessageIds: [],
@@ -2517,7 +2519,12 @@ export const runBridge = (
       input.workingAckMessageId !== "";
     const streamSeed = seedStreamMessageIds({
       workingAckMessageId: input.workingAckMessageId ?? null,
-      persistedStreamMessageIds: persistedLink?.streamDiscordMessageIds ?? [],
+      persistedStreamMessageIds: (persistedLink?.streamDiscordMessageIds ?? []).filter(
+        (id) =>
+          !persistedLink?.deliveryReceipt?.completed ||
+          (!persistedLink.deliveryReceipt.messageIds.includes(id) &&
+            !persistedLink.deliveryReceipt.uploads.some((upload) => upload.messageId === id)),
+      ),
       discardPersistedTips: freshWorkingTurn,
     });
     const seedLastFinalized =
@@ -3350,14 +3357,8 @@ export const runBridge = (
     };
 
     /**
-     * In-progress stream only:
-     * - edit latest bot message while it remains the channel tip and under 2000 chars
-     * - if someone posts after us, open a new message (old tip stays tracked for delete)
-     * - tip ends with italic _Working.._ (optional · N tool calls on the same line)
-     *
-     * On turn complete: stream messages are deleted, archived as stream-history.md,
-     * and the final answer is posted as Discord markdown (links live; no ASCII tables),
-     * with a T3 deep link always on the stats footer.
+     * Keep turn progress in stable editable slots, including when humans chat below them.
+     * Final text promotes those same slots; attachments use separate platform uploads.
      */
     const postOrEditAssistantUnlocked = (args: {
       readonly turnId: string | null;
@@ -3370,6 +3371,11 @@ export const runBridge = (
       Effect.gen(function* () {
         const { turnId, t3MessageId, text, streaming, images, worktreePath } = args;
         let state = yield* Ref.get(stateRef);
+        const latest = yield* Ref.get(latestThreadRef);
+        const progressLabel = chatProgressLabel({
+          runStatus: latest?.latestTurn?.runStatus ?? latest?.session?.status,
+          hasPendingApprovals: latest?.hasPendingApprovals === true,
+        });
         const receipt = yield* Ref.get(deliveryReceiptRef);
         const reopensFinalizedDelivery =
           (receipt?.turnId === turnId && receipt.text !== text) ||
@@ -3384,6 +3390,7 @@ export const runBridge = (
           state.currentTurnId === turnId &&
           state.t3AssistantMessageId === t3MessageId &&
           state.lastAssistantText === text &&
+          state.lastProgressLabel === progressLabel &&
           (state.discordMessageIds.length > 0 || state.finalDiscordMessageIds.length > 0) &&
           streaming
         ) {
@@ -3491,7 +3498,7 @@ export const runBridge = (
               streamHistoryText: priorText,
               worktreePath,
             }).pipe(
-              Effect.catchCause((cause) =>
+              Effect.tapCause((cause) =>
                 Effect.logError("Failed to finalize prior stream before new delivery", {
                   t3ThreadId: input.t3ThreadId,
                   priorTurnId,
@@ -3632,8 +3639,8 @@ export const runBridge = (
             yield* persistStreamMessageIds([...discordMessageIds, ...staleStreamMessageIds]);
           }
 
-          // Messages beyond the new post-break chunk count are obsolete (shorter rewrite).
-          // Mark stale for finalize cleanup — do not delete mid-turn (preserves order).
+          // Remove obsolete chunks immediately so a shorter replacement cannot leave an
+          // old Working indicator visible beside the current progress.
           if (discordMessageIds.length > desiredChunks.length) {
             const extra = discordMessageIds.slice(desiredChunks.length);
             yield* deleteMessages(extra);
@@ -3645,6 +3652,7 @@ export const runBridge = (
             currentTurnId: turnId,
             t3AssistantMessageId: t3MessageId,
             lastAssistantText: text,
+            lastProgressLabel: progressLabel,
             discordMessageIds,
             staleStreamMessageIds,
             streamBreakPrefix,
@@ -3660,8 +3668,8 @@ export const runBridge = (
           return;
         }
 
-        // Turn finished — archive stream tips as stream-history.md, post final answer,
-        // delete in-progress messages. stream-history is ONLY produced here (not mid-turn).
+        // Keep the full transcript for optional history separately from the latest progress
+        // bubble, then promote the editable slots to the final answer.
         const prior = yield* Ref.get(stateRef);
         const streamHistoryText = shouldArchiveStreamHistory({
           presentationMode: input.presentationMode ?? "full",
@@ -3875,7 +3883,12 @@ export const runBridge = (
         ) {
           // Still clear any leftover Working tips if durable finalize outran tip cleanup.
           if (allStreamIds(state).length > 0) {
-            yield* deleteMessages(allStreamIds(state));
+            const finalReceiptIds = new Set(
+              receipt?.completed
+                ? [...receipt.messageIds, ...receipt.uploads.map((upload) => upload.messageId)]
+                : [],
+            );
+            yield* deleteMessages(allStreamIds(state).filter((id) => !finalReceiptIds.has(id)));
             yield* Ref.update(stateRef, (current) => ({
               ...current,
               discordMessageIds: [],
@@ -4154,9 +4167,13 @@ export const runBridge = (
             const fields = idleFields(chunk.trim() !== "" ? chunk : "_(done)_");
             const current = yield* Ref.get(stateRef);
             const existingId = nextReceipt.messageIds[index] ?? current.discordMessageIds[index];
+            const firstSlot = ids[0] ?? state.discordMessageIds[0];
             const recent =
               existingId === undefined
-                ? yield* rest.listMessages(input.discordChannelId, { limit: 25 })
+                ? yield* rest.listMessages(input.discordChannelId, {
+                    limit: 25,
+                    ...(firstSlot === undefined ? {} : { after: firstSlot }),
+                  })
                 : [];
             const adopted = findAlreadyPostedFinalChunkIds({
               normalizeContent: rest.normalizeContent,
@@ -5305,7 +5322,7 @@ export const runBridge = (
               images: [],
               worktreePath: thread.worktreePath,
             }).pipe(
-              Effect.catchCause((cause) =>
+              Effect.tapCause((cause) =>
                 Effect.logError("Failed to catch-up finalize prior turn", {
                   t3ThreadId: input.t3ThreadId,
                   priorTurnId: priorCatchUp.turnId,
@@ -5443,7 +5460,7 @@ export const runBridge = (
                 images: [],
                 worktreePath: thread.worktreePath,
               }).pipe(
-                Effect.catchCause(alertStreamFailure("finalize-stream-fallback")),
+                Effect.tapCause(alertStreamFailure("finalize-stream-fallback")),
                 Effect.asVoid,
               );
               yield* Ref.update(stateRef, (current) => ({
@@ -5512,7 +5529,7 @@ export const runBridge = (
                 images: [],
                 worktreePath: thread.worktreePath,
               }).pipe(
-                Effect.catchCause(alertStreamFailure("rehydrate-working-no-assistant")),
+                Effect.tapCause(alertStreamFailure("rehydrate-working-no-assistant")),
                 Effect.asVoid,
               );
             }

@@ -130,11 +130,19 @@ describe("shared response runner", () => {
     { platform: "discord", failure: "final" },
     { platform: "discord", failure: "missing" },
     { platform: "discord", failure: "partial-final" },
+    { platform: "discord", failure: "accepted-final" },
+    { platform: "discord", failure: "late-final" },
+    { platform: "discord", failure: "restart" },
+    { platform: "discord", failure: "upload" },
     { platform: "teams", failure: "none" },
     { platform: "teams", failure: "progress" },
     { platform: "teams", failure: "final" },
     { platform: "teams", failure: "missing" },
     { platform: "teams", failure: "partial-final" },
+    { platform: "teams", failure: "accepted-final" },
+    { platform: "teams", failure: "late-final" },
+    { platform: "teams", failure: "restart" },
+    { platform: "teams", failure: "upload" },
   ] as const)(
     "edits working → latest progress → final through $platform (failure=$failure)",
     ({ platform, failure }) =>
@@ -146,8 +154,27 @@ describe("shared response runner", () => {
         );
         const links = yield* makeThreadLinkStore(directory);
         const warm = yield* makeThreadWarmCacheStore(directory);
-        const running = fixture(false),
-          completed = fixture(true, false, failure === "partial-final");
+        const running = fixture(false);
+        let completed = fixture(true, false, ["partial-final", "accepted-final"].includes(failure));
+        if (failure === "upload") {
+          const paths = ["first.txt", "second.txt"].map((name) => NodePath.join(directory, name));
+          yield* Effect.sync(() => {
+            for (const path of paths) NodeFS.writeFileSync(path, "x".repeat(40));
+          });
+          completed = {
+            ...completed,
+            messages: completed.messages.map((message) =>
+              message.id === "answer"
+                ? {
+                    ...message,
+                    text:
+                      message.text +
+                      paths.map((path) => `\n[${NodePath.basename(path)}](${path})`).join(""),
+                  }
+                : message,
+            ),
+          };
+        }
         yield* links.put({
           sourceKind: platform,
           sourceThreadId: "source",
@@ -157,12 +184,28 @@ describe("shared response runner", () => {
           channelId: "channel",
           guildId: "team",
           createdAt: time,
+          ...(failure === "restart"
+            ? {
+                lastFinalizedAssistantId: "answer",
+                streamDiscordMessageIds: ["1"],
+                deliveryReceipt: {
+                  assistantId: "answer",
+                  turnId: "turn",
+                  text: "It’s 19:50 CEST.",
+                  messageIds: ["1"],
+                  uploads: [],
+                  completed: true,
+                },
+              }
+            : {}),
         });
         const config = yield* DiscordBotConfig.pipe(
           Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnvRecord({}))),
         );
         const working = yield* Deferred.make<void>();
         const progress = yield* Deferred.make<void>();
+        const resumed = yield* Deferred.make<void>();
+        const grown = yield* Deferred.make<string>();
         const failed = yield* Deferred.make<void>();
         const final = yield* Deferred.make<string>();
         const info = yield* Deferred.make<string>();
@@ -176,6 +219,10 @@ describe("shared response runner", () => {
             const message = { id: id ?? String(++counter), content, author: { id: "bot" } };
             messages.set(message.id, message);
             fieldsById.set(message.id, fields);
+            if (content.includes("Additional final details"))
+              yield* Deferred.succeed(grown, content);
+            if (content.includes("Checking the current result.") && content.includes("_Working"))
+              yield* Deferred.succeed(resumed, undefined);
             if (content.includes("Checking the current result."))
               yield* Deferred.succeed(progress, undefined);
             if (/working|starting/iu.test(content)) yield* Deferred.succeed(working, undefined);
@@ -188,7 +235,7 @@ describe("shared response runner", () => {
           config: { ...config, webUiBaseUrl: "https://example.com" },
           contentLimit: 2000,
           fileLimit: 10,
-          uploadLimitBytes: 10_000_000,
+          uploadLimitBytes: failure === "upload" ? 60 : 10_000_000,
           normalizeContent: (text) => text.trim(),
           getMyUser: () => Effect.succeed({ id: "bot" }),
           getChannel: (id) => Effect.succeed({ id, type: 0, topic: "omegent-ips" }),
@@ -198,11 +245,12 @@ describe("shared response runner", () => {
           createMessage: (_, fields) =>
             Effect.gen(function* () {
               if (
-                failure === "partial-final" &&
+                ["partial-final", "accepted-final"].includes(failure) &&
                 !didFail &&
                 fields.content.includes("substantial final")
               ) {
                 didFail = true;
+                if (failure === "accepted-final") yield* write(fields.content, undefined, fields);
                 return yield* new BotTransportError({
                   cause: new Error("temporary final chunk failure"),
                 });
@@ -235,11 +283,28 @@ describe("shared response runner", () => {
             Effect.sync(() => {
               messages.delete(id);
             }),
-          createMessageWithFiles: (_, content) => write(content),
+          createMessageWithFiles: (_, content, files) =>
+            Effect.gen(function* () {
+              if (
+                failure === "upload" &&
+                files.some((file) => file.name === "second.txt") &&
+                !didFail
+              ) {
+                didFail = true;
+                return yield* new BotTransportError({
+                  cause: new Error("temporary upload failure"),
+                });
+              }
+              return yield* write(content);
+            }),
           upsertThreadInfo: (input) =>
             Deferred.succeed(info, input.modelSelection?.model ?? "").pipe(Effect.asVoid),
         };
-        let latest = running;
+        if (failure === "restart") {
+          counter = 1;
+          messages.set("1", { id: "1", content: "It’s 19:50 CEST.", author: { id: "bot" } });
+        }
+        let latest = failure === "restart" ? completed : running;
         const session = {
           fetchThreadDetail: () => Effect.succeed({ thread: latest, snapshotSequence: 1 }),
           getProjectShell: () => Effect.succeed(null),
@@ -249,6 +314,10 @@ describe("shared response runner", () => {
             onThread: Parameters<T3SessionService["subscribeThread"]>[1],
           ) =>
             Effect.gen(function* () {
+              if (failure === "restart") {
+                yield* onThread(completed);
+                return yield* Effect.never;
+              }
               yield* onThread(running);
               yield* Deferred.await(working);
               latest = fixture(false, true);
@@ -261,8 +330,33 @@ describe("shared response runner", () => {
               expect([...messages.values()][0]?.content).toContain("_Waiting..");
               expect([...messages.values()][0]?.content).not.toContain("earlier commentary");
               expect(fieldsById.get([...messages.keys()][0]!)?.actions?.[0]?.command).toBe("stop");
+              latest = { ...latest, latestTurn: { ...latest.latestTurn!, runStatus: "running" } };
+              yield* onThread(latest);
+              yield* Deferred.await(resumed);
+              expect([...messages.values()][0]?.content).toContain("_Working..");
               latest = completed;
               yield* onThread(completed);
+              if (failure === "late-final") {
+                yield* Deferred.await(final);
+                while (
+                  !(yield* links.getByDiscordThreadId("conversation"))?.deliveryReceipt?.completed
+                )
+                  yield* Effect.sleep("1 millis");
+                latest = {
+                  ...completed,
+                  messages: completed.messages.map((message) =>
+                    message.id === "answer"
+                      ? {
+                          ...message,
+                          text:
+                            message.text +
+                            " Additional final details prove that an already finalized message is updated in place.",
+                        }
+                      : message,
+                  ),
+                };
+                yield* onThread(latest);
+              }
               return yield* Effect.never;
             }),
         } as unknown as T3SessionService;
@@ -288,21 +382,39 @@ describe("shared response runner", () => {
           (effect) => effect as Effect.Effect<void, unknown, Scope.Scope>,
           Effect.forkChild,
         );
-        const answer = yield* Deferred.await(final);
+        if (failure === "restart") {
+          yield* Deferred.await(info);
+          yield* Fiber.interrupt(fiber);
+          expect(counter).toBe(1);
+          expect([...messages.values()].map((message) => message.content)).toEqual([
+            "It’s 19:50 CEST.",
+          ]);
+          return;
+        }
+        const answer = yield* Deferred.await(failure === "late-final" ? grown : final);
         yield* Effect.gen(function* () {
-          while (
-            (yield* links.getByDiscordThreadId("conversation"))?.lastFinalizedAssistantId !==
-            "answer"
-          ) {
+          while (true) {
+            const link = yield* links.getByDiscordThreadId("conversation");
+            if (
+              link?.lastFinalizedAssistantId === "answer" &&
+              link.deliveryReceipt?.completed &&
+              (failure !== "late-final" ||
+                link.deliveryReceipt.text.includes("Additional final details"))
+            )
+              break;
             yield* Effect.sleep("1 millis");
           }
-        }).pipe(Effect.timeout("2 seconds"));
-        expect(messages.size).toBe(failure === "partial-final" ? 3 : 1);
-        expect(counter).toBe(messages.size + (failure === "missing" ? 1 : 0));
-        expect(didFail).toBe(failure !== "none");
-        expect([...messages.keys()].map((id) => fieldsById.get(id)?.actions)).toEqual(
-          [...messages.keys()].map(() => []),
+        }).pipe(Effect.timeout("5 seconds"));
+        expect(messages.size).toBe(
+          ["partial-final", "accepted-final", "upload"].includes(failure) ? 3 : 1,
         );
+        expect(counter).toBe(messages.size + (failure === "missing" ? 1 : 0));
+        expect(didFail).toBe(!["none", "late-final"].includes(failure));
+        expect(
+          [...messages.keys()].every(
+            (id) => !fieldsById.get(id)?.actions?.some((action) => action.command === "stop"),
+          ),
+        ).toBe(true);
         expect(answer).not.toMatch(/working/iu);
         expect(answer).toContain("gpt-6.1-sol");
         expect(answer).toContain("effort medium");

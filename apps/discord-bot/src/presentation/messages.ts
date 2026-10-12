@@ -11,7 +11,7 @@ export type WorkingDotCount = 2 | 3 | 4;
 export const WORKING_WAKE_NOTE_MAX = 80;
 
 /** Longest Working suffix we reserve room for (dots + wake note + large tool count). */
-const WORKING_INDICATOR_MAX = `_Working.... · ${"x".repeat(WORKING_WAKE_NOTE_MAX)} · 9999 tool calls_`;
+const WORKING_INDICATOR_MAX = `_Waiting for approval.... · ${"x".repeat(WORKING_WAKE_NOTE_MAX)} · 9999 tool calls_`;
 
 /**
  * Optional tool-call progress on the Working indicator (Discord only shows a count,
