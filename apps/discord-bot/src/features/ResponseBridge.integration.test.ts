@@ -25,9 +25,11 @@ import {
 } from "./BotResponseTransport.ts";
 import { runBridge } from "./ResponseBridge.ts";
 
+const table = "| Item | Status |\n| --- | --- |\n| Build | Ready |";
+
 const time = "2026-10-11T17:50:00.000Z";
 const decodeThread = Schema.decodeUnknownSync(IntegrationThreadView);
-function fixture(completed: boolean, progress = false, longAnswer = false) {
+function fixture(completed: boolean, progress = false, longAnswer = false, withTable = false) {
   return decodeThread({
     id: "thread",
     projectId: "project",
@@ -84,7 +86,7 @@ function fixture(completed: boolean, progress = false, longAnswer = false) {
             {
               id: "progress-2",
               role: "assistant",
-              text: "Checking the current result.",
+              text: "Checking the current result." + (withTable ? "\n\n" + table : ""),
               turnId: "turn",
               streaming: true,
               createdAt: time,
@@ -98,7 +100,9 @@ function fixture(completed: boolean, progress = false, longAnswer = false) {
               id: "answer",
               role: "assistant",
               text:
-                (longAnswer ? "A substantial final answer. ".repeat(170) : "") + "It’s 19:50 CEST.",
+                (longAnswer ? "A substantial final answer. ".repeat(170) : "") +
+                "It’s 19:50 CEST." +
+                (withTable ? "\n\n" + table : ""),
               turnId: "turn",
               streaming: true,
               createdAt: time,
@@ -157,7 +161,12 @@ describe("shared response runner", () => {
         const links = yield* makeThreadLinkStore(directory);
         const warm = yield* makeThreadWarmCacheStore(directory);
         const running = fixture(false);
-        let completed = fixture(true, false, ["partial-final", "accepted-final"].includes(failure));
+        let completed = fixture(
+          true,
+          false,
+          ["partial-final", "accepted-final"].includes(failure),
+          failure === "none",
+        );
         if (failure === "upload") {
           const paths = ["first.txt", "second.txt"].map((name) => NodePath.join(directory, name));
           yield* Effect.sync(() => {
@@ -334,12 +343,19 @@ describe("shared response runner", () => {
               }
               yield* onThread(running);
               yield* Deferred.await(working);
-              latest = fixture(false, true);
+              latest = fixture(false, true, false, failure === "none");
               yield* onThread(latest);
               if (failure === "progress" || failure === "missing") {
                 yield* Deferred.await(failed);
               }
               yield* Deferred.await(progress);
+              const progressText = [...messages.values()][0]?.content;
+              if (failure === "none" && platform === "teams") expect(progressText).toContain(table);
+              else if (failure === "none") {
+                expect(progressText).not.toContain("| Item | Status |");
+                expect(progressText).toContain("Build");
+                expect(progressText).toContain("Ready");
+              }
               expect(messages.size).toBe(1);
               expect([...messages.values()][0]?.content).toContain("_Waiting..");
               expect([...messages.values()][0]?.content).not.toContain("earlier commentary");
@@ -438,6 +454,13 @@ describe("shared response runner", () => {
             (id) => !fieldsById.get(id)?.actions?.some((action) => action.command === "stop"),
           ),
         ).toBe(true);
+        const deliveredText = [...messages.values()].map((message) => message.content).join("\n");
+        if (failure === "none" && platform === "teams") expect(deliveredText).toContain(table);
+        else if (failure === "none") {
+          expect(deliveredText).not.toContain("| Item | Status |");
+          expect(deliveredText).toContain("Build");
+          expect(deliveredText).toContain("Ready");
+        }
         expect(answer).not.toMatch(/working/iu);
         expect(answer).toContain("gpt-6.1-sol");
         expect(answer).toContain("effort medium");

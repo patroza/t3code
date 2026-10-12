@@ -36,7 +36,7 @@ export interface TeamsResponseActivity {
   readonly type: "message";
   readonly id?: string;
   readonly text: string;
-  readonly textFormat: "markdown";
+  readonly textFormat: "extendedmarkdown";
   readonly attachments?: Array<{
     contentType: string;
     content?: unknown;
@@ -48,8 +48,8 @@ export interface TeamsResponseActivity {
 export function teamsMessageFields(fields: BotMessageFields): TeamsResponseActivity {
   return {
     type: "message",
-    textFormat: "markdown",
-    text: fields.actions?.length ? "" : fields.content,
+    textFormat: "extendedmarkdown",
+    text: fields.content,
     attachments: fields.actions?.length
       ? [
           {
@@ -57,7 +57,7 @@ export function teamsMessageFields(fields: BotMessageFields): TeamsResponseActiv
             content: {
               type: "AdaptiveCard",
               version: "1.4",
-              body: [{ type: "TextBlock", text: fields.content, wrap: true }],
+              body: [],
               actions: fields.actions.map((action) => ({
                 type: "Action.Execute",
                 title: action.label,
@@ -251,7 +251,6 @@ export function makeTeamsResponseTransport(input: {
     fields: BotMessageFields,
     id?: string,
     attachments?: TeamsResponseActivity["attachments"],
-    textInAttachment = false,
   ) => {
     input.assertActive();
     const startedAt = Date.now();
@@ -260,7 +259,6 @@ export function makeTeamsResponseTransport(input: {
       ...wire,
       ...(id ? { id } : {}),
       ...(attachments ? { attachments } : {}),
-      ...(textInAttachment ? { text: "" } : {}),
     });
     // An edit keeps its original identity even when the connector omits the response ID.
     let messageId = id ?? (typeof sent?.id === "string" && sent.id.trim() ? sent.id : undefined);
@@ -395,7 +393,7 @@ export function makeTeamsResponseTransport(input: {
             content: {
               type: "AdaptiveCard",
               version: "1.4",
-              body: content.trim() ? [{ type: "TextBlock", text: content, wrap: true }] : [],
+              body: [],
               actions: uploaded.map((file, index) => ({
                 type: "Action.OpenUrl",
                 title: other[index]!.name,
@@ -403,7 +401,7 @@ export function makeTeamsResponseTransport(input: {
               })),
             },
           });
-        return send({ content: content + note }, undefined, attachments, uploaded.length > 0);
+        return send({ content: content + note }, undefined, attachments);
       }),
     upsertThreadInfo: (info) =>
       Effect.gen(function* () {
