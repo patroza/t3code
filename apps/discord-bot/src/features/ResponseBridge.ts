@@ -97,6 +97,7 @@ import {
   decideAssistantDelivery,
   decideHeartbeat,
   initialDeliveryEpochState,
+  liveTurnIds,
   shouldRecreateTip,
   unfinalizedPriorAssistantForCatchUp,
   type DeliveryEpochState,
@@ -5306,6 +5307,7 @@ export const runBridge = (
             currentTurnId: activeTurnId,
             lastFinalizedAssistantId: lastFinalizedForDelivery,
             lastFinalizedText: lastFinalizedTextForDelivery,
+            liveTurnIds: liveTurnIds(thread.runStatuses),
           });
           if (priorCatchUp !== null) {
             yield* Effect.logInfo(

@@ -100,7 +100,11 @@ import {
   SourceRef,
   ThreadParticipantSummary,
 } from "@t3tools/contracts";
-import { integrationThreadView, integrationThreadShellView } from "./integrationThreadView.ts";
+import {
+  integrationLatestRun,
+  integrationThreadShellView,
+  integrationThreadView,
+} from "./integrationThreadView.ts";
 const decodeMessage = Schema.decodeUnknownSync(OrchestrationV2ConversationMessage);
 const decodeRun = Schema.decodeUnknownSync(OrchestrationV2Run);
 const decodeAttempt = Schema.decodeUnknownSync(OrchestrationV2RunAttempt);
@@ -109,7 +113,11 @@ const decodeRequest = Schema.decodeUnknownSync(OrchestrationV2RuntimeRequest);
 const decodeTurnItem = Schema.decodeUnknownSync(OrchestrationV2TurnItem);
 const decodeSource = Schema.decodeUnknownSync(SourceRef);
 const decodeParticipants = Schema.decodeUnknownSync(Schema.Array(ThreadParticipantSummary));
-function run(id: string, ordinal: number, status: "queued" | "running" | "completed") {
+function run(
+  id: string,
+  ordinal: number,
+  status: "queued" | "running" | "waiting" | "completed" | "cancelled",
+) {
   return decodeRun({
     id,
     threadId: v2ThreadId,
@@ -123,11 +131,44 @@ function run(id: string, ordinal: number, status: "queued" | "running" | "comple
     status,
     requestedAt: v2Now,
     startedAt: status === "queued" ? null : v2Now,
-    completedAt: status === "completed" ? v2Now : null,
+    completedAt: status === "running" || status === "waiting" || status === "queued" ? null : v2Now,
     checkpointId: null,
     contextHandoffId: null,
   });
 }
+describe("integrationLatestRun", () => {
+  it("keeps a live run ahead of a later cancelled follow-up", () => {
+    const working = run("run:working", 1, "running");
+    const cancelled = run("run:cancelled", 2, "cancelled");
+    const queued = run("run:queued", 3, "queued");
+    expect(integrationLatestRun([working, cancelled, queued])?.id).toBe(working.id);
+    const view = integrationThreadView({
+      ...v2Projection,
+      runs: [working, cancelled, queued],
+    });
+    expect(view.latestTurn?.turnId).toBe(working.id);
+    expect(view.latestTurn?.state).toBe("running");
+    expect(view.latestTurn?.runStatus).toBe("running");
+  });
+
+  it("uses a waiting run as the live turn", () => {
+    const waiting = run("run:waiting", 1, "waiting");
+    const cancelled = run("run:cancelled", 2, "cancelled");
+    const view = integrationThreadView({ ...v2Projection, runs: [waiting, cancelled] });
+    expect(view.latestTurn?.turnId).toBe(waiting.id);
+    expect(view.latestTurn?.state).toBe("running");
+    expect(view.latestTurn?.runStatus).toBe("waiting");
+  });
+
+  it("falls back to the newest settled run when nothing is live", () => {
+    const completed = run("run:completed", 1, "completed");
+    const cancelled = run("run:cancelled", 2, "cancelled");
+    const view = integrationThreadView({ ...v2Projection, runs: [completed, cancelled] });
+    expect(view.latestTurn?.turnId).toBe(cancelled.id);
+    expect(view.latestTurn?.state).toBe("interrupted");
+  });
+});
+
 describe("integrationThreadView", () => {
   it("keeps queued runs addressable without inventing an active response", () => {
     const queued = run("run:queued", 2, "queued");

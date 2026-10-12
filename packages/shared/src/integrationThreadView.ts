@@ -144,7 +144,43 @@ export type IntegrationThreadShellView = Omit<
 >;
 const iso = (value: DateTime.Utc | null | undefined) =>
   value == null ? null : DateTime.formatIso(value);
-const active = (status: string) => ["preparing", "starting", "running", "waiting"].includes(status);
+
+/**
+ * Runs that still own a visible response. A later cancelled or completed run
+ * must not hide one of these, or chat adapters post each progress bubble as
+ * its own final and drop the Working indicator.
+ */
+export const INTEGRATION_LIVE_RUN_STATUSES = [
+  "preparing",
+  "starting",
+  "running",
+  "waiting",
+] as const;
+
+export function isIntegrationRunLive(status: string): boolean {
+  return (INTEGRATION_LIVE_RUN_STATUSES as readonly string[]).includes(status);
+}
+
+/**
+ * The run Discord, Teams, and other chat adapters should treat as the current
+ * turn. Live work wins over a later terminal run. Queued runs stay out: they
+ * have no response yet, and their result is tied to the user message.
+ */
+export function integrationLatestRun<
+  T extends { readonly ordinal: number; readonly status: string },
+>(runs: ReadonlyArray<T>): T | null {
+  let live: T | null = null;
+  let settled: T | null = null;
+  for (const run of runs) {
+    if (run.status === "queued") continue;
+    if (isIntegrationRunLive(run.status)) {
+      if (live === null || run.ordinal > live.ordinal) live = run;
+    } else if (settled === null || run.ordinal > settled.ordinal) {
+      settled = run;
+    }
+  }
+  return live ?? settled;
+}
 
 export function integrationThreadShellView(
   shell: OrchestrationV2ThreadShell,
@@ -155,7 +191,7 @@ export function integrationThreadShellView(
       : {
           turnId: TurnId.make(shell.latestRunId),
           runStatus: shell.status,
-          state: active(shell.status)
+          state: isIntegrationRunLive(shell.status)
             ? ("running" as const)
             : shell.status === "completed"
               ? ("completed" as const)
@@ -207,16 +243,15 @@ export function integrationThreadView(
   const { thread } = projection;
   // Queued runs do not own an active response; their result is discovered by
   // the durable user-message/run link rather than arrival order of assistants.
-  const run = projection.runs
-    .filter((r) => r.status !== "queued")
-    .sort((a, b) => b.ordinal - a.ordinal)[0];
+  // A later cancelled follow-up must not replace a run that is still working.
+  const run = integrationLatestRun(projection.runs);
   const latestTurn =
-    run === undefined
+    run === null
       ? null
       : {
           turnId: TurnId.make(run.id),
           runStatus: run.status,
-          state: active(run.status)
+          state: isIntegrationRunLive(run.status)
             ? ("running" as const)
             : run.status === "completed"
               ? ("completed" as const)
@@ -371,7 +406,7 @@ export function integrationThreadView(
           providerName: provider.driver,
           providerInstanceId: provider.providerInstanceId,
           runtimeMode: thread.runtimeMode,
-          activeTurnId: run && active(run.status) ? TurnId.make(run.id) : null,
+          activeTurnId: run && isIntegrationRunLive(run.status) ? TurnId.make(run.id) : null,
           lastError: provider.lastError,
           updatedAt: iso(provider.updatedAt)!,
         },
