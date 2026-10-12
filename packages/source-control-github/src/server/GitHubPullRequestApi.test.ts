@@ -1588,7 +1588,7 @@ layer("GitHubPullRequestApi.layer", (it) => {
           fingerprint: `${host}:installation`,
         }),
       );
-      mockedExecute.mockImplementation((call) =>
+      mockedExecute.mockImplementation(() =>
         Effect.succeed(
           output(
             encodeJson({
