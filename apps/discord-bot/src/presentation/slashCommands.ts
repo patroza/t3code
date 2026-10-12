@@ -19,7 +19,7 @@ export const OMEGENT_SLASH_COMMAND_ALIAS = "agent" as const;
 const EXPORT_COUNT_OPTION = {
   type: Discord.ApplicationCommandOptionType.INTEGER,
   name: "count",
-  description: "How many latest messages. Omit to copy the whole chat.",
+  description: `How many latest messages. Omit to copy the chat, up to ${EXPORT_HISTORY_CAP}.`,
   required: false,
   min_value: 1,
   max_value: EXPORT_HISTORY_CAP,
@@ -28,7 +28,7 @@ const EXPORT_COUNT_OPTION = {
 /** Top-level `/export`. `/omegent export` and `/agent export` call the same handler. */
 export const EXPORT_SLASH_COMMAND = {
   name: "export",
-  description: "Copy this chat with usernames hidden",
+  description: "Copy this chat with names hidden",
   options: [EXPORT_COUNT_OPTION],
 } as const;
 
@@ -233,7 +233,7 @@ export const OMEGENT_SLASH_COMMAND = {
     {
       type: Discord.ApplicationCommandOptionType.SUB_COMMAND,
       name: "export",
-      description: "Copy this chat with usernames hidden",
+      description: "Copy this chat with names hidden",
       options: [EXPORT_COUNT_OPTION],
     },
   ],
