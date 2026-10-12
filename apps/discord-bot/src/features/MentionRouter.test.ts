@@ -10,10 +10,12 @@ import { it as effectIt } from "@effect/vitest";
 import { T3_CONNECT_WAIT_REACTION_EMOJI } from "../t3/T3Session.ts";
 import {
   createHandledDiscordMessageTracker,
+  discordThreadIdFromDeleteEvent,
   findDiscordLinkForT3Target,
   getContinuedConversationModelChangeError,
   isIncompleteDiscordLink,
   isTransientDiscordDispatchError,
+  shouldIgnoreParentChannelMessageUpdate,
   shouldShowThreadBootstrapReaction,
   makeDiscordMessageDispatchQueue,
   retryTransientDiscordOperation,
@@ -74,6 +76,39 @@ describe("today-recap slash command", () => {
     expect(mentionRouterSource).toContain('state === "error"');
     expect(mentionRouterSource).not.toContain("openTodayRecapThread");
     expect(mentionRouterSource).not.toContain("rest.createThread(input.projectChannelId");
+  });
+});
+
+describe("shouldIgnoreParentChannelMessageUpdate", () => {
+  it("does not treat a deleted thread's starter update as a new T3 turn", () => {
+    expect(shouldIgnoreParentChannelMessageUpdate({ source: "update", inThread: false })).toBe(
+      true,
+    );
+  });
+
+  it("still accepts a new parent mention and edits inside an existing thread", () => {
+    expect(shouldIgnoreParentChannelMessageUpdate({ source: "create", inThread: false })).toBe(
+      false,
+    );
+    expect(shouldIgnoreParentChannelMessageUpdate({ source: "update", inThread: true })).toBe(
+      false,
+    );
+    expect(shouldIgnoreParentChannelMessageUpdate({ source: "create", inThread: true })).toBe(
+      false,
+    );
+  });
+
+  it("routes thread deletes to a tombstone instead of a new thread", () => {
+    expect(discordThreadIdFromDeleteEvent({ id: "1559089613518147686", type: 11 })).toBe(
+      "1559089613518147686",
+    );
+    expect(discordThreadIdFromDeleteEvent({ id: "" })).toBeNull();
+    expect(discordThreadIdFromDeleteEvent(null)).toBeNull();
+    expect(mentionRouterSource).toContain("shouldIgnoreParentChannelMessageUpdate");
+    expect(mentionRouterSource).toContain('gateway.handleDispatch("THREAD_DELETE"');
+    expect(mentionRouterSource).toContain('gateway.handleDispatch("CHANNEL_DELETE"');
+    expect(mentionRouterSource).toContain("links.tombstone(discordThreadId)");
+    expect(mentionRouterSource).toContain("bridgeHub.drop(discordThreadId)");
   });
 });
 
