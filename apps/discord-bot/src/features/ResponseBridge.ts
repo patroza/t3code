@@ -2552,7 +2552,9 @@ export const runBridge = (
         lastFinalizedText: persistedLink?.deliveryReceipt?.text ?? null,
       }),
     });
-    const workerScope = yield* Effect.scope;
+    const workerScope = yield* Effect.acquireRelease(Scope.make(), (scope) =>
+      Scope.close(scope, Exit.void),
+    );
     const latestThreadRef = yield* Ref.make<OrchestrationThread | null>(null);
     const latestVcsStatusRef = yield* Ref.make<VcsStatusResult | null>(null);
     /** Sticky PR evidence — never cleared by transient null lookups (only force-refresh). */
