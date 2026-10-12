@@ -105,7 +105,10 @@ describe("Teams response adapter", () => {
         "Here is the report.",
         [{ name: "report.csv", mimeType: "text/csv", data: new Uint8Array([65, 66]) }],
       );
-      expect(message.content).toBe("Here is the report.");
+      expect(message.id).toBe("sent");
+      expect((yield* adapter.getMessage(options.conversationId, message.id)).content).toBe(
+        "Here is the report.",
+      );
       expect(send).toHaveBeenCalledTimes(1);
       expect(send.mock.calls[0]?.[0].text).toBe("");
       expect(send.mock.calls[0]?.[0].attachments?.[0]?.content).toMatchObject({
