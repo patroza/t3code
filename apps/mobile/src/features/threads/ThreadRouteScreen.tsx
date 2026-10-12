@@ -115,6 +115,7 @@ function ThreadPane(props: { readonly children: ReactNode }) {
   return (
     <View
       testID="thread-conversation-surface"
+      style={{ flex: 1 }}
       className="flex-1 bg-screen android:overflow-hidden android:rounded-t-[28px] android:bg-thread-canvas"
     >
       {props.children}
