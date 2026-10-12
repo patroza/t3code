@@ -188,6 +188,7 @@ import {
 } from "../t3/T3Session.ts";
 import { formatAlertCause } from "./Alerts.ts";
 import { formatUnknownDiscordModelMessage } from "../presentation/channelInfoPin.ts";
+import { topicRequestsFastMode } from "../presentation/fastMode.ts";
 import { ensureChannelInfoPin } from "./ChannelInfoPin.ts";
 import { makeDiscordThreadTurnCoordinator } from "./DiscordThreadTurnCoordinator.ts";
 import {
@@ -1374,6 +1375,7 @@ const make = (botConfig: DiscordBotConfig) =>
                   ? {}
                   : { overrideInstanceId: input.flags.provider }),
                 ...(input.flags.model === undefined ? {} : { overrideModel: input.flags.model }),
+                ...(topicRequestsFastMode(input.topic) ? { fastMode: true } : {}),
               })
             : undefined;
           if (currentThread?.modelSelection !== undefined && continueModelSelection !== undefined) {
@@ -1533,12 +1535,14 @@ const make = (botConfig: DiscordBotConfig) =>
         }
 
         // New Discord thread / first link: pick model from flags or bot defaults.
+        // `omegent-fast-mode` on the channel topic starts that thread in fast mode.
         const modelSelection = yield* t3.resolveModelSelection({
           project: resolved.project,
           ...(input.flags.provider === undefined
             ? {}
             : { overrideInstanceId: input.flags.provider }),
           ...(input.flags.model === undefined ? {} : { overrideModel: input.flags.model }),
+          ...(topicRequestsFastMode(input.topic) ? { fastMode: true } : {}),
         });
 
         // First link into this Discord thread: pull starter; Sentry bootstrap only when relevant.
@@ -2124,7 +2128,10 @@ const make = (botConfig: DiscordBotConfig) =>
           reason: "today-recap",
         });
         const resolved = yield* resolveProjectFromTopic(input.topic);
-        const modelSelection = yield* t3.resolveModelSelection({ project: resolved.project });
+        const modelSelection = yield* t3.resolveModelSelection({
+          project: resolved.project,
+          ...(topicRequestsFastMode(input.topic) ? { fastMode: true } : {}),
+        });
         const { threadId } = yield* t3.startTurnWithWorktree({
           project: resolved.project,
           prompt,

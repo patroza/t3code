@@ -92,6 +92,7 @@ describe("channel info pin helpers", () => {
     expect(rendered).toContain("--steer (inject now) --queue (park; default mid-turn)");
     expect(rendered).toContain("—model works too. Short names (opus-5.5).");
     expect(rendered).toContain("claude- and codex- prefixes still work.");
+    expect(rendered).toContain("topic: omegent-fast-mode         New threads start in fast mode");
     expect(rendered).toContain("delete your message to cancel");
     expect(rendered).toContain("Default provider/model: `codex/gpt-5.4`");
     // Labels pad to the widest provider label ("grok [missing]").
