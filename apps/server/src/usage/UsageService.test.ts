@@ -137,6 +137,7 @@ const layerService = (input: {
     ),
     Layer.provideMerge(NodeServices.layer),
     Layer.provideMerge(Layer.succeed(HostProcess.Platform, input.platform ?? "linux")),
+    Layer.provideMerge(Layer.succeed(HostProcess.HomeDirectory, input.home)),
     Layer.provideMerge(ServerSettings.layerTest(input.settings)),
     Layer.provideMerge(
       Layer.succeed(

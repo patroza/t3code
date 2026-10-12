@@ -39,6 +39,7 @@ import {
   type IntegrationThreadShellView as OrchestrationThreadShell,
 } from "@t3tools/shared/integrationThreadView";
 import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
+import { RepositoryIdentityResolver } from "../project/RepositoryIdentityResolver.ts";
 import { ProviderRegistry } from "../provider/ProviderRegistry.ts";
 import { getAutoBootstrapThreadModelSelection } from "../serverRuntimeStartup.ts";
 import {
@@ -164,6 +165,23 @@ function provisioned(thread: OrchestrationThreadShell): ProvisionOutcome {
 function provisionFailed(response: string): ProvisionOutcome {
   return { _tag: "failed", response };
 }
+
+/** Webhook routing must await remote discovery, including before UI enrichment has warmed. */
+export const getGitHubProjectShells = Effect.fn("GitHubPrBridge.getGitHubProjectShells")(
+  function* () {
+    const projects = yield* ProjectStoreV2;
+    const repositoryIdentity = yield* RepositoryIdentityResolver;
+    const shells = yield* projects.listShells();
+    return yield* Effect.forEach(
+      shells,
+      (project) =>
+        repositoryIdentity
+          .resolve(project.workspaceRoot)
+          .pipe(Effect.map((identity) => ({ ...project, repositoryIdentity: identity }))),
+      { concurrency: 16 },
+    );
+  },
+);
 
 export function liveWorktreeRef(
   thread: Pick<OrchestrationThreadShell, "branch" | "worktreePath">,
@@ -521,12 +539,18 @@ export const make = Effect.gen(function* () {
   const deliveries = yield* GitHubDeliveryStore;
   const workItems = yield* ThreadWorkItemStore;
   const engineProjection = yield* OrchestratorV2;
-  const projectStore = yield* ProjectStoreV2;
+  const projectContext = yield* Effect.context<ProjectStoreV2 | RepositoryIdentityResolver>();
   const projection = {
     getShellSnapshot: () =>
-      Effect.all([engineProjection.getShellSnapshot(), projectStore.listShells()], {
-        concurrency: "unbounded",
-      }).pipe(
+      Effect.all(
+        [
+          engineProjection.getShellSnapshot(),
+          getGitHubProjectShells().pipe(Effect.provide(projectContext)),
+        ],
+        {
+          concurrency: "unbounded",
+        },
+      ).pipe(
         Effect.map(([shell, projects]) => ({
           ...shell,
           projects,
