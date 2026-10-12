@@ -782,7 +782,7 @@ describe("UsageService", () => {
         const service = yield* makeWithCursor(cursor.read);
         const read = (input: UsageSummaryInput) =>
           service.readSummary({ ...input, awaitRefresh: true });
-        assert.strictEqual(totalOutputTokens(yield* read(WINDOW)), 19);
+        assert.strictEqual(cursorOutputTokens(yield* read(WINDOW)), 19);
         assert.deepStrictEqual(cursor.state.calls, [
           { sinceMs: CURSOR_NOW - CURSOR_RETENTION_MS, untilMs: CURSOR_NOW },
         ]);
@@ -799,7 +799,7 @@ describe("UsageService", () => {
           { timestampMs: CURSOR_NOW + HOUR_MS, outputTokens: 13 },
         );
         yield* TestClock.adjust(Duration.hours(2));
-        assert.strictEqual(totalOutputTokens(yield* read(WINDOW)), 43);
+        assert.strictEqual(cursorOutputTokens(yield* read(WINDOW)), 43);
         assert.deepStrictEqual(cursor.state.calls[1], {
           sinceMs: CURSOR_NOW - HOUR_MS,
           untilMs: CURSOR_NOW + 2 * HOUR_MS,

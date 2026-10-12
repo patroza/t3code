@@ -44,11 +44,37 @@ describe("resolveJiraBrowseBaseUrl", () => {
   });
 });
 
+const SCANNER_AND_CONFIGURATOR = ["SA", "CFG"];
+
 describe("extractJiraIssueKeys", () => {
   it("extracts bare keys in first-seen order without duplicates", () => {
     expect(
-      extractJiraIssueKeys("Please look at PROJ-367 then PROJ-400 and PROJ-367 again"),
-    ).toEqual(["PROJ-367", "PROJ-400"]);
+      extractJiraIssueKeys("Please look at SA-367 then CFG-400 and SA-367 again", {
+        bareKeyProjects: SCANNER_AND_CONFIGURATOR,
+      }),
+    ).toEqual(["SA-367", "CFG-400"]);
+  });
+
+  it("ignores bare keys outside the host project's prefixes", () => {
+    expect(
+      extractJiraIssueKeys(
+        "GPT-6 is not a ticket. Also SHA-256, EAN-13, and GPT-6.1. See SA-465 and CFG-12.",
+        { bareKeyProjects: ["SA"] },
+      ),
+    ).toEqual(["SA-465"]);
+  });
+
+  it("ignores bare keys when the host project lists none", () => {
+    expect(extractJiraIssueKeys("See SA-465 and GPT-6")).toEqual([]);
+  });
+
+  it("keeps a key from an Atlassian URL even when the project is not configured", () => {
+    expect(
+      extractJiraIssueKeys(
+        "bare OTHER-9 vs https://example.atlassian.net/browse/OTHER-9 and GPT-6",
+        { bareKeyProjects: ["SA"] },
+      ),
+    ).toEqual(["OTHER-9"]);
   });
 
   it("extracts keys from browse URLs and selectedIssue params", () => {
@@ -110,7 +136,21 @@ describe("extractJiraIssueKeys", () => {
 });
 
 describe("sentry-masked Jira false positives", () => {
-  it("returns the Sentry short id so stored Jira keys can be dropped", () => {
+  it("returns a configured Sentry short id so stored Jira keys can be dropped", () => {
+    expect(
+      jiraIssueKeysMaskedBySentryContext(
+        {
+          author: { username: "Sentry", bot: true },
+          embeds: [
+            {
+              url: "https://macs-scanner.sentry.io/issues/7506163172/",
+              footer: { text: "SA-313" },
+            },
+          ],
+        },
+        ["SA"],
+      ),
+    ).toEqual(["SA-313"]);
     expect(
       jiraIssueKeysMaskedBySentryContext({
         author: { username: "Sentry", bot: true },
@@ -121,7 +161,7 @@ describe("sentry-masked Jira false positives", () => {
           },
         ],
       }),
-    ).toEqual(["SCANNER-313"]);
+    ).toEqual([]);
   });
 
   it("drops stored Sentry short ids unless they were also extracted as real Jira", () => {
@@ -130,6 +170,7 @@ describe("sentry-masked Jira false positives", () => {
         ["SCANNER-313", "PROJ-1"],
         ["PROJ-1"],
         ["SCANNER-313"],
+        ["PROJ"],
       ),
     ).toEqual(["PROJ-1"]);
     expect(
@@ -137,8 +178,21 @@ describe("sentry-masked Jira false positives", () => {
         ["SCANNER-313"],
         ["SCANNER-313"],
         ["SCANNER-313"],
+        ["SCANNER"],
       ),
     ).toEqual(["SCANNER-313"]);
+  });
+
+  it("drops a stored key outside this project's prefixes unless it was extracted again", () => {
+    expect(
+      jiraIssueKeysAfterExcludingSentryFalsePositives(["GPT-6", "SA-465", "CFG-1"], [], [], ["SA"]),
+    ).toEqual(["SA-465"]);
+    expect(
+      jiraIssueKeysAfterExcludingSentryFalsePositives(["GPT-6"], ["OTHER-9"], [], ["SA"]),
+    ).toEqual(["OTHER-9"]);
+    expect(
+      jiraIssueKeysAfterExcludingSentryFalsePositives(["GPT-6", "SA-465"], [], [], null),
+    ).toEqual(["GPT-6", "SA-465"]);
   });
 });
 

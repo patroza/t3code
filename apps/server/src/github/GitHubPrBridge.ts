@@ -38,6 +38,7 @@ import {
   type IntegrationThreadView as OrchestrationThread,
   type IntegrationThreadShellView as OrchestrationThreadShell,
 } from "@t3tools/shared/integrationThreadView";
+import { readJiraBareKeyProjectsForWorkspaceRoots } from "@t3tools/shared/jiraBareKeyProjects";
 import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
 import { RepositoryIdentityResolver } from "../project/RepositoryIdentityResolver.ts";
 import { ProviderRegistry } from "../provider/ProviderRegistry.ts";
@@ -101,8 +102,12 @@ function normalizePullRequestUrl(value: string): string {
 /** Jira keys from PR title and the mention comment body (after @bot is stripped). */
 export function extractJiraIssueKeysFromGitHubInvocation(
   invocation: Pick<GitHubPrInvocation, "pullRequestTitle" | "prompt">,
+  bareKeyProjects?: ReadonlyArray<string> | ReadonlySet<string>,
 ): ReadonlyArray<string> {
-  return extractJiraIssueKeysFromText(`${invocation.pullRequestTitle}\n${invocation.prompt}`);
+  return extractJiraIssueKeysFromText(
+    `${invocation.pullRequestTitle}\n${invocation.prompt}`,
+    bareKeyProjects,
+  );
 }
 
 /** Empty allowlist permits every installed repo. Entries are `owner/name` or `owner/*`. */
@@ -1006,7 +1011,19 @@ export const make = Effect.gen(function* () {
         }
       }
 
-      const jiraKeys = extractJiraIssueKeysFromGitHubInvocation(invocation);
+      const shellForKeys = yield* projection
+        .getShellSnapshot()
+        .pipe(Effect.orElseSucceed(() => null));
+      const projectsForKeys =
+        shellForKeys?.projects.filter((project) =>
+          matchesGitHubRepository(project.repositoryIdentity, invocation.repository),
+        ) ?? [];
+      const jiraKeys = extractJiraIssueKeysFromGitHubInvocation(
+        invocation,
+        readJiraBareKeyProjectsForWorkspaceRoots(
+          projectsForKeys.map((project) => project.workspaceRoot),
+        ),
+      );
       const threadIds = new Set<string>();
       for (const key of jiraKeys) {
         const hit = yield* workItems.resolveJiraIssue(key);
@@ -1411,7 +1428,18 @@ export const make = Effect.gen(function* () {
     const thread = outcome.thread;
 
     // Durable PR ↔ thread association (+ Jira keys from title and mention comment).
-    const jiraIssueKeys = extractJiraIssueKeysFromGitHubInvocation(input.invocation);
+    const shellForKeys = yield* projection
+      .getShellSnapshot()
+      .pipe(Effect.orElseSucceed(() => null));
+    const projectForKeys = shellForKeys?.projects.find(
+      (candidate) => candidate.id === thread.projectId,
+    );
+    const jiraIssueKeys = extractJiraIssueKeysFromGitHubInvocation(
+      input.invocation,
+      readJiraBareKeyProjectsForWorkspaceRoots(
+        projectForKeys === undefined ? [] : [projectForKeys.workspaceRoot],
+      ),
+    );
     yield* workItems
       .appendForThread({
         threadId: thread.id,

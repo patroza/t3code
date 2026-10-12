@@ -70,4 +70,12 @@ describe("T3ProjectFile", () => {
     expect(decode({ worktreeSubmodules: "top-level" }).worktreeSubmodules).toBe("top-level");
     expect(() => decode({ worktreeSubmodules: "shallow" })).toThrow();
   });
+
+  it("decodes several Jira project keys and rejects a token that is not a key", () => {
+    expect(decode({ jiraProjects: [" sa ", "CFG"] }).jiraProjects).toEqual(["SA", "CFG"]);
+    expect(decode({ jiraProjects: [] }).jiraProjects).toEqual([]);
+    expect(() => decode({ jiraProjects: ["SA-465"] })).toThrow();
+    expect(() => decode({ jiraProjects: ["G"] })).toThrow();
+    expect(() => decode({ jiraProjects: "SA" })).toThrow();
+  });
 });

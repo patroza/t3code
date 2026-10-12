@@ -64,10 +64,12 @@ How associations get there:
 1. **Jira webhook** — on a successful resolve/dispatch, the issue key is appended for that thread
 2. **GitHub webhook** — PR URLs are recorded the same way (shared store)
 3. **Discord** — does not create work-item identity. The thread-info pin may list Jira
-   keys seen in the Discord thread, including pin backfill. A later Discord mention
-   follows an association only when Jira or GitHub already recorded it. Mentioning the
-   key in Discord does not retarget it. On a lookup miss, Discord-only rows are removed
-   from the store.
+   links, plus bare keys whose project is named in that repository's `t3.json`
+   `jiraProjects` (a repository can name more than one). A token that only looks like a
+   key is left off. Pin backfill uses the same rule. A later Discord mention follows an
+   association only when Jira or GitHub already recorded it. Mentioning the key in
+   Discord does not retarget it. On a lookup miss, Discord-only rows are removed from
+   the store.
 4. **Future** — authenticated API / web UI / agent tools to attach work items without Discord
 
 Fail closed when:

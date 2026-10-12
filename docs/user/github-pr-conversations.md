@@ -19,6 +19,10 @@ On accept, the bridge appends the PR URL and Jira keys extracted from the PR tit
 comment body to `ThreadWorkItemStore`. It never creates a **project**. See
 [work-item thread linking](./work-item-thread-linking.md).
 
+A pasted Jira link always counts. A bare key such as `SA-465` counts only when that repository's
+`t3.json` lists the project under `jiraProjects`. One repository can list more than one key. When
+the field is omitted, only links count.
+
 Setup and development webhook instructions are in
 [GitHub App setup](./github-app-setup.md). For agent `gh`/`git` auth without a machine user, see
 [GitHub App agent auth](./github-app-agent-auth.md). The longer in-process broker plan is

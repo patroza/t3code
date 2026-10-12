@@ -23,6 +23,11 @@ import { ServerConfig } from "../config.ts";
 
 const FALSE_POSITIVE_JIRA_KEYS = new Set(["UTF-8", "ISO-8601", "HTTP-1", "HTTP-2", "TLS-1"]);
 
+const JIRA_ISSUE_KEY_PATTERN = /\b([A-Z][A-Z0-9]{1,9}-\d{1,7})\b/giu;
+const JIRA_BROWSE_URL_PATTERN =
+  /https?:\/\/[^\s<>"']+\.atlassian\.net\/(?:browse|jira\/browse)\/([A-Z][A-Z0-9]{1,9}-\d{1,7})(?:[^\s<>"']*)?/giu;
+const JIRA_SELECTED_ISSUE_PATTERN = /[?&]selectedIssue=([A-Z][A-Z0-9]{1,9}-\d{1,7})\b/giu;
+
 export function normalizeJiraIssueKey(raw: string): string | null {
   const key = raw.trim().toUpperCase();
   if (!/^[A-Z][A-Z0-9]{1,9}-\d{1,7}$/u.test(key)) return null;
@@ -30,17 +35,60 @@ export function normalizeJiraIssueKey(raw: string): string | null {
   return key;
 }
 
-/** Scan free text (PR title/body, Discord messages) for Jira issue keys. */
-export function extractJiraIssueKeysFromText(text: string): ReadonlyArray<string> {
+function bareKeyProjectSet(projects: ReadonlyArray<string> | ReadonlySet<string> | undefined) {
+  const set = new Set<string>();
+  for (const project of projects ?? []) {
+    const prefix = project.trim().toUpperCase();
+    if (prefix.length > 0) set.add(prefix);
+  }
+  return set;
+}
+
+function isConfiguredBareKey(key: string, projects: ReadonlySet<string>): boolean {
+  if (projects.size === 0) return false;
+  const dash = key.lastIndexOf("-");
+  if (dash <= 0) return false;
+  return projects.has(key.slice(0, dash));
+}
+
+function collectJiraKeyHits(
+  text: string,
+  pattern: RegExp,
+  bareKeyProjects: ReadonlySet<string> | null,
+): Array<{ index: number; key: string }> {
+  const hits: Array<{ index: number; key: string }> = [];
+  pattern.lastIndex = 0;
+  for (const match of text.matchAll(pattern)) {
+    const key = normalizeJiraIssueKey(match[1] ?? "");
+    if (key === null) continue;
+    if (bareKeyProjects !== null && !isConfiguredBareKey(key, bareKeyProjects)) continue;
+    hits.push({ index: match.index ?? 0, key });
+  }
+  return hits;
+}
+
+/**
+ * Scan free text for Jira issue keys.
+ * Bare keys count only for `bareKeyProjects`. Atlassian links count for any project.
+ * Omit the list and only links are returned.
+ */
+export function extractJiraIssueKeysFromText(
+  text: string,
+  bareKeyProjects?: ReadonlyArray<string> | ReadonlySet<string>,
+): ReadonlyArray<string> {
   if (text.trim().length === 0) return [];
+  const projects = bareKeyProjectSet(bareKeyProjects);
+  const hits = [
+    ...collectJiraKeyHits(text, JIRA_BROWSE_URL_PATTERN, null),
+    ...collectJiraKeyHits(text, JIRA_SELECTED_ISSUE_PATTERN, null),
+    ...collectJiraKeyHits(text, JIRA_ISSUE_KEY_PATTERN, projects),
+  ].sort((a, b) => a.index - b.index || a.key.localeCompare(b.key));
   const found: string[] = [];
   const seen = new Set<string>();
-  const matcher = /\b([A-Z][A-Z0-9]{1,9}-\d{1,7})\b/giu;
-  for (const match of text.matchAll(matcher)) {
-    const key = normalizeJiraIssueKey(match[1] ?? "");
-    if (key === null || seen.has(key)) continue;
-    seen.add(key);
-    found.push(key);
+  for (const hit of hits) {
+    if (seen.has(hit.key)) continue;
+    seen.add(hit.key);
+    found.push(hit.key);
   }
   return found;
 }

@@ -37,9 +37,11 @@ describe("buildT3ProjectFileJsonSchema", () => {
       "defaultThreadEnvMode",
       "devStacks",
       "iconPath",
+      "jiraProjects",
       "scripts",
       "worktreeSubmodules",
     ]);
+    expect(schema.properties.jiraProjects?.description).toContain("bare PROJ-123");
     expect(schema.required).toBeUndefined();
     expect(schema.properties.iconPath?.description).toContain("Workspace-relative path");
     expect(schema.properties.devStacks?.description).toContain("supervising the dev stacks");
@@ -101,5 +103,12 @@ describe("parseT3ProjectFile", () => {
   it("returns null for malformed or invalid contents", () => {
     expect(parseT3ProjectFile("{ not json")).toBeNull();
     expect(parseT3ProjectFile('{ "defaultThreadEnvMode": "spaceship" }')).toBeNull();
+    expect(parseT3ProjectFile('{ "jiraProjects": ["nope-1"] }')).toBeNull();
+  });
+
+  it("keeps every Jira prefix a repository lists", () => {
+    expect(parseT3ProjectFile('{ "jiraProjects": ["sa", "CFG"] }')).toEqual({
+      jiraProjects: ["SA", "CFG"],
+    });
   });
 });

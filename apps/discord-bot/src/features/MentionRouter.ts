@@ -7,6 +7,7 @@ import {
   type ThreadId,
   type UploadChatAttachment,
 } from "@t3tools/contracts";
+import { readJiraBareKeyProjects } from "@t3tools/shared/jiraBareKeyProjects";
 import { DISCORD_LINK_REQUEST_MARKER } from "@t3tools/shared/providerModelSelection";
 import { makeKeyedDrainableWorker } from "@t3tools/shared/KeyedDrainableWorker";
 import { Discord, DiscordConfig, DiscordREST, Ix } from "dfx";
@@ -479,6 +480,7 @@ function t3WebThreadUrl(webUiBaseUrl: string | undefined, threadId: string): str
 }
 
 function jiraKeysFromMessages(
+  bareKeyProjects: ReadonlyArray<string>,
   ...messages: ReadonlyArray<
     DiscordMessageLike | null | undefined | { readonly content?: string | null }
   >
@@ -487,7 +489,7 @@ function jiraKeysFromMessages(
   for (const message of messages) {
     if (message === null || message === undefined) continue;
     if (isThreadInfoPinContent(message.content ?? null)) continue;
-    keys.push(...extractJiraIssueKeysFromDiscordMessage(message));
+    keys.push(...extractJiraIssueKeysFromDiscordMessage(message, bareKeyProjects));
   }
   return keys;
 }
@@ -1166,6 +1168,10 @@ const make = (botConfig: DiscordBotConfig) =>
         const parentUnavailable = input.parentUnavailable === true;
 
         let existing = yield* links.getByDiscordThreadId(input.discordThreadId);
+        const topicShortName = parseTopicShortName(input.topic);
+        const topicAlias = topicShortName === null ? null : aliases.resolve(topicShortName);
+        const topicBareKeyProjects =
+          topicAlias === null ? [] : (readJiraBareKeyProjects(topicAlias.workspaceRoot) ?? []);
 
         // First-time Discord channel: follow a Jira or GitHub webhook association to
         // the one T3 thread those systems recorded. A key or PR that only appeared
@@ -1177,6 +1183,7 @@ const make = (botConfig: DiscordBotConfig) =>
             ...(input.mentionMessage === undefined ? {} : { mentionMessage: input.mentionMessage }),
           });
           const joinJiraKeys = jiraKeysFromMessages(
+            topicBareKeyProjects,
             joinStarter,
             input.mentionMessage,
             input.referencedMessage,
@@ -1292,10 +1299,14 @@ const make = (botConfig: DiscordBotConfig) =>
           ];
           // Re-inject durable thread Jira keys so later turns (e.g. create PR) still see them.
           // Drop Sentry short ids that were previously stored as Jira (SCANNER-313 etc.).
+          // A null read means the project file could not be trusted, so stored keys stay.
+          const configuredBareKeyProjects = readJiraBareKeyProjects(resolved.project.workspaceRoot);
+          const bareKeyProjects = configuredBareKeyProjects ?? [];
           const turnJiraIssueKeys = jiraIssueKeysAfterExcludingSentryFalsePositives(
             existing.jiraIssueKeys,
-            jiraKeysFromMessages(...continueWorkItemMessages),
-            jiraIssueKeysMaskedBySentryFromMessages(continueWorkItemMessages),
+            jiraKeysFromMessages(bareKeyProjects, ...continueWorkItemMessages),
+            jiraIssueKeysMaskedBySentryFromMessages(continueWorkItemMessages, bareKeyProjects),
+            configuredBareKeyProjects,
           );
           const turnSentryIssueUrls = mergeSentryIssueUrls(
             existing.sentryIssueUrls,
@@ -1555,8 +1566,11 @@ const make = (botConfig: DiscordBotConfig) =>
             discordThreadId: input.discordThreadId,
             t3ThreadId: existing.t3ThreadId,
             botConfig,
-            incomingJiraKeys: jiraKeysFromMessages(...continueWorkItemMessages),
-            dropJiraIssueKeys: jiraIssueKeysMaskedBySentryFromMessages(continueWorkItemMessages),
+            incomingJiraKeys: jiraKeysFromMessages(bareKeyProjects, ...continueWorkItemMessages),
+            dropJiraIssueKeys: jiraIssueKeysMaskedBySentryFromMessages(
+              continueWorkItemMessages,
+              bareKeyProjects,
+            ),
             incomingSentryIssueUrls: sentryUrlsFromMessages(...continueWorkItemMessages),
             incomingPrUrls: prUrlsFromMessages(...continueWorkItemMessages),
             modelSelection: continueModelSelection ?? continueShell?.modelSelection ?? null,
@@ -1644,10 +1658,17 @@ const make = (botConfig: DiscordBotConfig) =>
           input.referencedMessage,
           { content: input.prompt },
         ];
-        const firstTurnJiraIssueKeys = jiraKeysFromMessages(...firstTurnWorkItemMessages);
+        const bareKeyProjects =
+          readJiraBareKeyProjects(resolved.project.workspaceRoot) ?? topicBareKeyProjects;
+        const firstTurnJiraIssueKeys = jiraKeysFromMessages(
+          bareKeyProjects,
+          ...firstTurnWorkItemMessages,
+        );
         const firstTurnSentryIssueUrls = sentryUrlsFromMessages(...firstTurnWorkItemMessages);
-        const firstTurnSentryMaskedJira =
-          jiraIssueKeysMaskedBySentryFromMessages(firstTurnWorkItemMessages);
+        const firstTurnSentryMaskedJira = jiraIssueKeysMaskedBySentryFromMessages(
+          firstTurnWorkItemMessages,
+          bareKeyProjects,
+        );
         const enrichedPrompt = buildFirstTurnPrompt({
           starter,
           mentionMessage: input.mentionMessage,
