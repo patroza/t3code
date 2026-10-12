@@ -154,7 +154,6 @@ const program = Effect.gen(function* () {
         active(lease);
       },
     });
-    teamsDescriptionProject(description, lease.binding);
     return description;
   };
 

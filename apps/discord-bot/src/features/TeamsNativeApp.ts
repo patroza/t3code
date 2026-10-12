@@ -173,7 +173,6 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
       channelId: location.channelId,
       assertActive,
     });
-    teamsDescriptionProject(description, channel);
     return description;
   };
   const app = new App({
