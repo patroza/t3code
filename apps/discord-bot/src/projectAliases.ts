@@ -18,6 +18,53 @@ export interface ProjectAlias {
   readonly workspaceRoot: string;
   /** Parent Discord text channel where GitHub-created T3 threads should be mirrored. */
   readonly discordChannelId?: string;
+  /**
+   * Jira project prefixes whose bare keys count for this host project.
+   * Scanner is `SA`, configurator is `CFG`. Empty means only Atlassian links count.
+   */
+  readonly jiraProjects?: readonly string[];
+}
+
+const JIRA_PROJECT_PREFIX = /^[A-Z][A-Z0-9]{1,9}$/u;
+
+/** Normalize `SA`, `sa, cfg`, or `["SA"]` into uppercase prefixes. Invalid tokens throw. */
+export function normalizeJiraProjectPrefixes(raw: unknown): readonly string[] {
+  if (raw === undefined || raw === null) return [];
+  const tokens: string[] = [];
+  const push = (value: string) => {
+    for (const part of value.split(/[^A-Za-z0-9]+/u)) {
+      if (part.length === 0) continue;
+      const prefix = part.toUpperCase();
+      if (!JIRA_PROJECT_PREFIX.test(prefix)) {
+        throw new Error(
+          `Invalid Jira project prefix '${part}'. Use 2–10 letters or digits, like SA or CFG.`,
+        );
+      }
+      if (!tokens.includes(prefix)) tokens.push(prefix);
+    }
+  };
+  if (typeof raw === "string") {
+    push(raw);
+    return tokens;
+  }
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      if (typeof item !== "string") {
+        throw new Error("jiraProjects entries must be strings.");
+      }
+      push(item);
+    }
+    return tokens;
+  }
+  throw new Error("jiraProjects must be a string or a list of strings.");
+}
+
+export function jiraProjectsForWorkspaceRoot(
+  aliases: ReadonlyArray<ProjectAlias>,
+  workspaceRoot: string,
+): readonly string[] {
+  const normalized = normalizeWorkspaceRootPath(workspaceRoot);
+  return aliases.find((alias) => alias.workspaceRoot === normalized)?.jiraProjects ?? [];
 }
 
 export class ProjectAliasesLoadError extends Schema.TaggedError<ProjectAliasesLoadError>()(
@@ -62,7 +109,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function parseSimpleAliasesYaml(raw: string): unknown {
   const lines = raw.split(/\r?\n/);
   const flat: Record<string, string> = {};
-  const nested: Record<string, { workspaceRoot?: string; discordChannelId?: string }> = {};
+  const nested: Record<
+    string,
+    { workspaceRoot?: string; discordChannelId?: string; jiraProjects?: string }
+  > = {};
   let inAliasesBlock = false;
   let currentKey: string | null = null;
 
@@ -72,12 +122,15 @@ export function parseSimpleAliasesYaml(raw: string): unknown {
 
     if (/^aliases:\s*$/.test(trimmed)) {
       inAliasesBlock = true;
+      currentKey = null;
       continue;
     }
 
-    const nestedValueMatch = /^\s+(workspaceRoot|discordChannelId):\s*(.+)\s*$/.exec(line);
+    const nestedValueMatch = /^\s+(workspaceRoot|discordChannelId|jiraProjects):\s*(.+)\s*$/.exec(
+      line,
+    );
     if (nestedValueMatch && currentKey !== null) {
-      const field = nestedValueMatch[1]! as "workspaceRoot" | "discordChannelId";
+      const field = nestedValueMatch[1]! as "workspaceRoot" | "discordChannelId" | "jiraProjects";
       const value = stripYamlScalar(nestedValueMatch[2]!);
       nested[currentKey] = { ...nested[currentKey], [field]: value };
       continue;
@@ -88,6 +141,17 @@ export function parseSimpleAliasesYaml(raw: string): unknown {
       currentKey = nestedKeyMatch[1]!;
       continue;
     }
+
+    // A top-level key with no value starts a nested alias, so a host file can mix
+    // `name: /path` entries with `name:` / `jiraProjects:` blocks.
+    const topLevelKey = /^([A-Za-z0-9][A-Za-z0-9_-]*):\s*$/.exec(trimmed);
+    if (topLevelKey && !/^\s/u.test(line)) {
+      currentKey = topLevelKey[1]!;
+      continue;
+    }
+
+    // Ignore other indented fields while a nested alias is open.
+    if (currentKey !== null && /^\s+\S/u.test(line)) continue;
 
     const flatMatch = /^([A-Za-z0-9][A-Za-z0-9_-]*):\s*(.+)\s*$/.exec(trimmed);
     if (flatMatch) {
@@ -100,10 +164,8 @@ export function parseSimpleAliasesYaml(raw: string): unknown {
     }
   }
 
-  if (Object.keys(nested).length > 0) {
-    return { aliases: nested };
-  }
-  return flat;
+  if (Object.keys(nested).length === 0) return flat;
+  return { aliases: { ...flat, ...nested } };
 }
 
 function stripYamlScalar(value: string): string {
@@ -124,7 +186,13 @@ function stripYamlScalar(value: string): string {
  *   aliases:
  *     example-project:
  *       workspaceRoot: ~/projects/example-project
- * or array of { shortName, workspaceRoot }.
+ *       jiraProjects: SA, CFG
+ * or a top-level block:
+ *   macs-scanner:
+ *     workspaceRoot: /var/lib/t3/src/macs/scanner
+ *     jiraProjects: SA
+ * or array of { shortName, workspaceRoot, jiraProjects }.
+ * Bare keys are off until jiraProjects is set for that host project.
  */
 export function parseProjectAliasesDocument(
   document: unknown,
@@ -140,8 +208,15 @@ export function parseProjectAliasesDocument(
   };
 
   const entries = new Map<string, string>();
+  const discordChannels = new Map<string, string>();
+  const jiraProjectsByAlias = new Map<string, readonly string[]>();
 
-  const add = (shortNameRaw: string, workspaceRootRaw: string, discordChannelIdRaw?: string) => {
+  const add = (
+    shortNameRaw: string,
+    workspaceRootRaw: string,
+    discordChannelIdRaw?: string,
+    jiraProjectsRaw?: unknown,
+  ) => {
     const shortName = normalizeProjectAliasShortName(shortNameRaw);
     if (shortName === null) {
       throw new Error(
@@ -157,9 +232,11 @@ export function parseProjectAliasesDocument(
     }
     entries.set(shortName, workspaceRoot);
     if (discordChannelIdRaw?.trim()) discordChannels.set(shortName, discordChannelIdRaw.trim());
+    if (jiraProjectsRaw !== undefined) {
+      const prefixes = normalizeJiraProjectPrefixes(jiraProjectsRaw);
+      if (prefixes.length > 0) jiraProjectsByAlias.set(shortName, prefixes);
+    }
   };
-
-  const discordChannels = new Map<string, string>();
 
   if (Array.isArray(document)) {
     for (const item of document) {
@@ -175,6 +252,7 @@ export function parseProjectAliasesDocument(
         shortName,
         workspaceRoot,
         typeof item.discordChannelId === "string" ? item.discordChannelId : undefined,
+        item.jiraProjects,
       );
     }
   } else if (isRecord(document)) {
@@ -191,6 +269,7 @@ export function parseProjectAliasesDocument(
           key,
           value.workspaceRoot,
           typeof value.discordChannelId === "string" ? value.discordChannelId : undefined,
+          value.jiraProjects,
         );
         continue;
       }
@@ -208,6 +287,9 @@ export function parseProjectAliasesDocument(
       workspaceRoot,
       ...(discordChannels.has(shortName)
         ? { discordChannelId: discordChannels.get(shortName)! }
+        : {}),
+      ...(jiraProjectsByAlias.has(shortName)
+        ? { jiraProjects: jiraProjectsByAlias.get(shortName)! }
         : {}),
     }))
     .toSorted((left, right) => left.shortName.localeCompare(right.shortName));

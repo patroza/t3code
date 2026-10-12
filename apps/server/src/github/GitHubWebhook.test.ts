@@ -98,17 +98,29 @@ describe("GitHub PR webhook", () => {
 
   it("extracts Jira keys from PR title and mention comment", () => {
     expect(
-      extractJiraIssueKeysFromGitHubInvocation({
-        pullRequestTitle: "Fix widgets for SA-401",
-        prompt: "also see CFG-12 please",
-      }),
+      extractJiraIssueKeysFromGitHubInvocation(
+        {
+          pullRequestTitle: "Fix widgets for SA-401",
+          prompt: "also see CFG-12 please",
+        },
+        ["SA", "CFG"],
+      ),
     ).toEqual(["SA-401", "CFG-12"]);
     expect(
-      extractJiraIssueKeysFromGitHubInvocation({
-        pullRequestTitle: "no keys here",
-        prompt: "look at SA-414",
-      }),
+      extractJiraIssueKeysFromGitHubInvocation(
+        {
+          pullRequestTitle: "no keys here",
+          prompt: "look at SA-414",
+        },
+        ["SA"],
+      ),
     ).toEqual(["SA-414"]);
+    expect(
+      extractJiraIssueKeysFromGitHubInvocation({
+        pullRequestTitle: "GPT-6 and SA-401",
+        prompt: "https://example.atlassian.net/browse/OTHER-9",
+      }),
+    ).toEqual(["OTHER-9"]);
   });
 
   it("parses an explicit PR invocation and preserves requester provenance", () => {

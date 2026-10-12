@@ -23,15 +23,6 @@ import { ServerConfig } from "../config.ts";
 
 const FALSE_POSITIVE_JIRA_KEYS = new Set(["UTF-8", "ISO-8601", "HTTP-1", "HTTP-2", "TLS-1"]);
 
-/**
- * Bare text such as "SA-465" counts only for these projects.
- * A key inside an Atlassian browse or selectedIssue URL still counts for any
- * project. Keep in sync with apps/discord-bot/src/presentation/jiraLinks.ts.
- *
- * macs-holding Jira as of 2026-10-12: BZOS, CFG, HAUSFUX, HPM, OM, SA, TC.
- */
-const JIRA_BARE_KEY_PROJECTS = new Set(["BZOS", "CFG", "HAUSFUX", "HPM", "OM", "SA", "TC"]);
-
 const JIRA_ISSUE_KEY_PATTERN = /\b([A-Z][A-Z0-9]{1,9}-\d{1,7})\b/giu;
 const JIRA_BROWSE_URL_PATTERN =
   /https?:\/\/[^\s<>"']+\.atlassian\.net\/(?:browse|jira\/browse)\/([A-Z][A-Z0-9]{1,9}-\d{1,7})(?:[^\s<>"']*)?/giu;
@@ -44,35 +35,53 @@ export function normalizeJiraIssueKey(raw: string): string | null {
   return key;
 }
 
-function isAllowlistedJiraProject(key: string): boolean {
+function bareKeyProjectSet(projects: ReadonlyArray<string> | ReadonlySet<string> | undefined) {
+  const set = new Set<string>();
+  for (const project of projects ?? []) {
+    const prefix = project.trim().toUpperCase();
+    if (prefix.length > 0) set.add(prefix);
+  }
+  return set;
+}
+
+function isConfiguredBareKey(key: string, projects: ReadonlySet<string>): boolean {
+  if (projects.size === 0) return false;
   const dash = key.lastIndexOf("-");
   if (dash <= 0) return false;
-  return JIRA_BARE_KEY_PROJECTS.has(key.slice(0, dash));
+  return projects.has(key.slice(0, dash));
 }
 
 function collectJiraKeyHits(
   text: string,
   pattern: RegExp,
-  requireProjectAllowlist: boolean,
+  bareKeyProjects: ReadonlySet<string> | null,
 ): Array<{ index: number; key: string }> {
   const hits: Array<{ index: number; key: string }> = [];
   pattern.lastIndex = 0;
   for (const match of text.matchAll(pattern)) {
     const key = normalizeJiraIssueKey(match[1] ?? "");
     if (key === null) continue;
-    if (requireProjectAllowlist && !isAllowlistedJiraProject(key)) continue;
+    if (bareKeyProjects !== null && !isConfiguredBareKey(key, bareKeyProjects)) continue;
     hits.push({ index: match.index ?? 0, key });
   }
   return hits;
 }
 
-/** Scan free text (PR title/body, Discord messages) for Jira issue keys. */
-export function extractJiraIssueKeysFromText(text: string): ReadonlyArray<string> {
+/**
+ * Scan free text for Jira issue keys.
+ * Bare keys count only for `bareKeyProjects`. Atlassian links count for any project.
+ * Omit the list and only links are returned.
+ */
+export function extractJiraIssueKeysFromText(
+  text: string,
+  bareKeyProjects?: ReadonlyArray<string> | ReadonlySet<string>,
+): ReadonlyArray<string> {
   if (text.trim().length === 0) return [];
+  const projects = bareKeyProjectSet(bareKeyProjects);
   const hits = [
-    ...collectJiraKeyHits(text, JIRA_BROWSE_URL_PATTERN, false),
-    ...collectJiraKeyHits(text, JIRA_SELECTED_ISSUE_PATTERN, false),
-    ...collectJiraKeyHits(text, JIRA_ISSUE_KEY_PATTERN, true),
+    ...collectJiraKeyHits(text, JIRA_BROWSE_URL_PATTERN, null),
+    ...collectJiraKeyHits(text, JIRA_SELECTED_ISSUE_PATTERN, null),
+    ...collectJiraKeyHits(text, JIRA_ISSUE_KEY_PATTERN, projects),
   ].sort((a, b) => a.index - b.index || a.key.localeCompare(b.key));
   const found: string[] = [];
   const seen = new Set<string>();

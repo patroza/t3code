@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 
 import type { DiscordBotConfig } from "../config.ts";
+import { jiraProjectsForWorkspaceRoot, ProjectAliasStore } from "../projectAliases.ts";
 import { resolveGitHubUrlForWorkspace } from "../presentation/githubLinks.ts";
 import {
   excludeBotOnlyKeysAcrossLinks,
@@ -539,6 +540,20 @@ export const ensureThreadInfoPin = (input: {
   });
 
 /**
+ * Prefixes for the host project this Discord link is bound to.
+ * `null` when the project cannot be resolved, so a pin refresh does not drop stored keys.
+ */
+const bareKeyProjectsForDiscordLink = (projectId: string | undefined) =>
+  Effect.gen(function* () {
+    if (projectId === undefined || projectId.length === 0) return null;
+    const t3 = yield* T3Session;
+    const aliases = yield* ProjectAliasStore;
+    const project = yield* t3.getProjectShell(projectId as ProjectId);
+    if (project === null) return null;
+    return [...jiraProjectsForWorkspaceRoot(aliases.list(), project.workspaceRoot)];
+  });
+
+/**
  * Persist any newly observed Jira keys / Sentry / PR URLs, then create/update + pin the thread-info message.
  */
 export const upsertThreadInfoPin = (input: {
@@ -563,10 +578,12 @@ export const upsertThreadInfoPin = (input: {
     const links = yield* ThreadLinkStore;
     const existing = yield* links.getByDiscordThreadId(input.discordThreadId);
 
+    const bareKeyProjects = yield* bareKeyProjectsForDiscordLink(existing?.projectId);
     let jiraIssueKeys = jiraIssueKeysAfterExcludingSentryFalsePositives(
       existing?.jiraIssueKeys,
       input.incomingJiraKeys ?? [],
       input.dropJiraIssueKeys ?? [],
+      bareKeyProjects,
     );
     const existingJira = existing?.jiraIssueKeys ?? [];
     const jiraUnchanged =
@@ -844,6 +861,8 @@ const classifyThreadJiraKeys = (link: ThreadLink) =>
 
     const history = yield* fetchChannelMessagesOldestFirst(link.discordThreadId);
 
+    const bareKeyProjects = yield* bareKeyProjectsForDiscordLink(link.projectId);
+    const extractProjects = bareKeyProjects ?? [];
     const humanKeys: string[] = [];
     const botKeys: string[] = [];
     const sentryMaskedFromHistory: string[] = [];
@@ -857,10 +876,10 @@ const classifyThreadJiraKeys = (link: ThreadLink) =>
         // Do not re-parse our own pin — it can echo previously misclassified Jira keys.
         continue;
       }
-      const keys = extractJiraIssueKeysFromDiscordMessage(message);
+      const keys = extractJiraIssueKeysFromDiscordMessage(message, extractProjects);
       const bucket = message.author?.bot === true ? botKeys : humanKeys;
       for (const key of keys) bucket.push(key);
-      for (const key of jiraIssueKeysMaskedBySentryContext(message)) {
+      for (const key of jiraIssueKeysMaskedBySentryContext(message, extractProjects)) {
         sentryMaskedFromHistory.push(key);
       }
       for (const url of extractSentryIssueUrlsFromDiscordMessage(message)) {
@@ -884,6 +903,7 @@ const classifyThreadJiraKeys = (link: ThreadLink) =>
       split.pinKeys,
       [],
       sentryMaskedFromHistory,
+      bareKeyProjects,
     );
 
     return {

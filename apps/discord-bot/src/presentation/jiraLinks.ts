@@ -33,20 +33,21 @@ const FALSE_POSITIVE_KEYS = new Set([
   "TLS-1",
 ]);
 
-/**
- * Bare text such as "SA-465" counts only for these projects.
- * A key inside an Atlassian browse or selectedIssue URL still counts for any
- * project, so a pasted link works when the prefix is not listed.
- *
- * macs-holding Jira as of 2026-10-12: BZOS, CFG, HAUSFUX, HPM, OM, SA, TC.
- * Keep in sync with apps/server/src/workItems/ThreadWorkItemStore.ts.
- */
-const JIRA_BARE_KEY_PROJECTS = new Set(["BZOS", "CFG", "HAUSFUX", "HPM", "OM", "SA", "TC"]);
+function bareKeyProjectSet(projects: ReadonlyArray<string> | undefined): ReadonlySet<string> {
+  const set = new Set<string>();
+  for (const project of projects ?? []) {
+    const prefix = project.trim().toUpperCase();
+    if (prefix.length > 0) set.add(prefix);
+  }
+  return set;
+}
 
-function isAllowlistedJiraProject(key: string): boolean {
+/** Bare text such as SA-465 counts only when that project's prefix is configured. */
+function isConfiguredBareKey(key: string, projects: ReadonlySet<string>): boolean {
+  if (projects.size === 0) return false;
   const dash = key.lastIndexOf("-");
   if (dash <= 0) return false;
-  return JIRA_BARE_KEY_PROJECTS.has(key.slice(0, dash));
+  return projects.has(key.slice(0, dash));
 }
 
 export function normalizeJiraIssueKey(raw: string): string | null {
@@ -93,6 +94,8 @@ export type ExtractJiraIssueKeysOptions = {
   readonly includeBareKeys?: boolean;
   /** Skip tokens whose match index sits inside a sentry.io URL. Default true. */
   readonly skipSentryUrls?: boolean;
+  /** Prefixes allowed for bare text. Omit or pass [] and only Atlassian links count. */
+  readonly bareKeyProjects?: ReadonlyArray<string>;
 };
 
 type JiraKeyHit = { readonly index: number; readonly key: string };
@@ -102,7 +105,7 @@ function collectJiraKeyHits(
   patterns: ReadonlyArray<RegExp>,
   sentryRanges: ReadonlyArray<{ readonly start: number; readonly end: number }>,
   skipSentryUrls: boolean,
-  requireProjectAllowlist: boolean,
+  bareKeyProjects: ReadonlySet<string> | null,
 ): JiraKeyHit[] {
   const hits: JiraKeyHit[] = [];
   for (const pattern of patterns) {
@@ -118,7 +121,7 @@ function collectJiraKeyHits(
       }
       const key = normalizeJiraIssueKey(match[1] ?? "");
       if (key === null) continue;
-      if (requireProjectAllowlist && !isAllowlistedJiraProject(key)) continue;
+      if (bareKeyProjects !== null && !isConfiguredBareKey(key, bareKeyProjects)) continue;
       hits.push({ index: matchIndex, key });
     }
   }
@@ -142,11 +145,18 @@ export function extractJiraIssueKeys(
     skipSentryUrls || options?.includeBareKeys === false ? sentryIssueUrlRanges(text) : [];
   const includeBareKeys =
     options?.includeBareKeys ?? (skipSentryUrls ? sentryRanges.length === 0 : true);
+  const bareKeyProjects = bareKeyProjectSet(options?.bareKeyProjects);
 
   const hits = [
-    ...collectJiraKeyHits(text, ATLASSIAN_KEY_PATTERNS, sentryRanges, skipSentryUrls, false),
+    ...collectJiraKeyHits(text, ATLASSIAN_KEY_PATTERNS, sentryRanges, skipSentryUrls, null),
     ...(includeBareKeys
-      ? collectJiraKeyHits(text, [JIRA_ISSUE_KEY_PATTERN], sentryRanges, skipSentryUrls, true)
+      ? collectJiraKeyHits(
+          text,
+          [JIRA_ISSUE_KEY_PATTERN],
+          sentryRanges,
+          skipSentryUrls,
+          bareKeyProjects,
+        )
       : []),
   ];
   hits.sort((a, b) => a.index - b.index || a.key.localeCompare(b.key));
@@ -175,12 +185,14 @@ function joinDiscordMessageText(input: SentryDiscordMessageInput): string {
 
 export function extractJiraIssueKeysFromDiscordMessage(
   input: SentryDiscordMessageInput,
+  bareKeyProjects?: ReadonlyArray<string>,
 ): ReadonlyArray<string> {
   const text = joinDiscordMessageText(input);
   const sentryContext = discordMessageLooksLikeSentry(input);
   return extractJiraIssueKeys(text, {
     includeBareKeys: !sentryContext,
     skipSentryUrls: true,
+    ...(bareKeyProjects === undefined ? {} : { bareKeyProjects }),
   });
 }
 
@@ -190,6 +202,7 @@ export function extractJiraIssueKeysFromDiscordMessage(
  */
 export function jiraIssueKeysMaskedBySentryContext(
   input: SentryDiscordMessageInput,
+  bareKeyProjects?: ReadonlyArray<string>,
 ): ReadonlyArray<string> {
   const text = joinDiscordMessageText(input);
   const sentryContext = discordMessageLooksLikeSentry(input);
@@ -199,18 +212,21 @@ export function jiraIssueKeysMaskedBySentryContext(
   const atlassianOnly = new Set(
     extractJiraIssueKeys(text, { includeBareKeys: false, skipSentryUrls: true }),
   );
-  return extractJiraIssueKeys(text, { includeBareKeys: true, skipSentryUrls: false }).filter(
-    (key) => !atlassianOnly.has(key),
-  );
+  return extractJiraIssueKeys(text, {
+    includeBareKeys: true,
+    skipSentryUrls: false,
+    ...(bareKeyProjects === undefined ? {} : { bareKeyProjects }),
+  }).filter((key) => !atlassianOnly.has(key));
 }
 
 export function jiraIssueKeysMaskedBySentryFromMessages(
   messages: ReadonlyArray<SentryDiscordMessageInput | null | undefined>,
+  bareKeyProjects?: ReadonlyArray<string>,
 ): ReadonlyArray<string> {
   const keys: string[] = [];
   for (const message of messages) {
     if (message === null || message === undefined) continue;
-    keys.push(...jiraIssueKeysMaskedBySentryContext(message));
+    keys.push(...jiraIssueKeysMaskedBySentryContext(message, bareKeyProjects));
   }
   return mergeJiraIssueKeys([], keys);
 }
@@ -233,15 +249,24 @@ export function jiraIssueKeysAfterExcludingSentryFalsePositives(
   existing: ReadonlyArray<string> | null | undefined,
   extracted: ReadonlyArray<string> | null | undefined,
   sentryMasked: ReadonlyArray<string> | null | undefined,
+  /**
+   * Prefixes configured for this host project.
+   * `null` means the project could not be resolved, so stored keys are left in place.
+   * `[]` means the project is configured with no bare keys.
+   */
+  bareKeyProjects: ReadonlyArray<string> | null,
 ): ReadonlyArray<string> {
   const keptExtracted = mergeJiraIssueKeys([], extracted);
   const drop = omitJiraIssueKeys(sentryMasked, keptExtracted);
   const fresh = new Set(keptExtracted);
+  const projects = bareKeyProjects === null ? null : bareKeyProjectSet(bareKeyProjects);
   // Drop a stored token such as GPT-6 once nothing in this pass extracted it.
   // A key just taken from an Atlassian URL is in `fresh` and stays.
-  return omitJiraIssueKeys(mergeJiraIssueKeys(existing, keptExtracted), drop).filter(
-    (key) => isAllowlistedJiraProject(key) || fresh.has(key),
-  );
+  return omitJiraIssueKeys(mergeJiraIssueKeys(existing, keptExtracted), drop).filter((key) => {
+    if (fresh.has(key)) return true;
+    if (projects === null) return true;
+    return isConfiguredBareKey(key, projects);
+  });
 }
 
 /** Append newly seen keys preserving first-seen order; never duplicates. */

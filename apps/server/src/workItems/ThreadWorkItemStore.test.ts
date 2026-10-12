@@ -17,10 +17,15 @@ describe("ThreadWorkItemStore helpers", () => {
   });
 
   it("extracts Jira keys from free text", () => {
-    expect(extractJiraIssueKeysFromText("Fixes SA-401 and cfg-12")).toEqual(["SA-401", "CFG-12"]);
-    expect(extractJiraIssueKeysFromText("UTF-8 encoding")).toEqual([]);
-    expect(extractJiraIssueKeysFromText("SA-401 then SA-401 again")).toEqual(["SA-401"]);
-    expect(extractJiraIssueKeysFromText("GPT-6 and SHA-256 are not tickets")).toEqual([]);
+    expect(extractJiraIssueKeysFromText("Fixes SA-401 and cfg-12", ["SA", "CFG"])).toEqual([
+      "SA-401",
+      "CFG-12",
+    ]);
+    expect(extractJiraIssueKeysFromText("Fixes SA-401 and CFG-12", ["SA"])).toEqual(["SA-401"]);
+    expect(extractJiraIssueKeysFromText("UTF-8 encoding", ["SA"])).toEqual([]);
+    expect(extractJiraIssueKeysFromText("SA-401 then SA-401 again", ["SA"])).toEqual(["SA-401"]);
+    expect(extractJiraIssueKeysFromText("GPT-6 and SHA-256 are not tickets", ["SA"])).toEqual([]);
+    expect(extractJiraIssueKeysFromText("See SA-465")).toEqual([]);
     expect(extractJiraIssueKeysFromText("https://example.atlassian.net/browse/OTHER-9")).toEqual([
       "OTHER-9",
     ]);
