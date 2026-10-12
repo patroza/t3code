@@ -563,7 +563,10 @@ export const runTeamsModule = Effect.fn("runTeamsModule")(function* (config: Dis
           sourceKind: "teams",
           sourceThreadId: rootKey,
         },
-        sourceActor: { platformId: actor.userId ?? undefined, displayName: access.person.name },
+        sourceActor: {
+          ...(actor.userId === null ? {} : { platformId: actor.userId }),
+          displayName: access.person.name,
+        },
         discordThreadId,
         discordParentChannelId: discordChannelId,
         discordGuildId: "",
@@ -588,7 +591,10 @@ export const runTeamsModule = Effect.fn("runTeamsModule")(function* (config: Dis
           sourceKind: "teams",
           sourceThreadId: rootKey,
         },
-        sourceActor: { platformId: actor.userId ?? undefined, displayName: access.person.name },
+        sourceActor: {
+          ...(actor.userId === null ? {} : { platformId: actor.userId }),
+          displayName: access.person.name,
+        },
         externalConversationId: rootKey,
         externalParentId: `${channel.teamId}/${channel.channelId}`,
         externalTenantId: config.teamsTenantId ?? "",
