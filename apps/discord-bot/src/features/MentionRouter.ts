@@ -241,6 +241,27 @@ export function shouldShowThreadBootstrapReaction(input: {
   );
 }
 
+/**
+ * Deleting a Discord thread emits MESSAGE_UPDATE on the parent starter message.
+ * The starter id is the thread id, and the text still mentions the bot. After a
+ * restart the in-memory handled set is empty, so that update used to open the
+ * thread again and start a new T3 turn. Parent-channel updates are not new
+ * prompts. MESSAGE_CREATE is.
+ */
+export function shouldIgnoreParentChannelMessageUpdate(input: {
+  readonly source: "create" | "update";
+  readonly inThread: boolean;
+}): boolean {
+  return input.source === "update" && !input.inThread;
+}
+
+/** Thread id from THREAD_DELETE / CHANNEL_DELETE, when Discord included one. */
+export function discordThreadIdFromDeleteEvent(event: unknown): string | null {
+  if (typeof event !== "object" || event === null || !("id" in event)) return null;
+  const id = event.id;
+  return typeof id === "string" && id.length > 0 ? id : null;
+}
+
 class DiscordImageDownloadError extends Schema.TaggedError<DiscordImageDownloadError>()(
   "DiscordImageDownloadError",
   { cause: Schema.Defect() },
@@ -2600,6 +2621,17 @@ const make = (botConfig: DiscordBotConfig) =>
         const inThread = isThreadChannel(channel.type);
         if (automaticThreadMessage && !inThread) return;
 
+        if (shouldIgnoreParentChannelMessageUpdate({ source, inThread })) {
+          yield* Effect.logInfo(
+            "Ignoring parent-channel Discord message update; it does not start a thread",
+            {
+              channelId: event.channel_id,
+              messageId: event.id,
+            },
+          );
+          return;
+        }
+
         // Claim before image download / turn start. Late marking let MESSAGE_UPDATE race
         // MESSAGE_CREATE and double-run prompts (especially noticeable on short edits).
         if (!handledMessageIds.claim(event.id)) {
@@ -3277,6 +3309,33 @@ const make = (botConfig: DiscordBotConfig) =>
         }).pipe(Effect.catchCause(Effect.logError)),
       );
     });
+
+    // Deleting the Discord thread must not recreate it or start another T3 turn.
+    // Tombstone the link and drop the live bridge. MESSAGE_UPDATE on the starter
+    // is ignored separately, including when this process never stored a link.
+    const forgetDeletedDiscordThread = (event: unknown) =>
+      Effect.gen(function* () {
+        const discordThreadId = discordThreadIdFromDeleteEvent(event);
+        if (discordThreadId === null) return;
+        const link = yield* links.getByDiscordThreadId(discordThreadId);
+        if (link === null || link.status !== "active") {
+          yield* bridgeHub.drop(discordThreadId);
+          return;
+        }
+        yield* links.tombstone(discordThreadId);
+        yield* bridgeHub.drop(discordThreadId);
+        yield* Effect.logInfo("Discord thread deleted; stopped the linked T3 bridge", {
+          discordThreadId,
+          t3ThreadId: link.t3ThreadId,
+        });
+      }).pipe(Effect.catchCause(Effect.logError));
+
+    const handleThreadDeletes = gateway.handleDispatch("THREAD_DELETE", (event) =>
+      forgetDeletedDiscordThread(event),
+    );
+    const handleChannelDeletes = gateway.handleDispatch("CHANNEL_DELETE", (event) =>
+      forgetDeletedDiscordThread(event),
+    );
 
     const approvalButton = Ix.messageComponent(
       Ix.idStartsWith("t3_approve:"),
@@ -4590,6 +4649,8 @@ const make = (botConfig: DiscordBotConfig) =>
     yield* Effect.forkScoped(handleMessages);
     yield* Effect.forkScoped(handleMessageUpdates);
     yield* Effect.forkScoped(handleMessageDeletes);
+    yield* Effect.forkScoped(handleThreadDeletes);
+    yield* Effect.forkScoped(handleChannelDeletes);
     yield* Effect.logInfo("Discord mention router ready");
     return DiscordBotRunning.of({ botUserId });
   });
