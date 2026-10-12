@@ -12,6 +12,7 @@ import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as ConfigProvider from "effect/ConfigProvider";
 import { IntegrationThreadView } from "@t3tools/shared/integrationThreadView";
+import { MessageId } from "@t3tools/contracts";
 import { DiscordBotConfig } from "../config.ts";
 import { ThreadLinkStore, makeThreadLinkStore } from "../store/ThreadLinkStore.ts";
 import { ThreadWarmCacheStore, makeThreadWarmCacheStore } from "../store/ThreadWarmCacheStore.ts";
@@ -135,6 +136,7 @@ describe("shared response runner", () => {
     { platform: "discord", failure: "restart" },
     { platform: "discord", failure: "upload" },
     { platform: "discord", failure: "shutdown" },
+    { platform: "discord", failure: "same-run-follow-up" },
     { platform: "teams", failure: "none" },
     { platform: "teams", failure: "progress" },
     { platform: "teams", failure: "final" },
@@ -146,7 +148,7 @@ describe("shared response runner", () => {
     { platform: "teams", failure: "upload" },
     { platform: "teams", failure: "shutdown" },
   ] as const)(
-    "edits working → latest progress → final through $platform (failure=$failure)",
+    "delivers progress and final replies through $platform (failure=$failure)",
     ({ platform, failure }) =>
       Effect.gen(function* () {
         const directory = yield* Effect.acquireRelease(
@@ -206,6 +208,8 @@ describe("shared response runner", () => {
         );
         const working = yield* Deferred.make<void>();
         const progress = yield* Deferred.make<void>();
+        const followUpProgress = yield* Deferred.make<void>();
+        const followUpFinal = yield* Deferred.make<string>();
         const resumed = yield* Deferred.make<void>();
         const grown = yield* Deferred.make<string>();
         const blockedWrite = yield* Deferred.make<void>();
@@ -220,12 +224,19 @@ describe("shared response runner", () => {
         let counter = 0;
         let didFail = false;
         const fieldsById = new Map<string, BotMessageFields>();
+        const progressIds = new Set<string>();
         const write = (content: string, id?: string, fields: BotMessageFields = { content }) =>
           Effect.gen(function* () {
             if (stopped) writesAfterStop += 1;
             const message = { id: id ?? String(++counter), content, author: { id: "bot" } };
             messages.set(message.id, message);
             fieldsById.set(message.id, fields);
+            if (fields.actions?.some((action) => action.command === "stop"))
+              progressIds.add(message.id);
+            if (content.includes("Following up on the same run."))
+              yield* Deferred.succeed(followUpProgress, undefined);
+            if (content.includes("The follow-up is complete."))
+              yield* Deferred.succeed(followUpFinal, content);
             if (content.includes("Additional final details"))
               yield* Deferred.succeed(grown, content);
             if (content.includes("Checking the current result.") && content.includes("_Working"))
@@ -245,12 +256,33 @@ describe("shared response runner", () => {
           uploadLimitBytes: failure === "upload" ? 60 : 10_000_000,
           normalizeContent: (text) => text.trim(),
           getMyUser: () => Effect.succeed({ id: "bot" }),
-          getChannel: (id) => Effect.succeed({ id, type: 0, topic: "omegent-ips" }),
+          getChannel: (id) =>
+            Effect.succeed({
+              id,
+              type: 0,
+              topic: failure === "same-run-follow-up" ? "" : "omegent-ips",
+            }),
           updateChannel: () => Effect.void,
           getMessage: (_, id) => Effect.succeed(messages.get(id)!),
           listMessages: () => Effect.succeed([...messages.values()].reverse()),
           createMessage: (_, fields) =>
             Effect.gen(function* () {
+              if (
+                platform === "discord" &&
+                failure === "final" &&
+                !didFail &&
+                fields.content.includes("It’s 19:50 CEST.")
+              ) {
+                didFail = true;
+                expect(
+                  [...messages.values()].some((message) =>
+                    message.content.includes("Checking the current result."),
+                  ),
+                ).toBe(true);
+                return yield* new BotTransportError({
+                  cause: new Error("temporary final failure"),
+                });
+              }
               if (
                 ["partial-final", "accepted-final"].includes(failure) &&
                 !didFail &&
@@ -277,7 +309,9 @@ describe("shared response runner", () => {
                 !didFail &&
                 ((["progress", "missing"].includes(failure) &&
                   fields.content.includes("Checking the current result.")) ||
-                  (failure === "final" && fields.content.includes("It’s 19:50 CEST.")))
+                  (platform === "teams" &&
+                    failure === "final" &&
+                    fields.content.includes("It’s 19:50 CEST.")))
               ) {
                 didFail = true;
                 yield* Deferred.succeed(failed, undefined);
@@ -350,6 +384,45 @@ describe("shared response runner", () => {
               expect([...messages.values()][0]?.content).toContain("_Working..");
               latest = completed;
               yield* onThread(completed);
+              if (failure === "same-run-follow-up") {
+                yield* Deferred.await(final);
+                while (
+                  !(yield* links.getByDiscordThreadId("conversation"))?.deliveryReceipt?.completed
+                )
+                  yield* Effect.sleep("1 millis");
+                const firstReply = [...messages.values()].find((message) =>
+                  message.content.includes("It’s 19:50 CEST."),
+                )!;
+                expect(progressIds.has(firstReply.id)).toBe(false);
+                expect([...progressIds].some((id) => messages.has(id))).toBe(false);
+                const followUp = {
+                  ...completed.messages.at(-1)!,
+                  id: MessageId.make("answer-2"),
+                  text: "Following up on the same run.",
+                  streaming: true,
+                };
+                latest = {
+                  ...running,
+                  messages: [...completed.messages, followUp],
+                };
+                yield* onThread(latest);
+                yield* Deferred.await(followUpProgress);
+                expect(messages.get(firstReply.id)?.content).toBe(firstReply.content);
+                expect(messages.size).toBe(2);
+                latest = {
+                  ...completed,
+                  latestTurn: { ...completed.latestTurn!, assistantMessageId: followUp.id },
+                  messages: [
+                    ...completed.messages,
+                    {
+                      ...followUp,
+                      text: "The follow-up is complete.",
+                      streaming: false,
+                    },
+                  ],
+                };
+                yield* onThread(latest);
+              }
               if (failure === "late-final") {
                 yield* Deferred.await(final);
                 while (
@@ -414,12 +487,19 @@ describe("shared response runner", () => {
           ]);
           return;
         }
-        const answer = yield* Deferred.await(failure === "late-final" ? grown : final);
+        const answer = yield* Deferred.await(
+          failure === "late-final"
+            ? grown
+            : failure === "same-run-follow-up"
+              ? followUpFinal
+              : final,
+        );
+        const finalAssistantId = failure === "same-run-follow-up" ? "answer-2" : "answer";
         yield* Effect.gen(function* () {
           while (true) {
             const link = yield* links.getByDiscordThreadId("conversation");
             if (
-              link?.lastFinalizedAssistantId === "answer" &&
+              link?.lastFinalizedAssistantId === finalAssistantId &&
               link.deliveryReceipt?.completed &&
               (failure !== "late-final" ||
                 link.deliveryReceipt.text.includes("Additional final details"))
@@ -429,10 +509,22 @@ describe("shared response runner", () => {
           }
         }).pipe(Effect.timeout("5 seconds"));
         expect(messages.size).toBe(
-          ["partial-final", "accepted-final", "upload"].includes(failure) ? 3 : 1,
+          ["partial-final", "accepted-final", "upload"].includes(failure)
+            ? 3
+            : failure === "same-run-follow-up"
+              ? 2
+              : 1,
         );
-        expect(counter).toBe(messages.size + (failure === "missing" ? 1 : 0));
-        expect(didFail).toBe(!["none", "late-final"].includes(failure));
+        expect(counter).toBe(
+          messages.size +
+            (failure === "missing" ? 1 : 0) +
+            (platform === "discord" ? (failure === "same-run-follow-up" ? 2 : 1) : 0),
+        );
+        expect(didFail).toBe(!["none", "late-final", "same-run-follow-up"].includes(failure));
+        if (platform === "discord") {
+          expect([...progressIds].some((id) => messages.has(id))).toBe(false);
+          expect([...messages.keys()].every((id) => !progressIds.has(id))).toBe(true);
+        }
         expect(
           [...messages.keys()].every(
             (id) => !fieldsById.get(id)?.actions?.some((action) => action.command === "stop"),
@@ -446,7 +538,7 @@ describe("shared response runner", () => {
         expect(yield* Deferred.await(info)).toBe("gpt-6.1-sol");
         yield* Fiber.interrupt(fiber);
         const stored = yield* links.getByDiscordThreadId("conversation");
-        expect(stored?.lastFinalizedAssistantId).toBe("answer");
+        expect(stored?.lastFinalizedAssistantId).toBe(finalAssistantId);
       }).pipe(Effect.scoped),
     15000,
   );

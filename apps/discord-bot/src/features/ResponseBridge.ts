@@ -3372,7 +3372,8 @@ export const runBridge = (
 
     /**
      * Keep turn progress in stable editable slots, including when humans chat below them.
-     * Final text promotes those same slots; attachments use separate platform uploads.
+     * Discord posts final replies separately; Teams promotes its editable slots.
+     * Attachments use separate platform uploads.
      */
     const postOrEditAssistantUnlocked = (args: {
       readonly turnId: string | null;
@@ -3463,6 +3464,7 @@ export const runBridge = (
 
         if (streaming) {
           const resumesSameTurn =
+            rest.platform === "teams" &&
             receipt !== undefined &&
             turnId !== null &&
             receipt.turnId === turnId &&
@@ -3683,7 +3685,7 @@ export const runBridge = (
         }
 
         // Keep the full transcript for optional history separately from the latest progress
-        // bubble, then promote the editable slots to the final answer.
+        // bubble, then finalize the answer and clean up its progress slots.
         const prior = yield* Ref.get(stateRef);
         const streamHistoryText = shouldArchiveStreamHistory({
           presentationMode: input.presentationMode ?? "full",
@@ -3877,7 +3879,8 @@ export const runBridge = (
         const receipt = yield* Ref.get(deliveryReceiptRef);
         const sameDelivery =
           receipt !== undefined &&
-          (receipt.assistantId === t3MessageId || (turnId !== null && receipt.turnId === turnId));
+          (receipt.assistantId === t3MessageId ||
+            (rest.platform === "teams" && turnId !== null && receipt.turnId === turnId));
         const alreadyFinalized = sameDelivery
           ? receipt.completed && receipt.assistantId === t3MessageId && receipt.text === text
           : isAssistantAlreadyFinalizedOnDiscord({
@@ -4164,8 +4167,9 @@ export const runBridge = (
           staleIds,
         });
 
-        // Final text promotes the same editable slots. Keep each successful receipt before
-        // advancing so a later chunk failure retries those slots without appending duplicates.
+        // Discord finals get fresh messages below the conversation. Keep each successful
+        // receipt so retries reuse final chunks without adopting or overwriting progress.
+        // Teams continues promoting its editable slots.
         let nextReceipt: ChatDeliveryReceipt = {
           assistantId: t3MessageId,
           turnId,
@@ -4180,7 +4184,9 @@ export const runBridge = (
             const chunk = finalChunks[index] ?? "";
             const fields = idleFields(chunk.trim() !== "" ? chunk : "_(done)_");
             const current = yield* Ref.get(stateRef);
-            const existingId = nextReceipt.messageIds[index] ?? current.discordMessageIds[index];
+            const existingId =
+              nextReceipt.messageIds[index] ??
+              (rest.platform === "teams" ? current.discordMessageIds[index] : undefined);
             const firstSlot = ids[0] ?? state.discordMessageIds[0];
             const recent =
               existingId === undefined
@@ -4198,7 +4204,8 @@ export const runBridge = (
               })),
               botUserId,
               finalChunks: [fields.content],
-              excludeMessageIds: ids,
+              excludeMessageIds:
+                rest.platform === "discord" ? [...ids, ...allStreamIds(current)] : ids,
             });
             const written =
               existingId === undefined
@@ -4219,14 +4226,16 @@ export const runBridge = (
               messageIds: [...ids, ...nextReceipt.messageIds.slice(index + 1)],
             });
             yield* persistDeliveryReceipt(nextReceipt);
-            yield* Ref.update(stateRef, (current) => ({
-              ...current,
-              discordMessageIds: [
-                ...current.discordMessageIds.slice(0, index),
-                written.id,
-                ...current.discordMessageIds.slice(index + 1),
-              ],
-            }));
+            if (rest.platform === "teams") {
+              yield* Ref.update(stateRef, (current) => ({
+                ...current,
+                discordMessageIds: [
+                  ...current.discordMessageIds.slice(0, index),
+                  written.id,
+                  ...current.discordMessageIds.slice(index + 1),
+                ],
+              }));
+            }
             yield* persistStreamMessageIds((yield* Ref.get(stateRef)).discordMessageIds);
           }
 
