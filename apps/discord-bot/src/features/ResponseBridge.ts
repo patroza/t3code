@@ -17,12 +17,14 @@ import {
   appendStatsToMessageChunks,
   formatTurnResponseStatsLine,
 } from "@t3tools/shared/turnResponseStats";
+import { DiscordREST } from "dfx";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Scope from "effect/Scope";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Semaphore from "effect/Semaphore";
@@ -90,6 +92,12 @@ import { ThreadWarmCacheStore } from "../store/ThreadWarmCacheStore.ts";
 import { T3Session } from "../t3/T3Session.ts";
 import { formatAlertCause, postBridgeAlert, postFatalAlert } from "./Alerts.ts";
 import { BridgeHub, type BridgeControlSlot, type BridgeEnsureInput } from "./BridgeHub.ts";
+import {
+  clearQueuedPromptBadges,
+  DiscordQueuedPrompts,
+  QUEUED_PROMPT_REACTION_EMOJI,
+  queuedPromptsThatStartedProcessing,
+} from "./DiscordQueuedPromptRegistry.ts";
 import {
   assistantMessagesForDelivery,
   chatProgressLabel,
@@ -5190,6 +5198,56 @@ export const runBridge = (
       );
 
     /**
+     * Discord message ids whose 📥 delete is already in flight. Snapshots arrive
+     * faster than the REST call, and a second delete would just 404.
+     */
+    const queuedBadgeClearsInFlight = new Set<string>();
+
+    /**
+     * Drop 📥 once a parked follow-up leaves the server queue and starts.
+     * The lookup is sync and cheap; the Discord delete is forked so it does not
+     * hold the delivery lock ahead of the Working tip.
+     */
+    const clearQueuedBadgesForStartedRuns = (thread: OrchestrationThread) =>
+      Effect.gen(function* () {
+        const registryOption = yield* Effect.serviceOption(DiscordQueuedPrompts);
+        if (Option.isNone(registryOption)) return;
+        const registry = registryOption.value;
+        const pending = registry.listForThread(thread.id);
+        if (pending.length === 0) return;
+        const started = queuedPromptsThatStartedProcessing({
+          pending,
+          runStatuses: thread.runStatuses ?? [],
+        }).filter((entry) => {
+          if (queuedBadgeClearsInFlight.has(entry.discordMessageId)) return false;
+          queuedBadgeClearsInFlight.add(entry.discordMessageId);
+          return true;
+        });
+        if (started.length === 0) return;
+        const restOption = yield* Effect.serviceOption(DiscordREST);
+        if (Option.isNone(restOption)) {
+          for (const entry of started) queuedBadgeClearsInFlight.delete(entry.discordMessageId);
+          return;
+        }
+        const rest = restOption.value;
+        yield* clearQueuedPromptBadges({
+          registry,
+          entries: started,
+          onSettled: (entry) => {
+            queuedBadgeClearsInFlight.delete(entry.discordMessageId);
+          },
+          deleteReaction: (entry) =>
+            rest
+              .deleteMyMessageReaction(
+                entry.discordChannelId,
+                entry.discordMessageId,
+                QUEUED_PROMPT_REACTION_EMOJI,
+              )
+              .pipe(Effect.asVoid),
+        }).pipe(Effect.forkDetach);
+      });
+
+    /**
      * Apply one thread snapshot to Discord (stream tip / finalize / tasks / title).
      * Must not run concurrently for the same bridge — callers serialize via deliveryLock.
      *
@@ -5201,6 +5259,7 @@ export const runBridge = (
      */
     const processThreadSnapshot = (thread: OrchestrationThread) =>
       Effect.gen(function* () {
+        yield* clearQueuedBadgesForStartedRuns(thread);
         yield* ensureVcsStatusSubscription(thread);
 
         // Cheap bookkeeping only — no Discord REST — so we do not delay the tip path.

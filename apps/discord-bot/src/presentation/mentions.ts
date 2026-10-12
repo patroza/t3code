@@ -13,7 +13,8 @@ export interface ParsedMentionFlags {
   readonly plan: boolean;
   /**
    * Explicit mid-turn delivery override. When omitted, busy-thread follow-ups
-   * **queue** server-side (platform default) and are badged with 📥.
+   * **queue** server-side (platform default) and are badged with 📥 until that
+   * run starts processing.
    * `--steer` injects into the active turn immediately; `--queue` forces park.
    */
   readonly followUpDelivery?: DiscordFollowUpDelivery;

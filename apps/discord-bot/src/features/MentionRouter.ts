@@ -207,7 +207,7 @@ import { topicDefaultModel, topicRequestsFastMode } from "../presentation/fastMo
 import { ensureChannelInfoPin } from "./ChannelInfoPin.ts";
 import { makeDiscordThreadTurnCoordinator } from "./DiscordThreadTurnCoordinator.ts";
 import {
-  createDiscordQueuedPromptRegistry,
+  DiscordQueuedPrompts,
   formatSteernowEmptyQueueMessage,
   QUEUED_PROMPT_REACTION_EMOJI,
   resolveSteernowMessageIds,
@@ -628,7 +628,7 @@ const make = (botConfig: DiscordBotConfig) =>
     const registry = yield* InteractionsRegistry;
     const bridgeHub = yield* BridgeHub;
     const turnCoordinator = yield* makeDiscordThreadTurnCoordinator;
-    const queuedPrompts = createDiscordQueuedPromptRegistry();
+    const queuedPrompts = yield* DiscordQueuedPrompts;
 
     const markDiscordPromptQueued = (input: {
       readonly discordChannelId: string;
@@ -1451,6 +1451,7 @@ const make = (botConfig: DiscordBotConfig) =>
             );
           // Server parks busy-thread follow-ups. Default Discord policy is **queue**
           // (badge with 📥; delete user message to remove; /omegent steernow to flush).
+          // The bridge removes 📥 once that run leaves the queue and starts.
           // `--steer` / `/omegent steer` inject immediately after startTurn.
           const t3MessageId = MessageId.make(startedTurn.messageId);
           if (followUpDelivery === "steer" && turnAlreadyRunning) {
@@ -2756,7 +2757,7 @@ const make = (botConfig: DiscordBotConfig) =>
             content:
               content.length === 0
                 ? "I saw your mention but message content is empty. Enable **Message Content Intent** for this bot in the Discord Developer Portal, then restart me."
-                : "Send a prompt after mentioning me (or attach a file). Optional flags: `--model` or `—model` `<short name>` (`opus-5.5`; `claude-` and `codex-` prefixes still work) `--provider` `--base` `--local` `--plan` `--steer` `--queue`. An unknown model stops immediately and links the pinned channel info. Mid-turn follow-ups **queue** by default (📥); delete your message to cancel, or `/omegent steernow` to inject the queue. Use `--steer` to inject immediately.",
+                : "Send a prompt after mentioning me (or attach a file). Optional flags: `--model` or `—model` `<short name>` (`opus-5.5`; `claude-` and `codex-` prefixes still work) `--provider` `--base` `--local` `--plan` `--steer` `--queue`. An unknown model stops immediately and links the pinned channel info. Mid-turn follow-ups **queue** by default (📥 until that message starts); delete your message to cancel, or `/omegent steernow` to inject the queue. Use `--steer` to inject immediately.",
             message_reference: { message_id: event.id },
           });
           return;
