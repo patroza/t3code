@@ -93,6 +93,8 @@ jobs:
         uses: expo/expo-github-action/continuous-deploy-fingerprint@main
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          # The Expo action otherwise suppresses the EAS command's failure output.
+          RUNNER_DEBUG: "1"
         with:
           # Release configuration, not `preview:dev`: PR builds must show
           # production-grade performance and memory behaviour. The dev-client

@@ -1,3 +1,4 @@
+import { useAtomSet } from "@effect/atom-react";
 import type {
   EnvironmentId,
   SidebarProjectGroupingMode,
@@ -32,6 +33,8 @@ import {
   type HomeListMode,
   type HomeThreadGrouping,
 } from "./homeListMode";
+import type { ThreadListFilters } from "../../persistence/mobile-preferences";
+import { updateMobilePreferencesAtom } from "../../state/preferences";
 import type { HomeProjectSortOrder } from "./homeThreadList";
 
 export type { OwnershipRelation };
@@ -44,6 +47,7 @@ export interface HomeListOptions {
    * the provider is given a storage callback.
    */
   readonly selectedEnvironmentIds: readonly EnvironmentId[];
+  readonly selectedProjectKey: string | null;
   readonly ownershipFilter: OwnershipFilter;
   /**
    * Sub-filter for mine/theirs: created, participated, or both (default).
@@ -88,6 +92,7 @@ export function isOwnershipFilter(value: unknown): value is OwnershipFilter {
 }
 
 export interface ResolvedHomeListOptions extends HomeListOptions {
+  readonly selectedEnvironmentId: EnvironmentId | null;
   readonly projectGroupingMode: SidebarProjectGroupingMode;
 }
 
@@ -116,9 +121,10 @@ export const THREAD_SORT_OPTIONS: ReadonlyArray<{
 /** Default ownership filter: Mine (created or participated, plus unattributed). */
 export const DEFAULT_OWNERSHIP_FILTER: OwnershipFilter = "mine";
 
-function defaultHomeListOptions(): HomeListOptions {
+function defaultHomeListOptions(filters?: ThreadListFilters): HomeListOptions {
   return {
-    selectedEnvironmentIds: [],
+    selectedEnvironmentIds: filters?.environmentId ? [filters.environmentId] : [],
+    selectedProjectKey: filters?.projectKey ?? null,
     ownershipFilter: DEFAULT_OWNERSHIP_FILTER,
     ownershipRelation: DEFAULT_OWNERSHIP_RELATION,
     listMode: DEFAULT_HOME_LIST_MODE,
@@ -152,6 +158,7 @@ const HomeListOptionsContext = createContext<HomeListOptionsContextValue | null>
 export function HomeListOptionsProvider({
   children,
   projectGroupingMode,
+  savedFilters,
   /**
    * `undefined` = storage not loaded yet (do not hydrate).
    * Array (possibly empty) = loaded value to apply once.
@@ -173,6 +180,7 @@ export function HomeListOptionsProvider({
   onStoreOwnershipRelation,
 }: PropsWithChildren<{
   readonly projectGroupingMode: SidebarProjectGroupingMode;
+  readonly savedFilters?: ThreadListFilters | undefined;
   readonly storedEnvironmentIds?: readonly EnvironmentId[];
   readonly onStoreEnvironmentIds?: (ids: readonly EnvironmentId[]) => void;
   readonly storedThreadGrouping?: HomeThreadGrouping;
@@ -182,7 +190,23 @@ export function HomeListOptionsProvider({
   readonly storedOwnershipRelation?: OwnershipRelation;
   readonly onStoreOwnershipRelation?: (relation: OwnershipRelation) => void;
 }>) {
-  const [options, setOptions] = useState<HomeListOptions>(defaultHomeListOptions);
+  const [options, setOptions] = useState<HomeListOptions>(() =>
+    defaultHomeListOptions(savedFilters),
+  );
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const saved = useRef(savedFilters);
+  const environmentId =
+    options.selectedEnvironmentIds.length === 1 ? options.selectedEnvironmentIds[0]! : null;
+  const projectKey = options.selectedProjectKey;
+  useEffect(() => {
+    if (
+      (saved.current?.environmentId ?? null) === environmentId &&
+      (saved.current?.projectKey ?? null) === projectKey
+    )
+      return;
+    saved.current = { environmentId, projectKey };
+    savePreferences({ threadListFilters: saved.current });
+  }, [environmentId, projectKey, savePreferences]);
   const envFilterHydratedRef = useRef(false);
   const lastPersistedEnvKeyRef = useRef<string | null>(null);
   const threadGroupingHydratedRef = useRef(false);
@@ -318,9 +342,25 @@ export function useHomeListOptions(availableEnvironmentIds: ReadonlySet<Environm
       : { ...options, selectedEnvironmentIds };
   const resolvedOptions: ResolvedHomeListOptions = {
     ...availableOptions,
+    selectedEnvironmentId: selectedEnvironmentIds.length === 1 ? selectedEnvironmentIds[0]! : null,
     projectGroupingMode: shared?.projectGroupingMode ?? "repository",
   };
 
+  const setSelectedProjectKey = useCallback(
+    (value: string | null) => {
+      setOptions((current) => ({ ...current, selectedProjectKey: value }));
+    },
+    [setOptions],
+  );
+  const setSelectedEnvironmentId = useCallback(
+    (value: EnvironmentId | null) => {
+      setOptions((current) => ({
+        ...current,
+        selectedEnvironmentIds: value === null ? [] : [value],
+      }));
+    },
+    [setOptions],
+  );
   const setSelectedEnvironmentIds = useCallback(
     (value: readonly EnvironmentId[]) => {
       setOptions((current) => ({ ...current, selectedEnvironmentIds: value }));
@@ -377,6 +417,8 @@ export function useHomeListOptions(availableEnvironmentIds: ReadonlySet<Environm
   );
   return {
     options: resolvedOptions,
+    setSelectedProjectKey,
+    setSelectedEnvironmentId,
     setSelectedEnvironmentIds,
     toggleSelectedEnvironmentId,
     clearSelectedEnvironments,
