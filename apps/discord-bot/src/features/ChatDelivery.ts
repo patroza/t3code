@@ -283,6 +283,16 @@ export function assistantMessagesForDelivery(input: {
   });
 }
 
+const LIVE_TURN_STATUSES = new Set(["preparing", "starting", "running", "waiting"]);
+
+/** Run ids that still own a visible response. Shared by Discord and Teams. */
+export function liveTurnIds(
+  runStatuses: ReadonlyArray<{ readonly id: string; readonly status: string }> | null | undefined,
+): ReadonlyArray<string> {
+  if (runStatuses == null) return [];
+  return runStatuses.filter((run) => LIVE_TURN_STATUSES.has(run.status)).map((run) => run.id);
+}
+
 /**
  * Prior-turn assistant Discord still owes a final for.
  *
@@ -291,6 +301,9 @@ export function assistantMessagesForDelivery(input: {
  * {@link assistantMessagesForDelivery} hides that body on purpose (must not
  * stream it under the next Working tip). Callers catch-up-finalize it as its
  * own Discord final even when the next turn already has assistants.
+ *
+ * A turn that is still live is not owed a final. Its latest bubble stays on
+ * the one editable progress message.
  */
 export function unfinalizedPriorAssistantForCatchUp(input: {
   readonly messages: ReadonlyArray<{
@@ -302,6 +315,12 @@ export function unfinalizedPriorAssistantForCatchUp(input: {
   readonly currentTurnId: string | null;
   readonly lastFinalizedAssistantId: string | null;
   readonly lastFinalizedText?: string | null;
+  /**
+   * Turns still preparing, running, or waiting. Their bubbles stay on the
+   * editable progress message. Catch-up must not post each one as a final
+   * when a later cancelled run is briefly selected as current.
+   */
+  readonly liveTurnIds?: ReadonlyArray<string>;
 }): {
   readonly id: string;
   readonly text: string;
@@ -322,6 +341,8 @@ export function unfinalizedPriorAssistantForCatchUp(input: {
     prior = { id: message.id, text: message.text, turnId: message.turnId };
   }
   if (prior === null) return null;
+
+  if (prior.turnId !== null && (input.liveTurnIds ?? []).includes(prior.turnId)) return null;
 
   const remaining = excludeFinalizedAssistants({
     messages,

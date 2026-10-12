@@ -12,6 +12,7 @@ import {
   isGrownFinalizedText,
   retainUnfinalizedStreamText,
   shouldRecreateTip,
+  liveTurnIds,
   unfinalizedPriorAssistantForCatchUp,
   type DeliveryEpochState,
 } from "./ChatDelivery.ts";
@@ -241,6 +242,28 @@ describe("unfinalizedPriorAssistantForCatchUp", () => {
         hasLatestTurn: true,
       }),
     ).toEqual([]);
+  });
+
+  it("does not post a still-live turn as its own final", () => {
+    const messages = [
+      msg("u1", "user", "fix the model flag", "t1"),
+      msg("a1", "assistant", "The implementation is in the fix worktree.", "t1"),
+      msg("u2", "user", "queued follow-up that was cancelled", "t2"),
+    ];
+    expect(
+      unfinalizedPriorAssistantForCatchUp({
+        messages,
+        currentTurnId: "t2",
+        lastFinalizedAssistantId: null,
+        liveTurnIds: ["t1"],
+      }),
+    ).toBeNull();
+    expect(
+      liveTurnIds([
+        { id: "t1", status: "running" },
+        { id: "t2", status: "cancelled" },
+      ]),
+    ).toEqual(["t1"]);
   });
 
   it("does not replay a prior answer Discord already finalized", () => {
