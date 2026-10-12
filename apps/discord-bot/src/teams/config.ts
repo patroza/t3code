@@ -1,10 +1,24 @@
 // @effect-diagnostics nodeBuiltinImport:off preferSchemaOverJson:off tryCatchInEffectGen:off
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
+import * as Schema from "effect/Schema";
+import { TeamsFileDestination, validateTeamsFileDestination } from "./channelFiles.ts";
 
 import { expandHomePath } from "../projectAliases.ts";
 
+function isFileDestination(value: unknown): value is TeamsFileDestination {
+  if (!Schema.is(TeamsFileDestination)(value)) return false;
+  try {
+    validateTeamsFileDestination(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export interface TeamsChannelConfig {
+  readonly fileDestination?: TeamsFileDestination | undefined;
+  readonly includeProgressHistory?: boolean | undefined;
   readonly teamId: string;
   readonly channelId: string;
   readonly channelName: string;
@@ -37,6 +51,9 @@ function isChannelConfig(value: unknown): value is TeamsChannelConfig {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const candidate = value as Record<string, unknown>;
   return (
+    (candidate.fileDestination === undefined || isFileDestination(candidate.fileDestination)) &&
+    (candidate.includeProgressHistory === undefined ||
+      typeof candidate.includeProgressHistory === "boolean") &&
     typeof candidate.teamId === "string" &&
     typeof candidate.channelId === "string" &&
     typeof candidate.channelName === "string" &&

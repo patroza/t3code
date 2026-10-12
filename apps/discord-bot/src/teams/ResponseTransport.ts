@@ -8,6 +8,7 @@ import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 import * as NodeBuffer from "node:buffer";
 import * as NodeTimersPromises from "node:timers/promises";
+import { uploadTeamsChannelFiles, type TeamsFileDestination } from "./channelFiles.ts";
 import {
   BotTransportError,
   messageUpdateError,
@@ -140,6 +141,8 @@ export function makeTeamsResponseTransport(input: {
   readonly conversationId: string;
   readonly rootMessageId: string;
   readonly incomingMessage?: BotMessage;
+  readonly fileDestination?: TeamsFileDestination | undefined;
+  readonly includeProgressHistory?: boolean | undefined;
   readonly assertActive: () => void;
   readonly send: (activity: TeamsResponseActivity) => Promise<{ id?: string }>;
   readonly deleteMessage: (messageId: string) => Promise<unknown>;
@@ -210,9 +213,8 @@ export function makeTeamsResponseTransport(input: {
       catch: (cause) => new BotTransportError({ cause }),
     });
   const graphBase = `https://graph.microsoft.com/v1.0/teams/${encodeURIComponent(input.teamId)}/channels/${encodeURIComponent(input.channelId)}/messages/${encodeURIComponent(input.rootMessageId)}`;
-  const graph = async (url: string) => {
+  const getAccessToken = async () => {
     input.assertActive();
-    if (!url.startsWith(graphBase)) throw new Error("Unexpected Teams history URL");
     if (!token || token.expires < Date.now() + 60_000) {
       const response = await fetch(
         `https://login.microsoftonline.com/${encodeURIComponent(input.tenantId)}/oauth2/v2.0/token`,
@@ -230,10 +232,16 @@ export function makeTeamsResponseTransport(input: {
       const body = (await response.json()) as { access_token: string; expires_in: number };
       token = { value: body.access_token, expires: Date.now() + body.expires_in * 1000 };
     }
+    return token.value;
+  };
+  const graph = async (url: string) => {
+    input.assertActive();
+    if (!url.startsWith(graphBase)) throw new Error("Unexpected Teams history URL");
+    const accessToken = await getAccessToken();
     input.assertActive();
     const response = await fetch(url, {
       signal: AbortSignal.timeout(15_000),
-      headers: { Authorization: `Bearer ${token.value}` },
+      headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (!response.ok) throw new Error(`Teams history read failed (${response.status})`);
     return response.json();
@@ -242,6 +250,7 @@ export function makeTeamsResponseTransport(input: {
     fields: BotMessageFields,
     id?: string,
     attachments?: TeamsResponseActivity["attachments"],
+    textInAttachment = false,
   ) => {
     input.assertActive();
     const startedAt = Date.now();
@@ -250,6 +259,7 @@ export function makeTeamsResponseTransport(input: {
       ...wire,
       ...(id ? { id } : {}),
       ...(attachments ? { attachments } : {}),
+      ...(textInAttachment ? { text: "" } : {}),
     });
     // An edit keeps its original identity even when the connector omits the response ID.
     let messageId = id ?? (typeof sent?.id === "string" && sent.id.trim() ? sent.id : undefined);
@@ -291,7 +301,8 @@ export function makeTeamsResponseTransport(input: {
     uploadLimitBytes: 4_000_000,
     getMyUser: () => Effect.succeed({ id: input.clientId }),
     // Teams topics and names belong to the channel; the bridge must never rename it per turn.
-    getChannel: (id) => Effect.succeed({ id, type: 0, topic: "omegent-ips" }),
+    getChannel: (id) =>
+      Effect.succeed({ id, type: 0, topic: input.includeProgressHistory ? "omegent-ips" : null }),
     updateChannel: () => Effect.void,
     getMessage: (_, id) =>
       request(async () => {
@@ -348,19 +359,42 @@ export function makeTeamsResponseTransport(input: {
       request(async () => {
         const images = files.filter((file) => file.mimeType.startsWith("image/"));
         const other = files.filter((file) => !file.mimeType.startsWith("image/"));
-        // Teams channel file uploads require SharePoint permissions. Keep this limitation visible.
-        const note = other.length
-          ? `\n\nChannel file upload is unavailable: ${other.map((file) => file.name).join(", ")}. Open the linked T3 thread for source attachments; generated delivery files could not be uploaded.`
-          : "";
-        return send(
-          { content: content + note },
-          undefined,
-          images.map((file) => ({
+        const uploaded =
+          input.fileDestination && other.length
+            ? await uploadTeamsChannelFiles({
+                destination: input.fileDestination,
+                files: other,
+                getAccessToken,
+                assertActive: input.assertActive,
+                fetch,
+              })
+            : [];
+        const note =
+          other.length && !input.fileDestination
+            ? `\n\nFile upload is not configured for this channel: ${other.map((file) => file.name).join(", ")}. Open the linked T3 thread for source attachments; generated files could not be delivered.`
+            : "";
+        const attachments: NonNullable<TeamsResponseActivity["attachments"]> = images.map(
+          (file) => ({
             contentType: file.mimeType,
             name: file.name,
             contentUrl: `data:${file.mimeType};base64,${NodeBuffer.Buffer.from(file.data).toString("base64")}`,
-          })),
+          }),
         );
+        if (uploaded.length)
+          attachments.unshift({
+            contentType: "application/vnd.microsoft.card.adaptive",
+            content: {
+              type: "AdaptiveCard",
+              version: "1.4",
+              body: content.trim() ? [{ type: "TextBlock", text: content, wrap: true }] : [],
+              actions: uploaded.map((file, index) => ({
+                type: "Action.OpenUrl",
+                title: other[index]!.name,
+                url: file.webUrl,
+              })),
+            },
+          });
+        return send({ content: content + note }, undefined, attachments, uploaded.length > 0);
       }),
     upsertThreadInfo: (info) =>
       Effect.gen(function* () {

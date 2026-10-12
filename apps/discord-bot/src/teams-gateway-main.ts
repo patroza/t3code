@@ -196,6 +196,8 @@ const program = Effect.gen(function* () {
               clientSecret: readPrivateCredential(secretPath),
               teamId: lease.binding.teamId,
               channelId: lease.binding.channelId,
+              fileDestination: lease.binding.fileDestination,
+              includeProgressHistory: lease.binding.includeProgressHistory,
               conversationId: lease.conversationId,
               rootMessageId:
                 lease.conversationId.split(";messageid=")[1] ?? activity.replyToId ?? activity.id,
@@ -334,6 +336,8 @@ const program = Effect.gen(function* () {
           clientSecret: readPrivateCredential(secretPath),
           teamId: lease.binding.teamId,
           channelId: lease.binding.channelId,
+          fileDestination: lease.binding.fileDestination,
+          includeProgressHistory: lease.binding.includeProgressHistory,
           conversationId: lease.conversationId,
           rootMessageId:
             lease.conversationId.split(";messageid=")[1] ?? activity.replyToId ?? activity.id,
@@ -391,6 +395,8 @@ const program = Effect.gen(function* () {
       clientSecret: readPrivateCredential(secretPath),
       teamId: lease.binding.teamId,
       channelId: lease.binding.channelId,
+      fileDestination: lease.binding.fileDestination,
+      includeProgressHistory: lease.binding.includeProgressHistory,
       conversationId: lease.conversationId,
       rootMessageId: reference.rootMessageId,
       assertActive: () => {
