@@ -38,3 +38,28 @@ Tenant consent/distribution policy may require administrator involvement. RSC gr
 team-wide message delivery; channel and actor restrictions are enforced by the gateway.
 The initial implementation supports commercial Teams service URLs, no attachment
 processing or history backfill, and bounded queues of 20 mentions per workspace.
+
+## Channel description tags
+
+The app requests `ChannelSettings.Read.Group` so the gateway can read descriptions in the
+installed team. Enable `useChannelDescription` on an already authorized channel binding and
+set `descriptionProjectShortNames` to its approved project aliases (including its default).
+This feature is off by default; existing configurations do not make new Graph metadata requests.
+
+Descriptions use the same parsers as Discord channel topics:
+
+```text
+omegent-link-example-project
+omegent-default-model-grok-4.7
+omegent-fast-mode
+```
+
+`omegent-ips` explicitly opts into progress-history files. Without a project tag the configured
+project is retained; unapproved or malformed link tags reject dispatch. Defaults affect new
+conversations only; continuing a thread keeps its model and cannot change its project. Start a
+new Teams conversation after changing the project tag. Metadata is cached for 30 seconds, scoped
+by tenant/team/channel, and failed reads are not cached or silently replaced with default settings.
+
+Native Teams channels support the same two settings in `TEAMS_CHANNELS_PATH`. Updating the app
+package must consent to the team-scoped channel-settings permission before enabling descriptions.
+No description tag changes tenant, workspace, actor authorization or file-upload permissions.

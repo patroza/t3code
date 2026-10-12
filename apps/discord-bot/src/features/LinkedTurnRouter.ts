@@ -7,6 +7,7 @@ import * as Result from "effect/Result";
 
 import type { DiscordBotConfig } from "../config.ts";
 import { workingMessageFields } from "../presentation/messages.ts";
+import { topicDefaultModel, topicRequestsFastMode } from "../presentation/fastMode.ts";
 import {
   buildFirstTurnPrompt,
   looksLikeSentryContext,
@@ -60,6 +61,7 @@ export interface LinkedTurnInput {
 }
 
 export interface TransportNeutralLinkedTurnInput {
+  readonly channelTopic?: string | undefined;
   readonly source: LinkedTurnSource;
   readonly sourceActor?: ClientSourceHint["actor"] | undefined;
   /** Stable delivery/conversation id. Stored in the legacy discordThreadId field for v2 links. */
@@ -147,6 +149,21 @@ export const startOrContinueT3Turn = Effect.fn("startOrContinueT3Turn")(function
   );
 
   if (existing !== null) {
+    if (input.source.sourceKind === "teams" && existing.projectId !== resolved.project.id) {
+      return yield* Effect.fail(
+        new Error(
+          "This Teams conversation is linked to another project; start a new conversation after changing its description",
+        ),
+      );
+    }
+    if (input.source.sourceKind === "teams") {
+      const snapshot = yield* t3.fetchThreadDetail(existing.t3ThreadId);
+      if (snapshot === null || snapshot.thread.projectId !== resolved.project.id) {
+        return yield* Effect.fail(
+          new Error("The linked Teams thread does not belong to the selected project"),
+        );
+      }
+    }
     const continueModelSelection =
       input.stickyModelOnContinue === true && !hasExplicitModelFlags
         ? undefined
@@ -172,7 +189,10 @@ export const startOrContinueT3Turn = Effect.fn("startOrContinueT3Turn")(function
   const modelSelection = yield* t3.resolveModelSelection({
     project: resolved.project,
     ...(input.flags.provider === undefined ? {} : { overrideInstanceId: input.flags.provider }),
-    ...(input.flags.model === undefined ? {} : { overrideModel: input.flags.model }),
+    ...((input.flags.model ?? topicDefaultModel(input.channelTopic)) == null
+      ? {}
+      : { overrideModel: input.flags.model ?? topicDefaultModel(input.channelTopic)! }),
+    ...(topicRequestsFastMode(input.channelTopic) ? { fastMode: true } : {}),
   });
   const enrichedPrompt = resolveInitialPrompt({
     config,

@@ -134,6 +134,15 @@ describe("Teams response adapter", () => {
         ),
       );
       const ordinary = makeTeamsResponseTransport({ ...options, config });
+      const described = makeTeamsResponseTransport({
+        ...options,
+        config,
+        getChannelTopic: async () => "omegent-link-t3code omegent-ips",
+      });
+      expect((yield* described.getChannel(options.conversationId)).topic).toBe(
+        "omegent-link-t3code omegent-ips",
+      );
+
       const optedIn = makeTeamsResponseTransport({
         ...options,
         config,
