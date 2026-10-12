@@ -630,12 +630,16 @@ export const makeThreadLinkStore = (dataDirRaw: string) =>
 
     // Persist migrated v1 → v2 so the next boot does not re-migrate.
     if (loaded.migratedFromV1 && loaded.links.length > 0) {
-      yield* Effect.promise(() => atomicWriteFile(filePath, serializeLinksDocument(loaded.links)));
+      yield* Effect.promise(() =>
+        atomicWriteFile(filePath, serializeLinksDocument(loaded.links)),
+      ).pipe(Effect.uninterruptible);
     }
 
     const persist = (map: Map<string, ThreadLink>) =>
       Effect.promise(() => atomicWriteFile(filePath, serializeLinksDocument([...map.values()])));
 
+    // Node filesystem promises cannot be cancelled. Finish each locked mutation+write
+    // before interruption so shutdown cannot release storage while a rename is pending.
     // Serialize mutate+persist so concurrent hint writers cannot flush a stale map
     // over a newer in-memory state (stream ids vs sequence marker, etc.).
     const writeLock = yield* Semaphore.make(1);
@@ -658,7 +662,7 @@ export const makeThreadLinkStore = (dataDirRaw: string) =>
           if (updated === null) return null;
           yield* persist(next);
           return updated;
-        }),
+        }).pipe(Effect.uninterruptible),
       );
 
     return ThreadLinkStore.of({
@@ -782,7 +786,7 @@ export const makeThreadLinkStore = (dataDirRaw: string) =>
               return copy;
             });
             yield* persist(next);
-          }),
+          }).pipe(Effect.uninterruptible),
         ),
 
       touch: (discordThreadId, at) => {
