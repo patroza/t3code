@@ -175,6 +175,25 @@ describe("makeThreadLinkStore", () => {
     );
   });
 
+  it.effect("keeps partial chat delivery receipts across reload and unrelated hint writes", () =>
+    Effect.gen(function* () {
+      const dir = yield* makeTempDir;
+      const store = yield* makeThreadLinkStore(dir);
+      yield* store.put(input());
+      const receipt = {
+        assistantId: "assistant",
+        turnId: "turn",
+        text: "Final answer",
+        messageIds: ["message"],
+        uploads: [{ key: "file-hash", messageId: "upload" }],
+        completed: false,
+      };
+      yield* store.updateBridgeHints("d-1", { deliveryReceipt: receipt });
+      yield* store.updateBridgeHints("d-1", { lastDeliveredSequence: 12 });
+      const restored = yield* makeThreadLinkStore(dir);
+      expect((yield* restored.getByDiscordThreadId("d-1"))?.deliveryReceipt).toEqual(receipt);
+    }).pipe(Effect.scoped),
+  );
   vitestIt("updateBridgeHints persists finalize + stream tip ids", async () => {
     await withStore((store) =>
       Effect.gen(function* () {

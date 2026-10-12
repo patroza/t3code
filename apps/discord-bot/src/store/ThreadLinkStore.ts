@@ -18,6 +18,16 @@ export const LINKS_DOCUMENT_VERSION = 2 as const;
 export const ThreadLinkStatus = Schema.Literals(["active", "tombstone"]);
 export type ThreadLinkStatus = typeof ThreadLinkStatus.Type;
 
+export const ChatDeliveryReceipt = Schema.Struct({
+  assistantId: Schema.String,
+  turnId: Schema.NullOr(Schema.String),
+  text: Schema.String,
+  messageIds: Schema.Array(Schema.String),
+  uploads: Schema.Array(Schema.Struct({ key: Schema.String, messageId: Schema.String })),
+  completed: Schema.Boolean,
+});
+export type ChatDeliveryReceipt = typeof ChatDeliveryReceipt.Type;
+
 /**
  * Durable Discord ↔ T3 link (links.json v2).
  *
@@ -63,6 +73,7 @@ export const ThreadLink = Schema.Struct({
   taskDiscordMessageId: Schema.optional(Schema.String),
   /** In-progress Discord stream tip ids (+ stale tips). Deleted on finalize / restart cleanup. */
   streamDiscordMessageIds: Schema.optional(Schema.Array(Schema.String)),
+  deliveryReceipt: Schema.optional(ChatDeliveryReceipt),
   sentDiscordUserMessageIds: Schema.optional(Schema.Array(Schema.String)),
   /**
    * Jira issue keys observed for this Discord thread, in first-seen order (no duplicates).
@@ -124,6 +135,7 @@ export type ThreadLink = {
   readonly threadTalkMode?: "all-messages" | undefined;
   readonly taskDiscordMessageId?: string | undefined;
   readonly streamDiscordMessageIds?: ReadonlyArray<string> | undefined;
+  readonly deliveryReceipt?: ChatDeliveryReceipt | undefined;
   readonly sentDiscordUserMessageIds?: ReadonlyArray<string> | undefined;
   readonly jiraIssueKeys?: ReadonlyArray<string> | undefined;
   readonly linkedJiraIssueKeys?: ReadonlyArray<string> | undefined;
@@ -156,6 +168,7 @@ export type ThreadLinkInput = {
   readonly threadTalkMode?: "all-messages" | undefined;
   readonly taskDiscordMessageId?: string | undefined;
   readonly streamDiscordMessageIds?: ReadonlyArray<string> | undefined;
+  readonly deliveryReceipt?: ChatDeliveryReceipt | undefined;
   readonly sentDiscordUserMessageIds?: ReadonlyArray<string> | undefined;
   readonly jiraIssueKeys?: ReadonlyArray<string> | undefined;
   readonly linkedJiraIssueKeys?: ReadonlyArray<string> | undefined;
@@ -175,6 +188,7 @@ export type ThreadLinkBridgeHints = {
   readonly lastThreadSnapshotSequence?: number | null;
   readonly lastDeliveredSequence?: number | null;
   readonly streamDiscordMessageIds?: ReadonlyArray<string>;
+  readonly deliveryReceipt?: ChatDeliveryReceipt;
 };
 
 export type ThreadLinkModelHistory = {
@@ -283,6 +297,7 @@ function asThreadLink(link: {
   readonly threadTalkMode?: "all-messages" | undefined;
   readonly taskDiscordMessageId?: string | undefined;
   readonly streamDiscordMessageIds?: ReadonlyArray<string> | undefined;
+  readonly deliveryReceipt?: ChatDeliveryReceipt | undefined;
   readonly sentDiscordUserMessageIds?: ReadonlyArray<string> | undefined;
   readonly jiraIssueKeys?: ReadonlyArray<string> | undefined;
   readonly linkedJiraIssueKeys?: ReadonlyArray<string> | undefined;
@@ -313,6 +328,7 @@ function asThreadLink(link: {
     threadTalkMode: link.threadTalkMode,
     taskDiscordMessageId: link.taskDiscordMessageId,
     streamDiscordMessageIds: link.streamDiscordMessageIds,
+    deliveryReceipt: link.deliveryReceipt,
     sentDiscordUserMessageIds: link.sentDiscordUserMessageIds,
     jiraIssueKeys: link.jiraIssueKeys,
     linkedJiraIssueKeys: link.linkedJiraIssueKeys,
@@ -337,6 +353,7 @@ export function migrateV1Link(link: {
   readonly threadTalkMode?: "all-messages" | undefined;
   readonly taskDiscordMessageId?: string | undefined;
   readonly streamDiscordMessageIds?: ReadonlyArray<string> | undefined;
+  readonly deliveryReceipt?: ChatDeliveryReceipt | undefined;
   readonly sentDiscordUserMessageIds?: ReadonlyArray<string> | undefined;
   readonly jiraIssueKeys?: ReadonlyArray<string> | undefined;
   readonly linkedJiraIssueKeys?: ReadonlyArray<string> | undefined;
@@ -365,6 +382,7 @@ export function migrateV1Link(link: {
     threadTalkMode: link.threadTalkMode,
     taskDiscordMessageId: link.taskDiscordMessageId,
     streamDiscordMessageIds: link.streamDiscordMessageIds,
+    deliveryReceipt: link.deliveryReceipt,
     sentDiscordUserMessageIds: link.sentDiscordUserMessageIds,
     jiraIssueKeys: link.jiraIssueKeys,
     linkedJiraIssueKeys: link.linkedJiraIssueKeys,
@@ -399,6 +417,7 @@ export function normalizeThreadLinkInput(link: ThreadLinkInput): ThreadLink {
     threadTalkMode: link.threadTalkMode,
     taskDiscordMessageId: link.taskDiscordMessageId,
     streamDiscordMessageIds: link.streamDiscordMessageIds,
+    deliveryReceipt: link.deliveryReceipt,
     sentDiscordUserMessageIds: link.sentDiscordUserMessageIds,
     jiraIssueKeys: link.jiraIssueKeys,
     linkedJiraIssueKeys: link.linkedJiraIssueKeys,
@@ -611,12 +630,16 @@ export const makeThreadLinkStore = (dataDirRaw: string) =>
 
     // Persist migrated v1 → v2 so the next boot does not re-migrate.
     if (loaded.migratedFromV1 && loaded.links.length > 0) {
-      yield* Effect.promise(() => atomicWriteFile(filePath, serializeLinksDocument(loaded.links)));
+      yield* Effect.promise(() =>
+        atomicWriteFile(filePath, serializeLinksDocument(loaded.links)),
+      ).pipe(Effect.uninterruptible);
     }
 
     const persist = (map: Map<string, ThreadLink>) =>
       Effect.promise(() => atomicWriteFile(filePath, serializeLinksDocument([...map.values()])));
 
+    // Node filesystem promises cannot be cancelled. Finish each locked mutation+write
+    // before interruption so shutdown cannot release storage while a rename is pending.
     // Serialize mutate+persist so concurrent hint writers cannot flush a stale map
     // over a newer in-memory state (stream ids vs sequence marker, etc.).
     const writeLock = yield* Semaphore.make(1);
@@ -639,7 +662,7 @@ export const makeThreadLinkStore = (dataDirRaw: string) =>
           if (updated === null) return null;
           yield* persist(next);
           return updated;
-        }),
+        }).pipe(Effect.uninterruptible),
       );
 
     return ThreadLinkStore.of({
@@ -705,6 +728,7 @@ export const makeThreadLinkStore = (dataDirRaw: string) =>
                         link.lastDeliveredSequence !== undefined
                           ? normalized.lastDeliveredSequence
                           : existing.lastDeliveredSequence,
+                      deliveryReceipt: link.deliveryReceipt ?? existing.deliveryReceipt,
                       streamDiscordMessageIds:
                         link.streamDiscordMessageIds !== undefined
                           ? normalized.streamDiscordMessageIds
@@ -762,7 +786,7 @@ export const makeThreadLinkStore = (dataDirRaw: string) =>
               return copy;
             });
             yield* persist(next);
-          }),
+          }).pipe(Effect.uninterruptible),
         ),
 
       touch: (discordThreadId, at) => {
@@ -800,6 +824,9 @@ export const makeThreadLinkStore = (dataDirRaw: string) =>
             : {}),
           ...(partial.lastDeliveredSequence !== undefined
             ? { lastDeliveredSequence: partial.lastDeliveredSequence }
+            : {}),
+          ...(partial.deliveryReceipt !== undefined
+            ? { deliveryReceipt: partial.deliveryReceipt }
             : {}),
           ...(partial.streamDiscordMessageIds !== undefined
             ? {

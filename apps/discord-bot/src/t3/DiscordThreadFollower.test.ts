@@ -43,6 +43,15 @@ describe("native Discord thread stream", () => {
     expect(result.state.current).toBe(v2Projection);
     expect(result.state.lastSequence).toBe(10);
   });
+  it("ignores an older snapshot so working state cannot regress after completion", () => {
+    const state = { current: v2Projection, lastSequence: 12 };
+    const result = applyDiscordThreadStreamItem(state, {
+      kind: "snapshot",
+      snapshotSequence: 11,
+      projection: v2Projection,
+    });
+    expect(result).toEqual({ _tag: "none", state });
+  });
   it("applies native metadata events and ignores replayed events", () => {
     const state = { current: v2Projection, lastSequence: 10 };
     const item: OrchestrationV2ThreadStreamItem = {

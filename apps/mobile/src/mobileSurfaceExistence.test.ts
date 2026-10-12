@@ -25,9 +25,7 @@ describe("mobile surface existence (anti stack-drop)", () => {
     // Inner host stays a real flex container so the composer overlay still
     // anchors to the true bottom. Android uses a canvas class and rounded
     // corners; iOS stays flex-1.
-    expect(threadRoute).toMatch(
-      /testID="thread-conversation-surface"[\s\S]*?flex: 1[\s\S]*?<ThreadDetailScreen/,
-    );
+    expect(threadRoute).toMatch(/<ThreadPane>[\s\S]*?<ThreadDetailScreen/);
   });
 
   it("renders settled threads as slim history rows in the v2 thread list", () => {
@@ -82,19 +80,15 @@ describe("mobile surface existence (anti stack-drop)", () => {
     expect(homeHeader).not.toContain("WorkspaceConnectionStatus");
   });
 
-  it("keys markdown nodes uniquely even when parser spans collide", () => {
-    const nodeKey = NodeFS.readFileSync(
-      NodePath.join(root, "../modules/t3-markdown-text/src/markdownNodeKey.ts"),
-      "utf8",
+  it("keeps selectable markdown connected to the native GFM renderer", () => {
+    const selectable = readSrc("native/SelectableMarkdownText.tsx");
+    const nativeRenderer = readSrc("native/EnrichedMarkdownText.tsx");
+    expect(selectable).toMatch(/return <MobileEnrichedMarkdownText[\s\S]*?\{\.\.\.props\}/);
+    expect(nativeRenderer).toMatch(/<EnrichedMarkdownText[\s\S]*?markdown=\{markdown\}/);
+    expect(nativeRenderer).toMatch(
+      /<EnrichedMarkdownText[\s\S]*?flavor="github"[\s\S]*?selectable/,
     );
-    const tableBlock = NodeFS.readFileSync(
-      NodePath.join(root, "../modules/t3-markdown-text/src/NativeMarkdownBlock.tsx"),
-      "utf8",
-    );
-    // Grid keys for tables (never type:beg:end → table_cell:0:0).
-    expect(nodeKey).toContain("markdownTableCellKey");
-    expect(nodeKey).toContain("i${index}");
-    expect(tableBlock).toContain("markdownTableCellKey");
-    expect(tableBlock).toContain("key={markdownTableCellKey(rowIndex, cellIndex)}");
+    expect(nativeRenderer).toContain("selectionClipboard={selectionClipboard}");
+    expect(nativeRenderer).toContain("props.contextClipboardFragment");
   });
 });

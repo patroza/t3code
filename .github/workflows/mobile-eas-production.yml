@@ -7,10 +7,11 @@ name: Mobile EAS Production
 # runner, with corepack pinning pnpm 10.24 in eas.json, local == build.
 #
 # Fork Release dispatches this workflow to reconcile each selected platform:
-#   1. Store builds: if the latest production build's version differs from
-#      app.config.ts, cut a new build and submit it (TestFlight + Play internal
-#      track). Bumping `version` is therefore all it takes to
-#      start the next release train — the first build of a version enters
+#   1. Store builds: when no production build matches the current native
+#      fingerprint, or the latest build's version differs from app.config.ts,
+#      cut a new build and submit it (TestFlight + Play internal track). Native
+#      changes therefore ship a binary, and bumping `version` starts the next
+#      release train — the first build of a version enters
 #      external-TestFlight beta review immediately, and later builds of the
 #      same version auto-approve until that version is released. After App
 #      Store approval, Apple closes the release train and `version` must be
@@ -21,10 +22,11 @@ name: Mobile EAS Production
 #      fingerprint. Older binaries of the same major version with a matching
 #      fingerprint receive it too; the major version is part of the
 #      fingerprint (apps/mobile/fingerprint.config.js), so a new major never
-#      reaches the previous major's store binaries over the air. When native
-#      drift means no binary could install the update,
-#      it is skipped and flagged in the job summary instead of published
-#      into the void.
+#      reaches the previous major's store binaries over the air. Until a
+#      build for the new fingerprint finishes, the OTA is skipped rather than
+#      published into the void.
+# Hold native-change PRs (the "📱 Native Change" label) and merge them as a
+# batch to avoid a store build per PR.
 # workflow_dispatch remains as a manual override for both modes (e.g. to
 # retry an errored build or force an OTA).
 # Manual v2-preview builds keep the production app identity and disable OTA.

@@ -293,4 +293,24 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(card).toContain('tooltip="Reset to the device setting"');
     expect(card).toContain("aria-label={`Enable ${displayName}`}");
   });
+
+  it("keeps project jump navigation alongside prompt links and the sidebar reveal target", () => {
+    const jump = readSrc("routes/_chat.jump.tsx");
+    const prompt = readSrc("routes/_chat.new.tsx");
+    const sidebar = readSrc("components/Sidebar.tsx");
+    expect(jump).toContain('createFileRoute("/_chat/jump")');
+    expect(jump).toContain("revealProjectInSidebar(target.project)");
+    expect(prompt).toContain('createFileRoute("/_chat/new")');
+    expect(prompt).toContain("<NewThreadLinkView");
+    expect(sidebar).toContain("subscribeToProjectReveal(");
+    expect(sidebar).toContain("setProjectScopeKey(projectGroup.projectKey)");
+  });
+
+  it("keeps full error toast titles reachable through the tooltip", () => {
+    const toast = readSrc("components/ui/toast.tsx");
+    expect(toast).toContain("<ToastTitleBlock toastTitle={toastTitle} toastType={toastType} />");
+    expect(toast).toContain("errorToastTitleTooltipText(toastType, toastTitle)");
+    expect(toast).toContain('<TooltipPopup side="top" className={ERROR_DETAIL_TOOLTIP_CLASS}>');
+    expect(toast).toContain("{titleTooltip}");
+  });
 });

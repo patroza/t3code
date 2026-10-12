@@ -1,11 +1,16 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import type {
   EnvironmentProject,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/models";
-import { parseProjectJumpAction, resolveProjectJumpTarget } from "./projectJump";
+import {
+  parseProjectJumpAction,
+  resolveProjectJumpTarget,
+  revealProjectInSidebar,
+  subscribeToProjectReveal,
+} from "./projectJump";
 
 const environmentId = EnvironmentId.make("local");
 const project = {
@@ -134,5 +139,34 @@ describe("project jumps", () => {
     expect(parseProjectJumpAction(undefined)).toBe("reveal");
     expect(parseProjectJumpAction("latest")).toBe("latest");
     expect(parseProjectJumpAction("new")).toBe("new");
+  });
+});
+
+describe("project reveal delivery", () => {
+  it("retains a navigation before sidebar mount and stops notifying after unmount", () => {
+    vi.stubGlobal("window", new EventTarget());
+    const received: Array<{ environmentId: string; projectId: string }> = [];
+    let unsubscribe = () => {};
+    try {
+      revealProjectInSidebar(project);
+      unsubscribe = subscribeToProjectReveal((detail) => received.push(detail));
+      expect(received).toEqual([{ environmentId, projectId: project.id }]);
+
+      const remote = { ...project, environmentId: EnvironmentId.make("remote") };
+      revealProjectInSidebar(remote);
+      expect(received).toEqual([
+        { environmentId, projectId: project.id },
+        { environmentId: remote.environmentId, projectId: project.id },
+      ]);
+      unsubscribe();
+      revealProjectInSidebar(project);
+      expect(received).toHaveLength(2);
+      // A later sidebar mount consumes the retained navigation.
+      subscribeToProjectReveal((detail) => received.push(detail))();
+      expect(received[2]).toEqual({ environmentId, projectId: project.id });
+    } finally {
+      unsubscribe();
+      vi.unstubAllGlobals();
+    }
   });
 });

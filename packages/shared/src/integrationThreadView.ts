@@ -56,6 +56,7 @@ export const IntegrationLatestTurn = Schema.Struct({
   startedAt: Schema.NullOr(Schema.String),
   completedAt: Schema.NullOr(Schema.String),
   assistantMessageId: Schema.NullOr(MessageId),
+  runStatus: Schema.optional(Schema.String),
 });
 export const IntegrationSession = Schema.Struct({
   threadId: ThreadId,
@@ -153,6 +154,7 @@ export function integrationThreadShellView(
       ? null
       : {
           turnId: TurnId.make(shell.latestRunId),
+          runStatus: shell.status,
           state: active(shell.status)
             ? ("running" as const)
             : shell.status === "completed"
@@ -213,6 +215,7 @@ export function integrationThreadView(
       ? null
       : {
           turnId: TurnId.make(run.id),
+          runStatus: run.status,
           state: active(run.status)
             ? ("running" as const)
             : run.status === "completed"
