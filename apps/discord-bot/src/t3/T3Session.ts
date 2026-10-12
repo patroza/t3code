@@ -76,6 +76,7 @@ import { formatThreadTitle } from "../presentation/messages.ts";
 import { normalizeWorkspacePath } from "../presentation/mentions.ts";
 import { followOrchestrationThread } from "./DiscordThreadFollower.ts";
 import { applyIntegrationShellStreamItem } from "./shellStream.ts";
+import { reconnectUntilReady } from "./reconnect.ts";
 import { newCommandId, newMessageId, newThreadId, shortId } from "./ids.ts";
 import {
   clearPersistedBearerSession,
@@ -455,12 +456,15 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
       if (reconnecting) return;
       reconnecting = true;
       try {
-        for (let attempt = 0; ; attempt += 1) {
-          const delay =
-            RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)] ?? 16_000;
-          await runtime.runPromise(Effect.sleep(Duration.millis(delay))).catch(() => {});
-          try {
-            await runtime.runPromise(connect());
+        await reconnectUntilReady({
+          connect: () => runtime.runPromise(connect()),
+          isReady: () => session !== null && shell !== null,
+          wait: (attempt) => {
+            const delay =
+              RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)] ?? 16_000;
+            return runtime.runPromise(Effect.sleep(Duration.millis(delay))).catch(() => {});
+          },
+          restore: async () => {
             await runtime.runPromise(Effect.logInfo("Reconnected to T3"));
             const handler = onReconnected;
             if (handler !== null) {
@@ -474,17 +478,16 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
                   .catch(() => {});
               }
             }
-            return;
-          } catch (cause) {
-            await runtime
+          },
+          onFailure: (cause, attempt) =>
+            runtime
               .runPromise(
                 Effect.logWarning(
                   `T3 reconnect attempt ${attempt + 1} failed: ${messageFromCause(cause)}`,
                 ),
               )
-              .catch(() => {});
-          }
-        }
+              .catch(() => {}),
+        });
       } finally {
         reconnecting = false;
       }
