@@ -11,6 +11,7 @@ import * as ConfigProvider from "effect/ConfigProvider";
 import { DiscordBotConfig } from "../config.ts";
 import { findAlreadyPostedFinalChunkIds } from "../features/ResponseBridge.ts";
 import { workingFields, idleFields } from "../features/BotResponseTransport.ts";
+import { channelTopicOptsIntoInProgressStream } from "../presentation/attachments.ts";
 import {
   makeTeamsResponseTransport,
   teamsMessageFields,
@@ -66,6 +67,87 @@ describe("Teams response adapter", () => {
     });
     expect(teamsMessageFields(idleFields("19:50")).attachments).toEqual([]);
   });
+  it.effect("uploads a channel document and sends one answer card with its SharePoint link", () =>
+    Effect.gen(function* () {
+      const config = yield* DiscordBotConfig.pipe(
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnvRecord({ T3_DISCORD_BOT_DATA_DIR: directory }),
+          ),
+        ),
+      );
+      const fetch = vi
+        .fn<typeof globalThis.fetch>()
+        .mockResolvedValueOnce(Response.json({ access_token: "token", expires_in: 3600 }))
+        .mockResolvedValueOnce(
+          Response.json({
+            id: "file",
+            name: "stored-report.csv",
+            webUrl: "https://omega.sharepoint.com/sites/Omega/report.csv",
+          }),
+        );
+      const send = vi
+        .fn<(wire: TeamsResponseActivity) => Promise<{ id: string }>>()
+        .mockResolvedValue({ id: "sent" });
+      const adapter = makeTeamsResponseTransport({
+        ...options,
+        config,
+        fetch,
+        send,
+        fileDestination: {
+          driveId: "drive",
+          folderId: "folder",
+          siteUrl: "https://omega.sharepoint.com/sites/Omega",
+        },
+      });
+      const message = yield* adapter.createMessageWithFiles(
+        options.conversationId,
+        "Here is the report.",
+        [{ name: "report.csv", mimeType: "text/csv", data: new Uint8Array([65, 66]) }],
+      );
+      expect(message.content).toBe("Here is the report.");
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(send.mock.calls[0]?.[0].text).toBe("");
+      expect(send.mock.calls[0]?.[0].attachments?.[0]?.content).toMatchObject({
+        body: [{ type: "TextBlock", text: "Here is the report.", wrap: true }],
+        actions: [
+          {
+            type: "Action.OpenUrl",
+            title: "report.csv",
+            url: "https://omega.sharepoint.com/sites/Omega/report.csv",
+          },
+        ],
+      });
+      expect(fetch.mock.calls[1]?.[1]?.method).toBe("PUT");
+    }),
+  );
+  it.effect("keeps progress-history files opt-in for each Teams channel", () =>
+    Effect.gen(function* () {
+      const config = yield* DiscordBotConfig.pipe(
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnvRecord({ T3_DISCORD_BOT_DATA_DIR: directory }),
+          ),
+        ),
+      );
+      const ordinary = makeTeamsResponseTransport({ ...options, config });
+      const optedIn = makeTeamsResponseTransport({
+        ...options,
+        config,
+        includeProgressHistory: true,
+      });
+      expect(
+        channelTopicOptsIntoInProgressStream(
+          (yield* ordinary.getChannel(options.conversationId)).topic,
+        ),
+      ).toBe(false);
+      expect(
+        channelTopicOptsIntoInProgressStream(
+          (yield* optedIn.getChannel(options.conversationId)).topic,
+        ),
+      ).toBe(true);
+    }),
+  );
   it.live("repairs idless rows and adopts a sent card before editing it in place", () =>
     Effect.gen(function* () {
       const config = yield* DiscordBotConfig.pipe(

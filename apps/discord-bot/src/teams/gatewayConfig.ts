@@ -2,6 +2,7 @@
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as Schema from "effect/Schema";
+import { TeamsFileDestination, validateTeamsFileDestination } from "./channelFiles.ts";
 
 const Workspace = Schema.Struct({
   enabled: Schema.Boolean,
@@ -27,6 +28,8 @@ const Binding = Schema.Struct({
   allowedActorIds: Schema.Array(Schema.String),
   projectShortName: Schema.optional(Schema.String),
   projectId: Schema.optional(Schema.String),
+  fileDestination: Schema.optional(TeamsFileDestination),
+  includeProgressHistory: Schema.optional(Schema.Boolean),
 });
 const GatewayConfig = Schema.Struct({
   version: Schema.Literal(1),
@@ -122,6 +125,7 @@ export function parseGatewayConfig(value: unknown): TeamsGatewayConfig {
   const scopes = new Set<string>();
   const ids = new Set<string>();
   for (const binding of config.bindings) {
+    if (binding.fileDestination) validateTeamsFileDestination(binding.fileDestination);
     if (ids.has(binding.id)) throw new Error("Duplicate binding ID");
     ids.add(binding.id);
     if (!binding.enabled) continue;
