@@ -11,7 +11,7 @@ export type WorkingDotCount = 2 | 3 | 4;
 export const WORKING_WAKE_NOTE_MAX = 80;
 
 /** Longest Working suffix we reserve room for (dots + wake note + large tool count). */
-const WORKING_INDICATOR_MAX = `_Working.... · ${"x".repeat(WORKING_WAKE_NOTE_MAX)} · 9999 tool calls_`;
+const WORKING_INDICATOR_MAX = `_Waiting for approval.... · ${"x".repeat(WORKING_WAKE_NOTE_MAX)} · 9999 tool calls_`;
 
 /**
  * Optional tool-call progress on the Working indicator (Discord only shows a count,
@@ -65,18 +65,19 @@ export function nextWorkingDotCount(current: WorkingDotCount): WorkingDotCount {
 export function stripWorkingIndicator(content: string): string {
   // Optional wake note, then optional " · N tool call(s)", inside the marker (italic or plain).
   // Notes are sanitized so they contain neither `_` nor `·`.
+  const label = "(?:Working|Starting|Waiting(?: for approval)?)";
   const wakeSuffix = "(?:\\s*·\\s*[^_\\r\\n·]+)?";
   const toolSuffix = "(?:\\s*·\\s*\\d+\\s+tool calls?)?";
   const workingTail = new RegExp(
-    `(?:\\r?\\n)+\\s*_Working\\.{2,4}${wakeSuffix}${toolSuffix}_\\s*$`,
+    `(?:\\r?\\n)+\\s*_${label}\\.{2,4}${wakeSuffix}${toolSuffix}_\\s*$`,
     "u",
   );
   const workingTailPlain = new RegExp(
-    `(?:\\r?\\n)+\\s*Working\\.{2,4}${wakeSuffix}${toolSuffix}\\s*$`,
+    `(?:\\r?\\n)+\\s*${label}\\.{2,4}${wakeSuffix}${toolSuffix}\\s*$`,
     "u",
   );
-  const workingInline = new RegExp(`\\s*_Working\\.{2,4}${wakeSuffix}${toolSuffix}_\\s*$`, "u");
-  const workingInlinePlain = new RegExp(`\\s*Working\\.{2,4}${wakeSuffix}${toolSuffix}\\s*$`, "u");
+  const workingInline = new RegExp(`\\s*_${label}\\.{2,4}${wakeSuffix}${toolSuffix}_\\s*$`, "u");
+  const workingInlinePlain = new RegExp(`\\s*${label}\\.{2,4}${wakeSuffix}${toolSuffix}\\s*$`, "u");
   return content
     .replace(workingTail, "")
     .replace(workingTailPlain, "")

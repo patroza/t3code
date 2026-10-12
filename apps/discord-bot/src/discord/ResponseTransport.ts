@@ -8,6 +8,7 @@ import * as Redacted from "effect/Redacted";
 import {
   BotResponseTransport,
   BotTransportError,
+  messageUpdateError,
   type BotMessageFields,
 } from "../features/BotResponseTransport.ts";
 import { upsertThreadInfoPin } from "../features/ThreadInfoPin.ts";
@@ -73,9 +74,9 @@ export const layer = Layer.effect(
       updateMessage: (id, messageId, fields) =>
         rest
           .updateMessage(id, messageId, discordMessageFields(fields))
-          .pipe(Effect.mapError(transportError)),
+          .pipe(Effect.mapError(messageUpdateError)),
       deleteMessage: (id, messageId) =>
-        rest.deleteMessage(id, messageId).pipe(Effect.asVoid, Effect.mapError(transportError)),
+        rest.deleteMessage(id, messageId).pipe(Effect.asVoid, Effect.mapError(messageUpdateError)),
       updateChannel: (id, fields) =>
         rest.updateChannel(id, fields).pipe(Effect.mapError(transportError)),
       createMessageWithFiles: (id, content, files) =>

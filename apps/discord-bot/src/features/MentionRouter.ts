@@ -1,5 +1,5 @@
 import { type IntegrationThreadView as OrchestrationThread } from "@t3tools/shared/integrationThreadView";
-// @effect-diagnostics anyUnknownInErrorContext:off missingEffectContext:off globalDate:off globalErrorInEffectFailure:off outdatedApi:off globalFetchInEffect:off
+// @effect-diagnostics anyUnknownInErrorContext:off missingEffectContext:off globalDate:off globalErrorInEffectFailure:off globalErrorInEffectCatch:off outdatedApi:off globalFetchInEffect:off
 import {
   MessageId,
   type ModelSelection,
@@ -9,7 +9,7 @@ import {
 } from "@t3tools/contracts";
 import { DISCORD_LINK_REQUEST_MARKER } from "@t3tools/shared/providerModelSelection";
 import { makeKeyedDrainableWorker } from "@t3tools/shared/KeyedDrainableWorker";
-import { Discord, DiscordREST, Ix } from "dfx";
+import { Discord, DiscordConfig, DiscordREST, Ix } from "dfx";
 import { DiscordGateway, InteractionsRegistry } from "dfx/gateway";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -18,6 +18,7 @@ import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
@@ -148,6 +149,7 @@ import {
   hasNewContextCompaction,
 } from "../presentation/compactContext.ts";
 import {
+  EXPORT_SLASH_COMMAND,
   formatAskSlashAck,
   isThreadTalkSlashAction,
   OMEGENT_SLASH_COMMAND,
@@ -157,6 +159,19 @@ import {
   slashReply,
   threadTalkSlashReply,
 } from "../presentation/slashCommands.ts";
+import { editOriginalInteractionWithAttachments, textFile } from "../presentation/discordFiles.ts";
+import {
+  EXPORT_HISTORY_CAP,
+  EXPORT_MARKDOWN_NAME,
+  exportHistoryTarget,
+  exportInteractionContent,
+  initialExportHistoryCursor,
+  nextExportHistoryCursor,
+  parseExportCount,
+  renderThreadExport,
+  type DiscordExportMessage,
+  type ExportHistoryCursor,
+} from "../presentation/threadExport.ts";
 import {
   buildTodayRecapPrompt,
   chunkTodayRecapContent,
@@ -188,6 +203,7 @@ import {
 } from "../t3/T3Session.ts";
 import { formatAlertCause } from "./Alerts.ts";
 import { formatUnknownDiscordModelMessage } from "../presentation/channelInfoPin.ts";
+import { topicDefaultModel, topicRequestsFastMode } from "../presentation/fastMode.ts";
 import { ensureChannelInfoPin } from "./ChannelInfoPin.ts";
 import { makeDiscordThreadTurnCoordinator } from "./DiscordThreadTurnCoordinator.ts";
 import {
@@ -602,6 +618,9 @@ const make = (botConfig: DiscordBotConfig) =>
   Effect.gen(function* () {
     const gateway = yield* DiscordGateway;
     const rest = yield* DiscordREST;
+    const discordConfig = yield* DiscordConfig.DiscordConfig;
+    const discordBotToken = Redacted.value(discordConfig.token);
+    const discordApiBaseUrl = discordConfig.rest.baseUrl;
     const t3 = yield* T3Session;
     const links = yield* ThreadLinkStore;
     const aliases = yield* ProjectAliasStore;
@@ -1374,6 +1393,7 @@ const make = (botConfig: DiscordBotConfig) =>
                   ? {}
                   : { overrideInstanceId: input.flags.provider }),
                 ...(input.flags.model === undefined ? {} : { overrideModel: input.flags.model }),
+                ...(topicRequestsFastMode(input.topic) ? { fastMode: true } : {}),
               })
             : undefined;
           if (currentThread?.modelSelection !== undefined && continueModelSelection !== undefined) {
@@ -1532,13 +1552,38 @@ const make = (botConfig: DiscordBotConfig) =>
           return existing.t3ThreadId;
         }
 
-        // New Discord thread / first link: pick model from flags or bot defaults.
+        // New Discord thread / first link. Explicit --model wins. Otherwise
+        // `omegent-default-model-<name>` on the channel topic is the default.
+        // `omegent-fast-mode` starts that thread in fast mode. Continues above
+        // keep the stored selection unless the message passes --model/--provider.
+        const topicModel = input.flags.model === undefined ? topicDefaultModel(input.topic) : null;
+        if (topicModel !== null) {
+          const unknownModel = yield* unknownModelMessage({
+            model: topicModel,
+            provider: input.flags.provider,
+            guildId: input.guildId,
+            pinChannelId: input.parentChannelId ?? input.channelId,
+            topic: input.topic,
+          });
+          if (unknownModel !== null) {
+            yield* clearBootstrapReaction(input.pendingReadyReaction);
+            yield* rest.createMessage(input.discordThreadId, {
+              content: unknownModel,
+              ...(typeof input.mentionMessage?.id === "string"
+                ? { message_reference: { message_id: input.mentionMessage.id } }
+                : {}),
+            });
+            return;
+          }
+        }
+        const startupModel = input.flags.model ?? topicModel ?? undefined;
         const modelSelection = yield* t3.resolveModelSelection({
           project: resolved.project,
           ...(input.flags.provider === undefined
             ? {}
             : { overrideInstanceId: input.flags.provider }),
-          ...(input.flags.model === undefined ? {} : { overrideModel: input.flags.model }),
+          ...(startupModel === undefined ? {} : { overrideModel: startupModel }),
+          ...(topicRequestsFastMode(input.topic) ? { fastMode: true } : {}),
         });
 
         // First link into this Discord thread: pull starter; Sentry bootstrap only when relevant.
@@ -2124,7 +2169,21 @@ const make = (botConfig: DiscordBotConfig) =>
           reason: "today-recap",
         });
         const resolved = yield* resolveProjectFromTopic(input.topic);
-        const modelSelection = yield* t3.resolveModelSelection({ project: resolved.project });
+        const topicModel = topicDefaultModel(input.topic);
+        if (topicModel !== null) {
+          const unknownModel = yield* unknownModelMessage({
+            model: topicModel,
+            guildId: input.guildId,
+            pinChannelId: input.deliveryChannelId,
+            topic: input.topic,
+          });
+          if (unknownModel !== null) return unknownModel;
+        }
+        const modelSelection = yield* t3.resolveModelSelection({
+          project: resolved.project,
+          ...(topicModel === null ? {} : { overrideModel: topicModel }),
+          ...(topicRequestsFastMode(input.topic) ? { fastMode: true } : {}),
+        });
         const { threadId } = yield* t3.startTurnWithWorktree({
           project: resolved.project,
           prompt,
@@ -3105,7 +3164,22 @@ const make = (botConfig: DiscordBotConfig) =>
             });
             if (unknownModel !== null) {
               yield* clearBootstrapReaction(pendingReadyReaction);
-              yield* rest.createMessage(event.channel_id, {
+              // A channel mention cannot be ephemeral. Open the thread (or reuse
+              // one AutoThreads already made) and leave the channel itself quiet.
+              const threadId = yield* openOrReuseThread(
+                event.channel_id,
+                event.id,
+                truncateTitle(prompt),
+              ).pipe(
+                Effect.map((thread) => thread.id),
+                Effect.catch((error) =>
+                  Effect.logWarning(
+                    "Could not open a thread for the unknown-model reply; posting in the channel",
+                    { error: String(error), messageId: event.id },
+                  ).pipe(Effect.as(event.channel_id)),
+                ),
+              );
+              yield* rest.createMessage(threadId, {
                 content: unknownModel,
                 message_reference: { message_id: event.id },
               });
@@ -3456,6 +3530,105 @@ const make = (botConfig: DiscordBotConfig) =>
     // `/omegent` and its `/agent` alias share one handler. Discord has no native
     // aliases, so each name is a separately registered command; the cast keeps the
     // command-spec type constant across both so the single handler type-checks.
+    const exportCountRaw = (optionsMap: HashMap.HashMap<string, string | undefined>) =>
+      Option.getOrUndefined(HashMap.get(optionsMap, "count"));
+
+    const respondToExport = (countRaw: unknown) =>
+      Effect.gen(function* () {
+        const interaction = yield* Ix.Interaction;
+        const channelId = interaction.channel_id;
+        if (channelId === undefined || channelId.length === 0) {
+          return slashReply("Export only works inside a server channel or thread.", {
+            ephemeral: true,
+          });
+        }
+
+        const parsed = parseExportCount(countRaw);
+        if (parsed === null) {
+          return slashReply(
+            `count must be a whole number from 1 to ${EXPORT_HISTORY_CAP}. Omit it to copy the whole chat.`,
+            { ephemeral: true },
+          );
+        }
+        const target = exportHistoryTarget(parsed);
+
+        const applicationId = interaction.application_id;
+        const interactionToken = interaction.token;
+        yield* forkSlashBackground(
+          Effect.gen(function* () {
+            // The deferred ack has to land before the original response can be edited.
+            yield* Effect.sleep("250 millis");
+            const listed: Array<DiscordExportMessage> = [];
+            let cursor: ExportHistoryCursor | undefined = initialExportHistoryCursor(target);
+            let truncated = false;
+            while (cursor !== undefined) {
+              const page = yield* retryTransientDiscordOperation(
+                rest.listMessages(channelId, {
+                  limit: cursor.limit,
+                  ...(cursor.before === undefined ? {} : { before: cursor.before }),
+                }),
+                DISCORD_MESSAGE_RETRY_DELAYS_MS,
+              );
+              listed.push(...page);
+              const oldestId = page.at(-1)?.id;
+              const next = nextExportHistoryCursor({
+                target,
+                collected: listed.length,
+                pageCount: page.length,
+                pageLimit: cursor.limit,
+                oldestId,
+              });
+              if (next === "end") {
+                cursor = undefined;
+              } else if (next === "maybe-truncated") {
+                // A full page that lands on the cap may still be the last page.
+                const probe =
+                  oldestId === undefined
+                    ? []
+                    : yield* retryTransientDiscordOperation(
+                        rest.listMessages(channelId, { limit: 1, before: oldestId }),
+                        DISCORD_MESSAGE_RETRY_DELAYS_MS,
+                      );
+                truncated = probe.length > 0;
+                cursor = undefined;
+              } else {
+                cursor = next;
+              }
+            }
+            const markdown = renderThreadExport({
+              messages: listed,
+              botUserId,
+              truncated,
+            });
+            yield* Effect.tryPromise({
+              try: () =>
+                editOriginalInteractionWithAttachments({
+                  baseUrl: discordApiBaseUrl,
+                  botToken: discordBotToken,
+                  applicationId,
+                  interactionToken,
+                  content: exportInteractionContent(markdown),
+                  files: [textFile(EXPORT_MARKDOWN_NAME, markdown)],
+                }),
+              catch: (cause) =>
+                cause instanceof Error ? cause : new Error("Export upload failed"),
+            });
+          }).pipe(
+            Effect.catch((error: unknown) =>
+              rest
+                .updateOriginalWebhookMessage(applicationId, interactionToken, {
+                  payload: {
+                    content: `Export failed: ${error instanceof Error ? error.message : String(error)}`,
+                  },
+                })
+                .pipe(Effect.ignore),
+            ),
+          ),
+        );
+
+        return slashDefer({ ephemeral: true });
+      });
+
     const makeSlashCommand = (commandName: string) =>
       Ix.guild(
         { ...OMEGENT_SLASH_COMMAND, name: commandName } as typeof OMEGENT_SLASH_COMMAND,
@@ -3563,7 +3736,7 @@ const make = (botConfig: DiscordBotConfig) =>
                     topic,
                   });
                   if (unknownModel !== null) {
-                    return slashReply(unknownModel);
+                    return slashReply(unknownModel, { ephemeral: true });
                   }
                 }
               }
@@ -4370,17 +4543,23 @@ const make = (botConfig: DiscordBotConfig) =>
                 ),
               ),
             ),
+
+            export: respondToExport(exportCountRaw(ix.optionsMap)),
           });
         },
       );
 
     const omegentSlashCommand = makeSlashCommand(OMEGENT_SLASH_COMMAND_NAME);
     const agentSlashCommand = makeSlashCommand(OMEGENT_SLASH_COMMAND_ALIAS);
+    const exportSlashCommand = Ix.guild(EXPORT_SLASH_COMMAND, (ix) =>
+      respondToExport(exportCountRaw(ix.optionsMap)),
+    );
 
     yield* registry.register(
       Ix.builder
         .add(omegentSlashCommand)
         .add(agentSlashCommand)
+        .add(exportSlashCommand)
         .add(approvalButton)
         .add(denyButton)
         .add(stopButton)
@@ -4389,7 +4568,11 @@ const make = (botConfig: DiscordBotConfig) =>
     );
 
     yield* Effect.logInfo("Registered Discord slash commands", {
-      commands: [OMEGENT_SLASH_COMMAND_NAME, OMEGENT_SLASH_COMMAND_ALIAS],
+      commands: [
+        OMEGENT_SLASH_COMMAND_NAME,
+        OMEGENT_SLASH_COMMAND_ALIAS,
+        EXPORT_SLASH_COMMAND.name,
+      ],
       subcommands: OMEGENT_SLASH_COMMAND.options.map((option) => option.name),
       scope: "guild",
     });

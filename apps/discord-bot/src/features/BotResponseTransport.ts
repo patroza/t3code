@@ -101,8 +101,12 @@ export class BotResponseTransport extends Context.Service<
   BotResponseTransportService
 >()("@t3tools/discord-bot/features/BotResponseTransport") {}
 
-export const workingFields = (content: string, threadId: string): BotMessageFields => ({
-  content,
+export const workingFields = (
+  content: string,
+  threadId: string,
+  label = "Working",
+): BotMessageFields => ({
+  content: content.replace(/_Working(?=\.{2,4}(?:_| ·))/u, `_${label}`),
   actions: [{ command: "stop", threadId, label: "Stop" }],
 });
 
@@ -115,4 +119,21 @@ export const idleFields = (content: string): BotMessageFields => ({ content, act
 
 export class BotTransportError extends Data.TaggedError("BotTransportError")<{
   readonly cause: unknown;
+  readonly reason?: "message-not-found";
 }> {}
+
+/** Only an explicit missing-message response authorizes replacing an existing message. */
+export function messageUpdateError(cause: unknown): BotTransportError {
+  const response =
+    typeof cause === "object" && cause !== null && "response" in cause ? cause.response : undefined;
+  const status =
+    typeof response === "object" && response !== null && "status" in response
+      ? response.status
+      : typeof cause === "object" && cause !== null && "statusCode" in cause
+        ? cause.statusCode
+        : undefined;
+  return new BotTransportError({
+    cause,
+    ...(status === 404 ? { reason: "message-not-found" as const } : {}),
+  });
+}

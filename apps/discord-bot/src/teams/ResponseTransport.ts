@@ -11,6 +11,7 @@ import * as NodeTimersPromises from "node:timers/promises";
 import { uploadTeamsChannelFiles, type TeamsFileDestination } from "./channelFiles.ts";
 import {
   BotTransportError,
+  messageUpdateError,
   type BotMessage,
   type BotMessageFields,
   type BotResponseTransportService,
@@ -344,13 +345,16 @@ export function makeTeamsResponseTransport(input: {
           .slice(0, options?.limit ?? 25);
       }),
     createMessage: (_, fields) => request(() => send(fields)),
-    updateMessage: (_, id, fields) => request(() => send(fields, id)),
+    updateMessage: (_, id, fields) =>
+      request(() => send(fields, id)).pipe(
+        Effect.mapError((error) => messageUpdateError(error.cause)),
+      ),
     deleteMessage: (_, id) =>
       request(async () => {
         await input.deleteMessage(id);
         ownMessages.delete(id);
         persist(undefined, id);
-      }),
+      }).pipe(Effect.mapError((error) => messageUpdateError(error.cause))),
     createMessageWithFiles: (_, content, files) =>
       request(async () => {
         const images = files.filter((file) => file.mimeType.startsWith("image/"));

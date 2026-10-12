@@ -33,6 +33,34 @@ describe("T3 connect-wait queue", () => {
   });
 });
 
+describe("unknown model replies", () => {
+  it("keeps a bad --model out of the parent channel", () => {
+    const channelReply = mentionRouterSource.indexOf(
+      "Could not open a thread for the unknown-model reply; posting in the channel",
+    );
+    expect(channelReply).toBeGreaterThan(-1);
+    expect(mentionRouterSource).toContain("openOrReuseThread(");
+    expect(mentionRouterSource).toContain("slashReply(unknownModel, { ephemeral: true })");
+    const slashReplyAt = mentionRouterSource.indexOf(
+      "slashReply(unknownModel, { ephemeral: true })",
+    );
+    expect(mentionRouterSource.slice(channelReply, slashReplyAt)).toContain(
+      "rest.createMessage(threadId,",
+    );
+  });
+});
+
+describe("export slash command", () => {
+  it("registers /export and posts an ephemeral transcript", () => {
+    expect(mentionRouterSource).toContain("export: respondToExport(exportCountRaw(ix.optionsMap))");
+    expect(mentionRouterSource).toContain("Ix.guild(EXPORT_SLASH_COMMAND");
+    expect(mentionRouterSource).toContain("renderThreadExport");
+    expect(mentionRouterSource).toContain("nextExportHistoryCursor");
+    expect(mentionRouterSource).toContain("editOriginalInteractionWithAttachments");
+    expect(mentionRouterSource).toContain("slashDefer({ ephemeral: true })");
+  });
+});
+
 describe("today-recap slash command", () => {
   it("registers /omegent today-recap and posts the recap in the invoking channel", () => {
     expect(mentionRouterSource).toContain('"today-recap": Effect.gen(function* () {');
