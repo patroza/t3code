@@ -200,6 +200,7 @@ describe("fork surface existence (anti stack-drop)", () => {
     const queue = readSrc("components/chat/QueuedRunsControl.tsx");
     expect(queue).toContain('aria-label="Edit queued message"');
     expect(queue).toContain('aria-label="Remove queued message"');
+    expect(queue).toContain('item.heldForEdit ? <span className="shrink-0 text-xs">Editing</span>');
     expect(queue).toContain("canPromoteToSteer");
     expect(queue).toContain("Reorder queued message");
   });
