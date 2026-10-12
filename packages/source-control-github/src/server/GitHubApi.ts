@@ -114,7 +114,7 @@ export interface GitHubRestResponse {
   readonly invalidUtf8: boolean;
 }
 
-export interface GitHubRestInput {
+export interface GitHubRestInput extends GitHubCredentials.GitHubCredentialTarget {
   readonly host: string;
   readonly operation: string;
   readonly method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -132,7 +132,7 @@ export interface GitHubRestInput {
   readonly allowReserve?: boolean;
 }
 
-export interface GitHubGraphQlInput {
+export interface GitHubGraphQlInput extends GitHubCredentials.GitHubCredentialTarget {
   readonly host: string;
   readonly operation: string;
   readonly query: string;
@@ -150,6 +150,7 @@ export class GitHubApi extends Context.Service<
     /** The credential a request to `host` would carry right now. */
     readonly credential: (
       host: string,
+      target?: GitHubCredentials.GitHubCredentialTarget,
     ) => Effect.Effect<
       { readonly token: Redacted.Redacted<string>; readonly fingerprint: string },
       GitHubApiError
@@ -342,7 +343,7 @@ export const make = Effect.gen(function* () {
   const gate = yield* Semaphore.make(CONCURRENCY);
 
   const credential: GitHubApi["Service"]["credential"] = Effect.fn("GitHubApi.credential")(
-    function* (host) {
+    function* (host, target) {
       const normalized = normalizeHost(host);
       const pinned = yield* PinnedGitHubCredential;
       if (pinned !== null) {
@@ -355,7 +356,7 @@ export const make = Effect.gen(function* () {
         }
         return { token: pinned.token, fingerprint: pinned.credentialFingerprint };
       }
-      const held = yield* credentials.get(normalized);
+      const held = yield* credentials.get(normalized, target);
       return { token: held.token, fingerprint: held.fingerprint };
     },
   );
@@ -366,6 +367,7 @@ export const make = Effect.gen(function* () {
    */
   const send = Effect.fn("GitHubApi.send")(function* (input: {
     readonly host: string;
+    readonly target: GitHubCredentials.GitHubCredentialTarget;
     readonly operation: string;
     readonly request: HttpClientRequest.HttpClientRequest;
     readonly maxResponseBytes: number;
@@ -384,7 +386,7 @@ export const make = Effect.gen(function* () {
       "http.request.method": input.request.method,
       "url.path": new URL(input.request.url).pathname,
     });
-    const { token, fingerprint } = yield* credential(host);
+    const { token, fingerprint } = yield* credential(host, input.target);
     const scope = yield* SourceControlRateLimit.CredentialScope;
     // REST spends `core` and GraphQL its own quota, each with its own reserve. Every REST path
     // this reads today is `core`; a `search/` read would need its own resource here. A refusal
@@ -483,7 +485,7 @@ export const make = Effect.gen(function* () {
           // The source may hold a newer token than the one that was refused.
           Unauthorized: () =>
             credentials
-              .invalidate(host)
+              .invalidate(host, input.target)
               .pipe(Effect.andThen(Effect.fail(new GitHubApiAuthenticationError(context)))),
           NotFound: () => Effect.fail(new GitHubApiNotFoundError(context)),
           Failed: ({ messages }) =>
@@ -520,6 +522,7 @@ export const make = Effect.gen(function* () {
       Effect.flatMap((interactive) =>
         send({
           host: input.host,
+          target: input,
           operation: input.operation,
           request,
           maxResponseBytes: input.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES,
@@ -546,6 +549,7 @@ export const make = Effect.gen(function* () {
       });
       const response = yield* send({
         host,
+        target: input,
         operation: input.operation,
         request: HttpClientRequest.post(gitHubApiUrls(host).graphql).pipe(
           HttpClientRequest.acceptJson,

@@ -1657,6 +1657,7 @@ export const make = Effect.gen(function* () {
     const identity = yield* api
       .getRoutingIdentity({
         cwd: project.project.workspaceRoot,
+        repository: project.repository,
         host,
       })
       .pipe(Effect.mapError(toPullRequestError("routeIdentity")));
@@ -1685,7 +1686,11 @@ export const make = Effect.gen(function* () {
       }
       const result = yield* api
         .withVerifiedCredential(
-          { cwd: project.project.workspaceRoot, host: project.host },
+          {
+            cwd: project.project.workspaceRoot,
+            host: project.host,
+            repository: project.repository,
+          },
           (identity) =>
             identity.accountId === input.expectedAccountId
               ? operation.pipe(Effect.provideService(routingCredential, identity), Effect.result)
@@ -1704,6 +1709,7 @@ export const make = Effect.gen(function* () {
     const identity = yield* api
       .getRoutingIdentity({
         cwd: project.project.workspaceRoot,
+        repository: project.repository,
         host: project.host,
       })
       .pipe(Effect.mapError(toPullRequestError("routeIdentity")));

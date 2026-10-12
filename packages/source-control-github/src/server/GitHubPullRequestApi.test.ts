@@ -60,7 +60,7 @@ type ApiCall =
 type ApiAnswer = Effect.Effect<GitHubApi.GitHubRestResponse, GitHubApi.GitHubApiError>;
 
 const mockedExecute = vi.fn<(call: ApiCall) => ApiAnswer>();
-const defaultCredential = (host: string) =>
+const defaultCredential = (host: string, _target?: GitHubCredentials.GitHubCredentialTarget) =>
   Effect.succeed({ token: Redacted.make("token"), fingerprint: `${host}:token` });
 const mockedCredential = vi.fn(defaultCredential);
 const mockedStackMemberships = vi.fn<(call: ApiCall) => ApiAnswer>(() =>
@@ -92,7 +92,8 @@ const mockApi = Layer.effect(
           Effect.map((answer) => answer.body),
         ),
       rest: (input) => mockedExecute({ kind: "rest", ...input }),
-      credential: (host) => mockedCredential(host),
+      credential: (host, target) =>
+        target === undefined ? mockedCredential(host) : mockedCredential(host, target),
     });
   }),
 );
@@ -552,6 +553,58 @@ it.effect(
 );
 
 layer("GitHubPullRequestApi.layer", (it) => {
+  it.effect(
+    "loads a private PR and verifies the installation bot with repository credentials",
+    () =>
+      Effect.gen(function* () {
+        mockedCredential.mockImplementation((host) =>
+          Effect.succeed({
+            token: Redacted.make("ghs_scanner-installation"),
+            fingerprint: `${host}:scanner`,
+          }),
+        );
+        mockedExecute.mockImplementation((call) => {
+          if (call.kind === "rest")
+            return Effect.fail(
+              new GitHubApi.GitHubApiNotFoundError({
+                host: call.host,
+                operation: call.operation,
+              }),
+            );
+          if (call.operation === "getRoutingIdentity")
+            return Effect.succeed(
+              output(
+                encodeJson({
+                  data: { viewer: { databaseId: 123, login: "review-app[bot]" } },
+                }),
+              ),
+            );
+          if (call.repository !== "organization/scanner")
+            return Effect.fail(
+              new GitHubApi.GitHubApiNotFoundError({
+                host: call.host,
+                operation: call.operation,
+              }),
+            );
+          return Effect.succeed(output(encodeJson(coreResponse({ number: 2375 }))));
+        });
+        const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+        const input = {
+          cwd: "/scanner",
+          host: "github.com",
+          repository: "organization/scanner",
+          number: 2375,
+        };
+        const identity = yield* cli.getRoutingIdentity(input);
+        expect(identity).toEqual({ accountId: "123", viewer: "review-app[bot]" });
+        expect((yield* cli.getPullRequestDetail(input)).number).toBe(2375);
+        expect(mockedCredential).toHaveBeenCalledWith("github.com", input);
+        expect(
+          mockedExecute.mock.calls.some(([call]) => call.kind === "rest" && call.path === "user"),
+        ).toBe(false);
+      }),
+  );
+
   it.effect("holds background previews once an answer reports the reserve, until it resets", () =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
@@ -1524,6 +1577,65 @@ layer("GitHubPullRequestApi.layer", (it) => {
       expect(empty.items).toEqual([]);
       expect(enterprise.items.map((item) => item.number)).toEqual([7]);
       expect(mockedStackMemberships).not.toHaveBeenCalled();
+    }),
+  );
+
+  it.effect("separates line-count batches by repository for installation tokens", () =>
+    Effect.gen(function* () {
+      mockedCredential.mockImplementation((host) =>
+        Effect.succeed({
+          token: Redacted.make("ghs_installation"),
+          fingerprint: `${host}:installation`,
+        }),
+      );
+      mockedExecute.mockImplementation((call) =>
+        Effect.succeed(
+          output(
+            encodeJson({
+              data: { s0: { pullRequest: { additions: 4, deletions: 1 } } },
+            }),
+          ),
+        ),
+      );
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      const stats = yield* cli.listPullRequestStats({
+        cwd: "/w",
+        host: "github.com",
+        changeRequests: [
+          { repository: "owner/fork", number: 1 },
+          { repository: "organization/scanner", number: 2375 },
+        ],
+      });
+      expect(stats.map((row) => row.repository)).toEqual(["owner/fork", "organization/scanner"]);
+      expect(mockedExecute.mock.calls.map(([call]) => call.repository)).toEqual([
+        "owner/fork",
+        "organization/scanner",
+      ]);
+    }),
+  );
+
+  it.effect("falls back from cross-repository search for installation credentials", () =>
+    Effect.gen(function* () {
+      mockedCredential.mockImplementation((host) =>
+        Effect.succeed({
+          token: Redacted.make("ghs_installation"),
+          fingerprint: `${host}:installation`,
+        }),
+      );
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      const result = yield* cli
+        .searchPullRequests({
+          cwd: "/w",
+          host: "github.com",
+          repositories: ["owner/fork", "organization/scanner"],
+          state: "open",
+          involvement: "all",
+          viewer: "review-app[bot]",
+          limit: 25,
+        })
+        .pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      expect(mockedExecute).not.toHaveBeenCalled();
     }),
   );
 
@@ -3273,7 +3385,10 @@ layer("GitHubPullRequestApi.layer", (it) => {
       const login = yield* cli.getViewerLogin({ cwd: "/w", host: "github.acme.com" });
 
       expect(login).toBe("enterprise-user");
-      expect(mockedCredential).toHaveBeenCalledWith("github.acme.com");
+      expect(mockedCredential).toHaveBeenCalledWith("github.acme.com", {
+        cwd: "/w",
+        host: "github.acme.com",
+      });
       expect(callAt(0)).toMatchObject({ kind: "rest", host: "github.acme.com", path: "user" });
     }),
   );
