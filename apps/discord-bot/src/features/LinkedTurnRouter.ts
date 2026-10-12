@@ -1,5 +1,5 @@
 // @effect-diagnostics anyUnknownInErrorContext:off missingEffectContext:off globalDate:off globalErrorInEffectFailure:off outdatedApi:off
-import type { UploadChatAttachment } from "@t3tools/contracts";
+import type { ClientSourceHint, UploadChatAttachment } from "@t3tools/contracts";
 import { DiscordREST } from "dfx";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -40,6 +40,7 @@ export interface LinkedTurnPromptContext {
 
 export interface LinkedTurnInput {
   readonly source: LinkedTurnSource;
+  readonly sourceActor?: ClientSourceHint["actor"] | undefined;
   readonly discordThreadId: string;
   readonly discordParentChannelId: string;
   readonly discordGuildId: string;
@@ -60,6 +61,7 @@ export interface LinkedTurnInput {
 
 export interface TransportNeutralLinkedTurnInput {
   readonly source: LinkedTurnSource;
+  readonly sourceActor?: ClientSourceHint["actor"] | undefined;
   /** Stable delivery/conversation id. Stored in the legacy discordThreadId field for v2 links. */
   readonly externalConversationId: string;
   readonly externalParentId: string;
@@ -70,6 +72,32 @@ export interface TransportNeutralLinkedTurnInput {
   readonly stickyModelOnContinue?: boolean | undefined;
   readonly attachments?: ReadonlyArray<UploadChatAttachment> | undefined;
   readonly promptContext?: LinkedTurnInput["promptContext"];
+}
+
+/** Preserve the requester on every dispatch; the server keeps the first thread origin. */
+export function linkedTurnSourceHint(input: TransportNeutralLinkedTurnInput): ClientSourceHint {
+  if (input.source.sourceKind === "teams") {
+    return {
+      channel: "teams",
+      ...(input.sourceActor === undefined ? {} : { actor: input.sourceActor }),
+      location: {
+        ...(input.externalTenantId ? { guildId: input.externalTenantId } : {}),
+        ...(input.externalParentId ? { channelId: input.externalParentId } : {}),
+        ...(input.externalConversationId ? { threadId: input.externalConversationId } : {}),
+      },
+    };
+  }
+  const author =
+    input.promptContext?.kind === "discord"
+      ? input.promptContext.mentionMessage?.author
+      : undefined;
+  return discordSourceHint({
+    authorId: author?.id,
+    authorUsername: author?.username,
+    guildId: input.externalTenantId,
+    channelId: input.externalParentId,
+    discordThreadId: input.externalConversationId,
+  });
 }
 
 /**
@@ -129,25 +157,14 @@ export const startOrContinueT3Turn = Effect.fn("startOrContinueT3Turn")(function
               : { overrideInstanceId: input.flags.provider }),
             ...(input.flags.model === undefined ? {} : { overrideModel: input.flags.model }),
           });
-    const mentionAuthor =
-      input.promptContext?.kind === "discord" ? input.promptContext.mentionMessage?.author : null;
-    const sourceHint =
-      input.source.sourceKind === "discord"
-        ? discordSourceHint({
-            authorId: mentionAuthor?.id,
-            authorUsername: mentionAuthor?.username,
-            guildId: input.externalTenantId,
-            channelId: input.externalParentId,
-            discordThreadId: input.externalConversationId,
-          })
-        : undefined;
+    const sourceHint = linkedTurnSourceHint(input);
     const { messageId } = yield* t3.startTurn({
       threadId: existing.t3ThreadId,
       prompt: input.prompt,
       ...(continueModelSelection === undefined ? {} : { modelSelection: continueModelSelection }),
       ...(input.flags.plan ? { interactionMode: "plan" as const } : {}),
       ...(attachments.length > 0 ? { attachments } : {}),
-      ...(sourceHint === undefined ? {} : { sourceHint }),
+      sourceHint,
     });
     return { threadId: existing.t3ThreadId, messageId, isNew: false } as const;
   }
@@ -166,18 +183,7 @@ export const startOrContinueT3Turn = Effect.fn("startOrContinueT3Turn")(function
     guildId: input.externalTenantId,
     discordThreadId: input.externalConversationId,
   });
-  const mentionAuthor =
-    input.promptContext?.kind === "discord" ? input.promptContext.mentionMessage?.author : null;
-  const sourceHint =
-    input.source.sourceKind === "discord"
-      ? discordSourceHint({
-          authorId: mentionAuthor?.id,
-          authorUsername: mentionAuthor?.username,
-          guildId: input.externalTenantId,
-          channelId: input.externalParentId,
-          discordThreadId: input.externalConversationId,
-        })
-      : undefined;
+  const sourceHint = linkedTurnSourceHint(input);
   const { threadId, messageId } = yield* t3.startTurnWithWorktree({
     project: resolved.project,
     prompt: enrichedPrompt,
@@ -186,7 +192,7 @@ export const startOrContinueT3Turn = Effect.fn("startOrContinueT3Turn")(function
     baseBranch: input.flags.base ?? config.t3DefaultBaseBranch,
     local: input.flags.local ?? false,
     ...(attachments.length > 0 ? { attachments } : {}),
-    ...(sourceHint === undefined ? {} : { sourceHint }),
+    sourceHint,
   });
 
   yield* links.put({
@@ -276,6 +282,7 @@ export const startOrContinueLinkedTurn = Effect.fn("startOrContinueLinkedTurn")(
 
   const turn = yield* startOrContinueT3Turn(config, {
     source: input.source,
+    ...(input.sourceActor === undefined ? {} : { sourceActor: input.sourceActor }),
     externalConversationId: input.discordThreadId,
     externalParentId: input.discordParentChannelId,
     externalTenantId: input.discordGuildId,

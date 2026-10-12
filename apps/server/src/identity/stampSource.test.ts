@@ -29,6 +29,7 @@ const people = [
     username: "patroza",
     name: "Patrick",
     discord: { id: "95218063095377920" },
+    teams: { aadObjectId: "00000000-0000-4000-8000-000000000001", userId: "29:patrick" },
     github: { login: "patroza", id: "42661" },
     jira: { accountId: "jira-pat", email: "p@example.com" },
   },
@@ -70,6 +71,36 @@ describe("buildIntegrationSourceRef", () => {
     expect(source.channel).toBe("discord");
   });
 
+  it.each(["00000000-0000-4000-8000-000000000001", "29:patrick"])(
+    "resolves Teams actor %s to the canonical map person",
+    (platformId) => {
+      const source = buildIntegrationSourceRef({
+        people,
+        channel: "teams",
+        platformId,
+        displayName: "Untrusted display name",
+      });
+      expect(source).toMatchObject({
+        channel: "teams",
+        personId: "patroza",
+        username: "patroza",
+        actor: { platformId },
+      });
+    },
+  );
+
+  it.each(["", "unknown-id"])("does not resolve Teams actor %s by display name", (platformId) => {
+    const source = buildIntegrationSourceRef({
+      people,
+      channel: "teams",
+      platformId,
+      displayName: "Patrick",
+    });
+    expect(source.channel).toBe("teams");
+    expect(source.personId).toBeUndefined();
+    expect(source.username).toBeUndefined();
+  });
+
   it("leaves person unset when unmapped", () => {
     const source = buildIntegrationSourceRef({
       people,
@@ -109,6 +140,30 @@ describe("stampOrchestrationCommandSource", () => {
         username: "patroza",
       });
     }
+  });
+
+  it("stamps Teams requesters on bot-dispatched messages", () => {
+    const stamped = stampOrchestrationCommandSource({
+      claim: null,
+      clientDeviceType: "bot",
+      people,
+      command: {
+        ...baseCommand,
+        sourceHint: {
+          channel: "teams",
+          actor: { platformId: "29:patrick" },
+          location: { threadId: "conversation" },
+        },
+      },
+    });
+    if (stamped.type !== "message.dispatch") throw new Error("Expected message dispatch");
+    expect(stamped.source).toMatchObject({
+      channel: "teams",
+      personId: "patroza",
+      username: "patroza",
+      location: { threadId: "conversation" },
+    });
+    expect(stamped.sourceHint).toBeUndefined();
   });
 
   it("stamps from discord sourceHint for bot sessions", () => {
