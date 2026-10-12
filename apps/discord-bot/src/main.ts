@@ -14,6 +14,7 @@ import { layer as discordResponseTransportLayer } from "./discord/ResponseTransp
 import { makeDiscordLayer } from "./discord/DiscordLive.ts";
 import { runAlertWatchdog } from "./features/Alerts.ts";
 import { layer as bridgeHubLayer } from "./features/BridgeHub.ts";
+import { discordQueuedPromptsLayer } from "./features/DiscordQueuedPromptRegistry.ts";
 import { DiscordBotRunning, MentionRouterLive } from "./features/MentionRouter.ts";
 import { runBridge } from "./features/ResponseBridge.ts";
 import { runTeamsModule } from "./features/TeamsModule.ts";
@@ -74,6 +75,7 @@ const MainLayer = Layer.unwrap(
       threadWarmCacheStoreLayer(botConfig.dataDir),
       projectAliasStoreLayer(botConfig.projectAliasesPath),
       identityMapStoreLayer(botConfig.identityMapPath),
+      discordQueuedPromptsLayer,
       bridgeHub,
       discordResponseTransportLayer,
     ).pipe(Layer.provideMerge(discord));
