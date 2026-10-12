@@ -30,6 +30,7 @@ import {
   type VcsResolveBranchChangeRequestResult,
   type VcsStatusStreamEvent,
 } from "@t3tools/contracts";
+import { applyFastModeSelection } from "../presentation/fastMode.ts";
 import { type DiscordClientSourceHint } from "./sourceHint.ts";
 import {
   PrimaryConnectionTarget,
@@ -317,6 +318,8 @@ export interface T3SessionService {
     readonly stickyModelSelection?: ModelSelection | null;
     readonly overrideInstanceId?: string;
     readonly overrideModel?: string;
+    /** Channel topic `omegent-fast-mode`: use the catalog's fast option or model. */
+    readonly fastMode?: boolean;
   }) => Effect.Effect<ModelSelection, UnknownDiscordModelError>;
   readonly getThreadShell: (threadId: ThreadId) => Effect.Effect<OrchestrationThreadShell | null>;
   /**
@@ -974,6 +977,7 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
         stickyModelSelection,
         overrideInstanceId,
         overrideModel,
+        fastMode,
       }) => {
         const selection = preferredModelSelection({
           config: botConfig,
@@ -986,7 +990,18 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
         if (selection === null) {
           return Effect.fail(new UnknownDiscordModelError(overrideModel ?? ""));
         }
-        return Effect.succeed(selection);
+        if (fastMode !== true) return Effect.succeed(selection);
+        const resolved = applyFastModeSelection(selection, providersForSelection());
+        if (resolved === selection) {
+          return Effect.logWarning(
+            "Channel topic requests fast mode, but this model has no fast option",
+            {
+              instanceId: selection.instanceId,
+              model: selection.model,
+            },
+          ).pipe(Effect.as(selection));
+        }
+        return Effect.succeed(resolved);
       },
       getThreadShell: (threadId) =>
         Effect.sync(() => {

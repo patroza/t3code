@@ -188,6 +188,7 @@ import {
 } from "../t3/T3Session.ts";
 import { formatAlertCause } from "./Alerts.ts";
 import { formatUnknownDiscordModelMessage } from "../presentation/channelInfoPin.ts";
+import { topicDefaultModel, topicRequestsFastMode } from "../presentation/fastMode.ts";
 import { ensureChannelInfoPin } from "./ChannelInfoPin.ts";
 import { makeDiscordThreadTurnCoordinator } from "./DiscordThreadTurnCoordinator.ts";
 import {
@@ -1374,6 +1375,7 @@ const make = (botConfig: DiscordBotConfig) =>
                   ? {}
                   : { overrideInstanceId: input.flags.provider }),
                 ...(input.flags.model === undefined ? {} : { overrideModel: input.flags.model }),
+                ...(topicRequestsFastMode(input.topic) ? { fastMode: true } : {}),
               })
             : undefined;
           if (currentThread?.modelSelection !== undefined && continueModelSelection !== undefined) {
@@ -1532,13 +1534,38 @@ const make = (botConfig: DiscordBotConfig) =>
           return existing.t3ThreadId;
         }
 
-        // New Discord thread / first link: pick model from flags or bot defaults.
+        // New Discord thread / first link. Explicit --model wins. Otherwise
+        // `omegent-default-model-<name>` on the channel topic is the default.
+        // `omegent-fast-mode` starts that thread in fast mode. Continues above
+        // keep the stored selection unless the message passes --model/--provider.
+        const topicModel = input.flags.model === undefined ? topicDefaultModel(input.topic) : null;
+        if (topicModel !== null) {
+          const unknownModel = yield* unknownModelMessage({
+            model: topicModel,
+            provider: input.flags.provider,
+            guildId: input.guildId,
+            pinChannelId: input.parentChannelId ?? input.channelId,
+            topic: input.topic,
+          });
+          if (unknownModel !== null) {
+            yield* clearBootstrapReaction(input.pendingReadyReaction);
+            yield* rest.createMessage(input.discordThreadId, {
+              content: unknownModel,
+              ...(typeof input.mentionMessage?.id === "string"
+                ? { message_reference: { message_id: input.mentionMessage.id } }
+                : {}),
+            });
+            return;
+          }
+        }
+        const startupModel = input.flags.model ?? topicModel ?? undefined;
         const modelSelection = yield* t3.resolveModelSelection({
           project: resolved.project,
           ...(input.flags.provider === undefined
             ? {}
             : { overrideInstanceId: input.flags.provider }),
-          ...(input.flags.model === undefined ? {} : { overrideModel: input.flags.model }),
+          ...(startupModel === undefined ? {} : { overrideModel: startupModel }),
+          ...(topicRequestsFastMode(input.topic) ? { fastMode: true } : {}),
         });
 
         // First link into this Discord thread: pull starter; Sentry bootstrap only when relevant.
@@ -2124,7 +2151,21 @@ const make = (botConfig: DiscordBotConfig) =>
           reason: "today-recap",
         });
         const resolved = yield* resolveProjectFromTopic(input.topic);
-        const modelSelection = yield* t3.resolveModelSelection({ project: resolved.project });
+        const topicModel = topicDefaultModel(input.topic);
+        if (topicModel !== null) {
+          const unknownModel = yield* unknownModelMessage({
+            model: topicModel,
+            guildId: input.guildId,
+            pinChannelId: input.deliveryChannelId,
+            topic: input.topic,
+          });
+          if (unknownModel !== null) return unknownModel;
+        }
+        const modelSelection = yield* t3.resolveModelSelection({
+          project: resolved.project,
+          ...(topicModel === null ? {} : { overrideModel: topicModel }),
+          ...(topicRequestsFastMode(input.topic) ? { fastMode: true } : {}),
+        });
         const { threadId } = yield* t3.startTurnWithWorktree({
           project: resolved.project,
           prompt,

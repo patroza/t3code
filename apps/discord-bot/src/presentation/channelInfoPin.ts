@@ -190,6 +190,8 @@ function buildChannelInfoPinBody(input: {
     "         —model works too. Short names (opus-5.5).",
     "         claude- and codex- prefixes still work.",
     "         --steer (inject now) --queue (park; default mid-turn)",
+    "  topic: omegent-fast-mode         New threads start in fast mode",
+    "  topic: omegent-default-model-<name>  New threads use that model",
     "  queued: 📥 badge · delete your message to cancel · /steernow to flush",
     "```",
     `Default provider/model: \`${defaultLine}\``,
