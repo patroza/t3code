@@ -58,6 +58,25 @@ describe("Teams response adapter", () => {
       }),
     ).toEqual(["landed"]);
   });
+  it("recovers an accepted native table from Graph HTML after a timeout", () => {
+    const final = "Build report\n\n| Item | Status |\n| --- | --- |\n| **Build** | Ready |";
+    const remote = graphMessage({
+      id: "landed",
+      from: { application: { id: "bot" } },
+      body: {
+        content:
+          "<p>Build report</p><table><tr><th>Item</th><th>Status</th></tr><tr><td><strong>Build</strong></td><td>Ready</td></tr></table>",
+      },
+    });
+    expect(
+      findAlreadyPostedFinalChunkIds({
+        recentMessages: [{ id: remote.id, authorId: remote.author!.id, content: remote.content }],
+        botUserId: "bot",
+        finalChunks: [final],
+        normalizeContent: normalizeTeamsContent,
+      }),
+    ).toEqual(["landed"]);
+  });
   it("preserves native Markdown tables in replies and progress messages", () => {
     const content = "| Item | Status |\n| --- | --- |\n| Build | Ready |";
     for (const fields of [idleFields(content), workingFields(content, "thread")]) {

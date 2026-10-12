@@ -22,6 +22,7 @@ import {
   formatModelSelectionLine,
   renderThreadInfoPin,
 } from "../presentation/threadInfoPin.ts";
+import { extractMarkdownTables } from "../presentation/markdownTables.ts";
 import { ThreadLinkStore } from "../store/ThreadLinkStore.ts";
 
 const ledgerRow = Schema.Struct({
@@ -76,6 +77,8 @@ export function teamsHistoryMarkdown(content: string): string {
   return content
     .replace(/<a\b[^>]*href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gisu, "[$2]($1)")
     .replace(/<br\s*\/?\s*>/giu, "\n")
+    .replace(/<\/t[hd]>/giu, " ")
+    .replace(/<\/tr>/giu, "\n")
     .replace(/<\/(?:p|div)>/giu, "\n")
     .replace(/<[^>]+>/gu, "")
     .replace(/&lt;/gu, "<")
@@ -86,6 +89,14 @@ export function teamsHistoryMarkdown(content: string): string {
     .trim();
 }
 export function normalizeTeamsContent(content: string): string {
+  // Graph returns native tables as HTML; compare their cells with the original Markdown
+  // so an accepted send can be recovered without posting a duplicate after a timeout.
+  for (const table of extractMarkdownTables(content).toReversed()) {
+    content =
+      content.slice(0, table.start) +
+      [...table.headers, ...table.rows.flat()].join(" ") +
+      content.slice(table.end);
+  }
   return teamsHistoryMarkdown(content)
     .replace(/(\*\*|__)(.*?)\1/gsu, "$2")
     .replace(/(?<!\w)[*_]([^*_]+)[*_](?!\w)/gu, "$1")
