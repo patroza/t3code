@@ -55,10 +55,12 @@ const matchesTeam = (binding: TeamsGatewayBinding, activity: GatewayActivity) =>
   const team = activity.channelData?.team;
   if (!team) return false;
   if (team.aadGroupId !== undefined) {
-    if (team.aadGroupId !== binding.teamId) return false;
+    if (team.aadGroupId.toLowerCase() !== binding.teamId.toLowerCase()) return false;
     return binding.teamConversationId === undefined || team.id === binding.teamConversationId;
   }
-  return team.id === (binding.teamConversationId ?? binding.teamId);
+  return binding.teamConversationId !== undefined
+    ? team.id === binding.teamConversationId
+    : team.id?.toLowerCase() === binding.teamId.toLowerCase();
 };
 
 export function safeTeamsServiceUrl(value: string): boolean {
@@ -188,11 +190,16 @@ export class TeamsGatewayPolicy {
   /** Uninstall revokes delivery even when the installer is not an authorized work actor. */
   revoke(activity: GatewayActivity): void {
     if (activity.channelId !== "msteams" || !safeTeamsServiceUrl(activity.serviceUrl)) return;
-    const tenant = activity.channelData?.tenant?.id ?? activity.conversation.tenantId;
+    const tenant = (
+      activity.channelData?.tenant?.id ?? activity.conversation.tenantId
+    )?.toLowerCase();
     const team = activity.channelData?.team;
     const config = this.config();
     for (const binding of config.bindings) {
-      if (binding.tenantId === tenant && (team === undefined || matchesTeam(binding, activity))) {
+      if (
+        binding.tenantId.toLowerCase() === tenant &&
+        (team === undefined || matchesTeam(binding, activity))
+      ) {
         this.revoked.add(teamKey(binding.tenantId, binding.teamId));
       }
     }
@@ -232,18 +239,20 @@ export class TeamsGatewayPolicy {
     ) {
       return reject("invalid-envelope");
     }
-    const tenant = activity.channelData?.tenant?.id ?? activity.conversation.tenantId;
+    const tenant = (
+      activity.channelData?.tenant?.id ?? activity.conversation.tenantId
+    )?.toLowerCase();
     if (
       activity.channelData?.tenant?.id &&
       activity.conversation.tenantId &&
-      activity.channelData.tenant.id !== activity.conversation.tenantId
+      activity.channelData.tenant.id.toLowerCase() !== activity.conversation.tenantId.toLowerCase()
     ) {
       return reject("tenant-mismatch");
     }
     const matches = config.bindings.filter(
       (binding) =>
         binding.enabled &&
-        binding.tenantId === tenant &&
+        binding.tenantId.toLowerCase() === tenant &&
         matchesTeam(binding, activity) &&
         binding.channelId === activity.channelData?.channel?.id &&
         config.workspaces[binding.workspace]?.enabled,
