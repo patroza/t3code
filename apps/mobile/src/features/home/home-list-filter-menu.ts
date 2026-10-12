@@ -16,7 +16,7 @@ import {
   THREAD_SORT_OPTIONS,
   type OwnershipFilter,
   type OwnershipRelation,
-} from "./home-list-options";
+} from "./home-list-filter-options";
 
 export interface HomeListFilterMenuEnvironment {
   readonly environmentId: EnvironmentId;

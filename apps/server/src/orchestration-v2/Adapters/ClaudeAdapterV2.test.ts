@@ -2806,6 +2806,75 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       ),
   );
 
+  it.effect.each([
+    { model: "claude-opus-5-5", expected: "assistant_message" },
+    { model: "claude-fable-5-1", expected: "assistant_message" },
+    { model: "claude-opus-5", expected: "reasoning" },
+    { model: "claude-sonnet-4-6", expected: "reasoning" },
+  ] as const)(
+    "shows $model thinking right before a tool call as $expected",
+    ({ model, expected }) =>
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("thinking-before-tool-attempt"),
+            text: "Check the memory file",
+            attachments: [],
+          }),
+        );
+        const snapshot = (uuid: string, content: ReadonlyArray<unknown>) =>
+          claudeSdkFrame({
+            type: "assistant",
+            uuid,
+            session_id: WAKE_NATIVE_SESSION,
+            parent_tool_use_id: null,
+            message: { id: "reply-message", model, content },
+          });
+        const frames = [
+          snapshot("reasoning-snapshot", [
+            { type: "thinking", thinking: "Planning the check", signature: "sig" },
+          ]),
+          snapshot("reply-snapshot", [
+            {
+              type: "thinking",
+              thinking: "Found it: the memory file is the cause.",
+              signature: "sig",
+            },
+          ]),
+          snapshot("tool-snapshot", [
+            { type: "tool_use", id: "tool-1", name: "Bash", input: { command: "ls" } },
+          ]),
+          makeResultFrame({ uuid: "thinking-before-tool-result", result: "" }),
+        ];
+        for (const frame of frames) yield* Queue.offer(harness.sdkMessages, frame);
+        yield* Queue.take(harness.terminalReceipts);
+        const latest = new Map(
+          harness.events.flatMap((event) =>
+            event.type === "turn_item.updated" &&
+            (event.turnItem.type === "reasoning" || event.turnItem.type === "assistant_message")
+              ? [[event.turnItem.id, event.turnItem] as const]
+              : [],
+          ),
+        );
+        assert.deepEqual(
+          [...latest.values()].map((item) => [item.type, item.text]),
+          [
+            ["reasoning", "Planning the check"],
+            [expected, "Found it: the memory file is the cause."],
+          ],
+        );
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+  );
+
   it.effect.each(["cancelled", "denied", "permission_denied", undefined])(
     "preserves native tool non-execution metadata %s without inferring a denial from text",
     (kind) =>
@@ -3081,7 +3150,8 @@ describe("ClaudeAdapterV2 background wake turns", () => {
   it.effect("names an expired Claude login instead of the terminal API error", () =>
     Effect.gen(function* () {
       const configDir = "/synthetic/Claude config";
-      const cwd = "/synthetic/project";
+      // The adapter resolves the cwd on the host, which adds a drive letter on Windows.
+      const cwd = NodePath.resolve("/synthetic/project");
       const harness = yield* makeWakeHarnessWithOptions({
         environment: { CLAUDE_CONFIG_DIR: configDir },
       });
@@ -3118,7 +3188,8 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       if (terminal.status !== "failed") return;
       assert.include(terminal.failure.message, "run `claude auth login`");
       assert.include(terminal.failure.message, configDir);
-      assert.include(terminal.failure.message, cwd);
+      // The message quotes its paths, which escapes Windows separators.
+      assert.include(terminal.failure.message, JSON.stringify(cwd));
       assert.notInclude(terminal.failure.message, "repeated API errors");
     }).pipe(
       Effect.provide(
@@ -13172,8 +13243,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           NodePath.join(harness.transcriptDir, "agent-a1.jsonl"),
           '{"type":"assistant","message":{"role":"assistant","id":"msg_a1","content":[{"type":"text","text":"A1 continued"}]}}\n',
         );
-        yield* Queue.offer(
-          harness.sdkMessages,
+        yield* harness.offerAndWait(
           workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000001015", state: "done" }),
         );
         yield* awaitUntil(
@@ -13196,8 +13266,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           NodePath.join(harness.transcriptDir, "agent-a2.jsonl"),
           '{"type":"assistant","message":{"role":"assistant","id":"msg_a2","content":[{"type":"text","text":"A2 from the transcript"}]}}\n',
         );
-        yield* Queue.offer(
-          harness.sdkMessages,
+        yield* harness.offerAndWait(
           workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000001016", state: "done" }),
         );
         yield* awaitUntil(

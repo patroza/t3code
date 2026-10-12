@@ -1,3 +1,16 @@
+import { DEFAULT_OWNERSHIP_FILTER, type OwnershipFilter } from "./home-list-filter-options";
+export {
+  DEFAULT_OWNERSHIP_FILTER,
+  isOwnershipFilter,
+  OWNERSHIP_FILTERS,
+  OWNERSHIP_FILTER_LABELS,
+  OWNERSHIP_RELATIONS,
+  OWNERSHIP_RELATION_LABELS,
+  PROJECT_SORT_OPTIONS,
+  THREAD_SORT_OPTIONS,
+  type OwnershipFilter,
+} from "./home-list-filter-options";
+import { useAtomSet } from "@effect/atom-react";
 import type {
   EnvironmentId,
   SidebarProjectGroupingMode,
@@ -32,6 +45,8 @@ import {
   type HomeListMode,
   type HomeThreadGrouping,
 } from "./homeListMode";
+import type { ThreadListFilters } from "../../persistence/mobile-preferences";
+import { updateMobilePreferencesAtom } from "../../state/preferences";
 import type { HomeProjectSortOrder } from "./homeThreadList";
 
 export type { OwnershipRelation };
@@ -44,6 +59,7 @@ export interface HomeListOptions {
    * the provider is given a storage callback.
    */
   readonly selectedEnvironmentIds: readonly EnvironmentId[];
+  readonly selectedProjectKey: string | null;
   readonly ownershipFilter: OwnershipFilter;
   /**
    * Sub-filter for mine/theirs: created, participated, or both (default).
@@ -57,37 +73,8 @@ export interface HomeListOptions {
   readonly threadSortOrder: SidebarThreadSortOrder;
 }
 
-export type OwnershipFilter = "any" | "mine" | "theirs";
-
-export const OWNERSHIP_FILTERS = [
-  "any",
-  "mine",
-  "theirs",
-] as const satisfies readonly OwnershipFilter[];
-
-export const OWNERSHIP_FILTER_LABELS: Record<OwnershipFilter, string> = {
-  any: "Anyone",
-  mine: "Mine",
-  theirs: "Theirs",
-};
-
-export const OWNERSHIP_RELATIONS = [
-  "both",
-  "created",
-  "participated",
-] as const satisfies readonly OwnershipRelation[];
-
-export const OWNERSHIP_RELATION_LABELS: Record<OwnershipRelation, string> = {
-  both: "Created or participated",
-  created: "Created",
-  participated: "Participated",
-};
-
-export function isOwnershipFilter(value: unknown): value is OwnershipFilter {
-  return value === "any" || value === "mine" || value === "theirs";
-}
-
 export interface ResolvedHomeListOptions extends HomeListOptions {
+  readonly selectedEnvironmentId: EnvironmentId | null;
   readonly projectGroupingMode: SidebarProjectGroupingMode;
 }
 
@@ -97,28 +84,10 @@ export function resolveProjectGroupingMode(
   return projectGroupingEnabled === false ? "separate" : "repository";
 }
 
-export const PROJECT_SORT_OPTIONS: ReadonlyArray<{
-  readonly value: HomeProjectSortOrder;
-  readonly label: string;
-}> = [
-  { value: "updated_at", label: "Last user message" },
-  { value: "created_at", label: "Created at" },
-];
-
-export const THREAD_SORT_OPTIONS: ReadonlyArray<{
-  readonly value: SidebarThreadSortOrder;
-  readonly label: string;
-}> = [
-  { value: "updated_at", label: "Last user message" },
-  { value: "created_at", label: "Created at" },
-];
-
-/** Default ownership filter: Mine (created or participated, plus unattributed). */
-export const DEFAULT_OWNERSHIP_FILTER: OwnershipFilter = "mine";
-
-function defaultHomeListOptions(): HomeListOptions {
+function defaultHomeListOptions(filters?: ThreadListFilters): HomeListOptions {
   return {
-    selectedEnvironmentIds: [],
+    selectedEnvironmentIds: filters?.environmentId ? [filters.environmentId] : [],
+    selectedProjectKey: filters?.projectKey ?? null,
     ownershipFilter: DEFAULT_OWNERSHIP_FILTER,
     ownershipRelation: DEFAULT_OWNERSHIP_RELATION,
     listMode: DEFAULT_HOME_LIST_MODE,
@@ -152,6 +121,7 @@ const HomeListOptionsContext = createContext<HomeListOptionsContextValue | null>
 export function HomeListOptionsProvider({
   children,
   projectGroupingMode,
+  savedFilters,
   /**
    * `undefined` = storage not loaded yet (do not hydrate).
    * Array (possibly empty) = loaded value to apply once.
@@ -173,6 +143,7 @@ export function HomeListOptionsProvider({
   onStoreOwnershipRelation,
 }: PropsWithChildren<{
   readonly projectGroupingMode: SidebarProjectGroupingMode;
+  readonly savedFilters?: ThreadListFilters | undefined;
   readonly storedEnvironmentIds?: readonly EnvironmentId[];
   readonly onStoreEnvironmentIds?: (ids: readonly EnvironmentId[]) => void;
   readonly storedThreadGrouping?: HomeThreadGrouping;
@@ -182,7 +153,23 @@ export function HomeListOptionsProvider({
   readonly storedOwnershipRelation?: OwnershipRelation;
   readonly onStoreOwnershipRelation?: (relation: OwnershipRelation) => void;
 }>) {
-  const [options, setOptions] = useState<HomeListOptions>(defaultHomeListOptions);
+  const [options, setOptions] = useState<HomeListOptions>(() =>
+    defaultHomeListOptions(savedFilters),
+  );
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const saved = useRef(savedFilters);
+  const environmentId =
+    options.selectedEnvironmentIds.length === 1 ? options.selectedEnvironmentIds[0]! : null;
+  const projectKey = options.selectedProjectKey;
+  useEffect(() => {
+    if (
+      (saved.current?.environmentId ?? null) === environmentId &&
+      (saved.current?.projectKey ?? null) === projectKey
+    )
+      return;
+    saved.current = { environmentId, projectKey };
+    savePreferences({ threadListFilters: saved.current });
+  }, [environmentId, projectKey, savePreferences]);
   const envFilterHydratedRef = useRef(false);
   const lastPersistedEnvKeyRef = useRef<string | null>(null);
   const threadGroupingHydratedRef = useRef(false);
@@ -318,9 +305,25 @@ export function useHomeListOptions(availableEnvironmentIds: ReadonlySet<Environm
       : { ...options, selectedEnvironmentIds };
   const resolvedOptions: ResolvedHomeListOptions = {
     ...availableOptions,
+    selectedEnvironmentId: selectedEnvironmentIds.length === 1 ? selectedEnvironmentIds[0]! : null,
     projectGroupingMode: shared?.projectGroupingMode ?? "repository",
   };
 
+  const setSelectedProjectKey = useCallback(
+    (value: string | null) => {
+      setOptions((current) => ({ ...current, selectedProjectKey: value }));
+    },
+    [setOptions],
+  );
+  const setSelectedEnvironmentId = useCallback(
+    (value: EnvironmentId | null) => {
+      setOptions((current) => ({
+        ...current,
+        selectedEnvironmentIds: value === null ? [] : [value],
+      }));
+    },
+    [setOptions],
+  );
   const setSelectedEnvironmentIds = useCallback(
     (value: readonly EnvironmentId[]) => {
       setOptions((current) => ({ ...current, selectedEnvironmentIds: value }));
@@ -377,6 +380,8 @@ export function useHomeListOptions(availableEnvironmentIds: ReadonlySet<Environm
   );
   return {
     options: resolvedOptions,
+    setSelectedProjectKey,
+    setSelectedEnvironmentId,
     setSelectedEnvironmentIds,
     toggleSelectedEnvironmentId,
     clearSelectedEnvironments,

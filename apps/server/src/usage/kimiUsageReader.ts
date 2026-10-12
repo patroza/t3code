@@ -16,7 +16,7 @@ export const kimiUsageFormat: TranscriptUsageFormat<KimiScanState> = {
     timestamp: true,
     message: { type: true, payload: { token_usage: true, message_id: true } },
   },
-  mightCarryUsage: (line) => line.includes('"StatusUpdate"') && line.includes('"token_usage"'),
+  usageMarkers: ['"token_usage"'],
   parseLine: (line, state) => {
     const record = parseKimiLine(line, state);
     return record === null ? [] : [record];
