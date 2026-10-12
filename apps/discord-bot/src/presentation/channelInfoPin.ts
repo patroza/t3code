@@ -185,6 +185,7 @@ function buildChannelInfoPinBody(input: {
     "/omegent link ref:<id|url>",
     "/omegent refresh-indicators",
     "/omegent assign [github:login]  Assign linked PR(s) (default: you)",
+    "/export [count]                 Whole chat (/omegent export)",
     "@Omegent …                      Same actions (fallback)",
     "  flags: --plan --local --base <b> --provider <id> --model <name>",
     "         —model works too. Short names (opus-5.5).",

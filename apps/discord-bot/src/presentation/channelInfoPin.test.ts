@@ -86,6 +86,8 @@ describe("channel info pin helpers", () => {
     expect(rendered).toContain("/omegent link ref:<id|url>");
     expect(rendered).toContain("/omegent refresh-indicators");
     expect(rendered).toContain("/omegent assign [github:login]");
+    expect(rendered).toContain("/export [count]");
+    expect(rendered).toContain("/omegent export");
     expect(rendered).toContain("@Omegent …");
     expect(rendered).toContain("Same actions (fallback)");
     expect(rendered).toContain("/omegent steernow");
