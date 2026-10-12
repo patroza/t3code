@@ -10,7 +10,7 @@ export function teamsMessageActionPrompt(input: {
 }): string {
   const author = input.message.from?.user;
   const access = classifyTeamsAgentAccess({ people: input.people, userId: author?.id });
-  const authorName = access.allowed ? access.person.name : (author?.displayName ?? "Unknown");
+  const authorName = access.allowed ? access.person.name : "Unknown";
   return [
     "Investigate the following Microsoft Teams message.",
     `Requested by: ${input.requester.name}`,
