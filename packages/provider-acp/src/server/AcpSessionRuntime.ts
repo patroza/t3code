@@ -303,7 +303,10 @@ export function wrapCommandForLinuxCgroup(
         // instead of "never launched". The caller always hands us an absolute
         // target, so test it as an executable file rather than asking the
         // shell to resolve it.
-        '[ -f "$1" ] && [ -x "$1" ] || exit 125',
+        'if [ ! -f "$1" ] || [ ! -x "$1" ]; then',
+        '  printf "T3 ACP wrapper: target is not an executable file: %s\\n" "$1" >&2',
+        "  exit 125",
+        "fi",
         'exec "$@"',
       ].join("\n"),
       "t3-acp-cgroup-wrapper",
