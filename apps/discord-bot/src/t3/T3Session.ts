@@ -177,6 +177,17 @@ export class T3SessionError extends Error {
   }
 }
 
+/** Explicit `--model` matched no catalog entry. Callers must not start a turn. */
+export class UnknownDiscordModelError extends Error {
+  readonly requestedModel: string;
+
+  constructor(requestedModel: string) {
+    super(`Unknown model \`${requestedModel}\`.`);
+    this.name = "UnknownDiscordModelError";
+    this.requestedModel = requestedModel;
+  }
+}
+
 export interface T3SessionService {
   readonly connect: () => Effect.Effect<void, T3SessionError>;
   /**
@@ -305,7 +316,7 @@ export interface T3SessionService {
     readonly stickyModelSelection?: ModelSelection | null;
     readonly overrideInstanceId?: string;
     readonly overrideModel?: string;
-  }) => Effect.Effect<ModelSelection>;
+  }) => Effect.Effect<ModelSelection, UnknownDiscordModelError>;
   readonly getThreadShell: (threadId: ThreadId) => Effect.Effect<OrchestrationThreadShell | null>;
   /**
    * HTTP snapshot of a thread (full transcript + sequence). Used by Discord bridges to
@@ -960,17 +971,20 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
         stickyModelSelection,
         overrideInstanceId,
         overrideModel,
-      }) =>
-        Effect.sync(() =>
-          preferredModelSelection({
-            config: botConfig,
-            providers: providersForSelection(),
-            projectDefault: project?.defaultModelSelection ?? null,
-            ...(stickyModelSelection === undefined ? {} : { stickyModelSelection }),
-            ...(overrideInstanceId === undefined ? {} : { overrideInstanceId }),
-            ...(overrideModel === undefined ? {} : { overrideModel }),
-          }),
-        ),
+      }) => {
+        const selection = preferredModelSelection({
+          config: botConfig,
+          providers: providersForSelection(),
+          projectDefault: project?.defaultModelSelection ?? null,
+          ...(stickyModelSelection === undefined ? {} : { stickyModelSelection }),
+          ...(overrideInstanceId === undefined ? {} : { overrideInstanceId }),
+          ...(overrideModel === undefined ? {} : { overrideModel }),
+        });
+        if (selection === null) {
+          return Effect.fail(new UnknownDiscordModelError(overrideModel ?? ""));
+        }
+        return Effect.succeed(selection);
+      },
       getThreadShell: (threadId) =>
         Effect.sync(() => {
           const thread = shell?.threads.find((thread) => thread.id === threadId);

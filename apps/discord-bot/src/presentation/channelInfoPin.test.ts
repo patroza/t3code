@@ -4,6 +4,8 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   CHANNEL_INFO_PIN_MARKER,
   DISCORD_MESSAGE_CONTENT_LIMIT,
+  discordModelLabel,
+  formatUnknownDiscordModelMessage,
   renderChannelInfoPin,
 } from "./channelInfoPin.ts";
 import { normalizeGitHubRemoteUrl } from "./githubLinks.ts";
@@ -88,6 +90,8 @@ describe("channel info pin helpers", () => {
     expect(rendered).toContain("Same actions (fallback)");
     expect(rendered).toContain("/omegent steernow");
     expect(rendered).toContain("--steer (inject now) --queue (park; default mid-turn)");
+    expect(rendered).toContain("—model works too. Short names (opus-5.5).");
+    expect(rendered).toContain("claude- and codex- prefixes still work.");
     expect(rendered).toContain("delete your message to cancel");
     expect(rendered).toContain("Default provider/model: `codex/gpt-5.4`");
     // Labels pad to the widest provider label ("grok [missing]").
@@ -153,5 +157,55 @@ describe("channel info pin helpers", () => {
 
     expect(rendered.length).toBeLessThanOrEqual(DISCORD_MESSAGE_CONTENT_LIMIT);
     expect(rendered).toContain(CHANNEL_INFO_PIN_MARKER);
+  });
+
+  it("documents short model names and links an unknown model to the pin", () => {
+    expect(
+      discordModelLabel({
+        slug: "claude-opus-5-5",
+        aliases: ["opus", "opus-5.5", "claude-opus-5.5"],
+      }),
+    ).toBe("opus-5.5");
+    expect(discordModelLabel({ slug: "gpt-5.4" })).toBe("gpt-5.4");
+    expect(discordModelLabel({ slug: "codex-gpt-5.5" })).toBe("gpt-5.5");
+
+    const rendered = renderChannelInfoPin({
+      githubUrl: "https://github.com/pingdotgg/t3code",
+      workspaceRoot: "/tmp/t3code",
+      providers: [
+        {
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+          enabled: true,
+          installed: true,
+          status: "ready",
+          availability: "available",
+          models: [
+            {
+              slug: "claude-opus-5-5",
+              name: "Claude Opus 5.5",
+              aliases: ["opus", "opus-5.5", "claude-opus-5.5"],
+              isCustom: false,
+              capabilities: null,
+            },
+          ],
+        },
+      ],
+      defaultModelSelection: {
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "claude-opus-5-5",
+      },
+    });
+
+    expect(rendered).toContain("claudeAgent  opus-5.5");
+    expect(rendered).toContain("Default provider/model: `claudeAgent/opus-5.5`");
+    expect(rendered).not.toContain("claude-opus-5-5");
+    expect(
+      formatUnknownDiscordModelMessage({
+        requestedModel: "opus-9",
+        channelInfoUrl: "https://discord.com/channels/1/2/3",
+      }),
+    ).toBe(
+      "Unknown model `opus-9`. See the pinned channel info: https://discord.com/channels/1/2/3.",
+    );
   });
 });

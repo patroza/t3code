@@ -92,8 +92,10 @@ describe("preferredModelSelection", () => {
       ],
     });
 
-    expect(selection.instanceId).toBe("codex");
-    expect(selection.model).toBe("gpt-5.4");
+    expect(selection).toEqual({
+      instanceId: "codex",
+      model: "gpt-5.4",
+    });
   });
 
   it("honors explicit mention overrides", () => {
@@ -190,6 +192,58 @@ describe("preferredModelSelection", () => {
       instanceId: "codex",
       model: "gpt-5.6",
     });
+  });
+
+  it("resolves a short model name to the catalog slug", () => {
+    const selection = preferredModelSelection({
+      config: baseConfig,
+      overrideModel: "opus-5.5",
+      providers: [
+        {
+          instanceId: ProviderInstanceId.make("codex"),
+          driver: "codex",
+          enabled: true,
+          installed: true,
+          models: [{ slug: "gpt-5.4", name: "GPT-5.4" }],
+        },
+        {
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+          driver: "claudeAgent",
+          enabled: true,
+          installed: true,
+          models: [
+            {
+              slug: "claude-opus-5-5",
+              name: "Claude Opus 5.5",
+              aliases: ["opus", "opus-5.5", "claude-opus-5.5"],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(selection).toEqual({
+      instanceId: "claudeAgent",
+      model: "claude-opus-5-5",
+    });
+  });
+
+  it("returns null when an explicit model matches nothing", () => {
+    const selection = preferredModelSelection({
+      config: baseConfig,
+      overrideModel: "opus-9",
+      providers: [
+        {
+          instanceId: ProviderInstanceId.make("codex"),
+          driver: "codex",
+          enabled: true,
+          installed: true,
+          models: [{ slug: "gpt-5.4", name: "GPT-5.4" }],
+        },
+      ],
+    });
+
+    expect(selection).toBeNull();
   });
 
   it("keeps the current thread model as the sticky default when only the provider override changes", () => {
