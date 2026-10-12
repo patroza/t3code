@@ -204,9 +204,9 @@ function totalOutputTokens(summary: { buckets: readonly { totals: { outputTokens
   return summary.buckets.reduce((sum, bucket) => sum + bucket.totals.outputTokens, 0);
 }
 
-/** Cursor buckets only. A developer `~/.kimi` is a real source and is not this cache. */
+/** Cursor account rows only. A developer machine's `~/.kimi` history is another source. */
 function cursorOutputTokens(summary: {
-  buckets: readonly { provider: string; totals: { outputTokens: number } }[];
+  readonly buckets: readonly { provider: string; totals: { outputTokens: number } }[];
 }) {
   return summary.buckets.reduce(
     (sum, bucket) => sum + (bucket.provider === "cursor" ? bucket.totals.outputTokens : 0),
@@ -786,7 +786,8 @@ describe("UsageService", () => {
           { sinceMs: CURSOR_NOW - CURSOR_RETENTION_MS, untilMs: CURSOR_NOW },
         ]);
 
-        // A wider window is answered from the same cache.
+        // A wider window is answered from the same cache. Count Cursor only so a
+        // developer machine's `~/.kimi` history in this range does not fail the assert.
         const wide = { ...WINDOW, sinceDay: UsageDay.make("2026-07-01") };
         assert.strictEqual(cursorOutputTokens(yield* read(wide)), 36);
         assert.strictEqual(cursor.state.calls.length, 1);
