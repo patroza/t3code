@@ -669,11 +669,11 @@ it.effect("keeps the Teams thread starter while stamping later message authors",
     const projection = yield* projections.getThreadProjection(threadId);
     assert.deepEqual(projection.thread.originSource, source("starter"));
     assert.deepEqual(
-      projection.thread.participantSummaries?.map((person) => person.username),
+      projection.thread.participantSummaries?.map((person) => String(person.username)),
       ["starter", "requester"],
     );
     assert.deepEqual(
-      projection.messages.map((message) => message.source?.username),
+      projection.messages.map((message) => message.source?.username?.toString()),
       ["starter", "requester", "starter"],
     );
   }).pipe(Effect.provide(layerTest)),
