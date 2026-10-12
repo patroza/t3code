@@ -1,7 +1,7 @@
 /**
- * `/export` transcript. Speakers keep a display name when it is not their
- * Discord username. Usernames, user ids, and mention tokens are rewritten to
- * stable labels (`user-1`, `omegent`).
+ * `/export` transcript. Speakers are only `user-1`, `bot-1`, or `omegent`.
+ * Usernames, display names, user ids, and mention tokens are rewritten to
+ * those labels.
  */
 
 export const EXPORT_SLASH_COMMAND_NAME = "export" as const;
@@ -12,7 +12,7 @@ export const EXPORT_HISTORY_PAGE_SIZE = 100;
  * Safety stop for a channel with a huge history. A normal thread finishes
  * before this, and the transcript says when older messages were left out.
  */
-export const EXPORT_HISTORY_CAP = 5000;
+export const EXPORT_HISTORY_CAP = 500;
 export const EXPORT_MARKDOWN_NAME = "export.md";
 export const EXPORT_MESSAGE_LIMIT = 2000;
 
@@ -169,13 +169,14 @@ export function renderThreadExport(input: {
   const assigned = assignParticipants(messages, input.botUserId);
   const byId = new Map(assigned.map((entry) => [entry.id, entry]));
   const redact = makeRedactor(assigned);
-  const participants = assigned.map((entry) => speakerName(entry)).join(", ");
+  const participants = assigned.map((entry) => entry.label).join(", ");
   const blocks = messages.map((message) => renderMessage(message, byId, redact));
   const countLabel = messages.length === 1 ? "1 message" : `${messages.length} messages`;
+  const privacy = "Discord usernames, display names, and user ids are omitted.";
   const summary =
     input.truncated === true
-      ? `Latest ${countLabel}. Older messages were left out. Discord usernames and user ids are omitted.`
-      : `${countLabel}. Discord usernames and user ids are omitted.`;
+      ? `Latest ${countLabel}. Older messages were left out. ${privacy}`
+      : `${countLabel}. ${privacy}`;
 
   return [
     "# Chat export",
@@ -277,17 +278,13 @@ function cleanHandle(username: string | null | undefined): string | null {
   return handle === "" ? null : handle;
 }
 
-function speakerName(entry: AssignedParticipant): string {
-  return entry.publicName === null ? entry.label : `${entry.label} (${entry.publicName})`;
-}
-
 function renderMessage(
   message: ExportSourceMessage,
   byId: ReadonlyMap<string, AssignedParticipant>,
   redact: (text: string) => string,
 ): string {
   const author = byId.get(message.author.id);
-  const speaker = author === undefined ? "user" : speakerName(author);
+  const speaker = author === undefined ? "user" : author.label;
   const when = formatTimestamp(message.timestamp);
   const reply = message.replyTo?.id ? byId.get(message.replyTo.id) : undefined;
   const replyNote = reply === undefined ? "" : ` (reply to ${reply.label})`;
@@ -339,6 +336,19 @@ function makeRedactor(assigned: ReadonlyArray<AssignedParticipant>): (text: stri
           handle.label,
         );
       }
+    }
+    const displayNames = assigned.flatMap((entry) => {
+      const name = entry.publicName;
+      if (name === null || name.length < 3) return [];
+      return [{ name, label: entry.label }];
+    });
+    displayNames.sort((left, right) => right.name.length - left.name.length);
+    for (const displayName of displayNames) {
+      const escaped = escapeRegExp(displayName.name);
+      next = next.replace(
+        new RegExp(`(?<![A-Za-z0-9_])${escaped}(?![A-Za-z0-9_])`, "gi"),
+        displayName.label,
+      );
     }
     next = next.replace(/\b\d{17,20}\b/g, (id) => byId.get(id) ?? id);
     return next;
