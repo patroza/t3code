@@ -18,6 +18,7 @@ const Workspace = Schema.Struct({
 });
 const Binding = Schema.Struct({
   id: Schema.String,
+  installationId: Schema.optional(Schema.String),
   enabled: Schema.Boolean,
   workspace: Schema.String,
   scope: Schema.Literal("channel"),
@@ -49,16 +50,109 @@ const GatewayConfig = Schema.Struct({
     contextTtlSeconds: Schema.Number,
   }),
 });
+// v2 owns workspace and authorization at the installed team boundary. The policy
+// consumes resolved bindings so existing delivery, revocation and lease checks
+// inherit the installation on every configuration reload.
+const TeamInstallation = Schema.Struct({
+  id: Schema.String,
+  enabled: Schema.Boolean,
+  workspace: Schema.String,
+  tenantId: Schema.String,
+  teamId: Schema.String,
+  teamConversationId: Schema.optional(Schema.String),
+  allowedActorIds: Schema.Array(Schema.String),
+});
+const InstalledChannel = Schema.Struct({
+  id: Schema.String,
+  enabled: Schema.Boolean,
+  installationId: Schema.String,
+  scope: Schema.Literal("channel"),
+  channelId: Schema.String,
+  projectShortName: Schema.optional(Schema.String),
+  projectId: Schema.optional(Schema.String),
+  fileDestination: Schema.optional(TeamsFileDestination),
+  includeProgressHistory: Schema.optional(Schema.Boolean),
+  // Refuse shadow authorization/location fields instead of silently ignoring them.
+  workspace: Schema.optional(Schema.Never),
+  tenantId: Schema.optional(Schema.Never),
+  teamId: Schema.optional(Schema.Never),
+  teamConversationId: Schema.optional(Schema.Never),
+  allowedActorIds: Schema.optional(Schema.Never),
+});
+const InstalledGatewayConfig = Schema.Struct({
+  ...GatewayConfig.fields,
+  version: Schema.Literal(2),
+  teamInstallations: Schema.Array(TeamInstallation),
+  bindings: Schema.Array(InstalledChannel),
+});
+const InputGatewayConfig = Schema.Union([GatewayConfig, InstalledGatewayConfig]);
+
 export type TeamsGatewayConfig = typeof GatewayConfig.Type;
 export type TeamsGatewayBinding = typeof Binding.Type;
 export type TeamsGatewayWorkspace = typeof Workspace.Type;
 export const isUuid = (value: string) =>
   /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu.test(value);
 
-const decodeGatewayConfig = Schema.decodeUnknownSync(GatewayConfig);
+const decodeGatewayConfig = Schema.decodeUnknownSync(InputGatewayConfig);
 
 export function parseGatewayConfig(value: unknown): TeamsGatewayConfig {
-  const config = decodeGatewayConfig(value);
+  const input = decodeGatewayConfig(value);
+  let config: TeamsGatewayConfig;
+  if (input.version === 2) {
+    const installations = new Map<string, typeof TeamInstallation.Type>();
+    const teams = new Set<string>();
+    const conversations = new Set<string>();
+    for (const installation of input.teamInstallations) {
+      const key = JSON.stringify([
+        installation.tenantId.toLowerCase(),
+        installation.teamId.toLowerCase(),
+      ]);
+      if (!installation.id.trim() || installations.has(installation.id))
+        throw new Error("Duplicate or empty team installation ID");
+      if (teams.has(key)) throw new Error("Ambiguous Teams team installation");
+      const conversation =
+        installation.teamConversationId === undefined
+          ? undefined
+          : JSON.stringify([installation.tenantId.toLowerCase(), installation.teamConversationId]);
+      if (conversation !== undefined && conversations.has(conversation))
+        throw new Error("Ambiguous Teams team conversation");
+      if (
+        installation.enabled &&
+        (!input.workspaces[installation.workspace]?.enabled ||
+          !isUuid(installation.tenantId) ||
+          !isUuid(installation.teamId) ||
+          (installation.teamConversationId !== undefined &&
+            !/^19:[^\s*]+@thread\.(?:tacv2|skype)$/u.test(installation.teamConversationId)) ||
+          installation.allowedActorIds.length === 0 ||
+          installation.allowedActorIds.some((actor) => !isUuid(actor)))
+      )
+        throw new Error("Enabled team installations require exact workspace and actor mappings");
+      installations.set(installation.id, installation);
+      teams.add(key);
+      if (conversation !== undefined) conversations.add(conversation);
+    }
+    config = {
+      ...input,
+      version: 1,
+      bindings: input.bindings.map((route) => {
+        const installation = installations.get(route.installationId);
+        if (installation === undefined) throw new Error("Unknown team installation reference");
+        return {
+          ...route,
+          enabled: route.enabled && installation.enabled,
+          workspace: installation.workspace,
+          tenantId: installation.tenantId.toLowerCase(),
+          teamId: installation.teamId.toLowerCase(),
+          ...(installation.teamConversationId === undefined
+            ? {}
+            : { teamConversationId: installation.teamConversationId }),
+          allowedActorIds: installation.allowedActorIds,
+        };
+      }),
+    };
+  } else {
+    config = input;
+  }
   if (
     !config.enabled ||
     !isUuid(config.identity.entraClientId) ||
