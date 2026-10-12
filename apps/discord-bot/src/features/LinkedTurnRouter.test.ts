@@ -23,6 +23,7 @@ describe("Teams linked turn attribution", () => {
       const dispatched: Array<ClientSourceHint | undefined> = [];
       const selections: Array<Parameters<T3SessionService["resolveModelSelection"]>[0]> = [];
       const threadId = ThreadId.make("thread:teams-attribution");
+      let liveProjectId = ProjectId.make("project:teams");
       const session = {
         findProjectByWorkspaceRoot: () =>
           Effect.succeed({
@@ -34,6 +35,7 @@ describe("Teams linked turn attribution", () => {
             selections.push(input);
             return { instanceId: "codex", model: "test-model" };
           }),
+        fetchThreadDetail: () => Effect.succeed({ thread: { projectId: liveProjectId } }),
         startTurnWithWorktree: (input: Parameters<T3SessionService["startTurnWithWorktree"]>[0]) =>
           Effect.sync(() => {
             dispatched.push(input.sourceHint);
@@ -79,6 +81,9 @@ describe("Teams linked turn attribution", () => {
           );
         expect((yield* dispatch("starter-aad-id")).isNew).toBe(true);
         expect((yield* dispatch("second-aad-id")).isNew).toBe(false);
+        liveProjectId = ProjectId.make("project:other");
+        expect((yield* Effect.result(dispatch("third-aad-id")))._tag).toBe("Failure");
+        liveProjectId = ProjectId.make("project:teams");
         const linked = yield* links.getBySourceThread("teams", input.source.sourceThreadId);
         yield* links.put({ ...linked!, projectId: ProjectId.make("project:other") });
         const retarget = yield* Effect.result(dispatch("third-aad-id"));

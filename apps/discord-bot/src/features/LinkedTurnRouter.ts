@@ -156,6 +156,14 @@ export const startOrContinueT3Turn = Effect.fn("startOrContinueT3Turn")(function
         ),
       );
     }
+    if (input.source.sourceKind === "teams") {
+      const snapshot = yield* t3.fetchThreadDetail(existing.t3ThreadId);
+      if (snapshot === null || snapshot.thread.projectId !== resolved.project.id) {
+        return yield* Effect.fail(
+          new Error("The linked Teams thread does not belong to the selected project"),
+        );
+      }
+    }
     const continueModelSelection =
       input.stickyModelOnContinue === true && !hasExplicitModelFlags
         ? undefined
