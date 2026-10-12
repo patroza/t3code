@@ -2508,6 +2508,8 @@ export const runBridge = (
 
     const t3 = yield* T3Session;
     const rest = yield* BotResponseTransport;
+    const renderTables = (text: string) =>
+      rest.platform === "discord" ? rewriteMarkdownTablesForDiscord(text) : text;
     const DISCORD_LIMIT = rest.contentLimit;
     const STREAM_CHUNK_LIMIT = inProgressChunkLimit(DISCORD_LIMIT);
     const DISCORD_MAX_FILES_PER_MESSAGE = rest.fileLimit;
@@ -3549,11 +3551,11 @@ export const runBridge = (
           const fullDisplayText = streamDisplayText(text);
           const previousFullDisplayText = streamDisplayText(lastText);
 
-          // Discord cannot render GFM pipe tables — rewrite complete tables to bullets.
-          const tipDisplayText = rewriteMarkdownTablesForDiscord(
+          // Only Discord needs complete GFM tables rewritten to bullets.
+          const tipDisplayText = renderTables(
             activeStreamTipText(fullDisplayText, streamBreakPrefix),
           );
-          const previousTipDisplayText = rewriteMarkdownTablesForDiscord(
+          const previousTipDisplayText = renderTables(
             activeStreamTipText(previousFullDisplayText, streamBreakPrefix),
           );
 
@@ -4063,7 +4065,7 @@ export const runBridge = (
         // Keep Discord markdown as-is (links stay clickable). GFM pipe tables → bullets
         // (Discord does not render tables; ASCII grids were tried and removed).
         // Stats footer always gets · [T3](deep link) when the web UI base is configured.
-        const finalText = rewriteMarkdownTablesForDiscord(
+        const finalText = renderTables(
           rewriteMarkdownLocalFileLinksForDiscord({
             text: stripWorkingIndicator(stripMarkdownImages(text)),
             githubUrlsBySrc,
@@ -4960,7 +4962,7 @@ export const runBridge = (
 
         const toolCallCount = currentTurnToolCallCount(latest);
         const wakeNote = currentTurnWakeNote(latest);
-        const tipDisplay = rewriteMarkdownTablesForDiscord(streamDisplayText(hb.tipBody));
+        const tipDisplay = renderTables(streamDisplayText(hb.tipBody));
         const chunks =
           tipDisplay.trim() === ""
             ? ([""] as string[])
@@ -5084,7 +5086,7 @@ export const runBridge = (
 
           // Epoch FSM: awaiting → dots only; streaming → current epoch streamText only.
           // Same GFM→bullets rewrite as the primary stream path.
-          const tipDisplay = rewriteMarkdownTablesForDiscord(
+          const tipDisplay = renderTables(
             activeStreamTipText(streamDisplayText(hb.tipBody), state.streamBreakPrefix),
           );
 

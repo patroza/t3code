@@ -58,16 +58,45 @@ describe("Teams response adapter", () => {
       }),
     ).toEqual(["landed"]);
   });
+  it("recovers an accepted native table from Graph HTML after a timeout", () => {
+    const final = "Build report\n\n| Item | Status |\n| --- | --- |\n| **Build** | Ready |";
+    const remote = graphMessage({
+      id: "landed",
+      from: { application: { id: "bot" } },
+      body: {
+        content:
+          "<p>Build report</p><table><tr><th>Item</th><th>Status</th></tr><tr><td><strong>Build</strong></td><td>Ready</td></tr></table>",
+      },
+    });
+    expect(
+      findAlreadyPostedFinalChunkIds({
+        recentMessages: [{ id: remote.id, authorId: remote.author!.id, content: remote.content }],
+        botUserId: "bot",
+        finalChunks: [final],
+        normalizeContent: normalizeTeamsContent,
+      }),
+    ).toEqual(["landed"]);
+  });
+  it("preserves native Markdown tables in replies and progress messages", () => {
+    const content = "| Item | Status |\n| --- | --- |\n| Build | Ready |";
+    for (const fields of [idleFields(content), workingFields(content, "thread")]) {
+      expect(teamsMessageFields(fields)).toMatchObject({
+        text: content,
+        textFormat: "extendedmarkdown",
+      });
+    }
+  });
   it("keeps one visible working text and removes controls on completion", () => {
     const working = teamsMessageFields(workingFields("Working…", "thread"));
-    expect(working.text).toBe("");
+    expect(working.text).toBe("Working…");
+    expect(working.textFormat).toBe("extendedmarkdown");
     expect(working.attachments?.[0]?.content).toMatchObject({
-      body: [{ type: "TextBlock", text: "Working…", wrap: true }],
+      body: [],
       actions: [{ data: { action: "omegent", command: "stop", threadId: "thread" } }],
     });
     expect(teamsMessageFields(idleFields("19:50")).attachments).toEqual([]);
   });
-  it.effect("uploads a channel document and sends one answer card with its SharePoint link", () =>
+  it.effect("uploads a channel document with extended Markdown text and SharePoint controls", () =>
     Effect.gen(function* () {
       const config = yield* DiscordBotConfig.pipe(
         Effect.provide(
@@ -110,9 +139,10 @@ describe("Teams response adapter", () => {
         "Here is the report.",
       );
       expect(send).toHaveBeenCalledTimes(1);
-      expect(send.mock.calls[0]?.[0].text).toBe("");
+      expect(send.mock.calls[0]?.[0].text).toBe("Here is the report.");
+      expect(send.mock.calls[0]?.[0].textFormat).toBe("extendedmarkdown");
       expect(send.mock.calls[0]?.[0].attachments?.[0]?.content).toMatchObject({
-        body: [{ type: "TextBlock", text: "Here is the report.", wrap: true }],
+        body: [],
         actions: [
           {
             type: "Action.OpenUrl",
@@ -195,12 +225,12 @@ describe("Teams response adapter", () => {
                 id: remoteId,
                 from: { application: { id: "bot" } },
                 createdDateTime: DateTime.formatIso(now),
-                body: { content: '<attachment id="card"></attachment>' },
+                body: { content: '<p>Working…</p><attachment id="card"></attachment>' },
                 attachments: [
                   {
                     contentType: "application/vnd.microsoft.card.adaptive",
                     content: JSON.stringify({
-                      body: [{ type: "TextBlock", text: "Working…", wrap: true }],
+                      body: [],
                     }),
                   },
                 ],
@@ -227,7 +257,7 @@ describe("Teams response adapter", () => {
       expect(final.id).toBe(remoteId);
       expect(send.mock.calls.map(([wire]) => wire.id)).toEqual([undefined, remoteId, remoteId]);
       expect(send.mock.calls[1]?.[0].attachments?.[0]?.content).toMatchObject({
-        body: [{ type: "TextBlock", text: "Checking…", wrap: true }],
+        body: [],
       });
       expect(send.mock.calls[2]?.[0].attachments).toEqual([]);
       const rows = JSON.parse(NodeFS.readFileSync(ledgerPath, "utf8")) as Array<{
