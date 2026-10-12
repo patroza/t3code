@@ -1,6 +1,6 @@
 import { Discord, Ix } from "dfx";
 
-import { EXPORT_DEFAULT_COUNT, EXPORT_MAX_COUNT } from "./threadExport.ts";
+import { EXPORT_HISTORY_CAP } from "./threadExport.ts";
 import { interactionMessageFlags } from "./suppressEmbeds.ts";
 
 /**
@@ -19,16 +19,16 @@ export const OMEGENT_SLASH_COMMAND_ALIAS = "agent" as const;
 const EXPORT_COUNT_OPTION = {
   type: Discord.ApplicationCommandOptionType.INTEGER,
   name: "count",
-  description: `How many latest messages (default ${EXPORT_DEFAULT_COUNT}, max ${EXPORT_MAX_COUNT})`,
+  description: "How many latest messages. Omit to copy the whole chat.",
   required: false,
   min_value: 1,
-  max_value: EXPORT_MAX_COUNT,
+  max_value: EXPORT_HISTORY_CAP,
 } as const;
 
 /** Top-level `/export`. `/omegent export` and `/agent export` call the same handler. */
 export const EXPORT_SLASH_COMMAND = {
   name: "export",
-  description: "Copy the latest messages with usernames hidden",
+  description: "Copy this chat with usernames hidden",
   options: [EXPORT_COUNT_OPTION],
 } as const;
 
@@ -233,7 +233,7 @@ export const OMEGENT_SLASH_COMMAND = {
     {
       type: Discord.ApplicationCommandOptionType.SUB_COMMAND,
       name: "export",
-      description: "Copy the latest messages with usernames hidden",
+      description: "Copy this chat with usernames hidden",
       options: [EXPORT_COUNT_OPTION],
     },
   ],

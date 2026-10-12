@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  EXPORT_DEFAULT_COUNT,
+  EXPORT_HISTORY_CAP,
+  EXPORT_HISTORY_PAGE_SIZE,
   EXPORT_MARKDOWN_NAME,
-  EXPORT_MAX_COUNT,
+  exportHistoryTarget,
   exportInteractionContent,
+  initialExportHistoryCursor,
+  nextExportHistoryCursor,
   parseExportCount,
   renderThreadExport,
   type DiscordExportMessage,
@@ -25,21 +28,83 @@ function message(
 }
 
 describe("parseExportCount", () => {
-  it("defaults when the option is omitted", () => {
-    expect(parseExportCount(undefined)).toBe(EXPORT_DEFAULT_COUNT);
-    expect(parseExportCount(null)).toBe(EXPORT_DEFAULT_COUNT);
-    expect(parseExportCount("")).toBe(EXPORT_DEFAULT_COUNT);
+  it("copies the whole chat when count is omitted", () => {
+    expect(parseExportCount(undefined)).toEqual({ scope: "all" });
+    expect(parseExportCount(null)).toEqual({ scope: "all" });
+    expect(parseExportCount("")).toEqual({ scope: "all" });
+    expect(exportHistoryTarget({ scope: "all" })).toBe(EXPORT_HISTORY_CAP);
   });
 
   it("accepts a whole number in range and rejects the rest", () => {
-    expect(parseExportCount(1)).toBe(1);
-    expect(parseExportCount("12")).toBe(12);
-    expect(parseExportCount(EXPORT_MAX_COUNT)).toBe(EXPORT_MAX_COUNT);
+    expect(parseExportCount(1)).toEqual({ scope: "latest", count: 1 });
+    expect(parseExportCount("12")).toEqual({ scope: "latest", count: 12 });
+    expect(parseExportCount(EXPORT_HISTORY_CAP)).toEqual({
+      scope: "latest",
+      count: EXPORT_HISTORY_CAP,
+    });
+    expect(exportHistoryTarget({ scope: "latest", count: 12 })).toBe(12);
     expect(parseExportCount(0)).toBeNull();
-    expect(parseExportCount(101)).toBeNull();
+    expect(parseExportCount(EXPORT_HISTORY_CAP + 1)).toBeNull();
     expect(parseExportCount(1.5)).toBeNull();
     expect(parseExportCount("latest")).toBeNull();
     expect(parseExportCount(true)).toBeNull();
+  });
+});
+
+describe("export history paging", () => {
+  it("starts with one Discord page, or fewer when count is small", () => {
+    expect(initialExportHistoryCursor(20)).toEqual({ limit: 20 });
+    expect(initialExportHistoryCursor(EXPORT_HISTORY_CAP)).toEqual({
+      limit: EXPORT_HISTORY_PAGE_SIZE,
+    });
+  });
+
+  it("walks older pages until a short page or the cap", () => {
+    expect(
+      nextExportHistoryCursor({
+        target: EXPORT_HISTORY_CAP,
+        collected: 100,
+        pageCount: 100,
+        pageLimit: 100,
+        oldestId: "100",
+      }),
+    ).toEqual({ limit: 100, before: "100" });
+    expect(
+      nextExportHistoryCursor({
+        target: EXPORT_HISTORY_CAP,
+        collected: 4980,
+        pageCount: 100,
+        pageLimit: 100,
+        oldestId: "4980",
+      }),
+    ).toEqual({ limit: 20, before: "4980" });
+    expect(
+      nextExportHistoryCursor({
+        target: EXPORT_HISTORY_CAP,
+        collected: 40,
+        pageCount: 40,
+        pageLimit: 100,
+        oldestId: "40",
+      }),
+    ).toBe("end");
+    expect(
+      nextExportHistoryCursor({
+        target: 50,
+        collected: 50,
+        pageCount: 50,
+        pageLimit: 50,
+        oldestId: "50",
+      }),
+    ).toBe("maybe-truncated");
+    expect(
+      nextExportHistoryCursor({
+        target: EXPORT_HISTORY_CAP,
+        collected: 100,
+        pageCount: 100,
+        pageLimit: 100,
+        oldestId: undefined,
+      }),
+    ).toBe("end");
   });
 });
 
@@ -185,6 +250,24 @@ describe("renderThreadExport", () => {
   it("says when the channel has no messages", () => {
     expect(renderThreadExport({ botUserId: BOT_ID, messages: [] })).toContain(
       "No messages to export.",
+    );
+  });
+
+  it("says when older messages were left out", () => {
+    const messages = [
+      message({
+        id: "100",
+        content: "hi",
+        author: { id: JOSHUA_ID, username: "joshuadima", global_name: "Joshua Dimaunahan" },
+      }),
+    ];
+    const whole = renderThreadExport({ botUserId: BOT_ID, messages });
+    expect(whole).toContain("1 message. Discord usernames and user ids are omitted.");
+    expect(whole).not.toContain("left out");
+
+    const truncated = renderThreadExport({ botUserId: BOT_ID, messages, truncated: true });
+    expect(truncated).toContain(
+      "Latest 1 message. Older messages were left out. Discord usernames and user ids are omitted.",
     );
   });
 });

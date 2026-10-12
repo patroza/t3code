@@ -55,6 +55,7 @@ describe("export slash command", () => {
     expect(mentionRouterSource).toContain("export: respondToExport(exportCountRaw(ix.optionsMap))");
     expect(mentionRouterSource).toContain("Ix.guild(EXPORT_SLASH_COMMAND");
     expect(mentionRouterSource).toContain("renderThreadExport");
+    expect(mentionRouterSource).toContain("nextExportHistoryCursor");
     expect(mentionRouterSource).toContain("editOriginalInteractionWithAttachments");
     expect(mentionRouterSource).toContain("slashDefer({ ephemeral: true })");
   });

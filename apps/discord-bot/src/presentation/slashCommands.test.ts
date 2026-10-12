@@ -1,6 +1,7 @@
 import { Discord } from "dfx";
 import { describe, expect, it } from "vite-plus/test";
 
+import { EXPORT_HISTORY_CAP } from "./threadExport.ts";
 import {
   EXPORT_SLASH_COMMAND,
   formatAskSlashAck,
@@ -42,11 +43,14 @@ describe("Omegent slash command definition", () => {
     expect(topLevelCount?.name).toBe("count");
     expect(topLevelCount?.required).toBe(false);
     expect(topLevelCount?.min_value).toBe(1);
-    expect(topLevelCount?.max_value).toBe(100);
+    expect(topLevelCount?.max_value).toBe(EXPORT_HISTORY_CAP);
+    expect(EXPORT_SLASH_COMMAND.description.length).toBeLessThanOrEqual(100);
+    expect(topLevelCount?.description.length).toBeLessThanOrEqual(100);
 
     const nested = OMEGENT_SLASH_COMMAND.options.find((option) => option.name === "export");
     expect(nested?.options?.[0]?.name).toBe("count");
     expect(nested?.options?.[0]?.required).toBe(false);
+    expect(nested?.options?.[0]?.max_value).toBe(EXPORT_HISTORY_CAP);
   });
 
   it("registers optional github option on assign", () => {

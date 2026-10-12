@@ -161,11 +161,16 @@ import {
 } from "../presentation/slashCommands.ts";
 import { editOriginalInteractionWithAttachments, textFile } from "../presentation/discordFiles.ts";
 import {
+  EXPORT_HISTORY_CAP,
   EXPORT_MARKDOWN_NAME,
-  EXPORT_MAX_COUNT,
+  exportHistoryTarget,
   exportInteractionContent,
+  initialExportHistoryCursor,
+  nextExportHistoryCursor,
   parseExportCount,
   renderThreadExport,
+  type DiscordExportMessage,
+  type ExportHistoryCursor,
 } from "../presentation/threadExport.ts";
 import {
   buildTodayRecapPrompt,
@@ -3538,12 +3543,14 @@ const make = (botConfig: DiscordBotConfig) =>
           });
         }
 
-        const count = parseExportCount(countRaw);
-        if (count === null) {
-          return slashReply(`count must be a whole number from 1 to ${EXPORT_MAX_COUNT}.`, {
-            ephemeral: true,
-          });
+        const parsed = parseExportCount(countRaw);
+        if (parsed === null) {
+          return slashReply(
+            `count must be a whole number from 1 to ${EXPORT_HISTORY_CAP}. Omit it to copy the whole chat.`,
+            { ephemeral: true },
+          );
         }
+        const target = exportHistoryTarget(parsed);
 
         const applicationId = interaction.application_id;
         const interactionToken = interaction.token;
@@ -3551,10 +3558,47 @@ const make = (botConfig: DiscordBotConfig) =>
           Effect.gen(function* () {
             // The deferred ack has to land before the original response can be edited.
             yield* Effect.sleep("250 millis");
-            const listed = yield* rest.listMessages(channelId, { limit: count });
+            const listed: Array<DiscordExportMessage> = [];
+            let cursor: ExportHistoryCursor | undefined = initialExportHistoryCursor(target);
+            let truncated = false;
+            while (cursor !== undefined) {
+              const page = yield* retryTransientDiscordOperation(
+                rest.listMessages(channelId, {
+                  limit: cursor.limit,
+                  ...(cursor.before === undefined ? {} : { before: cursor.before }),
+                }),
+                DISCORD_MESSAGE_RETRY_DELAYS_MS,
+              );
+              listed.push(...page);
+              const oldestId = page.at(-1)?.id;
+              const next = nextExportHistoryCursor({
+                target,
+                collected: listed.length,
+                pageCount: page.length,
+                pageLimit: cursor.limit,
+                oldestId,
+              });
+              if (next === "end") {
+                cursor = undefined;
+              } else if (next === "maybe-truncated") {
+                // A full page that lands on the cap may still be the last page.
+                const probe =
+                  oldestId === undefined
+                    ? []
+                    : yield* retryTransientDiscordOperation(
+                        rest.listMessages(channelId, { limit: 1, before: oldestId }),
+                        DISCORD_MESSAGE_RETRY_DELAYS_MS,
+                      );
+                truncated = probe.length > 0;
+                cursor = undefined;
+              } else {
+                cursor = next;
+              }
+            }
             const markdown = renderThreadExport({
               messages: listed,
               botUserId,
+              truncated,
             });
             yield* Effect.tryPromise({
               try: () =>

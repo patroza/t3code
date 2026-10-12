@@ -6,10 +6,24 @@
 
 export const EXPORT_SLASH_COMMAND_NAME = "export" as const;
 export const EXPORT_SUBCOMMAND = "export" as const;
-export const EXPORT_DEFAULT_COUNT = 20;
-export const EXPORT_MAX_COUNT = 100;
+/** Discord returns at most this many messages per history request. */
+export const EXPORT_HISTORY_PAGE_SIZE = 100;
+/**
+ * Safety stop for a channel with a huge history. A normal thread finishes
+ * before this, and the transcript says when older messages were left out.
+ */
+export const EXPORT_HISTORY_CAP = 5000;
 export const EXPORT_MARKDOWN_NAME = "export.md";
 export const EXPORT_MESSAGE_LIMIT = 2000;
+
+export type ParsedExportCount =
+  | { readonly scope: "all" }
+  | { readonly scope: "latest"; readonly count: number };
+
+export interface ExportHistoryCursor {
+  readonly limit: number;
+  readonly before?: string;
+}
 
 export interface ExportParticipant {
   readonly id: string;
@@ -71,17 +85,44 @@ interface AssignedParticipant {
   readonly username: string | null;
 }
 
-/** Missing count uses the default. Anything else outside 1..max is rejected. */
-export function parseExportCount(raw: unknown): number | null {
-  if (raw === undefined || raw === null || raw === "") return EXPORT_DEFAULT_COUNT;
+/** Omitted count copies the whole chat. A number keeps that many latest messages. */
+export function parseExportCount(raw: unknown): ParsedExportCount | null {
+  if (raw === undefined || raw === null || raw === "") return { scope: "all" };
   const value =
     typeof raw === "number"
       ? raw
       : typeof raw === "string" && raw.trim() !== ""
         ? Number(raw.trim())
         : Number.NaN;
-  if (!Number.isInteger(value) || value < 1 || value > EXPORT_MAX_COUNT) return null;
-  return value;
+  if (!Number.isInteger(value) || value < 1 || value > EXPORT_HISTORY_CAP) return null;
+  return { scope: "latest", count: value };
+}
+
+export function exportHistoryTarget(parsed: ParsedExportCount): number {
+  return parsed.scope === "all" ? EXPORT_HISTORY_CAP : parsed.count;
+}
+
+export function initialExportHistoryCursor(target: number): ExportHistoryCursor {
+  return { limit: Math.min(EXPORT_HISTORY_PAGE_SIZE, Math.max(target, 0)) };
+}
+
+/**
+ * Discord history pages are newest-first. A short page is the end of the chat.
+ * A full page at the target needs one newer probe before calling the export truncated.
+ */
+export function nextExportHistoryCursor(input: {
+  readonly target: number;
+  readonly collected: number;
+  readonly pageCount: number;
+  readonly pageLimit: number;
+  readonly oldestId: string | undefined;
+}): ExportHistoryCursor | "end" | "maybe-truncated" {
+  if (input.pageCount < input.pageLimit || input.oldestId === undefined) return "end";
+  if (input.collected >= input.target) return "maybe-truncated";
+  return {
+    limit: Math.min(EXPORT_HISTORY_PAGE_SIZE, input.target - input.collected),
+    before: input.oldestId,
+  };
 }
 
 export function discordMessageToExportSource(message: DiscordExportMessage): ExportSourceMessage {
@@ -116,6 +157,7 @@ export function discordMessageToExportSource(message: DiscordExportMessage): Exp
 export function renderThreadExport(input: {
   readonly messages: ReadonlyArray<DiscordExportMessage>;
   readonly botUserId: string;
+  readonly truncated?: boolean;
 }): string {
   const messages = [...input.messages]
     .map(discordMessageToExportSource)
@@ -130,11 +172,15 @@ export function renderThreadExport(input: {
   const participants = assigned.map((entry) => speakerName(entry)).join(", ");
   const blocks = messages.map((message) => renderMessage(message, byId, redact));
   const countLabel = messages.length === 1 ? "1 message" : `${messages.length} messages`;
+  const summary =
+    input.truncated === true
+      ? `Latest ${countLabel}. Older messages were left out. Discord usernames and user ids are omitted.`
+      : `${countLabel}. Discord usernames and user ids are omitted.`;
 
   return [
     "# Chat export",
     "",
-    `Latest ${countLabel}. Discord usernames and user ids are omitted.`,
+    summary,
     `Participants: ${participants}`,
     "",
     blocks.join("\n\n"),
