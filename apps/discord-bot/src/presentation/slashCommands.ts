@@ -1,5 +1,6 @@
 import { Discord, Ix } from "dfx";
 
+import { EXPORT_DEFAULT_COUNT, EXPORT_MAX_COUNT } from "./threadExport.ts";
 import { interactionMessageFlags } from "./suppressEmbeds.ts";
 
 /**
@@ -14,6 +15,22 @@ export const OMEGENT_SLASH_COMMAND_NAME = "omegent" as const;
  * registered as a second command that shares the `/omegent` handler.
  */
 export const OMEGENT_SLASH_COMMAND_ALIAS = "agent" as const;
+
+const EXPORT_COUNT_OPTION = {
+  type: Discord.ApplicationCommandOptionType.INTEGER,
+  name: "count",
+  description: `How many latest messages (default ${EXPORT_DEFAULT_COUNT}, max ${EXPORT_MAX_COUNT})`,
+  required: false,
+  min_value: 1,
+  max_value: EXPORT_MAX_COUNT,
+} as const;
+
+/** Top-level `/export`. `/omegent export` and `/agent export` call the same handler. */
+export const EXPORT_SLASH_COMMAND = {
+  name: "export",
+  description: "Copy the latest messages with usernames hidden",
+  options: [EXPORT_COUNT_OPTION],
+} as const;
 
 /** Discord option descriptions must stay within 100 characters. */
 const MODEL_OPTION_DESCRIPTION = "Short name (opus-5.5). claude- and codex- prefixes still work.";
@@ -212,6 +229,12 @@ export const OMEGENT_SLASH_COMMAND = {
           required: false,
         },
       ],
+    },
+    {
+      type: Discord.ApplicationCommandOptionType.SUB_COMMAND,
+      name: "export",
+      description: "Copy the latest messages with usernames hidden",
+      options: [EXPORT_COUNT_OPTION],
     },
   ],
 } as const;

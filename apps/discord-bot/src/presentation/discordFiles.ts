@@ -7,7 +7,7 @@
  */
 // @effect-diagnostics globalFetch:off globalFetchInEffect:off unknownInEffectCatch:off anyUnknownInErrorContext:off preferSchemaOverJson:off globalErrorInEffectCatch:off globalErrorInEffectFailure:off missingEffectError:off
 
-import { SUPPRESS_EMBEDS_FLAG } from "./suppressEmbeds.ts";
+import { interactionMessageFlags, SUPPRESS_EMBEDS_FLAG } from "./suppressEmbeds.ts";
 
 export interface DiscordUploadFile {
   readonly name: string;
@@ -38,37 +38,82 @@ export async function createMessageWithAttachments(input: {
   readonly content: string;
   readonly files: ReadonlyArray<DiscordUploadFile>;
 }): Promise<{ readonly id: string }> {
-  const content = input.content;
-  const files = input.files;
+  const base = input.baseUrl.replace(/\/+$/, "");
+  const json = await sendDiscordMultipart({
+    url: `${base}/channels/${input.channelId}/messages`,
+    botToken: input.botToken,
+    method: "POST",
+    content: input.content,
+    flags: SUPPRESS_EMBEDS_FLAG,
+    files: input.files,
+    failure: "Discord createMessage with files failed",
+  });
+  return { id: json.id };
+}
 
+/**
+ * Replace the deferred interaction response, including an ephemeral file.
+ * Interaction webhook edits authenticate with the interaction token in the URL.
+ * The bot token is still sent because the rest of this process does that for
+ * webhook edits and Discord accepts it for this application.
+ */
+export async function editOriginalInteractionWithAttachments(input: {
+  readonly baseUrl: string;
+  readonly botToken: string;
+  readonly applicationId: string;
+  readonly interactionToken: string;
+  readonly content: string;
+  readonly files: ReadonlyArray<DiscordUploadFile>;
+}): Promise<void> {
+  const base = input.baseUrl.replace(/\/+$/, "");
+  await sendDiscordMultipart({
+    url: `${base}/webhooks/${input.applicationId}/${input.interactionToken}/messages/@original`,
+    botToken: input.botToken,
+    method: "PATCH",
+    content: input.content,
+    flags: interactionMessageFlags({ ephemeral: true }),
+    files: input.files,
+    failure: "Discord interaction attachment edit failed",
+  });
+}
+
+async function sendDiscordMultipart(input: {
+  readonly url: string;
+  readonly botToken: string;
+  readonly method: "POST" | "PATCH";
+  readonly content: string;
+  readonly flags: number;
+  readonly files: ReadonlyArray<DiscordUploadFile>;
+  readonly failure: string;
+}): Promise<{ readonly id: string }> {
   const form = new FormData();
   const payload: {
     content: string;
     flags: number;
     attachments?: ReadonlyArray<{ id: number; filename: string }>;
   } = {
-    content,
+    content: input.content,
     // Suppress link embeds; attachments (files[]) are separate and unaffected.
-    flags: SUPPRESS_EMBEDS_FLAG,
+    flags: input.flags,
   };
 
-  if (files.length > 0) {
-    payload.attachments = files.map((file, index) => ({
+  if (input.files.length > 0) {
+    payload.attachments = input.files.map((file, index) => ({
       id: index,
       filename: file.name,
     }));
   }
 
   // Discord rejects completely empty messages; allow empty content when files exist.
-  if (payload.content.trim() === "" && files.length === 0) {
+  if (payload.content.trim() === "" && input.files.length === 0) {
     payload.content = "\u200b";
   }
 
   // payload_json must be a field name Discord recognizes — not an attachment.
   form.append("payload_json", JSON.stringify(payload));
 
-  for (let index = 0; index < files.length; index += 1) {
-    const file = files[index]!;
+  for (let index = 0; index < input.files.length; index += 1) {
+    const file = input.files[index]!;
     // Copy into a plain ArrayBuffer-backed Uint8Array for BlobPart typing.
     const copy = new Uint8Array(file.data.byteLength);
     copy.set(file.data);
@@ -88,14 +133,10 @@ export async function createMessageWithAttachments(input: {
     );
   }
 
-  // Strip trailing slash so we don't double up.
-  const base = input.baseUrl.replace(/\/+$/, "");
-  const url = `${base}/channels/${input.channelId}/messages`;
-
   // Prefer global fetch (Node undici over HTTP/1.1) — Effect's layerUndici + HTTP/2
   // multipart has been observed to fail with NGHTTP2_PROTOCOL_ERROR on ~1MB images.
-  const response = await globalThis.fetch(url, {
-    method: "POST",
+  const response = await globalThis.fetch(input.url, {
+    method: input.method,
     headers: {
       Authorization: `Bot ${input.botToken}`,
       "User-Agent": "DiscordBot (t3-discord-bot, 0.0.0)",
@@ -106,7 +147,7 @@ export async function createMessageWithAttachments(input: {
   if (!response.ok) {
     const errBody = await response.text().catch(() => "");
     throw new DiscordUploadError(
-      `Discord createMessage with files failed (${response.status}): ${errBody}`,
+      `${input.failure} (${response.status}): ${errBody}`,
       response.status,
       errBody,
     );

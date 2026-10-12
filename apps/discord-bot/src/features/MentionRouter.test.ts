@@ -50,6 +50,16 @@ describe("unknown model replies", () => {
   });
 });
 
+describe("export slash command", () => {
+  it("registers /export and posts an ephemeral transcript", () => {
+    expect(mentionRouterSource).toContain("export: respondToExport(exportCountRaw(ix.optionsMap))");
+    expect(mentionRouterSource).toContain("Ix.guild(EXPORT_SLASH_COMMAND");
+    expect(mentionRouterSource).toContain("renderThreadExport");
+    expect(mentionRouterSource).toContain("editOriginalInteractionWithAttachments");
+    expect(mentionRouterSource).toContain("slashDefer({ ephemeral: true })");
+  });
+});
+
 describe("today-recap slash command", () => {
   it("registers /omegent today-recap and posts the recap in the invoking channel", () => {
     expect(mentionRouterSource).toContain('"today-recap": Effect.gen(function* () {');

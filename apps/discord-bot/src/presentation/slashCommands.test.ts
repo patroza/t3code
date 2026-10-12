@@ -2,6 +2,7 @@ import { Discord } from "dfx";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  EXPORT_SLASH_COMMAND,
   formatAskSlashAck,
   isThreadTalkSlashAction,
   OMEGENT_SLASH_COMMAND,
@@ -31,7 +32,21 @@ describe("Omegent slash command definition", () => {
       "link",
       "refresh-indicators",
       "assign",
+      "export",
     ]);
+  });
+
+  it("registers /export and /omegent export with an optional count", () => {
+    expect(EXPORT_SLASH_COMMAND.name).toBe("export");
+    const topLevelCount = EXPORT_SLASH_COMMAND.options[0];
+    expect(topLevelCount?.name).toBe("count");
+    expect(topLevelCount?.required).toBe(false);
+    expect(topLevelCount?.min_value).toBe(1);
+    expect(topLevelCount?.max_value).toBe(100);
+
+    const nested = OMEGENT_SLASH_COMMAND.options.find((option) => option.name === "export");
+    expect(nested?.options?.[0]?.name).toBe("count");
+    expect(nested?.options?.[0]?.required).toBe(false);
   });
 
   it("registers optional github option on assign", () => {

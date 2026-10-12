@@ -1,5 +1,5 @@
 import { type IntegrationThreadView as OrchestrationThread } from "@t3tools/shared/integrationThreadView";
-// @effect-diagnostics anyUnknownInErrorContext:off missingEffectContext:off globalDate:off globalErrorInEffectFailure:off outdatedApi:off globalFetchInEffect:off
+// @effect-diagnostics anyUnknownInErrorContext:off missingEffectContext:off globalDate:off globalErrorInEffectFailure:off globalErrorInEffectCatch:off outdatedApi:off globalFetchInEffect:off
 import {
   MessageId,
   type ModelSelection,
@@ -9,7 +9,7 @@ import {
 } from "@t3tools/contracts";
 import { DISCORD_LINK_REQUEST_MARKER } from "@t3tools/shared/providerModelSelection";
 import { makeKeyedDrainableWorker } from "@t3tools/shared/KeyedDrainableWorker";
-import { Discord, DiscordREST, Ix } from "dfx";
+import { Discord, DiscordConfig, DiscordREST, Ix } from "dfx";
 import { DiscordGateway, InteractionsRegistry } from "dfx/gateway";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -18,6 +18,7 @@ import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
@@ -148,6 +149,7 @@ import {
   hasNewContextCompaction,
 } from "../presentation/compactContext.ts";
 import {
+  EXPORT_SLASH_COMMAND,
   formatAskSlashAck,
   isThreadTalkSlashAction,
   OMEGENT_SLASH_COMMAND,
@@ -157,6 +159,14 @@ import {
   slashReply,
   threadTalkSlashReply,
 } from "../presentation/slashCommands.ts";
+import { editOriginalInteractionWithAttachments, textFile } from "../presentation/discordFiles.ts";
+import {
+  EXPORT_MARKDOWN_NAME,
+  EXPORT_MAX_COUNT,
+  exportInteractionContent,
+  parseExportCount,
+  renderThreadExport,
+} from "../presentation/threadExport.ts";
 import {
   buildTodayRecapPrompt,
   chunkTodayRecapContent,
@@ -603,6 +613,9 @@ const make = (botConfig: DiscordBotConfig) =>
   Effect.gen(function* () {
     const gateway = yield* DiscordGateway;
     const rest = yield* DiscordREST;
+    const discordConfig = yield* DiscordConfig.DiscordConfig;
+    const discordBotToken = Redacted.value(discordConfig.token);
+    const discordApiBaseUrl = discordConfig.rest.baseUrl;
     const t3 = yield* T3Session;
     const links = yield* ThreadLinkStore;
     const aliases = yield* ProjectAliasStore;
@@ -3512,6 +3525,66 @@ const make = (botConfig: DiscordBotConfig) =>
     // `/omegent` and its `/agent` alias share one handler. Discord has no native
     // aliases, so each name is a separately registered command; the cast keeps the
     // command-spec type constant across both so the single handler type-checks.
+    const exportCountRaw = (optionsMap: HashMap.HashMap<string, string | undefined>) =>
+      Option.getOrUndefined(HashMap.get(optionsMap, "count"));
+
+    const respondToExport = (countRaw: unknown) =>
+      Effect.gen(function* () {
+        const interaction = yield* Ix.Interaction;
+        const channelId = interaction.channel_id;
+        if (channelId === undefined || channelId.length === 0) {
+          return slashReply("Export only works inside a server channel or thread.", {
+            ephemeral: true,
+          });
+        }
+
+        const count = parseExportCount(countRaw);
+        if (count === null) {
+          return slashReply(`count must be a whole number from 1 to ${EXPORT_MAX_COUNT}.`, {
+            ephemeral: true,
+          });
+        }
+
+        const applicationId = interaction.application_id;
+        const interactionToken = interaction.token;
+        yield* forkSlashBackground(
+          Effect.gen(function* () {
+            // The deferred ack has to land before the original response can be edited.
+            yield* Effect.sleep("250 millis");
+            const listed = yield* rest.listMessages(channelId, { limit: count });
+            const markdown = renderThreadExport({
+              messages: listed,
+              botUserId,
+            });
+            yield* Effect.tryPromise({
+              try: () =>
+                editOriginalInteractionWithAttachments({
+                  baseUrl: discordApiBaseUrl,
+                  botToken: discordBotToken,
+                  applicationId,
+                  interactionToken,
+                  content: exportInteractionContent(markdown),
+                  files: [textFile(EXPORT_MARKDOWN_NAME, markdown)],
+                }),
+              catch: (cause) =>
+                cause instanceof Error ? cause : new Error("Export upload failed"),
+            });
+          }).pipe(
+            Effect.catch((error: unknown) =>
+              rest
+                .updateOriginalWebhookMessage(applicationId, interactionToken, {
+                  payload: {
+                    content: `Export failed: ${error instanceof Error ? error.message : String(error)}`,
+                  },
+                })
+                .pipe(Effect.ignore),
+            ),
+          ),
+        );
+
+        return slashDefer({ ephemeral: true });
+      });
+
     const makeSlashCommand = (commandName: string) =>
       Ix.guild(
         { ...OMEGENT_SLASH_COMMAND, name: commandName } as typeof OMEGENT_SLASH_COMMAND,
@@ -4426,17 +4499,23 @@ const make = (botConfig: DiscordBotConfig) =>
                 ),
               ),
             ),
+
+            export: respondToExport(exportCountRaw(ix.optionsMap)),
           });
         },
       );
 
     const omegentSlashCommand = makeSlashCommand(OMEGENT_SLASH_COMMAND_NAME);
     const agentSlashCommand = makeSlashCommand(OMEGENT_SLASH_COMMAND_ALIAS);
+    const exportSlashCommand = Ix.guild(EXPORT_SLASH_COMMAND, (ix) =>
+      respondToExport(exportCountRaw(ix.optionsMap)),
+    );
 
     yield* registry.register(
       Ix.builder
         .add(omegentSlashCommand)
         .add(agentSlashCommand)
+        .add(exportSlashCommand)
         .add(approvalButton)
         .add(denyButton)
         .add(stopButton)
@@ -4445,7 +4524,11 @@ const make = (botConfig: DiscordBotConfig) =>
     );
 
     yield* Effect.logInfo("Registered Discord slash commands", {
-      commands: [OMEGENT_SLASH_COMMAND_NAME, OMEGENT_SLASH_COMMAND_ALIAS],
+      commands: [
+        OMEGENT_SLASH_COMMAND_NAME,
+        OMEGENT_SLASH_COMMAND_ALIAS,
+        EXPORT_SLASH_COMMAND.name,
+      ],
       subcommands: OMEGENT_SLASH_COMMAND.options.map((option) => option.name),
       scope: "guild",
     });
