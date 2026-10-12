@@ -3146,7 +3146,22 @@ const make = (botConfig: DiscordBotConfig) =>
             });
             if (unknownModel !== null) {
               yield* clearBootstrapReaction(pendingReadyReaction);
-              yield* rest.createMessage(event.channel_id, {
+              // A channel mention cannot be ephemeral. Open the thread (or reuse
+              // one AutoThreads already made) and leave the channel itself quiet.
+              const threadId = yield* openOrReuseThread(
+                event.channel_id,
+                event.id,
+                truncateTitle(prompt),
+              ).pipe(
+                Effect.map((thread) => thread.id),
+                Effect.catch((error) =>
+                  Effect.logWarning(
+                    "Could not open a thread for the unknown-model reply; posting in the channel",
+                    { error: String(error), messageId: event.id },
+                  ).pipe(Effect.as(event.channel_id)),
+                ),
+              );
+              yield* rest.createMessage(threadId, {
                 content: unknownModel,
                 message_reference: { message_id: event.id },
               });
@@ -3604,7 +3619,7 @@ const make = (botConfig: DiscordBotConfig) =>
                     topic,
                   });
                   if (unknownModel !== null) {
-                    return slashReply(unknownModel);
+                    return slashReply(unknownModel, { ephemeral: true });
                   }
                 }
               }
