@@ -33,6 +33,7 @@ export function validateTeamsFileDestination(destination: TeamsFileDestination):
 
 export function teamsUploadName(file: BotUploadFile): string {
   const name = file.name
+    // eslint-disable-next-line no-control-regex -- SharePoint filenames cannot contain control characters.
     .replace(/[\\/:*?"<>|#%\u0000-\u001f]/gu, "_")
     .replace(/[. ]+$/u, "")
     .slice(-120);

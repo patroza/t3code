@@ -207,6 +207,8 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
             clientSecret: config.teamsClientSecret!,
             teamId: location.teamId ?? "",
             channelId: location.channelId ?? "",
+            fileDestination: channel?.fileDestination,
+            includeProgressHistory: channel?.includeProgressHistory,
             conversationId: location.conversationId,
             rootMessageId:
               location.conversationId.split(";messageid=")[1] ?? activity.replyToId ?? activity.id,
@@ -327,6 +329,8 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
           clientSecret: config.teamsClientSecret!,
           teamId: location.teamId ?? "",
           channelId: location.channelId ?? "",
+          fileDestination: channel?.fileDestination,
+          includeProgressHistory: channel?.includeProgressHistory,
           conversationId: location.conversationId,
           rootMessageId:
             activity.replyToId ?? location.conversationId.split(";messageid=")[1] ?? activity.id,
