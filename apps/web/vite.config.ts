@@ -197,6 +197,10 @@ const isolatedUnitTestFiles = [
   // stub leaks into later files (ComposerControl then renders variant as a
   // DOM attribute and drops size classes).
   "src/components/settings/ProjectIconPickerDialog.test.tsx",
+  // Mocks `../ui/input`. Under isolate:false the real Base UI input binds
+  // first, FieldControl reads a missing currentTarget, and Fork CI fails
+  // on file order.
+  "src/components/settings/SecretInput.test.tsx",
   "src/components/settings/ProviderSettingsPanel.environment.test.tsx",
   // Mocks `../ui/toast`; under isolate:false an earlier file binds the real
   // toast manager and the release-link error toast is never recorded.

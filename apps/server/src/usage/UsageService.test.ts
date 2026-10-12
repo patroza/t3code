@@ -204,6 +204,16 @@ function totalOutputTokens(summary: { buckets: readonly { totals: { outputTokens
   return summary.buckets.reduce((sum, bucket) => sum + bucket.totals.outputTokens, 0);
 }
 
+/** Cursor buckets only. A developer `~/.kimi` is a real source and is not this cache. */
+function cursorOutputTokens(summary: {
+  buckets: readonly { provider: string; totals: { outputTokens: number } }[];
+}) {
+  return summary.buckets.reduce(
+    (sum, bucket) => sum + (bucket.provider === "cursor" ? bucket.totals.outputTokens : 0),
+    0,
+  );
+}
+
 /** Inside `WINDOW`: the time Cursor tests run at. */
 const CURSOR_NOW = Date.parse("2026-08-02T12:00:00Z");
 const HOUR_MS = 60 * 60 * 1000;
@@ -771,14 +781,14 @@ describe("UsageService", () => {
         const service = yield* makeWithCursor(cursor.read);
         const read = (input: UsageSummaryInput) =>
           service.readSummary({ ...input, awaitRefresh: true });
-        assert.strictEqual(totalOutputTokens(yield* read(WINDOW)), 19);
+        assert.strictEqual(cursorOutputTokens(yield* read(WINDOW)), 19);
         assert.deepStrictEqual(cursor.state.calls, [
           { sinceMs: CURSOR_NOW - CURSOR_RETENTION_MS, untilMs: CURSOR_NOW },
         ]);
 
         // A wider window is answered from the same cache.
         const wide = { ...WINDOW, sinceDay: UsageDay.make("2026-07-01") };
-        assert.strictEqual(totalOutputTokens(yield* read(wide)), 36);
+        assert.strictEqual(cursorOutputTokens(yield* read(wide)), 36);
         assert.strictEqual(cursor.state.calls.length, 1);
 
         // An event finalized late, inside the overlap, and a new one.
@@ -787,7 +797,7 @@ describe("UsageService", () => {
           { timestampMs: CURSOR_NOW + HOUR_MS, outputTokens: 13 },
         );
         yield* TestClock.adjust(Duration.hours(2));
-        assert.strictEqual(totalOutputTokens(yield* read(WINDOW)), 43);
+        assert.strictEqual(cursorOutputTokens(yield* read(WINDOW)), 43);
         assert.deepStrictEqual(cursor.state.calls[1], {
           sinceMs: CURSOR_NOW - HOUR_MS,
           untilMs: CURSOR_NOW + 2 * HOUR_MS,
@@ -796,7 +806,7 @@ describe("UsageService", () => {
         // Another login replaces the cached account's history instead of adding to it.
         cursor.state.accountKey = "account-b";
         yield* TestClock.adjust(Duration.minutes(2));
-        assert.strictEqual(totalOutputTokens(yield* read(wide)), 60);
+        assert.strictEqual(cursorOutputTokens(yield* read(wide)), 60);
         assert.strictEqual(cursor.state.calls.length, 4);
         assert.strictEqual(cursorSource(yield* read(wide))?.fingerprint.volumeId, "account-b");
       }).pipe(
