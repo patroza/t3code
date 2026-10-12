@@ -155,18 +155,23 @@ export const makeThreadWarmCacheStore = (dataDirRaw: string) =>
               projection: yield* encodeProjection(input.projection).pipe(Effect.orDie),
             };
             const body = `${JSON.stringify(doc)}\n`;
+            // The filesystem promise outlives cancellation; await its rename before releasing
+            // the lock or letting bridge shutdown release this cache directory.
             yield* Effect.promise(() => atomicWriteFile(pathFor(String(input.threadId)), body));
-          }),
+          }).pipe(Effect.uninterruptible),
         ),
 
       remove: (threadId) =>
-        Effect.tryPromise({
-          try: () => NodeFSP.unlink(pathFor(String(threadId))),
-          catch: () => undefined,
-        }).pipe(
-          Effect.asVoid,
-          Effect.orElseSucceed(() => undefined),
-          Effect.asVoid,
+        writeLock.withPermit(
+          Effect.tryPromise({
+            try: () => NodeFSP.unlink(pathFor(String(threadId))),
+            catch: () => undefined,
+          }).pipe(
+            Effect.asVoid,
+            Effect.orElseSucceed(() => undefined),
+            Effect.asVoid,
+            Effect.uninterruptible,
+          ),
         ),
     });
   });

@@ -1431,15 +1431,26 @@ describe("Working tip lifecycle contracts", () => {
         shouldRecreateStreamTipOnUpdateFailure({
           turnInProgress: true,
           updateFailed: true,
+          messageNotFound: true,
         }),
       ).toBe(true);
     });
 
+    it("does not append a new tip for a transient edit failure", () => {
+      expect(
+        shouldRecreateStreamTipOnUpdateFailure({
+          turnInProgress: true,
+          updateFailed: true,
+          messageNotFound: false,
+        }),
+      ).toBe(false);
+    });
     it("does not recreate when the turn is idle (avoid ghost Working after settle)", () => {
       expect(
         shouldRecreateStreamTipOnUpdateFailure({
           turnInProgress: false,
           updateFailed: true,
+          messageNotFound: true,
         }),
       ).toBe(false);
     });
@@ -1449,6 +1460,7 @@ describe("Working tip lifecycle contracts", () => {
         shouldRecreateStreamTipOnUpdateFailure({
           turnInProgress: true,
           updateFailed: false,
+          messageNotFound: false,
         }),
       ).toBe(false);
     });

@@ -1,8 +1,8 @@
 /**
- * Structural Discord assistant delivery state machine.
+ * Shared chat assistant delivery state machine.
  *
  * Band-aid flags (seededWorkingAckPending, finalizedTurnId, lastAssistantText) grew into
- * conflicting rules. This module is the single source of truth for *whether* Discord may
+ * conflicting rules. This module is the single source of truth for *whether* a chat adapter may
  * stream, finalize, or heartbeat — keyed by a monotonic **epoch** that advances on each
  * new user Working ack (and only then).
  *
@@ -364,7 +364,9 @@ export function deliveryTextFromAssistants(
     .map((message) => message.text.trimEnd())
     .filter((text) => text.trim() !== "");
   if (texts.length === 0) return "";
-  if (mode === "progress" || texts.length === 1) return texts.join("\n\n").trimEnd();
+  // Progress is a replaceable status, not a transcript. Provider bubbles change IDs
+  // within one turn; showing the latest nonempty bubble keeps one editable tip.
+  if (mode === "progress" || texts.length === 1) return texts.at(-1)!;
 
   // Mirror finalAnswerText: prefer last bubble unless it is a short trailer after Findings.
   const last = texts[texts.length - 1]!;
@@ -623,4 +625,15 @@ export function shouldRecreateTip(input: {
   if (!input.updateFailed) return false;
   if (!input.turnInProgress && !input.state.settleReady) return false;
   return input.state.phase === "awaiting" || input.state.phase === "streaming";
+}
+
+/** Unfinished work includes waiting; presentation must not imply active execution. */
+export function chatProgressLabel(input: {
+  readonly runStatus: string | null | undefined;
+  readonly hasPendingApprovals: boolean;
+}) {
+  if (input.hasPendingApprovals) return "Waiting for approval";
+  if (input.runStatus === "waiting") return "Waiting";
+  if (input.runStatus === "preparing" || input.runStatus === "starting") return "Starting";
+  return "Working";
 }

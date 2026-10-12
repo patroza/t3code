@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   assistantMessagesForDelivery,
+  chatProgressLabel,
   beginDeliveryEpoch,
   decideAssistantDelivery,
   decideHeartbeat,
@@ -13,7 +14,7 @@ import {
   shouldRecreateTip,
   unfinalizedPriorAssistantForCatchUp,
   type DeliveryEpochState,
-} from "./DiscordDelivery.ts";
+} from "./ChatDelivery.ts";
 
 const msg = (
   id: string,
@@ -746,5 +747,24 @@ describe("decideAssistantDelivery epoch FSM", () => {
       tipBody: "partial…",
       epoch: 1,
     });
+  });
+});
+
+describe("shared chat progress", () => {
+  it.each([
+    { runStatus: "starting", hasPendingApprovals: false, label: "Starting" },
+    { runStatus: "waiting", hasPendingApprovals: false, label: "Waiting" },
+    { runStatus: "waiting", hasPendingApprovals: true, label: "Waiting for approval" },
+    { runStatus: "running", hasPendingApprovals: false, label: "Working" },
+  ])("presents $runStatus (approval=$hasPendingApprovals) as $label", ({ label, ...state }) => {
+    expect(chatProgressLabel(state)).toBe(label);
+  });
+  it("uses the latest nonempty progress bubble rather than growing a chat transcript", () => {
+    expect(
+      deliveryTextFromAssistants(
+        [{ text: "Older progress" }, { text: "Latest progress" }, { text: "" }],
+        "progress",
+      ),
+    ).toBe("Latest progress");
   });
 });
