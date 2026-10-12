@@ -88,7 +88,7 @@ export function ThreadListFilters(
           }
         }}
       />
-      {props.selectedEnvironmentId !== null || props.selectedProjectKey !== null ? (
+      {props.selectedEnvironmentIds.length > 0 || props.selectedProjectKey !== null ? (
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Reset thread filters"
