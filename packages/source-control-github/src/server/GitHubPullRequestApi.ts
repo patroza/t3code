@@ -1809,6 +1809,24 @@ export const make = Effect.gen(function* () {
     );
   };
 
+  // App tokens can cover one repository. Capture them before enqueueing so the resolver's
+  // existing credential grouping never combines repositories served by different tokens.
+  const withBatchCredential = <A, E, R>(
+    input: { readonly cwd: string; readonly host: string; readonly repository: string },
+    read: Effect.Effect<A, E, R>,
+  ) =>
+    Effect.gen(function* () {
+      const credential = yield* api.credential(input.host, input);
+      if (!Redacted.value(credential.token).startsWith("ghs_")) return yield* read;
+      return yield* read.pipe(
+        Effect.provideService(GitHubApi.PinnedGitHubCredential, {
+          host: input.host.toLowerCase(),
+          token: credential.token,
+          credentialFingerprint: credential.fingerprint,
+        }),
+      );
+    });
+
   /**
    * Summaries asked for together, on one host under one credential, share aliased GraphQL reads
    * of twenty-five: the background sync reads every linked pull request each minute, and one
@@ -1840,6 +1858,7 @@ export const make = Effect.gen(function* () {
           : graphqlRead({
               cwd: first.request.cwd,
               host: first.request.host,
+              repository: first.request.repository,
               operation: "getPullRequestSummary",
               ...document,
               decode: decodePullRequestSummariesJson,
@@ -1888,7 +1907,7 @@ export const make = Effect.gen(function* () {
     RequestResolver.batchN(STAT_ALIASES_PER_REQUEST),
   );
   const getPullRequestSummary: GitHubPullRequestApi["Service"]["getPullRequestSummary"] = (input) =>
-    Effect.request(new PullRequestSummaryRead(input), summaryResolver);
+    withBatchCredential(input, Effect.request(new PullRequestSummaryRead(input), summaryResolver));
 
   // Every watched pull request on a host in one read per pass. A pull request the batch has no
   // answer for gets null, and its watch reads it in full; a failed batch fails every entry.
@@ -1917,6 +1936,7 @@ export const make = Effect.gen(function* () {
           : graphqlRead({
               cwd: first.request.cwd,
               host: first.request.host,
+              repository: first.request.repository,
               operation: "getPullRequestWatchFingerprint",
               ...document,
               decode: decodePullRequestWatchFingerprintsJson,
@@ -1942,7 +1962,11 @@ export const make = Effect.gen(function* () {
     RequestResolver.batchN(STAT_ALIASES_PER_REQUEST),
   );
   const getPullRequestWatchFingerprint: GitHubPullRequestApi["Service"]["getPullRequestWatchFingerprint"] =
-    (input) => Effect.request(new PullRequestWatchFingerprintRead(input), watchFingerprintResolver);
+    (input) =>
+      withBatchCredential(
+        input,
+        Effect.request(new PullRequestWatchFingerprintRead(input), watchFingerprintResolver),
+      );
 
   return GitHubPullRequestApi.of({
     withVerifiedCredential,

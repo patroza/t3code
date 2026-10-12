@@ -837,6 +837,63 @@ layer("GitHubPullRequestApi.layer", (it) => {
     }),
   );
 
+  it.effect("keeps watched PRs from different installations in separate credential batches", () =>
+    Effect.gen(function* () {
+      mockedCredential.mockImplementation((host, target) =>
+        Effect.succeed({
+          token: Redacted.make(`ghs_${target?.repository}`),
+          fingerprint: `${host}:${target?.repository}`,
+        }),
+      );
+      mockedExecute.mockImplementation((call) => {
+        if (call.kind !== "graphql" || call.variables?.w1_owner !== undefined || !call.repository) {
+          return Effect.fail(
+            new GitHubApi.GitHubApiNotFoundError({ host: call.host, operation: call.operation }),
+          );
+        }
+        return Effect.succeed(
+          output(
+            encodeJson({
+              data: {
+                w0: {
+                  pullRequest: {
+                    state: "OPEN",
+                    mergeable: "MERGEABLE",
+                    headRefOid: "abc123",
+                    comments: { totalCount: 1, nodes: [] },
+                    reviews: { totalCount: 0, nodes: [] },
+                    reviewThreads: { totalCount: 0 },
+                    commits: { nodes: [{ commit: { statusCheckRollup: null } }] },
+                  },
+                },
+              },
+            }),
+          ),
+        );
+      });
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      const reads = yield* Effect.forEach(
+        ["owner/fork", "organization/scanner"],
+        (repository) =>
+          cli.getPullRequestWatchFingerprint({
+            cwd: "/w",
+            repository,
+            host: "github.com",
+            number: 7,
+          }),
+        { concurrency: "unbounded" },
+      ).pipe(Effect.forkChild);
+      yield* TestClock.adjust("10 millis");
+      const fingerprints = yield* Fiber.join(reads);
+      expect(fingerprints.every((fingerprint) => fingerprint?.remarks.startsWith("1 "))).toBe(true);
+      expect(mockedExecute).toHaveBeenCalledTimes(2);
+      expect(mockedExecute.mock.calls.map(([call]) => call.repository).toSorted()).toEqual([
+        "organization/scanner",
+        "owner/fork",
+      ]);
+    }),
+  );
+
   it.effect("fingerprints watched pull requests on one host in one read", () =>
     Effect.gen(function* () {
       const node = (comments: number) => ({
