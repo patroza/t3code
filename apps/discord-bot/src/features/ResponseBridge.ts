@@ -20,6 +20,8 @@ import {
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Scope from "effect/Scope";
 import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
@@ -2550,6 +2552,7 @@ export const runBridge = (
         lastFinalizedText: persistedLink?.deliveryReceipt?.text ?? null,
       }),
     });
+    const workerScope = yield* Effect.scope;
     const latestThreadRef = yield* Ref.make<OrchestrationThread | null>(null);
     const latestVcsStatusRef = yield* Ref.make<VcsStatusResult | null>(null);
     /** Sticky PR evidence — never cleared by transient null lookups (only force-refresh). */
@@ -4842,9 +4845,8 @@ export const runBridge = (
         // Server-side VcsStatusBroadcaster already runs one remote poller per cwd when
         // clients subscribe. Do NOT also force-refresh every 30s from the bot — that
         // doubled GitHub/gh fan-out across every Discord bridge and starved the server.
-        // forkDetach (not forkScoped): bridge fibers are started with forkDetach and
-        // have no ambient Scope. forkScoped here used to fail every onThread after
-        // rehydrate, so Discord stream/finalize never ran while T3 kept working.
+        // Capture this bridge's scope explicitly: callbacks may execute without an ambient
+        // Scope, and a stopped/replaced bridge must await every background writer.
         const fiber = yield* t3
           .subscribeVcsStatus(cwd, (event) =>
             Effect.gen(function* () {
@@ -4886,7 +4888,7 @@ export const runBridge = (
               }),
             ),
             Effect.asVoid,
-            Effect.forkDetach,
+            Effect.forkIn(workerScope),
           );
         yield* Ref.set(vcsStatusSubscriptionRef, { cwd, fiber });
         yield* Effect.logInfo("Discord thread title VCS status subscription started", {
@@ -5782,7 +5784,7 @@ export const runBridge = (
         }
         yield* Ref.set(latestThreadRef, projectThreadForDiscordMemory(thread));
         yield* Ref.update(deliveryGenerationRef, (n) => n + 1);
-        yield* deliveryLock.withPermit(runDeliveryWorker).pipe(Effect.forkDetach);
+        yield* deliveryLock.withPermit(runDeliveryWorker).pipe(Effect.forkIn(workerScope));
       });
 
     /**
@@ -6068,6 +6070,7 @@ export const runBridge = (
         ),
         Effect.ensuring(
           Effect.gen(function* () {
+            yield* Scope.close(workerScope, Exit.void);
             if (heartbeatFiber !== null) {
               yield* Fiber.interrupt(heartbeatFiber).pipe(Effect.ignore);
             }
@@ -6115,4 +6118,4 @@ export const runBridge = (
           }),
         ),
       );
-  });
+  }).pipe(Effect.scoped);

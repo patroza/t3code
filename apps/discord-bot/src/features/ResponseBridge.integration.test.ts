@@ -134,6 +134,7 @@ describe("shared response runner", () => {
     { platform: "discord", failure: "late-final" },
     { platform: "discord", failure: "restart" },
     { platform: "discord", failure: "upload" },
+    { platform: "discord", failure: "shutdown" },
     { platform: "teams", failure: "none" },
     { platform: "teams", failure: "progress" },
     { platform: "teams", failure: "final" },
@@ -143,6 +144,7 @@ describe("shared response runner", () => {
     { platform: "teams", failure: "late-final" },
     { platform: "teams", failure: "restart" },
     { platform: "teams", failure: "upload" },
+    { platform: "teams", failure: "shutdown" },
   ] as const)(
     "edits working → latest progress → final through $platform (failure=$failure)",
     ({ platform, failure }) =>
@@ -206,6 +208,10 @@ describe("shared response runner", () => {
         const progress = yield* Deferred.make<void>();
         const resumed = yield* Deferred.make<void>();
         const grown = yield* Deferred.make<string>();
+        const blockedWrite = yield* Deferred.make<void>();
+        const releaseWrite = yield* Deferred.make<void>();
+        let stopped = false;
+        let writesAfterStop = 0;
         const failed = yield* Deferred.make<void>();
         const final = yield* Deferred.make<string>();
         const info = yield* Deferred.make<string>();
@@ -216,6 +222,7 @@ describe("shared response runner", () => {
         const fieldsById = new Map<string, BotMessageFields>();
         const write = (content: string, id?: string, fields: BotMessageFields = { content }) =>
           Effect.gen(function* () {
+            if (stopped) writesAfterStop += 1;
             const message = { id: id ?? String(++counter), content, author: { id: "bot" } };
             messages.set(message.id, message);
             fieldsById.set(message.id, fields);
@@ -259,6 +266,13 @@ describe("shared response runner", () => {
             }),
           updateMessage: (_, id, fields) =>
             Effect.gen(function* () {
+              if (
+                failure === "shutdown" &&
+                fields.content.includes("Checking the current result.")
+              ) {
+                yield* Deferred.succeed(blockedWrite, undefined);
+                yield* Deferred.await(releaseWrite);
+              }
               if (
                 !didFail &&
                 ((["progress", "missing"].includes(failure) &&
@@ -382,6 +396,15 @@ describe("shared response runner", () => {
           (effect) => effect as Effect.Effect<void, unknown, Scope.Scope>,
           Effect.forkChild,
         );
+        if (failure === "shutdown") {
+          yield* Deferred.await(blockedWrite);
+          yield* Fiber.interrupt(fiber).pipe(Effect.timeout("2 seconds"));
+          stopped = true;
+          yield* Deferred.succeed(releaseWrite, undefined);
+          yield* Effect.sleep("5 millis");
+          expect(writesAfterStop).toBe(0);
+          return;
+        }
         if (failure === "restart") {
           yield* Deferred.await(info);
           yield* Fiber.interrupt(fiber);
