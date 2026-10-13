@@ -74,7 +74,6 @@ import {
   ClockIcon,
   FolderIcon,
   GitBranchIcon,
-  ListIcon,
   ListFilterIcon,
   MessageCircleQuestionIcon,
   PinIcon,
@@ -191,10 +190,7 @@ import {
   isIdentityClaimRequiredMessage,
   requestIdentityClaimGate,
 } from "./identity/IdentityClaimGate";
-import {
-  DEFAULT_OWNERSHIP_RELATION,
-  isOwnershipRelation,
-} from "@t3tools/client-runtime/state/identity";
+import { DEFAULT_OWNERSHIP_RELATION } from "@t3tools/client-runtime/state/identity";
 import { identityClaimPersonIdByEnvironmentAtom } from "../state/identity";
 import {
   animateSidebarLayoutChanges,
@@ -284,18 +280,7 @@ import {
 import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Button, InlineButton } from "./ui/button";
-import {
-  Menu,
-  MenuCheckboxItem,
-  MenuGroup,
-  MenuItem,
-  MenuPopup,
-  MenuRadioGroup,
-  MenuRadioItem,
-  MenuSeparator,
-  MenuShortcut,
-  MenuTrigger,
-} from "./ui/menu";
+import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuShortcut, MenuTrigger } from "./ui/menu";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { buildOwnershipPredicate, useOwnershipFilter } from "./ownershipFilter";
 import {
@@ -307,20 +292,12 @@ import {
   LIST_THREAD_GROUPING_STORAGE_KEY,
   ListEnvironmentFilterSchema,
   ListHideSettledSchema,
-  SIDEBAR_OWNERSHIP_FILTER_LABELS,
-  SIDEBAR_OWNERSHIP_FILTERS,
-  SIDEBAR_OWNERSHIP_RELATION_LABELS,
-  SIDEBAR_OWNERSHIP_RELATIONS,
   SIDEBAR_V2_SETTLED_SHELF_EXPANDED_STORAGE_KEY,
-  WEB_THREAD_GROUPING_LABELS,
-  WEB_THREAD_GROUPINGS,
   WebThreadGroupingSchema,
   isAllEnvironmentsSelected,
-  isEnvironmentSelected,
   matchesEnvironmentFilter,
   resolveSelectedEnvironmentIds,
   toggleEnvironmentId,
-  type WebThreadGrouping,
 } from "./listEnvironmentFilter";
 import {
   Combobox,
@@ -332,8 +309,9 @@ import {
   ComboboxTrigger,
   useComboboxFilter,
 } from "./ui/combobox";
-import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./ui/sidebar";
+import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
+import { SidebarThreadFilters } from "./sidebar/SidebarThreadFilters";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { MiddleTruncate } from "./ui/middle-truncate";
@@ -5299,10 +5277,11 @@ export default function Sidebar() {
                   <ComboboxTrigger
                     render={
                       <SidebarHeaderIconButton
+                        data-testid="sidebar-project-filters-trigger"
                         label={
                           scopedProjectGroup
-                            ? `Filter threads by project: ${scopedProjectGroup.displayName}`
-                            : "Filter threads by project"
+                            ? `Filter threads: ${scopedProjectGroup.displayName}`
+                            : "Filter threads"
                         }
                       />
                     }
@@ -5316,6 +5295,12 @@ export default function Sidebar() {
                     ) : (
                       <ListFilterIcon className="size-4" />
                     )}
+                    {listOptionsActive ? (
+                      <span
+                        aria-hidden
+                        className="absolute top-1.5 right-1.5 size-1.5 rounded-full bg-primary"
+                      />
+                    ) : null}
                   </ComboboxTrigger>
                   <ComboboxPopup
                     align="start"
@@ -5326,6 +5311,24 @@ export default function Sidebar() {
                     anchor={headerSearchRef}
                     className="max-w-[min(18rem,var(--available-width))] overflow-hidden"
                   >
+                    <SidebarThreadFilters
+                      ownershipFilter={ownershipFilter}
+                      ownershipRelation={ownershipRelation}
+                      threadGrouping={threadGrouping}
+                      settledShelfExpanded={settledShelfExpanded}
+                      environments={environments}
+                      selectedEnvironmentIds={selectedEnvironmentIds}
+                      onOwnershipFilterChange={setOwnershipFilter}
+                      onOwnershipRelationChange={setOwnershipRelation}
+                      onThreadGroupingChange={setThreadGrouping}
+                      onSettledShelfExpandedChange={setSettledShelfExpanded}
+                      onClearEnvironments={() => setStoredEnvironmentFilter([])}
+                      onToggleEnvironment={(environmentId) => {
+                        setStoredEnvironmentFilter([
+                          ...toggleEnvironmentId(selectedEnvironmentIds, environmentId),
+                        ]);
+                      }}
+                    />
                     <ComboboxSearchInput
                       aria-label="Search projects"
                       placeholder="Search projects..."
@@ -5421,181 +5424,6 @@ export default function Sidebar() {
               activeSearchResultIndex={activeSearchResultIndex}
               onClearSearch={clearThreadSearch}
             />
-            <div className="flex items-center gap-1">
-              {projectGroups.length > 0 ? (
-                <>
-                  <Menu>
-                    <MenuTrigger
-                      render={
-                        <SidebarMenuButton
-                          size="icon"
-                          type="button"
-                          aria-label={`Thread ordering: ${WEB_THREAD_GROUPING_LABELS[threadGrouping]}`}
-                          data-testid="sidebar-thread-grouping"
-                        />
-                      }
-                    >
-                      {threadGrouping === "project" ? <ListIcon /> : <ClockIcon />}
-                    </MenuTrigger>
-                    <MenuPopup align="start">
-                      <MenuRadioGroup
-                        value={threadGrouping}
-                        onValueChange={(value) => setThreadGrouping(value as WebThreadGrouping)}
-                      >
-                        {WEB_THREAD_GROUPINGS.filter((grouping) => grouping !== "none").map(
-                          (grouping) => (
-                            <MenuRadioItem
-                              key={grouping}
-                              value={grouping}
-                              closeOnClick
-                              data-testid={`sidebar-thread-grouping-${grouping}`}
-                            >
-                              {grouping === "project" ? <ListIcon /> : <ClockIcon />}
-                              {WEB_THREAD_GROUPING_LABELS[grouping]}
-                            </MenuRadioItem>
-                          ),
-                        )}
-                      </MenuRadioGroup>
-                    </MenuPopup>
-                  </Menu>
-                  <Menu>
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <MenuTrigger
-                            render={
-                              <SidebarMenuButton
-                                size="icon"
-                                type="button"
-                                className="relative shrink-0"
-                                isActive={listOptionsActive}
-                                aria-label="View and filters"
-                                data-testid="sidebar-view-options-trigger"
-                              />
-                            }
-                          />
-                        }
-                      >
-                        <ListFilterIcon />
-                        {listOptionsActive ? (
-                          <span
-                            aria-hidden
-                            className="absolute top-1.5 right-1.5 size-1.5 rounded-full bg-primary"
-                          />
-                        ) : null}
-                      </TooltipTrigger>
-                      <TooltipPopup side="bottom">View & filters</TooltipPopup>
-                    </Tooltip>
-                    <MenuPopup align="end" side="bottom" className="min-w-56">
-                      <MenuGroup>
-                        <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
-                          Ownership
-                        </div>
-                        <MenuRadioGroup
-                          value={ownershipFilter}
-                          onValueChange={(value) => {
-                            if (value !== "any" && value !== "mine" && value !== "theirs") return;
-                            setOwnershipFilter(value);
-                          }}
-                        >
-                          {SIDEBAR_OWNERSHIP_FILTERS.map((value) => (
-                            <MenuRadioItem
-                              key={value}
-                              value={value}
-                              closeOnClick={false}
-                              data-testid={`sidebar-ownership-filter-${value}`}
-                            >
-                              {SIDEBAR_OWNERSHIP_FILTER_LABELS[value]}
-                            </MenuRadioItem>
-                          ))}
-                        </MenuRadioGroup>
-                      </MenuGroup>
-                      {ownershipFilter === "mine" || ownershipFilter === "theirs" ? (
-                        <>
-                          <MenuSeparator />
-                          <MenuGroup>
-                            <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
-                              {ownershipFilter === "mine" ? "Mine includes" : "Theirs includes"}
-                            </div>
-                            <MenuRadioGroup
-                              value={ownershipRelation}
-                              onValueChange={(value) => {
-                                if (!isOwnershipRelation(value)) return;
-                                setOwnershipRelation(value);
-                              }}
-                            >
-                              {SIDEBAR_OWNERSHIP_RELATIONS.map((value) => (
-                                <MenuRadioItem
-                                  key={value}
-                                  value={value}
-                                  closeOnClick={false}
-                                  data-testid={`sidebar-ownership-relation-${value}`}
-                                >
-                                  {SIDEBAR_OWNERSHIP_RELATION_LABELS[value]}
-                                </MenuRadioItem>
-                              ))}
-                            </MenuRadioGroup>
-                          </MenuGroup>
-                        </>
-                      ) : null}
-                      <MenuSeparator />
-                      <MenuGroup>
-                        <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
-                          Settled shelf
-                        </div>
-                        <MenuCheckboxItem
-                          checked={settledShelfExpanded}
-                          closeOnClick={false}
-                          data-testid="sidebar-settled-shelf-expanded"
-                          onCheckedChange={(checked) => setSettledShelfExpanded(checked === true)}
-                        >
-                          Expand settled shelf
-                        </MenuCheckboxItem>
-                      </MenuGroup>
-                      {environments.length > 1 ? (
-                        <>
-                          <MenuSeparator />
-                          <MenuGroup>
-                            <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
-                              Environment
-                            </div>
-                            <MenuCheckboxItem
-                              checked={isAllEnvironmentsSelected(selectedEnvironmentIds)}
-                              closeOnClick={false}
-                              data-testid="sidebar-environment-filter-all"
-                              onCheckedChange={() => setStoredEnvironmentFilter([])}
-                            >
-                              All environments
-                            </MenuCheckboxItem>
-                            {environments.map((environment) => (
-                              <MenuCheckboxItem
-                                key={environment.environmentId}
-                                checked={isEnvironmentSelected(
-                                  selectedEnvironmentIds,
-                                  environment.environmentId,
-                                )}
-                                closeOnClick={false}
-                                data-testid={`sidebar-environment-filter-${environment.environmentId}`}
-                                onCheckedChange={() => {
-                                  setStoredEnvironmentFilter([
-                                    ...toggleEnvironmentId(
-                                      selectedEnvironmentIds,
-                                      environment.environmentId,
-                                    ),
-                                  ]);
-                                }}
-                              >
-                                {environment.label}
-                              </MenuCheckboxItem>
-                            ))}
-                          </MenuGroup>
-                        </>
-                      ) : null}
-                    </MenuPopup>
-                  </Menu>
-                </>
-              ) : null}
-            </div>
           </SidebarGroup>
         }
       >
