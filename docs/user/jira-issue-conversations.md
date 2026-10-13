@@ -148,6 +148,7 @@ webhook.
 | `T3CODE_JIRA_DEFAULT_PROJECT_ID` | no\*     | —       | Fallback project for auto-create (\*or exactly one shell project) |
 | `T3CODE_JIRA_ACK_EMOJI_ID`       | no       | `1f440` | Reaction on the trigger comment (`👀`); empty string disables     |
 | `T3CODE_JIRA_BOT_ACCOUNT_ID`     | no       | —       | Alias for wiki/ADF `[~accountId:…]` mention matching              |
+| `T3CODE_JIRA_CONFLUENCE_PAGES`   | no       | empty   | Where a reply goes when it does not fit in a comment (see below)  |
 
 \*When any required value is missing, the integration is **disabled** (webhook returns 404).
 
@@ -167,6 +168,26 @@ T3CODE_JIRA_PROJECT_MAP=SA:scanner,CFG:/var/lib/t3/src/macs/configurator
 # Optional global fallback (id, title, basename, or full path)
 T3CODE_JIRA_DEFAULT_PROJECT_ID=/var/lib/t3/src/macs/scanner
 ```
+
+### Long replies
+
+Jira comments render Markdown: headings, emphasis, links, lists, tables, quotes, and fenced code
+blocks. A reply that does not fit in one comment keeps a leading portion in the comment. The rest
+is filed where you assign it, and the comment links to that exact section.
+
+```bash
+# Jira project : Confluence space / parent page titles
+# The leaf page is the issue key, for example SA-516 under scanner/omegent.
+T3CODE_JIRA_CONFLUENCE_PAGES=SA:SA/scanner/omegent,CFG:CFG/configurator/omegent
+```
+
+The first path segment is the Confluence space. Each later segment is a parent page title, created
+when it is missing. Page titles are unique inside a space, so each Jira project needs its own
+space entry. Each response is a new heading on the issue page, and the Jira comment links to that
+heading.
+
+When this variable is empty, or Confluence rejects the write, the overflow is attached to the
+issue as a Markdown file and the comment links to that file.
 
 ### Acknowledgment reactions
 
@@ -219,8 +240,11 @@ the create response lacks `parentId`).
 message while a turn is running; the bridge does **not** post an “already working” short-circuit.
 The reply still posts asynchronously when the turn completes (`bridgeTurn` is fork-detached).
 
-Prefer Markdown converted to a minimal ADF document for API v3. Do not @-spam watchers unless the
-agent explicitly mentions users.
+Replies are Markdown, stored as Atlassian document nodes (headings, links, lists, tables, and code
+blocks) so the comment does not show the source. Do not @-spam watchers unless the agent explicitly
+mentions users. A reply that exceeds the comment limit is not cut mid-sentence: the comment keeps
+what fits and links to the rest on the assigned Confluence page, or to a Markdown attachment when
+that page is not configured or the write is rejected.
 
 ## Testing checklist
 

@@ -51,6 +51,12 @@ import {
   resolveMappedT3ProjectId,
   resolveT3ProjectIdForJiraKey,
 } from "./JiraAppConfig.ts";
+import {
+  confluencePageForProject,
+  jiraAttachmentFilename,
+  jiraResponseStamp,
+} from "./JiraCommentPublish.ts";
+import { jiraOverflowNotice, partitionJiraComment } from "./JiraMarkdown.ts";
 import { JiraDeliveryStore, type StoredJiraDelivery } from "./JiraDeliveryStore.ts";
 import { resolveDiscordLinkForJiraIssue } from "./JiraThreadLookup.ts";
 import { classifyJiraActorTrust, type JiraActorTrustDecision } from "./jiraActorTrust.ts";
@@ -80,7 +86,6 @@ const CONTEXT_NOTED_RESPONSE =
   "Thanks — noted for the team. You're not currently authorized to run agent work from Jira, so this was filed as context only. An authorized teammate can pick it up.";
 const CONTEXT_FAILED_RESPONSE =
   "You're not currently authorized to run agent work from Jira, and I couldn't file this as context either. Please ping an authorized teammate.";
-const MAX_JIRA_COMMENT_LENGTH = 32_000;
 
 function jiraSourceRef(
   invocation: JiraIssueInvocation,
@@ -99,9 +104,7 @@ function jiraSourceRef(
 }
 
 export function formatJiraComment(body: string): string {
-  const trimmed = body.trim();
-  if (trimmed.length <= MAX_JIRA_COMMENT_LENGTH) return trimmed;
-  return `${trimmed.slice(0, MAX_JIRA_COMMENT_LENGTH - 20)}\n\n…(truncated)`;
+  return body.trim();
 }
 
 export function buildJiraT3ThreadUrl(input: {
@@ -236,34 +239,68 @@ const make = Effect.gen(function* () {
    * Never intentionally posts a bare top-level comment first; flat fallback is only
    * if every resolved parentId is rejected (see JiraAppClient).
    */
-  const postComment = (delivery: StoredJiraDelivery, body: string) => {
-    const mentionParent = delivery.sourceCommentId.trim();
-    const replyParent = delivery.replyToCommentId.trim();
-    // Prefer the mention itself so we always answer that comment's thread; client
-    // walks parentId up to the root when the mention is already a nested reply.
-    const parentCommentId = mentionParent.length > 0 ? mentionParent : null;
-    return jira.addIssueComment({
-      issueKey: delivery.issueKey,
-      body: formatJiraComment(
-        appendJiraT3ThreadLink(
-          body,
-          delivery.threadId === null
-            ? null
-            : {
-                hostedAppUrl,
-                environmentId,
-                threadId: delivery.threadId,
-              },
-        ),
-      ),
-      parentCommentId,
-      fallbackParentCommentId:
-        replyParent.length > 0 && replyParent !== mentionParent ? replyParent : null,
-      // Normal Jira reply style: @ the human who triggered the bot.
-      mentionAccountId: delivery.actorAccountId,
-      mentionDisplayName: delivery.actorDisplayName,
+  const storeOverflow = (delivery: StoredJiraDelivery, overflow: string) =>
+    Effect.gen(function* () {
+      const heading = jiraResponseStamp(DateTime.formatIso(yield* DateTime.now));
+      const target = config.enabled
+        ? confluencePageForProject(config.confluencePages, delivery.projectKey)
+        : null;
+      const published =
+        target === null
+          ? null
+          : yield* jira.publishConfluenceSection({
+              issueKey: delivery.issueKey,
+              spaceKey: target.spaceKey,
+              parentTitles: target.parentTitles,
+              title: delivery.issueKey,
+              heading,
+              markdown: overflow,
+            });
+      const stored =
+        published ??
+        (yield* jira.addIssueAttachment({
+          issueKey: delivery.issueKey,
+          filename: jiraAttachmentFilename(delivery.issueKey, heading),
+          markdown: overflow,
+        }));
+      return jiraOverflowNotice(stored);
     });
-  };
+
+  const postComment = (delivery: StoredJiraDelivery, body: string) =>
+    Effect.gen(function* () {
+      const mentionParent = delivery.sourceCommentId.trim();
+      const replyParent = delivery.replyToCommentId.trim();
+      // Prefer the mention itself so we always answer that comment's thread; client
+      // walks parentId up to the root when the mention is already a nested reply.
+      const parentCommentId = mentionParent.length > 0 ? mentionParent : null;
+      const prepared = partitionJiraComment(body);
+      const notice =
+        prepared.overflow === null ? null : yield* storeOverflow(delivery, prepared.overflow);
+      const inline = [prepared.inline, notice]
+        .filter((part): part is string => part !== null && part.trim().length > 0)
+        .join("\n\n");
+      return yield* jira.addIssueComment({
+        issueKey: delivery.issueKey,
+        body: formatJiraComment(
+          appendJiraT3ThreadLink(
+            inline,
+            delivery.threadId === null
+              ? null
+              : {
+                  hostedAppUrl,
+                  environmentId,
+                  threadId: delivery.threadId,
+                },
+          ),
+        ),
+        parentCommentId,
+        fallbackParentCommentId:
+          replyParent.length > 0 && replyParent !== mentionParent ? replyParent : null,
+        // Normal Jira reply style: @ the human who triggered the bot.
+        mentionAccountId: delivery.actorAccountId,
+        mentionDisplayName: delivery.actorDisplayName,
+      });
+    });
 
   const updateDelivery = (delivery: StoredJiraDelivery, patch: Partial<StoredJiraDelivery>) =>
     DateTime.now.pipe(
