@@ -10,11 +10,12 @@ import * as DateTime from "effect/DateTime";
 import * as ConfigProvider from "effect/ConfigProvider";
 import { DiscordBotConfig } from "../config.ts";
 import { findAlreadyPostedFinalChunkIds } from "../features/ResponseBridge.ts";
-import { workingFields, idleFields } from "../features/BotResponseTransport.ts";
+import { workingFields, idleFields, wakeUpFields } from "../features/BotResponseTransport.ts";
 import { channelTopicOptsIntoInProgressStream } from "../presentation/attachments.ts";
 import {
   makeTeamsResponseTransport,
   teamsMessageFields,
+  teamsControlActivity,
   normalizeTeamsContent,
   graphMessage,
   type TeamsResponseActivity,
@@ -86,15 +87,23 @@ describe("Teams response adapter", () => {
       });
     }
   });
-  it("keeps one visible working text and removes controls on completion", () => {
+  it("keeps working text free of cards and posts Stop as its own activity", () => {
     const working = teamsMessageFields(workingFields("Working…", "thread"));
     expect(working.text).toBe("Working…");
     expect(working.textFormat).toBe("extendedmarkdown");
-    expect(working.attachments?.[0]?.content).toMatchObject({
-      body: [],
-      actions: [{ data: { action: "omegent", command: "stop", threadId: "thread" } }],
+    expect(working.attachments).toEqual([]);
+    expect(teamsControlActivity(workingFields("Working…", "thread"))).toMatchObject({
+      text: "",
+      attachments: [
+        {
+          content: {
+            body: [],
+            actions: [{ data: { action: "omegent", command: "stop", threadId: "thread" } }],
+          },
+        },
+      ],
     });
-    expect(teamsMessageFields(idleFields("19:50")).attachments).toEqual([]);
+    expect(teamsControlActivity(idleFields("19:50"))).toBeNull();
   });
   it.effect("uploads a channel document with extended Markdown text and SharePoint controls", () =>
     Effect.gen(function* () {
@@ -190,7 +199,7 @@ describe("Teams response adapter", () => {
       ).toBe(true);
     }),
   );
-  it.live("repairs idless rows and adopts a sent card before editing it in place", () =>
+  it.live("repairs idless rows and adopts a sent reply before editing it in place", () =>
     Effect.gen(function* () {
       const config = yield* DiscordBotConfig.pipe(
         Effect.provide(
@@ -212,9 +221,10 @@ describe("Teams response adapter", () => {
       );
       const remoteId = "1791752939872";
       const now = yield* DateTime.now;
-      const send = vi
-        .fn<(wire: TeamsResponseActivity) => Promise<{ id?: string }>>()
-        .mockResolvedValue({});
+      const deleteMessage = vi.fn(async () => {});
+      const send = vi.fn<(wire: TeamsResponseActivity) => Promise<{ id?: string }>>(async (wire) =>
+        wire.attachments?.length ? { id: "control-1" } : {},
+      );
       const fetch = vi
         .fn<typeof globalThis.fetch>()
         .mockResolvedValueOnce(Response.json({ access_token: "token", expires_in: 3600 }))
@@ -238,7 +248,13 @@ describe("Teams response adapter", () => {
             ],
           }),
         );
-      const adapter = makeTeamsResponseTransport({ ...options, config, send, fetch });
+      const adapter = makeTeamsResponseTransport({
+        ...options,
+        config,
+        send,
+        fetch,
+        deleteMessage,
+      });
       const working = yield* adapter.createMessage(
         options.conversationId,
         workingFields("Working…", "thread"),
@@ -255,17 +271,33 @@ describe("Teams response adapter", () => {
         idleFields("It’s 21:08 UTC."),
       );
       expect(final.id).toBe(remoteId);
-      expect(send.mock.calls.map(([wire]) => wire.id)).toEqual([undefined, remoteId, remoteId]);
-      expect(send.mock.calls[1]?.[0].attachments?.[0]?.content).toMatchObject({
-        body: [],
+      expect(send.mock.calls.map(([wire]) => wire.id)).toEqual([
+        undefined,
+        undefined,
+        remoteId,
+        remoteId,
+      ]);
+      expect(send.mock.calls[0]?.[0].attachments).toEqual([]);
+      expect(send.mock.calls[1]?.[0]).toMatchObject({
+        text: "",
+        attachments: [{ content: { body: [], actions: [{ title: "Stop" }] } }],
       });
-      expect(send.mock.calls[2]?.[0].attachments).toEqual([]);
+      expect(send.mock.calls[2]?.[0]).toMatchObject({
+        id: remoteId,
+        text: "Checking…",
+        attachments: [],
+      });
+      expect(send.mock.calls[3]?.[0].attachments).toEqual([]);
+      expect(deleteMessage).toHaveBeenCalledTimes(1);
+      expect(deleteMessage).toHaveBeenCalledWith("control-1");
       const rows = JSON.parse(NodeFS.readFileSync(ledgerPath, "utf8")) as Array<{
         id: string;
         content: string;
+        controlId?: string;
       }>;
       expect(rows.map((row) => row.id).sort()).toEqual([remoteId, "sent"].sort());
       expect(rows.find((row) => row.id === remoteId)?.content).toBe("It’s 21:08 UTC.");
+      expect(rows.find((row) => row.id === remoteId)?.controlId).toBeUndefined();
       expect(
         NodeFS.readdirSync(ledgerDir).filter((name) => name.includes(".invalid-")).length,
       ).toBe(1);
@@ -310,10 +342,32 @@ describe("Teams response adapter", () => {
                 body: { content: "followup" },
                 from: { user: { id: "person" } },
               },
+              {
+                id: "stop-card",
+                createdDateTime: "2026-10-11T17:02:00Z",
+                body: { content: "" },
+                from: { application: { id: "bot" } },
+                attachments: [
+                  {
+                    contentType: "application/vnd.microsoft.card.adaptive",
+                    content: JSON.stringify({
+                      type: "AdaptiveCard",
+                      version: "1.4",
+                      body: [],
+                      actions: [{ type: "Action.Execute", title: "Stop" }],
+                    }),
+                  },
+                ],
+              },
             ],
           }),
         );
-      const adapter = makeTeamsResponseTransport({ ...options, config, fetch });
+      const adapter = makeTeamsResponseTransport({
+        ...options,
+        config,
+        fetch,
+        send: async (wire) => ({ id: wire.attachments?.length ? "control" : (wire.id ?? "sent") }),
+      });
       yield* adapter.updateMessage(
         options.conversationId,
         "sent",
@@ -361,6 +415,58 @@ describe("Teams response adapter", () => {
       expect(history[1]?.content).toBe("updated answer");
       expect(fetch).not.toHaveBeenCalled();
     }),
+  );
+  it.effect(
+    "deletes the Stop card with its working text and replaces it when the action changes",
+    () =>
+      Effect.gen(function* () {
+        const config = yield* DiscordBotConfig.pipe(
+          Effect.provide(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnvRecord({ T3_DISCORD_BOT_DATA_DIR: directory }),
+            ),
+          ),
+        );
+        let texts = 0;
+        let controls = 0;
+        const send = vi.fn(async (wire: TeamsResponseActivity) => {
+          if (wire.id) return { id: wire.id };
+          if (wire.attachments?.length) return { id: `control-${++controls}` };
+          return { id: `text-${++texts}` };
+        });
+        const deleteMessage = vi.fn(async (_messageId: string) => {});
+        const adapter = makeTeamsResponseTransport({
+          ...options,
+          config,
+          send,
+          deleteMessage,
+          teamId: "",
+          channelId: "",
+        });
+        const working = yield* adapter.createMessage(
+          options.conversationId,
+          workingFields("Working…", "thread"),
+        );
+        yield* adapter.updateMessage(
+          options.conversationId,
+          working.id,
+          workingFields("Checking…", "thread"),
+        );
+        expect(send.mock.calls.filter(([wire]) => wire.attachments?.length)).toHaveLength(1);
+        const woken = yield* adapter.updateMessage(
+          options.conversationId,
+          working.id,
+          wakeUpFields("Still going", "thread"),
+        );
+        expect(woken.id).toBe(working.id);
+        expect(send.mock.calls.at(-1)?.[0]).toMatchObject({
+          id: "control-1",
+          text: "",
+          attachments: [{ content: { actions: [{ title: "Continue" }] } }],
+        });
+        yield* adapter.deleteMessage(options.conversationId, working.id);
+        expect(deleteMessage.mock.calls.map(([id]) => id)).toEqual(["control-1", working.id]);
+      }),
   );
   it.effect("fails closed when the binding is revoked before a send", () =>
     Effect.gen(function* () {
