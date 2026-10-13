@@ -13,6 +13,16 @@ describe("mobile ownership filter surface", () => {
     const sidebar = readSource("../threads/ThreadNavigationSidebar.tsx");
     const preferences = readSource("../../persistence/mobile-preferences.ts");
     const layout = readSource("../layout/AdaptiveWorkspaceLayout.tsx");
+    const workspaceToolbar = readSource("../workspace/WorkspaceToolbar.ios.tsx");
+
+    // The workspace root bypasses HomeHeader on iOS phones.
+    expect(workspaceToolbar).toContain('accessibilityLabel="Thread filters and settings"');
+    expect(workspaceToolbar).toContain('icon="gearshape"');
+    expect(workspaceToolbar).toContain('title="Ownership"');
+    expect(workspaceToolbar).toContain("OWNERSHIP_FILTERS.map");
+    expect(workspaceToolbar).toContain("setOwnershipFilter(value)");
+    expect(workspaceToolbar).toContain("setOwnershipRelation(value)");
+    expect(workspaceToolbar).toContain("useHomeListOptions");
 
     expect(homeHeader).toMatch(/title:\s*"Ownership"|title="Ownership"/);
     expect(homeHeader).toContain("onOwnershipFilterChange");
