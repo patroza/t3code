@@ -637,7 +637,13 @@ const make = Effect.gen(function* () {
     // Best-effort 👀 on the triggering comment (like Discord/GitHub eyes). Cleared in finishDelivery.
     const ackEmojiConfigured = config.ackEmojiId;
     let acknowledged: StoredJiraDelivery = initial;
-    if (ackEmojiConfigured !== null && ackEmojiConfigured.length > 0) {
+    // Assignment has no source comment. A top-level reply is posted when the turn finishes.
+    if (
+      ackEmojiConfigured !== null &&
+      ackEmojiConfigured.length > 0 &&
+      input.invocation.commentSurface !== "assignment" &&
+      input.invocation.commentId.trim().length > 0
+    ) {
       const appliedEmojiId = yield* jira
         .addCommentReaction({
           issueKey: input.invocation.issueKey,
