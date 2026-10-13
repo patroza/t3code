@@ -68,10 +68,13 @@ export const JiraCommentWebhook = Schema.Struct({
 });
 export type JiraCommentWebhook = typeof JiraCommentWebhook.Type;
 
-export type JiraCommentSurface = "issue" | "reply";
+export type JiraCommentSurface = "issue" | "reply" | "assignment";
 
 /** Inbound comment webhook events we accept. */
 export type JiraCommentWebhookEvent = "comment_created" | "comment_updated";
+
+/** Comment events plus assignment of the configured bot. */
+export type JiraInboundWebhookEvent = JiraCommentWebhookEvent | "issue_assigned";
 
 const ACCEPTED_COMMENT_EVENTS = new Set<string>(["comment_created", "comment_updated"]);
 
@@ -97,9 +100,12 @@ export interface JiraIssueInvocation {
   /** Parent comment id when this is a threaded reply; otherwise equals `commentId`. */
   readonly replyToCommentId: string;
   readonly commentSurface: JiraCommentSurface;
-  /** `comment_created` or `comment_updated` (edits re-dispatch with a new delivery id). */
-  readonly webhookEvent: JiraCommentWebhookEvent;
-  /** Comment `updated` timestamp when present (used for update delivery dedupe). */
+  /** `comment_created`, `comment_updated`, or `issue_assigned`. */
+  readonly webhookEvent: JiraInboundWebhookEvent;
+  /**
+   * Comment `updated` timestamp, or the assignment stamp (changelog id, else
+   * issue `updated`, else webhook timestamp). Used for delivery dedupe.
+   */
   readonly commentUpdatedAt: string | null;
   readonly actorAccountId: string | null;
   readonly actorDisplayName: string | null;
@@ -421,19 +427,23 @@ const JIRA_COMMENT_LINK_RULE =
 export function buildJiraTurnPrompt(invocation: JiraIssueInvocation): string {
   const requester = invocation.actorDisplayName ?? invocation.actorAccountId ?? "unknown";
   const isUpdate = invocation.webhookEvent === "comment_updated";
+  const isAssignment = invocation.webhookEvent === "issue_assigned";
+  const issueRef = `[${invocation.issueKey}]${invocation.commentUrl ? `(${invocation.commentUrl})` : ""}`;
   const lines = [
     ...jiraPromptHeaderLines(invocation),
     "-->",
     "",
     JIRA_COMMENT_LINK_RULE,
     "",
-    isUpdate
-      ? [
-          "The Jira user **edited** an earlier comment that addresses the bot. Treat the updated prompt as authoritative and discard work that only applied to a previous version of this comment.",
-          "",
-          `Updated prompt from Jira [${requester}] on [${invocation.issueKey}]${invocation.commentUrl ? `(${invocation.commentUrl})` : ""}: ${invocation.prompt}`,
-        ].join("\n")
-      : `From Jira [${requester}] on [${invocation.issueKey}]${invocation.commentUrl ? `(${invocation.commentUrl})` : ""}: ${invocation.prompt}`,
+    isAssignment
+      ? `Assigned by Jira [${requester}] on ${issueRef}.\n\n${invocation.prompt}`
+      : isUpdate
+        ? [
+            "The Jira user **edited** an earlier comment that addresses the bot. Treat the updated prompt as authoritative and discard work that only applied to a previous version of this comment.",
+            "",
+            `Updated prompt from Jira [${requester}] on ${issueRef}: ${invocation.prompt}`,
+          ].join("\n")
+        : `From Jira [${requester}] on ${issueRef}: ${invocation.prompt}`,
   ].filter((line): line is string => line !== null);
   return lines.join("\n");
 }
@@ -446,10 +456,16 @@ export function jiraDeliveryIdFor(input: {
   readonly invocation: JiraIssueInvocation;
   readonly headerDeliveryId?: string | undefined;
 }): string {
+  const { invocation } = input;
+  // Assignment retries share a changelog id. A webhook registration id is stable
+  // across events, so it must not collapse later assignments into the first one.
+  if (invocation.webhookEvent === "issue_assigned") {
+    const stamp = invocation.commentUpdatedAt?.replace(/[^0-9A-Za-z._-]/gu, "") || "assign";
+    return `jira-assign:${invocation.issueKey}:${stamp}`;
+  }
   if (input.headerDeliveryId && input.headerDeliveryId.trim().length > 0) {
     return input.headerDeliveryId.trim();
   }
-  const { invocation } = input;
   if (invocation.webhookEvent === "comment_updated") {
     const stamp =
       invocation.commentUpdatedAt?.replace(/[^0-9A-Za-z._-]/gu, "") ||
@@ -469,6 +485,253 @@ function simplePromptFingerprint(prompt: string): string {
     hash = Math.imul(hash, 0x01000193);
   }
   return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+const ASSIGNMENT_TASK =
+  "You were assigned this Jira issue. Analyze it and propose a fix or implementation. Read the description, comments, and linked work before answering. When the change is clear and scoped to this issue, implement it on this thread. When it is ambiguous, reply with a concrete plan and the open questions.";
+
+const ASSIGNMENT_DESCRIPTION_LIMIT = 4_000;
+
+export type JiraAssignmentParse =
+  | { readonly _tag: "not_assignment" }
+  | { readonly _tag: "ignored"; readonly reason: string }
+  | { readonly _tag: "invocation"; readonly invocation: JiraIssueInvocation };
+
+type AssigneeIdentity = {
+  readonly accountId: string | null;
+  readonly displayName: string | null;
+};
+
+function normalizedEventName(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const text = value.trim().toLowerCase();
+  return text.length > 0 ? text : null;
+}
+
+function normalizeIdentity(value: string): string {
+  return value
+    .trim()
+    .replace(/^@/u, "")
+    .replace(/^accountid:/iu, "")
+    .toLowerCase();
+}
+
+function identityMatches(
+  candidate: string | null,
+  mention: string,
+  botAccountId: string | null,
+): boolean {
+  if (candidate === null) return false;
+  const normalized = normalizeIdentity(candidate);
+  if (normalized.length === 0) return false;
+  const targets = [mention, botAccountId].flatMap((value) => {
+    if (value === null || value.trim().length === 0) return [];
+    const normalizedTarget = normalizeIdentity(value);
+    return normalizedTarget.length > 0 ? [normalizedTarget] : [];
+  });
+  return targets.some((target) => target === normalized);
+}
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function ownString(record: Record<string, unknown>, key: string): string | null {
+  if (!Object.prototype.hasOwnProperty.call(record, key)) return null;
+  const value = record[key];
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  return asStringId(value);
+}
+
+function readAssigneeIdentity(value: unknown): AssigneeIdentity | null {
+  const record = readRecord(value);
+  if (record === null) return null;
+  const field = normalizedEventName(ownString(record, "field"));
+  const fieldId = normalizedEventName(ownString(record, "fieldId"));
+  // Changelog items name the field. Issue `fields.assignee` does not.
+  if (field !== null || fieldId !== null) {
+    if (field !== "assignee" && fieldId !== "assignee") return null;
+  }
+  return {
+    accountId:
+      ownString(record, "to") ??
+      ownString(record, "tmpToAccountId") ??
+      ownString(record, "accountId"),
+    displayName: ownString(record, "toString") ?? ownString(record, "displayName"),
+  };
+}
+
+function changelogAssigneeChanges(payload: Record<string, unknown>): AssigneeIdentity[] {
+  const changelog = readRecord(payload.changelog);
+  const items = changelog?.items;
+  if (!Array.isArray(items)) return [];
+  const changes: AssigneeIdentity[] = [];
+  for (const item of items) {
+    const record = readRecord(item);
+    if (record === null) continue;
+    const field = normalizedEventName(record.field);
+    const fieldId = normalizedEventName(record.fieldId);
+    if (field !== "assignee" && fieldId !== "assignee") continue;
+    const identity = readAssigneeIdentity(record);
+    if (identity !== null) changes.push(identity);
+  }
+  return changes;
+}
+
+function assigneeFromIssue(payload: Record<string, unknown>): AssigneeIdentity | null {
+  const issue = readRecord(payload.issue);
+  const fields = readRecord(issue?.fields);
+  if (fields === null || !("assignee" in fields)) return null;
+  if (fields.assignee === null) return { accountId: null, displayName: null };
+  return readAssigneeIdentity(fields.assignee);
+}
+
+function readActor(payload: Record<string, unknown>): {
+  readonly accountId: string | null;
+  readonly displayName: string | null;
+} {
+  const user = readRecord(payload.user) ?? readRecord(payload.actor);
+  return {
+    accountId: asStringId(user?.accountId as string | number | null | undefined),
+    displayName: asStringId(user?.displayName as string | number | null | undefined),
+  };
+}
+
+function assignmentStamp(
+  payload: Record<string, unknown>,
+  assignee: AssigneeIdentity,
+): string | null {
+  const changelog = readRecord(payload.changelog);
+  const changelogId = asStringId(changelog?.id as string | number | null | undefined);
+  if (changelogId !== null) return changelogId;
+  const issue = readRecord(payload.issue);
+  const fields = readRecord(issue?.fields);
+  const updated = asStringId(fields?.updated as string | number | null | undefined);
+  if (updated !== null) return updated;
+  const timestamp = asStringId(payload.timestamp as string | number | null | undefined);
+  if (timestamp !== null) return timestamp;
+  return assignee.accountId ?? assignee.displayName;
+}
+
+function assignmentPrompt(summary: string | null, description: unknown): string {
+  const lines = [ASSIGNMENT_TASK];
+  if (summary !== null && summary.length > 0) {
+    lines.push("", `Summary: ${summary}`);
+  }
+  const descriptionText = extractTextAndMentionsFromBody(description).text.trim();
+  if (descriptionText.length > 0) {
+    const clipped =
+      descriptionText.length > ASSIGNMENT_DESCRIPTION_LIMIT
+        ? `${descriptionText.slice(0, ASSIGNMENT_DESCRIPTION_LIMIT)}…`
+        : descriptionText;
+    lines.push("", "Description:", clipped);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Assignment of the configured bot. Comment payloads return `not_assignment`
+ * so the comment parser still owns them.
+ *
+ * `jira:issue_updated` counts only when the changelog assignee changes to the
+ * bot. An explicit `issue_assigned` event may omit the changelog and match
+ * `issue.fields.assignee` instead (Jira Automation custom data).
+ */
+export function parseJiraAssignmentInvocation(
+  payload: unknown,
+  mention: string,
+  options?: {
+    readonly botAccountId?: string | null;
+  },
+): JiraAssignmentParse {
+  const record = readRecord(payload);
+  if (record === null) return { _tag: "not_assignment" };
+
+  const event = normalizedEventName(record.webhookEvent);
+  if (event !== null && event.startsWith("comment")) {
+    return { _tag: "not_assignment" };
+  }
+
+  const issueEvent = normalizedEventName(record.issue_event_type_name);
+  const explicitAssign =
+    event === "issue_assigned" ||
+    event === "jira:issue_assigned" ||
+    issueEvent === "issue_assigned";
+  const updateEvent =
+    event === "issue_updated" ||
+    event === "jira:issue_updated" ||
+    issueEvent === "issue_updated" ||
+    issueEvent === "issue_generic";
+  const assigneeChanges = changelogAssigneeChanges(record);
+  if (!explicitAssign && !updateEvent && assigneeChanges.length === 0) {
+    return { _tag: "not_assignment" };
+  }
+
+  const assignee =
+    assigneeChanges.length > 0
+      ? assigneeChanges[assigneeChanges.length - 1]
+      : explicitAssign
+        ? assigneeFromIssue(record)
+        : null;
+  if (assigneeChanges.length === 0 && !explicitAssign) {
+    return { _tag: "ignored", reason: "assignee_unchanged" };
+  }
+  if (assignee === undefined || assignee === null) {
+    return { _tag: "ignored", reason: "assignee_missing" };
+  }
+  if (assignee.accountId === null && assignee.displayName === null) {
+    return { _tag: "ignored", reason: "assignee_cleared" };
+  }
+
+  const botAccountId = options?.botAccountId?.trim() || null;
+  const matched =
+    identityMatches(assignee.accountId, mention, botAccountId) ||
+    identityMatches(assignee.displayName, mention, botAccountId);
+  if (!matched) return { _tag: "ignored", reason: "assignee_not_bot" };
+
+  const actor = readActor(record);
+  const actorIsBot =
+    (actor.accountId !== null &&
+      assignee.accountId !== null &&
+      normalizeIdentity(actor.accountId) === normalizeIdentity(assignee.accountId)) ||
+    (botAccountId !== null &&
+      actor.accountId !== null &&
+      normalizeIdentity(actor.accountId) === normalizeIdentity(botAccountId));
+  if (actorIsBot) return { _tag: "ignored", reason: "self_assignment" };
+
+  const issue = readRecord(record.issue);
+  const issueKeyRaw = asStringId(issue?.key as string | number | null | undefined);
+  if (issueKeyRaw === null) return { _tag: "ignored", reason: "missing_issue" };
+  const issueKey = issueKeyRaw.toUpperCase();
+  const fields = readRecord(issue?.fields);
+  const summary = asStringId(fields?.summary as string | number | null | undefined);
+  const projectKey =
+    asStringId(
+      readRecord(fields?.project)?.key as string | number | null | undefined,
+    )?.toUpperCase() || projectKeyFromIssueKey(issueKey);
+  const description = fields && "description" in fields ? fields.description : null;
+  const prompt = assignmentPrompt(summary, description);
+  const stamp = assignmentStamp(record, assignee);
+
+  return {
+    _tag: "invocation",
+    invocation: {
+      issueKey,
+      issueSummary: summary,
+      projectKey,
+      commentId: "",
+      commentUrl: asStringId(issue?.self as string | number | null | undefined),
+      replyToCommentId: "",
+      commentSurface: "assignment",
+      webhookEvent: "issue_assigned",
+      commentUpdatedAt: stamp,
+      actorAccountId: actor.accountId,
+      actorDisplayName: actor.displayName,
+      prompt,
+      commentText: extractTextAndMentionsFromBody(description).text,
+    },
+  };
 }
 
 export type JiraAdfMention = {

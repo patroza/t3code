@@ -724,7 +724,7 @@ const make = Effect.gen(function* () {
     // was read. Jira Cloud does not accept comment reactions for this API token.
     const acknowledged: StoredJiraDelivery = initial;
     const receiptText = jiraReadReceiptText(config.ackEmojiId);
-    if (receiptText !== null) {
+    if (receiptText !== null && input.invocation.commentSurface !== "assignment") {
       const mentionParent = input.invocation.commentId.trim();
       const replyParent = input.invocation.replyToCommentId.trim();
       const posted = yield* jira.addIssueComment({
