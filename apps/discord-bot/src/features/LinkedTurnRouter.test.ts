@@ -2,12 +2,12 @@
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import { ClientSourceHint, ProjectId, ThreadId } from "@t3tools/contracts";
+import { ClientSourceHint, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import { describe, expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
-import { DiscordBotConfig } from "../config.ts";
+import { preferredModelSelection, DiscordBotConfig } from "../config.ts";
 import { makeProjectAliasStore, ProjectAliasStore } from "../projectAliases.ts";
 import { makeThreadLinkStore, ThreadLinkStore } from "../store/ThreadLinkStore.ts";
 import { T3Session, type T3SessionService } from "../t3/T3Session.ts";
@@ -20,6 +20,12 @@ describe("Teams linked turn attribution", () => {
         Effect.promise(() => NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "teams-attribution-"))),
         (path) => Effect.promise(() => NodeFSP.rm(path, { recursive: true, force: true })),
       );
+      const config = yield* DiscordBotConfig.pipe(
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnvRecord({}))),
+      );
+      const launchedModels: Array<
+        Parameters<T3SessionService["startTurnWithWorktree"]>[0]["modelSelection"]
+      > = [];
       const dispatched: Array<ClientSourceHint | undefined> = [];
       const selections: Array<Parameters<T3SessionService["resolveModelSelection"]>[0]> = [];
       const threadId = ThreadId.make("thread:teams-attribution");
@@ -29,16 +35,44 @@ describe("Teams linked turn attribution", () => {
           Effect.succeed({
             id: ProjectId.make("project:teams"),
             workspaceRoot: "/workspace/omega",
+            defaultModelSelection: {
+              instanceId: ProviderInstanceId.make("grok"),
+              model: "grok-4.7",
+            },
           }),
         resolveModelSelection: (input: Parameters<T3SessionService["resolveModelSelection"]>[0]) =>
           Effect.sync(() => {
             selections.push(input);
-            return { instanceId: "codex", model: "test-model" };
+            return preferredModelSelection({
+              config,
+              projectDefault: input.project?.defaultModelSelection ?? null,
+              providers: [
+                {
+                  instanceId: ProviderInstanceId.make("grok"),
+                  driver: "grok",
+                  enabled: true,
+                  installed: true,
+                  models: [{ slug: "grok-4.7", name: "Grok" }],
+                },
+                {
+                  instanceId: ProviderInstanceId.make("codex"),
+                  driver: "codex",
+                  enabled: true,
+                  installed: true,
+                  models: [{ slug: "gpt-6-astra", name: "Astra" }],
+                },
+              ],
+              ...(input.overrideModel === undefined ? {} : { overrideModel: input.overrideModel }),
+              ...(input.overrideInstanceId === undefined
+                ? {}
+                : { overrideInstanceId: input.overrideInstanceId }),
+            })!;
           }),
         fetchThreadDetail: () => Effect.succeed({ thread: { projectId: liveProjectId } }),
         startTurnWithWorktree: (input: Parameters<T3SessionService["startTurnWithWorktree"]>[0]) =>
           Effect.sync(() => {
             dispatched.push(input.sourceHint);
+            launchedModels.push(input.modelSelection);
             return { threadId, messageId: "message:first" };
           }),
         startTurn: (input: Parameters<T3SessionService["startTurn"]>[0]) =>
@@ -48,9 +82,6 @@ describe("Teams linked turn attribution", () => {
           }),
       } as unknown as T3SessionService;
       yield* Effect.gen(function* () {
-        const config = yield* DiscordBotConfig.pipe(
-          Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnvRecord({}))),
-        );
         const links = yield* makeThreadLinkStore(directory);
         const input = {
           source: {
@@ -80,6 +111,25 @@ describe("Teams linked turn attribution", () => {
             Effect.provideService(T3Session, session),
           );
         expect((yield* dispatch("starter-aad-id")).isNew).toBe(true);
+        const newThread = yield* startOrContinueT3Turn(config, {
+          ...input,
+          source: { sourceKind: "teams", sourceThreadId: "another-root" },
+          externalConversationId: "another-root",
+          channelTopic: "",
+        }).pipe(
+          Effect.provideService(
+            ProjectAliasStore,
+            makeProjectAliasStore([{ shortName: "omega", workspaceRoot: "/workspace/omega" }]),
+          ),
+          Effect.provideService(ThreadLinkStore, links),
+          Effect.provideService(T3Session, session),
+        );
+        expect(newThread.isNew).toBe(true);
+        expect(launchedModels).toEqual([
+          { instanceId: "grok", model: "grok-4.7" },
+          { instanceId: "grok", model: "grok-4.7" },
+        ]);
+
         expect((yield* dispatch("second-aad-id")).isNew).toBe(false);
         liveProjectId = ProjectId.make("project:other");
         expect((yield* Effect.result(dispatch("third-aad-id")))._tag).toBe("Failure");
@@ -89,9 +139,10 @@ describe("Teams linked turn attribution", () => {
         const retarget = yield* Effect.result(dispatch("third-aad-id"));
         expect(retarget._tag).toBe("Failure");
       });
-      expect(selections).toHaveLength(1); // Description defaults apply on launch, never a sticky continue.
+      expect(selections).toHaveLength(2); // Description defaults apply on launch, never a sticky continue.
       expect(selections[0]).toMatchObject({ overrideModel: "grok-4.7", fastMode: true });
-      expect(dispatched).toEqual([
+      expect(selections[1]).not.toHaveProperty("overrideModel");
+      expect(dispatched.filter((hint) => hint?.location?.threadId === "root")).toEqual([
         {
           channel: "teams",
           actor: { platformId: "starter-aad-id" },

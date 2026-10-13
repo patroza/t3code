@@ -2473,6 +2473,23 @@ export const bridgeThreadToPlatform = (input: {
 }) =>
   Effect.gen(function* () {
     const transport = yield* BotResponseTransport;
+    if (transport.platform === "teams") {
+      const t3 = yield* T3Session;
+      const snapshot = yield* t3.fetchThreadDetail(input.threadId as ThreadId);
+      if (snapshot === null) {
+        return yield* new BotTransportError({
+          cause: new Error("Cannot post Teams thread info without a thread snapshot"),
+        });
+      }
+      yield* transport.upsertThreadInfo({
+        conversationId: input.conversationId,
+        threadId: input.threadId,
+        config: transport.config,
+        modelSelection: snapshot.thread.modelSelection,
+        worktreePath: snapshot.thread.worktreePath,
+        local: snapshot.thread.worktreePath === null,
+      });
+    }
     const workingAckMessageId =
       input.workingAckMessageId ??
       (yield* transport.createMessage(
@@ -5271,6 +5288,9 @@ export const runBridge = (
      */
     const processThreadSnapshot = (thread: OrchestrationThread) =>
       Effect.gen(function* () {
+        // Rehydrated Teams bridges must also publish their info before any new delivery.
+        if (rest.platform === "teams") yield* syncThreadInfoModelPin(thread);
+
         yield* clearQueuedBadgesForStartedRuns(thread);
         yield* ensureVcsStatusSubscription(thread);
 
@@ -5636,7 +5656,7 @@ export const runBridge = (
 
         // Best-effort + hard time budget for remaining secondary work.
         yield* Effect.gen(function* () {
-          yield* syncThreadInfoModelPin(thread);
+          if (rest.platform !== "teams") yield* syncThreadInfoModelPin(thread);
 
           // Tasks first: first-class Discord progress UI from turn.plan (not External User Input).
           // Keep updating mid-turn / rehydrate; owned via taskDiscordMessageId so it never freezes Working.

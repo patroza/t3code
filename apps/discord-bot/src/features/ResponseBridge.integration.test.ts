@@ -24,7 +24,8 @@ import {
   BotTransportError,
   type BotResponseTransportService,
 } from "./BotResponseTransport.ts";
-import { runBridge } from "./ResponseBridge.ts";
+import { bridgeThreadToPlatform, runBridge } from "./ResponseBridge.ts";
+import { BridgeHub, makeBridgeHub } from "./BridgeHub.ts";
 
 const table = "| Item | Status |\n| --- | --- |\n| Build | Ready |";
 
@@ -233,10 +234,12 @@ describe("shared response runner", () => {
         let counter = 0;
         let didFail = false;
         const fieldsById = new Map<string, BotMessageFields>();
+        const deliveryOrder: string[] = [];
         const progressIds = new Set<string>();
         const write = (content: string, id?: string, fields: BotMessageFields = { content }) =>
           Effect.gen(function* () {
             if (stopped) writesAfterStop += 1;
+            deliveryOrder.push(content);
             const message = { id: id ?? String(++counter), content, author: { id: "bot" } };
             messages.set(message.id, message);
             fieldsById.set(message.id, fields);
@@ -355,7 +358,10 @@ describe("shared response runner", () => {
               return yield* write(content);
             }),
           upsertThreadInfo: (input) =>
-            Deferred.succeed(info, input.modelSelection?.model ?? "").pipe(Effect.asVoid),
+            Effect.sync(() => deliveryOrder.push("thread-info")).pipe(
+              Effect.andThen(Deferred.succeed(info, input.modelSelection?.model ?? "")),
+              Effect.asVoid,
+            ),
         };
         if (failure === "restart") {
           counter = 1;
@@ -463,19 +469,29 @@ describe("shared response runner", () => {
               return yield* Effect.never;
             }),
         } as unknown as T3SessionService;
-        const fiber = yield* runBridge(
-          {
-            discordChannelId: "conversation",
-            t3ThreadId: "thread",
-            sentDiscordUserMessageIds: ["question"],
-          },
-          ready,
-          {
-            noteSentUserMessageIds: () => Effect.void,
-            adoptWorkingAckMessageId: () => Effect.void,
-            refreshThreadIndicators: () => Effect.succeed({ ok: false, error: "unused" }),
-          },
-        ).pipe(
+        const hub = yield* makeBridgeHub(runBridge);
+        const bridgeEffect =
+          platform === "teams" && failure === "none"
+            ? bridgeThreadToPlatform({
+                conversationId: "conversation",
+                threadId: "thread",
+                sentUserMessageIds: ["question"],
+              }).pipe(Effect.andThen(Effect.never))
+            : runBridge(
+                {
+                  discordChannelId: "conversation",
+                  t3ThreadId: "thread",
+                  sentDiscordUserMessageIds: ["question"],
+                },
+                ready,
+                {
+                  noteSentUserMessageIds: () => Effect.void,
+                  adoptWorkingAckMessageId: () => Effect.void,
+                  refreshThreadIndicators: () => Effect.succeed({ ok: false, error: "unused" }),
+                },
+              );
+        const fiber = yield* bridgeEffect.pipe(
+          Effect.provideService(BridgeHub, hub),
           Effect.provideService(T3Session, session),
           Effect.provideService(BotResponseTransport, adapter),
           Effect.provideService(ThreadLinkStore, links),
@@ -553,12 +569,14 @@ describe("shared response runner", () => {
           expect(deliveredText).toContain("Build");
           expect(deliveredText).toContain("Ready");
         }
+        if (platform === "teams") expect(deliveryOrder[0]).toBe("thread-info");
         expect(answer).not.toMatch(/working/iu);
         expect(answer).toContain("gpt-6.1-sol");
         expect(answer).toContain("effort medium");
         expect(answer).toContain("↑1.5k ↓250");
         expect(answer).toContain("https://example.com");
         expect(yield* Deferred.await(info)).toBe("gpt-6.1-sol");
+        yield* hub.dropAll();
         yield* Fiber.interrupt(fiber);
         const stored = yield* links.getByDiscordThreadId("conversation");
         expect(stored?.lastFinalizedAssistantId).toBe(finalAssistantId);
