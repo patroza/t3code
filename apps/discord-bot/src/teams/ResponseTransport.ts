@@ -25,11 +25,6 @@ import {
 import { extractMarkdownTables } from "../presentation/markdownTables.ts";
 import { ThreadLinkStore } from "../store/ThreadLinkStore.ts";
 
-interface TrackedMessage extends BotMessage {
-  readonly controlId?: string;
-  readonly controlKey?: string;
-}
-
 const ledgerRow = Schema.Struct({
   id: Schema.String,
   content: Schema.String,
@@ -38,6 +33,7 @@ const ledgerRow = Schema.Struct({
   controlId: Schema.optional(Schema.String),
   controlKey: Schema.optional(Schema.String),
 });
+type TrackedMessage = typeof ledgerRow.Type;
 const decodeLedgerRow = Schema.decodeUnknownSync(ledgerRow);
 
 const visibleMessage = (message: TrackedMessage): BotMessage => ({

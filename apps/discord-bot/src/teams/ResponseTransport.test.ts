@@ -434,7 +434,7 @@ describe("Teams response adapter", () => {
           if (wire.attachments?.length) return { id: `control-${++controls}` };
           return { id: `text-${++texts}` };
         });
-        const deleteMessage = vi.fn(async () => {});
+        const deleteMessage = vi.fn(async (_messageId: string) => {});
         const adapter = makeTeamsResponseTransport({
           ...options,
           config,
