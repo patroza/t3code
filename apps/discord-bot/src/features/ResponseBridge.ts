@@ -131,7 +131,7 @@ interface BridgeState {
   readonly lastProgressLabel: string | null;
   /**
    * Discord messages that carry the current turn's *in-progress* stream (ordered tip slots).
-   * Final text promotes these slots in place; only obsolete slots are deleted.
+   * Final text is posted separately; these slots are deleted after successful delivery.
    * May include the pre-bridge Working.. ack (seeded at start).
    */
   readonly discordMessageIds: ReadonlyArray<string>;
@@ -3391,7 +3391,7 @@ export const runBridge = (
 
     /**
      * Keep turn progress in stable editable slots, including when humans chat below them.
-     * Discord posts final replies separately; Teams promotes its editable slots.
+     * Both platforms post final replies separately.
      * Attachments use separate platform uploads.
      */
     const postOrEditAssistantUnlocked = (args: {
@@ -3482,20 +3482,10 @@ export const runBridge = (
         }
 
         if (streaming) {
-          const resumesSameTurn =
-            rest.platform === "teams" &&
-            receipt !== undefined &&
-            turnId !== null &&
-            receipt.turnId === turnId &&
-            !state.seededWorkingAckPending;
-          if (resumesSameTurn && state.discordMessageIds.length === 0) {
-            state = { ...state, discordMessageIds: receipt.messageIds, finalizedTurnId: null };
-            yield* Ref.set(stateRef, state);
-          }
           const startsNewDelivery = startsNewStreamDelivery({
             currentTurnId: state.currentTurnId,
             nextTurnId: turnId,
-            reopensFinalizedDelivery: reopensFinalizedDelivery && !resumesSameTurn,
+            reopensFinalizedDelivery,
             seededWorkingAckPending: state.seededWorkingAckPending,
           });
 
@@ -3896,10 +3886,7 @@ export const runBridge = (
           .getByDiscordThreadId(input.discordChannelId)
           .pipe(Effect.catchCause(() => Effect.succeed(null)));
         const receipt = yield* Ref.get(deliveryReceiptRef);
-        const sameDelivery =
-          receipt !== undefined &&
-          (receipt.assistantId === t3MessageId ||
-            (rest.platform === "teams" && turnId !== null && receipt.turnId === turnId));
+        const sameDelivery = receipt !== undefined && receipt.assistantId === t3MessageId;
         const alreadyFinalized = sameDelivery
           ? receipt.completed && receipt.assistantId === t3MessageId && receipt.text === text
           : isAssistantAlreadyFinalizedOnDiscord({
@@ -4186,9 +4173,8 @@ export const runBridge = (
           staleIds,
         });
 
-        // Discord finals get fresh messages below the conversation. Keep each successful
-        // receipt so retries reuse final chunks without adopting or overwriting progress.
-        // Teams continues promoting its editable slots.
+        // Finals get fresh messages below the conversation on both platforms. Keep each
+        // successful receipt so retries reuse final chunks without overwriting progress.
         let nextReceipt: ChatDeliveryReceipt = {
           assistantId: t3MessageId,
           turnId,
@@ -4203,9 +4189,7 @@ export const runBridge = (
             const chunk = finalChunks[index] ?? "";
             const fields = idleFields(chunk.trim() !== "" ? chunk : "_(done)_");
             const current = yield* Ref.get(stateRef);
-            const existingId =
-              nextReceipt.messageIds[index] ??
-              (rest.platform === "teams" ? current.discordMessageIds[index] : undefined);
+            const existingId = nextReceipt.messageIds[index];
             const firstSlot = ids[0] ?? state.discordMessageIds[0];
             const recent =
               existingId === undefined
@@ -4223,8 +4207,7 @@ export const runBridge = (
               })),
               botUserId,
               finalChunks: [fields.content],
-              excludeMessageIds:
-                rest.platform === "discord" ? [...ids, ...allStreamIds(current)] : ids,
+              excludeMessageIds: [...ids, ...allStreamIds(current)],
             });
             const written =
               existingId === undefined
@@ -4245,16 +4228,6 @@ export const runBridge = (
               messageIds: [...ids, ...nextReceipt.messageIds.slice(index + 1)],
             });
             yield* persistDeliveryReceipt(nextReceipt);
-            if (rest.platform === "teams") {
-              yield* Ref.update(stateRef, (current) => ({
-                ...current,
-                discordMessageIds: [
-                  ...current.discordMessageIds.slice(0, index),
-                  written.id,
-                  ...current.discordMessageIds.slice(index + 1),
-                ],
-              }));
-            }
             yield* persistStreamMessageIds((yield* Ref.get(stateRef)).discordMessageIds);
           }
 
@@ -4306,7 +4279,7 @@ export const runBridge = (
         const createdIds = yield* createFinalWithAttachments.pipe(
           Effect.timeout(BRIDGE_FINALIZE_DISCORD_TIMEOUT),
         );
-        // Delete only obsolete slots, never the slots promoted to the final answer.
+        // Clear progress only after every final chunk and attachment has been delivered.
         const finalIds = new Set(createdIds);
         yield* deleteMessages(
           [...toDelete, ...nextReceipt.messageIds].filter((id) => !finalIds.has(id)),

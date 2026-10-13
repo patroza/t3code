@@ -152,6 +152,7 @@ describe("shared response runner", () => {
     { platform: "teams", failure: "restart" },
     { platform: "teams", failure: "upload" },
     { platform: "teams", failure: "shutdown" },
+    { platform: "teams", failure: "same-run-follow-up" },
   ] as const)(
     "delivers progress and final replies through $platform (failure=$failure)",
     ({ platform, failure }) =>
@@ -279,12 +280,7 @@ describe("shared response runner", () => {
           listMessages: () => Effect.succeed([...messages.values()].reverse()),
           createMessage: (_, fields) =>
             Effect.gen(function* () {
-              if (
-                platform === "discord" &&
-                failure === "final" &&
-                !didFail &&
-                fields.content.includes("It’s 19:50 CEST.")
-              ) {
+              if (failure === "final" && !didFail && fields.content.includes("It’s 19:50 CEST.")) {
                 didFail = true;
                 expect(
                   [...messages.values()].some((message) =>
@@ -319,11 +315,8 @@ describe("shared response runner", () => {
               }
               if (
                 !didFail &&
-                ((["progress", "missing"].includes(failure) &&
-                  fields.content.includes("Checking the current result.")) ||
-                  (platform === "teams" &&
-                    failure === "final" &&
-                    fields.content.includes("It’s 19:50 CEST.")))
+                ["progress", "missing"].includes(failure) &&
+                fields.content.includes("Checking the current result.")
               ) {
                 didFail = true;
                 yield* Deferred.succeed(failed, undefined);
@@ -550,13 +543,11 @@ describe("shared response runner", () => {
         expect(counter).toBe(
           messages.size +
             (failure === "missing" ? 1 : 0) +
-            (platform === "discord" ? (failure === "same-run-follow-up" ? 2 : 1) : 0),
+            (failure === "same-run-follow-up" ? 2 : 1),
         );
         expect(didFail).toBe(!["none", "late-final", "same-run-follow-up"].includes(failure));
-        if (platform === "discord") {
-          expect([...progressIds].some((id) => messages.has(id))).toBe(false);
-          expect([...messages.keys()].every((id) => !progressIds.has(id))).toBe(true);
-        }
+        expect([...progressIds].some((id) => messages.has(id))).toBe(false);
+        expect([...messages.keys()].every((id) => !progressIds.has(id))).toBe(true);
         expect(
           [...messages.keys()].every(
             (id) => !fieldsById.get(id)?.actions?.some((action) => action.command === "stop"),

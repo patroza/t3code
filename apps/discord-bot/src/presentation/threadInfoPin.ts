@@ -140,6 +140,12 @@ export function formatThreadInfoModelLine(history: ThreadModelHistory): string |
   return `Model: \`${current}\` (since ${formatModelSinceLabel(history.modelSinceAt)}, started with \`${initial}\`)`;
 }
 
+/** Use a compact clickable label for the thread URL, including legacy labelled values. */
+export function formatOpenInOmegentLink(webLink: string): string {
+  const url = webLink.trim().replace(/^Open in (?:Omegent|T3):\s*/u, "");
+  return `[Open in Omegent](${url.replaceAll("(", "%28").replaceAll(")", "%29")})`;
+}
+
 /**
  * Render the per-thread status message (Model / worktree / Open in Omegent / Jira / PRs).
  * Always includes the marker as the first line for pin discovery.
@@ -164,11 +170,7 @@ export function renderThreadInfoPin(input: ThreadInfoPinRenderInput): string {
   }
 
   if (input.webLink !== null && input.webLink.trim() !== "") {
-    // Accept either prefix (callers pass the pre-labelled form; legacy used "Open in T3:")
-    // so re-rendering an old value never double-prefixes; emit the Omegent label otherwise.
-    const alreadyLabelled =
-      input.webLink.startsWith("Open in Omegent:") || input.webLink.startsWith("Open in T3:");
-    lines.push(alreadyLabelled ? input.webLink : `Open in Omegent: ${input.webLink}`);
+    lines.push(formatOpenInOmegentLink(input.webLink));
   }
 
   const sentrySection = formatSentryLinksForDiscord(input.sentryIssueUrls ?? []);
