@@ -58,7 +58,9 @@ describe("fork surface existence (anti stack-drop)", () => {
 
   it("Sidebar V2 keeps Settled shelf labeling and new-thread affordance", () => {
     const sidebarV2 = readSrc("components/Sidebar.tsx");
-    expect(sidebarV2).toContain("Settled shelf");
+    expect(readSrc("components/sidebar/SidebarThreadFilters.tsx")).toContain(
+      "Expand settled shelf",
+    );
     expect(sidebarV2).toMatch(/New thread|new thread/i);
     expect(sidebarV2).toContain("sidebar-pinned-divider");
     expect(sidebarV2).toContain("sidebar-${shelf}-shelf-toggle");
@@ -68,13 +70,20 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(sidebarV2).toContain("attemptUnpin");
   });
 
-  it("Sidebar V2 View & filters keeps multi-env environment filter (shared storage)", () => {
+  it("Sidebar V2 project picker keeps list and environment filters together", () => {
     const sidebarV2 = readSrc("components/Sidebar.tsx");
     // Restacked ownership work once dropped this; without it multi-env users
     // cannot hide t3vm / secondary machines from the V2 inbox.
-    expect(sidebarV2).toContain('data-testid="sidebar-view-options-trigger"');
-    expect(sidebarV2).toContain('data-testid="sidebar-environment-filter-all"');
-    expect(sidebarV2).toContain("sidebar-environment-filter-${environment.environmentId}");
+    const filters = readSrc("components/sidebar/SidebarThreadFilters.tsx");
+    expect(sidebarV2).toContain('data-testid="sidebar-project-filters-trigger"');
+    expect(sidebarV2).not.toContain('data-testid="sidebar-view-options-trigger"');
+    expect(sidebarV2.indexOf("<SidebarThreadFilters")).toBeLessThan(
+      sidebarV2.indexOf("<ComboboxSearchInput"),
+    );
+    expect(sidebarV2).toContain("onOwnershipFilterChange={setOwnershipFilter}");
+    expect(sidebarV2).toContain("onThreadGroupingChange={setThreadGrouping}");
+    expect(filters).toContain('data-testid="sidebar-environment-filter-all"');
+    expect(filters).toContain("sidebar-environment-filter-${environment.environmentId}");
     expect(sidebarV2).toContain("LIST_ENVIRONMENT_FILTER_STORAGE_KEY");
     expect(sidebarV2).toContain(
       "matchesEnvironmentFilter(thread.environmentId, selectedEnvironmentIds)",
@@ -165,11 +174,12 @@ describe("fork surface existence (anti stack-drop)", () => {
     const webGrouping = readSrc("components/listEnvironmentFilter.ts");
     const mobileGrouping = readSrc("../../mobile/src/features/home/homeListMode.ts");
     const orderingContract = readSrc("../../../docs/sidebar-v2.md");
-    expect(sidebarV2).toContain("sidebar-thread-grouping-${grouping}");
-    expect(sidebarV2).toContain('data-testid="sidebar-thread-grouping"');
-    expect(sidebarV2).toMatch(/size="icon"\s+type="button"\s+aria-label={`Thread ordering:/);
-    expect(sidebarV2).toContain("Filter threads by project");
-    expect(sidebarV2).toContain('grouping !== "none"');
+    const filters = readSrc("components/sidebar/SidebarThreadFilters.tsx");
+    expect(filters).toContain("sidebar-thread-grouping-${value}");
+    expect(filters).toContain('data-testid="sidebar-thread-grouping"');
+    expect(filters).toContain('aria-label="Thread ordering"');
+    expect(sidebarV2).toContain('"Filter threads"');
+    expect(filters).toContain('["project", "recency"] as const');
     expect(sidebarV2).toContain('threadGrouping !== "recency"');
     expect(sidebarV2).toContain("orderForThreadGrouping(sortThreadsForSidebar(active))");
     expect(sidebarV2).toContain("sidebar-${section}-recency-${group.id}");
@@ -258,7 +268,9 @@ describe("fork surface existence (anti stack-drop)", () => {
       );
     }
     expect(sidebarV2).toContain("ThreadIdentityMark");
-    expect(sidebarV2).toContain("sidebar-ownership-filter-");
+    expect(readSrc("components/sidebar/SidebarThreadFilters.tsx")).toContain(
+      "sidebar-ownership-filter-",
+    );
     expect(sidebarV1).toContain("ThreadIdentityMark");
     expect(sidebarV1).not.toContain("ThreadIdentityLeading");
     expect(sidebarV2).not.toContain("ThreadIdentityLeading");
