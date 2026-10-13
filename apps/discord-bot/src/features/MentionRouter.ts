@@ -124,7 +124,7 @@ import {
   extractSentryIssueUrlsFromDiscordMessage,
   mergeSentryIssueUrls,
 } from "../presentation/sentryLinks.ts";
-import { isThreadInfoPinContent } from "../presentation/threadInfoPin.ts";
+import { formatOpenInOmegentLink, isThreadInfoPinContent } from "../presentation/threadInfoPin.ts";
 import {
   resolveUniqueT3ThreadIdForWorkItems,
   serverWorkItemsPathFromStateSqlite,
@@ -2041,13 +2041,13 @@ const make = (botConfig: DiscordBotConfig) =>
               ? [
                   `Recovered link for **${shellThread.title}** → ${jump}`,
                   "Bridge + thread-info pin re-attached. Mention `@Omegent` to continue.",
-                  webLink === null ? null : `Open in Omegent: ${webLink}`,
+                  webLink === null ? null : formatOpenInOmegentLink(webLink),
                 ]
                   .filter((line): line is string => line !== null)
                   .join("\n")
               : [
                   `T3 thread **${shellThread.title}** is already linked here: ${jump}`,
-                  webLink === null ? null : `Open in Omegent: ${webLink}`,
+                  webLink === null ? null : formatOpenInOmegentLink(webLink),
                 ]
                   .filter((line): line is string => line !== null)
                   .join("\n");
@@ -2130,7 +2130,7 @@ const make = (botConfig: DiscordBotConfig) =>
             shellThread.worktreePath === null
               ? "Mode: local (no worktree)"
               : `Worktree: \`${shellThread.worktreePath}\``,
-            webLink === null ? null : `Open in Omegent: ${webLink}`,
+            webLink === null ? null : formatOpenInOmegentLink(webLink),
             "Mention `@Omegent` in this thread to continue the conversation.",
           ]
             .filter((line): line is string => line !== null)
@@ -2150,7 +2150,7 @@ const make = (botConfig: DiscordBotConfig) =>
           return yield* postReply(
             [
               `Linked **${shellThread.title}** → ${jump}`,
-              webLink === null ? null : `Open in Omegent: ${webLink}`,
+              webLink === null ? null : formatOpenInOmegentLink(webLink),
             ]
               .filter((line): line is string => line !== null)
               .join("\n"),

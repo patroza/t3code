@@ -67,7 +67,7 @@ const baseConfig = {
 } satisfies DiscordBotConfig;
 
 describe("preferredModelSelection", () => {
-  it("defaults to codex gpt-5.4 over project grok", () => {
+  it("uses the project default before the bot fallback", () => {
     const selection = preferredModelSelection({
       config: baseConfig,
       projectDefault: {
@@ -93,8 +93,8 @@ describe("preferredModelSelection", () => {
     });
 
     expect(selection).toEqual({
-      instanceId: "codex",
-      model: "gpt-5.4",
+      instanceId: "grok",
+      model: "grok-build",
     });
   });
 

@@ -294,10 +294,12 @@ export function preferredModelSelection(input: {
     instanceId: DEFAULT_BOT_INSTANCE_ID as ProviderInstanceId,
     model: DEFAULT_BOT_MODEL,
   };
-  const preferredSelection = input.stickyModelSelection ?? {
-    instanceId: (input.config.t3DefaultInstanceId ?? DEFAULT_BOT_INSTANCE_ID) as ProviderInstanceId,
-    model: input.config.t3DefaultModel ?? DEFAULT_BOT_MODEL,
-  };
+  const preferredSelection = input.stickyModelSelection ??
+    input.projectDefault ?? {
+      instanceId: (input.config.t3DefaultInstanceId ??
+        DEFAULT_BOT_INSTANCE_ID) as ProviderInstanceId,
+      model: input.config.t3DefaultModel ?? DEFAULT_BOT_MODEL,
+    };
   if (input.overrideModel !== undefined) {
     return resolveProviderModelSelection({
       providers: input.providers,

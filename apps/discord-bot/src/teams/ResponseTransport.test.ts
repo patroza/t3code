@@ -8,6 +8,9 @@ import { describe, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as ConfigProvider from "effect/ConfigProvider";
+import { ThreadLinkStore, makeThreadLinkStore } from "../store/ThreadLinkStore.ts";
+import { ProjectAliasStore, makeProjectAliasStore } from "../projectAliases.ts";
+import { T3Session, type T3SessionService } from "../t3/T3Session.ts";
 import { DiscordBotConfig } from "../config.ts";
 import { findAlreadyPostedFinalChunkIds } from "../features/ResponseBridge.ts";
 import { workingFields, idleFields, wakeUpFields } from "../features/BotResponseTransport.ts";
@@ -40,6 +43,42 @@ describe("Teams response adapter", () => {
     directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "teams-adapter-"));
   });
   afterEach(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
+  it.effect("sends thread info with a clickable Open in Omegent label", () =>
+    Effect.gen(function* () {
+      const config = yield* DiscordBotConfig.pipe(
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnvRecord({
+              T3_DISCORD_BOT_DATA_DIR: directory,
+              T3_WEB_UI_BASE_URL: "https://omega.example",
+            }),
+          ),
+        ),
+      );
+      const links = yield* makeThreadLinkStore(directory);
+      const send = vi
+        .fn<(wire: TeamsResponseActivity) => Promise<{ id: string }>>()
+        .mockResolvedValue({ id: "info" });
+      const adapter = makeTeamsResponseTransport({ ...options, config, send });
+      yield* adapter
+        .upsertThreadInfo({
+          config,
+          conversationId: options.conversationId,
+          threadId: "scanner-thread",
+          modelSelection: { instanceId: "grok", model: "grok-4.7" },
+          local: true,
+        })
+        .pipe(
+          Effect.provideService(ThreadLinkStore, links),
+          Effect.provideService(ProjectAliasStore, makeProjectAliasStore([])),
+          Effect.provideService(T3Session, {} as T3SessionService),
+        );
+      expect(send.mock.calls[0]?.[0].text).toContain(
+        "[Open in Omegent](https://omega.example/?thread=scanner-thread)",
+      );
+      expect(send.mock.calls[0]?.[0].textFormat).toBe("extendedmarkdown");
+    }),
+  );
   it("adopts an accepted final after a send timeout with Graph's HTML body", () => {
     const final = "**It’s 19:50.**\n\n[Open in T3 Code](https://example.com/?thread=t)";
     const remote = graphMessage({

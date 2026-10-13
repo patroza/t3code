@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+import { renderThreadInfoPin } from "../presentation/threadInfoPin.ts";
 import { discordMessageFields } from "./ResponseTransport.ts";
 import {
   workingFields,
@@ -13,6 +14,16 @@ import {
 } from "../presentation/messages.ts";
 
 describe("Discord transport compatibility", () => {
+  it("preserves the clickable thread-info link in Discord message content", () => {
+    const content = renderThreadInfoPin({
+      modelLine: "grok/grok-4.7",
+      worktreeLine: null,
+      webLink: "https://omega.example/?thread=scanner-thread",
+    });
+    expect(discordMessageFields(idleFields(content)).content).toContain(
+      "[Open in Omegent](https://omega.example/?thread=scanner-thread)",
+    );
+  });
   it("keeps existing Stop and Continue wire payloads compatible with installed handlers", () => {
     expect(discordMessageFields(workingFields("Working…", "thread"))).toEqual(
       workingMessageFields("Working…", "thread"),

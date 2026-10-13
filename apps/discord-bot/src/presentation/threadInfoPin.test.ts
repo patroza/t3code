@@ -28,7 +28,7 @@ describe("renderThreadInfoPin", () => {
     expect(rendered).toContain(`**${THREAD_INFO_PIN_MARKER}**`);
     expect(rendered).toContain("Model: `grok/grok-4.5`");
     expect(rendered).toContain("Worktree off `main`");
-    expect(rendered).toContain("Open in Omegent: http://198.18.83.2:3773/?thread=abc");
+    expect(rendered).toContain("[Open in Omegent](http://198.18.83.2:3773/?thread=abc)");
     expect(rendered).toContain("**Sentry**");
     expect(rendered).toContain("[SCANNER-313](https://macs-scanner.sentry.io/issues/SCANNER-313)");
     expect(rendered).toContain("**Jira**");
@@ -43,6 +43,19 @@ describe("renderThreadInfoPin", () => {
     expect(rendered.indexOf("**Sentry**")).toBeLessThan(rendered.indexOf("**Jira**"));
     expect(rendered.indexOf("**Jira**")).toBeLessThan(rendered.indexOf("**PRs**"));
   });
+
+  it.each(["", "Open in Omegent: ", "Open in T3: "])(
+    "renders a labelled link from %s URLs",
+    (prefix) => {
+      expect(
+        renderThreadInfoPin({
+          modelLine: null,
+          worktreeLine: null,
+          webLink: `${prefix}https://omega.example/?thread=abc`,
+        }),
+      ).toContain("[Open in Omegent](https://omega.example/?thread=abc)");
+    },
+  );
 
   it("omits jira and PR sections when empty", () => {
     const rendered = renderThreadInfoPin({

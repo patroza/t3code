@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 
 import type { DiscordBotConfig } from "../config.ts";
+import { formatOpenInOmegentLink } from "../presentation/threadInfoPin.ts";
 import { workingMessageFields } from "../presentation/messages.ts";
 import { topicDefaultModel, topicRequestsFastMode } from "../presentation/fastMode.ts";
 import {
@@ -324,7 +325,7 @@ export const startOrContinueLinkedTurn = Effect.fn("startOrContinueLinkedTurn")(
 
   if (turn.isNew) {
     yield* rest.createMessage(input.discordThreadId, {
-      content: [...input.announceLines, webLink === null ? null : `Open in Omegent: ${webLink}`]
+      content: [...input.announceLines, webLink === null ? null : formatOpenInOmegentLink(webLink)]
         .filter((line): line is string => line !== null && line.trim().length > 0)
         .join("\n"),
     });
