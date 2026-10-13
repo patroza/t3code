@@ -489,6 +489,7 @@ describe("Jira helpers", () => {
       },
     });
     expect(formatJiraComment("  ok  ")).toBe("ok");
+    expect(formatJiraComment(`  ${"x".repeat(40_000)}  `)).toBe("x".repeat(40_000));
   });
 
   it("builds key-first auto-create branch names", () => {

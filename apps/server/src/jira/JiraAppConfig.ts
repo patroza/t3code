@@ -5,6 +5,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 
+import { parseJiraConfluencePages, type JiraConfluencePageTarget } from "./JiraCommentPublish.ts";
+
 export type JiraAuthMode = "basic" | "bearer";
 
 export interface EnabledJiraAppConfig {
@@ -44,6 +46,13 @@ export interface EnabledJiraAppConfig {
    * Empty disables reactions. Best-effort — site/API support varies.
    */
   readonly ackEmojiId: string | null;
+  /**
+   * Where long replies go when they do not fit in a comment.
+   * From `T3CODE_JIRA_CONFLUENCE_PAGES=SA:SA/scanner/omegent`.
+   * The first path segment is the Confluence space; the rest are parent page titles.
+   * The leaf page is titled with the issue key. Empty means attach a file instead.
+   */
+  readonly confluencePages: ReadonlyMap<string, JiraConfluencePageTarget>;
 }
 
 export interface DisabledJiraAppConfig {
@@ -93,6 +102,7 @@ const configEffect = Effect.gen(function* () {
     ),
     baseBranch: Config.String("T3CODE_JIRA_BASE_BRANCH").pipe(Config.withDefault("main")),
     ackEmojiId: optionalString("T3CODE_JIRA_ACK_EMOJI_ID"),
+    confluencePages: Config.String("T3CODE_JIRA_CONFLUENCE_PAGES").pipe(Config.withDefault("")),
   });
 
   // Prefer T3CODE_* then fall back to shared MCP-style env names.
@@ -140,6 +150,7 @@ const configEffect = Effect.gen(function* () {
     autoCreateThread: values.autoCreateThread,
     baseBranch: values.baseBranch.trim() || "main",
     ackEmojiId,
+    confluencePages: parseJiraConfluencePages(values.confluencePages),
   });
 });
 
