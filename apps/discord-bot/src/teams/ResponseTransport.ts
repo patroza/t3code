@@ -25,13 +25,27 @@ import {
 import { extractMarkdownTables } from "../presentation/markdownTables.ts";
 import { ThreadLinkStore } from "../store/ThreadLinkStore.ts";
 
+interface TrackedMessage extends BotMessage {
+  readonly controlId?: string;
+  readonly controlKey?: string;
+}
+
 const ledgerRow = Schema.Struct({
   id: Schema.String,
   content: Schema.String,
   author: Schema.optional(Schema.Struct({ id: Schema.String })),
   timestamp: Schema.optional(Schema.String),
+  controlId: Schema.optional(Schema.String),
+  controlKey: Schema.optional(Schema.String),
 });
 const decodeLedgerRow = Schema.decodeUnknownSync(ledgerRow);
+
+const visibleMessage = (message: TrackedMessage): BotMessage => ({
+  id: message.id,
+  content: message.content,
+  ...(message.author ? { author: message.author } : {}),
+  ...(message.timestamp ? { timestamp: message.timestamp } : {}),
+});
 
 export interface TeamsResponseActivity {
   readonly type: "message";
@@ -46,29 +60,50 @@ export interface TeamsResponseActivity {
   }>;
 }
 
+const teamsControlCard = (actions: NonNullable<BotMessageFields["actions"]>) => ({
+  contentType: "application/vnd.microsoft.card.adaptive",
+  content: {
+    type: "AdaptiveCard",
+    version: "1.4",
+    body: [],
+    actions: actions.map((action) => ({
+      type: "Action.Execute",
+      title: action.label,
+      verb: "omegent",
+      data: { action: "omegent", ...action },
+    })),
+  },
+});
+
+const controlKey = (fields: BotMessageFields) =>
+  JSON.stringify(
+    (fields.actions ?? []).map((action) => [
+      action.command,
+      action.threadId,
+      action.requestId ?? "",
+      action.label,
+    ]),
+  );
+
+// Teams splits an activity that contains both text and an attachment into two
+// activities and returns only one id, so the card cannot be updated or deleted.
+// Working text stays text-only. Stop and Continue are a second activity.
 export function teamsMessageFields(fields: BotMessageFields): TeamsResponseActivity {
   return {
     type: "message",
     textFormat: "extendedmarkdown",
     text: fields.content,
-    attachments: fields.actions?.length
-      ? [
-          {
-            contentType: "application/vnd.microsoft.card.adaptive",
-            content: {
-              type: "AdaptiveCard",
-              version: "1.4",
-              body: [],
-              actions: fields.actions.map((action) => ({
-                type: "Action.Execute",
-                title: action.label,
-                verb: "omegent",
-                data: { action: "omegent", ...action },
-              })),
-            },
-          },
-        ]
-      : [],
+    attachments: [],
+  };
+}
+
+export function teamsControlActivity(fields: BotMessageFields): TeamsResponseActivity | null {
+  if (!fields.actions?.length) return null;
+  return {
+    type: "message",
+    textFormat: "extendedmarkdown",
+    text: "",
+    attachments: [teamsControlCard(fields.actions)],
   };
 }
 
@@ -142,6 +177,33 @@ export function graphMessage(message: {
   };
 }
 
+/** A card-only Stop/Continue activity has no prose. Channel history must not treat it as a reply. */
+function isTeamsControlActivity(message: {
+  body?: { content?: string };
+  attachments?: ReadonlyArray<{ contentType?: string; content?: string }>;
+}): boolean {
+  if (teamsHistoryMarkdown(message.body?.content ?? "").trim() !== "") return false;
+  const attachments = message.attachments ?? [];
+  if (attachments.length === 0) return false;
+  return attachments.every((attachment) => {
+    if (attachment.contentType !== "application/vnd.microsoft.card.adaptive" || !attachment.content)
+      return false;
+    try {
+      const card = JSON.parse(attachment.content) as {
+        body?: Array<{ type?: string; text?: string }>;
+      };
+      return (card.body ?? []).every(
+        (element) =>
+          element.type !== "TextBlock" ||
+          typeof element.text !== "string" ||
+          element.text.trim() === "",
+      );
+    } catch {
+      return false;
+    }
+  });
+}
+
 export function makeTeamsResponseTransport(input: {
   readonly config: DiscordBotConfig;
   readonly clientId: string;
@@ -170,13 +232,13 @@ export function makeTeamsResponseTransport(input: {
     ledgerDir,
     NodeCrypto.createHash("sha256").update(input.conversationId).digest("hex") + ".json",
   );
-  const writeLedger = (rows: ReadonlyArray<BotMessage>) => {
+  const writeLedger = (rows: ReadonlyArray<TrackedMessage>) => {
     const temporary = ledgerPath + ".tmp";
     NodeFS.writeFileSync(temporary, JSON.stringify(rows), { mode: 0o600 });
     NodeFS.renameSync(temporary, ledgerPath);
   };
   const readLedger = () => {
-    if (!NodeFS.existsSync(ledgerPath)) return new Map<string, BotMessage>();
+    if (!NodeFS.existsSync(ledgerPath)) return new Map<string, TrackedMessage>();
     const original = NodeFS.readFileSync(ledgerPath, "utf8");
     const parsed: unknown = JSON.parse(original);
     if (!Array.isArray(parsed)) throw new Error("Teams delivery ledger must be an array");
@@ -194,10 +256,10 @@ export function makeTeamsResponseTransport(input: {
       NodeFS.writeFileSync(ledgerPath + ".invalid-" + digest, original, { mode: 0o600 });
       writeLedger(rows);
     }
-    return new Map<string, BotMessage>(rows.map((message) => [message.id, message]));
+    return new Map<string, TrackedMessage>(rows.map((message) => [message.id, message]));
   };
   const ownMessages = readLedger();
-  const persist = (message?: BotMessage, deletedId?: string) => {
+  const persist = (message?: TrackedMessage, deletedId?: string) => {
     const current = readLedger();
     if (message) {
       if (typeof message.id !== "string" || !message.id.trim())
@@ -258,6 +320,42 @@ export function makeTeamsResponseTransport(input: {
     if (!response.ok) throw new Error(`Teams history read failed (${response.status})`);
     return response.json();
   };
+  const deleteControl = async (controlId: string) => {
+    try {
+      await input.deleteMessage(controlId);
+    } catch (cause) {
+      if (messageUpdateError(cause).reason !== "message-not-found") throw cause;
+    }
+  };
+  const syncControl = async (fields: BotMessageFields, message: TrackedMessage) => {
+    const control = teamsControlActivity(fields);
+    if (!control) {
+      if (!message.controlId) return message;
+      await deleteControl(message.controlId);
+      return {
+        id: message.id,
+        content: message.content,
+        ...(message.author ? { author: message.author } : {}),
+        ...(message.timestamp ? { timestamp: message.timestamp } : {}),
+      };
+    }
+    const nextKey = controlKey(fields);
+    if (message.controlId && message.controlKey === nextKey) return message;
+    if (message.controlId) {
+      try {
+        await input.send({ ...control, id: message.controlId });
+        return { ...message, controlKey: nextKey };
+      } catch (cause) {
+        if (messageUpdateError(cause).reason !== "message-not-found") throw cause;
+      }
+    }
+    const posted = await input.send(control);
+    const controlId = typeof posted?.id === "string" ? posted.id.trim() : "";
+    if (!controlId || controlId === message.id) {
+      throw new Error("Teams accepted the Stop control without its own activity ID");
+    }
+    return { ...message, controlId, controlKey: nextKey };
+  };
   const send = async (
     fields: BotMessageFields,
     id?: string,
@@ -292,15 +390,26 @@ export function makeTeamsResponseTransport(input: {
       }
     }
     if (!messageId) throw new Error("Teams accepted the send without a recoverable activity ID");
-    const message: BotMessage = {
+    const previous = id ? ownMessages.get(id) : undefined;
+    const message: TrackedMessage = {
       id: messageId,
       content: fields.content,
       author: { id: input.clientId },
-      timestamp: ownMessages.get(id ?? "")?.timestamp ?? new Date().toISOString(),
+      timestamp: previous?.timestamp ?? new Date().toISOString(),
+      ...(previous?.controlId ? { controlId: previous.controlId } : {}),
+      ...(previous?.controlKey ? { controlKey: previous.controlKey } : {}),
     };
+    // Remember the text before touching its control, so a failed card post can retry
+    // against the same activity instead of leaving an untracked Stop card behind.
     ownMessages.set(message.id, message);
     persist(message);
-    return message;
+    if (attachments) return visibleMessage(message);
+    const next = await syncControl(fields, message);
+    if (next !== message) {
+      ownMessages.set(next.id, next);
+      persist(next);
+    }
+    return visibleMessage(next);
   };
   const service: BotResponseTransportService = {
     platform: "teams",
@@ -325,7 +434,7 @@ export function makeTeamsResponseTransport(input: {
     getMessage: (_, id) =>
       request(async () => {
         const known = channelHistory ? ownMessages.get(id) : readLedger().get(id);
-        if (known) return known;
+        if (known) return visibleMessage(known);
         if (!channelHistory)
           throw new Error("Message is not present in the private Teams delivery ledger");
         return graphMessage(
@@ -338,7 +447,7 @@ export function makeTeamsResponseTransport(input: {
       }),
     listMessages: (_, options) =>
       request(async () => {
-        const found = channelHistory ? new Map<string, BotMessage>() : readLedger();
+        const found = channelHistory ? new Map<string, TrackedMessage>() : readLedger();
         let url: string | undefined = channelHistory ? `${graphBase}/replies?$top=50` : undefined;
         // Graph returns replies in oldest-first pages; read all pages before selecting the latest window.
         while (url) {
@@ -346,9 +455,17 @@ export function makeTeamsResponseTransport(input: {
             value: Array<Parameters<typeof graphMessage>[0]>;
             "@odata.nextLink"?: string;
           };
-          for (const row of body.value) found.set(row.id, graphMessage(row));
+          for (const row of body.value) {
+            if (isTeamsControlActivity(row)) continue;
+            found.set(row.id, graphMessage(row));
+          }
           url = body["@odata.nextLink"];
         }
+        const controlIds = new Set(
+          [...ownMessages.values()].flatMap((message) =>
+            message.controlId ? [message.controlId] : [],
+          ),
+        );
         for (const [id, message] of channelHistory ? ownMessages : []) {
           const remote = found.get(id);
           found.set(id, remote?.timestamp ? { ...message, timestamp: remote.timestamp } : message);
@@ -357,10 +474,12 @@ export function makeTeamsResponseTransport(input: {
           .sort((a, b) => (b.timestamp ?? "").localeCompare(a.timestamp ?? ""))
           .filter(
             (message) =>
+              !controlIds.has(message.id) &&
               (!options?.before || message.id < options.before) &&
               (!options?.after || message.id > options.after),
           )
-          .slice(0, options?.limit ?? 25);
+          .slice(0, options?.limit ?? 25)
+          .map(visibleMessage);
       }),
     createMessage: (_, fields) => request(() => send(fields)),
     updateMessage: (_, id, fields) =>
@@ -369,6 +488,8 @@ export function makeTeamsResponseTransport(input: {
       ),
     deleteMessage: (_, id) =>
       request(async () => {
+        const tracked = ownMessages.get(id) ?? readLedger().get(id);
+        if (tracked?.controlId) await deleteControl(tracked.controlId);
         await input.deleteMessage(id);
         ownMessages.delete(id);
         persist(undefined, id);
