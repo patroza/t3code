@@ -434,9 +434,9 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
       });
 
     const crypto = yield* Crypto.Crypto;
-    const randomUUID = crypto.randomUUIDv4.pipe(
-      orFail("retryable")("crypto.randomUUIDv4", "Failed creating a UUID v4"),
-    );
+    const randomUUID = crypto
+      .randomUUIDv4()
+      .pipe(orFail("retryable")("crypto.randomUUIDv4", "Failed creating a UUID v4"));
 
     const getNow = DateTime.now.pipe(Effect.map(DateTime.formatIso));
 

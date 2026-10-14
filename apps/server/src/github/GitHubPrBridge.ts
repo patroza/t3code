@@ -834,7 +834,7 @@ export const make = Effect.gen(function* () {
       readonly threadMode: GitHubThreadMode;
       readonly runSetup: boolean;
     }) {
-      const threadId = ThreadId.make(yield* crypto.randomUUIDv4);
+      const threadId = ThreadId.make(yield* crypto.randomUUIDv4());
       const title = githubCommentThreadTitle(input.invocation, input.threadMode);
       yield* Effect.logInfo("Creating T3 thread for GitHub PR comment", {
         repository: input.invocation.repository,
@@ -850,7 +850,7 @@ export const make = Effect.gen(function* () {
         type: "thread.create",
         createdBy: "user",
         creationSource: "server",
-        commandId: CommandId.make(yield* crypto.randomUUIDv4),
+        commandId: CommandId.make(yield* crypto.randomUUIDv4()),
         threadId,
         projectId: input.projectId,
         title,
@@ -1460,8 +1460,8 @@ export const make = Effect.gen(function* () {
       return;
     }
 
-    const commandId = CommandId.make(yield* crypto.randomUUIDv4);
-    const messageId = MessageId.make(yield* crypto.randomUUIDv4);
+    const commandId = CommandId.make(yield* crypto.randomUUIDv4());
+    const messageId = MessageId.make(yield* crypto.randomUUIDv4());
     const processing: StoredGitHubDelivery = {
       ...acknowledged,
       threadId: thread.id,

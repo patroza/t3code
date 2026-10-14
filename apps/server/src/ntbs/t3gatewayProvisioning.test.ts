@@ -74,7 +74,7 @@ const createCryptoMock = (recordResult: CallRecordResult, input?: CryptoInput) =
 
       return Layer.mock(Crypto, {
         "~effect/Crypto": "~effect/Crypto",
-        randomUUIDv4:
+        randomUUIDv4: () =>
           // recordCrypto("randomUUIDv4", undefined, )
 
           input?.failRandomUUIDv4
