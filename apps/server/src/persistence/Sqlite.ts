@@ -9,10 +9,7 @@ import { runMigrations } from "./Migrations.ts";
 import { initializeV2Database } from "./initializeV2Database.ts";
 import * as ServerConfig from "../config.ts";
 
-const makeRuntimeSqliteLayer = (config: {
-  readonly filename: string;
-  readonly spanAttributes?: Record<string, unknown>;
-}) => NodeSqliteClient.layer(config);
+const makeRuntimeSqliteLayer = NodeSqliteClient.layer;
 
 // Size the -wal file is cut back to on the first commit after a WAL reset.
 export const WAL_SIZE_LIMIT_BYTES = 32 * 1024 * 1024;
@@ -31,6 +28,10 @@ const layerSetup = Layer.effectDiscard(
     // cannot corrupt the database and an app crash loses nothing; an OS crash
     // or power loss can roll back commits since the last checkpoint.
     yield* sql`PRAGMA synchronous = NORMAL;`;
+    // Checkpoints are now the only sync, and macOS fsync() does not flush the
+    // drive cache. F_FULLFSYNC makes them reach disk; other platforms ignore it.
+    // Per-commit fullfsync stays off.
+    yield* sql`PRAGMA checkpoint_fullfsync = ON;`;
     // PASSIVE checkpoints never shrink the -wal file, so it otherwise keeps its
     // largest size until the last connection closes.
     yield* sql.unsafe(`PRAGMA journal_size_limit = ${WAL_SIZE_LIMIT_BYTES};`);
@@ -51,6 +52,10 @@ export const layerFromPath = Effect.fn("makeSqlitePersistenceLive")(function* (d
     layerSetup,
     makeRuntimeSqliteLayer({
       filename: dbPath,
+      readerWorker: true,
+      // Checkpoints sync the database, with F_FULLFSYNC on macOS. Run them off
+      // the event loop so a slow flush cannot stall clients.
+      checkpointWorker: true,
       spanAttributes: {
         "db.name": path.basename(dbPath),
         "service.name": "t3code-server",

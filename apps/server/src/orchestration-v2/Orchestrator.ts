@@ -94,7 +94,7 @@ import { CommandPolicyV2, resolveMessageDispatchIntent } from "./CommandPolicy.t
 import { CommandReceiptStoreV2 } from "./CommandReceiptStore.ts";
 import { ContextHandoffServiceV2 } from "./ContextHandoffService.ts";
 import { notificationTurnItem } from "@t3tools/provider-core/server/notification";
-import { isRestartNoteSource } from "./RestartBackgroundNote.ts";
+import { isRestartContinuationSource, runOutcome } from "./RestartBackgroundNote.ts";
 import {
   isBufferedProviderNotification,
   isUndeliveredMailboxSteer,
@@ -299,6 +299,16 @@ export interface OrchestratorV2Shape {
     childThreadId: ThreadId,
     taskId?: NodeId,
   ) => Effect.Effect<boolean, OrchestratorProjectionError>;
+  /**
+   * Whether a restart continuation of this cut run has not started yet, so the
+   * run's status is not its outcome. A failed read counts as not pending.
+   */
+  readonly restartContinuationPending: (run: OrchestrationV2Run) => Effect.Effect<boolean>;
+  /**
+   * Resolves once that continuation has run or was declined. A declined one
+   * records no thread event, so a waiter needs this to wake.
+   */
+  readonly awaitRestartContinuation: (run: OrchestrationV2Run) => Effect.Effect<void>;
   readonly dispatch: (
     command: OrchestrationV2ServerCommand,
   ) => Effect.Effect<OrchestratorV2DispatchResult, OrchestratorV2Error>;
@@ -4847,8 +4857,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         const source = projection.runs.find((run) => run.id === command.restartContinuationOfRunId);
         if (
           !source ||
-          source.status !== "cancelled" ||
-          isRestartNoteSource(source, projection.providerTurns) ||
+          !isRestartContinuationSource(source, projection.providerTurns) ||
           projection.thread.archivedAt !== null ||
           projection.thread.deletedAt !== null ||
           projection.thread.providerInstanceId !== source.providerInstanceId ||
@@ -10464,7 +10473,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             : undefined
           : taskRuns.toSorted((a, b) => b.ordinal - a.ordinal)[0];
       if (childRun === undefined) return;
-      const terminalStatus = delegatedTaskTerminalStatus(childRun.status);
+      const outcome = runOutcome(childRun);
+      const terminalStatus = delegatedTaskTerminalStatus(outcome);
       if (terminalStatus === null) {
         return;
       }
@@ -10530,7 +10540,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
 
       const now = yield* DateTime.now;
-      const result = subagentResultForRun(childProjection, childRun);
+      const result = subagentResultForRun(childProjection, { ...childRun, status: outcome });
       const parentRun =
         task.runId === null
           ? undefined
@@ -11788,6 +11798,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     recoverDelegatedTasks,
     recoverDelegatedTask,
     delegatedTaskResultPending,
+    restartContinuationPending: (run) =>
+      awaitsRestartContinuation(run).pipe(Effect.orElseSucceed(() => false)),
+    awaitRestartContinuation: (run) =>
+      effectOutbox.awaitSettled(`effect:restart-continuation:${run.id}`).pipe(Effect.ignore),
     dispatch: dispatchWithReceipt,
     searchThreadStream: (input) =>
       projectionStore
@@ -11936,6 +11950,8 @@ const layerUnavailable: Layer.Layer<OrchestratorV2> = Layer.succeed(
     recoverDelegatedTasks: Effect.void,
     recoverDelegatedTask: () => Effect.void,
     delegatedTaskResultPending: () => Effect.succeed(false),
+    restartContinuationPending: () => Effect.succeed(false),
+    awaitRestartContinuation: () => Effect.void,
     dispatch: (command) =>
       Effect.fail(
         new OrchestratorDispatchError({

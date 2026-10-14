@@ -66,7 +66,7 @@ describe("relayProtectedErrorMessage", () => {
     });
 
     expect(relayProtectedErrorMessage(error)).toBe(
-      "Relay has no active link for this environment. The environment server may not have re-established its link yet.",
+      "Relay has no active link for this environment. If it was deregistered from T3 Connect, link it again on that machine.",
     );
   });
 
