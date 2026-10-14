@@ -21,6 +21,7 @@ import {
   SearchIcon,
   ServerIcon,
   SquarePenIcon,
+  TerminalIcon,
   TriangleAlertIcon,
   Undo2Icon,
 } from "lucide-react";
