@@ -10,6 +10,7 @@ import { sourceChannelFromDeviceType } from "@t3tools/shared/sourceAttribution";
 import { authClientMetadata } from "../../lib/authClientMetadata";
 import { identityEnvironment } from "../../state/identity";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import type { HandoffEndpoints } from "@t3tools/client-runtime/handoff";
 import type {
   CodexFeedbackSubmission,
   EnvironmentThreadStatus,
@@ -168,6 +169,7 @@ export interface ThreadDetailScreenProps {
   readonly selectedThreadFeed: ReadonlyArray<ThreadFeedEntry>;
   /** Conversation-message senders, for history whose turn item has no source. */
   readonly messageSourceById?: ReadonlyMap<string, MessageSenderSource>;
+  readonly pendingHandoff?: HandoffEndpoints | null;
   readonly activityRun: ThreadFeedLatestRun | null;
   readonly activeWorkStartedAt: string | null;
   /** The live work is a provider-native subagent's runless root turn. */
@@ -1183,6 +1185,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               threadId={props.selectedThread.id}
               workspaceRoot={props.threadCwd}
               feed={props.selectedThreadFeed}
+              pendingHandoff={props.pendingHandoff}
               worktreeSetup={props.worktreeSetup}
               setupWorkingStartedAt={props.setupWorkingStartedAt}
               queuedMessages={props.queuedMessages}

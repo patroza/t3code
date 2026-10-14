@@ -26,15 +26,7 @@ import type {
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import * as Option from "effect/Option";
-import {
-  type MouseEvent,
-  useCallback,
-  useEffect,
-  useEffectEvent,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { type MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import {
   CheckIcon,
@@ -968,7 +960,6 @@ export default function GitActionsControl({
     () => ({ environmentId: activeEnvironmentId, cwd: gitCwd }),
     [activeEnvironmentId, gitCwd],
   );
-  let runGitActionWithToast: (input: RunGitActionWithToastInput) => Promise<void>;
 
   const updateActiveProgressToast = useCallback(() => {
     const progress = activeGitActionProgressRef.current;
@@ -1242,8 +1233,10 @@ export default function GitActionsControl({
     });
   }, [gitStatusForActions?.sourceControlProvider?.repositoryUrl, threadToastData]);
 
-  runGitActionWithToast = useEffectEvent(
-    async ({
+  // React 19.2 leaves useEffectEvent stale inside the memoized details panel.
+  // Bind each render's actions to its checkout and thread, including retained toast actions.
+  const runGitActionWithToast = useCallback(
+    async function runGitActionWithToast({
       action,
       commitMessage,
       onConfirmed,
@@ -1253,7 +1246,7 @@ export default function GitActionsControl({
       disableCommitSigning = false,
       progressToastId,
       filePaths,
-    }: RunGitActionWithToastInput) => {
+    }: RunGitActionWithToastInput) {
       if (
         activeEnvironmentId === null ||
         !readEnvironmentScope(activeEnvironmentId, AuthSourceControlWriteScope) ||
@@ -1523,6 +1516,19 @@ export default function GitActionsControl({
         });
       }
     },
+    [
+      activeEnvironmentId,
+      activeServerThread,
+      gitStatusForActions,
+      isDefaultRef,
+      isLocalDraftThread,
+      openPrLink,
+      runImmediateGitAction,
+      changeRequestTerminology,
+      updateActiveProgressToast,
+      syncThreadBranchAfterGitAction,
+      threadToastData,
+    ],
   );
 
   const continuePendingDefaultBranchAction = () => {

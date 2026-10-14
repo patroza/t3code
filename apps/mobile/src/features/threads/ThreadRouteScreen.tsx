@@ -1005,6 +1005,7 @@ function ThreadRouteContent(
           onDismissFeedback={composer.dismissFeedback}
           selectedThreadFeed={composer.selectedThreadFeed}
           messageSourceById={userMessageSources}
+          pendingHandoff={composer.pendingHandoff}
           activityRun={composer.selectedThreadActivityRun}
           activeWorkStartedAt={
             creationState?.kind === "preparing" ||

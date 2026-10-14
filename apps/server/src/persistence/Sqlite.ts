@@ -17,24 +17,30 @@ const makeRuntimeSqliteLayer = (config: {
 // Size the -wal file is cut back to on the first commit after a WAL reset.
 export const WAL_SIZE_LIMIT_BYTES = 32 * 1024 * 1024;
 
-const setup = (trial: boolean) =>
-  Layer.effectDiscard(
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      // CLI and server write from separate processes; wait rather than fail with
-      // SQLITE_BUSY. Bounded so auth (websocket-ticket) cannot hang indefinitely
-      // when writers hold the single SQL permit longer than expected.
-      yield* sql`PRAGMA busy_timeout = 5000;`;
-      yield* sql`PRAGMA foreign_keys = ON;`;
-      if (!trial) {
-        yield* sql`PRAGMA journal_mode = WAL;`;
-        // PASSIVE checkpoints never shrink the -wal file, so it otherwise keeps its
-        // largest size until the last connection closes.
-        yield* sql.unsafe(`PRAGMA journal_size_limit = ${WAL_SIZE_LIMIT_BYTES};`);
-        yield* runMigrations();
-      }
-    }),
-  );
+const layerSetup = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    // CLI and server write from separate processes; wait rather than fail with SQLITE_BUSY.
+    // Bound the wait so auth tickets cannot hang behind a writer indefinitely.
+    yield* sql`PRAGMA busy_timeout = 5000;`;
+    yield* sql`PRAGMA foreign_keys = ON;`;
+    yield* sql`PRAGMA journal_mode = WAL;`;
+    // FULL fsyncs the WAL on every commit, on the main thread. Every provider
+    // event is its own commit, so a slow or busy disk stalls the event loop
+    // and clients drop. In WAL mode NORMAL only fsyncs at checkpoints. It
+    // cannot corrupt the database and an app crash loses nothing; an OS crash
+    // or power loss can roll back commits since the last checkpoint.
+    yield* sql`PRAGMA synchronous = NORMAL;`;
+    // PASSIVE checkpoints never shrink the -wal file, so it otherwise keeps its
+    // largest size until the last connection closes.
+    yield* sql.unsafe(`PRAGMA journal_size_limit = ${WAL_SIZE_LIMIT_BYTES};`);
+    yield* runMigrations();
+    // Without sqlite_stat1 the planner guesses at index selectivity. 0x10012
+    // analyzes tables whose indexes lack stats or whose row count changed 10x,
+    // under a temporary analysis_limit. Otherwise it only checks table sizes.
+    yield* sql`PRAGMA optimize = 0x10012;`;
+  }),
+);
 
 export const layerFromPath = Effect.fn("makeSqlitePersistenceLive")(function* (dbPath: string) {
   const fs = yield* FileSystem.FileSystem;
@@ -42,7 +48,7 @@ export const layerFromPath = Effect.fn("makeSqlitePersistenceLive")(function* (d
   yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true });
 
   return Layer.provideMerge(
-    setup(false),
+    layerSetup,
     makeRuntimeSqliteLayer({
       filename: dbPath,
       spanAttributes: {
@@ -54,7 +60,7 @@ export const layerFromPath = Effect.fn("makeSqlitePersistenceLive")(function* (d
 }, Layer.unwrap);
 
 export const layerMemory = Layer.provideMerge(
-  setup(false),
+  layerSetup,
   makeRuntimeSqliteLayer({ filename: ":memory:" }),
 );
 

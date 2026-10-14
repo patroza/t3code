@@ -1938,7 +1938,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const composerTerminalContexts = composerDraft.terminalContexts;
   const composerPreviewAnnotations = composerDraft.previewAnnotations;
   const composerReviewComments = composerDraft.reviewComments;
-  const composerThreadContexts = composerDraft.threadContexts;
+  const composerThreadContexts = attachmentDraft.threadContexts;
   const pendingSnapShotAnimations = useSyncExternalStore(
     subscribeToPendingSnapShotAnimations,
     getPendingSnapShotAnimations,
@@ -3213,6 +3213,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         ...composerTerminalContexts
           .filter((c) => wanted.has(terminalContextReference(c).contextId))
           .map(terminalContextRecord),
+        ...composerThreadContexts.filter((record) => wanted.has(record.contextId)),
         ...composerReviewComments
           .filter((c) => wanted.has(reviewCommentContextId(c.id)))
           .map(reviewCommentContextRecord),
@@ -3251,6 +3252,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       composerPreviewAnnotations,
       composerReviewComments,
       composerTerminalContexts,
+      composerThreadContexts,
       environmentId,
       uploadsByImageId,
     ],
@@ -3444,7 +3446,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           case "thread": {
             // The agent can only read threads on its own server; a pasted foreign one is dropped.
             if (record.environmentId !== environmentId) break;
-            addComposerDraftThreadContexts(composerDraftTarget, [record], {
+            addComposerDraftThreadContexts(attachmentDraftTarget, [record], {
               appendReference: false,
             });
             rewritten.set(record.contextId, record.contextId);
@@ -3477,6 +3479,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       addComposerDraftTerminalContexts,
       addComposerDraftThreadContexts,
       composerContextRecords,
+      attachmentDraftTarget,
       composerDraftTarget,
       environmentId,
       importAttachmentRecord,
@@ -4243,7 +4246,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
         );
         if (applied) {
-          addComposerDraftThreadContexts(composerDraftTarget, [record], {
+          addComposerDraftThreadContexts(attachmentDraftTarget, [record], {
             appendReference: false,
           });
           setComposerHighlightedItemId(null);
@@ -4255,6 +4258,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       addComposerDraftReviewComment,
       addComposerDraftThreadContexts,
       applyPromptReplacement,
+      attachmentDraftTarget,
       composerDraftTarget,
       handleInteractionModeChange,
       onStartNewThread,
@@ -6428,11 +6432,60 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         const shell = readThreadShell(ref);
         return shell ? [threadContextRecord(ref, shell.title)] : [];
       });
-      if (records.length > 0) addComposerDraftThreadContexts(composerDraftTarget, records);
+      if (records.length === 0) return;
+      if (questionAttachmentTarget !== null) {
+        const canAnswer =
+          canOperateThread &&
+          !isConnecting &&
+          !isComposerApprovalState &&
+          !activePendingIsResponding &&
+          activePendingProgress?.activeQuestion?.allowCustomAnswer !== false;
+        const text = `${records
+          .map((record) => formatInlineContextReference(threadContextReference(record)))
+          .join(" ")} `;
+        const snapshot = readComposerSnapshot();
+        const cursor = snapshot.expandedCursor;
+        const leadingSpace = cursor > 0 && !/\s/.test(snapshot.value[cursor - 1] ?? "");
+        const inserted =
+          canAnswer &&
+          applyPromptReplacement(
+            cursor,
+            extendReplacementRangeForTrailingSpace(snapshot.value, cursor, text),
+            leadingSpace ? ` ${text}` : text,
+          );
+        if (!inserted) {
+          toastManager.add({
+            type: "error",
+            title: "Unable to add thread",
+            description: "The composer is busy; try again once it is ready.",
+          });
+          return;
+        }
+        addComposerDraftThreadContexts(questionAttachmentTarget, records, {
+          appendReference: false,
+        });
+        if (isComposerCollapsedMobile) expandMobileComposer();
+      } else {
+        addComposerDraftThreadContexts(composerDraftTarget, records);
+      }
     };
     form.addEventListener(THREAD_CONTEXT_DROP_EVENT, onThreadDrop);
     return () => form.removeEventListener(THREAD_CONTEXT_DROP_EVENT, onThreadDrop);
-  }, [addComposerDraftThreadContexts, composerDraftTarget, environmentId]);
+  }, [
+    activePendingIsResponding,
+    activePendingProgress?.activeQuestion?.allowCustomAnswer,
+    addComposerDraftThreadContexts,
+    applyPromptReplacement,
+    canOperateThread,
+    composerDraftTarget,
+    environmentId,
+    expandMobileComposer,
+    isComposerApprovalState,
+    isComposerCollapsedMobile,
+    isConnecting,
+    questionAttachmentTarget,
+    readComposerSnapshot,
+  ]);
 
   const onComposerMentionDragLeaveCapture = (event: React.DragEvent<HTMLFormElement>) => {
     if (!dataTransferHasComposerMention(event.dataTransfer.types)) return;
@@ -6975,6 +7028,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 ) : !isComposerCollapsedMobile && pendingUserInputs.length > 0 ? (
                   <ComposerPendingUserInputPanel
                     pendingUserInputs={pendingUserInputs}
+                    cwd={gitCwd ?? undefined}
+                    threadRef={routeThreadRef}
                     disabled={!canOperateThread}
                     respondingRequestIds={
                       activePendingIsResponding && activePendingUserInput
@@ -6996,6 +7051,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   <div data-chat-composer-collapsed-controls="true">
                     <ComposerPendingUserInputPanel
                       pendingUserInputs={pendingUserInputs}
+                      cwd={gitCwd ?? undefined}
+                      threadRef={routeThreadRef}
                       disabled={!canOperateThread}
                       respondingRequestIds={
                         activePendingIsResponding && activePendingUserInput
