@@ -9,10 +9,7 @@ import { runMigrations } from "./Migrations.ts";
 import { initializeV2Database } from "./initializeV2Database.ts";
 import * as ServerConfig from "../config.ts";
 
-const makeRuntimeSqliteLayer = (config: {
-  readonly filename: string;
-  readonly spanAttributes?: Record<string, unknown>;
-}) => NodeSqliteClient.layer(config);
+const makeRuntimeSqliteLayer = NodeSqliteClient.layer;
 
 // Size the -wal file is cut back to on the first commit after a WAL reset.
 export const WAL_SIZE_LIMIT_BYTES = 32 * 1024 * 1024;

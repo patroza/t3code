@@ -910,7 +910,7 @@ it.effect("waitForThread follows a restart continuation instead of the cut run",
     let pending = true;
     const stored = (sequence: number, event: object) =>
       ({ sequence, event: { threadId, ...event } }) as unknown as OrchestrationV2StoredEvent;
-    const layerTest = ThreadManagementService.layer.pipe(
+    const layerTest = threadManagementLayer.pipe(
       Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
       Layer.provide(
         Layer.mock(Orchestrator.OrchestratorV2)({
@@ -973,7 +973,7 @@ it.effect("waitForThread returns the cut run once its continuation is declined",
     const subscribed = yield* Deferred.make<void>();
     const declined = yield* Deferred.make<void>();
     let pending = true;
-    const layerTest = ThreadManagementService.layer.pipe(
+    const layerTest = threadManagementLayer.pipe(
       Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
       Layer.provide(
         Layer.mock(Orchestrator.OrchestratorV2)({
