@@ -13,6 +13,7 @@ import {
   buildJiraAutoCreateBranchName,
   buildJiraT3ThreadUrl,
   formatJiraComment,
+  jiraReadReceiptText,
 } from "./JiraIssueBridge.ts";
 import { resolveDiscordLinkForJiraIssue, resolveThreadIdForJiraIssue } from "./JiraThreadLookup.ts";
 import {
@@ -105,6 +106,18 @@ describe("Jira webhook security", () => {
         signatureHeader: signature,
       }),
     ).toBe(true);
+  });
+});
+
+describe("Jira read receipt", () => {
+  it("replies with a thumbs up by default and can be disabled", () => {
+    expect(jiraReadReceiptText("1f44d")).toBe("👍");
+    expect(jiraReadReceiptText("1F44D")).toBe("👍");
+    expect(jiraReadReceiptText("1f440")).toBe("👀");
+    expect(jiraReadReceiptText("👀")).toBe("👀");
+    expect(jiraReadReceiptText(null)).toBeNull();
+    expect(jiraReadReceiptText("")).toBeNull();
+    expect(jiraReadReceiptText("   ")).toBeNull();
   });
 });
 
