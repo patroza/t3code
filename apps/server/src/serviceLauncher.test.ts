@@ -424,13 +424,21 @@ setInterval(() => {}, 1_000);
           yield* Effect.promise(() => readServiceState(statePath)),
         );
         // Each run ends when the final active child exits on its own.
+        const childrenBefore = spawnedChildren.length;
         const running = launcher.run().then(
           () => Promise.reject(new Error("launcher unexpectedly completed")),
           () => Promise.resolve(),
         );
-        // The prepared timer is armed once the trial has spawned.
+        // Other startup work can arm a timer before the trial has spawned.
         yield* Effect.promise(() =>
-          vi.waitFor(() => assert.equal(vi.getTimerCount(), 1), { timeout: 10_000 }),
+          vi.waitFor(
+            () => {
+              assert.equal(spawnedChildren.length, childrenBefore + 1);
+              assert.isTrue(spawnedChildren.at(-1)!.connected);
+              assert.equal(vi.getTimerCount(), 1);
+            },
+            { timeout: 10_000 },
+          ),
         );
         yield* Effect.promise(() => vi.advanceTimersByTimeAsync(121_000));
         if (prepares) spawnedChildren.at(-1)!.send({ type: "test-prepare" });
