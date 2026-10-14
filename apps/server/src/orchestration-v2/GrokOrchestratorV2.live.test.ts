@@ -1,6 +1,3 @@
-import * as NodeFS from "node:fs";
-import * as NodeOS from "node:os";
-import * as NodePath from "node:path";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
@@ -18,6 +15,7 @@ import {
 } from "@t3tools/contracts";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as ResetCreditCoordinator from "../provider/resetCreditCoordinator.ts";
 import { FetchHttpClient } from "effect/http";
@@ -134,6 +132,8 @@ const layerLive = RuntimeLayer.layer.pipe(
   Layer.provide(layerPlatformTest),
   Layer.provide(McpProviderSessions.layer),
 );
+
+let nextLiveShellMarker = 0;
 
 const waitForIdle = Effect.fn("GrokOrchestratorV2Live.waitForIdle")(function* (threadId: ThreadId) {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -257,15 +257,14 @@ describe.runIf(process.env.T3_GROK_LIVE_ORCHESTRATOR === "1")("Grok V2 live orch
       Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
         yield* EffectWorker.runDaemonWithOptions({ concurrency: 2 }).pipe(Effect.forkScoped);
-        const worktreePath = NodeFS.mkdtempSync(
-          NodePath.join(NodeOS.tmpdir(), "t3-grok-live-background-shell-"),
-        );
-        yield* Effect.addFinalizer(() =>
-          Effect.sync(() => NodeFS.rmSync(worktreePath, { recursive: true, force: true })),
-        );
+        const fs = yield* FileSystem.FileSystem;
+        const worktreePath = yield* fs.makeTempDirectoryScoped({
+          prefix: "t3-grok-live-background-shell-",
+        });
         const projectId = ProjectId.make("project:grok-live-background-shell");
         const threadId = ThreadId.make("thread:grok-live-background-shell");
-        const marker = `LIVE_SHELL_${Date.now().toString(36)}`;
+        nextLiveShellMarker += 1;
+        const marker = `LIVE_SHELL_${nextLiveShellMarker.toString(36)}`;
         yield* orchestrator.dispatch({
           type: "thread.create",
           createdBy: "user",
