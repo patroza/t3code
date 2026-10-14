@@ -30,11 +30,12 @@ bridge only owns **inbound webhooks** and **outbound response comments** for men
 
 ## User experience
 
-| Surface       | Webhook event     | Trigger                                        | Where T3 replies                                     |
-| ------------- | ----------------- | ---------------------------------------------- | ---------------------------------------------------- |
-| Issue comment | `comment_created` | Explicit configured mention + prompt           | Threaded **reply** under the mention (`parentId`)    |
-| Comment reply | `comment_created` | Mention in a comment with `parent` (when set)  | Threaded **reply** under the same thread root        |
-| Comment edit  | `comment_updated` | Edited comment still contains mention + prompt | Threaded **reply** under the edited comment’s thread |
+| Surface       | Webhook event                            | Trigger                                        | Where T3 replies                                     |
+| ------------- | ---------------------------------------- | ---------------------------------------------- | ---------------------------------------------------- |
+| Issue comment | `comment_created`                        | Explicit configured mention + prompt           | Threaded **reply** under the mention (`parentId`)    |
+| Comment reply | `comment_created`                        | Mention in a comment with `parent` (when set)  | Threaded **reply** under the same thread root        |
+| Comment edit  | `comment_updated`                        | Edited comment still contains mention + prompt | Threaded **reply** under the edited comment’s thread |
+| Assignment    | `issue_assigned` or `jira:issue_updated` | Assignee changes to the configured bot         | Top-level issue comment                              |
 
 A turn starts only when a non-bot author writes an explicit configured mention followed by a prompt:
 
@@ -48,6 +49,36 @@ Mentions are recognized in:
 2. Atlassian Document Format (ADF) `mention` nodes (`attrs.id` / `attrs.text`)
 
 Bot-authored comments and mention-free comments are ignored.
+
+**Assignment:** assigning the configured bot (display name or account id) starts a turn with no extra prompt. The agent reads the issue and proposes a fix or implementation, implementing it when the change is clear. The reply is a top-level comment that @-mentions the person who assigned the issue. Assigning someone else, clearing the assignee, or editing the issue while the bot is already assigned does not start a turn. The bot assigning itself is ignored.
+
+Automation can POST the same webhook with:
+
+```json
+{
+  "webhookEvent": "issue_assigned",
+  "user": {
+    "accountId": "{{initiator.accountId}}",
+    "displayName": "{{initiator.displayName}}"
+  },
+  "changelog": { "id": "{{changelog.id}}" },
+  "issue": {
+    "key": "{{issue.key}}",
+    "fields": {
+      "summary": "{{issue.summary}}",
+      "description": "{{issue.description}}",
+      "updated": "{{issue.updated}}",
+      "project": { "key": "{{issue.project.key}}" },
+      "assignee": {
+        "accountId": "{{issue.assignee.accountId}}",
+        "displayName": "{{issue.assignee.displayName}}"
+      }
+    }
+  }
+}
+```
+
+`changelog.id` dedupes retries. A later assignment uses a new changelog id and starts another turn. A native `jira:issue_updated` webhook is accepted when its changelog `assignee` item points at the bot.
 
 **Edits:** `comment_updated` re-dispatches when the edited body still mentions the bot and has a
 prompt. Delivery ids include the comment `updated` timestamp (or a prompt fingerprint) so the same
@@ -81,7 +112,7 @@ Fail closed when:
 ## Architecture
 
 ```text
-Jira Cloud comment_created | comment_updated webhook
+Jira Cloud comment_created | comment_updated | issue assignment webhook
         |
         v
 POST /api/jira/webhook
@@ -200,7 +231,7 @@ are logged and never block the turn.
 
 - Require a shared secret on every delivery (`Authorization: Bearer …` or `X-T3-Webhook-Secret`).
 - Cap body size at 1 MiB.
-- Ignore events that are not `comment_created`.
+- Ignore events that are not a comment mention or an assignment of the configured bot.
 - Allowlist projects when configured.
 - Do not put secrets in prompts, delivery logs, or git.
 - Prefer the free Atlassian **service account** for REST replies (see

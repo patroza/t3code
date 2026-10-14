@@ -27,6 +27,7 @@ import {
   extractJiraMentionPrompt,
   extractTextAndMentionsFromBody,
   jiraDeliveryIdFor,
+  parseJiraAssignmentInvocation,
   parseJiraCommentInvocation,
   plainTextToAdf,
   projectKeyFromIssueKey,
@@ -356,6 +357,196 @@ describe("parseJiraCommentInvocation", () => {
         "omegent",
       ),
     ).toBeNull();
+  });
+});
+
+describe("parseJiraAssignmentInvocation", () => {
+  const botAccountId = "712020:bot-account";
+
+  function assignmentPayload(overrides?: Record<string, unknown>) {
+    return {
+      webhookEvent: "issue_assigned",
+      timestamp: 1_700_000_000_000,
+      user: {
+        accountId: "6331c32307a27ebeff15d19d",
+        displayName: "Patrick Roza",
+      },
+      changelog: { id: "445566" },
+      issue: {
+        key: "SA-402",
+        self: "https://example.atlassian.net/rest/api/3/issue/10001",
+        fields: {
+          summary: "Packing plan",
+          description: "Packing fails when the lot is empty.",
+          updated: "2026-10-13T09:00:00.000+0000",
+          project: { key: "SA" },
+          assignee: {
+            accountId: botAccountId,
+            displayName: "Omegent",
+          },
+        },
+      },
+      ...overrides,
+    };
+  }
+
+  it("starts from an Automation assignment whose assignee is the bot", () => {
+    const parsed = parseJiraAssignmentInvocation(assignmentPayload(), "omegent", {
+      botAccountId,
+    });
+    expect(parsed._tag).toBe("invocation");
+    if (parsed._tag !== "invocation") return;
+    expect(parsed.invocation).toMatchObject({
+      issueKey: "SA-402",
+      projectKey: "SA",
+      commentId: "",
+      replyToCommentId: "",
+      commentSurface: "assignment",
+      webhookEvent: "issue_assigned",
+      commentUpdatedAt: "445566",
+      actorAccountId: "6331c32307a27ebeff15d19d",
+      actorDisplayName: "Patrick Roza",
+    });
+    expect(parsed.invocation.prompt).toContain("propose a fix or implementation");
+    expect(parsed.invocation.prompt).toContain("Packing fails when the lot is empty.");
+    const prompt = buildJiraTurnPrompt(parsed.invocation);
+    expect(prompt).toContain("Assigned by Jira");
+    expect(prompt).toContain("Patrick Roza");
+    expect(
+      jiraDeliveryIdFor({ invocation: parsed.invocation, headerDeliveryId: "webhook-1" }),
+    ).toBe("jira-assign:SA-402:445566");
+  });
+
+  it("matches a native issue update when the changelog assignee is the bot", () => {
+    const parsed = parseJiraAssignmentInvocation(
+      assignmentPayload({
+        webhookEvent: "jira:issue_updated",
+        issue_event_type_name: "issue_assigned",
+        changelog: {
+          id: "99",
+          items: [
+            {
+              field: "assignee",
+              fieldtype: "jira",
+              fieldId: "assignee",
+              from: "user-1",
+              fromString: "Ada Lovelace",
+              to: botAccountId,
+              toString: "Omegent",
+            },
+          ],
+        },
+      }),
+      "omegent",
+      { botAccountId },
+    );
+    expect(parsed._tag).toBe("invocation");
+    if (parsed._tag !== "invocation") return;
+    expect(parsed.invocation.commentUpdatedAt).toBe("99");
+    expect(jiraDeliveryIdFor({ invocation: parsed.invocation })).toBe("jira-assign:SA-402:99");
+  });
+
+  it("matches the bot display name when the account id is absent", () => {
+    const parsed = parseJiraAssignmentInvocation(
+      assignmentPayload({
+        changelog: { id: "7" },
+        issue: {
+          key: "SA-402",
+          fields: {
+            summary: "Packing plan",
+            project: { key: "SA" },
+            assignee: { displayName: "Omegent" },
+          },
+        },
+      }),
+      "omegent",
+    );
+    expect(parsed._tag).toBe("invocation");
+  });
+
+  it("ignores updates that do not change the assignee to the bot", () => {
+    expect(
+      parseJiraAssignmentInvocation(
+        assignmentPayload({
+          webhookEvent: "jira:issue_updated",
+          changelog: {
+            id: "1",
+            items: [{ field: "status", fromString: "To Do", toString: "In Progress" }],
+          },
+        }),
+        "omegent",
+        { botAccountId },
+      ),
+    ).toEqual({ _tag: "ignored", reason: "assignee_unchanged" });
+
+    expect(
+      parseJiraAssignmentInvocation(
+        assignmentPayload({
+          changelog: {
+            id: "2",
+            items: [{ field: "assignee", to: "user-9", toString: "Ada Lovelace" }],
+          },
+        }),
+        "omegent",
+        { botAccountId },
+      ),
+    ).toEqual({ _tag: "ignored", reason: "assignee_not_bot" });
+
+    expect(
+      parseJiraAssignmentInvocation(
+        assignmentPayload({
+          changelog: {
+            id: "3",
+            items: [
+              {
+                field: "assignee",
+                from: botAccountId,
+                fromString: "Omegent",
+                to: null,
+                toString: null,
+              },
+            ],
+          },
+        }),
+        "omegent",
+        { botAccountId },
+      ),
+    ).toEqual({ _tag: "ignored", reason: "assignee_cleared" });
+  });
+
+  it("ignores the bot assigning itself", () => {
+    expect(
+      parseJiraAssignmentInvocation(
+        assignmentPayload({
+          user: { accountId: botAccountId, displayName: "Omegent" },
+        }),
+        "omegent",
+        { botAccountId },
+      ),
+    ).toEqual({ _tag: "ignored", reason: "self_assignment" });
+  });
+
+  it("leaves comment webhooks to the comment parser", () => {
+    expect(
+      parseJiraAssignmentInvocation(webhook("@omegent investigate packing"), "omegent", {
+        botAccountId,
+      }),
+    ).toEqual({ _tag: "not_assignment" });
+  });
+
+  it("uses a new delivery id when the issue is assigned again", () => {
+    const first = parseJiraAssignmentInvocation(assignmentPayload(), "omegent", { botAccountId });
+    const second = parseJiraAssignmentInvocation(
+      assignmentPayload({ changelog: { id: "445567" } }),
+      "omegent",
+      { botAccountId },
+    );
+    expect(first._tag).toBe("invocation");
+    expect(second._tag).toBe("invocation");
+    if (first._tag !== "invocation" || second._tag !== "invocation") return;
+    expect(jiraDeliveryIdFor({ invocation: first.invocation })).not.toBe(
+      jiraDeliveryIdFor({ invocation: second.invocation }),
+    );
   });
 });
 
