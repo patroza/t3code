@@ -3939,19 +3939,37 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         // prompt is still open the agent may also report the end itself
         // (TaskOutput hydration). An end that never arrives keeps its
         // post-finalize continuation offer.
-        const finishRegisteredBackgroundTool = Effect.fnUntraced(function* (mutation: {
-          readonly taskId: string;
-          readonly status: "completed" | "failed";
-          readonly output?: string;
-        }) {
+        const finishRegisteredBackgroundTool = Effect.fnUntraced(function* (
+          mutation: {
+            readonly taskId: string;
+            readonly status: "completed" | "failed";
+            readonly output?: string;
+          },
+          options?: {
+            // True only for a shell end (`report.kind === "command"`) that
+            // arrived before the prompt returned. Apply it at settle: leaving
+            // that row running holds the turn with no later event to close it.
+            // A monitor completion is not queued. The tool stays running so the
+            // held turn can take the injected report, and an empty drain can
+            // still offer a continuation.
+            readonly queueUntilSettle?: boolean;
+            // True only for a completion that was queued before the prompt
+            // returned. That end is part of this turn. A completion that
+            // arrives after settle still leaves Grok's own wake reply free to
+            // open a continuation run.
+            readonly settledInTurn?: boolean;
+          },
+        ) {
           const context = yield* Ref.get(activeTurn);
           if (context === null || context.finalized) return;
           if (!context.promptSettled) {
-            yield* Ref.update(preSettleBackgroundCompletions, (current) => {
-              const next = new Map(current);
-              next.set(mutation.taskId, mutation);
-              return next;
-            });
+            if (options?.queueUntilSettle === true) {
+              yield* Ref.update(preSettleBackgroundCompletions, (current) => {
+                const next = new Map(current);
+                next.set(mutation.taskId, mutation);
+                return next;
+              });
+            }
             return;
           }
           const toolCallId = context.toolCallIdsByBackgroundTaskId.get(mutation.taskId);
@@ -3960,17 +3978,19 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const status = toolStatus(tool.status);
           if (status !== "pending" && status !== "running") return;
           context.awaitingBackgroundHydration.delete(mutation.taskId);
-          // The structured end is now part of this turn, so finalize must not
-          // treat it as an unreported completion and open a continuation.
-          yield* Ref.update(handledBackgroundTaskIdsInActiveTurn, (current) =>
-            new Set(current).add(mutation.taskId),
-          );
-          yield* Ref.update(midTurnUnreportedCompletedTaskIds, (current) => {
-            if (!current.has(mutation.taskId)) return current;
-            const next = new Set(current);
-            next.delete(mutation.taskId);
-            return next;
-          });
+          if (options?.settledInTurn === true) {
+            // The agent already answered in this turn. Finalize must not treat
+            // the queued end as unreported and open a continuation.
+            yield* Ref.update(handledBackgroundTaskIdsInActiveTurn, (current) =>
+              new Set(current).add(mutation.taskId),
+            );
+            yield* Ref.update(midTurnUnreportedCompletedTaskIds, (current) => {
+              if (!current.has(mutation.taskId)) return current;
+              const next = new Set(current);
+              next.delete(mutation.taskId);
+              return next;
+            });
+          }
           const finished = { ...tool, status: mutation.status };
           yield* emitTool(
             context,
@@ -3983,7 +4003,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         const flushPreSettleBackgroundCompletions = Effect.fnUntraced(function* () {
           const pending = yield* Ref.getAndSet(preSettleBackgroundCompletions, new Map());
           for (const mutation of pending.values()) {
-            yield* finishRegisteredBackgroundTool(mutation);
+            yield* finishRegisteredBackgroundTool(mutation, { settledInTurn: true });
           }
         });
 
@@ -6076,11 +6096,14 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     }
                     yield* applyLateBackgroundMutation(mutation.sessionId, mutation);
                     if (mutation.status !== "running") {
-                      yield* finishRegisteredBackgroundTool({
-                        taskId: mutation.taskId,
-                        status: mutation.status,
-                        ...(mutation.output === undefined ? {} : { output: mutation.output }),
-                      });
+                      yield* finishRegisteredBackgroundTool(
+                        {
+                          taskId: mutation.taskId,
+                          status: mutation.status,
+                          ...(mutation.output === undefined ? {} : { output: mutation.output }),
+                        },
+                        { queueUntilSettle: mutation.report?.kind === "command" },
+                      );
                     }
                   }),
                 ).pipe(Effect.asVoid),
