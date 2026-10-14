@@ -1,7 +1,16 @@
+import { DEFAULT_OWNERSHIP_RELATION } from "@t3tools/client-runtime/state/identity";
 import { Pressable, ScrollView } from "react-native";
+
 import { SymbolView } from "../../components/AppSymbol";
 import { ListFilterMenu } from "../workspace/ListFilterMenu";
 import type { HomeHeaderProps } from "./HomeHeader.types";
+import { DEFAULT_OWNERSHIP_FILTER } from "./home-list-filter-options";
+import {
+  ownershipFilterChipLabel,
+  ownershipFilterIsCustom,
+  ownershipFilterMenuActions,
+  selectOwnershipFilterMenuAction,
+} from "./thread-list-ownership-filter";
 
 export function ThreadListFilters(
   props: Pick<
@@ -10,9 +19,13 @@ export function ThreadListFilters(
     | "projects"
     | "selectedEnvironmentIds"
     | "selectedProjectKey"
+    | "ownershipFilter"
+    | "ownershipRelation"
     | "onToggleEnvironment"
     | "onClearEnvironments"
     | "onProjectChange"
+    | "onOwnershipFilterChange"
+    | "onOwnershipRelationChange"
   >,
 ) {
   const selectedEnvironment = props.environments.find(
@@ -63,6 +76,18 @@ export function ThreadListFilters(
         }}
       />
       <ListFilterMenu
+        label={ownershipFilterChipLabel(props.ownershipFilter, props.ownershipRelation)}
+        accessibilityLabel="Filter threads by ownership"
+        active={ownershipFilterIsCustom(props.ownershipFilter, props.ownershipRelation)}
+        actions={ownershipFilterMenuActions(props.ownershipFilter, props.ownershipRelation)}
+        onSelect={(id) =>
+          selectOwnershipFilterMenuAction(id, {
+            onOwnershipFilterChange: props.onOwnershipFilterChange,
+            onOwnershipRelationChange: props.onOwnershipRelationChange,
+          })
+        }
+      />
+      <ListFilterMenu
         label={selectedProject?.label ?? "All projects"}
         accessibilityLabel="Filter threads by project"
         active={selectedProject !== undefined}
@@ -88,7 +113,9 @@ export function ThreadListFilters(
           }
         }}
       />
-      {props.selectedEnvironmentIds.length > 0 || props.selectedProjectKey !== null ? (
+      {props.selectedEnvironmentIds.length > 0 ||
+      props.selectedProjectKey !== null ||
+      ownershipFilterIsCustom(props.ownershipFilter, props.ownershipRelation) ? (
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Reset thread filters"
@@ -96,6 +123,8 @@ export function ThreadListFilters(
           onPress={() => {
             props.onClearEnvironments();
             props.onProjectChange(null);
+            props.onOwnershipFilterChange(DEFAULT_OWNERSHIP_FILTER);
+            props.onOwnershipRelationChange(DEFAULT_OWNERSHIP_RELATION);
           }}
         >
           <SymbolView name="xmark.circle.fill" size={18} tintColorClassName="accent-icon-muted" />

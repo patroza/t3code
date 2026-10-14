@@ -71,6 +71,7 @@ import {
 } from "../threads/threadListV2";
 import { useThreadListV2ShelfPreferences } from "../threads/use-thread-list-v2-shelf-preferences";
 import type { HomeListFilterMenuEnvironment } from "./home-list-filter-menu";
+import type { OwnershipFilter, OwnershipRelation } from "./home-list-options";
 import { type HomeListMode, type HomeThreadGrouping } from "./homeListMode";
 import {
   buildHomeProjectScopes,
@@ -99,6 +100,10 @@ interface HomeScreenProps {
   readonly threadGrouping: HomeThreadGrouping;
   readonly selectedEnvironmentIds: readonly EnvironmentId[];
   readonly selectedProjectKey: string | null;
+  readonly ownershipFilter: OwnershipFilter;
+  readonly ownershipRelation: OwnershipRelation;
+  readonly onOwnershipFilterChange: (filter: OwnershipFilter) => void;
+  readonly onOwnershipRelationChange: (relation: OwnershipRelation) => void;
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly projectGroupingMode: SidebarProjectGroupingMode;
   readonly onSearchQueryChange: (query: string) => void;
@@ -1019,9 +1024,13 @@ export function HomeScreen(props: HomeScreenProps) {
           projects={projectScopes.map((scope) => ({ key: scope.key, label: scope.title }))}
           selectedEnvironmentIds={props.selectedEnvironmentIds}
           selectedProjectKey={props.selectedProjectKey}
+          ownershipFilter={props.ownershipFilter}
+          ownershipRelation={props.ownershipRelation}
           onToggleEnvironment={props.onToggleEnvironment}
           onClearEnvironments={props.onClearEnvironments}
           onProjectChange={props.onProjectChange}
+          onOwnershipFilterChange={props.onOwnershipFilterChange}
+          onOwnershipRelationChange={props.onOwnershipRelationChange}
         />
       ) : null}
     </>

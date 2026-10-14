@@ -106,11 +106,18 @@ describe("mobile surface existence (anti stack-drop)", () => {
     expect(route).toContain("pendingHandoff={composer.pendingHandoff}");
   });
 
-  it("keeps ownership filters reachable in the native iOS toolbar", () => {
+  it("keeps the iOS settings cog and ownership chip on the thread list", () => {
     const toolbar = readSrc("features/workspace/WorkspaceToolbar.ios.tsx");
-    expect(toolbar).toContain('<NativeHeaderToolbar.Menu title="Ownership">');
-    expect(toolbar).toContain("OWNERSHIP_FILTER_LABELS[value]");
-    expect(toolbar).toContain("OWNERSHIP_RELATION_LABELS[value]");
-    expect(toolbar).toContain("isOn={value === options.ownershipFilter}");
+    const filters = readSrc("features/home/ThreadListFilters.tsx");
+    const ownership = readSrc("features/home/thread-list-ownership-filter.ts");
+    expect(toolbar).toContain('accessibilityLabel="Open settings"');
+    expect(toolbar).toContain('icon="gearshape"');
+    expect(toolbar).not.toContain("Thread filters and settings");
+    expect(filters).toContain('accessibilityLabel="Filter threads by environment"');
+    expect(filters).toContain('accessibilityLabel="Filter threads by project"');
+    expect(filters).toContain('accessibilityLabel="Filter threads by ownership"');
+    expect(filters).toContain("ownershipFilterMenuActions");
+    expect(ownership).toContain("Mine includes");
+    expect(ownership).toContain("Theirs includes");
   });
 });

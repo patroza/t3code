@@ -384,6 +384,10 @@ export function HomeRouteScreen() {
           searchQuery={searchQuery}
           selectedEnvironmentIds={selectedEnvironmentIds}
           selectedProjectKey={selectedProjectKey}
+          ownershipFilter={listOptions.ownershipFilter}
+          ownershipRelation={listOptions.ownershipRelation}
+          onOwnershipFilterChange={setOwnershipFilter}
+          onOwnershipRelationChange={setOwnershipRelation}
           threads={ownershipFilteredThreads}
         />
       </>
