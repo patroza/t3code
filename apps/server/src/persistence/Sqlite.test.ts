@@ -84,6 +84,57 @@ it.effect("shrinks the WAL file back to the size limit after a large write", () 
   );
 });
 
+it.effect("collects planner statistics for an existing database on open", () => {
+  const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-sqlite-stats-"));
+  const dbPath = NodePath.join(tempDir, "state.sqlite");
+  const persistence = () =>
+    SqlitePersistence.layerFromPath(dbPath).pipe(Layer.provide(NodeServices.layer));
+
+  return Effect.gen(function* () {
+    yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`CREATE TABLE stats_probe(id INTEGER PRIMARY KEY, thread_id TEXT NOT NULL)`;
+      yield* sql`CREATE INDEX stats_probe_thread_idx ON stats_probe(thread_id)`;
+      yield* sql`
+        WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1000)
+        INSERT INTO stats_probe(thread_id) SELECT 'thread-' || (i % 10) FROM n
+      `;
+    }).pipe(Effect.provide(persistence()));
+
+    // A database written before statistics existed gets them on the next open.
+    yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const rows = yield* sql<{ readonly stat: string }>`
+        SELECT stat FROM sqlite_stat1 WHERE idx = 'stats_probe_thread_idx'
+      `;
+      assert.lengthOf(rows, 1);
+      const [rowCount, rowsPerThread] = rows[0]!.stat.split(" ").map(Number);
+      assert.equal(rowCount, 1000);
+      // optimize uses bounded ANALYZE, so selectivity is a sample estimate.
+      // It must still describe roughly 100 rows per thread, not the planner's default guess.
+      assert.isAtLeast(rowsPerThread!, 90);
+      assert.isAtMost(rowsPerThread!, 110);
+    }).pipe(Effect.provide(persistence()));
+  }).pipe(
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { recursive: true, force: true }))),
+  );
+});
+
+it.effect("only fsyncs the database file at WAL checkpoints", () => {
+  const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-sqlite-sync-"));
+  const dbPath = NodePath.join(tempDir, "state.sqlite");
+
+  return Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const rows = yield* sql<{ readonly synchronous: number }>`PRAGMA synchronous`;
+    // 1 is NORMAL.
+    assert.equal(rows[0]?.synchronous, 1);
+  }).pipe(
+    Effect.provide(SqlitePersistence.layerFromPath(dbPath).pipe(Layer.provide(NodeServices.layer))),
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { recursive: true, force: true }))),
+  );
+});
+
 it.effect("applies busy_timeout in the shared persistence setup", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;

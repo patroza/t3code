@@ -38,7 +38,7 @@ layer("fork migration namespace for a repaired database", (it) => {
       const backup = yield* sql<LedgerRow>`
         SELECT migration_id, name FROM ${sql(legacyMigrationBackupTable)} ORDER BY migration_id
       `;
-      assert.deepStrictEqual(upstream.slice(-10), [
+      assert.deepStrictEqual(upstream.slice(-11), [
         { migration_id: 52, name: "ProjectionThreadTitleState" },
         { migration_id: 53, name: "PullRequestFilesViewed" },
         { migration_id: 54, name: "ProjectionThreadsAutoSettleDisabledAt" },
@@ -49,6 +49,7 @@ layer("fork migration namespace for a repaired database", (it) => {
         { migration_id: 59, name: "McpAppModelContext" },
         { migration_id: 60, name: "ThreadSnapshotWindowIndexes" },
         { migration_id: 61, name: "PullRequestReviewGuides" },
+        { migration_id: 62, name: "ThreadFailureLookupIndex" },
       ]);
       assert.deepStrictEqual(fork, [
         { migration_id: 1, name: "ProjectionQueuedMessages" },

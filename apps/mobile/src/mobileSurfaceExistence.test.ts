@@ -91,4 +91,26 @@ describe("mobile surface existence (anti stack-drop)", () => {
     expect(nativeRenderer).toContain("selectionClipboard={selectionClipboard}");
     expect(nativeRenderer).toContain("props.contextClipboardFragment");
   });
+
+  it("keeps historical sender captions beside upstream handoff rows", () => {
+    const feed = readSrc("features/threads/ThreadFeed.tsx");
+    const detail = readSrc("features/threads/ThreadDetailScreen.tsx");
+    const route = readSrc("features/threads/ThreadRouteScreen.tsx");
+    expect(feed).toContain("<UserMessageSenderCaption");
+    expect(feed).toContain("message.source ?? props.messageSourceById?.get(message.id)");
+    expect(feed).toContain("<ThreadHandoffDivider");
+    expect(feed).toContain("<ThreadHandoffRow");
+    expect(detail).toContain("messageSourceById={props.messageSourceById}");
+    expect(detail).toContain("pendingHandoff={props.pendingHandoff}");
+    expect(route).toContain("messageSourceById={userMessageSources}");
+    expect(route).toContain("pendingHandoff={composer.pendingHandoff}");
+  });
+
+  it("keeps ownership filters reachable in the native iOS toolbar", () => {
+    const toolbar = readSrc("features/workspace/WorkspaceToolbar.ios.tsx");
+    expect(toolbar).toContain('<NativeHeaderToolbar.Menu title="Ownership">');
+    expect(toolbar).toContain("OWNERSHIP_FILTER_LABELS[value]");
+    expect(toolbar).toContain("OWNERSHIP_RELATION_LABELS[value]");
+    expect(toolbar).toContain("isOn={value === options.ownershipFilter}");
+  });
 });

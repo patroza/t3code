@@ -452,7 +452,7 @@ const make = Effect.gen(function* () {
           return null;
         }
 
-        const threadId = ThreadId.make(yield* crypto.randomUUIDv4);
+        const threadId = ThreadId.make(yield* crypto.randomUUIDv4());
         const createdAt = DateTime.formatIso(yield* DateTime.now);
         const title =
           invocation.issueSummary?.trim() || `${invocation.issueKey} · Jira` || invocation.issueKey;
@@ -460,7 +460,7 @@ const make = Effect.gen(function* () {
           project.defaultModelSelection ?? getAutoBootstrapThreadModelSelection();
         const branchName = buildJiraAutoCreateBranchName(
           invocation.issueKey,
-          (yield* crypto.randomUUIDv4).slice(0, 8),
+          (yield* crypto.randomUUIDv4()).slice(0, 8),
         );
         const baseBranch = config.enabled ? config.baseBranch : "main";
 
@@ -512,7 +512,7 @@ const make = Effect.gen(function* () {
           type: "thread.create",
           createdBy: "user",
           creationSource: "server",
-          commandId: CommandId.make(yield* crypto.randomUUIDv4),
+          commandId: CommandId.make(yield* crypto.randomUUIDv4()),
           threadId,
           projectId: ProjectId.make(project.id),
           title: title.slice(0, 120),
@@ -841,8 +841,8 @@ const make = Effect.gen(function* () {
     // Always dispatch. When the thread is mid-turn, orchestration queues the
     // message (thread.message-queued) — do not short-circuit with a busy reply.
     // Response posting stays async via forkDetach(bridgeTurn) below.
-    const commandId = CommandId.make(yield* crypto.randomUUIDv4);
-    const messageId = MessageId.make(yield* crypto.randomUUIDv4);
+    const commandId = CommandId.make(yield* crypto.randomUUIDv4());
+    const messageId = MessageId.make(yield* crypto.randomUUIDv4());
     const processing: StoredJiraDelivery = {
       ...acknowledged,
       threadId: thread.id,

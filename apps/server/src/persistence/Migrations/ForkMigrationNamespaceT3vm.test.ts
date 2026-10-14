@@ -28,7 +28,7 @@ layer("t3vm migration namespace repair", (it) => {
       const upstream = yield* sql<LedgerRow>`
         SELECT migration_id, name FROM ${sql(upstreamMigrationTable)} ORDER BY migration_id
       `;
-      assert.deepStrictEqual(upstream.slice(-12), [
+      assert.deepStrictEqual(upstream.slice(-13), [
         { migration_id: 50, name: "ProjectionThreadPullRequests" },
         { migration_id: 51, name: "ProjectionThreadMessageContext" },
         { migration_id: 52, name: "ProjectionThreadTitleState" },
@@ -41,6 +41,7 @@ layer("t3vm migration namespace repair", (it) => {
         { migration_id: 59, name: "McpAppModelContext" },
         { migration_id: 60, name: "ThreadSnapshotWindowIndexes" },
         { migration_id: 61, name: "PullRequestReviewGuides" },
+        { migration_id: 62, name: "ThreadFailureLookupIndex" },
       ]);
       const fork = yield* sql<LedgerRow>`
         SELECT migration_id, name FROM ${sql(forkMigrationTable)} ORDER BY migration_id

@@ -75,6 +75,10 @@ const buildSourcemap: boolean | "hidden" =
       : true;
 
 const isolatedUnitTestFiles = [
+  // Retained action toasts use scoped server and runtime mocks.
+  "src/components/GitActionsControl.lifecycle.test.ts",
+  // Route lifecycle tests substitute the router and environment stores.
+  "src/routes/-chatIndexLanding.test.tsx",
   // Hook mocks must bind before imports, without a preceding file’s cached theme hook.
   "src/hooks/useHtmlRenderTheme.test.ts",
   // Partial server mocks must not replace capability atoms used by browser restoration.
