@@ -42,7 +42,7 @@ export interface EnabledJiraAppConfig {
    */
   readonly baseBranch: string;
   /**
-   * Emoji id for the read receipt replied on the triggering comment (👍 = 1f44d).
+   * Emoji id for the read receipt replied on the triggering comment (👀 = 1f440).
    * Empty disables the receipt.
    */
   readonly ackEmojiId: string | null;
@@ -130,9 +130,9 @@ const configEffect = Effect.gen(function* () {
   );
   const mention = values.mention!.trim().replace(/^@/u, "");
   const ackEmojiRaw = values.ackEmojiId?.trim();
-  // Default 👍. Set empty string to disable the read receipt.
+  // Default 👀. Set empty string to disable the read receipt.
   const ackEmojiId =
-    ackEmojiRaw === undefined ? "1f44d" : ackEmojiRaw.length === 0 ? null : ackEmojiRaw;
+    ackEmojiRaw === undefined ? "1f440" : ackEmojiRaw.length === 0 ? null : ackEmojiRaw;
   return JiraAppConfig.of({
     enabled: true,
     webhookSecret: values.webhookSecret!,

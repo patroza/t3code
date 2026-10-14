@@ -92,7 +92,7 @@ POST /api/jira/webhook
         v
 JiraIssueBridge
   project allowlist
-  reply 👍 on the trigger comment so the author can see it was read
+  reply 👀 on the trigger comment so the author can see it was read
   parse mention + prompt (+ optional parent comment id)
   resolve unique T3 thread via ThreadWorkItemStore
     (optional Discord links.json import if still unlinked)
@@ -145,7 +145,7 @@ webhook.
 | `T3CODE_JIRA_AUTO_CREATE_THREAD` | no       | `true`  | Create a T3 thread when the issue is unlinked                     |
 | `T3CODE_JIRA_PROJECT_MAP`        | no       | empty   | Jira key → T3 project map (see below)                             |
 | `T3CODE_JIRA_DEFAULT_PROJECT_ID` | no\*     | —       | Fallback project for auto-create (\*or exactly one shell project) |
-| `T3CODE_JIRA_ACK_EMOJI_ID`       | no       | `1f44d` | Read receipt on the trigger comment (`👍`); empty string disables |
+| `T3CODE_JIRA_ACK_EMOJI_ID`       | no       | `1f440` | Read receipt on the trigger comment (`👀`); empty string disables |
 | `T3CODE_JIRA_BOT_ACCOUNT_ID`     | no       | —       | Alias for wiki/ADF `[~accountId:…]` mention matching              |
 | `T3CODE_JIRA_CONFLUENCE_PAGES`   | no       | empty   | Where a reply goes when it does not fit in a comment (see below)  |
 
@@ -192,10 +192,10 @@ issue as a Markdown file and the comment links to that file.
 
 ### Read receipt
 
-On accept, the bridge replies under the triggering comment with a thumbs up (`👍` by default)
+On accept, the bridge replies under the triggering comment with eyes (`👀` by default)
 so you can see the mention was read before the answer is ready. That reply stays. The answer
 follows as another reply when the turn finishes. An empty `T3CODE_JIRA_ACK_EMOJI_ID` skips the
-receipt. `1f440` sends 👀 instead. A failed receipt does not block the turn.
+receipt. `1f44d` sends 👍 instead. A failed receipt does not block the turn.
 
 ## Security
 

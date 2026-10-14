@@ -110,10 +110,12 @@ describe("Jira webhook security", () => {
 });
 
 describe("Jira read receipt", () => {
-  it("replies with a thumbs up by default and can be disabled", () => {
-    expect(jiraReadReceiptText("1f44d")).toBe("👍");
-    expect(jiraReadReceiptText("1F44D")).toBe("👍");
+  it("replies with eyes by default and can be disabled", () => {
     expect(jiraReadReceiptText("1f440")).toBe("👀");
+    expect(jiraReadReceiptText("1F440")).toBe("👀");
+    expect(jiraReadReceiptText("eyes")).toBe("👀");
+    expect(jiraReadReceiptText("1f44d")).toBe("👍");
+    expect(jiraReadReceiptText("deadbeef")).toBe("👀");
     expect(jiraReadReceiptText("👀")).toBe("👀");
     expect(jiraReadReceiptText(null)).toBeNull();
     expect(jiraReadReceiptText("")).toBeNull();

@@ -122,7 +122,7 @@ export function jiraReadReceiptText(ackEmojiId: string | null): string | null {
   const mapped = JIRA_READ_RECEIPT_BY_ID[trimmed.toLowerCase()] ?? JIRA_READ_RECEIPT_BY_ID[trimmed];
   if (mapped !== undefined) return mapped;
   if (/[^\da-f]/iu.test(trimmed)) return trimmed;
-  return "👍";
+  return "👀";
 }
 
 export function formatJiraComment(body: string): string {
