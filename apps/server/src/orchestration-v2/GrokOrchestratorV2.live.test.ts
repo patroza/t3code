@@ -343,7 +343,7 @@ describe.runIf(process.env.T3_GROK_LIVE_ORCHESTRATOR === "1")("Grok V2 live orch
           `${assistant}\n${commands.map((command) => command.output).join("\n")}`,
           marker,
         );
-      }).pipe(Effect.provide(layerLive), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(layerLive, NodeServices.layer)), Effect.scoped),
     360_000,
   );
 });
