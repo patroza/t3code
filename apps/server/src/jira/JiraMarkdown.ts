@@ -5,6 +5,10 @@
  * ``` fences showed up as source. This covers the Markdown agents actually write:
  * headings, emphasis, links, lists, tables, quotes, and fenced code.
  *
+ * A bare GitHub pull or issue URL, or a Jira browse URL, is a real link whose
+ * visible text is a short label (`scanner#2458`, `SA-510`). The raw address
+ * wraps in Jira and, on some write paths, is not a link at all.
+ *
  * A comment that will not fit in Jira's body limit is split on a block boundary.
  * The caller stores the overflow (Confluence section or issue attachment) and
  * leaves a link in the comment.
@@ -271,7 +275,9 @@ function parseInline(input: string): JiraAdfNode[] {
     if (link !== null) {
       flush();
       const href = safeHref(link.href);
-      const inner = parseInline(link.label);
+      const label =
+        href !== null && isRawUrlLabel(link.label, href) ? jiraLinkLabel(href) : link.label;
+      const inner = parseInline(label);
       nodes.push(...(href === null ? inner : withMark(inner, { type: "link", attrs: { href } })));
       index += link.length;
       continue;
@@ -305,7 +311,7 @@ function parseInline(input: string): JiraAdfNode[] {
       flush();
       nodes.push({
         type: "text",
-        text: autolink.url,
+        text: jiraLinkLabel(autolink.url),
         marks: [{ type: "link", attrs: { href: autolink.url } }],
       });
       index += autolink.length;
@@ -411,6 +417,39 @@ function safeHref(url: string): string | null {
   if (/^(https?:|mailto:)/iu.test(href)) return href;
   if (href.startsWith("/") || href.startsWith("#")) return href;
   return null;
+}
+
+function isRawUrlLabel(label: string, href: string): boolean {
+  const text = label.trim();
+  const bare = href.replace(/\/$/u, "");
+  return text === href || text === bare || text.replace(/\/$/u, "") === bare;
+}
+
+/** Short visible text for addresses Jira otherwise prints in full. */
+function jiraLinkLabel(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+  const host = parsed.hostname.toLowerCase();
+  const parts = parsed.pathname.split("/").filter((part) => part.length > 0);
+  if (host === "github.com" && parts.length >= 4) {
+    const repo = parts[1] ?? "";
+    const kind = parts[2] ?? "";
+    const id = parts[3] ?? "";
+    if ((kind === "pull" || kind === "issues") && /^\d+$/u.test(id) && repo.length > 0) {
+      return `${repo}#${id}`;
+    }
+  }
+  if (host.endsWith(".atlassian.net")) {
+    const browse = /^\/browse\/([A-Z][A-Z0-9]+-\d+)(?:\/|$)/u.exec(parsed.pathname);
+    if (browse?.[1] !== undefined) return browse[1];
+    const selected = parsed.searchParams.get("selectedIssue");
+    if (selected !== null && /^[A-Z][A-Z0-9]+-\d+$/u.test(selected)) return selected;
+  }
+  return url;
 }
 
 function matchAutolink(rest: string): { readonly url: string; readonly length: number } | null {

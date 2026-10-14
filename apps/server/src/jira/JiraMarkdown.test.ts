@@ -119,6 +119,39 @@ describe("Jira markdown", () => {
     expect(nodes.find((node) => node.text === "https://example.com/docs")).toMatchObject({
       marks: [{ type: "link", attrs: { href: "https://example.com/docs" } }],
     });
+    const pull = markdownToAdf("Shipped in https://github.com/macs-holding/scanner/pull/2458.");
+    expect(walk(pull.content).find((node) => node.text === "scanner#2458")).toMatchObject({
+      marks: [
+        {
+          type: "link",
+          attrs: { href: "https://github.com/macs-holding/scanner/pull/2458" },
+        },
+      ],
+    });
+    const issue = markdownToAdf("https://macs-holding.atlassian.net/browse/SA-510");
+    expect(walk(issue.content).find((node) => node.text === "SA-510")).toMatchObject({
+      marks: [
+        {
+          type: "link",
+          attrs: { href: "https://macs-holding.atlassian.net/browse/SA-510" },
+        },
+      ],
+    });
+    const labeled = markdownToAdf("[notes](https://github.com/macs-holding/scanner/issues/12)");
+    expect(
+      walk(labeled.content).find((node) => node.marks?.some((mark) => mark.type === "link")),
+    ).toMatchObject({ text: "notes" });
+    const self = markdownToAdf(
+      "[https://github.com/macs-holding/scanner/pull/2458](https://github.com/macs-holding/scanner/pull/2458)",
+    );
+    expect(walk(self.content).find((node) => node.text === "scanner#2458")).toMatchObject({
+      marks: [
+        {
+          type: "link",
+          attrs: { href: "https://github.com/macs-holding/scanner/pull/2458" },
+        },
+      ],
+    });
     expect(nodes.some((node) => node.type === "bulletList")).toBe(true);
     expect(nodes.some((node) => node.type === "orderedList")).toBe(true);
     expect(nodes.some((node) => node.type === "blockquote")).toBe(true);

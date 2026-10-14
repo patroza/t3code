@@ -172,8 +172,10 @@ T3CODE_JIRA_DEFAULT_PROJECT_ID=/var/lib/t3/src/macs/scanner
 ### Long replies
 
 Jira comments render Markdown: headings, emphasis, links, lists, tables, quotes, and fenced code
-blocks. A reply that does not fit in one comment keeps a leading portion in the comment. The rest
-is filed where you assign it, and the comment links to that exact section.
+blocks. A GitHub pull request or issue address shows as `repo#123`, and a Jira issue address shows
+as its key. Other addresses stay links with the address as the label. A reply that does not fit in
+one comment keeps a leading portion in the comment. The rest is filed where you assign it, and the
+comment links to that exact section.
 
 ```bash
 # Jira project : Confluence space / parent page titles

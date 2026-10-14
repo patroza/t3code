@@ -204,6 +204,8 @@ describe("parseJiraCommentInvocation", () => {
     expect(prompt).toContain("## Jira issue context");
     expect(prompt).toContain("SA-402");
     expect(prompt).toContain("investigate the packing failure");
+    expect(prompt).toContain("[scanner#2458]");
+    expect(prompt).toContain("A bare URL stays plain text.");
     expect(jiraDeliveryIdFor({ invocation: invocation! })).toBe("jira-comment:SA-402:10700");
   });
 

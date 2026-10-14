@@ -415,12 +415,17 @@ function jiraPromptHeaderLines(invocation: JiraIssueInvocation): Array<string | 
   ];
 }
 
+const JIRA_COMMENT_LINK_RULE =
+  "In any Jira comment, write each URL as a markdown link with a short label, for example [scanner#2458](https://github.com/macs-holding/scanner/pull/2458). A bare URL stays plain text.";
+
 export function buildJiraTurnPrompt(invocation: JiraIssueInvocation): string {
   const requester = invocation.actorDisplayName ?? invocation.actorAccountId ?? "unknown";
   const isUpdate = invocation.webhookEvent === "comment_updated";
   const lines = [
     ...jiraPromptHeaderLines(invocation),
     "-->",
+    "",
+    JIRA_COMMENT_LINK_RULE,
     "",
     isUpdate
       ? [
