@@ -1324,7 +1324,7 @@ const make = Effect.gen(function* () {
 
   const requestKey = (clientRequestId: string | undefined): Effect.Effect<string> =>
     clientRequestId === undefined
-      ? crypto.randomUUIDv4.pipe(Effect.orDie)
+      ? crypto.randomUUIDv4().pipe(Effect.orDie)
       : Effect.succeed(clientRequestId);
 
   const readTask = (

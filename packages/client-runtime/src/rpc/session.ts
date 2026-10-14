@@ -324,11 +324,6 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
     const trackedConstructor = captureSocketClose(webSocketConstructor, closeCapture);
     const hooks = RpcClient.ConnectionHooks.of({
       onConnect: Deferred.succeed(connected, undefined).pipe(Effect.asVoid),
-      // Fork patch: runs before the protocol fails the socket with SocketOpenError(ping timeout).
-      onPingTimeout: Effect.sync(() => {
-        causeSink.causeMessage = "ping timeout";
-        causeSink.reason = "timeout";
-      }),
       onDisconnect: Deferred.isDone(connected).pipe(
         Effect.flatMap((wasConnected) => {
           const close = mergeCloseCapture(closeCapture.current, causeSink.close);
@@ -372,6 +367,10 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
           pingTimeout: PING_TIMEOUT,
           retryTransientErrors: false,
           retryPolicy: Schedule.recurs(0),
+          onPingTimeout: Effect.sync(() => {
+            causeSink.causeMessage = "ping timeout";
+            causeSink.reason = "timeout";
+          }),
         }).pipe(
           Effect.provideService(Socket.Socket, socket),
           Effect.provide(RpcSerialization.layerJson),
