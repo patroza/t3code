@@ -79,7 +79,6 @@ export const make = Effect.fn("DirenvEnvironment.make")(function* () {
     const direnvPath = yield* resolveCommandPath("direnv", { env: environment }).pipe(
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
-      Effect.catchTags({ CommandResolutionError: () => Effect.void }),
     );
     direnvPathCache.set(cacheKey, direnvPath ?? undefined);
     return direnvPath ?? undefined;
