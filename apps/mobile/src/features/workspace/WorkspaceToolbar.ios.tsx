@@ -8,13 +8,7 @@ import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
 import { NativeWorkspaceTabActivityContext } from "../../native/v5-workspace-context";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
-import {
-  OWNERSHIP_FILTERS,
-  OWNERSHIP_FILTER_LABELS,
-  OWNERSHIP_RELATIONS,
-  OWNERSHIP_RELATION_LABELS,
-  useHomeListOptions,
-} from "../home/home-list-options";
+
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { useWorkspaceTabs } from "./WorkspaceTabsContext";
 
@@ -24,7 +18,6 @@ export function WorkspaceToolbar(props: {
   readonly sidebar?: boolean;
 }) {
   const workspace = useWorkspaceTabs()!;
-  const { options, setOwnershipFilter, setOwnershipRelation } = useHomeListOptions(new Set());
   const navigation = useNavigation();
   const metrics = useNativeLayoutMetrics();
   const nativeToolbarCompose =
@@ -110,60 +103,16 @@ export function WorkspaceToolbar(props: {
       />
       {/* UIKit lays trailing items out from the edge inward. */}
       <NativeHeaderToolbar placement="right">
-        <NativeHeaderToolbar.Menu
-          accessibilityLabel="Thread filters and settings"
+        <NativeHeaderToolbar.Button
+          accessibilityLabel="Open settings"
           icon="gearshape"
-          title="Thread filters and settings"
-        >
-          {selectedTab === "threads" ? (
-            <>
-              <NativeHeaderToolbar.Menu title="Ownership">
-                <NativeHeaderToolbar.Label>Ownership</NativeHeaderToolbar.Label>
-                {OWNERSHIP_FILTERS.map((value) => (
-                  <NativeHeaderToolbar.MenuAction
-                    key={value}
-                    isOn={value === options.ownershipFilter}
-                    onPress={() => setOwnershipFilter(value)}
-                  >
-                    <NativeHeaderToolbar.Label>
-                      {OWNERSHIP_FILTER_LABELS[value]}
-                    </NativeHeaderToolbar.Label>
-                  </NativeHeaderToolbar.MenuAction>
-                ))}
-              </NativeHeaderToolbar.Menu>
-              {options.ownershipFilter === "mine" || options.ownershipFilter === "theirs" ? (
-                <NativeHeaderToolbar.Menu
-                  title={options.ownershipFilter === "mine" ? "Mine includes" : "Theirs includes"}
-                >
-                  <NativeHeaderToolbar.Label>
-                    {options.ownershipFilter === "mine" ? "Mine includes" : "Theirs includes"}
-                  </NativeHeaderToolbar.Label>
-                  {OWNERSHIP_RELATIONS.map((value) => (
-                    <NativeHeaderToolbar.MenuAction
-                      key={value}
-                      isOn={value === options.ownershipRelation}
-                      onPress={() => setOwnershipRelation(value)}
-                    >
-                      <NativeHeaderToolbar.Label>
-                        {OWNERSHIP_RELATION_LABELS[value]}
-                      </NativeHeaderToolbar.Label>
-                    </NativeHeaderToolbar.MenuAction>
-                  ))}
-                </NativeHeaderToolbar.Menu>
-              ) : null}
-            </>
-          ) : null}
-          <NativeHeaderToolbar.MenuAction
-            onPress={() =>
-              navigation.navigate("SettingsSheet", {
-                screen: "SettingsContent",
-                params: { screen: "Settings" },
-              })
-            }
-          >
-            <NativeHeaderToolbar.Label>Settings</NativeHeaderToolbar.Label>
-          </NativeHeaderToolbar.MenuAction>
-        </NativeHeaderToolbar.Menu>
+          onPress={() =>
+            navigation.navigate("SettingsSheet", {
+              screen: "SettingsContent",
+              params: { screen: "Settings" },
+            })
+          }
+        />
         {NATIVE_LIQUID_GLASS_SUPPORTED ? null : (
           <NativeHeaderToolbar.Button
             accessibilityLabel={
