@@ -103,6 +103,28 @@ function jiraSourceRef(
   });
 }
 
+const JIRA_READ_RECEIPT_BY_ID: Readonly<Record<string, string>> = {
+  "1f44d": "👍",
+  "1f440": "👀",
+  thumbsup: "👍",
+  "+1": "👍",
+  eyes: "👀",
+};
+
+/**
+ * Glyph replied on the triggering comment as soon as a mention is accepted.
+ * Null skips the receipt (`T3CODE_JIRA_ACK_EMOJI_ID` empty).
+ */
+export function jiraReadReceiptText(ackEmojiId: string | null): string | null {
+  if (ackEmojiId === null) return null;
+  const trimmed = ackEmojiId.trim();
+  if (trimmed.length === 0) return null;
+  const mapped = JIRA_READ_RECEIPT_BY_ID[trimmed.toLowerCase()] ?? JIRA_READ_RECEIPT_BY_ID[trimmed];
+  if (mapped !== undefined) return mapped;
+  if (/[^\da-f]/iu.test(trimmed)) return trimmed;
+  return "👍";
+}
+
 export function formatJiraComment(body: string): string {
   return body.trim();
 }
@@ -671,34 +693,29 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    // Best-effort 👀 on the triggering comment (like Discord/GitHub eyes). Cleared in finishDelivery.
-    const ackEmojiConfigured = config.ackEmojiId;
-    let acknowledged: StoredJiraDelivery = initial;
-    if (ackEmojiConfigured !== null && ackEmojiConfigured.length > 0) {
-      const appliedEmojiId = yield* jira
-        .addCommentReaction({
+    // Reply on the triggering comment immediately so the author can see the mention
+    // was read. Jira Cloud does not accept comment reactions for this API token.
+    const acknowledged: StoredJiraDelivery = initial;
+    const receiptText = jiraReadReceiptText(config.ackEmojiId);
+    if (receiptText !== null) {
+      const mentionParent = input.invocation.commentId.trim();
+      const replyParent = input.invocation.replyToCommentId.trim();
+      const posted = yield* jira.addIssueComment({
+        issueKey: input.invocation.issueKey,
+        body: receiptText,
+        parentCommentId: mentionParent.length > 0 ? mentionParent : null,
+        fallbackParentCommentId:
+          replyParent.length > 0 && replyParent !== mentionParent ? replyParent : null,
+        mentionAccountId: input.invocation.actorAccountId,
+        mentionDisplayName: input.invocation.actorDisplayName,
+      });
+      if (posted !== null) {
+        yield* Effect.logInfo("Posted Jira read receipt", {
+          deliveryId: input.deliveryId,
           issueKey: input.invocation.issueKey,
-          commentId: input.invocation.commentId,
-          emojiId: ackEmojiConfigured,
-        })
-        .pipe(
-          Effect.tapError((cause) =>
-            Effect.logWarning("Failed to add Jira acknowledgment reaction", {
-              deliveryId: input.deliveryId,
-              issueKey: input.invocation.issueKey,
-              commentId: input.invocation.commentId,
-              cause,
-            }),
-          ),
-          Effect.orElseSucceed(() => null),
-        );
-      if (appliedEmojiId !== null) {
-        acknowledged = {
-          ...initial,
-          acknowledgmentEmojiId: appliedEmojiId,
-          updatedAt: DateTime.formatIso(yield* DateTime.now),
-        };
-        yield* deliveries.put(acknowledged);
+          commentId: posted.id,
+          parentId: posted.parentId,
+        });
       }
     }
 

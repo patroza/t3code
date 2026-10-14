@@ -92,7 +92,7 @@ POST /api/jira/webhook
         v
 JiraIssueBridge
   project allowlist
-  best-effort 👀 reaction on trigger comment (cleared when done)
+  reply 👍 on the trigger comment so the author can see it was read
   parse mention + prompt (+ optional parent comment id)
   resolve unique T3 thread via ThreadWorkItemStore
     (optional Discord links.json import if still unlinked)
@@ -102,7 +102,6 @@ JiraIssueBridge
         |
         v
 Jira REST comment create (markdown → ADF, parentId reply when possible)
-+ remove ack reaction
 ```
 
 Work-item associations live in:
@@ -146,7 +145,7 @@ webhook.
 | `T3CODE_JIRA_AUTO_CREATE_THREAD` | no       | `true`  | Create a T3 thread when the issue is unlinked                     |
 | `T3CODE_JIRA_PROJECT_MAP`        | no       | empty   | Jira key → T3 project map (see below)                             |
 | `T3CODE_JIRA_DEFAULT_PROJECT_ID` | no\*     | —       | Fallback project for auto-create (\*or exactly one shell project) |
-| `T3CODE_JIRA_ACK_EMOJI_ID`       | no       | `1f440` | Reaction on the trigger comment (`👀`); empty string disables     |
+| `T3CODE_JIRA_ACK_EMOJI_ID`       | no       | `1f44d` | Read receipt on the trigger comment (`👍`); empty string disables |
 | `T3CODE_JIRA_BOT_ACCOUNT_ID`     | no       | —       | Alias for wiki/ADF `[~accountId:…]` mention matching              |
 | `T3CODE_JIRA_CONFLUENCE_PAGES`   | no       | empty   | Where a reply goes when it does not fit in a comment (see below)  |
 
@@ -191,12 +190,12 @@ heading.
 When this variable is empty, or Confluence rejects the write, the overflow is attached to the
 issue as a Markdown file and the comment links to that file.
 
-### Acknowledgment reactions
+### Read receipt
 
-On accept, the bridge best-effort adds an eyes reaction (`1f440` / 👀 by default) to the
-triggering comment, then removes it when the turn finishes or is rejected — same idea as Discord
-and GitHub eyes. Jira Cloud’s public REST surface for comment reactions varies by site; failures
-are logged and never block the turn.
+On accept, the bridge replies under the triggering comment with a thumbs up (`👍` by default)
+so you can see the mention was read before the answer is ready. That reply stays. The answer
+follows as another reply when the turn finishes. An empty `T3CODE_JIRA_ACK_EMOJI_ID` skips the
+receipt. `1f440` sends 👀 instead. A failed receipt does not block the turn.
 
 ## Security
 
