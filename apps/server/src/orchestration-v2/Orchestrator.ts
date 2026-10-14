@@ -3361,6 +3361,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                     failedChecks: [],
                     passed: false,
                     passedChecks: [],
+                    pendingChecks: [],
                     remarksThrough: startedAt,
                     remarkIds: [],
                     conflicting: false,

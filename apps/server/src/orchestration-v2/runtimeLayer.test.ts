@@ -3350,7 +3350,11 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       fingerprint = { status: "OPEN settled", remarks: "1" };
       yield* reactor.sweep;
       assert.deepEqual(reads(), { detail: 4, activity: 2 });
-      assert.deepEqual(yield* summaries, ["#11: checks failed", "#11: new comments"]);
+      assert.deepEqual(yield* summaries, [
+        "#11: checks failed",
+        "#11: checks finished",
+        "#11: new comments",
+      ]);
 
       // While the host is rate limited, a pass reads nothing and the watch stays on.
       fingerprint = "rate-limited";
@@ -3364,7 +3368,11 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       yield* TestClock.adjust("30 minutes");
       yield* reactor.sweep;
       assert.deepEqual(reads(), { detail: 5, activity: 3 });
-      assert.deepEqual(yield* summaries, ["#11: checks failed", "#11: new comments"]);
+      assert.deepEqual(yield* summaries, [
+        "#11: checks failed",
+        "#11: checks finished",
+        "#11: new comments",
+      ]);
     }),
   );
 
