@@ -32,6 +32,8 @@ import { DesktopWebLinkCoordinator } from "../components/desktop/DesktopWebLinkC
 import { RunningThreadKeepAlive } from "../components/desktop/RunningThreadKeepAlive";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
 import { IdentityClaimGate } from "../components/identity/IdentityClaimGate";
+import { DesktopUpdateLaunchNotice } from "../components/sidebar/updateEverythingRun";
+
 import { NightlyMobileBetaNotice } from "../components/NightlyMobileBeta";
 import { LegacyThreadMigrationToast } from "../components/LegacyThreadMigrationToast";
 import { ThreadNotificationCoordinator } from "../components/ThreadNotificationCoordinator";
@@ -272,6 +274,8 @@ function RootRouteView() {
           {primaryEnvironmentAuthenticated || authGateState.status === "hosted-static" ? (
             <IdentityClaimGate />
           ) : null}
+          {isElectron ? <DesktopUpdateLaunchNotice /> : null}
+
           {/* Hosted Nightly is "hosted-static", not authenticated, and needs it too. */}
           <NightlyMobileBetaNotice />
           {appShell}

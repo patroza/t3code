@@ -874,10 +874,11 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
     vpArgs = [...vpArgs, ...input.runArgs];
 
     const spawnCommand = yield* resolveSpawnCommand("vp", vpArgs, { env });
+
     const processContext = {
       mode: input.mode,
       executable: "vp" as const,
-      argumentCount: spawnCommand.args.length,
+      argumentCount: vpArgs.length,
       shell: spawnCommand.shell,
     } as const;
     const child = yield* ChildProcess.make(spawnCommand.command, spawnCommand.args, {
