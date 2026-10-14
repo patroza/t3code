@@ -804,13 +804,32 @@ const withCheckpointClient = <A, E>(
 const checkpointWorkerReply = (worker: NodeWorkerThreads.Worker) =>
   Effect.promise(
     () =>
-      new Promise<void>((resolve) => {
+      new Promise<void>((resolve, reject) => {
+        const cleanup = () => {
+          worker.off("message", onReply);
+          worker.off("error", onError);
+          worker.off("exit", onExit);
+        };
         const onReply = (reply: unknown) => {
           if (reply !== "barrier") return;
-          worker.off("message", onReply);
+          cleanup();
           resolve();
         };
+        const onError = (cause: Error) => {
+          cleanup();
+          reject(cause);
+        };
+        const onExit = (code: number) => {
+          cleanup();
+          reject(new Error(`Checkpoint worker exited before the barrier (code ${code}).`));
+        };
         worker.on("message", onReply);
+        worker.on("error", onError);
+        worker.on("exit", onExit);
+        if (worker.threadId === -1) {
+          onExit(-1);
+          return;
+        }
         // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node workers do not accept a target origin.
         worker.postMessage("barrier");
       }),
