@@ -13,6 +13,16 @@ import {
 
 const t3SessionSource = NodeFS.readFileSync(new URL("./T3Session.ts", import.meta.url), "utf8");
 
+describe("live provider catalog wiring", () => {
+  it("subscribes on connect and interrupts the config subscription on teardown", () => {
+    expect(t3SessionSource).toContain("followBotServerConfig(connected");
+    expect(t3SessionSource).toContain(
+      "[shellFiber, configFiber, browserFiber, ...threadFibers.values()]",
+    );
+    expect(t3SessionSource).toContain("configFiber = null");
+  });
+});
+
 describe("isT3TransportError", () => {
   it("matches SocketCloseError and ConnectionTransientError", () => {
     expect(isT3TransportError(new Error("SocketCloseError: 1005"))).toBe(true);
