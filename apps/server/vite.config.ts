@@ -152,6 +152,7 @@ export default mergeConfig(
             testTimeout: serverTestTimeout,
             include: ["integration/**/*.test.ts", "scripts/**/*.test.ts", "src/**/*.test.ts"],
             exclude: [
+              "src/persistence/OrchestrationEventStore.test.ts",
               "src/assets/AssetAccess.test.ts",
               "src/htmlRender/publicProxy.test.ts",
               "src/bootstrap.test.ts",
@@ -230,6 +231,19 @@ export default mergeConfig(
               // isolate:false the real mkdir runs against `/test` and fails.
               "src/preview/ServerBrowserContexts.test.ts",
             ],
+          },
+        },
+        {
+          test: {
+            name: "server-isolated-replay-retention",
+            // queryObjects performs full-heap collection. Keep the replay-page
+            // retention check out of the main worker's accumulated module heap.
+            isolate: true,
+            fileParallelism: false,
+            maxWorkers: 1,
+            hookTimeout: serverTestTimeout,
+            testTimeout: serverTestTimeout,
+            include: ["src/persistence/OrchestrationEventStore.test.ts"],
           },
         },
         {
