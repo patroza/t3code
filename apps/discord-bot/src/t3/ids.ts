@@ -1,4 +1,10 @@
-import { CommandId, MessageId, ProjectId, ThreadId } from "@t3tools/contracts";
+import {
+  type ClientSourceHint,
+  CommandId,
+  MessageId,
+  ProjectId,
+  ThreadId,
+} from "@t3tools/contracts";
 
 function randomUuid(): string {
   const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
@@ -15,4 +21,9 @@ export const newThreadId = (): ThreadId => ThreadId.make(randomUuid());
 
 export function shortId(length = 8): string {
   return randomUuid().replaceAll("-", "").slice(0, length);
+}
+
+/** Name new chat worktrees for their source; legacy callers remain Discord by default. */
+export function newChatWorktreeBranch(channel?: ClientSourceHint["channel"]): string {
+  return `t3-${channel === "teams" ? "teams" : "discord"}/${shortId()}`;
 }

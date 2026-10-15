@@ -66,7 +66,7 @@ const program = Effect.gen(function* () {
         t3BootstrapCredential: undefined,
         dataDir: workspace.dataDir!,
         webUiBaseUrl: workspace.webOrigin,
-        publicWebUiBaseUrl: workspace.webOrigin,
+        publicWebUiBaseUrl: workspace.publicWebOrigin ?? workspace.webOrigin,
         projectAliasesPath: workspace.projectAliasesPath,
         identityMapPath: workspace.identityMapPath,
         t3DefaultBaseBranch: workspace.defaultBaseBranch ?? defaults.t3DefaultBaseBranch,

@@ -160,6 +160,7 @@ export function buildThreadInfoRenderInput(input: {
   readonly worktreePath?: string | null | undefined;
   readonly baseBranchLabel?: string | null | undefined;
   readonly local?: boolean | undefined;
+  readonly workspaceStatus?: "preparing" | "failed" | undefined;
   readonly webLink?: string | null | undefined;
   readonly extraLines?: ReadonlyArray<string | null | undefined> | undefined;
   readonly sentryIssueUrls?: ReadonlyArray<string> | undefined;
@@ -186,6 +187,14 @@ export function buildThreadInfoRenderInput(input: {
     worktreeLine = `Worktree: \`${input.worktreePath}\``;
   } else if (input.baseBranchLabel !== null && input.baseBranchLabel !== undefined) {
     worktreeLine = `Worktree off \`${input.baseBranchLabel}\``;
+  }
+
+  if (input.workspaceStatus !== undefined) {
+    const statusLine =
+      input.workspaceStatus === "preparing" ? "Preparing workspace…" : "Workspace setup failed.";
+    worktreeLine = input.worktreePath
+      ? `Worktree: \`${input.worktreePath}\`\n${statusLine}`
+      : statusLine;
   }
 
   return {
@@ -569,6 +578,7 @@ export const upsertThreadInfoPin = (input: {
   readonly worktreePath?: string | null;
   readonly baseBranchLabel?: string | null;
   readonly local?: boolean;
+  readonly workspaceStatus?: "preparing" | "failed" | undefined;
   /** Skip GitHub repo slug enrichment on latency-sensitive bootstrap paths. */
   readonly skipChannelRepoLookup?: boolean;
   readonly extraLines?: ReadonlyArray<string | null | undefined>;
@@ -668,6 +678,7 @@ export const upsertThreadInfoPin = (input: {
         worktreePath: input.worktreePath,
         baseBranchLabel: input.baseBranchLabel,
         local: input.local,
+        workspaceStatus: input.workspaceStatus,
         webLink: t3WebThreadUrl(input.botConfig.webUiBaseUrl, input.t3ThreadId),
         extraLines: input.extraLines,
         titleLine: input.titleLine,

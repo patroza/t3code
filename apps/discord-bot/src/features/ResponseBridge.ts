@@ -43,6 +43,7 @@ import {
 import { buildOmegentThreadMessageUrl } from "../presentation/discordPrAttribution.ts";
 import { textFile, type DiscordUploadFile } from "../presentation/discordFiles.ts";
 import { formatModelSelectionLine } from "../presentation/threadInfoPin.ts";
+import { threadWorkspaceInfo } from "../presentation/threadWorkspaceInfo.ts";
 import {
   assertFilesystemPath as assertFilesystemFilePath,
   extractMarkdownLocalFileLinks,
@@ -2486,8 +2487,7 @@ export const bridgeThreadToPlatform = (input: {
         threadId: input.threadId,
         config: transport.config,
         modelSelection: snapshot.thread.modelSelection,
-        worktreePath: snapshot.thread.worktreePath,
-        local: snapshot.thread.worktreePath === null,
+        ...threadWorkspaceInfo(snapshot.thread),
       });
     }
     const workingAckMessageId =
@@ -2584,6 +2584,7 @@ export const runBridge = (
       Scope.close(scope, Exit.void),
     );
     const latestThreadRef = yield* Ref.make<OrchestrationThread | null>(null);
+    let threadInfoReady = rest.platform !== "teams";
     const latestVcsStatusRef = yield* Ref.make<VcsStatusResult | null>(null);
     /** Sticky PR evidence — never cleared by transient null lookups (only force-refresh). */
     const stickyTitlePrRef = yield* Ref.make<StickyTitlePrEvidence | null>(null);
@@ -2973,6 +2974,10 @@ export const runBridge = (
           yield* rest.createMessage(input.discordChannelId, {
             content: formatEchoedUserMessage(message),
           });
+          yield* Ref.update(stateRef, (current) => ({
+            ...current,
+            seenUserMessageIds: uniqueMessageIds([...current.seenUserMessageIds, message.id]),
+          }));
         }
       }).pipe(Effect.asVoid);
 
@@ -3828,7 +3833,7 @@ export const runBridge = (
     /**
      * Final delivery for a completed assistant turn:
      * 1. Post Discord markdown content (chunked if needed; links stay clickable)
-     * 2. Always append · [T3](…#message-…) on the stats footer
+     * 2. Always append · [Open](…#message-…) on the stats footer
      * 3. Attach stream-history.md when the channel topic contains `omegent-ips`
      *    (or legacy `t3-ips`) and the stream has intermediate progress, plus
      *    chat/local images
@@ -4071,7 +4076,7 @@ export const runBridge = (
         // Never leave Working.. or the stream placeholder.
         // Keep Discord markdown as-is (links stay clickable). GFM pipe tables → bullets
         // (Discord does not render tables; ASCII grids were tried and removed).
-        // Stats footer always gets · [T3](deep link) when the web UI base is configured.
+        // Stats footer always gets · [Open](deep link) when the web UI base is configured.
         const finalText = renderTables(
           rewriteMarkdownLocalFileLinksForDiscord({
             text: stripWorkingIndicator(stripMarkdownImages(text)),
@@ -4110,7 +4115,7 @@ export const runBridge = (
                   : [];
 
         // Small italic turn stats on the final answer (model / effort / duration / tokens),
-        // then always append · [T3](deep link) on that footer section when the URL is known.
+        // then always append · [Open](deep link) on that footer section when the URL is known.
         const statsThread = yield* Ref.get(latestThreadRef);
         const statsLine = formatTurnResponseStatsLine({
           modelSelection: statsThread?.modelSelection ?? null,
@@ -5019,6 +5024,7 @@ export const runBridge = (
     const updateWorkingHeartbeat = Effect.fn("ResponseBridge.updateWorkingHeartbeat")(function* (
       workingDots: WorkingDotCount,
     ) {
+      if (!threadInfoReady) return;
       yield* streamWriteLock.withPermit(
         Effect.gen(function* () {
           const state = yield* Ref.get(stateRef);
@@ -5160,44 +5166,56 @@ export const runBridge = (
         );
       }).pipe(Effect.asVoid);
 
-    /**
-     * Keep the pinned thread-info Model line in sync when the T3 thread model changes
-     * (Discord `--model` flag, web UI, etc.). Includes "since …, started with …" history.
-     */
-    const syncThreadInfoModelPin = (thread: OrchestrationThread) =>
+    // Cache only successful writes. A failed creation must retry even if the adapter
+    // already persisted the model history before its platform API call failed.
+    let lastThreadInfo: (ReturnType<typeof threadWorkspaceInfo> & { modelLine: string }) | null =
+      null;
+    const syncThreadInfoPin = (thread: OrchestrationThread) =>
       Effect.gen(function* () {
-        const modelSelection = thread.modelSelection;
-        if (modelSelection === undefined || modelSelection === null) return;
-
-        const modelLine = formatModelSelectionLine(modelSelection);
+        const workspace = threadWorkspaceInfo(thread);
+        const info = { ...workspace, modelLine: formatModelSelectionLine(thread.modelSelection) };
+        if (
+          lastThreadInfo !== null &&
+          lastThreadInfo.modelLine === info.modelLine &&
+          lastThreadInfo.worktreePath === info.worktreePath &&
+          lastThreadInfo.workspaceStatus === info.workspaceStatus
+        )
+          return;
         const link = yield* links.getByDiscordThreadId(input.discordChannelId);
         if (link === null) return;
-        if (link.currentModelLine === modelLine) return;
+        if (link.infoDiscordMessageId) threadInfoReady = true;
 
-        const botConfig = rest.config;
-        yield* rest.upsertThreadInfo({
-          conversationId: input.discordChannelId,
-          threadId: input.t3ThreadId,
-          config: botConfig,
-          modelSelection,
-          worktreePath: thread.worktreePath,
-          local: thread.worktreePath === null,
-        });
-        yield* Effect.logInfo("Thread info pin model updated", {
-          discordChannelId: input.discordChannelId,
-          threadId: input.t3ThreadId,
-          previousModel: link.currentModelLine ?? null,
-          nextModel: modelLine,
-        });
-      }).pipe(
-        Effect.catch((error) =>
-          Effect.logWarning("Failed to sync thread info model pin", {
-            discordChannelId: input.discordChannelId,
-            t3ThreadId: input.t3ThreadId,
-            error: String(error),
-          }),
-        ),
-      );
+        const updated = yield* rest
+          .upsertThreadInfo({
+            conversationId: input.discordChannelId,
+            threadId: input.t3ThreadId,
+            config: rest.config,
+            modelSelection: thread.modelSelection,
+            ...workspace,
+          })
+          .pipe(
+            Effect.catch((error) => {
+              // Recovery must establish the first Teams info message before responses.
+              // Later metadata refresh failures can retry without holding up delivery.
+              if (
+                rest.platform === "teams" &&
+                lastThreadInfo === null &&
+                !link.infoDiscordMessageId
+              )
+                return Effect.fail(error);
+              return Effect.logWarning("Failed to refresh thread info", {
+                discordChannelId: input.discordChannelId,
+                t3ThreadId: input.t3ThreadId,
+                error: String(error),
+              }).pipe(Effect.as(false));
+            }),
+            Effect.map((result) => result !== false),
+          );
+        if (updated) {
+          lastThreadInfo = info;
+          threadInfoReady = true;
+        }
+      });
 
     /**
      * Discord message ids whose 📥 delete is already in flight. Snapshots arrive
@@ -5253,7 +5271,8 @@ export const runBridge = (
      * Apply one thread snapshot to Discord (stream tip / finalize / tasks / title).
      * Must not run concurrently for the same bridge — callers serialize via deliveryLock.
      *
-     * Order matters: assistant stream/finalize runs **before** title/pin/side work.
+     * User echoes are interleaved with answers in conversation order. Assistant
+     * stream/finalize runs before title/pin/side work.
      * Mid-turn thread renames used to run first (with optional GH PR lookups) and hold
      * this queue so intermediate tip edits coalesced away — Discord stayed on
      * `_Working.._` until the final, while the channel name still updated. Finals
@@ -5262,7 +5281,7 @@ export const runBridge = (
     const processThreadSnapshot = (thread: OrchestrationThread) =>
       Effect.gen(function* () {
         // Rehydrated Teams bridges must also publish their info before any new delivery.
-        if (rest.platform === "teams") yield* syncThreadInfoModelPin(thread);
+        if (rest.platform === "teams") yield* syncThreadInfoPin(thread);
 
         yield* clearQueuedBadgesForStartedRuns(thread);
         yield* ensureVcsStatusSubscription(thread);
@@ -5278,6 +5297,9 @@ export const runBridge = (
           seenUserMessageIds: priorState.seenUserMessageIds,
           sentDiscordUserMessageIds: priorState.sentDiscordUserMessageIds,
         });
+        const pendingEchoIds = new Set<string>(
+          unseenExternalUserMessages.map((message) => message.id),
+        );
         const unresolvedSentDiscordUserMessageIds = priorState.sentDiscordUserMessageIds.filter(
           (messageId) => !threadUserMessageIds.includes(messageId),
         );
@@ -5285,7 +5307,7 @@ export const runBridge = (
           ...current,
           seenUserMessageIds: uniqueMessageIds([
             ...current.seenUserMessageIds,
-            ...threadUserMessageIds,
+            ...threadUserMessageIds.filter((id) => !pendingEchoIds.has(id)),
           ]),
           observedInitialUserSnapshot: true,
           sentDiscordUserMessageIds: unresolvedSentDiscordUserMessageIds,
@@ -5295,6 +5317,32 @@ export const runBridge = (
         ) {
           yield* persistSentDiscordUserMessageIds(unresolvedSentDiscordUserMessageIds);
         }
+
+        // Preserve conversation order even when a coalesced snapshot contains both
+        // an older answer and a newer user turn. An echo is acknowledged only after send.
+        let remainingUserMessages = [...unseenExternalUserMessages];
+        const messagePositions = new Map<string, number>(
+          thread.messages.map((message, index) => [message.id, index]),
+        );
+        const postUserMessagesBefore = (assistantId?: string) =>
+          Effect.gen(function* () {
+            const position =
+              assistantId === undefined
+                ? Infinity
+                : (messagePositions.get(assistantId) ?? Infinity);
+            const before = remainingUserMessages.filter(
+              (message) => (messagePositions.get(message.id) ?? Infinity) < position,
+            );
+            if (before.length === 0) return;
+            yield* postExternalUserMessages(before);
+            const sent = new Set(before.map((message) => message.id));
+            remainingUserMessages = remainingUserMessages.filter(
+              (message) => !sent.has(message.id),
+            );
+            if (shouldHopWorkingTipOnDisplacement("echoed-command")) {
+              yield* streamWriteLock.withPermit(hopWorkingTipToChannelEnd("external-user-echo"));
+            }
+          });
 
         const activeTurnId = thread.latestTurn?.turnId ?? null;
         const turnInProgressNow = isTurnInProgress(thread);
@@ -5383,6 +5431,7 @@ export const runBridge = (
                 textLen: priorCatchUp.text.length,
               },
             );
+            yield* postUserMessagesBefore(priorCatchUp.id);
             yield* postOrEditAssistant({
               turnId: priorCatchUp.turnId,
               t3MessageId: priorCatchUp.id,
@@ -5487,6 +5536,7 @@ export const runBridge = (
           }
 
           if (decision.intent._tag === "stream") {
+            yield* postUserMessagesBefore(decision.intent.assistantId);
             yield* postOrEditAssistant({
               turnId: decision.intent.turnId,
               t3MessageId: decision.intent.assistantId,
@@ -5496,6 +5546,7 @@ export const runBridge = (
               worktreePath: thread.worktreePath,
             }).pipe(Effect.tapCause(alertStreamFailure("live-stream")), Effect.asVoid);
           } else if (decision.intent._tag === "finalize") {
+            yield* postUserMessagesBefore(decision.intent.assistantId);
             yield* postOrEditAssistant({
               turnId: decision.intent.turnId,
               t3MessageId: decision.intent.assistantId,
@@ -5521,6 +5572,7 @@ export const runBridge = (
                   textLen: fallbackText.length,
                 },
               );
+              yield* postUserMessagesBefore(prior.t3AssistantMessageId);
               yield* postOrEditAssistant({
                 turnId: activeTurnId,
                 t3MessageId: prior.t3AssistantMessageId,
@@ -5555,6 +5607,7 @@ export const runBridge = (
             }
           }
         } else {
+          yield* postUserMessagesBefore();
           const stateBefore = yield* Ref.get(stateRef);
           const turnRunningNoAssistant = isTurnInProgress(thread);
           yield* Ref.update(stateRef, (current) =>
@@ -5612,6 +5665,9 @@ export const runBridge = (
           }
         }
 
+        // User messages after the last answer remain after it, ahead of side work.
+        yield* postUserMessagesBefore();
+
         // --- Secondary: title / pin / side posts (must not starve tip edits) ---
         // Title first, with its own budget: turn settle must clear ⏳ even when GH
         // lookup / tasks would burn the shared secondary timeout. Pending renames
@@ -5629,7 +5685,7 @@ export const runBridge = (
 
         // Best-effort + hard time budget for remaining secondary work.
         yield* Effect.gen(function* () {
-          if (rest.platform !== "teams") yield* syncThreadInfoModelPin(thread);
+          if (rest.platform !== "teams") yield* syncThreadInfoPin(thread);
 
           // Tasks first: first-class Discord progress UI from turn.plan (not External User Input).
           // Keep updating mid-turn / rehydrate; owned via taskDiscordMessageId so it never freezes Working.
@@ -5641,19 +5697,6 @@ export const runBridge = (
               Effect.catchCause(Effect.logError),
               Effect.asVoid,
             );
-          }
-
-          // Cross-surface user text only (github / t3-client whitelist) — after Tasks.
-          if (unseenExternalUserMessages.length > 0) {
-            yield* postExternalUserMessages(unseenExternalUserMessages).pipe(
-              Effect.catchCause(Effect.logError),
-              Effect.asVoid,
-            );
-            if (shouldHopWorkingTipOnDisplacement("echoed-command")) {
-              yield* streamWriteLock
-                .withPermit(hopWorkingTipToChannelEnd("external-user-echo"))
-                .pipe(Effect.catchCause(Effect.logWarning), Effect.asVoid);
-            }
           }
 
           const pending = derivePendingInteractions(thread.activities);

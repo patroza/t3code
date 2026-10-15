@@ -179,17 +179,17 @@ describe("T3 deep link caption helpers", () => {
         "https://t3vm.tail86038f.ts.net/?thread=tid-1#message-msg-1",
       ),
     ).toBe(
-      "_`grok-4.5` · effort high · 50s_ · [T3](https://t3vm.tail86038f.ts.net/?thread=tid-1#message-msg-1)",
+      "_`grok-4.5` · effort high · 50s_ · [Open](https://t3vm.tail86038f.ts.net/?thread=tid-1#message-msg-1)",
     );
     expect(withT3DeepLink("Summary", null)).toBe("Summary");
   });
 
   it("appends the link onto the last chunk without overflowing", () => {
     const url = "https://t3vm.example/?thread=t#message-m";
-    expect(appendT3DeepLinkToChunks(["hello"], url, 2000)).toEqual([`hello · [T3](${url})`]);
+    expect(appendT3DeepLinkToChunks(["hello"], url, 2000)).toEqual([`hello · [Open](${url})`]);
     const almostFull = "x".repeat(1990);
     const next = appendT3DeepLinkToChunks([almostFull], url, 2000);
     expect(next).toHaveLength(2);
-    expect(next[1]).toBe(`[T3](${url})`);
+    expect(next[1]).toBe(`[Open](${url})`);
   });
 });
