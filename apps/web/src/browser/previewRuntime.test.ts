@@ -7,16 +7,27 @@ const state = vi.hoisted(() => ({
   serverBrowser: new Set<string>(),
 }));
 
-vi.mock("~/env", () => ({ isElectron: false }));
+vi.mock("~/env", () => ({
+  get isElectron() {
+    return state.desktop;
+  },
+}));
 vi.mock("~/previewStateStore", () => ({ isPreviewSupportedInRuntime: () => state.desktop }));
 vi.mock("~/rpc/atomRegistry", () => ({ appAtomRegistry: { get: () => state.primary } }));
-vi.mock("~/state/primaryEnvironment", () => ({ primaryEnvironmentIdAtom: {} }));
+vi.mock("~/state/primaryEnvironment", () => ({
+  primaryEnvironmentIdAtom: {},
+  primaryEnvironmentNativeBrowserAtom: {},
+}));
 vi.mock("~/state/entities", () => ({
   readEnvironmentSupportsServerBrowser: (id: string) => state.serverBrowser.has(id),
   useEnvironmentSupportsServerBrowser: () => false,
 }));
 
-import { alternatePreviewRuntime, previewRuntimeFor } from "./previewRuntime";
+import {
+  alternatePreviewRuntime,
+  previewRuntimeFor,
+  rendersServerTabNatively,
+} from "./previewRuntime";
 
 const local = "local" as EnvironmentId;
 const remote = "remote" as EnvironmentId;
@@ -56,5 +67,22 @@ describe("alternatePreviewRuntime", () => {
 
   it("offers no move outside the desktop app", () => {
     expect(alternatePreviewRuntime(remote, null, true, { runtime: "server" })).toBeNull();
+  });
+});
+
+describe("rendersServerTabNatively", () => {
+  it("streams reused primary servers and older bootstraps without a browser channel", () => {
+    state.desktop = true;
+    expect(rendersServerTabNatively(local, local, { runtime: "server" }, false)).toBe(false);
+    expect(rendersServerTabNatively(local, local, { runtime: "server" })).toBe(false);
+  });
+
+  it("uses native pages only for this desktop's own browser channel", () => {
+    state.desktop = true;
+    expect(rendersServerTabNatively(local, local, { runtime: "server" }, true)).toBe(true);
+    expect(rendersServerTabNatively(remote, local, { runtime: "server" }, true)).toBe(false);
+    expect(rendersServerTabNatively(local, local, { runtime: "desktop" }, true)).toBe(false);
+    state.desktop = false;
+    expect(rendersServerTabNatively(local, local, { runtime: "server" }, true)).toBe(false);
   });
 });

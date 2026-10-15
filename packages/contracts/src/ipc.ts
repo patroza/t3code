@@ -403,6 +403,8 @@ export interface DesktopEnvironmentBootstrap {
   httpBaseUrl: string | null;
   wsBaseUrl: string | null;
   bootstrapToken?: string;
+  /** This desktop hosts the server's browser pages through its private browser channel. */
+  nativeServerBrowser?: boolean;
 }
 
 export const DesktopEnvironmentBootstrapSchema = Schema.Struct({
@@ -412,6 +414,7 @@ export const DesktopEnvironmentBootstrapSchema = Schema.Struct({
   httpBaseUrl: Schema.NullOr(Schema.String),
   wsBaseUrl: Schema.NullOr(Schema.String),
   bootstrapToken: Schema.optionalKey(Schema.String),
+  nativeServerBrowser: Schema.optionalKey(Schema.Boolean),
 });
 
 export const DesktopSshEnvironmentTargetSchema = Schema.Struct({

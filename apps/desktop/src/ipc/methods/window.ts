@@ -143,6 +143,11 @@ export const getLocalEnvironmentBootstraps = DesktopIpc.makeSyncIpcMethod({
         runningDistro,
         httpBaseUrl: httpBaseUrl.href,
         wsBaseUrl: toWebSocketBaseUrl(httpBaseUrl),
+        nativeServerBrowser:
+          config.value.reuseExisting !== true &&
+          config.value.bootstrapDelivery === "fd3" &&
+          bootstrap.desktopBrowserFd !== undefined &&
+          bootstrap.desktopBrowserControlFd !== undefined,
         // A backend launched with the desktop secret accepts whichever token
         // the secret derives for the current window, so hand out that one
         // rather than the token frozen into its launch config. Every backend

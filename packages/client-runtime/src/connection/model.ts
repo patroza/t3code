@@ -12,6 +12,7 @@ export class PrimaryConnectionTarget extends Schema.TaggedClass<PrimaryConnectio
     ...ConnectionTargetBase,
     httpBaseUrl: Schema.String,
     wsBaseUrl: Schema.String,
+    nativeServerBrowser: Schema.optionalKey(Schema.Boolean),
   },
 ) {}
 
