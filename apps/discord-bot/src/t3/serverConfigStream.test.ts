@@ -51,7 +51,7 @@ const claude = Schema.decodeUnknownSync(ServerProvider)({
   status: "ready",
   auth: { status: "authenticated" },
   checkedAt: "2026-10-15T00:00:00.000Z",
-  models: [{ slug: "claude-opus-5-5", name: "Opus" }],
+  models: [{ slug: "claude-opus-5-5", name: "Opus", isCustom: false, capabilities: null }],
 });
 
 describe("bot server config subscription", () => {
