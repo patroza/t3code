@@ -18,6 +18,12 @@ function readSrc(relativePath: string): string {
 }
 
 describe("fork surface existence (anti stack-drop)", () => {
+  it("uses the browser ownership guard for native rendering and keeps the streamed surface", () => {
+    expect(readSrc("browser/ElectronBrowserHost.tsx")).toContain("rendersServerTabNatively(");
+    const view = readSrc("components/preview/PreviewView.tsx");
+    expect(view).toContain("useRendersServerTabNatively(");
+    expect(view).toContain("<ServerBrowserSurface");
+  });
   it("keeps the upstream editor picker without custom application management", () => {
     const picker = readSrc("components/chat/OpenInPicker.tsx");
     expect(picker).toContain('aria-label="Choose editor"');

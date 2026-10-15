@@ -1694,7 +1694,16 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         ReadonlyMap<string, PreviewTabState>,
       ] => {
         const existing = tabs.get(tabId);
-        if (existing) return [{ state: existing, created: false }, tabs] as const;
+        if (existing) {
+          if (!defaults?.serverTab || existing.serverTab)
+            return [{ state: existing, created: false }, tabs] as const;
+          // Navigation can create the tab before its host supplies the server key.
+          const state = { ...existing, serverTab: defaults.serverTab };
+          return [
+            { state, created: false },
+            replaceMap(tabs, (copy) => copy.set(tabId, state)),
+          ] as const;
+        }
         const initial: PreviewTabState = {
           tabId,
           webContentsId: null,
@@ -2022,6 +2031,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         zoomFactor: current?.zoomFactor ?? DEFAULT_ZOOM_FACTOR,
         pictureInPicture: current?.pictureInPicture ?? false,
         colorScheme: current?.colorScheme ?? "system",
+        ...(current?.serverTab === undefined ? {} : { serverTab: current.serverTab }),
         // Both carry across navigation. Mute is user intent, and the old
         // document keeps playing until loadURL actually replaces it, so
         // clearing audibility here would drop the speaker with no transition

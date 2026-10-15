@@ -356,6 +356,9 @@ const loadPrimaryConnectionRegistration = Effect.fn(
       label: descriptor.label,
       httpBaseUrl: resolved.target.httpBaseUrl,
       wsBaseUrl: resolved.target.wsBaseUrl,
+      ...(resolved.target.nativeServerBrowser === undefined
+        ? {}
+        : { nativeServerBrowser: resolved.target.nativeServerBrowser }),
     }),
   });
 });
@@ -601,7 +604,7 @@ const layerPlatformConnectionSource = Layer.effect(
         });
       } else if (primaryTopologyRead.target !== null) {
         const primaryTarget = primaryTopologyRead.target;
-        const signature = `primary|${primaryTarget.target.httpBaseUrl}|${primaryTarget.target.wsBaseUrl}`;
+        const signature = `primary|${primaryTarget.target.httpBaseUrl}|${primaryTarget.target.wsBaseUrl}|native:${primaryTarget.target.nativeServerBrowser === true}`;
         const cached = previous.get(PRIMARY_LOCAL_ENVIRONMENT_ID);
         if (
           cached !== undefined &&

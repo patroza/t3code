@@ -11,9 +11,10 @@ import { authClientMetadata } from "../../lib/authClientMetadata";
 import { identityEnvironment } from "../../state/identity";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import type { HandoffEndpoints } from "@t3tools/client-runtime/handoff";
-import type {
-  CodexFeedbackSubmission,
-  EnvironmentThreadStatus,
+import {
+  childThreadInputsTitle,
+  type CodexFeedbackSubmission,
+  type EnvironmentThreadStatus,
 } from "@t3tools/client-runtime/state/threads";
 import { useKeyboardChatComposerInset, useKeyboardScrollToEnd } from "@legendapp/list/keyboard";
 import { resolveProviderSkillsForCwd } from "@t3tools/client-runtime/providerSkills";
@@ -547,11 +548,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     if (childInput && contentPresentationKind === "ready") {
       return {
         kind: "child-input",
-        label:
-          childThreadInputs.length === 1
-            ? "Subagent needs input"
-            : `${childThreadInputs.length} subagents need input`,
-        accessibilityLabel: `Open question from ${childInput.title}`,
+        label: childThreadInputsTitle(childThreadInputs),
+        accessibilityLabel: `Open ${childInput.hasPendingApprovals ? "approval" : "question"} from ${childInput.title}`,
         onPress: () => {
           Keyboard.dismiss();
           navigation.navigate("Thread", {

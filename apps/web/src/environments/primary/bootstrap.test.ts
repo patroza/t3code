@@ -183,6 +183,27 @@ describe("environmentBootstrap", () => {
     );
   });
 
+  it.each([true, false])(
+    "carries native browser ownership %s from the desktop bootstrap",
+    (nativeServerBrowser) => {
+      vi.stubGlobal("window", {
+        location: new URL("http://127.0.0.1:3774/"),
+        desktopBridge: {
+          getLocalEnvironmentBootstraps: () => [
+            {
+              id: "primary",
+              label: "Local",
+              httpBaseUrl: "http://127.0.0.1:3774/",
+              wsBaseUrl: "ws://127.0.0.1:3774/",
+              nativeServerBrowser,
+            },
+          ],
+        },
+      });
+      expect(readPrimaryEnvironmentTarget()?.target.nativeServerBrowser).toBe(nativeServerBrowser);
+    },
+  );
+
   it("uses the vite proxy for desktop-managed loopback descriptor requests during local dev", async () => {
     vi.stubEnv("VITE_DEV_SERVER_URL", "http://127.0.0.1:5733");
     vi.stubGlobal("window", {

@@ -159,6 +159,7 @@ export default mergeConfig(
               "src/git/GitManager.test.ts",
               "src/observability/HeapSnapshot.test.ts",
               "src/os-jank.test.ts",
+              "src/serviceLauncher.test.ts",
               "src/provider/ClaudeCapabilitiesProbe.test.ts",
               "src/orchestration-v2/Adapters/ClaudeAgentSdkQueryRunner.test.ts",
               "src/provider/ProviderRegistry.test.ts",
@@ -209,6 +210,9 @@ export default mergeConfig(
               "src/observability/HeapSnapshot.test.ts",
               // Mocks the synchronous login-shell probe used by shared/shell.
               "src/os-jank.test.ts",
+              // Wraps node:child_process.spawn to observe trial IPC. Earlier
+              // CloudLink imports otherwise cache the launcher without that wrapper.
+              "src/serviceLauncher.test.ts",
               // Wraps ChildProcessSpawner and drives SettingsWatcherLive
               // through TestClock. Under isolate:false a sibling file in
               // the same worker can swallow the second binaryPath probe.
