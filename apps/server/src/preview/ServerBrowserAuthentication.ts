@@ -20,7 +20,5 @@ export const SERVER_BROWSER_AUTHENTICATION_SCRIPT = `(() => {
       },
     });
   }
-  Object.defineProperty(globalThis, "PublicKeyCredential", {
-    value: undefined, configurable: true, writable: true,
-  });
+  Reflect.deleteProperty(globalThis, "PublicKeyCredential");
 })();`;

@@ -58,7 +58,8 @@ describe("streamed browser authentication", () => {
         route.fulfill({
           contentType: "text/html",
           body: `<!doctype html><script>
-        document.title = typeof PublicKeyCredential === "undefined" ? "Phone sign-in" : "Device passkey";
+        document.title = typeof PublicKeyCredential === "undefined" && !("PublicKeyCredential" in window)
+          ? "Phone sign-in" : "Device passkey";
       </script>${route.request().url().endsWith("/") ? '<a href="/popup" target="_blank">Sign in</a><iframe src="/frame"></iframe>' : ""}`,
         }),
       );
