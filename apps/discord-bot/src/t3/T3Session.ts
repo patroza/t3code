@@ -77,6 +77,7 @@ import { formatThreadTitle } from "../presentation/messages.ts";
 import { normalizeWorkspacePath } from "../presentation/mentions.ts";
 import { followOrchestrationThread } from "./DiscordThreadFollower.ts";
 import { applyIntegrationShellStreamItem } from "./shellStream.ts";
+import { followBotServerConfig } from "./serverConfigStream.ts";
 import { reconnectUntilReady } from "./reconnect.ts";
 import { newCommandId, newMessageId, newThreadId, newChatWorktreeBranch } from "./ids.ts";
 import {
@@ -320,7 +321,7 @@ export interface T3SessionService {
     readonly overrideModel?: string;
     /** Channel topic `omegent-fast-mode`: use the catalog's fast option or model. */
     readonly fastMode?: boolean;
-  }) => Effect.Effect<ModelSelection, UnknownDiscordModelError>;
+  }) => Effect.Effect<ModelSelection, UnknownDiscordModelError | T3SessionError>;
   readonly getThreadShell: (threadId: ThreadId) => Effect.Effect<OrchestrationThreadShell | null>;
   /**
    * HTTP snapshot of a thread (full transcript + sequence). Used by Discord bridges to
@@ -392,6 +393,7 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
     let shell: OrchestrationV2ShellSnapshot | null = null;
     let serverConfig: ServerConfig | null = null;
     let shellFiber: Fiber.Fiber<void, unknown> | null = null;
+    let configFiber: Fiber.Fiber<void, unknown> | null = null;
     let browserFiber: Fiber.Fiber<void, unknown> | null = null;
     let browserHost: BrowserAutomationHost | null = null;
     let reconnecting = false;
@@ -412,7 +414,7 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
      */
     const teardown = async () => {
       const previousScope = scope;
-      const previousFibers = [shellFiber, browserFiber, ...threadFibers.values()];
+      const previousFibers = [shellFiber, configFiber, browserFiber, ...threadFibers.values()];
       const previousBrowserHost = browserHost;
       scope = null;
       session = null;
@@ -421,6 +423,7 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
       shell = null;
       serverConfig = null;
       shellFiber = null;
+      configFiber = null;
       browserFiber = null;
       browserHost = null;
       // Drop thread subscriptions so subscribeThread() re-subscribes on the new session
@@ -630,6 +633,11 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
             httpBaseUrl = normalizedBaseUrl;
             httpBearerToken = bearerToken !== undefined && bearerToken !== "" ? bearerToken : null;
             serverConfig = await runtime.runPromise(connected.initialConfig);
+            configFiber = runtime.runFork(
+              followBotServerConfig(connected, (config) => {
+                serverConfig = config;
+              }),
+            );
             superviseClose(connected);
 
             const stream = connected.client[ORCHESTRATION_V2_WS_METHODS.subscribeShell]({}).pipe(
@@ -988,7 +996,13 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
           ...(overrideModel === undefined ? {} : { overrideModel }),
         });
         if (selection === null) {
-          return Effect.fail(new UnknownDiscordModelError(overrideModel ?? ""));
+          return Effect.fail(
+            overrideModel === undefined
+              ? new T3SessionError(
+                  "No enabled provider is ready. Please try again when provider discovery completes.",
+                )
+              : new UnknownDiscordModelError(overrideModel),
+          );
         }
         if (fastMode !== true) return Effect.succeed(selection);
         const resolved = applyFastModeSelection(selection, providersForSelection());

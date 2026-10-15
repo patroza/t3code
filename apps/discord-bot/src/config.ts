@@ -290,6 +290,15 @@ export function preferredModelSelection(input: {
   readonly overrideInstanceId?: string;
   readonly overrideModel?: string;
 }): ModelSelection | null {
+  // Provider discovery can still be warming up after a server restart. Never
+  // persist the shared resolver's offline fallback as a real bot thread model.
+  if (
+    !input.providers.some(
+      (provider) => provider.enabled && provider.installed && provider.models.length > 0,
+    )
+  ) {
+    return null;
+  }
   const fallbackSelection = {
     instanceId: DEFAULT_BOT_INSTANCE_ID as ProviderInstanceId,
     model: DEFAULT_BOT_MODEL,

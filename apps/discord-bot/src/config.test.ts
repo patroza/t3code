@@ -67,6 +67,53 @@ const baseConfig = {
 } satisfies DiscordBotConfig;
 
 describe("preferredModelSelection", () => {
+  const claudeConfig = {
+    ...baseConfig,
+    t3DefaultInstanceId: "claudeAgent",
+    t3DefaultModel: "claude-opus-5-5",
+  };
+
+  it("does not select the offline Codex fallback before provider discovery", () => {
+    expect(preferredModelSelection({ config: claudeConfig, providers: [] })).toBeNull();
+  });
+
+  it.each([
+    { enabled: false, installed: true, models: [{ slug: "gpt-6-astra", name: "GPT" }] },
+    { enabled: true, installed: false, models: [{ slug: "gpt-6-astra", name: "GPT" }] },
+    { enabled: true, installed: true, models: [] },
+  ])("does not create a thread when every provider is unavailable: %j", (state) => {
+    expect(
+      preferredModelSelection({
+        config: claudeConfig,
+        providers: [{ instanceId: ProviderInstanceId.make("codex"), driver: "codex", ...state }],
+      }),
+    ).toBeNull();
+  });
+
+  it("uses Claude when it becomes ready while Codex remains disabled", () => {
+    expect(
+      preferredModelSelection({
+        config: claudeConfig,
+        providers: [
+          {
+            instanceId: ProviderInstanceId.make("codex"),
+            driver: "codex",
+            enabled: false,
+            installed: true,
+            models: [{ slug: "gpt-6-astra", name: "GPT" }],
+          },
+          {
+            instanceId: ProviderInstanceId.make("claudeAgent"),
+            driver: "claudeAgent",
+            enabled: true,
+            installed: true,
+            models: [{ slug: "claude-opus-5-5", name: "Opus" }],
+          },
+        ],
+      }),
+    ).toEqual({ instanceId: "claudeAgent", model: "claude-opus-5-5" });
+  });
+
   it("uses the project default before the bot fallback", () => {
     const selection = preferredModelSelection({
       config: baseConfig,
