@@ -12,7 +12,11 @@ import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as ConfigProvider from "effect/ConfigProvider";
 import { IntegrationThreadView } from "@t3tools/shared/integrationThreadView";
-import { MessageId } from "@t3tools/contracts";
+import {
+  EventId,
+  MessageId,
+  ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
+} from "@t3tools/contracts";
 import { DiscordBotConfig } from "../config.ts";
 import { ThreadLinkStore, makeThreadLinkStore } from "../store/ThreadLinkStore.ts";
 import { ThreadWarmCacheStore, makeThreadWarmCacheStore } from "../store/ThreadWarmCacheStore.ts";
@@ -24,6 +28,8 @@ import {
   BotTransportError,
   type BotResponseTransportService,
 } from "./BotResponseTransport.ts";
+import { buildThreadInfoRenderInput } from "./ThreadInfoPin.ts";
+import { renderThreadInfoPin } from "../presentation/threadInfoPin.ts";
 import { bridgeThreadToPlatform, runBridge } from "./ResponseBridge.ts";
 import { BridgeHub, makeBridgeHub } from "./BridgeHub.ts";
 
@@ -153,6 +159,9 @@ describe("shared response runner", () => {
     { platform: "teams", failure: "upload" },
     { platform: "teams", failure: "shutdown" },
     { platform: "teams", failure: "same-run-follow-up" },
+    { platform: "teams", failure: "workspace" },
+    { platform: "teams", failure: "info" },
+    { platform: "teams", failure: "setup" },
   ] as const)(
     "delivers progress and final replies through $platform (failure=$failure)",
     ({ platform, failure }) =>
@@ -164,7 +173,12 @@ describe("shared response runner", () => {
         );
         const links = yield* makeThreadLinkStore(directory);
         const warm = yield* makeThreadWarmCacheStore(directory);
-        const running = fixture(false);
+        let running = fixture(false);
+        if (failure === "workspace" || failure === "setup")
+          running = {
+            ...running,
+            latestTurn: { ...running.latestTurn!, runStatus: "preparing" },
+          };
         let completed = fixture(
           true,
           false,
@@ -230,6 +244,7 @@ describe("shared response runner", () => {
         const failed = yield* Deferred.make<void>();
         const final = yield* Deferred.make<string>();
         const info = yield* Deferred.make<string>();
+        const setupFailed = yield* Deferred.make<void>();
         const ready = yield* Deferred.make<void>();
         const messages = new Map<string, BotMessage>();
         let counter = 0;
@@ -237,8 +252,11 @@ describe("shared response runner", () => {
         const fieldsById = new Map<string, BotMessageFields>();
         const deliveryOrder: string[] = [];
         const progressIds = new Set<string>();
+        const infoContent: string[] = [];
+        let infoSucceeded = false;
         const write = (content: string, id?: string, fields: BotMessageFields = { content }) =>
           Effect.gen(function* () {
+            if (platform === "teams") expect(infoSucceeded).toBe(true);
             if (stopped) writesAfterStop += 1;
             deliveryOrder.push(content);
             const message = { id: id ?? String(++counter), content, author: { id: "bot" } };
@@ -351,10 +369,32 @@ describe("shared response runner", () => {
               return yield* write(content);
             }),
           upsertThreadInfo: (input) =>
-            Effect.sync(() => deliveryOrder.push("thread-info")).pipe(
-              Effect.andThen(Deferred.succeed(info, input.modelSelection?.model ?? "")),
-              Effect.asVoid,
-            ),
+            Effect.gen(function* () {
+              if (failure === "info" && !didFail) {
+                didFail = true;
+                expect(deliveryOrder).toEqual([]);
+                return yield* new BotTransportError({ cause: new Error("info unavailable") });
+              }
+              deliveryOrder.push("thread-info");
+              infoContent.push(
+                renderThreadInfoPin(
+                  buildThreadInfoRenderInput({
+                    ...input,
+                    webLink: "https://example.com/?thread=thread",
+                  }),
+                ),
+              );
+              infoSucceeded = true;
+              yield* links.setModelHistory("conversation", {
+                initialModelLine: "codex/gpt-6.1-sol",
+                currentModelLine: "codex/gpt-6.1-sol",
+                modelSinceAt: null,
+              });
+              yield* links.setInfoDiscordMessageId("conversation", "info");
+              yield* Deferred.succeed(info, input.modelSelection?.model ?? "");
+              if (input.workspaceStatus === "failed")
+                yield* Deferred.succeed(setupFailed, undefined);
+            }),
         };
         if (failure === "restart") {
           counter = 1;
@@ -376,7 +416,39 @@ describe("shared response runner", () => {
               }
               yield* onThread(running);
               yield* Deferred.await(working);
+              if (failure === "setup") {
+                latest = {
+                  ...running,
+                  latestTurn: { ...running.latestTurn!, state: "error", runStatus: "failed" },
+                  activities: [
+                    {
+                      id: EventId.make("setup-error"),
+                      turnId: running.latestTurn!.turnId,
+                      tone: "error",
+                      kind: "tool.updated",
+                      summary: "Setup failed",
+                      payload: {
+                        status: "failed",
+                        failure: {
+                          code: ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
+                        },
+                      },
+                      createdAt: time,
+                    },
+                  ],
+                };
+                yield* onThread(latest);
+                return yield* Effect.never;
+              }
               latest = fixture(false, true, false, failure === "none");
+              if (failure === "workspace") {
+                latest = { ...latest, worktreePath: "/worktrees/scanner/task", branch: "task" };
+                completed = {
+                  ...completed,
+                  worktreePath: latest.worktreePath,
+                  branch: latest.branch,
+                };
+              }
               yield* onThread(latest);
               if (failure === "progress" || failure === "missing") {
                 yield* Deferred.await(failed);
@@ -494,6 +566,16 @@ describe("shared response runner", () => {
           (effect) => effect as Effect.Effect<void, unknown, Scope.Scope>,
           Effect.forkChild,
         );
+        if (failure === "setup") {
+          yield* Deferred.await(setupFailed);
+          expect(infoContent[0]).toContain("Preparing workspace…");
+          expect(infoContent.at(-1)).toContain("Workspace setup failed.");
+          expect(infoContent.at(-1)).not.toContain("local (no worktree)");
+          expect(deliveryOrder[0]).toBe("thread-info");
+          yield* hub.dropAll();
+          yield* Fiber.interrupt(fiber);
+          return;
+        }
         if (failure === "shutdown") {
           yield* Deferred.await(blockedWrite);
           yield* Fiber.interrupt(fiber).pipe(Effect.timeout("2 seconds"));
@@ -545,7 +627,16 @@ describe("shared response runner", () => {
             (failure === "missing" ? 1 : 0) +
             (failure === "same-run-follow-up" ? 2 : 1),
         );
-        expect(didFail).toBe(!["none", "late-final", "same-run-follow-up"].includes(failure));
+        expect(didFail).toBe(
+          !["none", "late-final", "same-run-follow-up", "workspace"].includes(failure),
+        );
+        if (failure === "workspace") {
+          expect(infoContent[0]).toContain("Preparing workspace…");
+          expect(infoContent[0]).not.toContain("local (no worktree)");
+          expect(infoContent.at(-1)).toContain("Worktree: `/worktrees/scanner/task`");
+          expect(infoContent.at(-1)).not.toContain("Preparing workspace…");
+          expect(infoContent).toHaveLength(2);
+        }
         expect([...progressIds].some((id) => messages.has(id))).toBe(false);
         expect([...messages.keys()].every((id) => !progressIds.has(id))).toBe(true);
         expect(

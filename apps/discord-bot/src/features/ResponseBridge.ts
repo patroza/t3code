@@ -43,6 +43,7 @@ import {
 import { buildOmegentThreadMessageUrl } from "../presentation/discordPrAttribution.ts";
 import { textFile, type DiscordUploadFile } from "../presentation/discordFiles.ts";
 import { formatModelSelectionLine } from "../presentation/threadInfoPin.ts";
+import { threadWorkspaceInfo } from "../presentation/threadWorkspaceInfo.ts";
 import {
   assertFilesystemPath as assertFilesystemFilePath,
   extractMarkdownLocalFileLinks,
@@ -2486,8 +2487,7 @@ export const bridgeThreadToPlatform = (input: {
         threadId: input.threadId,
         config: transport.config,
         modelSelection: snapshot.thread.modelSelection,
-        worktreePath: snapshot.thread.worktreePath,
-        local: snapshot.thread.worktreePath === null,
+        ...threadWorkspaceInfo(snapshot.thread),
       });
     }
     const workingAckMessageId =
@@ -2584,6 +2584,7 @@ export const runBridge = (
       Scope.close(scope, Exit.void),
     );
     const latestThreadRef = yield* Ref.make<OrchestrationThread | null>(null);
+    let threadInfoReady = rest.platform !== "teams";
     const latestVcsStatusRef = yield* Ref.make<VcsStatusResult | null>(null);
     /** Sticky PR evidence — never cleared by transient null lookups (only force-refresh). */
     const stickyTitlePrRef = yield* Ref.make<StickyTitlePrEvidence | null>(null);
@@ -5019,6 +5020,7 @@ export const runBridge = (
     const updateWorkingHeartbeat = Effect.fn("ResponseBridge.updateWorkingHeartbeat")(function* (
       workingDots: WorkingDotCount,
     ) {
+      if (!threadInfoReady) return;
       yield* streamWriteLock.withPermit(
         Effect.gen(function* () {
           const state = yield* Ref.get(stateRef);
@@ -5160,44 +5162,56 @@ export const runBridge = (
         );
       }).pipe(Effect.asVoid);
 
-    /**
-     * Keep the pinned thread-info Model line in sync when the T3 thread model changes
-     * (Discord `--model` flag, web UI, etc.). Includes "since …, started with …" history.
-     */
-    const syncThreadInfoModelPin = (thread: OrchestrationThread) =>
+    // Cache only successful writes. A failed creation must retry even if the adapter
+    // already persisted the model history before its platform API call failed.
+    let lastThreadInfo: (ReturnType<typeof threadWorkspaceInfo> & { modelLine: string }) | null =
+      null;
+    const syncThreadInfoPin = (thread: OrchestrationThread) =>
       Effect.gen(function* () {
-        const modelSelection = thread.modelSelection;
-        if (modelSelection === undefined || modelSelection === null) return;
-
-        const modelLine = formatModelSelectionLine(modelSelection);
+        const workspace = threadWorkspaceInfo(thread);
+        const info = { ...workspace, modelLine: formatModelSelectionLine(thread.modelSelection) };
+        if (
+          lastThreadInfo !== null &&
+          lastThreadInfo.modelLine === info.modelLine &&
+          lastThreadInfo.worktreePath === info.worktreePath &&
+          lastThreadInfo.workspaceStatus === info.workspaceStatus
+        )
+          return;
         const link = yield* links.getByDiscordThreadId(input.discordChannelId);
         if (link === null) return;
-        if (link.currentModelLine === modelLine) return;
+        if (link.infoDiscordMessageId) threadInfoReady = true;
 
-        const botConfig = rest.config;
-        yield* rest.upsertThreadInfo({
-          conversationId: input.discordChannelId,
-          threadId: input.t3ThreadId,
-          config: botConfig,
-          modelSelection,
-          worktreePath: thread.worktreePath,
-          local: thread.worktreePath === null,
-        });
-        yield* Effect.logInfo("Thread info pin model updated", {
-          discordChannelId: input.discordChannelId,
-          threadId: input.t3ThreadId,
-          previousModel: link.currentModelLine ?? null,
-          nextModel: modelLine,
-        });
-      }).pipe(
-        Effect.catch((error) =>
-          Effect.logWarning("Failed to sync thread info model pin", {
-            discordChannelId: input.discordChannelId,
-            t3ThreadId: input.t3ThreadId,
-            error: String(error),
-          }),
-        ),
-      );
+        const updated = yield* rest
+          .upsertThreadInfo({
+            conversationId: input.discordChannelId,
+            threadId: input.t3ThreadId,
+            config: rest.config,
+            modelSelection: thread.modelSelection,
+            ...workspace,
+          })
+          .pipe(
+            Effect.catch((error) => {
+              // Recovery must establish the first Teams info message before responses.
+              // Later metadata refresh failures can retry without holding up delivery.
+              if (
+                rest.platform === "teams" &&
+                lastThreadInfo === null &&
+                !link.infoDiscordMessageId
+              )
+                return Effect.fail(error);
+              return Effect.logWarning("Failed to refresh thread info", {
+                discordChannelId: input.discordChannelId,
+                t3ThreadId: input.t3ThreadId,
+                error: String(error),
+              }).pipe(Effect.as(false));
+            }),
+            Effect.map((result) => result !== false),
+          );
+        if (updated) {
+          lastThreadInfo = info;
+          threadInfoReady = true;
+        }
+      });
 
     /**
      * Discord message ids whose 📥 delete is already in flight. Snapshots arrive
@@ -5262,7 +5276,7 @@ export const runBridge = (
     const processThreadSnapshot = (thread: OrchestrationThread) =>
       Effect.gen(function* () {
         // Rehydrated Teams bridges must also publish their info before any new delivery.
-        if (rest.platform === "teams") yield* syncThreadInfoModelPin(thread);
+        if (rest.platform === "teams") yield* syncThreadInfoPin(thread);
 
         yield* clearQueuedBadgesForStartedRuns(thread);
         yield* ensureVcsStatusSubscription(thread);
@@ -5629,7 +5643,7 @@ export const runBridge = (
 
         // Best-effort + hard time budget for remaining secondary work.
         yield* Effect.gen(function* () {
-          if (rest.platform !== "teams") yield* syncThreadInfoModelPin(thread);
+          if (rest.platform !== "teams") yield* syncThreadInfoPin(thread);
 
           // Tasks first: first-class Discord progress UI from turn.plan (not External User Input).
           // Keep updating mid-turn / rehydrate; owned via taskDiscordMessageId so it never freezes Working.
