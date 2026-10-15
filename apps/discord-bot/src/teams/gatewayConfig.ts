@@ -8,6 +8,7 @@ import { validateTeamsDescriptionPolicy } from "./channelDescription.ts";
 const Workspace = Schema.Struct({
   enabled: Schema.Boolean,
   webOrigin: Schema.String,
+  publicWebOrigin: Schema.optional(Schema.String),
   t3HttpBaseUrl: Schema.optional(Schema.String),
   credentialFile: Schema.optional(Schema.String),
   dataDir: Schema.optional(Schema.String),
@@ -75,6 +76,8 @@ const InstalledChannel = Schema.Struct({
   projectId: Schema.optional(Schema.String),
   fileDestination: Schema.optional(TeamsFileDestination),
   includeProgressHistory: Schema.optional(Schema.Boolean),
+  useChannelDescription: Schema.optional(Schema.Boolean),
+  descriptionProjectShortNames: Schema.optional(Schema.Array(Schema.String)),
   // Refuse shadow authorization/location fields instead of silently ignoring them.
   workspace: Schema.optional(Schema.Never),
   tenantId: Schema.optional(Schema.Never),
@@ -184,6 +187,7 @@ export function parseGatewayConfig(value: unknown): TeamsGatewayConfig {
     if (!workspace.enabled) continue;
     const origin = new URL(workspace.t3HttpBaseUrl ?? "");
     const web = new URL(workspace.webOrigin);
+    const publicWeb = new URL(workspace.publicWebOrigin ?? workspace.webOrigin);
     if (
       origin.protocol !== "https:" ||
       origin.username ||
@@ -196,7 +200,13 @@ export function parseGatewayConfig(value: unknown): TeamsGatewayConfig {
       web.password ||
       web.search ||
       web.hash ||
-      web.pathname !== "/"
+      web.pathname !== "/" ||
+      publicWeb.protocol !== "https:" ||
+      publicWeb.username ||
+      publicWeb.password ||
+      publicWeb.search ||
+      publicWeb.hash ||
+      publicWeb.pathname !== "/"
     ) {
       throw new Error("Workspaces require fixed HTTPS origins without embedded credentials");
     }
