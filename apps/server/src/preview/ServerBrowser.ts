@@ -689,8 +689,8 @@ const make = Effect.gen(function* () {
     tabs.delete(key);
     tab.closing = true;
     clearAbortedNavigation(tab);
-    // A desktop page outlives the connection unless its session closed with it.
-    const end = tab.desktop && !closeSession && sessionOpen(tab) ? "reconnect" : "gone";
+    // A surviving session reconnects, including when a desktop replaces a fallback page.
+    const end = !closeSession && sessionOpen(tab) ? "reconnect" : "gone";
     for (const viewer of tab.viewers) viewer.push({ _tag: end });
     void tab.control.close().catch(constVoid);
     // The desktop owns its page; letting go only ends this connection.
@@ -2405,18 +2405,24 @@ const make = Effect.gen(function* () {
     ),
     Effect.forkScoped,
   );
-  // The page came back, for example after its DevTools closed. Reconnect now
-  // rather than on the next viewer or agent, or the tab's URL and title stop
-  // reaching every client in the meantime.
+  // Reconnect returned pages and replace headless fallbacks when the desktop
+  // attaches late, so the human and agent never keep driving separate pages.
   yield* desktopChannel.attached.pipe(
     Stream.runForEach((key) =>
       Effect.gen(function* () {
-        if (tabs.has(tabKey(key.threadId, key.tabId))) return;
+        const id = tabKey(key.threadId, key.tabId);
+        yield* Effect.promise(() => pendingTabs.get(id)?.catch(constVoid) ?? Promise.resolve());
+        if (!(yield* desktopChannel.isAttached(key))) return;
+        const existing = tabs.get(id);
+        if (existing?.desktop) return;
         const { sessions } = yield* manager.list({ threadId: ThreadId.make(key.threadId) });
         const snapshot = sessions.find(
           (session) => session.tabId === key.tabId && session.runtime === "server",
         );
-        if (snapshot) yield* Effect.promise(() => ensureTab(snapshot).catch(constVoid));
+        if (snapshot) {
+          if (existing) dropTab(existing, false);
+          yield* Effect.promise(() => ensureTab(snapshot).catch(constVoid));
+        }
       }).pipe(Effect.ignore),
     ),
     Effect.forkScoped,
