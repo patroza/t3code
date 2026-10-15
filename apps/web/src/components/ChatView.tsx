@@ -97,6 +97,7 @@ import {
 import { readPastedComposerContext } from "./composerInlineTokenPaste";
 import { isPasteAsTextShortcut } from "@t3tools/client-runtime/text-paste";
 import { effectiveSnoozed, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
+import { childThreadInputsTitle } from "@t3tools/client-runtime/state/threads";
 import { useAcknowledgeThreadWoke, useThreadActions } from "../hooks/useThreadActions";
 import {
   deriveProviderSubagentStatus,
@@ -316,6 +317,7 @@ import {
   ChevronDownIcon,
   DownloadIcon,
   GitBranchIcon,
+  ShieldQuestionIcon,
   TargetIcon,
   WifiOffIcon,
 } from "lucide-react";
@@ -7785,22 +7787,22 @@ export default function ChatView(props: ChatViewProps) {
       id: `child-input:${first.id}`,
       variant: "info",
       priority: "activity",
-      icon: <MessageCircleIcon />,
-      title:
-        childThreadInputs.length === 1
-          ? "Subagent needs input"
-          : `${childThreadInputs.length} subagents need input`,
+      icon: first.hasPendingApprovals ? <ShieldQuestionIcon /> : <MessageCircleIcon />,
+      title: childThreadInputsTitle(childThreadInputs),
       description: childThreadInputs.map((child, index) => (
         <Fragment key={child.id}>
-          {index > 0 ? ", " : null}
-          <InlineButton tone="muted" onClick={() => onOpenRelatedThread(child.id)}>
-            {child.title}
-          </InlineButton>
+          {index > 0 ? " " : null}
+          <span className="whitespace-nowrap">
+            <InlineButton tone="muted" onClick={() => onOpenRelatedThread(child.id)}>
+              {child.title}
+            </InlineButton>
+            {index < childThreadInputs.length - 1 ? "," : null}
+          </span>
         </Fragment>
       )),
       actions: (
         <Button size="xs" variant="ghost" onClick={() => onOpenRelatedThread(first.id)}>
-          Open question
+          {first.hasPendingApprovals ? "Open approval" : "Open question"}
         </Button>
       ),
     };
@@ -7963,19 +7965,26 @@ export default function ChatView(props: ChatViewProps) {
           ? undefined
           : presentation.items.map((item, index) => {
               const childThreadId = item.childThreadId;
+              const separator = index < presentation.items.length - 1 ? "," : null;
               return (
                 <Fragment key={item.taskId}>
-                  {index > 0 ? ", " : null}
+                  {index > 0 ? " " : null}
                   {childThreadId === undefined ? (
-                    item.label
-                  ) : (
-                    <InlineButton
-                      tone="muted"
-                      aria-label={`Open subagent ${item.label}`}
-                      onClick={() => onOpenRelatedThread(childThreadId)}
-                    >
+                    <>
                       {item.label}
-                    </InlineButton>
+                      {separator}
+                    </>
+                  ) : (
+                    <span className="whitespace-nowrap">
+                      <InlineButton
+                        tone="muted"
+                        aria-label={`Open subagent ${item.label}`}
+                        onClick={() => onOpenRelatedThread(childThreadId)}
+                      >
+                        {item.label}
+                      </InlineButton>
+                      {separator}
+                    </span>
                   )}
                 </Fragment>
               );

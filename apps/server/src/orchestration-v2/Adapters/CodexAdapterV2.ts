@@ -1325,6 +1325,10 @@ export const CODEX_THREAD_CONFIG = {
   mcp_optional_startup_grace_ms: 10_000,
 } as const;
 
+// T3 wait tools can block for up to an hour. Keep Codex's MCP timeout above
+// that limit so the server's own wait timeout ends a long call.
+const CODEX_T3_MCP_TOOL_TIMEOUT_SEC = 65 * 60;
+
 export function codexThreadRuntimeParams(input: {
   readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
   readonly modelSelection?: { readonly model: string };
@@ -1346,6 +1350,7 @@ export function codexThreadRuntimeParams(input: {
             mcp_servers: {
               "t3-code": {
                 url: mcpSession.endpoint,
+                tool_timeout_sec: CODEX_T3_MCP_TOOL_TIMEOUT_SEC,
                 http_headers: {
                   Authorization: mcpSession.authorizationHeader,
                 },
@@ -1894,6 +1899,45 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           new Map<string, PendingCodexRuntimeRequest>(),
         );
         /**
+         * Approval kinds the user chose "Always allow this session" for, by
+         * native thread. Codex's own acceptForSession only skips the exact
+         * command or patch it answered, so every new command would ask again.
+         * A turn in another runtime mode ends the allowance, and so does the
+         * thread unloading, like Codex's own session approvals.
+         */
+        const sessionApprovals = new Map<
+          string,
+          { readonly runtimeMode: RuntimeMode; readonly kinds: Set<ProviderRequestKind> }
+        >();
+        /**
+         * The allowed kinds for an approval request's turn. Read it when the
+         * request arrives and add to that same set when the user answers, so a
+         * late answer from a turn whose mode has since ended is dropped.
+         */
+        /** Every native turn registers here. A turn in another mode ends the allowance. */
+        const endSessionApprovalsOnModeChange = (context: ActiveCodexTurnContext) => {
+          const nativeThreadId = context.providerThread.nativeThreadRef?.nativeId;
+          if (
+            nativeThreadId != null &&
+            sessionApprovals.get(nativeThreadId)?.runtimeMode !==
+              context.input.runtimePolicy.runtimeMode
+          ) {
+            sessionApprovals.delete(nativeThreadId);
+          }
+        };
+        const sessionAllowance = (
+          nativeThreadId: string,
+          context: ActiveCodexTurnContext,
+        ): Set<ProviderRequestKind> => {
+          const runtimeMode = context.input.runtimePolicy.runtimeMode;
+          const allowed = sessionApprovals.get(nativeThreadId);
+          if (allowed?.runtimeMode === runtimeMode) return allowed.kinds;
+          if (allowed !== undefined) return new Set();
+          const kinds = new Set<ProviderRequestKind>();
+          sessionApprovals.set(nativeThreadId, { runtimeMode, kinds });
+          return kinds;
+        };
+        /**
          * Turn contexts retained past turn/completed while background command
          * items started in that turn are still running, so late item events
          * keep projecting instead of being dropped.
@@ -2043,6 +2087,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               return next;
             });
             beginTurnTokenUsage(context);
+            endSessionApprovalsOnModeChange(context);
             yield* Ref.update(activeTurns, (current) => {
               const updated = new Map(current);
               updated.set(input.nativeTurnId, context);
@@ -2628,6 +2673,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               itemPositions: new Map(),
             };
             beginTurnTokenUsage(activeContext);
+            endSessionApprovalsOnModeChange(activeContext);
             yield* Ref.update(activeTurns, (current) => {
               const updated = new Map(current);
               updated.set(turn.nativeTurnId, activeContext);
@@ -5089,6 +5135,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 payload,
               );
             }
+            const allowance = sessionAllowance(payload.threadId, context);
+            if (allowance.has("command")) {
+              return {
+                decision: "acceptForSession",
+              } satisfies CodexSchema.CommandExecutionRequestApprovalResponse;
+            }
 
             const nativeRequestId = payload.approvalId ?? payload.itemId;
             const artifacts = yield* buildApprovalRequestArtifacts({
@@ -5137,6 +5189,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 }),
               ),
             );
+            if (resolved === "acceptForSession" || resolved === "acceptAlways") {
+              allowance.add("command");
+            }
             return {
               decision: resolved === "acceptAlways" ? "acceptForSession" : resolved,
             } satisfies CodexSchema.CommandExecutionRequestApprovalResponse;
@@ -5151,6 +5206,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 `No active Codex turn context for file change approval turn ${payload.turnId}.`,
                 payload,
               );
+            }
+            const allowance = sessionAllowance(payload.threadId, context);
+            if (allowance.has("file-change")) {
+              return {
+                decision: "acceptForSession",
+              } satisfies CodexSchema.FileChangeRequestApprovalResponse;
             }
 
             const artifacts = yield* buildApprovalRequestArtifacts({
@@ -5197,6 +5258,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 }),
               ),
             );
+            if (resolved === "acceptForSession" || resolved === "acceptAlways") {
+              allowance.add("file-change");
+            }
             return {
               decision: resolved === "acceptAlways" ? "acceptForSession" : resolved,
             } satisfies CodexSchema.FileChangeRequestApprovalResponse;
@@ -5356,6 +5420,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 payload,
               );
             }
+            const allowance = sessionAllowance(payload.conversationId, context);
+            if (allowance.has("command")) {
+              return {
+                decision: "approved_for_session",
+              } satisfies CodexSchema.ExecCommandApprovalResponse;
+            }
 
             const nativeRequestId = payload.approvalId ?? payload.callId;
             const artifacts = yield* buildApprovalRequestArtifacts({
@@ -5402,6 +5472,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 }),
               ),
             );
+            if (resolved === "acceptForSession" || resolved === "acceptAlways") {
+              allowance.add("command");
+            }
             return {
               decision: approvalDecisionToLegacyReviewDecision(resolved),
             } satisfies CodexSchema.ExecCommandApprovalResponse;
@@ -5416,6 +5489,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 `No active Codex turn context for apply patch approval thread ${payload.conversationId}.`,
                 payload,
               );
+            }
+            const allowance = sessionAllowance(payload.conversationId, context);
+            if (allowance.has("file-change")) {
+              return {
+                decision: "approved_for_session",
+              } satisfies CodexSchema.ApplyPatchApprovalResponse;
             }
 
             const artifacts = yield* buildApprovalRequestArtifacts({
@@ -5462,6 +5541,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 }),
               ),
             );
+            if (resolved === "acceptForSession" || resolved === "acceptAlways") {
+              allowance.add("file-change");
+            }
             return {
               decision: approvalDecisionToLegacyReviewDecision(resolved),
             } satisfies CodexSchema.ApplyPatchApprovalResponse;
@@ -6719,6 +6801,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           unloadThread: (unloadInput) =>
             Effect.gen(function* () {
               const nativeThreadId = yield* getNativeThreadId(unloadInput.providerThread);
+              sessionApprovals.delete(nativeThreadId);
               yield* client.request("thread/unsubscribe", { threadId: nativeThreadId });
             }).pipe(
               Effect.mapError((cause) =>
