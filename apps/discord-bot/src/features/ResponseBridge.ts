@@ -2974,6 +2974,10 @@ export const runBridge = (
           yield* rest.createMessage(input.discordChannelId, {
             content: formatEchoedUserMessage(message),
           });
+          yield* Ref.update(stateRef, (current) => ({
+            ...current,
+            seenUserMessageIds: uniqueMessageIds([...current.seenUserMessageIds, message.id]),
+          }));
         }
       }).pipe(Effect.asVoid);
 
@@ -3829,7 +3833,7 @@ export const runBridge = (
     /**
      * Final delivery for a completed assistant turn:
      * 1. Post Discord markdown content (chunked if needed; links stay clickable)
-     * 2. Always append · [T3](…#message-…) on the stats footer
+     * 2. Always append · [Open](…#message-…) on the stats footer
      * 3. Attach stream-history.md when the channel topic contains `omegent-ips`
      *    (or legacy `t3-ips`) and the stream has intermediate progress, plus
      *    chat/local images
@@ -4072,7 +4076,7 @@ export const runBridge = (
         // Never leave Working.. or the stream placeholder.
         // Keep Discord markdown as-is (links stay clickable). GFM pipe tables → bullets
         // (Discord does not render tables; ASCII grids were tried and removed).
-        // Stats footer always gets · [T3](deep link) when the web UI base is configured.
+        // Stats footer always gets · [Open](deep link) when the web UI base is configured.
         const finalText = renderTables(
           rewriteMarkdownLocalFileLinksForDiscord({
             text: stripWorkingIndicator(stripMarkdownImages(text)),
@@ -4111,7 +4115,7 @@ export const runBridge = (
                   : [];
 
         // Small italic turn stats on the final answer (model / effort / duration / tokens),
-        // then always append · [T3](deep link) on that footer section when the URL is known.
+        // then always append · [Open](deep link) on that footer section when the URL is known.
         const statsThread = yield* Ref.get(latestThreadRef);
         const statsLine = formatTurnResponseStatsLine({
           modelSelection: statsThread?.modelSelection ?? null,
@@ -5267,7 +5271,8 @@ export const runBridge = (
      * Apply one thread snapshot to Discord (stream tip / finalize / tasks / title).
      * Must not run concurrently for the same bridge — callers serialize via deliveryLock.
      *
-     * Order matters: assistant stream/finalize runs **before** title/pin/side work.
+     * User echoes are interleaved with answers in conversation order. Assistant
+     * stream/finalize runs before title/pin/side work.
      * Mid-turn thread renames used to run first (with optional GH PR lookups) and hold
      * this queue so intermediate tip edits coalesced away — Discord stayed on
      * `_Working.._` until the final, while the channel name still updated. Finals
@@ -5292,6 +5297,9 @@ export const runBridge = (
           seenUserMessageIds: priorState.seenUserMessageIds,
           sentDiscordUserMessageIds: priorState.sentDiscordUserMessageIds,
         });
+        const pendingEchoIds = new Set<string>(
+          unseenExternalUserMessages.map((message) => message.id),
+        );
         const unresolvedSentDiscordUserMessageIds = priorState.sentDiscordUserMessageIds.filter(
           (messageId) => !threadUserMessageIds.includes(messageId),
         );
@@ -5299,7 +5307,7 @@ export const runBridge = (
           ...current,
           seenUserMessageIds: uniqueMessageIds([
             ...current.seenUserMessageIds,
-            ...threadUserMessageIds,
+            ...threadUserMessageIds.filter((id) => !pendingEchoIds.has(id)),
           ]),
           observedInitialUserSnapshot: true,
           sentDiscordUserMessageIds: unresolvedSentDiscordUserMessageIds,
@@ -5309,6 +5317,32 @@ export const runBridge = (
         ) {
           yield* persistSentDiscordUserMessageIds(unresolvedSentDiscordUserMessageIds);
         }
+
+        // Preserve conversation order even when a coalesced snapshot contains both
+        // an older answer and a newer user turn. An echo is acknowledged only after send.
+        let remainingUserMessages = [...unseenExternalUserMessages];
+        const messagePositions = new Map<string, number>(
+          thread.messages.map((message, index) => [message.id, index]),
+        );
+        const postUserMessagesBefore = (assistantId?: string) =>
+          Effect.gen(function* () {
+            const position =
+              assistantId === undefined
+                ? Infinity
+                : (messagePositions.get(assistantId) ?? Infinity);
+            const before = remainingUserMessages.filter(
+              (message) => (messagePositions.get(message.id) ?? Infinity) < position,
+            );
+            if (before.length === 0) return;
+            yield* postExternalUserMessages(before);
+            const sent = new Set(before.map((message) => message.id));
+            remainingUserMessages = remainingUserMessages.filter(
+              (message) => !sent.has(message.id),
+            );
+            if (shouldHopWorkingTipOnDisplacement("echoed-command")) {
+              yield* streamWriteLock.withPermit(hopWorkingTipToChannelEnd("external-user-echo"));
+            }
+          });
 
         const activeTurnId = thread.latestTurn?.turnId ?? null;
         const turnInProgressNow = isTurnInProgress(thread);
@@ -5397,6 +5431,7 @@ export const runBridge = (
                 textLen: priorCatchUp.text.length,
               },
             );
+            yield* postUserMessagesBefore(priorCatchUp.id);
             yield* postOrEditAssistant({
               turnId: priorCatchUp.turnId,
               t3MessageId: priorCatchUp.id,
@@ -5501,6 +5536,7 @@ export const runBridge = (
           }
 
           if (decision.intent._tag === "stream") {
+            yield* postUserMessagesBefore(decision.intent.assistantId);
             yield* postOrEditAssistant({
               turnId: decision.intent.turnId,
               t3MessageId: decision.intent.assistantId,
@@ -5510,6 +5546,7 @@ export const runBridge = (
               worktreePath: thread.worktreePath,
             }).pipe(Effect.tapCause(alertStreamFailure("live-stream")), Effect.asVoid);
           } else if (decision.intent._tag === "finalize") {
+            yield* postUserMessagesBefore(decision.intent.assistantId);
             yield* postOrEditAssistant({
               turnId: decision.intent.turnId,
               t3MessageId: decision.intent.assistantId,
@@ -5535,6 +5572,7 @@ export const runBridge = (
                   textLen: fallbackText.length,
                 },
               );
+              yield* postUserMessagesBefore(prior.t3AssistantMessageId);
               yield* postOrEditAssistant({
                 turnId: activeTurnId,
                 t3MessageId: prior.t3AssistantMessageId,
@@ -5569,6 +5607,7 @@ export const runBridge = (
             }
           }
         } else {
+          yield* postUserMessagesBefore();
           const stateBefore = yield* Ref.get(stateRef);
           const turnRunningNoAssistant = isTurnInProgress(thread);
           yield* Ref.update(stateRef, (current) =>
@@ -5626,6 +5665,9 @@ export const runBridge = (
           }
         }
 
+        // User messages after the last answer remain after it, ahead of side work.
+        yield* postUserMessagesBefore();
+
         // --- Secondary: title / pin / side posts (must not starve tip edits) ---
         // Title first, with its own budget: turn settle must clear ⏳ even when GH
         // lookup / tasks would burn the shared secondary timeout. Pending renames
@@ -5655,19 +5697,6 @@ export const runBridge = (
               Effect.catchCause(Effect.logError),
               Effect.asVoid,
             );
-          }
-
-          // Cross-surface user text only (github / t3-client whitelist) — after Tasks.
-          if (unseenExternalUserMessages.length > 0) {
-            yield* postExternalUserMessages(unseenExternalUserMessages).pipe(
-              Effect.catchCause(Effect.logError),
-              Effect.asVoid,
-            );
-            if (shouldHopWorkingTipOnDisplacement("echoed-command")) {
-              yield* streamWriteLock
-                .withPermit(hopWorkingTipToChannelEnd("external-user-echo"))
-                .pipe(Effect.catchCause(Effect.logWarning), Effect.asVoid);
-            }
           }
 
           const pending = derivePendingInteractions(thread.activities);

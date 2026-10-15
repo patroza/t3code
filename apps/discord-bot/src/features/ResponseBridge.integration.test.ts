@@ -14,6 +14,8 @@ import * as ConfigProvider from "effect/ConfigProvider";
 import { IntegrationThreadView } from "@t3tools/shared/integrationThreadView";
 import {
   EventId,
+  IdentityUsername,
+  TurnId,
   MessageId,
   ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
 } from "@t3tools/contracts";
@@ -162,6 +164,12 @@ describe("shared response runner", () => {
     { platform: "teams", failure: "workspace" },
     { platform: "teams", failure: "info" },
     { platform: "teams", failure: "setup" },
+    { platform: "teams", failure: "echo-order" },
+    { platform: "discord", failure: "echo-order" },
+    { platform: "teams", failure: "echo-failure" },
+    { platform: "discord", failure: "echo-failure" },
+    { platform: "teams", failure: "echo-catch-up" },
+    { platform: "discord", failure: "echo-catch-up" },
   ] as const)(
     "delivers progress and final replies through $platform (failure=$failure)",
     ({ platform, failure }) =>
@@ -231,6 +239,8 @@ describe("shared response runner", () => {
         const config = yield* DiscordBotConfig.pipe(
           Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnvRecord({}))),
         );
+        const orderingCase = ["echo-order", "echo-failure", "echo-catch-up"].includes(failure);
+        const echoedAfter = yield* Deferred.make<void>();
         const working = yield* Deferred.make<void>();
         const progress = yield* Deferred.make<void>();
         const followUpProgress = yield* Deferred.make<void>();
@@ -262,6 +272,7 @@ describe("shared response runner", () => {
             const message = { id: id ?? String(++counter), content, author: { id: "bot" } };
             messages.set(message.id, message);
             fieldsById.set(message.id, fields);
+            if (content.includes("a later note")) yield* Deferred.succeed(echoedAfter, undefined);
             if (fields.actions?.some((action) => action.command === "stop"))
               progressIds.add(message.id);
             if (content.includes("Following up on the same run."))
@@ -298,6 +309,19 @@ describe("shared response runner", () => {
           listMessages: () => Effect.succeed([...messages.values()].reverse()),
           createMessage: (_, fields) =>
             Effect.gen(function* () {
+              if (
+                failure === "echo-failure" &&
+                !didFail &&
+                fields.content.includes("should be fixed")
+              ) {
+                didFail = true;
+                expect(
+                  [...messages.values()].some((message) =>
+                    message.content.includes("It’s 19:50 CEST."),
+                  ),
+                ).toBe(false);
+                return yield* new BotTransportError({ cause: new Error("temporary echo failure") });
+              }
               if (failure === "final" && !didFail && fields.content.includes("It’s 19:50 CEST.")) {
                 didFail = true;
                 expect(
@@ -416,6 +440,49 @@ describe("shared response runner", () => {
               }
               yield* onThread(running);
               yield* Deferred.await(working);
+              if (orderingCase) {
+                const user = completed.messages[0]!;
+                const source = {
+                  channel: "desktop" as const,
+                  username: IdentityUsername.make("patroza"),
+                };
+                const priorAnswer = {
+                  ...completed.messages.at(-1)!,
+                  id: MessageId.make("previous-answer"),
+                  turnId: TurnId.make("previous-turn"),
+                  text: "Earlier settled answer. ".repeat(5),
+                };
+                completed = {
+                  ...completed,
+                  messages: [
+                    user,
+                    ...(failure === "echo-catch-up" ? [priorAnswer] : []),
+                    {
+                      ...user,
+                      id: MessageId.make("before-answer"),
+                      text: "should be fixed",
+                      source,
+                    },
+                    ...completed.messages.slice(1),
+                  ],
+                };
+                latest = completed;
+                yield* onThread(latest);
+                yield* Deferred.await(final);
+                while (
+                  !(yield* links.getByDiscordThreadId("conversation"))?.deliveryReceipt?.completed
+                )
+                  yield* Effect.sleep("1 millis");
+                latest = {
+                  ...completed,
+                  messages: [
+                    ...completed.messages,
+                    { ...user, id: MessageId.make("after-answer"), text: "a later note", source },
+                  ],
+                };
+                yield* onThread(latest);
+                return yield* Effect.never;
+              }
               if (failure === "setup") {
                 latest = {
                   ...running,
@@ -601,6 +668,7 @@ describe("shared response runner", () => {
               ? followUpFinal
               : final,
         );
+        if (orderingCase) yield* Deferred.await(echoedAfter);
         const finalAssistantId = failure === "same-run-follow-up" ? "answer-2" : "answer";
         yield* Effect.gen(function* () {
           while (true) {
@@ -618,17 +686,43 @@ describe("shared response runner", () => {
         expect(messages.size).toBe(
           ["partial-final", "accepted-final", "upload"].includes(failure)
             ? 3
-            : failure === "same-run-follow-up"
-              ? 2
-              : 1,
+            : orderingCase
+              ? failure === "echo-catch-up"
+                ? 4
+                : 3
+              : failure === "same-run-follow-up"
+                ? 2
+                : 1,
         );
-        expect(counter).toBe(
-          messages.size +
-            (failure === "missing" ? 1 : 0) +
-            (failure === "same-run-follow-up" ? 2 : 1),
-        );
+        if (orderingCase) {
+          const contents = [...messages.values()].map((message) => message.content);
+          const beforeIndex = contents.findIndex((content) => content.includes("should be fixed"));
+          const answerIndex = contents.findIndex((content) => content.includes("It’s 19:50 CEST."));
+          const afterIndex = contents.findIndex((content) => content.includes("a later note"));
+          expect(beforeIndex).toBeLessThan(answerIndex);
+          expect(answerIndex).toBeLessThan(afterIndex);
+          expect(contents.filter((content) => content.includes("should be fixed"))).toHaveLength(1);
+          if (failure === "echo-catch-up") {
+            expect(
+              contents.findIndex((content) => content.includes("Earlier settled answer.")),
+            ).toBeLessThan(beforeIndex);
+          }
+        }
+        if (!orderingCase)
+          expect(counter).toBe(
+            messages.size +
+              (failure === "missing" ? 1 : 0) +
+              (failure === "same-run-follow-up" ? 2 : 1),
+          );
         expect(didFail).toBe(
-          !["none", "late-final", "same-run-follow-up", "workspace"].includes(failure),
+          ![
+            "none",
+            "late-final",
+            "same-run-follow-up",
+            "workspace",
+            "echo-order",
+            "echo-catch-up",
+          ].includes(failure),
         );
         if (failure === "workspace") {
           expect(infoContent[0]).toContain("Preparing workspace…");
@@ -656,7 +750,7 @@ describe("shared response runner", () => {
         expect(answer).toContain("gpt-6.1-sol");
         expect(answer).toContain("effort medium");
         expect(answer).toContain("↑1.5k ↓250");
-        expect(answer).toContain("https://example.com");
+        expect(answer).toContain("[Open](https://example.com");
         expect(yield* Deferred.await(info)).toBe("gpt-6.1-sol");
         yield* hub.dropAll();
         yield* Fiber.interrupt(fiber);
