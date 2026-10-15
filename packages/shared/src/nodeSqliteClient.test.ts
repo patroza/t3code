@@ -792,9 +792,14 @@ const withCheckpointClient = <A, E>(
     const path = yield* Path.Path;
     const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-sqlite-checkpoint-" });
     const filename = path.join(directory, "state.sqlite");
+    // Finish journal setup before the checkpoint worker opens its connection.
+    yield* Effect.acquireUseRelease(
+      Effect.sync(() => new NodeSqlite.DatabaseSync(filename)),
+      (database) => Effect.sync(() => database.exec("PRAGMA journal_mode = WAL")),
+      (database) => Effect.sync(() => database.close()),
+    );
     return yield* Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* sql`PRAGMA journal_mode = WAL`;
       return yield* use(sql, filename);
     }).pipe(Effect.provide(SqliteClient.layer({ filename, checkpointWorker: true })));
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
