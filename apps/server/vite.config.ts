@@ -167,6 +167,7 @@ export default mergeConfig(
               "src/terminal/NodePtyAdapter.test.ts",
               "src/vcs/GitVcsDriverCore.test.ts",
               "src/workspace/WorkspaceEntries.test.ts",
+              "src/serviceLauncher.test.ts",
               // Mocks `./ServerBrowserContexts`. Under isolate:false the real
               // pool is already bound, so launch asks the stub browser for an
               // executable and desktop CDP connects to ws://desktop.
@@ -218,6 +219,9 @@ export default mergeConfig(
               "src/textGeneration/CursorTextGeneration.test.ts",
               "src/terminal/NodePtyAdapter.test.ts",
               "src/workspace/WorkspaceEntries.test.ts",
+              // Wraps node:child_process.spawn to observe trial children. A
+              // cached launcher import would retain the real, untracked spawn.
+              "src/serviceLauncher.test.ts",
               // Mocks `./ServerBrowserContexts`. Under isolate:false the real
               // pool is already bound, so launch asks the stub browser for an
               // executable and desktop CDP connects to ws://desktop.
