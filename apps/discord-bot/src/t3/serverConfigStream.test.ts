@@ -3,6 +3,7 @@ import {
   DEFAULT_SERVER_SETTINGS,
   ServerConfig,
   ServerProvider,
+  ServerSettings,
   type ServerConfigStreamEvent,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -38,7 +39,7 @@ const config = Schema.decodeUnknownSync(ServerConfig)({
     otlpMetricsEnabled: false,
     otlpLogsEnabled: false,
   },
-  settings: DEFAULT_SERVER_SETTINGS,
+  settings: Schema.encodeSync(ServerSettings)(DEFAULT_SERVER_SETTINGS),
 });
 
 const claude = Schema.decodeUnknownSync(ServerProvider)({
