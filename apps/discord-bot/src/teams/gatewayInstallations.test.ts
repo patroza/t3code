@@ -96,6 +96,20 @@ describe("Teams team installations", () => {
   });
   afterEach(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
 
+  it("retains explicitly allowed channel description routing in v2 installations", () => {
+    const input = {
+      ...config,
+      bindings: config.bindings.map((binding) => ({
+        ...binding,
+        useChannelDescription: true,
+        descriptionProjectShortNames: [binding.projectShortName],
+      })),
+    };
+    const parsed = parseGatewayConfig(input);
+    expect(parsed.bindings[0]?.useChannelDescription).toBe(true);
+    expect(parsed.bindings[0]?.descriptionProjectShortNames).toEqual(["project-one"]);
+  });
+
   it("retains a separate public origin and wires it into generated public links", () => {
     const input = {
       ...config,

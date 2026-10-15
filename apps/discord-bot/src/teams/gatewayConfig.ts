@@ -76,6 +76,8 @@ const InstalledChannel = Schema.Struct({
   projectId: Schema.optional(Schema.String),
   fileDestination: Schema.optional(TeamsFileDestination),
   includeProgressHistory: Schema.optional(Schema.Boolean),
+  useChannelDescription: Schema.optional(Schema.Boolean),
+  descriptionProjectShortNames: Schema.optional(Schema.Array(Schema.String)),
   // Refuse shadow authorization/location fields instead of silently ignoring them.
   workspace: Schema.optional(Schema.Never),
   tenantId: Schema.optional(Schema.Never),
