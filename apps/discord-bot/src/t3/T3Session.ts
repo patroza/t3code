@@ -79,7 +79,7 @@ import { followOrchestrationThread } from "./DiscordThreadFollower.ts";
 import { applyIntegrationShellStreamItem } from "./shellStream.ts";
 import { followBotServerConfig } from "./serverConfigStream.ts";
 import { reconnectUntilReady } from "./reconnect.ts";
-import { newCommandId, newMessageId, newThreadId, shortId } from "./ids.ts";
+import { newCommandId, newMessageId, newThreadId, newChatWorktreeBranch } from "./ids.ts";
 import {
   clearPersistedBearerSession,
   persistedBearerExpiresAtIso,
@@ -1049,10 +1049,14 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
         Effect.gen(function* () {
           const threadId = newThreadId();
           const messageId = newMessageId();
-          const title = formatThreadTitle(input.titleSeed ?? input.prompt, 72, "Discord thread");
+          const title = formatThreadTitle(
+            input.titleSeed ?? input.prompt,
+            72,
+            input.sourceHint?.channel === "teams" ? "Teams thread" : "Discord thread",
+          );
           const interactionMode = input.interactionMode ?? "default";
           const runtimeMode = input.runtimeMode ?? botConfig.t3DefaultRuntimeMode;
-          const worktreeBranch = `t3-discord/${shortId()}`;
+          const worktreeBranch = newChatWorktreeBranch(input.sourceHint?.channel);
 
           yield* claimBrowserHost(threadId);
           const attachments = yield* persistAttachments(

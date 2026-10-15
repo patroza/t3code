@@ -101,13 +101,13 @@ export function buildStreamHistoryMarkdownFile(streamText: string): File | null 
 
 /**
  * Append a compact T3 deep link on a Discord caption/chunk.
- * Same-line ` · [T3](url)` — clickable Discord markdown, short label.
+ * Same-line ` · [Open](url)` — clickable Discord markdown, short label.
  * Used on the stats footer of every final answer.
  */
 export function withT3DeepLink(caption: string, t3Url: string | null | undefined): string {
   const url = t3Url?.trim() ?? "";
   if (url === "") return caption;
-  const link = `[T3](${url})`;
+  const link = `[Open](${url})`;
   const body = caption.trimEnd();
   if (body === "") return link;
   return `${body} · ${link}`;

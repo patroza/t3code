@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 // @effect-diagnostics globalPromise:off globalFetch:off
 import { it } from "@effect/vitest";
+import { ThreadId, ProjectId } from "@t3tools/contracts";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -43,7 +44,7 @@ describe("Teams response adapter", () => {
     directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "teams-adapter-"));
   });
   afterEach(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
-  it.effect("sends thread info with a clickable Open in Omegent label", () =>
+  it.effect("updates one labelled thread-info message as workspace setup progresses", () =>
     Effect.gen(function* () {
       const config = yield* DiscordBotConfig.pipe(
         Effect.provide(
@@ -56,23 +57,48 @@ describe("Teams response adapter", () => {
         ),
       );
       const links = yield* makeThreadLinkStore(directory);
+      yield* links.put({
+        discordThreadId: options.conversationId,
+        t3ThreadId: ThreadId.make("scanner-thread"),
+        projectId: ProjectId.make("scanner"),
+        channelId: "channel",
+        guildId: "team",
+        createdAt: "2026-10-15T10:00:00.000Z",
+      });
       const send = vi
         .fn<(wire: TeamsResponseActivity) => Promise<{ id: string }>>()
         .mockResolvedValue({ id: "info" });
       const adapter = makeTeamsResponseTransport({ ...options, config, send });
-      yield* adapter
-        .upsertThreadInfo({
-          config,
-          conversationId: options.conversationId,
-          threadId: "scanner-thread",
-          modelSelection: { instanceId: "grok", model: "grok-4.7" },
-          local: true,
-        })
-        .pipe(
-          Effect.provideService(ThreadLinkStore, links),
-          Effect.provideService(ProjectAliasStore, makeProjectAliasStore([])),
-          Effect.provideService(T3Session, {} as T3SessionService),
-        );
+      for (const workspace of [
+        { workspaceStatus: "preparing" as const },
+        { workspaceStatus: "preparing" as const, worktreePath: "/worktrees/scanner/task" },
+        { worktreePath: "/worktrees/scanner/task" },
+        { workspaceStatus: "failed" as const, worktreePath: "/worktrees/scanner/task" },
+      ]) {
+        yield* adapter
+          .upsertThreadInfo({
+            config,
+            conversationId: options.conversationId,
+            threadId: "scanner-thread",
+            modelSelection: { instanceId: "grok", model: "grok-4.7" },
+            ...workspace,
+          })
+          .pipe(
+            Effect.provideService(ThreadLinkStore, links),
+            Effect.provideService(ProjectAliasStore, makeProjectAliasStore([])),
+            Effect.provideService(T3Session, {} as T3SessionService),
+          );
+      }
+      expect(send).toHaveBeenCalledTimes(4);
+      expect(send.mock.calls[0]?.[0].id).toBeUndefined();
+      expect(send.mock.calls.slice(1).every(([activity]) => activity.id === "info")).toBe(true);
+      expect(send.mock.calls[0]?.[0].text).toContain("Preparing workspace…");
+      expect(send.mock.calls[0]?.[0].text).not.toContain("local (no worktree)");
+      expect(send.mock.calls[1]?.[0].text).toContain("Worktree: `/worktrees/scanner/task`");
+      expect(send.mock.calls[1]?.[0].text).toContain("Preparing workspace…");
+      expect(send.mock.calls[2]?.[0].text).toContain("Worktree: `/worktrees/scanner/task`");
+      expect(send.mock.calls[2]?.[0].text).not.toContain("Preparing workspace…");
+      expect(send.mock.calls[3]?.[0].text).toContain("Workspace setup failed.");
       expect(send.mock.calls[0]?.[0].text).toContain(
         "[Open in Omegent](https://omega.example/?thread=scanner-thread)",
       );
