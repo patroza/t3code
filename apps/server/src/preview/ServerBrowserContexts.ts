@@ -8,6 +8,7 @@ import * as NodePath from "node:path";
 import type { Browser, BrowserContext, CDPSession } from "playwright-core";
 
 import { sandboxDisabled } from "./PreviewBrowserHost.ts";
+import { SERVER_BROWSER_AUTHENTICATION_SCRIPT } from "./ServerBrowserAuthentication.ts";
 
 // Playwright needs its files on disk. createRequire also resolves it from a Node SEA executable.
 const requirePlaywright = NodeModule.createRequire(import.meta.url);
@@ -154,6 +155,12 @@ export class ServerBrowserContexts {
         if (this.closing) {
           await context.close().catch(constVoid);
           throw new Error("The preview browser is closed.");
+        }
+        try {
+          await context.addInitScript(SERVER_BROWSER_AUTHENTICATION_SCRIPT);
+        } catch (cause) {
+          await context.close().catch(constVoid);
+          throw cause;
         }
         return context;
       });
