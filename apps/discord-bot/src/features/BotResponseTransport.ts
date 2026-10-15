@@ -53,6 +53,7 @@ export interface BotThreadInfoInput {
   readonly worktreePath?: string | null;
   readonly baseBranchLabel?: string | null;
   readonly local?: boolean;
+  readonly workspaceStatus?: "preparing" | "failed" | undefined;
   readonly skipChannelRepoLookup?: boolean;
   readonly extraLines?: ReadonlyArray<string | null | undefined>;
   readonly titleLine?: string | null;
