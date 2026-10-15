@@ -59,10 +59,14 @@ describe("bot server config subscription", () => {
     () =>
       Effect.gen(function* () {
         const events: ServerConfigStreamEvent[] = [
-          { type: "snapshot", config },
-          { type: "providerStatuses", payload: { providers: [claude] } },
-          { type: "providerStatuses", payload: { providers: [{ ...claude, enabled: false }] } },
-          { type: "snapshot", config },
+          { version: 1, type: "snapshot", config },
+          { version: 1, type: "providerStatuses", payload: { providers: [claude] } },
+          {
+            version: 1,
+            type: "providerStatuses",
+            payload: { providers: [{ ...claude, enabled: false }] },
+          },
+          { version: 1, type: "snapshot", config },
         ];
         const seen: ServerConfig[] = [];
         yield* followBotServerConfig(
