@@ -6,6 +6,7 @@ import {
   looksLikeGermanProblemReport,
   resolveTeamsTriggerActor,
   teamsMessageText,
+  shouldTriggerTeamsMention,
 } from "./presentation.ts";
 
 describe("teamsMessageText", () => {
@@ -16,6 +17,24 @@ describe("teamsMessageText", () => {
         body: { content: "<div>Hallo <b>Welt</b>&nbsp;&amp; mehr</div>" },
       }),
     ).toBe("Hallo Welt & mehr");
+  });
+});
+
+describe("edited mentions in the Graph poller", () => {
+  it("detects a mention added after the original ambient message was seen", () => {
+    const original = { id: "1", body: { content: "Please check the order" } };
+    expect(shouldTriggerTeamsMention(original, "Omegent", false)).toBe(false);
+    expect(shouldTriggerTeamsMention(original, "Omegent", true)).toBe(false);
+    const edited = {
+      ...original,
+      lastEditedDateTime: "2026-10-15T10:00:00Z",
+      body: { content: "<at>Omegent</at> Please check the order" },
+      mentions: [{ mentionText: "Omegent" }],
+    };
+    expect(shouldTriggerTeamsMention(edited, "Omegent", true)).toBe(true);
+    expect(
+      shouldTriggerTeamsMention({ ...edited, lastEditedDateTime: null }, "Omegent", true),
+    ).toBe(false);
   });
 });
 

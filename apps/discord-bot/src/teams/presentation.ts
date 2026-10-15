@@ -7,6 +7,7 @@ export interface TeamsMessage {
   readonly id: string;
   readonly replyToId?: string | null | undefined;
   readonly createdDateTime?: string | undefined;
+  readonly lastEditedDateTime?: string | null | undefined;
   readonly subject?: string | null | undefined;
   readonly summary?: string | null | undefined;
   readonly webUrl?: string | undefined;
@@ -143,6 +144,17 @@ export function isHumanTeamsMessage(message: TeamsMessage): boolean {
   if (message.messageType && message.messageType !== "message") return false;
   if (message.from?.application) return false;
   return teamsMessageText(message).trim().length > 0;
+}
+
+/** Edited ambient messages can acquire their first bot mention after the initial poll. */
+export function shouldTriggerTeamsMention(
+  message: TeamsMessage,
+  displayName: string | undefined,
+  alreadySeen: boolean,
+): boolean {
+  return (
+    (!alreadySeen || Boolean(message.lastEditedDateTime)) && mentionsTeamsBot(message, displayName)
+  );
 }
 
 export function mentionsTeamsBot(message: TeamsMessage, displayName: string | undefined): boolean {

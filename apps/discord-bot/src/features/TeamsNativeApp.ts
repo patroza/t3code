@@ -4,6 +4,9 @@ import { ProviderUserInputAnswers } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
+import { TeamsSeenStore, layer as teamsSeenLayer } from "../store/TeamsSeenStore.ts";
+import { mentionsTeamsRecipient, registerTeamsMessageEvents } from "../teams/messageEvents.ts";
 
 import type { DiscordBotConfig } from "../config.ts";
 import { classifyTeamsAgentAccess, IdentityMapStore, type PersonIdentity } from "../identityMap.ts";
@@ -156,6 +159,10 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
     ProjectAliasStore | T3Session | ThreadLinkStore | BridgeHub | ThreadWarmCacheStore
   >();
   const run = Effect.runPromiseWith(services);
+  const receipts = yield* TeamsSeenStore.pipe(
+    Effect.provide(teamsSeenLayer(config.dataDir, "teams-native-receipts.json")),
+  );
+  const intakeLock = yield* Semaphore.make(1);
 
   const readDescription = makeTeamsChannelDescriptionReader({
     clientId: config.teamsClientId!,
@@ -273,7 +280,7 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
     };
   });
 
-  app.on("message", async ({ activity, api, send, reply }) => {
+  registerTeamsMessageEvents(app, async ({ activity, api, send, reply }) => {
     await run(
       Effect.gen(function* () {
         const access = teamsActorAccess(identityMap.list(), activity.from);
@@ -288,7 +295,16 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
         }
 
         const location = coordinates(activity);
+        if (location.teamId && !mentionsTeamsRecipient(activity)) return;
         const sourceKey = sourceConversationKey(location);
+        const claimed = yield* intakeLock.withPermit(
+          Effect.gen(function* () {
+            if (yield* receipts.hasSeen(sourceKey, activity.id)) return false;
+            yield* receipts.markSeen(sourceKey, activity.id);
+            return true;
+          }),
+        );
+        if (!claimed) return;
         const channel = channelForCoordinates(channels, location);
         const topic = yield* Effect.tryPromise(() =>
           channelTopic(channel, location, () => {

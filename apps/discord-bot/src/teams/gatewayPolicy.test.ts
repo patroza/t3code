@@ -1,4 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off globalFetch:off globalDate:off globalTimers:off globalPromise:off globalErrorInErrorChannel:off
+import { App } from "@microsoft/teams.apps";
+import { registerTeamsMessageEvents } from "./messageEvents.ts";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -86,6 +88,7 @@ describe("shared Teams gateway", () => {
   let sequence: number;
   function activity(overrides: Partial<GatewayActivity> = {}): GatewayActivity {
     return {
+      type: "message",
       id: "activity-" + sequence++,
       channelId: "msteams",
       timestamp: new Date(now).toISOString(),
@@ -112,6 +115,112 @@ describe("shared Teams gateway", () => {
     );
   });
   afterEach(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
+  class ReceivingApp extends App {
+    async receive(input: GatewayActivity) {
+      for (const handler of this.router.select(
+        input as Parameters<Parameters<App["message"]>[1]>[0]["activity"],
+      )) {
+        await handler({ activity: input } as Parameters<Parameters<App["message"]>[1]>[0]);
+      }
+    }
+  }
+  function receiver(
+    dispatcher: TeamsGatewayDispatcher,
+    execute: (decision: MentionDecision) => Promise<void>,
+  ) {
+    const app = new ReceivingApp({ clientId: appId });
+    registerTeamsMessageEvents(app, async ({ activity: input }, edited) => {
+      dispatcher.receive(
+        {
+          ...input,
+          type: edited ? "messageUpdate" : "message",
+          channelData: { ...input.channelData, ...(edited ? { eventType: "editMessage" } : {}) },
+        } as GatewayActivity,
+        execute,
+      );
+    });
+    return app;
+  }
+  it("starts work once when a Teams edit adds the bot mention to an ambient message", async () => {
+    const dispatcher = new TeamsGatewayDispatcher(policy);
+    const execute = vi.fn(async (_decision: MentionDecision) => {});
+    const app = receiver(dispatcher, execute);
+    const original = activity({ entities: [], text: "Please check the order" });
+    await app.receive(original);
+    const edited = {
+      ...original,
+      type: "messageUpdate",
+      text: "Please check the order now",
+      entities: activity().entities!,
+      channelData: { ...original.channelData, eventType: "editMessage" },
+    };
+    await app.receive(edited);
+    await app.receive(edited);
+    await app.receive({ ...edited, text: "Another correction" });
+    await dispatcher.drain();
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute.mock.calls[0]?.[0].text).toBe("Please check the order now");
+    expect(execute.mock.calls[0]?.[0].context).not.toContain("Please check the order");
+  });
+  it("ignores edits of messages that already triggered and edits that do not mention this bot", async () => {
+    const dispatcher = new TeamsGatewayDispatcher(policy);
+    const execute = vi.fn(async (_decision: MentionDecision) => {});
+    const app = receiver(dispatcher, execute);
+    const original = activity();
+    await app.receive(original);
+    await app.receive({
+      ...original,
+      type: "messageUpdate",
+      channelData: { ...original.channelData, eventType: "editMessage" },
+      text: "Corrected request",
+    });
+    await app.receive(
+      activity({
+        type: "messageUpdate",
+        entities: [],
+        channelData: { ...original.channelData, eventType: "editMessage" },
+      }),
+    );
+    await app.receive(
+      activity({
+        type: "messageUpdate",
+        channelData: { ...original.channelData, eventType: "undeleteMessage" },
+      }),
+    );
+    await app.receive(
+      activity({
+        type: "messageUpdate",
+        from: { id: "unknown", aadObjectId: "unknown" },
+        channelData: { ...original.channelData, eventType: "editMessage" },
+      }),
+    );
+    await dispatcher.drain();
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+  it("preserves ambient-to-mentioned edit eligibility and consumed triggers across restarts", () => {
+    const original = activity({ entities: [] });
+    expect(policy.accept(original).kind).toBe("ambient");
+    policy = new TeamsGatewayPolicy(
+      () => config,
+      directory,
+      () => true,
+      () => now,
+    );
+    const edited = {
+      ...original,
+      type: "messageUpdate",
+      entities: activity().entities!,
+      channelData: { ...original.channelData, eventType: "editMessage" },
+    };
+    expect(policy.accept(edited).kind).toBe("mention");
+    policy = new TeamsGatewayPolicy(
+      () => config,
+      directory,
+      () => true,
+      () => now,
+    );
+    expect(policy.accept(edited)).toMatchObject({ kind: "reject", reason: "duplicate" });
+  });
   it("restores private response references only while their original authorization is active", () => {
     const decision = policy.accept(activity());
     expect(decision.kind).toBe("mention");

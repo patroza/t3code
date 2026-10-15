@@ -5,7 +5,8 @@ identity. The host gateway selects a T3 workspace from an explicit tenant/team/c
 binding; it never selects a workspace from a person’s membership or a default project.
 
 Mention the bot to start/continue work or send `stop`, `approve`, `deny` and `answer`
-commands. Without a mention, an authorized person’s message is context only. The
+commands. Adding the mention in an edit also starts work if that message has not
+already triggered a request. Later edits do not rerun an accepted request. Without a mention, an authorized person’s message is context only. The
 context is quoted as untrusted data, bounded by count/TTL, kept only in memory, and
 never invokes T3. Personal/group chats and message actions are disabled in this package.
 
