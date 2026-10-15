@@ -96,6 +96,39 @@ describe("Teams team installations", () => {
   });
   afterEach(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
 
+  it("retains a separate public origin and wires it into generated public links", () => {
+    const input = {
+      ...config,
+      workspaces: {
+        alpha: { ...config.workspaces.alpha, publicWebOrigin: "https://public" },
+      },
+    };
+    const workspace = parseGatewayConfig(input).workspaces.alpha!;
+    expect(workspace.webOrigin).toBe("https://alpha.example.com");
+    expect(workspace.publicWebOrigin).toBe("https://public");
+    const runtime = NodeFS.readFileSync(
+      new URL("../teams-gateway-main.ts", import.meta.url),
+      "utf8",
+    );
+    expect(runtime).toContain(
+      "publicWebUiBaseUrl: workspace.publicWebOrigin ?? workspace.webOrigin",
+    );
+  });
+
+  it.each([
+    "http://public",
+    "https://user:secret@public",
+    "https://public/path",
+    "https://public/?token=x",
+    "https://public/#fragment",
+  ])("rejects unsafe public origin %s", (publicWebOrigin) => {
+    const input = {
+      ...config,
+      workspaces: { alpha: { ...config.workspaces.alpha, publicWebOrigin } },
+    };
+    expect(() => parseGatewayConfig(input)).toThrow("fixed HTTPS origins");
+  });
+
   it("matches UUID casing and revokes the entire installation on uninstall", () => {
     const incoming = activity();
     const mixedCase = {
