@@ -22,7 +22,7 @@ import {
   hasInternalTagTrigger,
   isHumanTeamsMessage,
   looksLikeGermanProblemReport,
-  mentionsTeamsBot,
+  shouldTriggerTeamsMention,
   resolveTeamsTriggerActor,
   rootTeamsMessageId,
   teamsMessageTimestamp,
@@ -386,8 +386,11 @@ export const runTeamsModule = Effect.fn("runTeamsModule")(function* (config: Dis
     readonly targetMessage: TeamsMessage;
     readonly triggerMessage?: TeamsMessage | undefined;
   } | null => {
-    const mentionTrigger =
-      !input.alreadySeen && mentionsTeamsBot(input.message, config.teamsBotDisplayName);
+    const mentionTrigger = shouldTriggerTeamsMention(
+      input.message,
+      config.teamsBotDisplayName,
+      input.alreadySeen,
+    );
     if (mentionTrigger) {
       return {
         reason: "mention",

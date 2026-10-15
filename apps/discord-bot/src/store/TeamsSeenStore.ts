@@ -20,12 +20,12 @@ export class TeamsSeenStore extends Context.Service<TeamsSeenStore, TeamsSeenSto
 
 const MAX_MESSAGE_IDS_PER_CHANNEL = 500;
 
-export const layer = (dataDirRaw: string) =>
+export const layer = (dataDirRaw: string, fileName = "teams-seen.json") =>
   Layer.effect(
     TeamsSeenStore,
     Effect.gen(function* () {
       const dataDir = expandHomePath(dataDirRaw);
-      const filePath = NodePath.join(dataDir, "teams-seen.json");
+      const filePath = NodePath.join(dataDir, fileName);
       yield* Effect.promise(() => NodeFSP.mkdir(dataDir, { recursive: true, mode: 0o700 }));
 
       const initial = yield* Effect.tryPromise({

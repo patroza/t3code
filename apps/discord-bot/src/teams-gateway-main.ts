@@ -29,6 +29,7 @@ import { layerFromOptionalPath as aliasesLayer } from "./projectAliases.ts";
 import { ThreadLinkStore, layer as linksLayer } from "./store/ThreadLinkStore.ts";
 import { T3Session, layer as sessionLayer } from "./t3/T3Session.ts";
 import { readGatewayConfig, readPrivateCredential } from "./teams/gatewayConfig.ts";
+import { registerTeamsMessageEvents } from "./teams/messageEvents.ts";
 import { TeamsGatewayDispatcher } from "./teams/gatewayDispatcher.ts";
 import { LoopbackTeamsAdapter, RedactedTeamsLogger } from "./teams/gatewayHttp.ts";
 import {
@@ -249,9 +250,16 @@ const program = Effect.gen(function* () {
     };
   });
 
-  app.on("message", async ({ activity, send, reply, api }) => {
+  registerTeamsMessageEvents(app, async ({ activity, send, reply, api }, edited) => {
     // Structural SDK activity type narrows to the fields read by the independent policy.
-    const outcome = dispatcher.receive(activity as GatewayActivity, async (decision) => {
+    const intake = edited
+      ? {
+          ...activity,
+          type: "messageUpdate",
+          channelData: { ...activity.channelData, eventType: "editMessage" },
+        }
+      : activity;
+    const outcome = dispatcher.receive(intake as GatewayActivity, async (decision) => {
       const { lease } = decision;
       const workspace = active(lease);
       references.remember(
