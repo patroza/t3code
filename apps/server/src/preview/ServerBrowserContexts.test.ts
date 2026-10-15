@@ -5,15 +5,18 @@ import { chromium, type Browser, type BrowserContext, type BrowserType } from "p
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { ServerBrowserContexts } from "./ServerBrowserContexts.ts";
+import { SERVER_BROWSER_AUTHENTICATION_SCRIPT } from "./ServerBrowserAuthentication.ts";
 
 const launches = vi.hoisted(() => ({
   launch: vi.fn<BrowserType["launch"]>(),
   persistent: vi.fn<BrowserType["launchPersistentContext"]>(),
+  connect: vi.fn<BrowserType["connectOverCDP"]>(),
   mkdir: vi.fn().mockResolvedValue(undefined),
   rm: vi.fn().mockResolvedValue(undefined),
 }));
 vi.spyOn(chromium, "launch").mockImplementation(launches.launch);
 vi.spyOn(chromium, "launchPersistentContext").mockImplementation(launches.persistent);
+vi.spyOn(chromium, "connectOverCDP").mockImplementation(launches.connect);
 vi.mock("node:fs/promises", () => ({ mkdir: launches.mkdir, rm: launches.rm }));
 
 const makeContext = () => {
@@ -22,6 +25,7 @@ const makeContext = () => {
   return {
     on: vi.fn((event: string, listener: () => void) => events.on(event, listener)),
     pages: vi.fn(() => []),
+    addInitScript: vi.fn().mockResolvedValue(undefined),
     close: vi.fn(async () => {
       if (!closed) {
         closed = true;
@@ -58,11 +62,37 @@ const options = () => ({
 beforeEach(() => {
   launches.launch.mockReset();
   launches.persistent.mockReset();
+  launches.connect.mockReset();
   launches.mkdir.mockClear();
   launches.rm.mockClear();
 });
 
 describe("ServerBrowserContexts", () => {
+  it("keeps a desktop page's authenticator support when connecting to its native context", async () => {
+    const context = makeContext();
+    const page = {};
+    const browser = { contexts: () => [{ ...context, pages: () => [page] }] };
+    launches.connect.mockResolvedValue(browser as unknown as Browser);
+    const pool = new ServerBrowserContexts(options());
+    expect(await pool.connectDesktopPage("http://desktop")).toEqual({ browser, page });
+    expect(context.addInitScript).not.toHaveBeenCalled();
+    await pool.close();
+  });
+
+  it("closes a context if its authentication policy cannot be installed and retries later", async () => {
+    const failed = makeContext();
+    failed.addInitScript.mockRejectedValueOnce(new Error("page setup failed"));
+    const retry = makeContext();
+    launches.persistent
+      .mockResolvedValueOnce(failed as unknown as BrowserContext)
+      .mockResolvedValueOnce(retry as unknown as BrowserContext);
+    const pool = new ServerBrowserContexts(options());
+    await expect(pool.contextFor("default")).rejects.toThrow("page setup failed");
+    expect(failed.close).toHaveBeenCalledOnce();
+    expect(await pool.contextFor("default")).toBe(retry);
+    await pool.close();
+  });
+
   it("lazily shares one browser across concurrent isolated sessions and reuses each context", async () => {
     const browser = makeBrowser();
     const launch = Promise.withResolvers<Browser>();
@@ -103,6 +133,12 @@ describe("ServerBrowserContexts", () => {
       expect.objectContaining({ chromiumSandbox: true, executablePath: "/test/chromium" }),
     );
     expect(launches.mkdir).toHaveBeenCalledWith("/test/profiles/work%2Fteam", { recursive: true });
+    expect(human.addInitScript).toHaveBeenCalledExactlyOnceWith(
+      SERVER_BROWSER_AUTHENTICATION_SCRIPT,
+    );
+    expect(browser.contexts[0]?.addInitScript).toHaveBeenCalledExactlyOnceWith(
+      SERVER_BROWSER_AUTHENTICATION_SCRIPT,
+    );
     await pool.close();
     expect(human.close).toHaveBeenCalledTimes(1);
   });
