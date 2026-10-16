@@ -208,7 +208,7 @@ describe("fork surface existence (anti stack-drop)", () => {
   it("uses native queued runs and keeps steering and editing reachable", () => {
     const chat = readSrc("components/ChatView.tsx");
     expect(chat).toContain("<QueuedRunsControl");
-    expect(chat).toContain("onEditQueuedRun={beginEditingQueuedRun}");
+    expect(chat).toContain("onEditQueuedRun={beginEditingQueuedRunStable}");
     expect(chat).toContain("queuedRunsControlRef.current?.steerNext");
     expect(chat).toContain("queuedRunsControlRef.current?.editLatest");
     expect(chat).not.toContain("QueuedMessageChips");
