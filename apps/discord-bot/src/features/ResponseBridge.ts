@@ -5371,7 +5371,6 @@ export const runBridge = (
 
         const assistant = thread.messages.findLast((message) => message.role === "assistant");
 
-        // --- Primary: stream tip / finalize (user-visible progress) ---
         // Skip stream/finalize when we just converted (or previously posted) a wake-up notice
         // for a real mid-turn interrupt — partial content is not a completed final.
         const afterWakeState = yield* Ref.get(stateRef);
@@ -5668,7 +5667,6 @@ export const runBridge = (
         // User messages after the last answer remain after it, ahead of side work.
         yield* postUserMessagesBefore();
 
-        // --- Secondary: title / pin / side posts (must not starve tip edits) ---
         // Title first, with its own budget: turn settle must clear ⏳ even when GH
         // lookup / tasks would burn the shared secondary timeout. Pending renames
         // also retry on the Working heartbeat so idle threads do not stay stale.

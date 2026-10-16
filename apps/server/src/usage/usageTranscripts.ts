@@ -89,10 +89,6 @@ function grokCostTicksToUsd(ticks: unknown): number | null {
   return ticks / GROK_COST_USD_TICKS_PER_DOLLAR;
 }
 
-/* -------------------------------------------------------------------------- */
-/* Claude Code                                                                */
-/* -------------------------------------------------------------------------- */
-
 /**
  * Parses one line of a Claude Code transcript.
  *
@@ -158,10 +154,6 @@ export function parseClaudeRecord(parsed: unknown): UsageRecord | null {
     dedupeKey,
   };
 }
-
-/* -------------------------------------------------------------------------- */
-/* Codex                                                                      */
-/* -------------------------------------------------------------------------- */
 
 /**
  * Rolling state for a single Codex rollout file.
@@ -347,10 +339,6 @@ function codexSpeed(serviceTier: unknown): UsageSpeed {
   return "standard";
 }
 
-/* -------------------------------------------------------------------------- */
-/* Grok Build                                                                 */
-/* -------------------------------------------------------------------------- */
-
 interface GrokUsageTotals {
   readonly inputTokens: number;
   readonly outputTokens: number;
@@ -527,9 +515,6 @@ export function parseGrokRecord(parsed: unknown): readonly UsageRecord[] {
   }
   return results;
 }
-
-/* Kimi                                                                       */
-/* -------------------------------------------------------------------------- */
 
 /**
  * The model recorded for Kimi turns.

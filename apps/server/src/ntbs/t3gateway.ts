@@ -483,8 +483,6 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
         return coordinates;
       });
 
-    /* TODO: We doing a lot of work behind the scenes just to know whether the thread exists or is missing, this screams sql query or something not a snapshot query
-     */
     const getThreadStatus = (
       state: NTBS.WorkPlanned,
     ): Effect.Effect<NTBS.WorkPlannedContext, RetryableError> =>
@@ -781,7 +779,6 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
             Failure to launch setup is fatal to provisioning. Once launched, setup
             may still be running or fail later; T3 does not report its completion.
             NTBS follows that behavior.
-            TODO: Revisit if T3 exposes setup completion.
           */
           yield* projectScriptRunner
             .runForThread({

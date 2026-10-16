@@ -247,10 +247,6 @@ export const make = Effect.gen(function* () {
 
 export const layer = Layer.effect(WebhookDebugLog, make);
 
-// ---------------------------------------------------------------------------
-// Backward-compatible aliases (Jira-first naming from the initial PR)
-// ---------------------------------------------------------------------------
-
 /** @deprecated Use WEBHOOK_DEBUG_MAX_AGE_MS */
 export const JIRA_WEBHOOK_DEBUG_MAX_AGE_MS = WEBHOOK_DEBUG_MAX_AGE_MS;
 /** @deprecated Use WEBHOOK_DEBUG_MAX_RECORDS */

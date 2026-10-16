@@ -66,7 +66,6 @@ export type T3Target = {
  * the exchange. The thread records the actual checkout path after creation.
  */
 export type WorkCoordinates = {
-  // TODO: Isn't this doubled from T3Target?
   readonly projectId: ProjectId;
   /**
    * The branch this work starts from, and the commit it pointed at on `origin` when the work was planned.
