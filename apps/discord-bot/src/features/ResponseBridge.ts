@@ -89,6 +89,7 @@ import {
 import { formatTasksForDiscord, presentTasks } from "../presentation/tasks.ts";
 import { countTurnToolCalls } from "../presentation/toolCalls.ts";
 import { ThreadLinkStore, type ChatDeliveryReceipt } from "../store/ThreadLinkStore.ts";
+import { teamsMessageIsThreadInfo } from "../teams/ResponseTransport.ts";
 import { ThreadWarmCacheStore } from "../store/ThreadWarmCacheStore.ts";
 import { T3Session } from "../t3/T3Session.ts";
 import { formatAlertCause, postBridgeAlert, postFatalAlert } from "./Alerts.ts";
@@ -2490,12 +2491,28 @@ export const bridgeThreadToPlatform = (input: {
         ...threadWorkspaceInfo(snapshot.thread),
       });
     }
-    const workingAckMessageId =
-      input.workingAckMessageId ??
-      (yield* transport.createMessage(
+    let workingAckMessageId = input.workingAckMessageId;
+    if (transport.platform === "teams" && workingAckMessageId === undefined) {
+      const links = yield* ThreadLinkStore;
+      const infoId = (yield* links.getByDiscordThreadId(input.conversationId))
+        ?.infoDiscordMessageId;
+      if (infoId) {
+        const existing = yield* transport
+          .getMessage(input.conversationId, infoId)
+          .pipe(Effect.catchCause(() => Effect.succeed(null)));
+        // One bubble: the info message is the progress slot. A second Working
+        // message stays on screen beside it because Teams often will not delete it.
+        if (existing?.content && teamsMessageIsThreadInfo(existing.content)) {
+          workingAckMessageId = existing.id;
+        }
+      }
+    }
+    if (workingAckMessageId === undefined) {
+      workingAckMessageId = (yield* transport.createMessage(
         input.conversationId,
         workingFields(formatInProgressChunk("", true), input.threadId),
       )).id;
+    }
     yield* bridgeThreadToDiscord({
       discordChannelId: input.conversationId,
       t3ThreadId: input.threadId,
@@ -4178,13 +4195,30 @@ export const runBridge = (
           staleIds,
         });
 
-        // Finals get fresh messages below the conversation on both platforms. Keep each
-        // successful receipt so retries reuse final chunks without overwriting progress.
+        // Discord posts the answer below the conversation, then deletes progress.
+        // Teams edits that same bubble when nothing has been posted under it. A second
+        // Teams message leaves the first one saying Working when delete does not land.
+        // A later message keeps the fresh-reply path so earlier input stays above the answer.
+        const progressId =
+          rest.platform === "teams" && !sameDelivery ? (state.discordMessageIds[0] ?? null) : null;
+        const historyAfterProgress =
+          progressId === null
+            ? []
+            : yield* rest
+                .listMessages(input.discordChannelId, { limit: 25, after: progressId })
+                .pipe(Effect.catchCause(() => Effect.succeed([])));
+        const teamsProgressId =
+          progressId !== null &&
+          !historyAfterProgress.some(
+            (message) => message.id !== progressId && message.id > progressId,
+          )
+            ? progressId
+            : null;
         let nextReceipt: ChatDeliveryReceipt = {
           assistantId: t3MessageId,
           turnId,
           text,
-          messageIds: sameDelivery ? receipt.messageIds : [],
+          messageIds: sameDelivery ? receipt.messageIds : teamsProgressId ? [teamsProgressId] : [],
           uploads: sameDelivery ? receipt.uploads : [],
           completed: false,
         };

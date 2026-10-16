@@ -20,6 +20,8 @@ import {
   makeTeamsResponseTransport,
   teamsMessageFields,
   teamsControlActivity,
+  teamsInfoRefreshFields,
+  teamsMessageIsThreadInfo,
   normalizeTeamsContent,
   graphMessage,
   type TeamsResponseActivity,
@@ -103,6 +105,83 @@ describe("Teams response adapter", () => {
         "[Open in Omegent](https://omega.example/?thread=scanner-thread)",
       );
       expect(send.mock.calls[0]?.[0].textFormat).toBe("extendedmarkdown");
+    }),
+  );
+  it("keeps a delivered Teams reply when thread info refreshes", () => {
+    expect(teamsMessageIsThreadInfo("**Omegent Info**\nModel: `grok/grok-4.7`")).toBe(true);
+    expect(teamsMessageIsThreadInfo("**Omegent Info**\n\n_Working.._")).toBe(true);
+    expect(teamsMessageIsThreadInfo("_Working.._")).toBe(false);
+    expect(teamsMessageIsThreadInfo("No secrets in the repositories.")).toBe(false);
+    expect(
+      teamsInfoRefreshFields({
+        rendered: "**Omegent Info**\nModel: `grok/grok-4.7`",
+        current: "**Omegent Info**\nModel: `grok/grok-4.7`\n\n_Working.._",
+        threadId: "thread",
+      })?.content,
+    ).toBe("**Omegent Info**\nModel: `grok/grok-4.7`\n\n_Working.._");
+    expect(
+      teamsInfoRefreshFields({
+        rendered: "**Omegent Info**\nModel: `grok/grok-4.7`",
+        current: "No secrets in the repositories.",
+        threadId: "thread",
+      }),
+    ).toBeNull();
+  });
+  it.effect("does not post a second Teams message over a delivered reply", () =>
+    Effect.gen(function* () {
+      const config = yield* DiscordBotConfig.pipe(
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnvRecord({ T3_DISCORD_BOT_DATA_DIR: directory }),
+          ),
+        ),
+      );
+      const links = yield* makeThreadLinkStore(directory);
+      yield* links.put({
+        discordThreadId: options.conversationId,
+        t3ThreadId: ThreadId.make("scanner-thread"),
+        projectId: ProjectId.make("scanner"),
+        channelId: "channel",
+        guildId: "team",
+        createdAt: "2026-10-15T10:00:00.000Z",
+      });
+      const send = vi
+        .fn<(wire: TeamsResponseActivity) => Promise<{ id?: string }>>()
+        .mockImplementation(async (wire) => ({ id: wire.id ?? "info" }));
+      const adapter = makeTeamsResponseTransport({ ...options, config, send });
+      const provide = <A, E>(
+        effect: Effect.Effect<A, E, ThreadLinkStore | ProjectAliasStore | T3Session>,
+      ) =>
+        effect.pipe(
+          Effect.provideService(ThreadLinkStore, links),
+          Effect.provideService(ProjectAliasStore, makeProjectAliasStore([])),
+          Effect.provideService(T3Session, {} as T3SessionService),
+        );
+      yield* provide(
+        adapter.upsertThreadInfo({
+          config,
+          conversationId: options.conversationId,
+          threadId: "scanner-thread",
+          modelSelection: { instanceId: "claudeAgent", model: "claude-opus-5-5" },
+        }),
+      );
+      yield* adapter.updateMessage(options.conversationId, "info", {
+        content: "No secrets in the repositories.",
+      });
+      const callsAfterReply = send.mock.calls.length;
+      yield* provide(
+        adapter.upsertThreadInfo({
+          config,
+          conversationId: options.conversationId,
+          threadId: "scanner-thread",
+          modelSelection: { instanceId: "claudeAgent", model: "claude-opus-5-5" },
+          worktreePath: "/var/lib/t3/worktrees/HausfuxApps/t3-teams-23b871f2",
+        }),
+      );
+      expect(send.mock.calls.length).toBe(callsAfterReply);
+      expect((yield* adapter.getMessage(options.conversationId, "info")).content).toBe(
+        "No secrets in the repositories.",
+      );
     }),
   );
   it("adopts an accepted final after a send timeout with Graph's HTML body", () => {
