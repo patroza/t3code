@@ -204,16 +204,6 @@ export const make = Effect.gen(function* () {
         void runPromise(webLinks.receive(url));
         return true;
       };
-      yield* electronApp.on("open-url", (event: { preventDefault: () => void }, url: string) => {
-        if (
-          startProviderAuthHandoff(url) ||
-          resumeProviderAuth(url) ||
-          openWebLink(url) ||
-          openAppLink(url)
-        )
-          event.preventDefault();
-      });
-
       yield* electronApp.on("open-file", (event: { preventDefault: () => void }, path: string) => {
         if (!DesktopWebLinks.isWebPageFile(path)) return;
         event.preventDefault();
