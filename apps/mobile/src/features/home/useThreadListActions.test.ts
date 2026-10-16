@@ -43,8 +43,10 @@ vi.mock("expo-haptics", () => ({
   impactAsync: async () => {},
   ImpactFeedbackStyle: { Light: "light" },
 }));
-vi.mock("../../components/ConfirmDialogHost", () => ({
-  showConfirmDialog: (dialog: { onConfirm: () => void }) => state.dialogs.push(dialog),
+vi.mock("../../components/ui/Dialog", () => ({
+  alert: (title: string, _message: string, buttons?: { text: string; onPress?: () => void }[]) =>
+    state.alerts.push({ title, buttons }),
+  confirm: (dialog: { onConfirm: () => void }) => state.dialogs.push(dialog),
 }));
 vi.mock("../archive/useArchivedThreadSnapshots", () => ({
   refreshArchivedThreadsForEnvironment: () => {},
@@ -89,16 +91,12 @@ vi.mock("../../state/atom-registry", () => ({
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: unknown) => command,
 }));
-// Stubbed at the direct dependency: the real outbox pulls the Expo file-system
-// storage into a test that only reads which threads are queued.
 vi.mock("../../state/use-thread-outbox", () => ({ queuedThreadKeysAtom: "queued-thread-keys" }));
-// The real module builds the connection runtime, which loads Expo. A failed preview skips the cleanup prompt.
-vi.mock("../../state/vcs", () => ({
-  vcsEnvironment: {
-    previewWorktreeCleanup: async () => ({ _tag: "Failure" }),
-    cleanupThreadWorktree: async () => ({ _tag: "Success", value: { status: "removed" } }),
-  },
+const worktreeCleanup = vi.hoisted(() => ({
+  previewWorktreeCleanup: vi.fn(),
+  cleanupThreadWorktree: vi.fn(),
 }));
+vi.mock("../../state/vcs", () => ({ vcsEnvironment: worktreeCleanup }));
 // The real hold lives in a module-level atom that would leak between cases.
 vi.mock("../../state/thread-order", () => ({
   threadDropBusyAtom: "thread-drop-busy",
@@ -187,6 +185,12 @@ beforeEach(() => {
   state.dialogs = [];
   state.alerts = [];
   state.afterRequest = undefined;
+  worktreeCleanup.previewWorktreeCleanup.mockReset();
+  worktreeCleanup.previewWorktreeCleanup.mockResolvedValue({ _tag: "Failure" });
+  worktreeCleanup.cleanupThreadWorktree.mockReset();
+  worktreeCleanup.cleanupThreadWorktree.mockResolvedValue(
+    AsyncResult.success({ status: "removed" }),
+  );
 });
 
 afterEach(() => vi.unstubAllEnvs());
@@ -231,8 +235,7 @@ describe("thread list operation permissions", () => {
     },
   );
 
-  it.each(["ios", "android"])("does not show a forbidden %s delete confirmation", (os) => {
-    vi.stubEnv("EXPO_OS", os);
+  it("does not show a forbidden delete confirmation", () => {
     useThreadListActions().confirmDeleteThread(makeThread({ environmentId: otherEnvironmentId }));
 
     expect(state.dialogs).toEqual([]);
@@ -240,23 +243,16 @@ describe("thread list operation permissions", () => {
     expect(state.requests).toEqual([]);
   });
 
-  it.each(["ios", "android"])(
-    "rechecks permission after a retained %s delete confirmation",
-    async (os) => {
-      vi.stubEnv("EXPO_OS", os);
-      useThreadListActions().confirmDeleteThread(makeThread());
-      const confirm =
-        os === "ios"
-          ? state.alerts[0]?.buttons?.find((button) => button.text === "Delete")?.onPress
-          : state.dialogs[0]?.onConfirm;
-      expect(confirm).toBeTypeOf("function");
-      state.scopes.get(primaryEnvironmentId)!.clear();
+  it("rechecks permission after a retained delete confirmation", async () => {
+    useThreadListActions().confirmDeleteThread(makeThread());
+    const confirm = state.dialogs[0]?.onConfirm;
+    expect(confirm).toBeTypeOf("function");
+    state.scopes.get(primaryEnvironmentId)!.clear();
 
-      await confirm!();
+    await confirm!();
 
-      expect(state.requests).toEqual([]);
-    },
-  );
+    expect(state.requests).toEqual([]);
+  });
 
   it("unarchives with only task permission and blocks a later revoked callback", async () => {
     const actions = useArchivedThreadListActions(() => {});
@@ -277,6 +273,50 @@ describe("thread list operation permissions", () => {
     await state.dialogs[0]!.onConfirm();
 
     expect(state.requests).toEqual([expect.objectContaining({ action: "delete" })]);
+  });
+});
+
+describe("archive worktree cleanup dialogs", () => {
+  it.each([
+    ["ios", "failed"],
+    ["android", "failed"],
+    ["ios", "retained-active"],
+    ["android", "retained-active"],
+  ] as const)("%s preserves the archive when cleanup is %s", async (platform, outcome) => {
+    vi.stubEnv("EXPO_OS", platform);
+    worktreeCleanup.previewWorktreeCleanup.mockResolvedValue(
+      AsyncResult.success({ candidate: { worktreePath: "/worktrees/feature", branch: "feature" } }),
+    );
+    if (outcome === "failed") {
+      worktreeCleanup.cleanupThreadWorktree.mockResolvedValue(
+        AsyncResult.failure(Cause.fail(new Error("Permission denied"))),
+      );
+    } else {
+      worktreeCleanup.cleanupThreadWorktree.mockResolvedValue(
+        AsyncResult.success({ status: outcome }),
+      );
+    }
+
+    const archived = useThreadListActions().archiveThread(makeThread());
+    if (platform === "ios") {
+      await vi.waitFor(() => expect(state.alerts).toHaveLength(1));
+      expect(state.alerts[0]?.title).toBe("Remove worktree?");
+      expect(state.requests).toEqual([]);
+      state.alerts[0]?.buttons?.find((button) => button.text === "Remove")?.onPress?.();
+    } else {
+      await vi.waitFor(() => expect(state.dialogs).toHaveLength(1));
+      expect(state.requests).toEqual([]);
+      state.dialogs[0]!.onConfirm();
+    }
+    await archived;
+
+    expect(state.requests).toEqual([
+      expect.objectContaining({ action: "archive", environmentId: primaryEnvironmentId }),
+    ]);
+    expect(worktreeCleanup.cleanupThreadWorktree).toHaveBeenCalledOnce();
+    expect(state.alerts.at(-1)?.title).toBe(
+      outcome === "failed" ? "Thread archived, but worktree removal failed" : "Worktree kept",
+    );
   });
 });
 

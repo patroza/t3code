@@ -45,8 +45,7 @@ export const watchDiscoveredCompatibility = Effect.fn("connection.watchDiscovere
             // Discovery describes the server behind the relay route. A direct
             // connection (the desktop's own server, a saved URL, SSH) can reach
             // a different server with the same environment id, such as a
-            // preview app that shares the home directory. Its socket handshake
-            // already checks the protocol.
+            // preview app that shares the home directory.
             const saved = registered.get(environmentId);
             if (
               saved === undefined ||
@@ -88,7 +87,6 @@ export function layerWithOptions(options: RpcSession.RpcSessionOptions) {
     layerRegistry,
     RelayEnvironmentDiscovery.layer,
     layerOnboarding,
-    // Exposed for updating hosts too old to connect through the driver.
     ConnectionResolver.layer,
   );
   const layerConnectionStartup = Layer.effectDiscard(

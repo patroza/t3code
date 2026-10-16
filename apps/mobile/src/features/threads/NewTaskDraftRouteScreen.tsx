@@ -1,11 +1,12 @@
+import * as Dialog from "../../components/ui/Dialog";
 import { useNavigation, usePreventRemove, type StaticScreenProps } from "@react-navigation/native";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, View } from "react-native";
+import { View } from "react-native";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { AppText as Text } from "../../components/AppText";
+import { AppText as Text } from "../../components/ui/AppText";
 import { useProjects } from "../../state/entities";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useWorkspaceState } from "../../state/workspace";
@@ -20,7 +21,6 @@ type NewTaskDraftRouteParams = {
   readonly environmentId?: string | string[];
   readonly projectId?: string | string[];
   readonly title?: string | string[];
-  /** Set by Add Project when this draft opens while the project's clone runs. */
   readonly cloning?: string | string[];
   readonly pendingTaskId?: string | string[];
   readonly draftId?: string | string[];
@@ -145,7 +145,7 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
     if (checkoutPending || result?._tag !== "Failure") return;
     if (!isAtomCommandInterrupted(result)) {
       const error = squashAtomCommandFailure(result);
-      Alert.alert(
+      Dialog.alert(
         "Could not switch branch",
         error instanceof Error ? error.message : "The branch could not be checked out.",
       );
@@ -160,7 +160,6 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
         : initialProjectRef,
     [initialProjectRef, result],
   );
-  // Send/queue remain unavailable on failure while the unlocked route closes.
   const preparingBranch = checkoutPending || (needsPreparation && result?._tag !== "Success");
 
   return (

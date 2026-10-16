@@ -49,6 +49,7 @@ import {
 } from "./acpSupport.ts";
 import { sessionModelStateFromInitialize } from "@t3tools/provider-acp/server/runtimeModel";
 import { discoverGrokSkills } from "./skills.ts";
+import { grokProbeEnvironment } from "./probeEnvironment.ts";
 
 // No `requiresNewThreadForModelChange`: Grok's ACP accepts `session/set_model`
 // mid-session, and the adapter re-applies the requested model on every turn
@@ -92,7 +93,6 @@ export function buildGrokReasoningEffortCapabilities(
 }
 
 const VERSION_PROBE_TIMEOUT_MS = 4_000;
-// `initialize` is a single local round trip, so this is generous even on slow machines.
 const GROK_ACP_INITIALIZE_TIMEOUT_MS = 8_000;
 const GROK_API_KEY_ENV = "XAI_API_KEY";
 
@@ -361,7 +361,6 @@ export function buildGrokModelCapabilities(model: EffectAcpSchema.ModelInfo): Mo
     : EMPTY_CAPABILITIES;
 }
 
-/** Models advertised by the ACP agent, with the session's current model marked as default. */
 export function buildGrokModelsFromSessionModelState(
   modelState: EffectAcpSchema.SessionModelState | null | undefined,
 ): ReadonlyArray<ServerProviderModel> {
@@ -393,20 +392,13 @@ export function buildGrokModelsFromSessionModelState(
 }
 
 export interface GrokModelsCliOutput {
-  /** True or false when the CLI printed a login line, null when it printed neither. */
   readonly authenticated: boolean | null;
   readonly models: ReadonlyArray<ServerProviderModel>;
 }
 
 /**
- * Parses `grok models`. The command exits 0 whether or not the user is logged in, so the
- * text is the only signal. Current output looks like:
- *
- *     You are logged in with grok.com.
- *     Default model: grok-4.6
- *     Available models:
- *       * grok-4.6 (default)
- *       - grok-4.5
+ * The command exits 0 whether or not the user is logged in, so the text is the
+ * only signal.
  */
 export function parseGrokModelsCliOutput(output: string): GrokModelsCliOutput {
   const authenticated = /you are logged in/i.test(output)
@@ -483,7 +475,6 @@ export function grokSlashCommandsFromInitialize(
     if (Option.isNone(decoded)) continue;
     const command = decoded.value;
     const name = command.name.trim();
-    // Permission changes must go through T3 so the client and provider agree.
     if (!name || name.toLowerCase() === "always-approve") continue;
     // Grok advertises /context, but its ACP handler completes without emitting output.
     if (name.toLowerCase() === "context") continue;
@@ -499,8 +490,8 @@ export function grokSlashCommandsFromInitialize(
 }
 
 /**
- * Reads model and command metadata from `initialize._meta`. This never calls `authenticate`
- * or `session/new`, so it cannot open a browser login or boot the workspace's MCP servers.
+ * This never calls `authenticate` or `session/new`, so it cannot open a browser login or
+ * boot the workspace's MCP servers.
  */
 const discoverGrokMetadataViaAcpInitialize = (
   grokSettings: GrokSettings,
@@ -548,10 +539,13 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
     });
   }
 
-  const versionResult = yield* runGrokCliCommand(grokSettings, ["--version"], environment).pipe(
-    Effect.timeoutOption(VERSION_PROBE_TIMEOUT_MS),
-    Effect.result,
-  );
+  const probeEnvironment = grokProbeEnvironment(environment);
+
+  const versionResult = yield* runGrokCliCommand(
+    grokSettings,
+    ["--version"],
+    probeEnvironment,
+  ).pipe(Effect.timeoutOption(VERSION_PROBE_TIMEOUT_MS), Effect.result);
 
   if (Result.isFailure(versionResult)) {
     const error = versionResult.failure;
@@ -615,7 +609,7 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
   }
 
   // `grok models` reports login state and model slugs without starting the agent.
-  const modelsResult = yield* runGrokCliCommand(grokSettings, ["models"], environment).pipe(
+  const modelsResult = yield* runGrokCliCommand(grokSettings, ["models"], probeEnvironment).pipe(
     Effect.timeoutOption(AUTH_PROBE_TIMEOUT_MS),
     Effect.result,
   );
@@ -648,12 +642,13 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
         ? { status: "unauthenticated" }
         : { status: "unknown" };
 
+  // Skill discovery applies the probe environment itself.
   const skills = yield* discoverGrokSkills(grokSettings, environment, cwd).pipe(
     Effect.tapError((cause) => Effect.logDebug("Grok skill discovery failed.", { cause })),
     Effect.orElseSucceed(() => []),
   );
 
-  const acpExit = yield* discoverGrokMetadataViaAcpInitialize(grokSettings, environment).pipe(
+  const acpExit = yield* discoverGrokMetadataViaAcpInitialize(grokSettings, probeEnvironment).pipe(
     Effect.timeoutOption(GROK_ACP_INITIALIZE_TIMEOUT_MS),
     Effect.exit,
   );
@@ -700,7 +695,6 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
     probe: {
       installed: true,
       version,
-      // A failed metadata probe degrades the model picker, it does not make chats fail.
       status: acpFailed ? "warning" : "ready",
       auth,
       ...(acpFailed

@@ -76,11 +76,6 @@ const POST_REPLY_TIMEOUT = Duration.toMillis(Duration.seconds(30));
 const ACKNOWLEDGE_TIMEOUT = Duration.toMillis(Duration.seconds(10));
 
 /**
- * TODO: Evaluate whether we can turn both observe and act below in one generic `attempt` helper.
- * Also evaluate whether we need `Result` at all.
- */
-
-/**
  * Checks external state without letting an unanswered check hold the exchange lock forever.
  * The caller decides what to do with the failed observation.
  */
@@ -180,8 +175,7 @@ type ExchangeLock = {
  *
  * Build one per platform, each with its own adapter provided.
  *
- * TODO: Consider collapsing to a single runtime processor with one routing adapter that reads the platform from the sourceUri scheme (jira://, discord://) and delegates to the platform adapter.
- * The current one-per-platform design has an unenforced assumption: `findNonTerminalExchanges` returns every stored exchange with no platform filter, so processors sharing a repository would re-drive each other's exchanges through the wrong adapter during recovery and sweeps.
+ * The current design requires separate exchange repositories per platform: `findNonTerminalExchanges` returns every stored exchange with no platform filter, so processors sharing a repository would re-drive each other's exchanges through the wrong adapter during recovery and sweeps.
  * A single processor also means one lock map, one activity subscription, one sweeper, and retires `makeNTBSProcessorTag`.
  */
 export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcessorRequirements> =
@@ -228,7 +222,7 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
      * Serializes concurrent work on the same sourceUri, protecting the check-then-act record in `process` (findBySourceUri -> persist).
      * The lock is in-process memory: single-writer is an assumption on the deployment, not something the code or the database enforces.
      * Two processors on the same database would each pass the "no exchange yet" check, both record, and the upsert would silently overwrite the first record instead of failing.
-     * TODO: If we ever run more than one processor, this needs remote locking or a record that can lose (e.g. a unique insert on sourceUri that rejects the second writer).
+     * Multiple processors require remote locking or a unique insert on sourceUri that rejects the second writer.
      */
     const exchangeLocks = new Map<string, ExchangeLock>();
 
@@ -315,7 +309,6 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
         }
 
         case "provision-thread": {
-          // TODO: Quite sure there's low hanging fruits here
           const rejection = yield* act(
             state,
             t3.provisionThread(state),

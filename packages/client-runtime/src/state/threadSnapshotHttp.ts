@@ -14,21 +14,12 @@ import {
 
 import { SNAPSHOT_HTTP_TIMEOUT_MS } from "./snapshotHttpPolicy.ts";
 
-/** Progressive history metadata returned by a bounded snapshot loader. */
 export type ThreadSnapshotHistoryMeta = {
   readonly historyCursor: string | null;
   readonly hasMoreHistory: boolean;
-  /** Max local turn ordinal from the full projection; optional on older servers. */
   readonly latestLocalTurnOrdinal?: number | null;
 };
 
-/**
- * Outcome of an HTTP thread-detail snapshot load.
- *
- * - `present`: snapshot body is available (seed projection, resume via socket).
- * - `missing`: server definitively reported the thread does not exist (404).
- * - `unavailable`: transport/timeout/5xx/etc.; fall back to the socket path.
- */
 export type ThreadSnapshotLoadResult =
   | {
       readonly _tag: "present";
@@ -38,11 +29,6 @@ export type ThreadSnapshotLoadResult =
   | { readonly _tag: "missing" }
   | { readonly _tag: "unavailable" };
 
-/**
- * Load a thread's detail snapshot over HTTP instead of embedding it in the
- * WebSocket subscription's first frame. The response is gzip-compressible by
- * the transport and keeps the (potentially multi-KB) snapshot off the socket.
- */
 export const fetchEnvironmentThreadSnapshot = Effect.fn(
   "clientRuntime.state.fetchEnvironmentThreadSnapshot",
 )(function* (input: {
@@ -70,14 +56,6 @@ export const fetchEnvironmentThreadSnapshot = Effect.fn(
 
 export type FetchEnvironmentThreadSnapshotError = RemoteEnvironmentRequestError;
 
-/**
- * Loads a thread's detail snapshot over HTTP.
- *
- * Distinguishes a definitive missing thread (HTTP 404) from transient snapshot
- * unavailability so the thread state machine can mark the thread deleted without
- * opening a socket subscription, while still falling back to the socket when the
- * HTTP path is merely unavailable.
- */
 export class ThreadSnapshotLoader extends Context.Service<
   ThreadSnapshotLoader,
   {

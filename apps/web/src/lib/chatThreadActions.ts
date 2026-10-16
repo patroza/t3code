@@ -27,7 +27,6 @@ interface NewThreadHandler {
       startFromOrigin?: boolean;
       reuseBaseBranch?: boolean;
     },
-    // The opened draft's identity, which most callers have no use for.
   ): Promise<unknown>;
 }
 
@@ -84,12 +83,6 @@ export function resolveThreadActionProjectRef(
   return context.defaultProjectRef;
 }
 
-// New threads inherit only the *project* from the current context. Branch,
-// worktree, and env mode always come from the user's configured defaults —
-// carrying them over from the viewed thread meant "new thread" silently
-// reused checkouts and branches. Explicit affordances (branch toolbar's
-// "new thread in this worktree") pass those options to handleNewThread
-// directly instead.
 export async function startNewThreadFromContext(
   context: ChatThreadActionContext,
 ): Promise<boolean> {

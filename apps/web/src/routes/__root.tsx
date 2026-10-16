@@ -34,7 +34,6 @@ import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLa
 import { IdentityClaimGate } from "../components/identity/IdentityClaimGate";
 import { DesktopUpdateLaunchNotice } from "../components/sidebar/updateEverythingRun";
 
-import { NightlyMobileBetaNotice } from "../components/NightlyMobileBeta";
 import { LegacyThreadMigrationToast } from "../components/LegacyThreadMigrationToast";
 import { ThreadNotificationCoordinator } from "../components/ThreadNotificationCoordinator";
 import { ReopenClosedViewShortcut } from "../components/ReopenClosedViewShortcut";
@@ -190,8 +189,6 @@ function RootRouteView() {
     );
   }
 
-  // Show onboarding over the workspace, keeping automatic thread navigation
-  // and other startup dialogs suspended until setup finishes.
   if (pathname === "/welcome") {
     return (
       <ToastProvider>
@@ -230,10 +227,6 @@ function RootRouteView() {
     </CommandPalette>
   );
 
-  // FirstRunGate holds back everything below it — including EventRouter,
-  // whose welcome payload navigates into a thread — until the first-run
-  // decision is known, so a fresh install renders nothing (not the shell,
-  // not a flash of threads) before landing on the welcome wizard.
   return (
     <ToastProvider>
       <AnchoredToastProvider>
@@ -276,8 +269,6 @@ function RootRouteView() {
           ) : null}
           {isElectron ? <DesktopUpdateLaunchNotice /> : null}
 
-          {/* Hosted Nightly is "hosted-static", not authenticated, and needs it too. */}
-          <NightlyMobileBetaNotice />
           {appShell}
           {/* Above the router: a theme draft is judged by walking the app, so the
               editor has to survive navigation away from settings. */}
@@ -288,7 +279,6 @@ function RootRouteView() {
   );
 }
 
-/** Follows the palette the primary environment's machine publishes, if any. */
 function EnvironmentThemeSync() {
   useEnvironmentThemeSync();
   // Ordered after the palette sync so a first-run client adopting the
@@ -445,7 +435,6 @@ function RootRouteErrorView({ error }: ErrorComponentProps) {
   );
 }
 
-/** Copies the full error report and swaps to a check mark for a moment as confirmation. */
 function CopyErrorButton({ report }: { report: string }) {
   const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "error-report" });
 
@@ -488,9 +477,7 @@ function errorDetails(error: unknown): string {
 const MAX_ERROR_CAUSE_DEPTH = 5;
 
 /**
- * Full error text for bug reports: app build, page path, time, then the stack
- * and any cause chain. Takes the pathname only so tokens in the query never
- * land on the clipboard.
+ * Takes the pathname only so tokens in the query never land on the clipboard.
  */
 function errorReport(error: unknown, pathname: string): string {
   const lines = [

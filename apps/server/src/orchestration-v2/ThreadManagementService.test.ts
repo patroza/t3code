@@ -130,8 +130,6 @@ it("identifies every existing thread that must be hydrated before dispatch", () 
     }),
   ).toEqual([targetThreadId]);
 
-  // Read-state commands skip transcript hydration entirely: they fire on
-  // every activity bump while a thread is open and never touch messages.
   expect(
     ThreadManagementService.existingThreadIdsForCommand({
       type: "thread.visit",
@@ -612,8 +610,6 @@ it.effect.each([
         Layer.mock(Orchestrator.OrchestratorV2)({
           getThreadEventSequence: () => Effect.succeed(0),
           restartContinuationPending: () => Effect.succeed(false),
-          // No run update arrives, so the timeout path runs while a final
-          // projection read can still observe a terminal run.
           streamStoredEventsFrom: () =>
             Stream.fromEffect(Deferred.succeed(subscribed, undefined)).pipe(
               Stream.drain,
@@ -854,7 +850,6 @@ it.effect("waitForThread reads the run again only when the run updates", () =>
         Layer.mock(Orchestrator.OrchestratorV2)({
           getThreadEventSequence: () => Effect.succeed(0),
           restartContinuationPending: () => Effect.succeed(false),
-          // Only the run.updated stream carries events in this test.
           streamStoredEventsFrom: (input) =>
             input?.eventType === "run.updated"
               ? Stream.fromEffect(Deferred.succeed(subscribed, undefined)).pipe(
@@ -888,7 +883,6 @@ it.effect("waitForThread reads the run again only when the run updates", () =>
     const result = yield* Fiber.join(fiber);
 
     expect(result).toMatchObject({ timedOut: false, run: { id: runId, status: "completed" } });
-    // The first read plus one for this run's update. The other run caused none.
     expect(reads).toBe(2);
   }),
 );
@@ -901,7 +895,6 @@ it.effect("waitForThread follows a restart continuation instead of the cut run",
     const continuationId = RunId.make("run:thread-management:wait-restart:2");
     const subscribed = yield* Deferred.make<void>();
     const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
-    // The restart cut the run; its continuation effect has not started yet.
     let runs: Array<{
       id: RunId;
       status: OrchestrationV2Run["status"];
@@ -980,7 +973,6 @@ it.effect("waitForThread returns the cut run once its continuation is declined",
           getThreadEventSequence: () => Effect.succeed(0),
           restartContinuationPending: () => Effect.succeed(pending),
           awaitRestartContinuation: () => Deferred.await(declined),
-          // Declining records no thread event.
           streamStoredEventsFrom: (input) =>
             input?.eventType === "run.updated"
               ? Stream.fromEffect(Deferred.succeed(subscribed, undefined)).pipe(

@@ -21,7 +21,7 @@ import {
 } from "@t3tools/shared/git";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
-import { Alert } from "react-native";
+import * as Dialog from "../components/ui/Dialog";
 
 import { useBranches } from "../state/queries";
 import { threadEnvironment } from "../state/threads";
@@ -145,10 +145,7 @@ export function useSelectedThreadGitActions() {
   );
 
   // Shell updates replace the selected thread object many times per second while a
-  // turn streams, so key the refresh on primitives. The server publishes status after
-  // each turn finishes; this only seeds status when the selection or cwd changes, and
-  // again on reconnect because the server's cached status can miss changes made while
-  // the app was away.
+  // turn streams, so key the refresh on primitives.
   const selectedEnvironmentId = selectedThread?.environmentId ?? null;
   const selectedThreadId = selectedThread?.id ?? null;
   const hasSelectedThreadProject = selectedThreadProject !== null;
@@ -460,7 +457,7 @@ export function useSelectedThreadGitActions() {
               if (actionInput.disableCommitSigning || !isCommitSigningFailure(error)) {
                 return false;
               }
-              Alert.alert(
+              Dialog.alert(
                 "Commit signing failed",
                 "Git couldn’t sign the commit. Retry this commit without signing?",
                 [

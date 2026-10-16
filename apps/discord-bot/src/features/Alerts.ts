@@ -358,8 +358,6 @@ export function sessionErrorAlertKey(threadId: string, lastError: string): strin
   return `session-error:${threadId}`;
 }
 
-// --- /proc helpers -----------------------------------------------------------
-
 function readLoad(): { load1: number; load5: number } {
   const raw = NodeFS.readFileSync("/proc/loadavg", "utf8");
   const parts = raw.split(/\s+/);
@@ -731,8 +729,6 @@ export function collectHostSnapshot(input: {
   };
 }
 
-// --- Fatal / bridge alert bus (callable from bridge / main) ------------------
-
 type Poster = (
   key: string,
   content: string,
@@ -875,8 +871,6 @@ export const postBridgeAlert = (
     yield* p(`bridge:${key}`, delivery.content, BRIDGE_ALERT_COOLDOWN_MS, delivery.files);
   });
 
-// --- Watchdog ----------------------------------------------------------------
-
 /**
  * Periodic guest watchdog → Discord alerts channel.
  * No-op (log only) when `alertsChannelId` is unset.
@@ -957,7 +951,6 @@ export const runAlertWatchdog = (botConfig: DiscordBotConfig) =>
         });
         const loadLimit = snap.nproc * LOAD_RATIO;
 
-        // --- load ---
         if (snap.load1 >= loadLimit && snap.load1 >= 2) {
           yield* postAlert(
             "load",
@@ -970,7 +963,6 @@ export const runAlertWatchdog = (botConfig: DiscordBotConfig) =>
           );
         }
 
-        // --- cpu ---
         if (snap.cpuPercent !== null && snap.cpuPercent >= CPU_PERCENT_ALERT) {
           yield* postAlert(
             "cpu",
@@ -993,7 +985,6 @@ export const runAlertWatchdog = (botConfig: DiscordBotConfig) =>
           );
         }
 
-        // --- memory ---
         if (snap.memAvailableMb > 0 && snap.memAvailableMb < MEM_AVAILABLE_MIN_MB) {
           yield* postAlert(
             "mem",
@@ -1010,7 +1001,6 @@ export const runAlertWatchdog = (botConfig: DiscordBotConfig) =>
           );
         }
 
-        // --- disk ---
         for (const d of snap.disks) {
           if (d.freePercent < DISK_FREE_MIN_PERCENT || d.freeGb < DISK_FREE_MIN_GB) {
             yield* postAlert(
@@ -1025,7 +1015,6 @@ export const runAlertWatchdog = (botConfig: DiscordBotConfig) =>
           }
         }
 
-        // --- runaway MCP (legacy stdio Sentry) — alert only, never kill ---
         const runaways = snap.runaways;
         if (runaways.length >= SENTRY_COUNT_ALERT) {
           yield* postAlert(
@@ -1056,7 +1045,6 @@ export const runAlertWatchdog = (botConfig: DiscordBotConfig) =>
           }
         }
 
-        // --- other stuck/fat processes (alert only) ---
         const fatNonRunaway = snap.fatProcesses.filter(
           (p) => !runaways.some((k) => k.pid === p.pid),
         );
@@ -1082,7 +1070,6 @@ export const runAlertWatchdog = (botConfig: DiscordBotConfig) =>
           );
         }
 
-        // --- long T3 turns (page at 0.25h × 2ⁿ age milestones; drop finished turns) ---
         const longTurnIds = new Set(snap.longTurns.map((t) => t.turnId));
         for (const turnId of lastTurnMilestones.keys()) {
           if (!longTurnIds.has(turnId)) lastTurnMilestones.delete(turnId);
@@ -1109,7 +1096,6 @@ export const runAlertWatchdog = (botConfig: DiscordBotConfig) =>
           );
         }
 
-        // --- session last_error (fresh real fatals only; skip recover + sticky stale) ---
         const sessionSelection = selectSessionErrorsForAlert(
           snap.sessionErrors,
           SESSION_ERROR_ALERT_MAX,
@@ -1137,7 +1123,6 @@ export const runAlertWatchdog = (botConfig: DiscordBotConfig) =>
           });
         }
 
-        // --- failed systemd units ---
         if (snap.failedUnits.length > 0) {
           yield* postAlert(
             "systemd-failed",

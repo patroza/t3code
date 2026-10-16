@@ -14,8 +14,6 @@ const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 const GitFilePath = Schema.String.check(Schema.isNonEmpty());
 const GIT_LIST_BRANCHES_MAX_LIMIT = 200;
 
-// Domain Types
-
 export const GitStackedAction = Schema.Literals([
   "commit",
   "push",
@@ -157,7 +155,6 @@ export const GitRunStackedActionInput = Schema.Struct({
   featureBranch: Schema.optional(Schema.Boolean),
   disableCommitSigning: Schema.optional(Schema.Boolean),
   filePaths: Schema.optional(Schema.Array(GitFilePath).check(Schema.isMinLength(1))),
-  /** The thread the action runs beside; a pull request it creates is linked to it. */
   threadId: Schema.optional(ThreadId),
   projectId: Schema.optional(ProjectId),
 });
@@ -282,12 +279,8 @@ export const VcsStatusChangeRequest = Schema.Struct({
   state: VcsStatusChangeRequestState,
   hasFailingChecks: Schema.optional(Schema.Boolean),
   /** Optional for compatibility with older servers and providers. */
+
   isDraft: Schema.optional(Schema.Boolean),
-  /**
-   * Last provider-side activity (ISO), including comments and metadata edits.
-   * This is not the time a change request closed or merged. Optional for old
-   * servers and providers whose lookups do not report it.
-   */
   updatedAt: Schema.optional(Schema.NullOr(Schema.String)),
 });
 export type VcsStatusChangeRequest = typeof VcsStatusChangeRequest.Type;
@@ -316,10 +309,6 @@ const VcsStatusLocalShape = {
     insertions: NonNegativeInt,
     deletions: NonNegativeInt,
   }),
-  /**
-   * Totals for the diff panel's Changes view: merge-base with the base branch to the
-   * working tree, untracked files included. Absent on older servers.
-   */
   branchChanges: Schema.optional(
     Schema.Struct({
       baseRef: Schema.NullOr(TrimmedNonEmptyStringSchema),
@@ -450,12 +439,9 @@ export const VcsPullResult = Schema.Struct({
 });
 export type VcsPullResult = typeof VcsPullResult.Type;
 
-// RPC / domain errors
-
-// Well-known git failures, recognized from stderr at the driver and carried as
-// a closed set of diagnostic tags. Git's stderr itself stays off the error: it
-// echoes argv and remote URLs, which can hold credentials. The tag names the
-// cause for logs and callers; it does not select a message.
+// Git's stderr itself stays off the error: it echoes argv and remote URLs,
+// which can hold credentials. The tag names the cause for logs and callers; it
+// does not select a message.
 export const GitCommandFailureReason = Schema.Literals([
   "authentication_failed",
   "branch_already_exists",

@@ -81,8 +81,6 @@ export class ElectronProtocolUnregistrationError extends Schema.TaggedError<Elec
   }
 }
 
-// The scheme either proxies to a dev server (`targetOrigin`) or serves the
-// built client from disk (`assetDirectory`).
 export type DesktopProtocolRegistrationInput = {
   readonly scheme: string;
   readonly clerkFrontendApiHostname: string | undefined;
@@ -125,8 +123,6 @@ export function makeDesktopContentSecurityPolicy(input: DesktopProtocolRegistrat
     "style-src 'self' 'unsafe-inline'",
     `font-src 'self' ${input.scheme}: data:`,
     "worker-src 'self' blob:",
-    // Document viewers use local Blob URLs and signed assets from runtime environments.
-    // HTML viewers retain their own sandbox; the renderer's script policy stays unchanged.
     "frame-src 'self' blob: http: https:",
     "form-action 'self'",
   ].join("; ");
@@ -208,6 +204,7 @@ function isRetryableDocumentResponse(url: string, response: Response): boolean {
 // and an in-progress asset swap can answer the document shell with 503/404.
 // Retry idempotent requests after 50ms, then 150ms. Connection failures keep
 // the last error; a document shell that stays unavailable keeps the last response.
+
 const fetchWithTransientRetry = (url: string, init: RequestInit) =>
   netFetch(url, init).pipe(
     Effect.filterOrFail(
@@ -265,9 +262,6 @@ const proxyRequest = Effect.fn("desktop.protocol.proxyRequest")(function* (
   return withContentSecurityPolicy(response, contentSecurityPolicy);
 });
 
-// Serves the packaged web client without a backend: files resolve within the
-// asset directory, and any other path falls back to index.html so the SPA
-// router handles it, except for asset-shaped misses (`/missing.js`) which 404.
 const serveDesktopAsset = Effect.fn("desktop.protocol.serveAsset")(function* (
   request: Request,
   assetDirectory: string,
@@ -328,7 +322,6 @@ export const make = Effect.gen(function* () {
                   contentSecurityPolicy,
                 );
               }
-              // Reject with net.fetch's own error, as an unproxied fetch would.
               return runPromise(
                 proxyRequest(request, input.targetOrigin, contentSecurityPolicy).pipe(
                   Effect.catchTags({

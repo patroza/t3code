@@ -74,11 +74,6 @@ describe("deriveActiveWorkStartedAt", () => {
       ),
     ).toBeNull();
   });
-  // The gap this closes. The projector stamps startedAt in the same update
-  // that moves the session to "running", so during provider spin-up the turn
-  // is requested with no startedAt and the session is "starting". Returning
-  // null there blinks the working indicator out between "Setting up
-  // worktree..." and "Working for 0s".
   it("counts from requestedAt while the provider is still starting", () => {
     expect(
       deriveActiveWorkStartedAt(
@@ -109,7 +104,6 @@ describe("deriveActiveWorkStartedAt", () => {
     ).toBe("2026-09-06T23:33:05.000Z");
   });
 
-  // requestedAt must not leak past the end of the work.
   it("stops counting once the turn has settled", () => {
     expect(
       deriveActiveWorkStartedAt(
@@ -125,7 +119,6 @@ describe("deriveActiveWorkStartedAt", () => {
     ).toBeNull();
   });
 
-  // A session restarting with no new turn must not resurrect the old one.
   it("does not count a settled turn while a session is starting again", () => {
     expect(
       deriveActiveWorkStartedAt(

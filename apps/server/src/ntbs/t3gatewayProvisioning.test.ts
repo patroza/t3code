@@ -127,8 +127,6 @@ type GitLayerInput = {
   worktreeBranchPath?: string;
 };
 
-// TODO: Can't we simplify it by leveraging default values in params?
-// we can pass default arguments in JS
 const createGitWorkflowServiceMock = (
   recordResult: CallRecordResult,
   callRecord: CallRecord,

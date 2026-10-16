@@ -57,7 +57,6 @@ describe("home list options across layout changes", () => {
           createElement(
             HomeListOptionsProvider,
             { projectGroupingMode: "repository", savedFilters },
-            // Replace the list while keeping the workspace provider mounted.
             createElement(ThreadList, { key: layout }),
           ),
         ),
@@ -66,7 +65,6 @@ describe("home list options across layout changes", () => {
   }
 
   beforeEach(() => {
-    // The hook probe renders no DOM, but ReactDOM needs an event target.
     const document = {
       nodeType: 9,
       addEventListener() {},
@@ -121,7 +119,6 @@ describe("home list options across layout changes", () => {
             });
           }
         }
-        // Make the next selection (or clear it) from the opposite layout.
         await showLayout(otherLayout);
       }
     },

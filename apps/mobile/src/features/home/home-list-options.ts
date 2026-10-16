@@ -112,12 +112,6 @@ interface HomeListOptionsContextValue {
 
 const HomeListOptionsContext = createContext<HomeListOptionsContextValue | null>(null);
 
-/**
- * Keeps list preferences stable while the app moves between compact and split
- * shells. Optional stored* + store callbacks make filters survive app restarts
- * (device preferences). Ownership is included so Mine/Theirs does not reset
- * on every launch (especially painful on mobile).
- */
 export function HomeListOptionsProvider({
   children,
   projectGroupingMode,

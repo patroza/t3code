@@ -1,8 +1,5 @@
-import {
-  NativeHeaderToolbar,
-  NativeStackScreenOptions,
-  nativeHeaderScrollEdgeEffects,
-} from "../../native/StackHeader";
+import { Toolbar } from "../../components/ui/Toolbar";
+import { NativeStackScreenOptions, nativeHeaderScrollEdgeEffects } from "../../native/StackHeader";
 import { use, useCallback, useEffect, useRef } from "react";
 import { useNavigation, type ParamListBase } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
@@ -201,7 +198,7 @@ export function HomeHeader(props: HomeHeaderProps) {
                   }),
                 ],
           // The keys below are set per-branch (not `undefined`) so a later
-          // reapply cannot clobber options owned by NativeHeaderToolbar.
+          // reapply cannot clobber options owned by Toolbar.
           ...(sidebarHeader
             ? {
                 headerSearchBarOptions: {
@@ -256,8 +253,8 @@ export function HomeHeader(props: HomeHeaderProps) {
       />
 
       {sidebarHeader || usesNativeMailSearchToolbar ? null : (
-        <NativeHeaderToolbar placement="bottom">
-          <NativeHeaderToolbar.Menu
+        <Toolbar placement="bottom">
+          <Toolbar.Menu
             accessibilityLabel="Filter threads"
             icon={
               hasCustomListOptions
@@ -267,17 +264,17 @@ export function HomeHeader(props: HomeHeaderProps) {
             title="Thread list options"
             separateBackground
           >
-            <NativeHeaderToolbar.Menu title="Environment">
-              <NativeHeaderToolbar.Label>Environment</NativeHeaderToolbar.Label>
-              <NativeHeaderToolbar.MenuAction
+            <Toolbar.Menu title="Environment">
+              <Toolbar.Label>Environment</Toolbar.Label>
+              <Toolbar.MenuAction
                 isOn={isAllEnvironmentsSelected(props.selectedEnvironmentIds)}
                 onPress={() => props.onClearEnvironments()}
                 subtitle="Show threads from every environment"
               >
-                <NativeHeaderToolbar.Label>All environments</NativeHeaderToolbar.Label>
-              </NativeHeaderToolbar.MenuAction>
+                <Toolbar.Label>All environments</Toolbar.Label>
+              </Toolbar.MenuAction>
               {props.environments.map((environment) => (
-                <NativeHeaderToolbar.MenuAction
+                <Toolbar.MenuAction
                   key={environment.environmentId}
                   isOn={isEnvironmentSelected(
                     props.selectedEnvironmentIds,
@@ -285,105 +282,99 @@ export function HomeHeader(props: HomeHeaderProps) {
                   )}
                   onPress={() => props.onToggleEnvironment(environment.environmentId)}
                 >
-                  <NativeHeaderToolbar.Label>{environment.label}</NativeHeaderToolbar.Label>
-                </NativeHeaderToolbar.MenuAction>
+                  <Toolbar.Label>{environment.label}</Toolbar.Label>
+                </Toolbar.MenuAction>
               ))}
-            </NativeHeaderToolbar.Menu>
+            </Toolbar.Menu>
 
-            <NativeHeaderToolbar.Menu title="Ownership">
-              <NativeHeaderToolbar.Label>Ownership</NativeHeaderToolbar.Label>
+            <Toolbar.Menu title="Ownership">
+              <Toolbar.Label>Ownership</Toolbar.Label>
               {OWNERSHIP_FILTERS.map((value) => (
-                <NativeHeaderToolbar.MenuAction
+                <Toolbar.MenuAction
                   key={value}
                   isOn={value === props.ownershipFilter}
                   onPress={() => props.onOwnershipFilterChange(value)}
                 >
-                  <NativeHeaderToolbar.Label>
-                    {OWNERSHIP_FILTER_LABELS[value]}
-                  </NativeHeaderToolbar.Label>
-                </NativeHeaderToolbar.MenuAction>
+                  <Toolbar.Label>{OWNERSHIP_FILTER_LABELS[value]}</Toolbar.Label>
+                </Toolbar.MenuAction>
               ))}
-            </NativeHeaderToolbar.Menu>
+            </Toolbar.Menu>
 
             {props.ownershipFilter === "mine" || props.ownershipFilter === "theirs" ? (
-              <NativeHeaderToolbar.Menu
+              <Toolbar.Menu
                 title={props.ownershipFilter === "mine" ? "Mine includes" : "Theirs includes"}
               >
-                <NativeHeaderToolbar.Label>
+                <Toolbar.Label>
                   {props.ownershipFilter === "mine" ? "Mine includes" : "Theirs includes"}
-                </NativeHeaderToolbar.Label>
+                </Toolbar.Label>
                 {OWNERSHIP_RELATIONS.map((value) => (
-                  <NativeHeaderToolbar.MenuAction
+                  <Toolbar.MenuAction
                     key={value}
                     isOn={value === props.ownershipRelation}
                     onPress={() => props.onOwnershipRelationChange(value)}
                   >
-                    <NativeHeaderToolbar.Label>
-                      {OWNERSHIP_RELATION_LABELS[value]}
-                    </NativeHeaderToolbar.Label>
-                  </NativeHeaderToolbar.MenuAction>
+                    <Toolbar.Label>{OWNERSHIP_RELATION_LABELS[value]}</Toolbar.Label>
+                  </Toolbar.MenuAction>
                 ))}
-              </NativeHeaderToolbar.Menu>
+              </Toolbar.Menu>
             ) : null}
 
             {props.projects.length > 0 ? (
-              <NativeHeaderToolbar.Menu title="Project">
-                <NativeHeaderToolbar.Label>Project</NativeHeaderToolbar.Label>
-                <NativeHeaderToolbar.MenuAction
+              <Toolbar.Menu title="Project">
+                <Toolbar.Label>Project</Toolbar.Label>
+                <Toolbar.MenuAction
                   isOn={props.selectedProjectKey === null}
                   onPress={() => props.onProjectChange(null)}
                   subtitle="Show threads from every project"
                 >
-                  <NativeHeaderToolbar.Label>All projects</NativeHeaderToolbar.Label>
-                </NativeHeaderToolbar.MenuAction>
+                  <Toolbar.Label>All projects</Toolbar.Label>
+                </Toolbar.MenuAction>
                 {props.projects.map((project) => (
-                  <NativeHeaderToolbar.MenuAction
+                  <Toolbar.MenuAction
                     key={project.key}
                     isOn={props.selectedProjectKey === project.key}
                     onPress={() => props.onProjectChange(project.key)}
                   >
-                    <NativeHeaderToolbar.Label>{project.label}</NativeHeaderToolbar.Label>
-                  </NativeHeaderToolbar.MenuAction>
+                    <Toolbar.Label>{project.label}</Toolbar.Label>
+                  </Toolbar.MenuAction>
                 ))}
-              </NativeHeaderToolbar.Menu>
+              </Toolbar.Menu>
             ) : null}
 
             {props.listMode === "threads" ? (
               <>
-                <NativeHeaderToolbar.Menu title="Group threads">
-                  <NativeHeaderToolbar.Label>Group threads</NativeHeaderToolbar.Label>
+                <Toolbar.Menu title="Group threads">
+                  <Toolbar.Label>Group threads</Toolbar.Label>
                   {HOME_THREAD_GROUPINGS.map((grouping) => (
-                    <NativeHeaderToolbar.MenuAction
+                    <Toolbar.MenuAction
                       key={grouping}
                       isOn={props.threadGrouping === grouping}
                       onPress={() => props.onThreadGroupingChange(grouping)}
                     >
-                      <NativeHeaderToolbar.Label>
-                        {HOME_THREAD_GROUPING_LABELS[grouping]}
-                      </NativeHeaderToolbar.Label>
-                    </NativeHeaderToolbar.MenuAction>
+                      <Toolbar.Label>{HOME_THREAD_GROUPING_LABELS[grouping]}</Toolbar.Label>
+                    </Toolbar.MenuAction>
                   ))}
-                </NativeHeaderToolbar.Menu>
-                <NativeHeaderToolbar.MenuAction
+                </Toolbar.Menu>
+                <Toolbar.MenuAction
                   isOn={props.hideSettledThreads}
                   onPress={() => props.onHideSettledThreadsChange(!props.hideSettledThreads)}
                   subtitle="Move settled threads out of the main list"
                 >
-                  <NativeHeaderToolbar.Label>Hide settled</NativeHeaderToolbar.Label>
-                </NativeHeaderToolbar.MenuAction>
+                  <Toolbar.Label>Hide settled</Toolbar.Label>
+                </Toolbar.MenuAction>
               </>
             ) : null}
-          </NativeHeaderToolbar.Menu>
-          <NativeHeaderToolbar.Spacer width={8} sharesBackground={false} />
-          <NativeHeaderToolbar.SearchBarSlot />
-          <NativeHeaderToolbar.Spacer width={8} sharesBackground={false} />
-          <NativeHeaderToolbar.Button
+          </Toolbar.Menu>
+          <Toolbar.Spacer width={8} sharesBackground={false} />
+          <Toolbar.SearchBarSlot />
+          <Toolbar.Spacer width={8} sharesBackground={false} />
+          <Toolbar.Button
             accessibilityLabel="New task"
             icon="square.and.pencil"
             onPress={props.onStartNewTask}
             separateBackground
           />
-        </NativeHeaderToolbar>
+        </Toolbar>
       )}
     </>
   );

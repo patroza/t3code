@@ -97,9 +97,7 @@ export interface NewProjectScriptInput {
   runOnSettle: boolean;
   /** Omit to preserve the current shortcut when the form did not edit it. */
   keybinding?: string | null;
-  /** Optional URL to open in the in-app preview when this script runs. */
   previewUrl: string | null;
-  /** When true, automatically open the preview panel pointed at `previewUrl`. */
   autoOpenPreview: boolean;
 }
 
@@ -119,11 +117,9 @@ export const EMPTY_PROJECT_SCRIPT_INPUT: NewProjectScriptInput = {
   autoOpenPreview: false,
 };
 
-/** What the editor dialog should open with. `scriptId: null` means "add". */
 export interface ProjectScriptEditorRequest {
   scriptId: string | null;
   initial: NewProjectScriptInput;
-  /** Validation error to show immediately (e.g. a failed t3.json import). */
   error?: string;
 }
 
@@ -149,11 +145,6 @@ export function editorRequestForScript(
   };
 }
 
-/**
- * Add/edit dialog for a project script, shared by the chat-header scripts menu
- * and the project settings page. The parent owns which script (if any) is
- * being edited via `request`; the dialog owns the form state and validation.
- */
 export function ProjectScriptEditorDialog({
   environmentId,
   editScope = AuthOrchestrationOperateScope,
@@ -166,7 +157,6 @@ export function ProjectScriptEditorDialog({
   environmentId: EnvironmentId;
   editScope?: typeof AuthOrchestrationOperateScope | typeof AuthSettingsWriteScope;
   request: ProjectScriptEditorRequest | null;
-  /** Existing scripts, used to derive a unique id for new scripts. */
   scripts: ReadonlyArray<ProjectScript>;
   onSubmit: (
     scriptId: string | null,
@@ -199,7 +189,6 @@ export function ProjectScriptEditorDialog({
   const isEditing = request?.scriptId != null;
   const isSaving = request !== null && savingRequest === request;
 
-  // A save completion must not affect a replacement request or an unmounted editor.
   useLayoutEffect(
     () => () => {
       if (pendingSubmissionRef.current?.request === request) {
@@ -209,7 +198,6 @@ export function ProjectScriptEditorDialog({
     [request],
   );
 
-  // Hydrate the form whenever a new request opens the dialog.
   useEffect(() => {
     if (!request) return;
     setName(request.initial.name);

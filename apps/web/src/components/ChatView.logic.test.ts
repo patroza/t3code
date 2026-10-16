@@ -638,8 +638,6 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
   });
 
   it("holds a first send while the thread shell still reports a preparing run", () => {
-    // The draft had no run. The server thread's shell shows the new run before
-    // the detail projection behind `phase` loads.
     const localDispatch = createLocalDispatchSnapshot(makeThread());
     const preparingRun = {
       ...completedTurn,
@@ -998,7 +996,6 @@ describe("draft hero submission transition", () => {
         hasWorktreeSetupCard: true,
       }),
     ).toBe(false);
-    // A background submission normally pins the hero, but never over the card.
     expect(
       resolveDraftHeroState({
         isLocalDraftThread: true,
@@ -1996,11 +1993,9 @@ describe("worktree setup visibility", () => {
       held: WorktreeSetupSnapshot | null = null,
     ) => resolveWorktreeSetupProgress({ threadId, localPreparing, runStatus, latest, held });
 
-    // The local send, its durable acknowledgement, and the stream arrive separately.
     expect(progress(true, undefined, null).isPreparingWorktree).toBe(true);
     expect(progress(false, "preparing", null).isPreparingWorktree).toBe(true);
     expect(progress(false, "preparing", base).snapshot).toBe(base);
-    // Releasing the prepared run precedes the tracker marking the agent started.
     expect(progress(false, "starting", base).isPreparingWorktree).toBe(true);
     const handedOff = {
       ...base,
@@ -2095,8 +2090,6 @@ describe("worktree setup visibility", () => {
     const cancelled = { ...settledDone, phase: "cancelled" as const };
     expect(visible(cancelled)).toEqual(cancelled);
 
-    // The setup belongs to the first turn. A follow-up send retires every
-    // settled outcome; only a script that is still running stays.
     expect(visible(scriptFailed, true)).toBeNull();
     expect(visible(failed, true)).toBeNull();
     expect(visible(cancelled, true)).toBeNull();

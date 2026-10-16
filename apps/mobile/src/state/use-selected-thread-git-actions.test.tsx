@@ -15,7 +15,6 @@ const harness = vi.hoisted(() => ({
   worktree: { selectedThreadCwd: "/repo" as string | null, selectedThreadWorktreePath: null },
   refreshStatusCalls: [] as Array<unknown>,
   renderCount: 0,
-  // Mirrors refreshStatus invalidating refs: settled refreshes rerender consumers.
   onRefreshSettled: () => {},
 }));
 
@@ -43,7 +42,6 @@ vi.mock("./session", () => ({
 }));
 vi.mock("./use-remote-environment-registry", () => ({ setPendingConnectionError: () => {} }));
 vi.mock("./use-vcs-action-state", () => ({ showGitActionResult: () => {} }));
-// Runs on every render: a refresh loop fails fast here instead of exhausting memory.
 vi.mock("./use-thread-selection", () => ({
   useThreadSelection: () => {
     harness.renderCount += 1;
@@ -62,8 +60,6 @@ import { useSelectedThreadGitActions } from "./use-selected-thread-git-actions";
 let root: Root | null = null;
 let rerender: () => void = () => {};
 
-// Stands in for a Git sheet: every settled refresh causes a rerender, as the
-// refs invalidation does on device.
 function Consumer() {
   const [, bump] = useReducer((count: number) => count + 1, 0);
   useEffect(() => {
@@ -105,7 +101,6 @@ describe("useSelectedThreadGitActions", () => {
     act(() => root!.render(<Consumer />));
     await flush();
 
-    // Shell updates replace the thread object without changing the selection.
     harness.selection = {
       selectedThread: { environmentId: "environment-1", id: "thread-1" },
       selectedThreadProject: { workspaceRoot: "/repo" },
@@ -158,8 +153,6 @@ describe("useSelectedThreadGitActions", () => {
     }
     expect(harness.refreshStatusCalls).toHaveLength(1);
 
-    // The server's cached status can be stale after a long background, so the
-    // new session refreshes it once.
     harness.selection = {
       ...harness.selection,
       selectedEnvironmentRuntime: { connectionState: "connected" },

@@ -37,10 +37,6 @@ function toNativeHeaderMenuItems(items: HomeListFilterMenu["items"]): NativeHead
   );
 }
 
-/**
- * Right-side UINavigationBar items for the sidebar column: filter/sort menu,
- * the two alternate list-mode icons (Recent / Projects), and settings.
- */
 export function createSidebarHeaderItems(input: {
   readonly filterIcon: string;
   readonly filterMenu: HomeListFilterMenu;
