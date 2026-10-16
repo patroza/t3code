@@ -271,7 +271,7 @@ export function useThreadListActions(): {
             isIos: process.env.EXPO_OS === "ios",
             displayWorktreePath,
             presentAlert: (buttons) => {
-              Alert.alert(buttons.title, buttons.message, [
+              Dialog.alert(buttons.title, buttons.message, [
                 { text: "Keep", style: "cancel", onPress: buttons.onKeep },
                 { text: "Remove", style: "destructive", onPress: buttons.onRemove },
               ]);
@@ -310,13 +310,13 @@ export function useThreadListActions(): {
         // Cleanup problems are nonfatal: the archive itself already
         // succeeded.
         onCleanupFailed: (displayWorktreePath, message) => {
-          Alert.alert(
+          Dialog.alert(
             "Thread archived, but worktree removal failed",
             `Could not remove ${displayWorktreePath}. ${message}`,
           );
         },
         onCleanupRetained: (displayWorktreePath) => {
-          Alert.alert(
+          Dialog.alert(
             "Worktree kept",
             `${displayWorktreePath} is still used by another active thread.`,
           );

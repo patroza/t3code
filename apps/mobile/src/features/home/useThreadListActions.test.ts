@@ -92,13 +92,11 @@ vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: unknown) => command,
 }));
 vi.mock("../../state/use-thread-outbox", () => ({ queuedThreadKeysAtom: "queued-thread-keys" }));
-// The real module builds the connection runtime, which loads Expo. A failed preview skips the cleanup prompt.
-vi.mock("../../state/vcs", () => ({
-  vcsEnvironment: {
-    previewWorktreeCleanup: async () => ({ _tag: "Failure" }),
-    cleanupThreadWorktree: async () => ({ _tag: "Success", value: { status: "removed" } }),
-  },
+const worktreeCleanup = vi.hoisted(() => ({
+  previewWorktreeCleanup: vi.fn(),
+  cleanupThreadWorktree: vi.fn(),
 }));
+vi.mock("../../state/vcs", () => ({ vcsEnvironment: worktreeCleanup }));
 // The real hold lives in a module-level atom that would leak between cases.
 vi.mock("../../state/thread-order", () => ({
   threadDropBusyAtom: "thread-drop-busy",
@@ -187,6 +185,12 @@ beforeEach(() => {
   state.dialogs = [];
   state.alerts = [];
   state.afterRequest = undefined;
+  worktreeCleanup.previewWorktreeCleanup.mockReset();
+  worktreeCleanup.previewWorktreeCleanup.mockResolvedValue({ _tag: "Failure" });
+  worktreeCleanup.cleanupThreadWorktree.mockReset();
+  worktreeCleanup.cleanupThreadWorktree.mockResolvedValue(
+    AsyncResult.success({ status: "removed" }),
+  );
 });
 
 afterEach(() => vi.unstubAllEnvs());
@@ -269,6 +273,50 @@ describe("thread list operation permissions", () => {
     await state.dialogs[0]!.onConfirm();
 
     expect(state.requests).toEqual([expect.objectContaining({ action: "delete" })]);
+  });
+});
+
+describe("archive worktree cleanup dialogs", () => {
+  it.each([
+    ["ios", "failed"],
+    ["android", "failed"],
+    ["ios", "retained-active"],
+    ["android", "retained-active"],
+  ] as const)("%s preserves the archive when cleanup is %s", async (platform, outcome) => {
+    vi.stubEnv("EXPO_OS", platform);
+    worktreeCleanup.previewWorktreeCleanup.mockResolvedValue(
+      AsyncResult.success({ candidate: { worktreePath: "/worktrees/feature", branch: "feature" } }),
+    );
+    if (outcome === "failed") {
+      worktreeCleanup.cleanupThreadWorktree.mockResolvedValue(
+        AsyncResult.failure(Cause.fail(new Error("Permission denied"))),
+      );
+    } else {
+      worktreeCleanup.cleanupThreadWorktree.mockResolvedValue(
+        AsyncResult.success({ status: outcome }),
+      );
+    }
+
+    const archived = useThreadListActions().archiveThread(makeThread());
+    if (platform === "ios") {
+      await vi.waitFor(() => expect(state.alerts).toHaveLength(1));
+      expect(state.alerts[0]?.title).toBe("Remove worktree?");
+      expect(state.requests).toEqual([]);
+      state.alerts[0]?.buttons?.find((button) => button.text === "Remove")?.onPress?.();
+    } else {
+      await vi.waitFor(() => expect(state.dialogs).toHaveLength(1));
+      expect(state.requests).toEqual([]);
+      state.dialogs[0]!.onConfirm();
+    }
+    await archived;
+
+    expect(state.requests).toEqual([
+      expect.objectContaining({ action: "archive", environmentId: primaryEnvironmentId }),
+    ]);
+    expect(worktreeCleanup.cleanupThreadWorktree).toHaveBeenCalledOnce();
+    expect(state.alerts.at(-1)?.title).toBe(
+      outcome === "failed" ? "Thread archived, but worktree removal failed" : "Worktree kept",
+    );
   });
 });
 
