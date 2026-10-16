@@ -131,8 +131,10 @@ interface BridgeState {
   readonly lastAssistantText: string;
   readonly lastProgressLabel: string | null;
   /**
-   * Discord messages that carry the current turn's *in-progress* stream (ordered tip slots).
-   * Final text is posted separately; these slots are deleted after successful delivery.
+   * Messages that carry the current turn's in-progress stream (ordered tip slots).
+   * Discord posts the final separately and deletes these slots. Teams reuses them:
+   * the client keeps a deleted message on screen, so replacing Working.. is the
+   * only way the thread ends as one reply.
    * May include the pre-bridge Working.. ack (seeded at start).
    */
   readonly discordMessageIds: ReadonlyArray<string>;
@@ -3396,7 +3398,7 @@ export const runBridge = (
 
     /**
      * Keep turn progress in stable editable slots, including when humans chat below them.
-     * Both platforms post final replies separately.
+     * Discord posts final replies separately. Teams turns the Working slot into the reply.
      * Attachments use separate platform uploads.
      */
     const postOrEditAssistantUnlocked = (args: {
@@ -4178,8 +4180,9 @@ export const runBridge = (
           staleIds,
         });
 
-        // Finals get fresh messages below the conversation on both platforms. Keep each
-        // successful receipt so retries reuse final chunks without overwriting progress.
+        // Discord finals are new messages below the conversation. Teams edits the
+        // Working slot: a deleted Teams message stays visible as "Working..".
+        // Keep each successful receipt so retries reuse final chunks.
         let nextReceipt: ChatDeliveryReceipt = {
           assistantId: t3MessageId,
           turnId,
@@ -4194,7 +4197,9 @@ export const runBridge = (
             const chunk = finalChunks[index] ?? "";
             const fields = idleFields(chunk.trim() !== "" ? chunk : "_(done)_");
             const current = yield* Ref.get(stateRef);
-            const existingId = nextReceipt.messageIds[index];
+            const existingId =
+              nextReceipt.messageIds[index] ??
+              (rest.platform === "teams" ? current.discordMessageIds[index] : undefined);
             const firstSlot = ids[0] ?? state.discordMessageIds[0];
             const recent =
               existingId === undefined
