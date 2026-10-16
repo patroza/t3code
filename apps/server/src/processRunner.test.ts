@@ -24,7 +24,6 @@ type ChildProcessCommand = {
   };
 };
 
-// Accesses private properties of ChildProcessCommand for testing purposes
 function asChildProcessCommand(command: unknown): ChildProcessCommand {
   return command as ChildProcessCommand;
 }

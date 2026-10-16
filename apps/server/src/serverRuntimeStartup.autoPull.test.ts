@@ -191,7 +191,6 @@ it.effect("parks automatic pull until activation without delaying command readin
         yield* Deferred.succeed(commitTrial, undefined);
         yield* Deferred.await(activation);
         expect(yield* Deferred.await(statusCalled)).toBe(cwd);
-        // statusDetails can never finish; readiness must not depend on it.
         yield* startup.awaitCommandReady;
       }).pipe(
         Effect.provide(

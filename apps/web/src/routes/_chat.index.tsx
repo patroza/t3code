@@ -78,15 +78,12 @@ function IndexDraftLanding() {
       return;
     }
     const projectRef = scopeProjectRef(mostRecentProject.environmentId, mostRecentProject.id);
-    // A project removed since this render is gone from the store; the next
-    // render picks another one.
     if (readProject(projectRef) === null) {
       return;
     }
     startingRef.current = true;
     void handleNewThread(projectRef, { replace: true })
       .then((opened) => {
-        // The project was removed while its draft started; land on the next one.
         if (opened === null) {
           startingRef.current = false;
           setStartState((state) => ({ ...state, retryRequest: state.retryRequest + 1 }));
@@ -113,8 +110,6 @@ function IndexDraftLanding() {
       />
     ) : null;
   }
-  // First-run routing to the welcome wizard happens in FirstRunGate at the
-  // root, before this route ever renders.
   return <NoProjectsHero />;
 }
 

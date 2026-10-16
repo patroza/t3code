@@ -997,8 +997,6 @@ it.effect("checks out fork pull requests through an ensured fork remote", () => 
 });
 
 it.effect("refuses a url that points away from the configured Bitbucket", () => {
-  // A whole url reaches `request` from inside a response — a pagination cursor, say — so
-  // following one off-host would hand the account's credentials to whoever wrote it.
   const { layer, execute } = makeLayer({ response: () => new Response("{}", { status: 200 }) });
   return Effect.gen(function* () {
     const bitbucket = yield* BitbucketApi.BitbucketApi;
@@ -1008,7 +1006,6 @@ it.effect("refuses a url that points away from the configured Bitbucket", () => 
     );
 
     assert.strictEqual(error._tag, "BitbucketUntrustedUrlError");
-    // Nothing was sent at all, so no header travelled anywhere.
     assert.strictEqual(execute.mock.calls.length, 0);
   }).pipe(Effect.provide(layer));
 });
@@ -1020,7 +1017,6 @@ it.effect("keeps only the host of a url it refuses, never its query", () =>
     const error = yield* Effect.flip(
       bitbucket.request({
         method: "GET",
-        // A signed link, whose query is the credential.
         url: "https://attacker.example/asset?signature=secret-token",
       }),
     );
@@ -1076,8 +1072,6 @@ it.effect("follows a redirect that stays on the configured Bitbucket", () =>
           request.url.endsWith("/pullrequests/1/diff")
             ? new Response(null, {
                 status: 302,
-                // The same host the harness configures, which is not bitbucket.org: a
-                // self-hosted base url has to be trusted on its own terms.
                 headers: { location: "https://api.test.local/2.0/repositories/acme/web/diff/abc" },
               })
             : new Response("diff --git a/a.ts b/a.ts", { status: 200 }),
@@ -1098,7 +1092,6 @@ it.effect("cuts a response short rather than reading an unbounded diff into memo
 
     assert.strictEqual(result.body, "12345678");
     assert.isTrue(result.truncated);
-    // Bounded as the body arrives, so an oversized diff is never held whole.
   }).pipe(
     Effect.provide(
       makeLayer({ response: () => new Response("1234567890", { status: 200 }) }).layer,
@@ -1111,7 +1104,6 @@ const stalledResponseBody = (status: number): Response =>
     new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new TextEncoder().encode("{"));
-        // Deliberately never close: headers arrive before the body stalls.
       },
     }),
     { status, headers: { "content-type": "application/json" } },

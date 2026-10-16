@@ -226,7 +226,6 @@ interface OpenCodeTurnTokenUsageAccumulator {
   readonly partIds: Set<string>;
   readonly promptMessageIds: Set<string>;
   readonly assistantOwnershipByMessageId: Map<string, "owned" | "other" | "unknown">;
-  // Native removal does not undo usage. Keep unresolved counts until this turn settles.
   readonly unresolvedStepsByMessageId: Map<string, Map<string, OpenCodeStepUsage>>;
   inputTokens: number;
   cachedInputTokens: number;
@@ -276,7 +275,6 @@ interface ActiveOpenCodeTurn {
   readonly modelSelection: ModelSelection;
   readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
   readonly providerTurnId: OrchestrationV2ProviderTurn["id"];
-  /** The provider thread the turn started on, which its terminal names. */
   readonly providerThreadId: OrchestrationV2ProviderTurn["providerThreadId"];
   readonly providerTurnOrdinal: number;
   readonly runOrdinal: number;
@@ -396,14 +394,9 @@ interface OpenCodeThreadState {
 interface OpenCodeRequestOwner {
   readonly state: OpenCodeThreadState;
   readonly turn: ActiveOpenCodeTurn;
-  /** The subagent on the owner's thread that leads to the asking session. */
   readonly subagent: OpenCodeSubagentContext | null;
 }
 
-/**
- * The top-level thread and active turn that own a session's requests, walking
- * up through (possibly nested) subagents.
- */
 function topLevelRequestOwner(state: OpenCodeThreadState): OpenCodeRequestOwner | undefined {
   let owner = state;
   let subagent: OpenCodeSubagentContext | null = null;
@@ -417,7 +410,6 @@ function topLevelRequestOwner(state: OpenCodeThreadState): OpenCodeRequestOwner 
 interface PendingOpenCodeRequest {
   readonly requestId: RuntimeRequestId;
   readonly nativeRequestId: string;
-  /** The session that asked, which may be a subagent's. */
   readonly nativeSessionId: string;
   readonly turn: ActiveOpenCodeTurn;
   readonly state: OpenCodeThreadState;
@@ -610,10 +602,7 @@ const OPENCODE_RESTRICTED_PERMISSIONS = [
 
 /**
  * OpenCode does not provide an OS sandbox, so permission rules are also the
- * enforcement boundary for non-interactive policies. Read/planning tools are
- * safe by default; edits are auto-approved only for workspace-write modes,
- * while shell/network/external access remains gated unless policy explicitly
- * allows it.
+ * enforcement boundary for non-interactive policies.
  */
 export function openCodePermissionRules(
   runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
@@ -1008,10 +997,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
         const pendingRequestsByNativeId = new Map<string, PendingOpenCodeRequest>();
         const subagentsByNativeItemId = new Map<string, OpenCodeSubagentContext>();
         const subagentsByChildSessionId = new Map<string, OpenCodeSubagentContext>();
-        // Permission and question requests can originate from child sessions
-        // (task subagents and their descendants). Related sessions map back
-        // to the root thread state whose active turn owns the request; asks
-        // arriving before the relation is known resolve it via session.get.
         const relatedSessionOwners = new Map<string, OpenCodeThreadState>();
         // Sessions of this runtime that OpenCode reports busy. A background
         // task child keeps running after its parent turn settles, so idle
@@ -1544,8 +1529,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             yield* emitSubagent(state, turn, part);
             return;
           }
-          // question.asked carries the respondable semantic item. Projecting
-          // the implementation tool as well would duplicate it in the UI.
           if (normalizedTool === "question") return;
           const now = yield* DateTime.now;
           const status = toolStatus(part);
@@ -1830,7 +1813,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           });
           const nodeId = idAllocator.derive.approvalNode({ requestId });
           const turnItemId = idAllocator.derive.approvalTurnItem({ requestId });
-          // The tool call belongs to the asking session's turn, not the owner's.
           const permissionToolName =
             request.type === "permission" && request.value.tool !== undefined
               ? threads
@@ -1971,10 +1953,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           if (!hasOtherPending) yield* updateProviderSession("running", null);
         });
 
-        /** Resolve the thread state a session belongs to: its own, or for a
-         *  child not registered yet, the nearest known ancestor found by walking
-         *  the native parent chain. Registers every hop so later requests from
-         *  the same child resolve without another lookup. */
         const resolveSessionOwner = Effect.fnUntraced(function* (sessionId: string) {
           const known = threads.get(sessionId) ?? relatedSessionOwners.get(sessionId);
           if (known !== undefined) return known;
@@ -1998,14 +1976,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           return undefined;
         });
 
-        /** Every request is asked on the top-level thread and its active turn,
-         *  under the subagent that leads to the asking session, because native
-         *  subagent threads are hidden from the sidebar. A child's request can
-         *  arrive before the task part or session.created event that reveals
-         *  its relation to a thread. The first resolution attempt runs inline
-         *  (the replayable path); if the relation or the owning turn is not
-         *  established yet, a short forked backoff keeps trying instead of
-         *  dropping the request. */
         const routeRuntimeRequest = Effect.fnUntraced(function* (
           nativeRequestId: string,
           sessionId: string,
@@ -2484,7 +2454,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             return;
           }
           if (part.type === "tool") {
-            // Approval routing needs the tool name, without retaining its input and output.
             turn.toolNamesByCallId.set(part.callID, part.tool);
           } else {
             turn.parts.set(part.id, part);
@@ -2733,7 +2702,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           Effect.exit,
           Effect.flatMap((exit) =>
             Effect.gen(function* () {
-              // No further status can clear a busy session once the stream ends.
               busySessionIds.clear();
               if (closing || abortController.signal.aborted) return;
               const detail = Exit.isSuccess(exit)
@@ -3031,8 +2999,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           hasPendingBackgroundWork: Effect.sync(() => busySessionIds.size > 0),
           ensureThread: (threadInput) =>
             Effect.gen(function* () {
-              // Only a row that already carries a native session can be
-              // resumed; a placeholder without one still needs session.create.
               if (threadInput.existingProviderThread?.nativeThreadRef != null) {
                 return yield* runtimeSession.resumeThread({
                   providerThread: threadInput.existingProviderThread,
@@ -3059,9 +3025,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 now: createdAt,
               });
               const existing = threadInput.existingProviderThread;
-              // Bind the new native session to the caller's row when one was
-              // handed over: a second live row per app thread would make
-              // `activeProviderThreadId` flap between the two on every update.
               const providerThread =
                 existing === undefined
                   ? created
@@ -3417,8 +3380,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               const sessionId = nativeThreadId(interruptInput.providerThread);
               const state = threads.get(sessionId);
               const turn = state?.activeTurn;
-              // Stop on a settled turn: a background task child can outlive
-              // it (busySessionIds), and aborting the descendants ends it.
               if (
                 (turn === undefined || turn === null) &&
                 interruptInput.requestRuntimeRestart === true
@@ -3443,7 +3404,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               cancelOpenCodePromptAdmission(turn, state!.nextAdmissionGeneration++);
               turn.admissionAbortController?.abort();
               if (admissionWasPending) {
-                // Settle the cancelled request before sending the session abort.
                 // A timed-out local request must not prevent the definitive
                 // server-side abort below from running.
                 yield* Deferred.await(turn.admissionSettled).pipe(
@@ -3455,10 +3415,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 client.session.abort({ sessionID: sessionId }, { signal }),
               ).pipe(
                 Effect.timeout("10 seconds"),
-                // The turn can settle while the abort is in flight, and
-                // aborting an already-idle session fails. That stop still
-                // succeeded; only surface failures for a turn that is
-                // genuinely still running.
                 Effect.catch((cause) =>
                   turn.finalized
                     ? Effect.void

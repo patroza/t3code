@@ -6,32 +6,11 @@ name: Mobile EAS Production
 # fingerprint (platform-specific deps + pnpm version) and errors. On this Linux
 # runner, with corepack pinning pnpm 10.24 in eas.json, local == build.
 #
-# Fork Release dispatches this workflow to reconcile each selected platform:
-#   1. Store builds: when no production build matches the current native
-#      fingerprint, or the latest build's version differs from app.config.ts,
-#      cut a new build and submit it (TestFlight + Play internal track). Native
-#      changes therefore ship a binary, and bumping `version` starts the next
-#      release train — the first build of a version enters
-#      external-TestFlight beta review immediately, and later builds of the
-#      same version auto-approve until that version is released. After App
-#      Store approval, Apple closes the release train and `version` must be
-#      bumped before another iOS build can be submitted. Releasing to the App
-#      Store stays a manual App Store Connect step.
-#   2. OTA: publish a production-channel update for each platform where at
-#      least one finished production build matches the current native
-#      fingerprint. Older binaries of the same major version with a matching
-#      fingerprint receive it too; the major version is part of the
-#      fingerprint (apps/mobile/fingerprint.config.js), so a new major never
-#      reaches the previous major's store binaries over the air. Until a
-#      build for the new fingerprint finishes, the OTA is skipped rather than
-#      published into the void.
-# Hold native-change PRs (the "📱 Native Change" label) and merge them as a
-# batch to avoid a store build per PR.
-# workflow_dispatch remains as a manual override for both modes (e.g. to
-# retry an errored build or force an OTA).
-# Manual v2-preview builds keep the production app identity and disable OTA.
-# They auto-submit to TestFlight and the Google Play closed testing track v2.
-# Select the v2 branch when dispatching a preview build.
+# Fork Release dispatches this workflow for an approved fork/dev SHA. Auto mode
+# reuses matching native builds, or builds and submits the selected platforms.
+# A failed native build can still publish pure-JS fixes to an installed runtime.
+# Manual dispatch can select the iOS testflight profile and its fixed major
+# version, or force an OTA runtime. Store releases use the production profile.
 on:
   workflow_dispatch:
     inputs:
@@ -45,13 +24,13 @@ on:
           - build
           - update
       profile:
-        description: "Store build profile (v2-preview: TestFlight + Play closed track v2; build only)"
+        description: "production: store release; testflight: iOS 3.0.0 beta"
         required: true
         type: choice
         default: production
         options:
           - production
-          - v2-preview
+          - testflight
       platform:
         description: "Target platform"
         required: true
@@ -62,7 +41,7 @@ on:
           - android
           - all
       version:
-        description: "Optional build version override (blank uses app.config.ts; an override is committed before building)"
+        description: "Optional build version override (blank uses profile default; store overrides are committed)"
         required: false
         type: string
       message:
@@ -81,7 +60,7 @@ on:
         description: "Release branch that must contain the SHA"
         required: false
         type: string
-        default: fork/integration
+        default: fork/dev
 
 concurrency:
   group: mobile-eas-production
@@ -102,11 +81,16 @@ jobs:
       T3CODE_MOBILE_IOS_BUNDLE_IDENTIFIER: ${{ vars.T3CODE_MOBILE_IOS_BUNDLE_IDENTIFIER }}
       T3CODE_MOBILE_IOS_TEAM_ID: ${{ vars.T3CODE_MOBILE_IOS_TEAM_ID }}
     steps:
-      - name: Reject preview OTA updates
-        if: github.event_name == 'workflow_dispatch' && inputs.profile == 'v2-preview' && inputs.mode == 'update'
+      - name: Validate TestFlight inputs
+        if: github.event_name == 'workflow_dispatch' && inputs.profile == 'testflight'
+        env:
+          PLATFORM: ${{ inputs.platform }}
+          VERSION: ${{ inputs.version }}
         run: |
-          echo "::error::V2 previews use store builds only. Select mode=build."
-          exit 1
+          if [ "$PLATFORM" != "ios" ] || [ -n "$VERSION" ]; then
+            echo "::error::TestFlight uses platform=ios and its fixed version. Use production for a committed store version."
+            exit 1
+          fi
 
       - id: expo-token
         name: Check for EXPO_TOKEN
@@ -122,7 +106,7 @@ jobs:
 
       - id: version_app_token
         name: Mint release app token for version override
-        if: steps.expo-token.outputs.present == 'true' && github.event_name == 'workflow_dispatch' && inputs.mode == 'build' && inputs.version != ''
+        if: steps.expo-token.outputs.present == 'true' && github.event_name == 'workflow_dispatch' && inputs.mode == 'build' && inputs.version != '' && inputs.profile != 'testflight'
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.RELEASE_APP_ID }}
@@ -142,25 +126,25 @@ jobs:
           # when the partial clone can't serve the unfetched blobs.
 
       - id: source
-        name: Resolve approved integration source
+        name: Resolve approved release source
         if: steps.expo-token.outputs.present == 'true'
         env:
           REQUESTED_SHA: ${{ inputs.sha }}
         run: |
-          integration_sha="$(git rev-parse HEAD)"
-          target_sha="${REQUESTED_SHA:-$integration_sha}"
+          release_sha="$(git rev-parse HEAD)"
+          target_sha="${REQUESTED_SHA:-$release_sha}"
           if [[ ! "$target_sha" =~ ^[0-9a-f]{40}$ ]]; then
             echo "sha must be an exact 40-character commit SHA" >&2
             exit 1
           fi
           git fetch origin "$target_sha"
-          git merge-base --is-ancestor "$target_sha" "$integration_sha"
+          git merge-base --is-ancestor "$target_sha" "$release_sha"
           git checkout --detach "$target_sha"
           test "$(git rev-parse HEAD)" = "$target_sha"
           echo "sha=$target_sha" >> "$GITHUB_OUTPUT"
 
       # Workflow file may come from a feature branch (workflow_dispatch --ref)
-      # while product code is always the approved integration SHA above. Overlay
+      # while product code is always the approved release SHA above. Overlay
       # the deploy script + app.config runtime override from the workflow ref so
       # we can ship fixes without waiting for a full compose.
       - name: Overlay deploy tooling from workflow ref
@@ -190,16 +174,6 @@ jobs:
           run-install: |
             args:
               - --filter=@t3tools/mobile...
-
-      - name: Verify v2 preview source
-        if: steps.expo-token.outputs.present == 'true' && github.event_name == 'workflow_dispatch' && inputs.profile == 'v2-preview'
-        run: |
-          node --input-type=module -e '
-            import * as environment from "./packages/contracts/src/environment.ts";
-            if (environment.ORCHESTRATION_PROTOCOL_VERSION !== 2) {
-              throw new Error("V2 previews require a v2 source branch. Select the v2 branch when running this workflow.");
-            }
-          '
 
       - name: Expose pnpm
         if: steps.expo-token.outputs.present == 'true'
@@ -248,10 +222,10 @@ jobs:
             const path = "apps/mobile/app.config.ts";
             const source = fs.readFileSync(path, "utf8");
             const next = source.replace(
-              /^(  version: ")[^"]+(".*)$/m,
+              /^(  version: repoEnv\.T3CODE_MOBILE_VERSION \?\? ")[^"]+(".*)$/m,
               `$1${process.env.RELEASE_VERSION}$2`,
             );
-            if (next === source && !source.includes(`  version: "${process.env.RELEASE_VERSION}"`)) {
+            if (next === source && !source.includes(`  version: repoEnv.T3CODE_MOBILE_VERSION ?? "${process.env.RELEASE_VERSION}"`)) {
               throw new Error("Could not update app version");
             }
             fs.writeFileSync(path, next);
@@ -278,6 +252,10 @@ jobs:
         env:
           MOBILE_BUILD_PROFILE: ${{ inputs.profile || 'production' }}
         run: |
+          if [ "$MOBILE_BUILD_PROFILE" = "testflight" ]; then
+            T3CODE_MOBILE_VERSION="$(node -p 'require("./eas.json").build.testflight.env.T3CODE_MOBILE_VERSION')"
+            export T3CODE_MOBILE_VERSION
+          fi
           version="$(npx expo config --json --type public | jq -r '.version')"
           {
             echo "## Manual $MOBILE_BUILD_PROFILE build"
@@ -294,18 +272,25 @@ jobs:
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
           GITHUB_SHA: ${{ steps.source.outputs.sha }}
+          MOBILE_BUILD_PROFILE: ${{ inputs.profile || 'production' }}
+          RUNTIME_VERSION: ${{ inputs.runtime_version }}
+          OTA_MESSAGE: ${{ inputs.message || format('Production auto ({0})', steps.source.outputs.sha) }}
         run: |
+          if [ "$MOBILE_BUILD_PROFILE" = "testflight" ]; then
+            T3CODE_MOBILE_VERSION="$(node -p 'require("./eas.json").build.testflight.env.T3CODE_MOBILE_VERSION')"
+            export T3CODE_MOBILE_VERSION
+          fi
           chmod +x scripts/eas-continuous-deploy.sh
           args=(
-            --profile production
+            --profile "$MOBILE_BUILD_PROFILE"
             --channel production
             --environment production
             --platform "${{ inputs.platform }}"
             --auto-submit
-            --message "${{ inputs.message || format('Production auto ({0})', steps.source.outputs.sha) }}"
+            --message "$OTA_MESSAGE"
           )
-          if [ -n "${{ inputs.runtime_version }}" ]; then
-            args+=(--runtime-version "${{ inputs.runtime_version }}")
+          if [ -n "$RUNTIME_VERSION" ]; then
+            args+=(--runtime-version "$RUNTIME_VERSION")
           fi
           ./scripts/eas-continuous-deploy.sh "${args[@]}"
 
@@ -317,10 +302,12 @@ jobs:
           MOBILE_BUILD_PROFILE: ${{ inputs.profile || 'production' }}
         run: |
           set -o pipefail
-          eas build --platform ${{ inputs.platform }} --profile "$MOBILE_BUILD_PROFILE" --auto-submit --non-interactive --wait 2>&1 | tee /tmp/eas-build.log
+          build_status=0
+          eas build --platform ${{ inputs.platform }} --profile "$MOBILE_BUILD_PROFILE" --auto-submit --non-interactive --wait 2>&1 | tee /tmp/eas-build.log || build_status=$?
           if grep -q 'used its iOS builds from the Free plan' /tmp/eas-build.log; then
             echo "::error::Expo Free plan iOS build quota exhausted. Upgrade at https://expo.dev/accounts/patroza/settings/billing or wait for the monthly reset, then re-run mode=build. Pure-JS fixes can still ship via mode=auto (fallback OTA) or mode=update with runtime_version."
           fi
+          exit "$build_status"
 
       - name: Publish OTA update (manual)
         if: steps.expo-token.outputs.present == 'true' && github.event_name == 'workflow_dispatch' && inputs.mode == 'update'
@@ -329,22 +316,23 @@ jobs:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
           GITHUB_SHA: ${{ steps.source.outputs.sha }}
           RUNTIME_VERSION: ${{ inputs.runtime_version }}
+          MOBILE_BUILD_PROFILE: ${{ inputs.profile || 'production' }}
+          OTA_MESSAGE: ${{ inputs.message || format('Production OTA ({0})', steps.source.outputs.sha) }}
         run: |
+          if [ "$MOBILE_BUILD_PROFILE" = "testflight" ]; then
+            T3CODE_MOBILE_VERSION="$(node -p 'require("./eas.json").build.testflight.env.T3CODE_MOBILE_VERSION')"
+            export T3CODE_MOBILE_VERSION
+          fi
           chmod +x scripts/eas-continuous-deploy.sh
           args=(
-            --profile production
+            --profile "$MOBILE_BUILD_PROFILE"
             --channel production
             --environment production
             --platform "${{ inputs.platform }}"
-            --message "${{ inputs.message || format('Production OTA ({0})', steps.source.outputs.sha) }}"
+            --message "$OTA_MESSAGE"
           )
           if [ -n "$RUNTIME_VERSION" ]; then
             args+=(--runtime-version "$RUNTIME_VERSION")
-          else
-            # mode=update without runtime: publish under fingerprint policy only
-            # (no native rebuild attempt). Use --runtime-version to target an
-            # installed binary when fingerprints drifted.
-            :
           fi
           if [ -n "$RUNTIME_VERSION" ]; then
             ./scripts/eas-continuous-deploy.sh "${args[@]}"
@@ -353,6 +341,6 @@ jobs:
               --channel production \
               --environment production \
               --platform ${{ inputs.platform }} \
-              --message "${{ inputs.message || format('Production OTA ({0})', steps.source.outputs.sha) }}" \
+              --message "$OTA_MESSAGE" \
               --non-interactive
           fi

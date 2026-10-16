@@ -2,7 +2,7 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import type { MenuAction } from "@react-native-menu/menu";
 import { useCallback, useMemo } from "react";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
-import { MaterialThreadListToolbar } from "./MaterialThreadListToolbar";
+import { ThreadListToolbar } from "./ThreadListToolbar";
 import {
   DEFAULT_OWNERSHIP_FILTER,
   OWNERSHIP_FILTER_LABELS,
@@ -32,8 +32,6 @@ function defaultHideSettledForGrouping(threadGrouping: HomeThreadGrouping): bool
 }
 
 export function HomeHeader(props: HomeHeaderProps) {
-  // v2 is the only Threads list. Sort/group-by-project menus would be ignored,
-  // so the customized icon keys off filters that still apply.
   const hasCustomListOptions =
     props.selectedEnvironmentIds.length > 0 ||
     props.ownershipFilter !== DEFAULT_OWNERSHIP_FILTER ||
@@ -213,7 +211,7 @@ export function HomeHeader(props: HomeHeaderProps) {
   return (
     <>
       <NativeStackScreenOptions options={{ headerShown: false }} />
-      <MaterialThreadListToolbar
+      <ThreadListToolbar
         searchQuery={props.searchQuery}
         onSearchQueryChange={props.onSearchQueryChange}
         filterActions={menuActions}

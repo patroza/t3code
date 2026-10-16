@@ -16,7 +16,6 @@ export {
 
 export interface EnvironmentOption {
   environmentId: EnvironmentId;
-  /** Null when the machine's "No project" folder is not created yet. */
   projectId: ProjectId | null;
   label: string;
   isPrimary: boolean;
@@ -54,9 +53,6 @@ export function resolveEnvironmentOptionLabel(input: {
   return runtimeLabel ?? savedLabel ?? input.environmentId;
 }
 
-// A remote (non-primary) environment is always surfaced, even when it is the
-// only environment available: with a single connected machine there is nothing
-// to pick, but the user still needs to see where the project runs.
 export function shouldShowEnvironmentIndicator(input: {
   activeEnvironment: Pick<EnvironmentOption, "isPrimary"> | null;
   canPickEnvironment: boolean;
@@ -71,7 +67,6 @@ export function shouldShowComposerContextStrip(input: {
   hasActiveProject: boolean;
   isGitRepo: boolean;
   showEnvironmentIndicator: boolean;
-  /** A collapsed composer's controls currently fit in their measured strip host. */
   hostsRestingComposerControls: boolean;
 }): boolean {
   return (
@@ -134,11 +129,6 @@ export interface PreviousWorktreeSeed {
   worktreePath: string;
 }
 
-// The most recently touched worktree in the project that the composer isn't
-// already pointing at. Backs the "Previous worktree" entry in the workspace
-// selector so a follow-up thread can hop back into the worktree you just
-// worked in without hunting for its branch. Archived threads don't compete —
-// the rest of the UI hides them, so their worktrees shouldn't resurface here.
 export function resolvePreviousWorktreeSeed(input: {
   threads: ReadonlyArray<{
     branch: string | null;
@@ -180,10 +170,6 @@ export function resolveEffectiveEnvMode(input: {
   activeWorktreePath: string | null;
   hasServerThread: boolean;
   draftThreadEnvMode: EnvMode | undefined;
-  /**
-   * The server is still creating this thread's worktree. The thread exists
-   * from the start of that setup but gets its worktree path only at the end.
-   */
   preparingWorktree?: boolean;
 }): EnvMode {
   const { activeWorktreePath, hasServerThread, draftThreadEnvMode, preparingWorktree } = input;
@@ -335,9 +321,6 @@ export function shouldIncludeBranchPickerItem(input: {
     return true;
   }
 
-  // A query containing whitespace can only ever match a ref under its sanitized
-  // name, because that is the name such a ref would have been created with.
-  // Without this, typing "new branch" hides an existing "new-branch".
   const sanitizedQuery = sanitizeNewRefName(normalizedQuery);
   return (
     sanitizedQuery.length > 0 &&

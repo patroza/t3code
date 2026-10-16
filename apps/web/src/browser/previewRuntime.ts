@@ -32,10 +32,6 @@ export function previewRuntimeFor(environmentId: EnvironmentId): PreviewRuntime 
   return "server";
 }
 
-/**
- * The other browser a tab can move to, or null when it has none: a desktop
- * tab of a remote environment can move to that environment's browser, and back.
- */
 export function alternatePreviewRuntime(
   environmentId: EnvironmentId,
   primaryEnvironmentId: EnvironmentId | null,
@@ -47,7 +43,6 @@ export function alternatePreviewRuntime(
   return snapshot.runtime === "server" ? "desktop" : "server";
 }
 
-/** Electron hosts its own browser tabs; other clients need the environment to host them. */
 export function isPreviewAvailableFor(environmentId: EnvironmentId): boolean {
   return isPreviewSupportedInRuntime() || readEnvironmentSupportsServerBrowser(environmentId);
 }

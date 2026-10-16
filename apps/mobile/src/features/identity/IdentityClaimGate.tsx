@@ -6,7 +6,7 @@ import { IDENTITY_CLAIM_TYPEAHEAD_MIN_CHARS, IdentityUsername } from "@t3tools/c
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Modal, Pressable, TextInput, View } from "react-native";
 
-import { AppText as Text } from "../../components/AppText";
+import { AppText as Text } from "../../components/ui/AppText";
 import { useEnvironments, type EnvironmentPresentation } from "../../state/environments";
 import { identityEnvironment } from "../../state/identity";
 import { useEnvironmentQuery } from "../../state/query";

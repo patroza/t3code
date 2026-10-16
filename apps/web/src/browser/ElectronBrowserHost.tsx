@@ -35,7 +35,6 @@ export function ElectronBrowserHost() {
     () =>
       Object.entries(previewByThreadKey).flatMap(([threadKey, previewState]) => {
         const threadRef = parseScopedThreadKey(threadKey);
-        // Server tabs of other environments stream; this desktop's own server tabs render here.
         return threadRef
           ? Object.values(previewState.sessions)
               .filter(
@@ -106,8 +105,6 @@ export function ElectronBrowserHost() {
     });
   }, []);
 
-  // A `target="_blank"` link inside a hosted page opens as another tab of the
-  // same thread, so the page that held the link stays where it is.
   const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: true });
   const sessionByRuntimeTabId = useRef(new Map<string, (typeof sessions)[number]>());
   useEffect(() => {
@@ -121,7 +118,6 @@ export function ElectronBrowserHost() {
     return preview.onOpenLink(({ tabId, url, background }) => {
       const source = sessionByRuntimeTabId.current.get(tabId);
       if (!source) return;
-      // The new tab keeps the source tab's profile so its cookies carry over.
       void openUrlInPreview({
         threadRef: source.threadRef,
         url,
@@ -174,10 +170,7 @@ function AuthorizedBrowserWebview(props: ComponentProps<typeof HostedBrowserWebv
 }
 
 /**
- * Agent `preview_open` normally carries the profile clients reported (see
- * BrowserProfileReporter). An agent tab opened before any client reported has
- * none, so it falls back to the configured default here. It is latched once
- * settings load: Electron fixes the partition when the guest attaches, so a
+ * It is latched once settings load: Electron fixes the partition when the guest attaches, so a
  * later settings change must not move a live tab.
  */
 function useTabProfileId(profileId: string | undefined): string | undefined {

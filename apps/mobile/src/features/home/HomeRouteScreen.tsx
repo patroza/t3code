@@ -1,3 +1,4 @@
+import { Toolbar } from "../../components/ui/Toolbar";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import {
   claimPersonIdForEnvironment,
@@ -21,7 +22,7 @@ import { Platform, useWindowDimensions } from "react-native";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { resolveScratchProjectScopeKey } from "@t3tools/client-runtime/state/project-grouping";
 
-import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
+import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { useProjects } from "../../state/entities";
 import { environmentThreadShells } from "../../state/threads";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
@@ -30,7 +31,7 @@ import { useSavedRemoteConnections } from "../../state/use-remote-environment-re
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { useNativeColumnLayoutMetrics } from "../../native/native-layout-metrics";
 import { WorkspaceEmptyDetail } from "../layout/WorkspaceEmptyDetail";
-import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
+import { AndroidScreenHeader } from "../../components/ui/AndroidScreenHeader";
 import { checkForAppUpdateOnLaunch, startAppUpdateForegroundRecheck } from "../updates/app-updates";
 import { AndroidHomeFabLayout } from "./AndroidHomeFab";
 import { HomeScreen } from "./HomeScreen";
@@ -42,8 +43,6 @@ import { buildHomeProjectScopes } from "./homeThreadList";
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useThreadListActions } from "./useThreadListActions";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
-
-/* ─── Route screen ───────────────────────────────────────────────────── */
 
 export function HomeRouteScreen() {
   const { width: windowWidth } = useWindowDimensions();
@@ -210,15 +209,12 @@ export function HomeRouteScreen() {
       })),
     [listOptions.projectGroupingMode, projects, selectedEnvironmentIds],
   );
-  // A saved project stays selected while its environment is offline or filtered out.
   const selectedProjectKey = projectFilterOptions.some(
     (project) => project.key === resolvedProjectKey,
   )
     ? resolvedProjectKey
     : null;
 
-  // In split layouts the persistent sidebar IS the thread list — Home becomes
-  // an empty detail pane so selecting a thread never transitions layouts.
   if (layout.usesSplitView && !nativePrimaryColumn) {
     return (
       <>
@@ -230,7 +226,6 @@ export function HomeRouteScreen() {
                   title: "",
                   headerTitle: "",
                   unstable_headerLeftItems: () => [],
-                  // Options survive layout changes; search and settings now belong to the sidebar.
                   headerSearchBarOptions: undefined,
                   unstable_headerRightItems: () => [],
                   unstable_headerToolbarItems: () => [],
@@ -238,13 +233,13 @@ export function HomeRouteScreen() {
           }
         />
         {Platform.OS === "ios" ? (
-          <NativeHeaderToolbar placement="left">
-            <NativeHeaderToolbar.Button
+          <Toolbar placement="left">
+            <Toolbar.Button
               accessibilityLabel="New task"
               icon="square.and.pencil"
               onPress={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
             />
-          </NativeHeaderToolbar>
+          </Toolbar>
         ) : null}
         {Platform.OS === "android" ? <AndroidScreenHeader title="Threads" /> : null}
         <WorkspaceEmptyDetail

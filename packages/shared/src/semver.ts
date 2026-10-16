@@ -17,7 +17,7 @@ export function normalizeSemverVersion(version: string): string {
     }
   }
 
-  if (segments.length === 2) {
+  while (segments.length > 0 && segments.length < 3) {
     segments.push("0");
   }
 
@@ -136,14 +136,8 @@ export function compareSemverVersions(left: string, right: string): number {
 }
 
 /**
- * Small semver range checker for CLI/runtime gates.
- *
  * Keep the function body valid plain JavaScript: SSH startup stringifies this
  * function and runs it on remote Node versions before TypeScript support is known.
- *
- * @param rawVersion Version string, with or without a leading `v`.
- * @param range Space-separated comparators, with `||` range groups.
- * @returns Whether `rawVersion` satisfies the supported range syntax.
  */
 export const satisfiesSemverRange: (rawVersion: string, range: string) => boolean =
   function satisfiesSemverRange(rawVersion, range) {

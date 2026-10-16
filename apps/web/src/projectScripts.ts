@@ -40,10 +40,6 @@ export function buildProjectScript(id: string, input: ProjectScriptInput): Proje
   };
 }
 
-/**
- * A project runs at most one setup script and one settle script, so saving a
- * script that claims either role takes it from the script that held it.
- */
 export function releaseClaimedRoles(
   script: ProjectScript,
   saved: ProjectScriptInput,
@@ -73,7 +69,6 @@ function normalizeScriptId(value: string): string {
   return cleaned.slice(0, MAX_SCRIPT_ID_LENGTH).replace(/-+$/g, "") || "script";
 }
 
-/** Legacy script IDs may not support shortcuts; keep those scripts usable without one. */
 export function commandForProjectScript(scriptId: string): KeybindingCommand | null {
   const command = `script.${scriptId}.run`;
   return isScriptRunCommand(command) ? command : null;
@@ -106,7 +101,6 @@ export function nextProjectScriptId(name: string, existingIds: Iterable<string>)
     suffix += 1;
   }
 
-  // This last-resort fallback only triggers after exhausting thousands of suffixes.
   return `${baseId}-${Date.now()}`.slice(0, MAX_SCRIPT_ID_LENGTH);
 }
 
