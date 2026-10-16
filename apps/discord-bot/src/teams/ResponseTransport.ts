@@ -12,15 +12,19 @@ import { uploadTeamsChannelFiles, type TeamsFileDestination } from "./channelFil
 import {
   BotTransportError,
   messageUpdateError,
+  workingFields,
   type BotMessage,
   type BotMessageFields,
   type BotResponseTransportService,
 } from "../features/BotResponseTransport.ts";
 import { buildThreadInfoRenderInput, modelHistoryFromLink } from "../features/ThreadInfoPin.ts";
+import { formatInProgressChunk, stripWorkingIndicator } from "../presentation/messages.ts";
 import {
   applyModelHistoryUpdate,
   formatModelSelectionLine,
+  LEGACY_THREAD_INFO_PIN_MARKERS,
   renderThreadInfoPin,
+  THREAD_INFO_PIN_MARKER,
 } from "../presentation/threadInfoPin.ts";
 import { extractMarkdownTables } from "../presentation/markdownTables.ts";
 import { ThreadLinkStore } from "../store/ThreadLinkStore.ts";
@@ -91,6 +95,34 @@ export function teamsMessageFields(fields: BotMessageFields): TeamsResponseActiv
     text: fields.content,
     attachments: [],
   };
+}
+
+/**
+ * A Teams info bubble is safe to rewrite. A Working-only line or a delivered
+ * answer is not: refreshing metadata must not put the info card back on top of it.
+ */
+export function teamsMessageIsThreadInfo(content: string): boolean {
+  const body = stripWorkingIndicator(content).trim();
+  if (body === "") return content.trim() === "";
+  return (
+    body.startsWith(`**${THREAD_INFO_PIN_MARKER}**`) ||
+    LEGACY_THREAD_INFO_PIN_MARKERS.some(
+      (marker) => body.startsWith(`**${marker}**`) || body.startsWith(marker),
+    )
+  );
+}
+
+/** Refresh the info card in place. Null means the visible message is already a reply. */
+export function teamsInfoRefreshFields(input: {
+  readonly rendered: string;
+  readonly current: string | null;
+  readonly threadId: string;
+}): BotMessageFields | null {
+  if (input.current !== null && !teamsMessageIsThreadInfo(input.current)) return null;
+  const hadProgress =
+    input.current !== null && stripWorkingIndicator(input.current) !== input.current.trimEnd();
+  if (!hadProgress) return { content: input.rendered };
+  return workingFields(`${input.rendered}\n\n${formatInProgressChunk("", true)}`, input.threadId);
 }
 
 export function teamsControlActivity(fields: BotMessageFields): TeamsResponseActivity | null {
@@ -564,11 +596,23 @@ export function makeTeamsResponseTransport(input: {
           }),
         );
         const old = link?.infoDiscordMessageId;
+        const current = old
+          ? yield* service
+              .getMessage(info.conversationId, old)
+              .pipe(Effect.catchCause(() => Effect.succeed(null)))
+          : null;
+        const fields = teamsInfoRefreshFields({
+          rendered: content,
+          current: current?.content ?? null,
+          threadId: info.threadId,
+        });
+        // The info message is also the live reply. Leave that text alone.
+        if (fields === null) return;
         const sent = old
           ? yield* service
-              .updateMessage(info.conversationId, old, { content })
-              .pipe(Effect.catch(() => service.createMessage(info.conversationId, { content })))
-          : yield* service.createMessage(info.conversationId, { content });
+              .updateMessage(info.conversationId, old, fields)
+              .pipe(Effect.catch(() => service.createMessage(info.conversationId, fields)))
+          : yield* service.createMessage(info.conversationId, fields);
         yield* links.setInfoDiscordMessageId(info.conversationId, sent.id);
       }),
   };

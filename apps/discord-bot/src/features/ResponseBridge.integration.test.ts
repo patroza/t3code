@@ -348,6 +348,30 @@ describe("shared response runner", () => {
             }),
           updateMessage: (_, id, fields) =>
             Effect.gen(function* () {
+              const settlesProgress = !fields.actions?.some((action) => action.command === "stop");
+              if (
+                failure === "final" &&
+                !didFail &&
+                settlesProgress &&
+                fields.content.includes("It’s 19:50 CEST.")
+              ) {
+                didFail = true;
+                return yield* new BotTransportError({
+                  cause: new Error("temporary final failure"),
+                });
+              }
+              if (
+                ["partial-final", "accepted-final"].includes(failure) &&
+                !didFail &&
+                settlesProgress &&
+                fields.content.includes("substantial final")
+              ) {
+                didFail = true;
+                if (failure === "accepted-final") yield* write(fields.content, id, fields);
+                return yield* new BotTransportError({
+                  cause: new Error("temporary final chunk failure"),
+                });
+              }
               if (
                 failure === "shutdown" &&
                 fields.content.includes("Checking the current result.")
@@ -547,8 +571,16 @@ describe("shared response runner", () => {
                 const firstReply = [...messages.values()].find((message) =>
                   message.content.includes("It’s 19:50 CEST."),
                 )!;
-                expect(progressIds.has(firstReply.id)).toBe(false);
-                expect([...progressIds].some((id) => messages.has(id))).toBe(false);
+                if (platform === "discord") {
+                  expect(progressIds.has(firstReply.id)).toBe(false);
+                  expect([...progressIds].some((id) => messages.has(id))).toBe(false);
+                } else {
+                  expect(
+                    fieldsById
+                      .get(firstReply.id)
+                      ?.actions?.some((action) => action.command === "stop"),
+                  ).toBe(false);
+                }
                 const followUp = {
                   ...completed.messages.at(-1)!,
                   id: MessageId.make("answer-2"),
@@ -708,12 +740,14 @@ describe("shared response runner", () => {
             ).toBeLessThan(beforeIndex);
           }
         }
-        if (!orderingCase)
+        if (!orderingCase) {
+          const keptProgress = [...progressIds].filter((id) => messages.has(id)).length;
           expect(counter).toBe(
             messages.size +
               (failure === "missing" ? 1 : 0) +
-              (failure === "same-run-follow-up" ? 2 : 1),
+              (failure === "same-run-follow-up" ? 2 - keptProgress : 1 - Math.min(keptProgress, 1)),
           );
+        }
         expect(didFail).toBe(
           ![
             "none",
@@ -731,8 +765,10 @@ describe("shared response runner", () => {
           expect(infoContent.at(-1)).not.toContain("Preparing workspace…");
           expect(infoContent).toHaveLength(2);
         }
-        expect([...progressIds].some((id) => messages.has(id))).toBe(false);
-        expect([...messages.keys()].every((id) => !progressIds.has(id))).toBe(true);
+        if (platform === "discord") {
+          expect([...progressIds].some((id) => messages.has(id))).toBe(false);
+          expect([...messages.keys()].every((id) => !progressIds.has(id))).toBe(true);
+        }
         expect(
           [...messages.keys()].every(
             (id) => !fieldsById.get(id)?.actions?.some((action) => action.command === "stop"),
