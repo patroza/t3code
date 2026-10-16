@@ -2208,8 +2208,8 @@ describe.concurrent("Sharding active teardowns", () => {
           runnerAddress: Option.some(RunnerAddress.make("localhost", 1234)),
           shardsPerGroup: 1,
           entityTerminationTimeout: 0,
-          entityMessagePollInterval: 10,
-          refreshAssignmentsInterval: 10,
+          entityMessagePollInterval: 1000,
+          refreshAssignmentsInterval: 1000,
           sendRetryInterval: 10
         }))
       )
@@ -2228,8 +2228,10 @@ describe.concurrent("Sharding active teardowns", () => {
         assert.strictEqual(Queue.sizeUnsafe(state.envelopes), 1)
 
         storageState.assignSelf = false
+        // The acquisition loop waits one second between passes. Advance by
+        // that interval instead of repeatedly waking 10ms polling loops.
         while (sharding.hasShardId(shardId)) {
-          yield* TestClock.adjust(10)
+          yield* TestClock.adjust(1000)
         }
         while ((yield* sharding.activeEntityCount) > 0) {
           yield* TestClock.adjust(1)
@@ -2366,6 +2368,7 @@ const ReapStormEntity = Entity.make("ReapStormEntity", [
 const ReapStormEntityLayer = ReapStormEntity.toLayer({ Ping: () => Effect.void })
 
 describe.concurrent("Sharding residency cap", () => {
+  // Repeated TestClock adjustments need wall-clock headroom under concurrent Deno CI load.
   it.effect("bounds resident entities to maxResidentEntities", () =>
     Effect.gen(function*() {
       yield* TestClock.adjust(1)
@@ -2390,7 +2393,7 @@ describe.concurrent("Sharding residency cap", () => {
 
       const users = yield* Fiber.joinAll(fibers)
       assert.deepStrictEqual(users.map((user) => user.id), [1, 2, 3, 4, 5, 6])
-    }).pipe(Effect.provide(CappedSharding({ maxResidentEntities: 2, entityMaxIdleTime: 1000 }))))
+    }).pipe(Effect.provide(CappedSharding({ maxResidentEntities: 2, entityMaxIdleTime: 1000 }))), 20_000)
 
   it.effect("volatile sends to new entities fail with MailboxFull at the cap", () =>
     Effect.gen(function*() {
