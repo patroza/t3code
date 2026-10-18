@@ -19,6 +19,7 @@ import {
   formatAlertCause,
   formatLongRunningTurnMilestone,
   isExpectedSessionLastError,
+  listLongRunningTurns,
   listSessionErrors,
   longRunningTurnMilestoneMs,
   nextLongRunningTurnMilestoneMs,
@@ -38,6 +39,56 @@ const TICK_MS = 60_000;
 const CPU_THRESHOLD = 50;
 const RSS_THRESHOLD = 768;
 const SUSTAINED_FOR_MS = 4 * TICK_MS;
+
+describe("persisted long-running turns", () => {
+  it.each(["v2-only", "both", "v1"] as const)(
+    "reads active work from a %s database without alerting for completed or queued work",
+    (schema) => {
+      const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-alert-turns-"));
+      const dbPath = NodePath.join(tempDir, schema === "v1" ? "state.sqlite" : "statev2.sqlite");
+      const now = Date.now();
+      const timestamp = (minutes: number) => new Date(now - minutes * 60_000).toISOString();
+      const rows = [
+        ["old-thread", "old-run", "running", timestamp(30)],
+        ["recent-thread", "recent-run", "running", timestamp(2)],
+        ["completed-thread", "completed-run", "completed", timestamp(90)],
+        ["queued-thread", "queued-run", "queued", timestamp(90)],
+      ];
+
+      try {
+        NodeChildProcess.execFileSync(
+          "python3",
+          [
+            "-c",
+            [
+              "import json, sqlite3, sys",
+              "db = sqlite3.connect(sys.argv[1])",
+              "schema, rows = sys.argv[2], json.loads(sys.argv[3])",
+              "if schema != 'v1':",
+              "  db.execute('CREATE TABLE orchestration_v2_projection_runs (thread_id TEXT, run_id TEXT, status TEXT, requested_at TEXT)')",
+              "  db.executemany('INSERT INTO orchestration_v2_projection_runs VALUES (?, ?, ?, ?)', rows)",
+              "if schema != 'v2-only':",
+              "  db.execute('CREATE TABLE projection_turns (thread_id TEXT, turn_id TEXT, state TEXT, requested_at TEXT)')",
+              "  legacy = rows if schema == 'v1' else [('stale-thread', 'stale-turn', 'running', rows[0][3])]",
+              "  db.executemany('INSERT INTO projection_turns VALUES (?, ?, ?, ?)', legacy)",
+              "db.commit()",
+            ].join("\n"),
+            dbPath,
+            schema,
+            JSON.stringify(rows),
+          ],
+          { encoding: "utf8" },
+        );
+
+        expect(listLongRunningTurns(dbPath, TURN_RUNNING_MIN_MS)).toEqual([
+          { threadId: "old-thread", turnId: "old-run", ageMin: 30 },
+        ]);
+      } finally {
+        NodeFS.rmSync(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
+});
 
 const proc = (over: Partial<ProcInfo> & { pid: number }): ProcInfo => ({
   pid: over.pid,

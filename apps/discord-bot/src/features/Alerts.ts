@@ -628,7 +628,7 @@ export function shouldAlertLongRunningTurn(
   return { alert: true, milestoneMs };
 }
 
-function listLongRunningTurns(
+export function listLongRunningTurns(
   dbPath: string,
   minAgeMs: number,
 ): ReadonlyArray<{ threadId: string; turnId: string; ageMin: number }> {
@@ -636,10 +636,19 @@ function listLongRunningTurns(
     dbPath,
     `
 min_age_ms = float(sys.argv[2])
-cur = db.execute(
-  "SELECT thread_id, turn_id, requested_at FROM projection_turns "
-  "WHERE state = 'running' AND turn_id IS NOT NULL ORDER BY requested_at ASC LIMIT 10"
-)
+has_v2_runs = db.execute(
+  "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'orchestration_v2_projection_runs'"
+).fetchone() is not None
+if has_v2_runs:
+  cur = db.execute(
+    "SELECT thread_id, run_id, requested_at FROM orchestration_v2_projection_runs "
+    "WHERE status = 'running' ORDER BY requested_at ASC LIMIT 10"
+  )
+else:
+  cur = db.execute(
+    "SELECT thread_id, turn_id, requested_at FROM projection_turns "
+    "WHERE state = 'running' AND turn_id IS NOT NULL ORDER BY requested_at ASC LIMIT 10"
+  )
 now = time.time()
 out = []
 for thread_id, turn_id, requested_at in cur:
