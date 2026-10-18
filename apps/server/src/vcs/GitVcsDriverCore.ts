@@ -425,6 +425,7 @@ const refuseOptionLikeRefName = (operation: string, cwd: string, refName: string
           command: "git",
           cwd,
           detail: "Ref names cannot start with '-'.",
+          failureKind: "unknown",
         }),
       )
     : Effect.void;
