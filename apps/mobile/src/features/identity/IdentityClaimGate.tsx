@@ -151,9 +151,8 @@ function IdentityClaimGateBody(props: {
       claimQuery.refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Claim failed");
-    } finally {
-      setSubmitting(false);
     }
+    setSubmitting(false);
   };
 
   const envLabel = props.environment.label.trim() || "this environment";

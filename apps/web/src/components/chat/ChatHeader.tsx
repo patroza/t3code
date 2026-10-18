@@ -16,9 +16,7 @@ import {
 import { ChevronDownIcon, EllipsisIcon } from "lucide-react";
 import {
   memo,
-  useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -194,18 +192,12 @@ export const ChatHeader = memo(function ChatHeader({
   });
   // Reparent the DOM host, not the React controls: rotating a phone or resizing
   // a window must not discard an unsaved script or Git dialog.
-  const mountInlineActions = useCallback(
-    (node: HTMLDivElement | null) => {
-      if (node && !actionsCollapsed) node.appendChild(actionsContainer);
-    },
-    [actionsContainer, actionsCollapsed],
-  );
-  const mountMenuActions = useCallback(
-    (node: HTMLDivElement | null) => {
-      if (node && actionsCollapsed) node.appendChild(actionsContainer);
-    },
-    [actionsContainer, actionsCollapsed],
-  );
+  const mountInlineActions = (node: HTMLDivElement | null) => {
+    if (node && !actionsCollapsed) node.appendChild(actionsContainer);
+  };
+  const mountMenuActions = (node: HTMLDivElement | null) => {
+    if (node && actionsCollapsed) node.appendChild(actionsContainer);
+  };
   if (!actionsCollapsed && actionsOpen) setActionsOpen(false);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const activeEnvironment = useEnvironment(activeThreadEnvironmentId);
@@ -223,20 +215,15 @@ export const ChatHeader = memo(function ChatHeader({
     remoteOpenMode: remoteOpenState.mode,
   });
   const aiUsageSnapshot = useAiUsageSnapshot(activeThreadEnvironmentId);
-  const headerUsage = useMemo(
-    () => resolveDriverUsage(aiUsageSnapshot, activeThreadDriverKind, activeThreadModel),
-    [aiUsageSnapshot, activeThreadDriverKind, activeThreadModel],
-  );
+  const headerUsage = (() =>
+    resolveDriverUsage(aiUsageSnapshot, activeThreadDriverKind, activeThreadModel))();
   const headerDotClass = headerUsage ? usageDotFillClass(headerUsage.marker) : undefined;
   const headerRingColor = headerUsage ? usageDotRingColor(headerUsage.marker) : undefined;
 
   const interfaceFont = useClientSettings((settings) => settings.fontFamilySans);
   const breadcrumbContainerRef = useRef<HTMLDivElement>(null);
   const [collapseParentTitle, setCollapseParentTitle] = useState(false);
-  const activeThreadRef = useMemo(
-    () => scopeThreadRef(activeThreadEnvironmentId, activeThreadId),
-    [activeThreadEnvironmentId, activeThreadId],
-  );
+  const activeThreadRef = scopeThreadRef(activeThreadEnvironmentId, activeThreadId);
   const canOperateThread = useEnvironmentScope(
     activeThreadEnvironmentId,
     AuthOrchestrationOperateScope,
@@ -295,9 +282,16 @@ export const ChatHeader = memo(function ChatHeader({
       document.fonts.removeEventListener("loadingdone", measure);
       stopObserving();
     };
-  }, [activeProjectName, activeThreadTitle, parentThreadLink, interfaceFont, isRenamingTitle]);
+  }, [
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Title, font and rename changes resize the breadcrumb text without resizing the list, so it re-measures.
+    activeProjectName,
+    activeThreadTitle,
+    parentThreadLink,
+    interfaceFont,
+    isRenamingTitle,
+  ]);
   const renameCommittedRef = useRef(false);
-  const startRename = useCallback(() => {
+  const startRename = () => {
     if (
       !isServerThread ||
       !readEnvironmentScope(activeThreadEnvironmentId, AuthOrchestrationOperateScope)
@@ -309,33 +303,30 @@ export const ChatHeader = memo(function ChatHeader({
       threadId: activeThreadId,
       title: activeThreadTitle,
     });
-  }, [activeThreadEnvironmentId, activeThreadId, activeThreadTitle, isServerThread]);
-  const commitRename = useCallback(
-    (title: string) => {
-      setRenaming(null);
-      if (!readEnvironmentScope(activeThreadEnvironmentId, AuthOrchestrationOperateScope)) return;
-      const resolution = resolveRenameCommit({ title, originalTitle: activeThreadTitle });
-      if (resolution.action === "reject-empty") {
-        toastManager.add({ type: "warning", title: "Thread title cannot be empty" });
-        return;
+  };
+  const commitRename = (title: string) => {
+    setRenaming(null);
+    if (!readEnvironmentScope(activeThreadEnvironmentId, AuthOrchestrationOperateScope)) return;
+    const resolution = resolveRenameCommit({ title, originalTitle: activeThreadTitle });
+    if (resolution.action === "reject-empty") {
+      toastManager.add({ type: "warning", title: "Thread title cannot be empty" });
+      return;
+    }
+    if (resolution.action === "noop") return;
+    void updateThreadMetadata({
+      environmentId: activeThreadEnvironmentId,
+      input: { threadId: activeThreadId, title: resolution.title },
+    }).then((result) => {
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add({
+          type: "error",
+          title: "Failed to rename thread",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        });
       }
-      if (resolution.action === "noop") return;
-      void updateThreadMetadata({
-        environmentId: activeThreadEnvironmentId,
-        input: { threadId: activeThreadId, title: resolution.title },
-      }).then((result) => {
-        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-          const error = squashAtomCommandFailure(result);
-          toastManager.add({
-            type: "error",
-            title: "Failed to rename thread",
-            description: error instanceof Error ? error.message : "An error occurred.",
-          });
-        }
-      });
-    },
-    [activeThreadEnvironmentId, activeThreadId, activeThreadTitle, updateThreadMetadata],
-  );
+    });
+  };
   const { openMenu, closeMenu } = useThreadActionMenu({
     threadRef: isServerThread ? activeThreadRef : null,
     projectCwd: activeProjectCwd,
@@ -343,89 +334,80 @@ export const ChatHeader = memo(function ChatHeader({
   });
   const titleButtonRef = useRef<HTMLButtonElement | null>(null);
   const titleMenuTimerRef = useRef<number | null>(null);
-  const cancelPendingTitleMenu = useCallback(() => {
+  const cancelPendingTitleMenu = () => {
     if (titleMenuTimerRef.current === null) return;
     clearTimeout(titleMenuTimerRef.current);
     titleMenuTimerRef.current = null;
-  }, []);
+  };
   useEffect(
     () => () => {
-      cancelPendingTitleMenu();
+      if (titleMenuTimerRef.current === null) return;
+      clearTimeout(titleMenuTimerRef.current);
+      titleMenuTimerRef.current = null;
     },
-    [activeThreadId, cancelPendingTitleMenu],
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Switching threads must cancel a pending title menu.
+    [activeThreadId],
   );
-  const openTitleMenuNow = useCallback(() => {
+  const openTitleMenuNow = () => {
     cancelPendingTitleMenu();
     const rect = titleButtonRef.current?.getBoundingClientRect();
     if (!rect) return;
     openMenu({ x: rect.left, y: rect.bottom + 4 });
-  }, [cancelPendingTitleMenu, openMenu]);
-  const openMenuFromTitle = useCallback(
-    (event: ReactMouseEvent<HTMLButtonElement>) => {
-      if (isTrailingDoubleClick(event.detail)) return;
-      const clickedChevron =
-        (event.target as HTMLElement).closest("[data-thread-title-chevron]") !== null;
-      if (event.detail === 0 || clickedChevron || window.desktopBridge === undefined) {
-        openTitleMenuNow();
-        return;
-      }
-      cancelPendingTitleMenu();
-      titleMenuTimerRef.current = window.setTimeout(() => {
-        titleMenuTimerRef.current = null;
-        openTitleMenuNow();
-      }, TITLE_MENU_OPEN_DELAY_MS);
-    },
-    [cancelPendingTitleMenu, openTitleMenuNow],
-  );
-  const handleTitleDoubleClick = useCallback(
-    (event: ReactMouseEvent) => {
-      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-      if ((event.target as HTMLElement).closest("[data-thread-title-chevron]") !== null) return;
-      cancelPendingTitleMenu();
-      closeMenu();
-      startRename();
-    },
-    [cancelPendingTitleMenu, closeMenu, startRename],
-  );
-  const handleHeaderContextMenu = useCallback(
-    (event: ReactMouseEvent) => {
-      if (renamingTitle !== null) return;
-      // The right-side controls (git, scripts, open-in) keep their own
-      // behavior; only the breadcrumb area opens the thread menu.
-      if ((event.target as HTMLElement).closest("[data-chat-header-actions]")) return;
-      if (!isServerThread && onOpenProjectSettings === undefined) return;
-      cancelPendingTitleMenu();
-      event.preventDefault();
-      if (!isServerThread) {
-        const api = readLocalApi();
-        if (!api) return;
-        void api.contextMenu
-          .show([{ id: "project-settings", label: "Project settings", icon: "settings" }], {
-            x: event.clientX,
-            y: event.clientY,
-          })
-          .then((action) => {
-            if (action === "project-settings") onOpenProjectSettings?.();
-          });
-        return;
-      }
-      openMenu({ x: event.clientX, y: event.clientY });
-    },
-    [cancelPendingTitleMenu, isServerThread, onOpenProjectSettings, openMenu, renamingTitle],
-  );
-  const handleRenameKeyDown = useCallback(
-    (event: ReactKeyboardEvent<HTMLInputElement>) => {
-      if (event.nativeEvent.isComposing || event.keyCode === 229) return;
-      if (event.key === "Enter") {
-        renameCommittedRef.current = true;
-        commitRename(event.currentTarget.value);
-      } else if (event.key === "Escape") {
-        renameCommittedRef.current = true;
-        setRenaming(null);
-      }
-    },
-    [commitRename],
-  );
+  };
+  const openMenuFromTitle = (event: ReactMouseEvent<HTMLButtonElement>) => {
+    if (isTrailingDoubleClick(event.detail)) return;
+    const clickedChevron =
+      (event.target as HTMLElement).closest("[data-thread-title-chevron]") !== null;
+    if (event.detail === 0 || clickedChevron || window.desktopBridge === undefined) {
+      openTitleMenuNow();
+      return;
+    }
+    cancelPendingTitleMenu();
+    titleMenuTimerRef.current = window.setTimeout(() => {
+      titleMenuTimerRef.current = null;
+      openTitleMenuNow();
+    }, TITLE_MENU_OPEN_DELAY_MS);
+  };
+  const handleTitleDoubleClick = (event: ReactMouseEvent) => {
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    if ((event.target as HTMLElement).closest("[data-thread-title-chevron]") !== null) return;
+    cancelPendingTitleMenu();
+    closeMenu();
+    startRename();
+  };
+  const handleHeaderContextMenu = (event: ReactMouseEvent) => {
+    if (renamingTitle !== null) return;
+    // The right-side controls (git, scripts, open-in) keep their own
+    // behavior; only the breadcrumb area opens the thread menu.
+    if ((event.target as HTMLElement).closest("[data-chat-header-actions]")) return;
+    if (!isServerThread && onOpenProjectSettings === undefined) return;
+    cancelPendingTitleMenu();
+    event.preventDefault();
+    if (!isServerThread) {
+      const api = readLocalApi();
+      if (!api) return;
+      void api.contextMenu
+        .show([{ id: "project-settings", label: "Project settings", icon: "settings" }], {
+          x: event.clientX,
+          y: event.clientY,
+        })
+        .then((action) => {
+          if (action === "project-settings") onOpenProjectSettings?.();
+        });
+      return;
+    }
+    openMenu({ x: event.clientX, y: event.clientY });
+  };
+  const handleRenameKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+    if (event.key === "Enter") {
+      renameCommittedRef.current = true;
+      commitRename(event.currentTarget.value);
+    } else if (event.key === "Escape") {
+      renameCommittedRef.current = true;
+      setRenaming(null);
+    }
+  };
   const headerActions = (
     <>
       {activeProjectScripts && (

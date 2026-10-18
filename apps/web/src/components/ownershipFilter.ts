@@ -19,7 +19,7 @@ import {
   type OwnershipRelation,
 } from "@t3tools/client-runtime/state/identity";
 import type { EnvironmentId } from "@t3tools/contracts";
-import { useCallback, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 
 import {
   dispatchLocalStorageChange,
@@ -88,12 +88,12 @@ export function useOwnershipFilter(): OwnershipFilterState {
   const rawMode = useSyncExternalStore(subscribeToMode, readMode, readNothing);
   const rawRelation = useSyncExternalStore(subscribeToRelation, readRelation, readNothing);
 
-  const setMode = useCallback((next: SidebarOwnershipFilter) => {
+  const setMode = (next: SidebarOwnershipFilter) => {
     writeRaw(SIDEBAR_OWNERSHIP_FILTER_STORAGE_KEY, next);
-  }, []);
-  const setRelation = useCallback((next: OwnershipRelation) => {
+  };
+  const setRelation = (next: OwnershipRelation) => {
     writeRaw(SIDEBAR_OWNERSHIP_RELATION_STORAGE_KEY, next);
-  }, []);
+  };
 
   return {
     mode:

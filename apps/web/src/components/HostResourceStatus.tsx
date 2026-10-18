@@ -8,7 +8,7 @@ import {
 } from "@t3tools/client-runtime/state/hostResourcePresentation";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { CloudIcon, RefreshCwIcon } from "lucide-react";
-import { Fragment, useCallback, useEffect, useRef } from "react";
+import { Fragment, useEffect, useRef } from "react";
 
 import { cn } from "~/lib/utils";
 import { useHostResourceSnapshot } from "../hooks/useHostResourceSnapshot";
@@ -66,18 +66,18 @@ export function HostResourceStatus(props: {
     props.connected,
   );
   const liveRefreshInterval = useRef<number | null>(null);
-  const stopLiveRefresh = useCallback(() => {
+  const stopLiveRefresh = () => {
     if (liveRefreshInterval.current === null) return;
     window.clearInterval(liveRefreshInterval.current);
     liveRefreshInterval.current = null;
-  }, []);
-  const startLiveRefresh = useCallback(() => {
+  };
+  const startLiveRefresh = () => {
     if (!props.connected || liveRefreshInterval.current !== null) return;
     refresh();
     liveRefreshInterval.current = window.setInterval(() => {
       if (document.visibilityState === "visible") refresh();
     }, 1_000);
-  }, [props.connected, refresh]);
+  };
   useEffect(() => stopLiveRefresh, [stopLiveRefresh]);
   if (!props.connected) return null;
 

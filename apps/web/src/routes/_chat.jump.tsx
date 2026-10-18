@@ -1,6 +1,6 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 
 import { Button } from "../components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
@@ -27,10 +27,7 @@ function ProjectJumpRoute() {
   const navigate = useNavigate();
   const handledKeyRef = useRef<string | null>(null);
   const action = parseProjectJumpAction(search.action);
-  const target = useMemo(
-    () => resolveProjectJumpTarget(search.project ?? "", projects, threads),
-    [projects, search.project, threads],
-  );
+  const target = (() => resolveProjectJumpTarget(search.project ?? "", projects, threads))();
   const handledKey = `${search.project ?? ""}:${action}`;
 
   useEffect(() => {

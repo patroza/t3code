@@ -8,7 +8,7 @@ import {
   type EnvironmentId,
   type IdentityPersonPublic,
 } from "@t3tools/contracts";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { useActiveEnvironmentId } from "../../state/entities";
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
@@ -76,7 +76,7 @@ export function IdentityClaimGate() {
   const { environments } = useEnvironments();
   const force = useForceClaimState();
 
-  const orderedEnvironmentIds = useMemo(() => {
+  const orderedEnvironmentIds = (() => {
     const ids: EnvironmentId[] = [];
     const add = (id: EnvironmentId | null | undefined) => {
       if (id !== null && id !== undefined && !ids.includes(id)) {
@@ -91,7 +91,7 @@ export function IdentityClaimGate() {
       add(environment.environmentId);
     }
     return ids;
-  }, [activeEnvironmentId, environments, force.environmentId, primaryEnvironmentId]);
+  })();
 
   if (orderedEnvironmentIds.length === 0) {
     return null;
@@ -124,10 +124,7 @@ function IdentityClaimGateForEnvironment(props: {
   readonly environmentLabel: string | null;
   readonly forceOpen: boolean;
 }) {
-  const target = useMemo(
-    () => ({ environmentId: props.environmentId, input: {} as const }),
-    [props.environmentId],
-  );
+  const target = (() => ({ environmentId: props.environmentId, input: {} as const }))();
   const snapshotQuery = useEnvironmentQuery(identityEnvironment.snapshot(target));
   const claimQuery = useEnvironmentQuery(identityEnvironment.sessionClaim(target));
   const claimCommand = useAtomCommand(identityEnvironment.claim, {
@@ -140,14 +137,14 @@ function IdentityClaimGateForEnvironment(props: {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const suggestions = useMemo(() => {
+  const suggestions = (() => {
     if (!snapshotQuery.data) return [] as ReadonlyArray<IdentityPersonPublic>;
     return filterPeopleForTypeahead(
       snapshotQuery.data.people,
       query,
       IDENTITY_CLAIM_TYPEAHEAD_MIN_CHARS,
     );
-  }, [query, snapshotQuery.data]);
+  })();
 
   // Show when: map requires claim, or user forced open after a dispatch error.
   // Keep showing while loading if forceOpen (so the error path isn't silent).

@@ -321,7 +321,12 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(prompt).toContain('createFileRoute("/_chat/new")');
     expect(prompt).toContain("<NewThreadLinkView");
     expect(sidebar).toContain("subscribeToProjectReveal(");
-    expect(sidebar).toContain("setProjectScopeKey(projectGroup.projectKey)");
+    expect(sidebar).toMatch(
+      /const setPersistedProjectScopeKey = useUiStateStore\(\s*\(store\) => store\.setSidebarProjectScopeKey/,
+    );
+    expect(sidebar).toMatch(
+      /subscribeToProjectReveal\([\s\S]*?setPersistedProjectScopeKey\(projectGroup\.projectKey\)/,
+    );
   });
 
   it("keeps full error toast titles reachable through the tooltip", () => {

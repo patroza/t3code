@@ -14,6 +14,7 @@ import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 import { createNativeMailSearchToolbarItem } from "../layout/native-mail-search-toolbar";
 import { getConnectionAwareBrandHeaderOptions } from "./WorkspaceConnectionTitle";
 import { useNativeMailSearchToolbar } from "../../native/use-native-mail-search-toolbar";
+import { useDeviceType } from "../../native/native-layout-metrics";
 import { buildHomeListFilterMenu } from "./home-list-filter-menu";
 import { createSidebarHeaderItems } from "../threads/sidebar-native-header-items";
 import {
@@ -49,12 +50,13 @@ export function HomeHeader(props: HomeHeaderProps) {
   const navigation = useNavigation<NativeStackNavigationProp<ParamListBase>>();
   const { layout, panes, togglePrimarySidebar } = useAdaptiveWorkspaceLayout();
   const usesNativeMailSearchToolbar = useNativeMailSearchToolbar();
+  const deviceType = useDeviceType();
   const primaryColumn = use(NativePrimaryColumnContext);
   const sidebarHeader =
     Platform.OS === "ios" &&
     primaryColumn !== null &&
-    (Platform.isPad || !usesNativeMailSearchToolbar);
-  const showsCompactCompose = Platform.OS === "ios" && Platform.isPad && !layout.usesSplitView;
+    (deviceType === "pad" || !usesNativeMailSearchToolbar);
+  const showsCompactCompose = deviceType === "pad" && !layout.usesSplitView;
   const searchBarRef = useRef<SearchBarCommands>(null);
   const { width: headerWidth } = useWindowDimensions();
   const theme = useUniwindTheme();

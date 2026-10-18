@@ -335,6 +335,29 @@ export default defineConfig({
         },
       },
       {
+        // Every web file must compile under the React Compiler. Its bailout rules are errors here,
+        // and manual memoization is redundant. No upstream rule bans useMemo/useCallback, hence
+        // t3code/no-manual-memo.
+        files: ["apps/web/src/**/*.{ts,tsx}"],
+        rules: {
+          "react/exhaustive-effect-dependencies": "error",
+          "react/globals": "error",
+          "react/hooks": "error",
+          "react/immutability": "error",
+          // The compiler memoizes context values; this rule would ask for useMemo.
+          "react/jsx-no-constructed-context-values": "off",
+          "react/memo-dependencies": "error",
+          "react/preserve-manual-memoization": "error",
+          "react/purity": "error",
+          "react/refs": "error",
+          "react/set-state-in-effect": "error",
+          "react/set-state-in-render": "error",
+          "react/static-components": "error",
+          "react/unsupported-syntax": "error",
+          "t3code/no-manual-memo": "error",
+        },
+      },
+      {
         // The sign-in masthead is T3 brand artwork: fixed gradients, not theme surfaces.
         files: ["apps/web/src/components/auth/AuthSurfaceShell.tsx"],
         rules: { "shadcn/no-arbitrary-values": "off" },
@@ -351,6 +374,13 @@ export default defineConfig({
         ],
         excludeFiles: ["**/*.test.ts", "**/*.test.tsx"],
         rules: { "t3code/no-hermes-unsupported-apis": "error" },
+      },
+      {
+        // Mobile is ratcheting toward full React Compiler coverage
+        // (apps/mobile/src/reactCompilerCoverage.test.ts). Directives would hide bailouts from it;
+        // the manual memo hooks go once the allowlist there is empty.
+        files: ["apps/mobile/src/**/*.{ts,tsx}"],
+        rules: { "t3code/no-manual-memo": ["error", { allowMemoHooks: true }] },
       },
       {
         files: [

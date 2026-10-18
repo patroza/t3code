@@ -1,6 +1,5 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 import { CheckIcon, ChevronsUpDownIcon } from "lucide-react";
-import { useMemo } from "react";
 
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
@@ -38,7 +37,7 @@ export function ListEnvironmentFilterControl(props: {
   const allSelected = isAllEnvironmentsSelected(selectedEnvironmentIds);
   const selectedCount = selectedEnvironmentIds.length;
 
-  const triggerLabel = useMemo(() => {
+  const triggerLabel = (() => {
     if (allSelected || environments.length === 0) {
       return "All environments";
     }
@@ -50,7 +49,7 @@ export function ListEnvironmentFilterControl(props: {
       );
     }
     return `${selectedCount} environments`;
-  }, [allSelected, environments, selectedCount, selectedEnvironmentIds]);
+  })();
 
   if (environments.length <= 1) {
     return null;

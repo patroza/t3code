@@ -75,6 +75,10 @@ describe("mobile surface existence (anti stack-drop)", () => {
     expect(homeHeader).toMatch(
       /getConnectionAwareBrandHeaderOptions\(\{[\s\S]*?title: headerTitle/,
     );
+    // HomeHeader owns the title; route-level options must not overwrite the list-mode swap.
+    expect(readSrc("features/home/HomeRouteScreen.tsx")).not.toContain(
+      "getConnectionAwareBrandHeaderOptions",
+    );
     // No surface may render the deleted in-list status pill again.
     expect(sidebar).not.toContain("WorkspaceConnectionStatus");
     expect(homeHeader).not.toContain("WorkspaceConnectionStatus");

@@ -90,11 +90,19 @@ import {
   SHARED_WORKSPACE_RESTORE_MESSAGE,
 } from "./CheckpointRestoreSafety.ts";
 import { CheckpointServiceV2 } from "./CheckpointService.ts";
-import { CommandPolicyV2, resolveMessageDispatchIntent } from "./CommandPolicy.ts";
+import {
+  CommandPolicyV2,
+  isNativeMaintenanceCommand,
+  resolveMessageDispatchIntent,
+} from "./CommandPolicy.ts";
 import { CommandReceiptStoreV2 } from "./CommandReceiptStore.ts";
 import { ContextHandoffServiceV2 } from "./ContextHandoffService.ts";
 import { notificationTurnItem } from "@t3tools/provider-core/server/notification";
-import { isRestartContinuationSource, runOutcome } from "./RestartBackgroundNote.ts";
+import {
+  cancelledBeforeStart,
+  isRestartContinuationSource,
+  runOutcome,
+} from "./RestartBackgroundNote.ts";
 import {
   isBufferedProviderNotification,
   isUndeliveredMailboxSteer,
@@ -408,17 +416,6 @@ function wakeWorkStartedAt(
         DateTime.Order(right.startedAt, left.startedAt) || right.run.ordinal - left.run.ordinal,
     )[0]?.run;
   return previous === undefined ? {} : { workStartedAt: orchestrationV2RunWorkStartedAt(previous) };
-}
-
-export function isNativeMaintenanceCommand(message: {
-  readonly text: string;
-  readonly attachments: ReadonlyArray<ChatAttachment>;
-  readonly context?: import("@t3tools/contracts").OrchestrationMessageContext | undefined;
-}): boolean {
-  return (
-    message.attachments.length === 0 &&
-    ["/compact", "/logout"].includes(message.text.trim().toLowerCase())
-  );
 }
 
 function isGoalCommand(message: {
@@ -4801,7 +4798,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           projection.thread.deletedAt !== null ||
           projection.thread.providerInstanceId !== source.providerInstanceId ||
           projection.runs.some(
-            (run) => run.id !== source.id && run.status !== "queued" && runRanAfter(run, source),
+            (run) =>
+              run.id !== source.id &&
+              run.status !== "queued" &&
+              !cancelledBeforeStart(run) &&
+              runRanAfter(run, source),
           ) ||
           (yield* stopReachedRun(command, command.threadId, source.id))
         ) {

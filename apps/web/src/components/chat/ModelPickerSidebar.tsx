@@ -1,6 +1,6 @@
 import { Toolbar } from "@base-ui/react/toolbar";
 import { type AiUsageSnapshot, type ProviderInstanceId } from "@t3tools/contracts";
-import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useLayoutEffect, useRef, useState } from "react";
 import { SparklesIcon, StarIcon } from "lucide-react";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -65,7 +65,7 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
   // providers keep their relative order via the stable sort tie-break. Locked
   // mode already sorts available-first, so leave that ordering untouched.
   const usageSnapshot = props.usageSnapshot ?? null;
-  const orderedInstanceEntries = useMemo(() => {
+  const orderedInstanceEntries = (() => {
     if (usageSnapshot === null || !usageSnapshot.available) return props.instanceEntries;
     return props.instanceEntries
       .map((entry, index) => ({ entry, index }))
@@ -76,7 +76,7 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
         return rankDelta !== 0 ? rankDelta : a.index - b.index;
       })
       .map(({ entry }) => entry);
-  }, [props.instanceEntries, usageSnapshot]);
+  })();
   const [hoveredInstanceId, setHoveredInstanceId] = useState<ProviderInstanceId | null>(null);
   const sidebarContentRef = useRef<HTMLDivElement>(null);
   const [selectedIndicatorTop, setSelectedIndicatorTop] = useState<number | null>(null);
@@ -93,7 +93,12 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
       return;
     }
     setSelectedIndicatorTop(selectedItem.offsetTop + selectedItem.offsetHeight / 2 - 10);
-  }, [props.instanceEntries, props.selectedInstanceId, showFavorites]);
+  }, [
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Adding, removing or reordering providers moves the selected item, so the indicator re-measures.
+    props.instanceEntries,
+    props.selectedInstanceId,
+    showFavorites,
+  ]);
 
   return (
     <Toolbar.Root

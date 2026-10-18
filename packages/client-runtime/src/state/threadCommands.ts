@@ -120,6 +120,7 @@ export type {
   RespondToThreadApprovalInput,
   RespondToThreadUserInputInput,
   DismissThreadUserInputInput,
+  RetryWorkspacePreparationInput,
   RevertThreadCheckpointInput,
   SetThreadInteractionModeInput,
   SetThreadRuntimeModeInput,

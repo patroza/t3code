@@ -30,6 +30,7 @@ import {
 import { useResolveClassNames } from "uniwind";
 
 import { AppText as Text } from "./components/ui/AppText";
+import { androidWorkspaceDestinationAnimation } from "./lib/android-workspace-navigation";
 import { getCompactBrandHeaderOptions } from "./components/CompactBrandTitle";
 import { WorkspaceRootScreen } from "./features/workspace/WorkspaceRootScreen";
 import { AndroidWorkspaceTabsProvider } from "./features/workspace/AndroidWorkspaceTabsProvider";
@@ -669,7 +670,9 @@ function NotFoundScreen() {
 
 const RootStackConfig = createWorkspaceStackNavigator({
   initialRouteName: "Home",
-  layout: RootStackLayout,
+  // React Navigation calls layouts as plain functions inside its own render. Passing a
+  // compiled component directly would put its memo cache among the navigator's hooks.
+  layout: (props) => <RootStackLayout {...props} />,
   screenOptions: {
     headerShown: false,
   },
@@ -1007,15 +1010,17 @@ function ScreenRenderFallback(props: RenderFailureProps & { readonly routeName: 
 export const RootStack = RootStackConfig.with(function AdaptiveRootStack({ Navigator }) {
   const { width, height } = useWindowDimensions();
   const nativeMetrics = useNativeLayoutMetrics();
-  const usesWorkspaceFlowScreens =
-    Platform.OS === "android" || deriveLayout({ width, height, nativeMetrics }).usesSplitView;
+  const usesSplitView = deriveLayout({ width, height, nativeMetrics }).usesSplitView;
+  const usesWorkspaceFlowScreens = Platform.OS === "android" || usesSplitView;
 
   return (
     <Navigator
-      screenLayout={GuardedScreenLayout}
+      screenLayout={(props) => <GuardedScreenLayout {...props} />}
       screenOptions={({ route }) => {
         if (route.name !== "SettingsSheet" && route.name !== "NewTaskSheet") {
-          return {};
+          return Platform.OS === "android"
+            ? { animation: androidWorkspaceDestinationAnimation(route.name, usesSplitView) }
+            : {};
         }
 
         return usesWorkspaceFlowScreens

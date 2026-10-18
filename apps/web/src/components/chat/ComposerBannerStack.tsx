@@ -69,9 +69,10 @@ export function ComposerBannerStack({ className, items, attachedAbove }: Compose
     };
   }, []);
 
-  useEffect(() => {
-    if (items.length < 2) setStackExpanded(false);
-  }, [items.length]);
+  // A stack that shrinks to one banner collapses, so the next stack starts collapsed.
+  if (items.length < 2 && stackExpanded) {
+    setStackExpanded(false);
+  }
 
   useLayoutEffect(() => {
     if (stackExpanded && pendingFocusRef.current === "notice") {
@@ -346,7 +347,7 @@ function ComposerBannerStackAlert({
       variant={item.variant}
       density="comfortable"
     >
-      <ComposerBanner.Row layout="wrap-actions">
+      <ComposerBanner.Row layout={item.priority === "activity" ? "inline" : "wrap-actions"}>
         <ComposerBanner.Icon className="h-(--composer-banner-icon-column) self-start">
           {item.icon}
         </ComposerBanner.Icon>
