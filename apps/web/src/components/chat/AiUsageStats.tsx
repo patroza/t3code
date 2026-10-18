@@ -9,6 +9,7 @@ import {
   usageProviderLabel,
 } from "../../aiUsageState";
 import { cn } from "~/lib/utils";
+import { useNowMinute } from "../../hooks/useNowMinute";
 
 function barColorClass(percent: number, enforced: boolean): string {
   // Extra-usage / credit pools are context, not caps: a full one is neutral.
@@ -31,6 +32,8 @@ export function AiUsageStats(props: {
   nowMs?: number;
 }) {
   const { item, compact = false } = props;
+  const nowMinute = useNowMinute();
+  const nowMs = props.nowMs ?? Date.parse(`${nowMinute}:00Z`);
   const marker = usageMarkerForItem(item);
   return (
     <div className={cn("flex min-w-44 flex-col", compact ? "gap-1" : "gap-1.5", props.className)}>
@@ -45,7 +48,7 @@ export function AiUsageStats(props: {
       {item.ok && item.windows.length > 0 ? (
         <div className={cn("flex flex-col", compact ? "gap-0.5" : "gap-1.5")}>
           {item.windows.map((window) => {
-            const resets = formatResetsIn(window.resets_at, props.nowMs ?? Date.now());
+            const resets = formatResetsIn(window.resets_at, nowMs);
             const pace = formatPaceNote(window);
             const enforced = isEnforcedUsageWindow(window);
             // In compact mode only surface a sub-line when there's a pace

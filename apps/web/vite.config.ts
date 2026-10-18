@@ -339,6 +339,8 @@ const browserTestProject = {
   optimizeDeps: { include: ["vite-plus/test/browser"] },
   test: {
     name: "browser",
+    maxWorkers: 4,
+    sequence: { groupOrder: 1 },
     include: ["src/**/*.browser.test.{ts,tsx}"],
     hookTimeout: 15_000,
     testTimeout: 15_000,

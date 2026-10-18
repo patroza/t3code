@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { useRef } from "react";
+import { useState } from "react";
 
 import { primaryServerWebVersionAtom } from "../state/server";
 
@@ -23,12 +23,12 @@ export function isWebUpdateAvailable(boot: string | null, latest: string | null)
  */
 export function WebUpdateBanner() {
   const latest = useAtomValue(primaryServerWebVersionAtom);
-  const bootVersionRef = useRef<string | null>(null);
-  if (latest !== null && bootVersionRef.current === null) {
-    bootVersionRef.current = latest;
+  const [bootVersion, setBootVersion] = useState(latest);
+  if (latest !== null && bootVersion === null) {
+    setBootVersion(latest);
   }
 
-  if (!isWebUpdateAvailable(bootVersionRef.current, latest)) {
+  if (!isWebUpdateAvailable(bootVersion, latest)) {
     return null;
   }
 

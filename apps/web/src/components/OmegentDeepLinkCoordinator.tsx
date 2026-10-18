@@ -11,7 +11,7 @@ import {
 } from "../deepLinkStore";
 import { parseOmegentDeepLink } from "../deepLinks";
 import { buildThreadRouteParams } from "../threadRoutes";
-import { findThreadRef, useThreadRefs } from "../state/entities";
+import { useThreadRefs } from "../state/entities";
 import { usePrimaryEnvironmentId } from "../state/environments";
 
 function stripThreadQueryFromLocation(): void {
@@ -57,7 +57,7 @@ export function OmegentDeepLinkCoordinator() {
       awaitingNavigation: pending?.awaitingNavigation ?? true,
     });
 
-    const knownRef = findThreadRef(ThreadId.make(threadId));
+    const knownRef = threadRefs.find((ref) => ref.threadId === threadId) ?? null;
     // Prefer the shell list (correct env in multi-env). Fall back to primary
     // so we never sit forever on `/` waiting for a ref that is slow/empty.
     const threadRef =
