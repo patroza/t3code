@@ -68,6 +68,8 @@ const buildSourcemap: boolean | "hidden" =
       : true;
 
 const isolatedUnitTestFiles = [
+  // Workspace picker mocks replace entity and composer stores.
+  "src/components/BranchToolbar.panel.test.tsx",
   // Retained action toasts use scoped server and runtime mocks.
   "src/components/GitActionsControl.lifecycle.test.ts",
   // Route lifecycle tests substitute the router and environment stores.

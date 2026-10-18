@@ -18,6 +18,9 @@ import type { PreviewableServer } from "./useDiscoveredLocalServers";
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(async (_tabId: string, _url: string): Promise<void> => undefined),
+  resolveNavigableUrl: vi.fn(
+    async (_environmentId: unknown, target: { kind: string; url?: string }) => target.url ?? "",
+  ),
   rememberPreviewUrl: vi.fn(),
   readPreparedConnection: vi.fn(() => ({ httpBaseUrl: "http://172.25.85.75:3773" })),
   readEnvironmentScope: vi.fn((_environmentId?: unknown, _scope?: unknown) => true),
@@ -72,6 +75,10 @@ vi.mock(import("./previewBridge"), async (original) => ({
       close: mocks.closePictureInPicture,
     },
   } as never,
+}));
+vi.mock(import("~/browser/browserTargetResolver"), async (original) => ({
+  ...(await original()),
+  resolveNavigableUrl: mocks.resolveNavigableUrl,
 }));
 vi.mock(import("~/browserHistoryStore"), async (original) => ({
   ...(await original()),
@@ -275,14 +282,24 @@ describe("PreviewView", () => {
     ],
     ["localhost:5173/app", "http://localhost:5173/app"],
   ])(
-    "preserves a direct localhost URL %s in a WSL environment and records it",
+    "resolves the typed localhost URL %s through its environment while recording the entered address",
     async (submitted, expected) => {
+      const entered = new URL(expected);
+      const reachable = new URL(
+        entered.pathname + entered.search + entered.hash,
+        "https://reachable.example.test",
+      ).toString();
+      mocks.resolveNavigableUrl.mockResolvedValueOnce(reachable);
       await render(view());
       await submitAddress(submitted);
       await vi.waitFor(() =>
-        expect(mocks.navigate).toHaveBeenCalledWith(TEST_RUNTIME_TAB_ID, expected),
+        expect(mocks.navigate).toHaveBeenCalledWith(TEST_RUNTIME_TAB_ID, reachable),
       );
-      expect(mocks.rememberPreviewUrl).toHaveBeenCalledWith(TEST_THREAD_REF, expected);
+      expect(mocks.resolveNavigableUrl).toHaveBeenCalledWith(TEST_THREAD_REF.environmentId, {
+        kind: "url",
+        url: expected,
+      });
+      expect(mocks.rememberPreviewUrl).toHaveBeenCalledWith(TEST_THREAD_REF, reachable);
       expect(mocks.recordVisitForThread).toHaveBeenCalledWith(TEST_THREAD_REF, expected);
     },
   );

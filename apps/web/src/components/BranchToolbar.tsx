@@ -582,7 +582,7 @@ export const BranchToolbar = memo(function BranchToolbar({
   showGitControls,
   draftId,
   onEnvModeChange = () => {},
-  onWorkspaceTargetChange = (target) => onEnvModeChange(target === "local" ? "local" : "worktree"),
+  onWorkspaceTargetChange: requestedWorkspaceTargetChange,
   effectiveEnvModeOverride,
   activeThreadBranchOverride,
   onActiveThreadBranchOverrideChange,
@@ -600,6 +600,9 @@ export const BranchToolbar = memo(function BranchToolbar({
   composerControlsHostRef,
   contextStripVisible = true,
 }: BranchToolbarProps) {
+  const onWorkspaceTargetChange =
+    requestedWorkspaceTargetChange ??
+    ((target: WorkspaceTarget) => onEnvModeChange(target === "local" ? "local" : "worktree"));
   const branchSelectorRef = useRef<BranchToolbarBranchSelectorHandle>(null);
   const threadRef = scopeThreadRef(environmentId, threadId);
   const draftThread = useComposerDraftStore((store) =>
