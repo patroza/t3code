@@ -21,6 +21,7 @@ import {
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import * as ProcessRunner from "../processRunner.ts";
+import { ExplicitGitDirectory } from "./GitRepositoryProbe.ts";
 
 export interface VcsProcessInput {
   readonly operation: string;
@@ -184,6 +185,9 @@ export const make = Effect.gen(function* () {
   const githubProcesses = yield* Semaphore.make(GITHUB_PROCESS_CONCURRENCY);
 
   const runUnbounded = Effect.fn("VcsProcess.runUnbounded")(function* (input: VcsProcessInput) {
+    const explicitDirectory = yield* ExplicitGitDirectory;
+    const gitDirectoryEnv =
+      explicitDirectory?.cwd === input.cwd ? { GIT_DIR: explicitDirectory.gitDir } : {};
     const baseError = {
       operation: input.operation,
       command: input.command,
@@ -201,7 +205,11 @@ export const make = Effect.gen(function* () {
         ...(input.onStdoutChunk !== undefined ? { onStdoutChunk: input.onStdoutChunk } : {}),
         env: {
           ...input.env,
-          ...explicitBareRepositoryEnv({ ...process.env, ...input.env }, hostPlatform),
+          ...gitDirectoryEnv,
+          ...explicitBareRepositoryEnv(
+            { ...process.env, ...input.env, ...gitDirectoryEnv },
+            hostPlatform,
+          ),
         },
         timeout: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         maxOutputBytes: input.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,

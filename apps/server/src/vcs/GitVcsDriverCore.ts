@@ -39,6 +39,7 @@ import { resolveProjectFileBackedSetting } from "@t3tools/shared/projectSettings
 import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../observability/Metrics.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import { explicitBareRepositoryEnv, gitConfigEnv } from "./VcsProcess.ts";
+import { ExplicitGitDirectory, probeGitRepository } from "./GitRepositoryProbe.ts";
 import { resolveWorktreesDirectory } from "../worktreesDirectory.ts";
 import {
   parseRemoteNames,
@@ -1026,6 +1027,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       const appendTruncationMarker = input.appendTruncationMarker ?? false;
 
       const runGitCommand = Effect.fn("runGitCommand")(function* () {
+        const explicitDirectory = yield* ExplicitGitDirectory;
         const trace2Monitor = yield* createTrace2Monitor(commandInput, input.progress).pipe(
           Effect.provideService(Path.Path, path),
           Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -1044,6 +1046,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           // `git status` takes index.lock to save its refreshed index.
           GIT_OPTIONAL_LOCKS: "0",
           ...input.env,
+          ...(explicitDirectory?.cwd === input.cwd ? { GIT_DIR: explicitDirectory.gitDir } : {}),
           ...trace2Monitor.env,
         };
         const env = { ...baseEnv, ...explicitBareRepositoryEnv(baseEnv, hostPlatform) };
@@ -3524,13 +3527,28 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       : ["worktree", "add", "--", worktreePath, input.refName];
     const progress = options?.progress;
     const onCheckoutProgress = progress?.onCheckoutProgress;
+    const repository = yield* probeGitRepository(path.resolve(input.cwd), (probeArgs) =>
+      executeGit("GitVcsDriver.createWorktree.probe", input.cwd, probeArgs, {
+        allowNonZeroExit: true,
+      }),
+    );
 
-    const checkoutWorkers = (yield* readConfigValue(input.cwd, "checkout.workers")) ?? "0";
+    const readCheckoutWorkers = readConfigValue(input.cwd, "checkout.workers");
+    const checkoutWorkers =
+      (yield* repository?.gitDir
+        ? readCheckoutWorkers.pipe(
+            Effect.provideService(ExplicitGitDirectory, {
+              cwd: input.cwd,
+              gitDir: repository.gitDir,
+            }),
+          )
+        : readCheckoutWorkers) ?? "0";
     const preparationEnv = input.deferDependencyInstall
       ? { T3CODE_DEFER_DEPENDENCY_INSTALL: "1" }
       : undefined;
     const worktreeEnv = {
       ...preparationEnv,
+      ...(repository?.gitDir ? { GIT_DIR: repository.gitDir } : {}),
       ...(onCheckoutProgress ? { GIT_PROGRESS_DELAY: "0", LC_ALL: "C" } : {}),
     };
     yield* executeGit(

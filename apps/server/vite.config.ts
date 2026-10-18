@@ -147,6 +147,7 @@ export default mergeConfig(
               "src/orchestration-v2/Adapters/CursorAgentSdk.test.ts",
               "src/textGeneration/CursorTextGeneration.test.ts",
               "src/terminal/NodePtyAdapter.test.ts",
+              "src/terminal/Manager.test.ts",
               "src/vcs/GitVcsDriverCore.test.ts",
               "src/workspace/WorkspaceEntries.test.ts",
               // Mocks `./ServerBrowserContexts`. Under isolate:false the real
@@ -202,6 +203,9 @@ export default mergeConfig(
               "src/orchestration-v2/Adapters/CursorAgentSdk.test.ts",
               "src/textGeneration/CursorTextGeneration.test.ts",
               "src/terminal/NodePtyAdapter.test.ts",
+              // Wraps SynchronizedRef.make to inspect kill-fiber registration races.
+              // Cached Manager imports otherwise bypass the wrapped module.
+              "src/terminal/Manager.test.ts",
               "src/workspace/WorkspaceEntries.test.ts",
               // Mocks `./ServerBrowserContexts`. Under isolate:false the real
               // pool is already bound, so launch asks the stub browser for an

@@ -5,6 +5,7 @@ import * as Layer from "effect/Layer";
 import {
   GitManagerError,
   GitCommandError,
+  type VcsRepositoryIdentity,
   type VcsSwitchRefInput,
   type VcsSwitchRefResult,
   type VcsCreateRefInput,
@@ -34,6 +35,7 @@ import * as GitManager from "./GitManager.ts";
 import * as ProjectLifecycleScriptRunner from "../project/ProjectLifecycleScriptRunner.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
+import { ExplicitGitDirectory } from "../vcs/GitRepositoryProbe.ts";
 
 export class GitWorkflowService extends Context.Service<
   GitWorkflowService,
@@ -242,6 +244,7 @@ export const make = Effect.gen(function* () {
         detail: bareRepositoryDetail(operation, cwd),
       });
     }
+    return handle.repository;
   });
 
   const ensureGitCommand = Effect.fn("GitWorkflowService.ensureGitCommand")(function* (
@@ -280,6 +283,7 @@ export const make = Effect.gen(function* () {
         detail: bareRepositoryDetail(operation, cwd),
       });
     }
+    return handle.repository;
   });
 
   const detectGitRepositoryForStatus = Effect.fn("GitWorkflowService.detectGitRepositoryForStatus")(
@@ -332,7 +336,7 @@ export const make = Effect.gen(function* () {
       ),
     );
     if (!handle) {
-      return false;
+      return null;
     }
     if (handle.kind !== "git") {
       return yield* new GitCommandError({
@@ -343,8 +347,18 @@ export const make = Effect.gen(function* () {
         detail: `The ${operation} command currently supports Git repositories only; detected ${handle.kind}.`,
       });
     }
-    return true;
+    return handle.repository;
   });
+
+  const runInRepository =
+    <A, E, R>(cwd: string, effect: Effect.Effect<A, E, R>) =>
+    (repository: VcsRepositoryIdentity) =>
+      effect.pipe(
+        Effect.provideService(
+          ExplicitGitDirectory,
+          repository.bare ? { cwd, gitDir: repository.rootPath } : null,
+        ),
+      );
 
   const routeGitManager =
     <Input extends { readonly cwd: string }, Output>(
@@ -385,17 +399,20 @@ export const make = Effect.gen(function* () {
       /[*?[\\]/.test(input.refName)
         ? Effect.succeed(false)
         : ensureGitCommand("GitWorkflowService.hasRefNamed", input.cwd, { allowBare: true }).pipe(
-            Effect.andThen(
-              git.execute({
-                operation: "GitWorkflowService.hasRefNamed",
-                cwd: input.cwd,
-                args: [
-                  "for-each-ref",
-                  "--count=1",
-                  "--format=%(refname)",
-                  `refs/**/${input.refName}`,
-                ],
-              }),
+            Effect.flatMap(
+              runInRepository(
+                input.cwd,
+                git.execute({
+                  operation: "GitWorkflowService.hasRefNamed",
+                  cwd: input.cwd,
+                  args: [
+                    "for-each-ref",
+                    "--count=1",
+                    "--format=%(refname)",
+                    `refs/**/${input.refName}`,
+                  ],
+                }),
+              ),
             ),
             Effect.map((result) => result.stdout.trim().length > 0),
           ),
@@ -444,15 +461,17 @@ export const make = Effect.gen(function* () {
     ),
     listRefs: (input) =>
       detectGitRepositoryForCommand("GitWorkflowService.listRefs", input.cwd).pipe(
-        Effect.flatMap((isGitRepository) =>
-          isGitRepository ? git.listRefs(input) : Effect.succeed(nonRepositoryListRefs()),
+        Effect.flatMap((repository) =>
+          repository !== null
+            ? runInRepository(input.cwd, git.listRefs(input))(repository)
+            : Effect.succeed(nonRepositoryListRefs()),
         ),
       ),
     // `git worktree add` is the whole point of a bare source repository: the
     // thread gets its own checkout, so the source never needs one.
     createWorktree: (input, options) =>
       ensureGitCommand("GitWorkflowService.createWorktree", input.cwd, { allowBare: true }).pipe(
-        Effect.andThen(gitManager.createWorktree(input, options)),
+        Effect.flatMap(runInRepository(input.cwd, gitManager.createWorktree(input, options))),
       ),
     listLocalBranchNames: (cwd) =>
       ensureGitCommand("GitWorkflowService.listLocalBranchNames", cwd).pipe(
@@ -460,64 +479,67 @@ export const make = Effect.gen(function* () {
       ),
     fetchRemote: (input) =>
       ensureGitCommand("GitWorkflowService.fetchRemote", input.cwd, { allowBare: true }).pipe(
-        Effect.andThen(git.fetchRemote(input)),
+        Effect.flatMap(runInRepository(input.cwd, git.fetchRemote(input))),
       ),
     remoteExists: (input) =>
       ensureGitCommand("GitWorkflowService.remoteExists", input.cwd, { allowBare: true }).pipe(
-        Effect.andThen(git.remoteExists(input)),
+        Effect.flatMap(runInRepository(input.cwd, git.remoteExists(input))),
       ),
     remoteBranchExists: (input) =>
       ensureGitCommand("GitWorkflowService.remoteBranchExists", input.cwd, {
         allowBare: true,
-      }).pipe(Effect.andThen(git.remoteBranchExists(input))),
+      }).pipe(Effect.flatMap(runInRepository(input.cwd, git.remoteBranchExists(input)))),
     resolveRemoteTrackingCommit: (input) =>
       ensureGitCommand("GitWorkflowService.resolveRemoteTrackingCommit", input.cwd, {
         allowBare: true,
-      }).pipe(Effect.andThen(git.resolveRemoteTrackingCommit(input))),
+      }).pipe(Effect.flatMap(runInRepository(input.cwd, git.resolveRemoteTrackingCommit(input)))),
     removeWorktree: (input) =>
       ensureGitCommand("GitWorkflowService.removeWorktree", input.cwd, { allowBare: true }).pipe(
-        Effect.andThen(
-          Effect.gen(function* () {
-            // Prefer the PR associated with the worktree branch (status cwd = worktree path).
-            const associatedPr = yield* gitManager.remoteStatus({ cwd: input.path }).pipe(
-              Effect.map((remote) => remote?.pr ?? null),
-              Effect.orElseSucceed(() => null),
-            );
-
-            // Teardown must finish successfully before the worktree directory is removed.
-            // PR-merged lifecycle is a separate trigger (status transition), not part of remove.
-            yield* lifecycleScriptRunner
-              .runWorktreeRemove({
-                projectCwd: input.cwd,
-                worktreePath: input.path,
-                pr: associatedPr
-                  ? {
-                      number: associatedPr.number,
-                      url: associatedPr.url,
-                      title: associatedPr.title,
-                      baseRef: associatedPr.baseRef,
-                      headRef: associatedPr.headRef,
-                      state: associatedPr.state,
-                    }
-                  : null,
-              })
-              .pipe(
-                Effect.mapError((error) =>
-                  lifecycleScriptToGitCommandError(
-                    "GitWorkflowService.removeWorktree",
-                    input,
-                    error,
-                  ),
-                ),
+        Effect.flatMap(
+          runInRepository(
+            input.cwd,
+            Effect.gen(function* () {
+              // Prefer the PR associated with the worktree branch (status cwd = worktree path).
+              const associatedPr = yield* gitManager.remoteStatus({ cwd: input.path }).pipe(
+                Effect.map((remote) => remote?.pr ?? null),
+                Effect.orElseSucceed(() => null),
               );
 
-            yield* git.removeWorktree(input);
-          }),
+              // Teardown must finish successfully before the worktree directory is removed.
+              // PR-merged lifecycle is a separate trigger (status transition), not part of remove.
+              yield* lifecycleScriptRunner
+                .runWorktreeRemove({
+                  projectCwd: input.cwd,
+                  worktreePath: input.path,
+                  pr: associatedPr
+                    ? {
+                        number: associatedPr.number,
+                        url: associatedPr.url,
+                        title: associatedPr.title,
+                        baseRef: associatedPr.baseRef,
+                        headRef: associatedPr.headRef,
+                        state: associatedPr.state,
+                      }
+                    : null,
+                })
+                .pipe(
+                  Effect.mapError((error) =>
+                    lifecycleScriptToGitCommandError(
+                      "GitWorkflowService.removeWorktree",
+                      input,
+                      error,
+                    ),
+                  ),
+                );
+
+              yield* git.removeWorktree(input);
+            }),
+          ),
         ),
       ),
     pruneWorktrees: (input) =>
       ensureGitCommand("GitWorkflowService.pruneWorktrees", input.cwd, { allowBare: true }).pipe(
-        Effect.andThen(git.pruneWorktrees(input)),
+        Effect.flatMap(runInRepository(input.cwd, git.pruneWorktrees(input))),
       ),
     deleteLocalBranch: (input) =>
       ensureGitCommand("GitWorkflowService.deleteLocalBranch", input.cwd).pipe(
@@ -528,14 +550,14 @@ export const make = Effect.gen(function* () {
         // Creating the branch is pure ref plumbing; only checking it out after
         // creation needs a working tree.
         allowBare: input.switchRef !== true,
-      }).pipe(Effect.andThen(git.createRef(input))),
+      }).pipe(Effect.flatMap(runInRepository(input.cwd, git.createRef(input)))),
     switchRef: (input) =>
       ensureGitCommand("GitWorkflowService.switchRef", input.cwd).pipe(
         Effect.andThen(Effect.scoped(git.switchRef(input))),
       ),
     renameBranch: (input) =>
       ensureGit("GitWorkflowService.renameBranch", input.cwd, { allowBare: true }).pipe(
-        Effect.andThen(git.renameBranch(input)),
+        Effect.flatMap(runInRepository(input.cwd, git.renameBranch(input))),
       ),
   });
 });

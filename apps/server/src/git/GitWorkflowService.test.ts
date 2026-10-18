@@ -8,6 +8,7 @@ import { VcsRepositoryDetectionError } from "@t3tools/contracts";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 
 import * as ServerConfig from "../config.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
@@ -17,6 +18,7 @@ import * as ProjectLifecycleScriptRunner from "../project/ProjectLifecycleScript
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriver from "../vcs/VcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
+import { ExplicitGitDirectory } from "../vcs/GitRepositoryProbe.ts";
 
 const lifecycleScriptRunnerMock = Layer.mock(
   ProjectLifecycleScriptRunner.ProjectLifecycleScriptRunner,
@@ -267,6 +269,92 @@ describe("GitWorkflowService", () => {
   });
 
   describe("bare repositories", () => {
+    it.effect("uses explicit bare metadata for ref discovery and fetch without leaking it", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-bare-workflow-" });
+        const source = path.join(root, "source");
+        const bare = path.join(root, "bare.git");
+        yield* fileSystem.makeDirectory(source);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const git = (cwd: string, args: ReadonlyArray<string>) =>
+          driver.execute({ operation: "test.bare-workflow", cwd, args });
+        yield* git(source, ["init", "-b", "main"]);
+        yield* git(source, [
+          "-c",
+          "user.name=Test",
+          "-c",
+          "user.email=t@t",
+          "-c",
+          "commit.gpgSign=false",
+          "commit",
+          "--allow-empty",
+          "-m",
+          "init",
+        ]);
+        yield* git(root, ["clone", "--bare", source, bare]);
+        yield* git(root, [
+          "--git-dir",
+          bare,
+          "config",
+          "remote.origin.fetch",
+          "+refs/heads/*:refs/remotes/origin/*",
+        ]);
+        yield* git(source, ["branch", "fetched"]);
+
+        const workflow = yield* GitWorkflowService.GitWorkflowService;
+        const refs = yield* workflow.listRefs({ cwd: bare, refresh: true });
+        assert.isTrue(refs.isRepo);
+        assert.isTrue(refs.refs.some((ref) => ref.name === "main"));
+        assert.isTrue(yield* workflow.hasRefNamed({ cwd: bare, refName: "main" }));
+        yield* workflow.fetchRemote({ cwd: bare, remoteName: "origin" });
+        assert.isTrue(yield* workflow.hasRefNamed({ cwd: bare, refName: "fetched" }));
+
+        const checkout = yield* git(source, ["rev-parse", "--show-toplevel"]).pipe(
+          Effect.provideService(ExplicitGitDirectory, { cwd: bare, gitDir: bare }),
+        );
+        assert.equal(checkout.stdout.trim(), source);
+        const implicit = yield* driver.execute({
+          operation: "test.bare-workflow.unscoped",
+          cwd: bare,
+          args: ["rev-parse", "--is-bare-repository"],
+          allowNonZeroExit: true,
+        });
+        assert.notEqual(implicit.exitCode, 0);
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          GitWorkflowService.layer.pipe(
+            Layer.provide(
+              Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({
+                detect: ({ cwd }) =>
+                  Effect.succeed({
+                    ...bareHandle(cwd),
+                    repository: { ...bareHandle(cwd).repository, rootPath: cwd, metadataPath: cwd },
+                  }),
+                resolve: ({ cwd }) =>
+                  Effect.succeed({
+                    ...bareHandle(cwd),
+                    repository: { ...bareHandle(cwd).repository, rootPath: cwd, metadataPath: cwd },
+                  }),
+              }),
+            ),
+            Layer.provide(Layer.mock(GitManager.GitManager)({})),
+            Layer.provide(lifecycleScriptRunnerMock),
+            Layer.provideMerge(GitVcsDriver.layer),
+            Layer.provideMerge(VcsProcess.layer),
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "t3-bare-workflow-" }).pipe(
+                Layer.provide(NodeServices.layer),
+              ),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
     it.effect("creates a worktree from a bare repository", () => {
       // The service builds driver effects eagerly, so execution has to be
       // recorded from inside the effect rather than from a call count.
