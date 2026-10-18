@@ -3,7 +3,6 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
 import {
-  AuthAdministrativeScopes,
   AuthStandardClientScopes,
   type AuthEnvironmentScope,
   type AuthPairingLink,
@@ -343,7 +342,7 @@ export const make = Effect.gen(function* () {
     const now = yield* DateTime.now;
     yield* seedGrant(config.desktopBootstrapToken, {
       method: "desktop-bootstrap",
-      scopes: AuthAdministrativeScopes,
+      scopes: AuthStandardClientScopes,
       subject: "desktop-bootstrap",
       expiresAt: DateTime.add(now, {
         milliseconds: Duration.toMillis(DESKTOP_BOOTSTRAP_TTL_HOURS),
@@ -360,7 +359,7 @@ export const make = Effect.gen(function* () {
     const now = yield* DateTime.now;
     yield* seedGrant(localCredential, {
       method: "desktop-bootstrap",
-      scopes: AuthAdministrativeScopes,
+      scopes: AuthStandardClientScopes,
       subject: "local-bootstrap",
       expiresAt: DateTime.add(now, {
         milliseconds: Duration.toMillis(LOCAL_BOOTSTRAP_TTL),
@@ -480,7 +479,7 @@ export const make = Effect.gen(function* () {
       if (consumeRotatingDesktopToken(credential, now.epochMilliseconds)) {
         return {
           method: "desktop-bootstrap",
-          scopes: AuthAdministrativeScopes,
+          scopes: AuthStandardClientScopes,
           subject: "desktop-bootstrap",
           expiresAt: DateTime.add(now, {
             milliseconds: DESKTOP_BOOTSTRAP_TOKEN_WINDOW_MS,

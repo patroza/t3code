@@ -40,6 +40,7 @@ import {
 } from "./GitVcsDriverCore.ts";
 import * as VcsDriver from "./VcsDriver.ts";
 import * as VcsProcess from "./VcsProcess.ts";
+import { probeGitRepository } from "./GitRepositoryProbe.ts";
 
 export interface ExecuteGitInput {
   readonly operation: string;
@@ -544,29 +545,11 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
    * every status poll were a major VCS load contributor.
    */
   const probeRepository = (cwd: string) =>
-    gitCommand(
-      vcsProcess,
-      "GitVcsDriver.probeRepository",
-      cwd,
-      ["rev-parse", "--is-bare-repository", "--is-inside-work-tree"],
-      {
+    probeGitRepository(path.resolve(cwd), (args) =>
+      gitCommand(vcsProcess, "GitVcsDriver.probeRepository", cwd, args, {
         allowNonZeroExit: true,
         timeoutMs: 5_000,
         maxOutputBytes: 4_096,
-      },
-    ).pipe(
-      Effect.map((result) => {
-        if (result.exitCode !== 0) {
-          return null;
-        }
-        const [bare, insideWorkTree] = result.stdout
-          .trim()
-          .split("\n")
-          .map((line) => line.trim());
-        return {
-          bare: bare === "true",
-          insideWorkTree: insideWorkTree === "true",
-        };
       }),
     );
 
@@ -603,7 +586,11 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       vcsProcess,
       "GitVcsDriver.detectRepository.commonDir",
       cwd,
-      ["rev-parse", "--git-common-dir"],
+      [
+        ...(probe.gitDir === null ? [] : ["--git-dir", probe.gitDir]),
+        "rev-parse",
+        "--git-common-dir",
+      ],
     ).pipe(Effect.orElseSucceed(() => null));
     const metadataPath = gitCommonDir?.stdout.trim() || null;
 

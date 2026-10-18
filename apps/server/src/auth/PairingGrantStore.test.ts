@@ -2,7 +2,7 @@
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
-import { AuthAdministrativeScopes, AuthStandardClientScopes } from "@t3tools/contracts";
+import { AuthStandardClientScopes } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { LOCAL_BOOTSTRAP_CREDENTIAL_FILE } from "@t3tools/shared/serverRuntime";
 import { expect, it } from "@effect/vitest";
@@ -192,7 +192,7 @@ it.layer(NodeServices.layer)("PairingGrantStore.layer", (it) => {
       const third = yield* bootstrapCredentials.consume("desktop-bootstrap-token");
 
       expect(first.method).toBe("desktop-bootstrap");
-      expect(first.scopes).toEqual(AuthAdministrativeScopes);
+      expect(first.scopes).toEqual(AuthStandardClientScopes);
       expect(first.subject).toBe("desktop-bootstrap");
       expect(second.method).toBe("desktop-bootstrap");
       expect(third.method).toBe("desktop-bootstrap");
@@ -238,6 +238,7 @@ it.layer(NodeServices.layer)("PairingGrantStore.layer", (it) => {
       const afterADay = yield* bootstrapCredentials.consume("local-file-bootstrap-token");
       expect(afterADay.method).toBe("desktop-bootstrap");
       expect(afterADay.subject).toBe("local-bootstrap");
+      expect(afterADay.scopes).toEqual(AuthStandardClientScopes);
 
       yield* TestClock.adjust(Duration.days(400));
       const monthsLater = yield* bootstrapCredentials.consume("local-file-bootstrap-token");
@@ -306,6 +307,7 @@ it.layer(NodeServices.layer)("PairingGrantStore.layer", (it) => {
         // The Discord bot and other colocated clients still send the file contents.
         const raw = yield* bootstrapCredentials.consume(secret);
         expect(raw.subject).toBe("local-bootstrap");
+        expect(raw.scopes).toEqual(AuthStandardClientScopes);
 
         const stale = yield* Effect.flip(
           bootstrapCredentials.consume(currentDesktopBootstrapToken(secret, now - 2 * window)),

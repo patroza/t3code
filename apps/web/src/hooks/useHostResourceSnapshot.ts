@@ -11,13 +11,14 @@ export function useHostResourceSnapshot(environmentId: EnvironmentId, connected:
     connected ? serverEnvironment.hostResourceSnapshot({ environmentId, input: {} }) : null,
   );
 
+  const { refresh } = query;
   useEffect(() => {
     if (!connected) return;
     const interval = window.setInterval(() => {
-      if (document.visibilityState === "visible") query.refresh();
+      if (document.visibilityState === "visible") refresh();
     }, HOST_RESOURCE_POLL_INTERVAL_MS);
     return () => window.clearInterval(interval);
-  }, [connected, query.refresh]);
+  }, [connected, refresh]);
 
   return query;
 }

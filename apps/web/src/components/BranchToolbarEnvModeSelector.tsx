@@ -1,7 +1,7 @@
 import { ComposerSelectControl } from "./chat/ComposerControl";
 import { ComposerContextLabel } from "./ComposerContextLabel";
 import { FolderGit2Icon, FolderGitIcon, FolderIcon } from "lucide-react";
-import { memo, useMemo, type MouseEvent as ReactMouseEvent } from "react";
+import { memo, type MouseEvent as ReactMouseEvent } from "react";
 
 import {
   resolveCurrentWorkspaceLabel,
@@ -51,24 +51,21 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
 }: BranchToolbarEnvModeSelectorProps) {
   const composerFloatingLayerProps = useComposerMenuProps();
   const showPreviousWorktree = Boolean(previousWorktreeLabel && onUsePreviousWorktree);
-  const envModeItems = useMemo(
-    () => [
-      {
-        value: "local",
-        label: onWorkspaceTargetChange
-          ? resolveEnvModeLabel("local")
-          : resolveCurrentWorkspaceLabel(activeWorktreePath),
-      },
-      ...(onWorkspaceTargetChange && activeWorktreePath
-        ? [{ value: "current-worktree", label: resolveCurrentWorkspaceLabel(activeWorktreePath) }]
-        : []),
-      { value: "worktree", label: resolveEnvModeLabel("worktree") },
-      ...(showPreviousWorktree && previousWorktreeLabel
-        ? [{ value: PREVIOUS_WORKTREE_SELECT_VALUE, label: previousWorktreeLabel }]
-        : []),
-    ],
-    [activeWorktreePath, previousWorktreeLabel, showPreviousWorktree, onWorkspaceTargetChange],
-  );
+  const envModeItems = (() => [
+    {
+      value: "local",
+      label: onWorkspaceTargetChange
+        ? resolveEnvModeLabel("local")
+        : resolveCurrentWorkspaceLabel(activeWorktreePath),
+    },
+    ...(onWorkspaceTargetChange && activeWorktreePath
+      ? [{ value: "current-worktree", label: resolveCurrentWorkspaceLabel(activeWorktreePath) }]
+      : []),
+    { value: "worktree", label: resolveEnvModeLabel("worktree") },
+    ...(showPreviousWorktree && previousWorktreeLabel
+      ? [{ value: PREVIOUS_WORKTREE_SELECT_VALUE, label: previousWorktreeLabel }]
+      : []),
+  ])();
 
   const stopContextMenuMouseDown = (event: ReactMouseEvent) => {
     if (event.button !== 0 || event.ctrlKey) {

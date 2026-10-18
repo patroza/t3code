@@ -148,6 +148,41 @@ describe("GitVcsDriver bare repositories", () => {
     ),
   );
 
+  it.effect("does not opt a nested folder into its bare ancestor", () =>
+    withTempDir((cwd) =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const driver = yield* VcsDriver.VcsDriver;
+        const gitDriver = yield* GitVcsDriver.GitVcsDriver;
+        yield* runGit(cwd, ["init", "--bare"]);
+        const nested = path.join(cwd, "nested");
+        yield* fileSystem.makeDirectory(nested);
+
+        assert.equal(yield* driver.detectRepository(nested), null);
+        const result = yield* gitDriver.execute({
+          operation: "test.implicit-bare-discovery",
+          cwd,
+          args: ["rev-parse", "--is-bare-repository"],
+          allowNonZeroExit: true,
+        });
+        assert.notEqual(result.exitCode, 0);
+        assert.include(result.stderr, "safe.bareRepository");
+      }),
+    ),
+  );
+
+  it.effect("does not classify an ordinary checkout's git directory as a bare source", () =>
+    withTempDir((cwd) =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const driver = yield* VcsDriver.VcsDriver;
+        yield* runGit(cwd, ["init"]);
+        assert.equal(yield* driver.detectRepository(path.join(cwd, ".git")), null);
+      }),
+    ),
+  );
+
   it.effect("creates a usable worktree from a bare repository", () =>
     withTempDir((root) =>
       Effect.gen(function* () {

@@ -6,7 +6,7 @@ import {
   type ProviderDriverKind,
   type ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import { Badge } from "../ui/badge";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -65,7 +65,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   const isMenuOpen = props.open ?? uncontrolledIsMenuOpen;
   const size = props.size ?? "sm";
   const favoriteProviderIds = useClientSettings((settings) => settings.providerFavorites ?? []);
-  const orderedInstanceEntries = useMemo(() => {
+  const orderedInstanceEntries = (() => {
     const favorites = new Set(favoriteProviderIds);
     return props.instanceEntries
       .map((entry, index) => ({ entry, index, favorite: favorites.has(entry.instanceId) }))
@@ -73,13 +73,13 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         (left, right) => Number(right.favorite) - Number(left.favorite) || left.index - right.index,
       )
       .map(({ entry }) => entry);
-  }, [favoriteProviderIds, props.instanceEntries]);
+  })();
 
-  const activeEntry = useMemo(() => {
+  const activeEntry = (() => {
     return (
       orderedInstanceEntries.find((entry) => entry.instanceId === props.activeInstanceId) ?? null
     );
-  }, [props.activeInstanceId, orderedInstanceEntries]);
+  })();
 
   const activeInstanceId = props.activeInstanceId;
   const selectedInstanceOptions = props.modelOptionsByInstance.get(activeInstanceId) ?? [];
@@ -102,10 +102,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     : triggerTitle;
   const showInstanceBadge =
     activeEntry !== null && shouldShowInstanceBadge(activeEntry, props.instanceEntries);
-  const activeUsage = useMemo(
-    () => resolveDriverUsage(props.usageSnapshot, activeEntry?.driverKind ?? null, props.model),
-    [props.usageSnapshot, activeEntry, props.model],
-  );
+  const activeUsage = (() =>
+    resolveDriverUsage(props.usageSnapshot, activeEntry?.driverKind ?? null, props.model))();
   const setIsMenuOpen = (open: boolean) => {
     props.onOpenChange?.(open);
     if (props.open === undefined) {

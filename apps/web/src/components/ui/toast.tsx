@@ -5,7 +5,6 @@ import { Spinner } from "~/components/ui/spinner";
 import { Toast } from "@base-ui/react/toast";
 import {
   useEffect,
-  useMemo,
   useState,
   type CSSProperties,
   type ComponentPropsWithoutRef,
@@ -37,6 +36,7 @@ import {
   shouldRenderThreadScopedToast,
 } from "./toast.logic";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./tooltip";
+import { useThreadRouteTarget } from "~/hooks/useThreadRouteTarget";
 
 export type ThreadToastData = {
   threadRef?: ScopedThreadRef | null;
@@ -493,26 +493,21 @@ interface ToastProviderProps extends Toast.Provider.Props {
 }
 
 function useActiveThreadRefFromRoute(): ScopedThreadRef | null {
-  const routeTarget = useParams({
-    strict: false,
-    select: (params) => resolveThreadRouteTarget(params),
-  });
+  const routeTarget = useThreadRouteTarget();
   const activeDraftSession = useComposerDraftStore((store) =>
     routeTarget?.kind === "draft" ? store.getDraftSession(routeTarget.draftId) : null,
   );
 
-  return useMemo(() => {
-    if (routeTarget?.kind === "server") {
-      return routeTarget.threadRef;
-    }
-    if (routeTarget?.kind === "draft" && activeDraftSession) {
-      return {
-        environmentId: activeDraftSession.environmentId,
-        threadId: activeDraftSession.threadId,
-      };
-    }
-    return null;
-  }, [activeDraftSession, routeTarget]);
+  if (routeTarget?.kind === "server") {
+    return routeTarget.threadRef;
+  }
+  if (routeTarget?.kind === "draft" && activeDraftSession) {
+    return {
+      environmentId: activeDraftSession.environmentId,
+      threadId: activeDraftSession.threadId,
+    };
+  }
+  return null;
 }
 
 function ThreadToastVisibleAutoDismiss({

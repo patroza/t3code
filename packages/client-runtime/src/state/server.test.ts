@@ -423,7 +423,9 @@ describe("server state projection", () => {
     });
 
     const result = Option.getOrThrow(projected);
-    expect(result.config.settings).toBe(settings);
+    // An equal settings payload keeps the snapshot's object so readers don't re-render.
+    expect(result.config.settings).toBe(Option.getOrThrow(snapshot).config.settings);
+    expect(result.config.settings).toEqual(settings);
     expect(result.latestEvent.type).toBe("settingsUpdated");
   });
 
@@ -895,7 +897,9 @@ describe("server state projection", () => {
             ),
             Stream.runHead,
           );
-          expect(Option.getOrThrow(Option.getOrThrow(projected)).config.providers).toBe(providers);
+          expect(Option.getOrThrow(Option.getOrThrow(projected)).config.providers).toEqual(
+            providers,
+          );
         }),
       );
 
