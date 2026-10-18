@@ -5,6 +5,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import * as Cause from "effect/Cause";
+import * as DateTime from "effect/DateTime";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 vi.mock("dfx", () => ({
@@ -46,8 +47,9 @@ describe("persisted long-running turns", () => {
     (schema) => {
       const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-alert-turns-"));
       const dbPath = NodePath.join(tempDir, schema === "v1" ? "state.sqlite" : "statev2.sqlite");
-      const now = Date.now();
-      const timestamp = (minutes: number) => new Date(now - minutes * 60_000).toISOString();
+      const now = DateTime.nowUnsafe();
+      const timestamp = (minutes: number) =>
+        DateTime.formatIso(DateTime.subtract(now, { minutes }));
       const rows = [
         ["old-thread", "old-run", "running", timestamp(30)],
         ["recent-thread", "recent-run", "running", timestamp(2)],
