@@ -2810,28 +2810,30 @@ export default function ChatView(props: ChatViewProps) {
           videoPreviewRequestIdRef.current,
         );
       setOpeningVideoAttachmentId(attachment.id);
-      try {
-        const url = await resolveFileAttachmentUrl({
-          attachment,
-          environmentId,
-          httpBaseUrl: connection.httpBaseUrl,
-          createAssetUrl: createAttachmentAssetUrl,
-        });
-        if (!isCurrentRequest()) return;
-        setExpandedImage({
-          images: [{ src: url, name: attachment.name, type: "video" }],
-          index: 0,
-        });
-      } catch (error) {
-        if (!isCurrentRequest()) return;
-        toastManager.add({
-          type: "error",
-          title: "Could not play " + attachment.name,
-          description: error instanceof Error ? error.message : "The attachment is unavailable.",
-        });
-      } finally {
+      await (async () => {
+        try {
+          const url = await resolveFileAttachmentUrl({
+            attachment,
+            environmentId,
+            httpBaseUrl: connection.httpBaseUrl,
+            createAssetUrl: createAttachmentAssetUrl,
+          });
+          if (!isCurrentRequest()) return;
+          setExpandedImage({
+            images: [{ src: url, name: attachment.name, type: "video" }],
+            index: 0,
+          });
+        } catch (error) {
+          if (!isCurrentRequest()) return;
+          toastManager.add({
+            type: "error",
+            title: "Could not play " + attachment.name,
+            description: error instanceof Error ? error.message : "The attachment is unavailable.",
+          });
+        }
+      })().finally(() => {
         if (isCurrentRequest()) setOpeningVideoAttachmentId(null);
-      }
+      });
       return;
     }
     if (activeThreadRef) {
@@ -3574,7 +3576,7 @@ export default function ChatView(props: ChatViewProps) {
       return;
     }
     queuedEditSaveInFlightRef.current = true;
-    try {
+    await (async () => {
       const result = await beginQueuedRunEditCommand({
         environmentId: activeThread.environmentId,
         input: {
@@ -3600,16 +3602,16 @@ export default function ChatView(props: ChatViewProps) {
           ?.context,
       });
       scheduleComposerFocus();
-    } finally {
+    })().finally(() => {
       queuedEditSaveInFlightRef.current = false;
-    }
+    });
   };
   const beginEditingQueuedRunStable = useStableCallback(beginEditingQueuedRun);
   const cancelEditingQueuedRun = async () => {
     if (editingQueuedRun === null || queuedEditSaveInFlightRef.current) return;
     queuedEditSaveInFlightRef.current = true;
     setIsSavingQueuedEdit(true);
-    try {
+    await (async () => {
       const result =
         queuedRunEditOwnership(serverThreadState, editingQueuedRun) === "lost"
           ? null
@@ -3625,10 +3627,10 @@ export default function ChatView(props: ChatViewProps) {
       clearComposerDraftContent(queuedEditDraftTargetFor(editingQueuedRun.runId));
       setEditingQueuedRun(null);
       scheduleComposerFocus();
-    } finally {
+    })().finally(() => {
       queuedEditSaveInFlightRef.current = false;
       setIsSavingQueuedEdit(false);
-    }
+    });
   };
   const cancelEditingQueuedRunStable = useStableCallback(cancelEditingQueuedRun);
   const removeEditingQueuedAttachment = (attachmentId: string) => {
@@ -6645,103 +6647,106 @@ export default function ChatView(props: ChatViewProps) {
       }
       queuedEditSaveInFlightRef.current = true;
       setIsSavingQueuedEdit(true);
-      try {
-        const uploads = await prepareQueuedEditAttachments({
-          existingAttachments: editingQueuedRun.existingAttachments,
-          images: newEditImages,
-          files: newEditFiles,
-          readImage: readFileAsDataUrl,
-          uploadFiles: async (files) => {
-            const validateFiles = () => {
-              const config =
-                appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId) ?? null;
-              const reason = fileAttachmentCapabilityBlockReason({
-                files,
-                attachmentUploadsCapabilityKnown: config !== null,
-                supportsAttachmentUploads:
-                  config?.environment.capabilities.attachmentUploads === true,
-                maxFileAttachmentBytes:
-                  config?.environment.capabilities.fileAttachments?.maxUploadBytes ?? null,
-              });
-              if (reason !== null) throw new Error(reason);
-            };
-            validateFiles();
-            for (const file of files)
-              startAttachmentUpload({
-                environmentId,
-                image: file,
-                draftTarget: composerDraftTarget,
-              });
-            await awaitAttachmentUploads(files.map((file) => file.id));
-            validateFiles();
-            const uploaded = getUploadedAttachments({ environmentId, images: files });
-            if (uploaded === null) throw new Error("Retry or remove failed uploads before saving.");
-            return uploaded;
-          },
-        });
-        const result = await editQueuedRunCommand({
-          environmentId: activeThread.environmentId,
-          input: {
-            threadId: editingQueuedRun.threadId,
-            runId: editingQueuedRun.runId,
-            editId: editingQueuedRun.editId,
-            text: editText.length === 0 ? ATTACHMENT_ONLY_BOOTSTRAP_PROMPT : editText,
-            edit: {
-              messageId: editingQueuedRun.messageId,
-              attachments: uploads,
-              context: {
-                version: 1,
-                records: [
-                  ...new Map(
-                    [
-                      ...(editingQueuedRun.context?.records ?? []).filter(
-                        (record) =>
-                          !("attachmentId" in record) ||
-                          editingQueuedRun.existingAttachments.some(
-                            (attachment) => attachment.id === record.attachmentId,
-                          ),
-                      ),
-                      ...(buildMessageContext({
-                        terminalContexts: composerTerminalContexts.filter(
-                          (context) => context.text.trim().length > 0,
+      await (async () => {
+        try {
+          const uploads = await prepareQueuedEditAttachments({
+            existingAttachments: editingQueuedRun.existingAttachments,
+            images: newEditImages,
+            files: newEditFiles,
+            readImage: readFileAsDataUrl,
+            uploadFiles: async (files) => {
+              const validateFiles = () => {
+                const config =
+                  appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId) ?? null;
+                const reason = fileAttachmentCapabilityBlockReason({
+                  files,
+                  attachmentUploadsCapabilityKnown: config !== null,
+                  supportsAttachmentUploads:
+                    config?.environment.capabilities.attachmentUploads === true,
+                  maxFileAttachmentBytes:
+                    config?.environment.capabilities.fileAttachments?.maxUploadBytes ?? null,
+                });
+                if (reason !== null) throw new Error(reason);
+              };
+              validateFiles();
+              for (const file of files)
+                startAttachmentUpload({
+                  environmentId,
+                  image: file,
+                  draftTarget: composerDraftTarget,
+                });
+              await awaitAttachmentUploads(files.map((file) => file.id));
+              validateFiles();
+              const uploaded = getUploadedAttachments({ environmentId, images: files });
+              if (uploaded === null)
+                throw new Error("Retry or remove failed uploads before saving.");
+              return uploaded;
+            },
+          });
+          const result = await editQueuedRunCommand({
+            environmentId: activeThread.environmentId,
+            input: {
+              threadId: editingQueuedRun.threadId,
+              runId: editingQueuedRun.runId,
+              editId: editingQueuedRun.editId,
+              text: editText.length === 0 ? ATTACHMENT_ONLY_BOOTSTRAP_PROMPT : editText,
+              edit: {
+                messageId: editingQueuedRun.messageId,
+                attachments: uploads,
+                context: {
+                  version: 1,
+                  records: [
+                    ...new Map(
+                      [
+                        ...(editingQueuedRun.context?.records ?? []).filter(
+                          (record) =>
+                            !("attachmentId" in record) ||
+                            editingQueuedRun.existingAttachments.some(
+                              (attachment) => attachment.id === record.attachmentId,
+                            ),
                         ),
-                        reviewComments: composerReviewComments,
-                        previewAnnotations: composerPreviewAnnotations,
-                        threadContexts: composerThreadContexts,
-                        attachments: newEditAttachments.map((attachment, index) => ({
-                          attachment,
-                          attachmentId:
-                            uploads[editingQueuedRun.existingAttachments.length + index]?.id ??
-                            attachment.id,
-                        })),
-                      })?.records ?? []),
-                    ].map((record) => [record.contextId, record] as const),
-                  ).values(),
-                ],
+                        ...(buildMessageContext({
+                          terminalContexts: composerTerminalContexts.filter(
+                            (context) => context.text.trim().length > 0,
+                          ),
+                          reviewComments: composerReviewComments,
+                          previewAnnotations: composerPreviewAnnotations,
+                          threadContexts: composerThreadContexts,
+                          attachments: newEditAttachments.map((attachment, index) => ({
+                            attachment,
+                            attachmentId:
+                              uploads[editingQueuedRun.existingAttachments.length + index]?.id ??
+                              attachment.id,
+                          })),
+                        })?.records ?? []),
+                      ].map((record) => [record.contextId, record] as const),
+                    ).values(),
+                  ],
+                },
               },
             },
-          },
-        });
-        if (result._tag === "Failure") {
-          setThreadError(editingQueuedRun.threadId, "Could not save the edited queued message.");
-          return;
+          });
+          if (result._tag === "Failure") {
+            setThreadError(editingQueuedRun.threadId, "Could not save the edited queued message.");
+            return;
+          }
+          setThreadError(editingQueuedRun.threadId, null);
+          releaseDraftAttachments(newEditAttachments);
+          promptRef.current = "";
+          clearComposerDraftContent(queuedEditDraftTargetFor(editingQueuedRun.runId));
+          composerRef.current?.resetCursorState();
+          setEditingQueuedRun(null);
+          scheduleComposerFocus();
+        } catch (error) {
+          setThreadError(
+            editingQueuedRun.threadId,
+            error instanceof Error ? error.message : "Could not save the edited queued message.",
+          );
         }
-        setThreadError(editingQueuedRun.threadId, null);
-        releaseDraftAttachments(newEditAttachments);
-        promptRef.current = "";
-        clearComposerDraftContent(queuedEditDraftTargetFor(editingQueuedRun.runId));
-        composerRef.current?.resetCursorState();
-        setEditingQueuedRun(null);
-        scheduleComposerFocus();
-      } catch (error) {
-        setThreadError(
-          editingQueuedRun.threadId,
-          error instanceof Error ? error.message : "Could not save the edited queued message.",
-        );
-      } finally {
+      })().finally(() => {
         queuedEditSaveInFlightRef.current = false;
         setIsSavingQueuedEdit(false);
-      }
+      });
       return;
     }
     const {

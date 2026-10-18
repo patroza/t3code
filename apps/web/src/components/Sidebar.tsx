@@ -3618,6 +3618,7 @@ export default function Sidebar() {
               }),
             );
           }
+          settlingThreadKeysRef.current.delete(threadKey);
           return;
         }
         if (
@@ -3631,9 +3632,11 @@ export default function Sidebar() {
         ) {
           navigateAfterSettle?.();
         }
-      } finally {
+      } catch (error) {
         settlingThreadKeysRef.current.delete(threadKey);
+        throw error;
       }
+      settlingThreadKeysRef.current.delete(threadKey);
     })();
   };
   useEffect(() => registerSettleAndAdvance(attemptSettle), [attemptSettle]);

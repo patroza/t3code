@@ -237,26 +237,28 @@ function IdentityClaimGateForEnvironment(props: {
     }
     setSubmitting(true);
     setError(null);
-    try {
-      const result = await claimCommand({
-        environmentId: props.environmentId,
-        input: {
-          username: IdentityUsername.make(exact.username),
-          method: "typeahead",
-        },
-      });
-      if (result._tag === "Failure") {
-        setError("Could not claim identity on this server.");
-        return;
+    await (async () => {
+      try {
+        const result = await claimCommand({
+          environmentId: props.environmentId,
+          input: {
+            username: IdentityUsername.make(exact.username),
+            method: "typeahead",
+          },
+        });
+        if (result._tag === "Failure") {
+          setError("Could not claim identity on this server.");
+          return;
+        }
+        claimQuery.refresh();
+        snapshotQuery.refresh();
+        clearForceClaimOpen();
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : "Could not claim identity.");
       }
-      claimQuery.refresh();
-      snapshotQuery.refresh();
-      clearForceClaimOpen();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not claim identity.");
-    } finally {
+    })().finally(() => {
       setSubmitting(false);
-    }
+    });
   };
 
   return (
