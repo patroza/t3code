@@ -85,6 +85,7 @@ import {
   ThreadListV2WorkingShelfHeader,
 } from "./thread-list-v2-items";
 import { useThreadRowProviderInstanceResolver } from "./thread-provider-instance";
+import type { ThreadPrPresentation } from "../../state/thread-pr-presentation";
 import {
   buildThreadListV2Items,
   getThreadListV2OrderedSection,
@@ -113,6 +114,10 @@ interface ThreadNavigationSidebarProps {
   readonly onNewThreadInProject: (project: EnvironmentProject) => void;
   readonly onSearchQueryChange: (query: string) => void;
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
+  readonly onOpenThreadPullRequests: (
+    thread: EnvironmentThreadShell,
+    pr: ThreadPrPresentation,
+  ) => void;
   readonly onRequestVisibility: () => void;
   readonly searchQuery: string;
 }
@@ -721,6 +726,13 @@ function ThreadNavigationSidebarPane(
     },
     [props.onSelectThread],
   );
+  const handleOpenThreadPullRequests = useCallback(
+    (thread: EnvironmentThreadShell, pr: ThreadPrPresentation) => {
+      props.onOpenThreadPullRequests(thread, pr);
+      openSwipeableRef.current?.close();
+    },
+    [props.onOpenThreadPullRequests],
+  );
   const handleScrollBeginDrag = useCallback(() => {
     openSwipeableRef.current?.close();
   }, []);
@@ -851,6 +863,7 @@ function ThreadNavigationSidebarPane(
               }
               fullSwipeWidth={props.width - 20}
               onSelectThread={handleSelectThread}
+              onOpenThreadPullRequests={handleOpenThreadPullRequests}
               onDeleteThread={confirmDeleteThread}
               onArchiveThread={archiveThread}
               onRenameThread={renameThread}
@@ -932,6 +945,7 @@ function ThreadNavigationSidebarPane(
       activeReorderEnvironmentIds,
       confirmDeletePendingTask,
       confirmDeleteThread,
+      handleOpenThreadPullRequests,
       handleSelectThread,
       handleSwipeableClose,
       handleSwipeableWillOpen,

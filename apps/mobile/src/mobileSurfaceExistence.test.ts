@@ -40,6 +40,22 @@ describe("mobile surface existence (anti stack-drop)", () => {
     );
   });
 
+  it("keeps thread prefetch alongside pull-request sheet actions in both lists", () => {
+    const row = readSrc("features/threads/thread-list-v2-items.tsx");
+    expect(row).toMatch(
+      /onPressIn=\{\(\) => \{\s*prefetchEnvironmentThread\(thread\.environmentId, thread\.id\)/,
+    );
+    expect(row).toContain("accessibilityActions={rowAccessibilityActions}");
+    expect(row).toContain('actionName === "openPullRequests"');
+    expect(readSrc("features/home/HomeScreen.tsx")).toContain(
+      "onOpenThreadPullRequests={handleOpenThreadPullRequests}",
+    );
+    expect(readSrc("features/threads/ThreadNavigationSidebar.tsx")).toContain(
+      "onOpenThreadPullRequests={handleOpenThreadPullRequests}",
+    );
+    expect(readSrc("Stack.tsx")).toContain("screen: ThreadPullRequestsSheet");
+  });
+
   it("keeps native queued-message editing and steering reachable", () => {
     const detail = readSrc("features/threads/ThreadDetailScreen.tsx");
     const controls = readSrc("features/threads/ThreadQueueControl.tsx");
