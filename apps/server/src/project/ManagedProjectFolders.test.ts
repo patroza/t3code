@@ -54,6 +54,7 @@ const layerEnrichment = ProjectEnrichmentService.layer.pipe(
         resolve: () => Effect.succeed(null),
       }),
       Layer.succeed(ProjectFaviconResolver.ProjectFaviconResolver, {
+        invalidate: () => Effect.void,
         resolvePath: () => Effect.succeed(null),
       }),
     ),
