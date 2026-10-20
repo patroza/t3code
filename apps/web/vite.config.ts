@@ -297,6 +297,8 @@ const isolatedUnitTestFiles = [
   "src/components/settings/settingsLayout.test.tsx",
 ] as const;
 
+const compilerTestFiles = ["src/components/ChatView.compiler.test.ts"] as const;
+
 const unitTestProject = {
   extends: true,
   test: {
@@ -308,7 +310,7 @@ const unitTestProject = {
     fileParallelism: true,
     maxWorkers: 4,
     include: ["src/**/*.test.{ts,tsx}"],
-    exclude: [...isolatedUnitTestFiles, "src/**/*.browser.test.{ts,tsx}"],
+    exclude: [...isolatedUnitTestFiles, ...compilerTestFiles, "src/**/*.browser.test.{ts,tsx}"],
     hookTimeout: 15_000,
     testTimeout: 15_000,
     setupFiles: ["../../packages/shared/src/testing/longTempDir.ts"],
@@ -355,6 +357,16 @@ const browserTestProject = {
       instances: [{ browser: "chromium" }],
       screenshotFailures: false,
     },
+  },
+} satisfies TestProjectInlineConfiguration;
+
+// Compile the full ChatView body after other web tests release their workers.
+const compilerTestProject = {
+  extends: true,
+  test: {
+    name: "compiler",
+    sequence: { groupOrder: 2 },
+    include: [...compilerTestFiles],
   },
 } satisfies TestProjectInlineConfiguration;
 
@@ -539,6 +551,7 @@ export default defineConfig(() => {
         defineProject(unitTestProject),
         defineProject(isolatedUnitTestProject),
         defineProject(browserTestProject),
+        defineProject(compilerTestProject),
       ],
     },
   };
