@@ -18,6 +18,12 @@ function readSrc(relativePath: string): string {
 }
 
 describe("fork surface existence (anti stack-drop)", () => {
+  it("keeps the EAS account check available in device host settings", () => {
+    expect(readSrc("components/settings/EasDeviceHostsSettings.tsx")).toContain(
+      'data-testid="eas-device-account-check"',
+    );
+  });
+
   it("uses the browser ownership guard for native rendering and keeps the streamed surface", () => {
     expect(readSrc("browser/ElectronBrowserHost.tsx")).toContain("rendersServerTabNatively(");
     const view = readSrc("components/preview/PreviewView.tsx");
