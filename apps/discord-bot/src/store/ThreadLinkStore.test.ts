@@ -86,6 +86,8 @@ describe("migrateV1Link / parseLinksDocument", () => {
       initialModelLine: undefined,
       currentModelLine: undefined,
       modelSinceAt: undefined,
+      backgroundDigestMessageId: undefined,
+      backgroundDigestText: undefined,
     });
   });
 
@@ -210,6 +212,31 @@ describe("makeThreadLinkStore", () => {
         const cleared = yield* store.getByDiscordThreadId("d-1");
         expect(cleared?.streamDiscordMessageIds).toBeUndefined();
         expect(cleared?.lastFinalizedAssistantId).toBe("asst-1");
+      }),
+    );
+  });
+
+  vitestIt("keeps the watch digest across hint writes and clears it on an empty id", async () => {
+    await withStore((store) =>
+      Effect.gen(function* () {
+        yield* store.put(input());
+        yield* store.updateBridgeHints("d-1", {
+          backgroundDigestMessageId: "digest-1",
+          backgroundDigestText: "Release Smoke passed.",
+        });
+        yield* store.updateBridgeHints("d-1", { lastDeliveredSequence: 4 });
+        const kept = yield* store.getByDiscordThreadId("d-1");
+        expect(kept?.backgroundDigestMessageId).toBe("digest-1");
+        expect(kept?.backgroundDigestText).toBe("Release Smoke passed.");
+
+        yield* store.put(input());
+        const afterPut = yield* store.getByDiscordThreadId("d-1");
+        expect(afterPut?.backgroundDigestMessageId).toBe("digest-1");
+
+        yield* store.updateBridgeHints("d-1", { backgroundDigestMessageId: "" });
+        const cleared = yield* store.getByDiscordThreadId("d-1");
+        expect(cleared?.backgroundDigestMessageId).toBeUndefined();
+        expect(cleared?.backgroundDigestText).toBeUndefined();
       }),
     );
   });

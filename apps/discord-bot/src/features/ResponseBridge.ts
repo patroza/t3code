@@ -86,6 +86,11 @@ import {
   derivePendingInteractions,
   type PendingApproval,
 } from "../presentation/pendingInteractions.ts";
+import {
+  planBackgroundDigestAppend,
+  pullRequestWatchIsActive,
+  turnFoldsIntoWatchDigest,
+} from "../presentation/backgroundDigest.ts";
 import { formatTasksForDiscord, presentTasks } from "../presentation/tasks.ts";
 import { countTurnToolCalls } from "../presentation/toolCalls.ts";
 import { ThreadLinkStore, type ChatDeliveryReceipt } from "../store/ThreadLinkStore.ts";
@@ -2671,6 +2676,20 @@ export const runBridge = (
       links
         .updateBridgeHints(input.discordChannelId, { deliveryReceipt: receipt })
         .pipe(Effect.andThen(Ref.set(deliveryReceiptRef, receipt)));
+    const watchDigestRef = yield* Ref.make({
+      messageId: persistedLink?.backgroundDigestMessageId ?? null,
+      text: persistedLink?.backgroundDigestText ?? "",
+    });
+    const persistWatchDigest = (digest: {
+      readonly messageId: string | null;
+      readonly text: string;
+    }) =>
+      links
+        .updateBridgeHints(input.discordChannelId, {
+          backgroundDigestMessageId: digest.messageId ?? "",
+          backgroundDigestText: digest.text,
+        })
+        .pipe(Effect.asVoid);
     const persistFinalizedAssistant = (assistantId: string) =>
       Effect.gen(function* () {
         deliveredMemoryTrim.lastFinalizedAssistantId = assistantId;
@@ -3401,6 +3420,25 @@ export const runBridge = (
      * Discord posts final replies separately. Teams turns the Working slot into the reply.
      * Attachments use separate platform uploads.
      */
+    const watchUpdateNeedsOwnMessage = (text: string, imageCount: number) =>
+      imageCount > 0 ||
+      extractMarkdownImages(text).some((ref) => isLocalImageSrc(ref.src)) ||
+      extractMarkdownLocalFileLinks(text).some((ref) => isLocalFileSrc(ref.src));
+
+    const activeTurnFoldsIntoWatchDigest = (
+      thread: OrchestrationThread | null,
+      turnId: string | null,
+      text = "",
+      imageCount = 0,
+    ) =>
+      rest.platform === "discord" &&
+      turnFoldsIntoWatchDigest({
+        turnId,
+        messages: thread?.messages ?? [],
+        pullRequests: thread?.pullRequests,
+        hasAttachments: watchUpdateNeedsOwnMessage(text, imageCount),
+      });
+
     const postOrEditAssistantUnlocked = (args: {
       readonly turnId: string | null;
       readonly t3MessageId: string;
@@ -3434,6 +3472,16 @@ export const runBridge = (
           state.lastProgressLabel === progressLabel &&
           (state.discordMessageIds.length > 0 || state.finalDiscordMessageIds.length > 0) &&
           streaming
+        ) {
+          return;
+        }
+
+        // An open watch digest already says Watching. Later wakes edit that
+        // message when they settle, instead of flashing another Working tip.
+        if (
+          streaming &&
+          (yield* Ref.get(watchDigestRef)).messageId !== null &&
+          activeTurnFoldsIntoWatchDigest(latest, turnId, text, images.length)
         ) {
           return;
         }
@@ -3832,6 +3880,138 @@ export const runBridge = (
       };
     });
 
+    const writeDigestSlot = (existingId: string | null, content: string, live: boolean) =>
+      Effect.gen(function* () {
+        const fields = live ? workingFields(content, input.t3ThreadId) : idleFields(content);
+        if (existingId !== null) {
+          const updated = yield* rest
+            .updateMessage(input.discordChannelId, existingId, { ...fields })
+            .pipe(Effect.result);
+          if (Result.isFailure(updated)) {
+            const missing =
+              updated.failure instanceof BotTransportError &&
+              updated.failure.reason === "message-not-found";
+            if (!missing) return yield* Effect.fail(updated.failure);
+          } else {
+            return existingId;
+          }
+        }
+        const created = yield* rest.createMessage(input.discordChannelId, { ...fields });
+        return created.id;
+      });
+
+    /** Drop the Watching line once the pull request is no longer watched. */
+    const freezeWatchDigest = Effect.gen(function* () {
+      const digest = yield* Ref.get(watchDigestRef);
+      if (digest.messageId === null && digest.text.trim() === "") return;
+      if (digest.messageId !== null) {
+        const body = digest.text.trim();
+        if (body === "") {
+          yield* deleteMessages([digest.messageId]);
+        } else {
+          const updated = yield* rest
+            .updateMessage(input.discordChannelId, digest.messageId, { ...idleFields(body) })
+            .pipe(Effect.result);
+          if (
+            Result.isFailure(updated) &&
+            !(
+              updated.failure instanceof BotTransportError &&
+              updated.failure.reason === "message-not-found"
+            )
+          ) {
+            return yield* Effect.fail(updated.failure);
+          }
+        }
+      }
+      const cleared = { messageId: null, text: "" };
+      yield* Ref.set(watchDigestRef, cleared);
+      yield* persistWatchDigest(cleared).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Failed to clear watch digest", {
+            cause: formatAlertCause(cause, 200),
+          }),
+        ),
+      );
+    });
+
+    /**
+     * Keep watch updates in one editable message. A full message stays as history
+     * and the next update starts a new one. The live message keeps a Watching line
+     * and Stop until the watch itself ends.
+     */
+    const appendSettledWatchUpdate = (args: {
+      readonly turnId: string | null;
+      readonly t3MessageId: string;
+      readonly text: string;
+    }) =>
+      Effect.gen(function* () {
+        const digest = yield* Ref.get(watchDigestRef);
+        const bridge = yield* Ref.get(stateRef);
+        const plan = planBackgroundDigestAppend({
+          liveText: digest.text,
+          update: renderTables(stripWorkingIndicator(args.text)),
+          limit: DISCORD_LIMIT,
+        });
+        let replaceId = digest.messageId ?? bridge.discordMessageIds.at(-1) ?? null;
+        let liveMessageId = digest.messageId;
+        const written = new Set<string>();
+        for (const write of plan.writes) {
+          const id = yield* writeDigestSlot(replaceId, write.text, write.live);
+          written.add(id);
+          replaceId = null;
+          if (write.live) liveMessageId = id;
+        }
+        const next = { messageId: liveMessageId, text: plan.liveText };
+        yield* Ref.set(watchDigestRef, next);
+        yield* persistWatchDigest(next).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Failed to persist watch digest", {
+              cause: formatAlertCause(cause, 200),
+            }),
+          ),
+        );
+        // A failed delete must not fail the fold. The digest text is already
+        // stored, so a retry would append the same update again.
+        const leftoverTips = allStreamIds(bridge).filter(
+          (id) => id !== next.messageId && !written.has(id),
+        );
+        const deletedTips = yield* deleteMessages(leftoverTips).pipe(Effect.result);
+        if (Result.isFailure(deletedTips)) {
+          yield* Effect.logWarning("Failed to delete leftover Working tips after watch digest", {
+            cause: formatAlertCause(deletedTips.failure, 200),
+          });
+        }
+        yield* Ref.update(stateRef, (current) => ({
+          ...current,
+          discordMessageIds: [],
+          staleStreamMessageIds: [],
+          streamBreakPrefix: "",
+          currentTurnId: args.turnId,
+          lastAssistantText: args.text,
+          finalizedTurnId: args.turnId,
+          t3AssistantMessageId: args.t3MessageId,
+          seededWorkingAckPending: false,
+          delivery: {
+            ...current.delivery,
+            phase: "finalized" as const,
+            lastFinalizedAssistantId: args.t3MessageId,
+            lastFinalizedText: args.text,
+            finalizedAssistantId: args.t3MessageId,
+            streamText: "",
+            settleReady: false,
+          },
+        }));
+        yield* persistStreamMessageIds([]);
+        yield* persistFinalizedAssistant(args.t3MessageId);
+        yield* Effect.logInfo("Folded watch update into the background digest", {
+          t3ThreadId: input.t3ThreadId,
+          turnId: args.turnId,
+          t3MessageId: args.t3MessageId,
+          liveMessageId: next.messageId,
+          chunks: plan.writes.length,
+        });
+      });
+
     /**
      * Final delivery for a completed assistant turn:
      * 1. Post Discord markdown content (chunked if needed; links stay clickable)
@@ -3930,6 +4110,21 @@ export const runBridge = (
             yield* persistStreamMessageIds([]);
           }
           return;
+        }
+
+        const latestForDigest = yield* Ref.get(latestThreadRef);
+        const foldWatchUpdate =
+          pendingImages.length === 0 &&
+          pendingMarkdown.length === 0 &&
+          pendingMarkdownFiles.length === 0 &&
+          text.trim() !== "" &&
+          activeTurnFoldsIntoWatchDigest(latestForDigest, turnId, text, images.length);
+        if (foldWatchUpdate) {
+          yield* appendSettledWatchUpdate({ turnId, t3MessageId, text });
+          return;
+        }
+        if (!pullRequestWatchIsActive(latestForDigest?.pullRequests)) {
+          yield* freezeWatchDigest;
         }
 
         // Late images after a prior finalize: must be a *new* createMessage with files.
@@ -5036,6 +5231,14 @@ export const runBridge = (
           let tipId = state.discordMessageIds.at(-1) ?? null;
           const latest = yield* Ref.get(latestThreadRef);
           const turnRunning = latest !== null && isTurnInProgress(latest);
+          // The digest message is the background-work indicator. A new Working
+          // bubble would notify again for the same watch.
+          if (
+            (yield* Ref.get(watchDigestRef)).messageId !== null &&
+            activeTurnFoldsIntoWatchDigest(latest, latest?.latestTurn?.turnId ?? null)
+          ) {
+            return;
+          }
           const toolCallCount = currentTurnToolCallCount(latest);
           const wakeNote = currentTurnWakeNote(latest);
 
@@ -5640,7 +5843,10 @@ export const runBridge = (
               mode === "rehydrate" ||
               !stateBefore.adoptedInitialSnapshot ||
               allStreamIds(state).length === 0;
-            if (needsWorkingTip) {
+            const digestCoversTurn =
+              (yield* Ref.get(watchDigestRef)).messageId !== null &&
+              activeTurnFoldsIntoWatchDigest(thread, activeTurnId);
+            if (needsWorkingTip && !digestCoversTurn) {
               yield* Effect.logInfo("Ensuring Working tip for in-progress turn without assistant", {
                 t3ThreadId: input.t3ThreadId,
                 turnId: activeTurnId,
