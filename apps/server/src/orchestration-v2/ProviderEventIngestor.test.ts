@@ -1830,6 +1830,7 @@ layer("ProviderEventIngestorV2", (it) => {
                       cwd,
                       command: "rev-parse",
                       detail: "Read failed",
+                      failureKind: "unknown",
                     }),
                   )
                 : git.resolveBranchName(cwd, refName),

@@ -55,6 +55,7 @@ it.effect.each([
             Effect.gen(function* () {
               calls.push("refresh");
               return yield* new GitCommandError({
+                failureKind: "unknown",
                 operation: "statusDetailsLocal",
                 command: "git",
                 cwd: "/repo",

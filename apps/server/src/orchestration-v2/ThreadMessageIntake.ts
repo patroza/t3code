@@ -17,6 +17,7 @@ function dispatchWasNotAccepted(
   error: Orchestrator.OrchestratorV2Error | ThreadManagement.ThreadManagementError,
 ) {
   switch (error._tag) {
+    case "OrchestrationDispatchCommandError":
     case "OrchestratorCommandRejectedError":
     case "OrchestratorThreadAlreadyExistsError":
     case "OrchestratorProjectionError":
@@ -57,6 +58,9 @@ export const dispatchCommand = Effect.fn("ThreadMessageIntake.dispatchCommand")(
   command: OrchestrationV2Command,
 ) {
   const threads = yield* ThreadManagement.ThreadManagementService;
+  if (command.type === "thread.create" || command.type === "message.dispatch") {
+    yield* threads.assertCommandReady(command);
+  }
   if (command.type === "runtime-request.respond" && command.attachmentsByQuestionId) {
     const config = yield* ServerConfig.ServerConfig;
     const incomingByQuestionId = command.attachmentsByQuestionId;

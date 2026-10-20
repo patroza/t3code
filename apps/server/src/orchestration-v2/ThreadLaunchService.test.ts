@@ -144,6 +144,9 @@ function makeHarness(options: HarnessOptions = {}) {
   const layerServerSettings = ServerSettings.layerTest(options.serverSettings);
   const layerReceipts = CommandReceiptStore.layer.pipe(Layer.provide(layerDatabase));
   const layerThreadManagement = ThreadManagement.layer.pipe(
+    Layer.provide(
+      Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({ get: () => Effect.succeed(null) }),
+    ),
     Layer.provide(layerOrchestrator),
     Layer.provide(layerServerSettings),
     Layer.provide(layerReceipts),
@@ -1246,6 +1249,7 @@ function scratchHarness() {
   const notARepository = (operation: string, cwd: string) =>
     new GitCommandError({
       operation,
+      failureKind: "unknown",
       command: "vcs-route",
       cwd,
       detail: "Failed to resolve the VCS driver for this Git command.",
@@ -1911,6 +1915,7 @@ it.effect("shows the fetch diagnosis when preparing a worktree from origin fails
     fetchWorktreeBaseCommit: () =>
       Effect.fail(
         new GitCommandError({
+          failureKind: "unknown",
           operation: "GitVcsDriver.fetchRemote",
           command: "git",
           cwd: project.workspaceRoot,
@@ -1960,6 +1965,7 @@ it.effect("retries a failed workspace preparation on the same run", () => {
       fetchFailures-- > 0
         ? Effect.fail(
             new GitCommandError({
+              failureKind: "unknown",
               operation: "GitVcsDriver.fetchRemote",
               command: "git",
               cwd: project.workspaceRoot,
@@ -2038,6 +2044,7 @@ it.effect.each(["fails", "is interrupted"] as const)(
                 Effect.andThen(
                   Effect.fail(
                     new GitCommandError({
+                      failureKind: "unknown",
                       operation: "GitVcsDriver.fetchRemote",
                       command: "git",
                       cwd: project.workspaceRoot,
@@ -2117,6 +2124,7 @@ it.effect.each(["failed", "interrupted"] as const)(
           ? Deferred.succeed(fetchEntered!, undefined).pipe(Effect.andThen(Effect.never))
           : Effect.fail(
               new GitCommandError({
+                failureKind: "unknown",
                 operation: "GitVcsDriver.fetchRemote",
                 command: "git",
                 cwd: project.workspaceRoot,
@@ -3051,7 +3059,14 @@ it.effect("shared intake preserves durable attachment bytes after a lost launch 
 it.effect("cancels tracked setup before provider work is released", () =>
   Effect.gen(function* () {
     const entered = yield* Deferred.make<void>();
+    const renameEntered = yield* Deferred.make<void>();
+    const renameStopped = yield* Deferred.make<void>();
     const harness = makeHarness({
+      renameBranch: () =>
+        Deferred.succeed(renameEntered, undefined).pipe(
+          Effect.andThen(Effect.never),
+          Effect.onInterrupt(() => Deferred.succeed(renameStopped, undefined).pipe(Effect.asVoid)),
+        ),
       runSetup: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
     });
     yield* Effect.gen(function* () {
@@ -3067,9 +3082,11 @@ it.effect("cancels tracked setup before provider work is released", () =>
       });
       const launched = yield* launches.launch(input);
       yield* Deferred.await(entered);
+      yield* Deferred.await(renameEntered);
       assert.equal((yield* tracker.get(launched.threadId))?.phase, "running");
       assert.isTrue(yield* tracker.cancel(launched.threadId));
       assert.equal((yield* tracker.get(launched.threadId))?.phase, "cancelled");
+      assert.isTrue(yield* Deferred.isDone(renameStopped));
       const projection = yield* threads.getThreadProjection(launched.threadId);
       assert.equal(projection.runs[0]?.status, "failed");
       assert.isNull(projection.thread.worktreePath);
@@ -3260,6 +3277,7 @@ it.effect.each([
         commits === null
           ? Effect.fail(
               new GitCommandError({
+                failureKind: "unknown",
                 operation: "GitWorkflowService.hasCommit",
                 command: "git rev-parse",
                 cwd: "/repo",
@@ -3411,6 +3429,7 @@ it.effect.each(
         failResolve || (foreignBase && input.cwd === "/repo")
           ? Effect.fail(
               new GitCommandError({
+                failureKind: "unknown",
                 operation: "resolveCommit",
                 command: "git",
                 cwd: "/private-checkout",

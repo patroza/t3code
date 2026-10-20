@@ -19,6 +19,7 @@ describe("Forgejo comment watch boundary", () => {
     failedChecks: [],
     passed: false,
     passedChecks: [],
+    pendingChecks: [],
     remarksThrough: "2026-10-10T19:52:40.000Z",
     remarkIds: ["29061"],
     conflicting: false,

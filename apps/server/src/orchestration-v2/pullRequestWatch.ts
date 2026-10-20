@@ -17,6 +17,7 @@ const SNIPPET_LENGTH = 200;
 export type PullRequestWatchChange =
   | { readonly kind: "checks-failed"; readonly failed: ReadonlyArray<PullRequestCheck> }
   | { readonly kind: "checks-passed"; readonly count: number; readonly required: boolean }
+  | { readonly kind: "checks-settled"; readonly checks: ReadonlyArray<PullRequestCheck> }
   | { readonly kind: "remarks"; readonly remarks: ReadonlyArray<PullRequestComment> }
   | { readonly kind: "conflicting" };
 
@@ -43,6 +44,7 @@ export function evaluatePullRequestWatch(
   let failedChecks = headMoved ? [] : watch.failedChecks;
   let passed = headMoved ? false : watch.passed;
   let passedChecks = headMoved ? [] : watch.passedChecks;
+  let pendingChecks = headMoved ? [] : watch.pendingChecks;
   if (detail.checks.length > 0) {
     const failed = detail.checks.filter(isFailedCheck);
     const newlyFailed = failed.filter((check) => !failedChecks.includes(check.name));
@@ -57,11 +59,39 @@ export function evaluatePullRequestWatch(
     // A required job created and finished between two passes is never seen pending. Without
     // required checks, any check counts, and advisory bots keep adding passed ones: no wake.
     const gateGrew = required.length > 0 && gateNames.some((name) => !told.includes(name));
-    if (passedNow && (!passed || gateGrew)) {
+    const passedThisPass = passedNow && (!passed || gateGrew);
+    if (passedThisPass) {
       changes.push({ kind: "checks-passed", count: gate.length, required: required.length > 0 });
     }
     passed = passedNow;
     passedChecks = passedNow ? gateNames : [];
+
+    const seen = new Set(detail.checks.map((check) => check.name));
+    const stillPending = new Set(
+      detail.checks.filter((check) => check.status === "pending").map((check) => check.name),
+    );
+    const failedNames = new Set(failed.map((check) => check.name));
+    const settledNames = pendingChecks.filter(
+      (name) =>
+        seen.has(name) &&
+        !stillPending.has(name) &&
+        !failedNames.has(name) &&
+        !(passedThisPass && gateNames.includes(name)),
+    );
+    const settled = settledNames.flatMap((name) => {
+      const check = detail.checks.find(
+        (candidate) =>
+          candidate.name === name &&
+          (candidate.status === "success" ||
+            candidate.status === "skipped" ||
+            candidate.status === "neutral"),
+      );
+      return check === undefined ? [] : [check];
+    });
+    if (settled.length > 0) changes.push({ kind: "checks-settled", checks: settled });
+    pendingChecks = [
+      ...new Set([...stillPending, ...pendingChecks.filter((name) => !seen.has(name))]),
+    ];
   }
 
   const own = (detail.viewer ?? detail.author?.login)?.toLowerCase();
@@ -106,6 +136,7 @@ export function evaluatePullRequestWatch(
       remarkIds,
       conflicting,
       wakes,
+      pendingChecks,
     },
     exhausted: commentsOnly && wakes >= PULL_REQUEST_WATCH_WAKE_LIMIT,
   };
@@ -143,6 +174,11 @@ function changeLines(
       return [
         `- All ${change.count} ${change.required ? "required " : ""}${change.count === 1 ? "check" : "checks"} passed${context.commit}.`,
       ];
+    case "checks-settled":
+      return [
+        `- Checks that were still running have finished${context.commit}:`,
+        ...listed(change.checks, (check) => `  - ${check.name}${check.url ? ` ${check.url}` : ""}`),
+      ];
     case "remarks":
       return [
         `- ${change.remarks.length} new ${change.remarks.length === 1 ? "comment" : "comments"}:`,
@@ -161,6 +197,7 @@ function changeLines(
 const SUMMARY: Record<PullRequestWatchChange["kind"], string> = {
   "checks-failed": "checks failed",
   "checks-passed": "checks passed",
+  "checks-settled": "checks finished",
   remarks: "new comments",
   conflicting: "merge conflict",
 };
@@ -196,7 +233,9 @@ export function pullRequestWatchMessage(input: {
       source: { kind: "monitor" },
       outcome: failed
         ? "failed"
-        : changes.every((change) => change.kind === "checks-passed")
+        : changes.every(
+              (change) => change.kind === "checks-passed" || change.kind === "checks-settled",
+            )
           ? "completed"
           : "updated",
       summary: `#${input.number}: ${summary.join(", ")}`,

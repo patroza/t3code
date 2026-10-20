@@ -1,3 +1,4 @@
+import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -14,6 +15,7 @@ import {
 } from "@t3tools/contracts";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as ResetCreditCoordinator from "../provider/resetCreditCoordinator.ts";
 import { FetchHttpClient } from "effect/http";
@@ -37,6 +39,7 @@ import * as OpenCodeServerLedger from "@t3tools/provider-opencode/server/OpenCod
 import * as ServerSettings from "../serverSettings.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
+import * as EffectWorker from "./EffectWorker.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderTurnStartServiceTestkit from "./ProviderTurnStartService.testkit.ts";
 import * as RuntimeLayer from "./runtimeLayer.ts";
@@ -113,6 +116,9 @@ const layerProviderInstanceRegistry = ProviderInstanceRegistryHydration.layer.pi
 );
 
 const layerLive = RuntimeLayer.layer.pipe(
+  Layer.provide(
+    Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({ get: () => Effect.succeed(null) }),
+  ),
   Layer.provide(ProviderTurnStartServiceTestkit.layer),
   Layer.provide(McpSessionRegistryTestkit.layer),
   Layer.provide(SqlitePersistence.layerMemory),
@@ -125,6 +131,8 @@ const layerLive = RuntimeLayer.layer.pipe(
   Layer.provide(layerPlatformTest),
   Layer.provide(McpProviderSessions.layer),
 );
+
+let nextLiveShellMarker = 0;
 
 const waitForIdle = Effect.fn("GrokOrchestratorV2Live.waitForIdle")(function* (threadId: ThreadId) {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -239,6 +247,102 @@ describe.runIf(process.env.T3_GROK_LIVE_ORCHESTRATOR === "1")("Grok V2 live orch
         assert.include(targetProjection.contextHandoffs[0]?.summaryText ?? "", marker);
         assert.include(assistantText(targetProjection), marker);
       }).pipe(Effect.provide(layerLive), Effect.scoped),
+    360_000,
+  );
+
+  it.live(
+    "closes a background shell inside the server orchestrator",
+    () =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        yield* EffectWorker.runDaemonWithOptions({ concurrency: 2 }).pipe(Effect.forkScoped);
+        const fs = yield* FileSystem.FileSystem;
+        const worktreePath = yield* fs.makeTempDirectoryScoped({
+          prefix: "t3-grok-live-background-shell-",
+        });
+        const projectId = ProjectId.make("project:grok-live-background-shell");
+        const threadId = ThreadId.make("thread:grok-live-background-shell");
+        nextLiveShellMarker += 1;
+        const marker = `LIVE_SHELL_${nextLiveShellMarker.toString(36)}`;
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make("command:grok-live-background-shell:create"),
+          threadId,
+          projectId,
+          title: "Grok live background shell",
+          modelSelection: GROK_MODEL_SELECTION,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath,
+        });
+        yield* Console.log("Grok live background shell thread created; dispatching prompt.");
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make("command:grok-live-background-shell:prompt"),
+          threadId,
+          messageId: MessageId.make("message:grok-live-background-shell"),
+          text: [
+            "Use your shell tool for this and nothing else.",
+            `Run: sleep 12 && echo ${marker}`,
+            "Start it in the background instead of holding the tool call open.",
+            "Poll that background task until it exits.",
+            `Then reply with exactly ${marker} and stop.`,
+          ].join(" "),
+          attachments: [],
+          modelSelection: GROK_MODEL_SELECTION,
+          dispatchMode: { type: "start_immediately" },
+        });
+        yield* Console.log("Grok live background shell prompt dispatched; waiting for completion.");
+        const projection = yield* waitForIdle(threadId);
+        const commands = projection.turnItems.flatMap((item) =>
+          item.type === "command_execution"
+            ? [
+                {
+                  status: item.status,
+                  input: item.input.slice(0, 180),
+                  output: (item.output ?? "").slice(0, 240),
+                  exitCode: item.exitCode ?? null,
+                },
+              ]
+            : [],
+        );
+        const assistant = projection.messages
+          .filter((message) => message.role === "assistant")
+          .map((message) => message.text)
+          .join("\n");
+        yield* Console.log(
+          JSON.stringify(
+            {
+              marker,
+              runs: projection.runs.map((run) => run.status),
+              commands,
+              assistant: assistant.slice(-400),
+            },
+            null,
+            2,
+          ),
+        );
+        const sleepCommand = commands.find((command) => command.input.includes("sleep"));
+        assert.deepEqual(
+          projection.runs.map((run) => run.status),
+          ["completed"],
+        );
+        assert.isDefined(sleepCommand);
+        assert.equal(
+          sleepCommand !== undefined &&
+            !["idle", "pending", "running", "waiting"].includes(sleepCommand.status),
+          true,
+        );
+        assert.include(
+          `${assistant}\n${commands.map((command) => command.output).join("\n")}`,
+          marker,
+        );
+      }).pipe(Effect.provide(Layer.mergeAll(layerLive, NodeServices.layer)), Effect.scoped),
     360_000,
   );
 });

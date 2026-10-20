@@ -790,9 +790,12 @@ it.effect("releases consumed application replay pages", () =>
       })
       .pipe(
         Stream.runForEach((event) =>
-          Effect.sync(() => {
+          Effect.gen(function* () {
             if (count % 500 === 0) {
               Object.assign(event, { replayPage: new ReplayPage() });
+              // V8 can still see transient roots on Effect's previous-page pull stack.
+              // Unwind it before GC; retained pages must still satisfy the same live-page bound.
+              yield* Effect.yieldNow;
               assert.isAtMost(NodeV8.queryObjects(ReplayPage, { format: "count" }), 1);
             }
             count++;

@@ -17,6 +17,7 @@ import {
   type RunId,
   type RuntimeMode,
   type ScheduledTaskId,
+  type SourceRef,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -66,6 +67,7 @@ export type ThreadLaunchWorkspaceStrategy =
     };
 
 export interface ThreadLaunchInitialMessage {
+  readonly source?: import("@t3tools/contracts").SourceRef;
   readonly messageId?: MessageId;
   readonly scheduledTaskId?: ScheduledTaskId;
   readonly senderThreadId?: ThreadId;
@@ -96,6 +98,7 @@ export interface ThreadLaunchInput {
   };
   readonly createdBy: OrchestrationV2Actor;
   readonly creationSource: OrchestrationV2CreationSource;
+  readonly originSource?: SourceRef;
 }
 
 type PreparationInput = Pick<
@@ -307,6 +310,7 @@ const make = Effect.gen(function* () {
     let createdWorktreePath: string | null = null;
     let setupTerminalId: string | null = null;
     let workspaceRecorded = false;
+    let stopBranchRename: Effect.Effect<void> = Effect.void;
     let runReleased = false;
     // The background branch rename records the worktree again when it lands,
     // so cleanup stops it before forgetting a removed worktree.
@@ -553,6 +557,7 @@ const make = Effect.gen(function* () {
           ),
           Effect.forkIn(preparationScope),
         );
+        stopBranchRename = Fiber.interrupt(branchRename).pipe(Effect.asVoid);
       }
 
       if (runId !== null && worktreePath !== null) {
@@ -676,7 +681,8 @@ const make = Effect.gen(function* () {
             createdWorktreePath &&
             ((cancelled && !runReleased) || !workspaceRecorded)
           ) {
-            if (branchRename !== null) yield* Fiber.interrupt(branchRename);
+            // Join the rename before cleanup so it cannot restore deleted workspace metadata.
+            yield* stopBranchRename;
             const removedPath = createdWorktreePath;
             // The thread forgets the worktree only once it is gone; a failed
             // removal leaves the directory for the user to clean up rather than
@@ -924,6 +930,7 @@ const make = Effect.gen(function* () {
                   : { importedNativeThread: input.importedNativeThread }),
                 createdBy: input.createdBy,
                 creationSource: input.creationSource,
+                ...(input.originSource === undefined ? {} : { originSource: input.originSource }),
               });
         const claimed = yield* claimDispatch.pipe(
           Effect.mapError(
@@ -959,6 +966,9 @@ const make = Effect.gen(function* () {
               threadId,
               messageId,
               text: input.initialMessage.text,
+              ...(input.initialMessage.source === undefined
+                ? {}
+                : { source: input.initialMessage.source }),
               ...(input.initialMessage.scheduledTaskId === undefined
                 ? {}
                 : { scheduledTaskId: input.initialMessage.scheduledTaskId }),
