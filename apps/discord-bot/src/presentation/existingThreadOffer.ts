@@ -7,8 +7,40 @@ export const START_NEW_THREAD_ANYWAY_LABEL = "start a new thread here anyway";
 
 export const START_NEW_THREAD_ANYWAY_CUSTOM_ID_PREFIX = "t3_new_anyway:";
 
+/** Posted again when someone talks in a thread that is still waiting on the button. */
+export const NEW_THREAD_OFFER_HOLD_MESSAGE =
+  "This Discord thread stays unlinked until you click **start a new thread here anyway**.";
+
+const OFFER_CONTENT_MARKER = "There's already a conversation for this:";
+
 export function startNewThreadAnywayCustomId(t3ThreadId: string): string {
   return `${START_NEW_THREAD_ANYWAY_CUSTOM_ID_PREFIX}${t3ThreadId}`;
+}
+
+/**
+ * True when this Discord message is the offer. Later mentions must not link
+ * the thread or start a turn while one of these is still in the channel.
+ */
+export function messageOffersNewThread(message: unknown): boolean {
+  if (typeof message !== "object" || message === null) return false;
+  if ("content" in message && typeof message.content === "string") {
+    if (message.content.includes(OFFER_CONTENT_MARKER)) return true;
+  }
+  if (!("components" in message) || !Array.isArray(message.components)) return false;
+  for (const row of message.components) {
+    if (typeof row !== "object" || row === null || !("components" in row)) continue;
+    if (!Array.isArray(row.components)) continue;
+    for (const child of row.components) {
+      if (typeof child !== "object" || child === null || !("custom_id" in child)) continue;
+      if (
+        typeof child.custom_id === "string" &&
+        child.custom_id.startsWith(START_NEW_THREAD_ANYWAY_CUSTOM_ID_PREFIX)
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 /**

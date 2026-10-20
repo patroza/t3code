@@ -4,6 +4,7 @@ import {
   START_NEW_THREAD_ANYWAY_LABEL,
   existingConversationOfferContent,
   existingConversationOfferFields,
+  messageOffersNewThread,
   startNewThreadAnywayCustomId,
 } from "./existingThreadOffer.ts";
 
@@ -53,5 +54,22 @@ describe("existing conversation offer", () => {
     expect(button?.custom_id).toBe(startNewThreadAnywayCustomId("thread-123"));
     expect(button?.custom_id).toBe("t3_new_anyway:thread-123");
     expect(button?.style).toBe(1);
+  });
+
+  it("recognizes the offer by its button or its text", () => {
+    const fields = existingConversationOfferFields({
+      title: "SA-516",
+      discordThreadUrl: null,
+      webLink: null,
+      t3ThreadId: "thread-123",
+    });
+    expect(messageOffersNewThread(fields)).toBe(true);
+    expect(
+      messageOffersNewThread({
+        content: "There's already a conversation for this: **SA-516**",
+      }),
+    ).toBe(true);
+    expect(messageOffersNewThread({ content: "Starting a new thread here." })).toBe(false);
+    expect(messageOffersNewThread(null)).toBe(false);
   });
 });

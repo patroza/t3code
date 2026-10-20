@@ -128,6 +128,8 @@ import {
 import { formatOpenInOmegentLink, isThreadInfoPinContent } from "../presentation/threadInfoPin.ts";
 import {
   existingConversationOfferFields,
+  messageOffersNewThread,
+  NEW_THREAD_OFFER_HOLD_MESSAGE,
   START_NEW_THREAD_ANYWAY_CUSTOM_ID_PREFIX,
 } from "../presentation/existingThreadOffer.ts";
 import {
@@ -1115,7 +1117,17 @@ const make = (botConfig: DiscordBotConfig) =>
 
     // Latest offer per Discord thread, so the button can replay that turn after a click.
     // Lost on restart; the button then rebuilds the prompt from the thread starter.
+    // The offer message itself is the durable hold: until it is clicked, nothing links.
     const offeredNewThreads = yield* Ref.make(new Map<string, BridgedTurnInput>());
+
+    const discordThreadHasPendingNewThreadOffer = (discordThreadId: string) =>
+      Effect.gen(function* () {
+        if ((yield* Ref.get(offeredNewThreads)).has(discordThreadId)) return true;
+        const listed = yield* rest
+          .listMessages(discordThreadId, { limit: 50 })
+          .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<unknown>));
+        return listed.some((message) => messageOffersNewThread(message));
+      });
 
     const startBridgedTurnUnlocked = (input: BridgedTurnInput) =>
       Effect.gen(function* () {
@@ -1199,8 +1211,22 @@ const make = (botConfig: DiscordBotConfig) =>
 
         // A new Discord thread does not join a T3 conversation that Jira or GitHub
         // already recorded. Point at that conversation, including one that lives in
-        // another channel, and let the user start a separate thread here.
+        // another channel. Nothing links and no turn starts until the button.
         if (existing === null && input.forceNewThread !== true) {
+          if (yield* discordThreadHasPendingNewThreadOffer(input.discordThreadId)) {
+            yield* Effect.logInfo("Holding Discord thread until the new-thread button is clicked", {
+              discordThreadId: input.discordThreadId,
+            });
+            yield* rest.createMessage(input.discordThreadId, {
+              content: NEW_THREAD_OFFER_HOLD_MESSAGE,
+              ...(typeof input.mentionMessage?.id === "string"
+                ? { message_reference: { message_id: input.mentionMessage.id } }
+                : {}),
+            });
+            yield* clearBootstrapReaction(input.pendingReadyReaction);
+            return;
+          }
+
           const joinStarter = yield* loadThreadStarter({
             discordThreadId: input.discordThreadId,
             parentChannelId: input.parentChannelId,
@@ -1246,11 +1272,6 @@ const make = (botConfig: DiscordBotConfig) =>
                   jiraIssueKeys: joinJiraKeys,
                   prUrls: joinPrUrls,
                 });
-                yield* Ref.update(offeredNewThreads, (map) => {
-                  const next = new Map(map);
-                  next.set(input.discordThreadId, input);
-                  return next;
-                });
                 yield* rest.createMessage(input.discordThreadId, {
                   ...existingConversationOfferFields({
                     title: existingShell.title,
@@ -1261,6 +1282,11 @@ const make = (botConfig: DiscordBotConfig) =>
                   ...(typeof input.mentionMessage?.id === "string"
                     ? { message_reference: { message_id: input.mentionMessage.id } }
                     : {}),
+                });
+                yield* Ref.update(offeredNewThreads, (map) => {
+                  const next = new Map(map);
+                  next.set(input.discordThreadId, input);
+                  return next;
                 });
                 yield* clearBootstrapReaction(input.pendingReadyReaction);
                 return;

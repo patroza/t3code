@@ -68,8 +68,9 @@ How associations get there:
    `jiraProjects` (a repository can name more than one). A token that only looks like a
    key is left off. Pin backfill uses the same rule. A later Discord mention does not
    join that conversation. It links to the existing one and adds a button,
-   "start a new thread here anyway", which starts a separate thread in this Discord
-   thread. Mentioning the key in Discord does not retarget the existing conversation.
+   "start a new thread here anyway". Until that button is clicked, the Discord
+   thread is not linked and no turn starts. The button starts a separate thread
+   here. Mentioning the key in Discord does not retarget the existing conversation.
    On a lookup miss, Discord-only rows are removed from the store.
 4. **Future** — authenticated API / web UI / agent tools to attach work items without Discord
 

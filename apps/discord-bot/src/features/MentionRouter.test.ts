@@ -34,6 +34,9 @@ describe("existing work-item conversation", () => {
     expect(mentionRouterSource).toContain("existingConversationOfferFields");
     expect(mentionRouterSource).toContain("forceNewThread");
     expect(mentionRouterSource).toContain("START_NEW_THREAD_ANYWAY_CUSTOM_ID_PREFIX");
+    expect(mentionRouterSource).toContain(
+      "Holding Discord thread until the new-thread button is clicked",
+    );
     expect(mentionRouterSource).not.toContain("Joining existing T3 thread via work-item identity");
     expect(mentionRouterSource).not.toContain(
       "links.put({\n                  discordThreadId: input.discordThreadId,\n                  t3ThreadId: joinThreadId,",
