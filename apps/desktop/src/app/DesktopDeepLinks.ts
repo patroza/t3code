@@ -224,10 +224,13 @@ export function resolveEnvironmentIdForConnectionLabel(
     exactMatches.length > 0
       ? exactMatches
       : document.targets.filter((target) => isShortAndFqdnMatch(target.label, connectionLabel));
-  if (matches.length === 0) {
+  // One environment can have several targets (e.g. a learned direct route
+  // beside the configured one); only distinct environments are ambiguous.
+  const environmentIds = new Set(matches.map((target) => target.environmentId));
+  if (environmentIds.size === 0) {
     return { _tag: "missing" };
   }
-  if (matches.length > 1) {
+  if (environmentIds.size > 1) {
     return { _tag: "ambiguous" };
   }
   return {

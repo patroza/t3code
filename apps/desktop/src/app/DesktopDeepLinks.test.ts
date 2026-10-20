@@ -199,6 +199,20 @@ describe("DesktopDeepLinks catalog resolution", () => {
     );
   });
 
+  it("resolves several targets that share one environment", () => {
+    const resolution = DesktopDeepLinks.resolveEnvironmentIdForConnectionLabel(
+      catalogJson([
+        { label: "t3vm", environmentId: "db6d1813-ace4-42bd-9bce-e04ee27e97ff" },
+        { label: "t3vm", environmentId: "db6d1813-ace4-42bd-9bce-e04ee27e97ff" },
+      ]),
+      "t3vm",
+    );
+    assert.equal(resolution._tag, "resolved");
+    if (resolution._tag === "resolved") {
+      assert.equal(resolution.environmentId, "db6d1813-ace4-42bd-9bce-e04ee27e97ff");
+    }
+  });
+
   it("refuses missing and duplicate labels", () => {
     assert.equal(
       DesktopDeepLinks.resolveEnvironmentIdForConnectionLabel(
