@@ -98,6 +98,10 @@ vi.mock("~/browser/browserDefaults", () => ({
   }),
 }));
 
+vi.mock("~/browser/useBrowserLayoutZoomFactor", () => ({
+  useBrowserLayoutZoomFactor: (previewZoomFactor: number) => previewZoomFactor,
+}));
+
 vi.mock("~/composerDraftStore", () => ({
   useComposerDraftStore: (
     select: (store: { addPreviewAnnotation: () => void; addImage: () => void }) => unknown,
