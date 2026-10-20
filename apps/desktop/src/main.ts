@@ -6,6 +6,7 @@ for (const stream of [process.stdout, process.stderr]) {
 }
 
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
+import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - Version output must flush before Electron exits, without acquiring the runtime.
 import * as NodeFS from "node:fs";
@@ -22,7 +23,6 @@ import type { RemoteT3RunnerOptions } from "@t3tools/ssh/tunnel";
 import serverPackageJson from "../../server/package.json" with { type: "json" };
 
 import { configureDesktopEarlyStartup } from "./electron/DesktopEarlyStartup.ts";
-import * as DesktopRuntime from "./app/DesktopRuntime.ts";
 import * as DesktopIpc from "./ipc/DesktopIpc.ts";
 import * as ElectronApp from "./electron/ElectronApp.ts";
 import * as ElectronDialog from "./electron/ElectronDialog.ts";
@@ -39,7 +39,6 @@ import * as DesktopAppActivation from "./app/DesktopAppActivation.ts";
 import * as DesktopWebLinks from "./app/DesktopWebLinks.ts";
 import * as DesktopAppIdentity from "./app/DesktopAppIdentity.ts";
 import * as DesktopConnectionCatalogStore from "./app/DesktopConnectionCatalogStore.ts";
-import * as DesktopSafeStorageIdentity from "./app/DesktopSafeStorageIdentity.ts";
 import * as DesktopClerk from "./app/DesktopClerk.ts";
 import * as DesktopDeepLinks from "./app/DesktopDeepLinks.ts";
 import * as DesktopCliCommand from "./app/DesktopCliCommand.ts";
@@ -152,10 +151,7 @@ const layerDesktopFoundation = Layer.mergeAll(
   DesktopLegacyLocalStorage.layer,
   DesktopAppSettings.layer,
   DesktopClientSettings.layer,
-  DesktopConnectionCatalogStore.layer.pipe(
-    Layer.provideMerge(DesktopSavedEnvironments.layer),
-    Layer.provide(DesktopSafeStorageIdentity.layer.pipe(Layer.provide(LinuxBrowserSecret.layer))),
-  ),
+  DesktopConnectionCatalogStore.layer.pipe(Layer.provideMerge(DesktopSavedEnvironments.layer)),
   DesktopAssets.layer,
   DesktopObservability.layer,
   DesktopRendererHistory.layer,
@@ -259,4 +255,4 @@ const layerDesktopRuntime = layerDesktopClerk.pipe(
   Layer.provideMerge(DesktopPreReadyPlatform.layer),
 );
 
-DesktopApp.program.pipe(Effect.provide(layerDesktopRuntime), DesktopRuntime.runMain);
+DesktopApp.program.pipe(Effect.provide(layerDesktopRuntime), NodeRuntime.runMain);

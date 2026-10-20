@@ -266,6 +266,7 @@ import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrom
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useNowMinute } from "~/hooks/useNowMinute";
+import { useIsMobile } from "~/hooks/useMediaQuery";
 import { CommandDialogTrigger } from "./ui/command";
 import { useClientSettings, updateClientSettings } from "~/hooks/useSettings";
 import {
@@ -587,7 +588,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     environmentId: thread.environmentId,
     threadId: thread.id,
   });
-  const { isMobile } = useSidebar();
+  const isMobile = useIsMobile();
   const discoveredPorts = useThreadDiscoveredPorts({
     environmentId: thread.environmentId,
     threadId: thread.id,
