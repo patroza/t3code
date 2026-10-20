@@ -643,7 +643,7 @@ describe("mobile composer drafts", () => {
       h.update({ modelSelection });
       expect(getComposerDraftSnapshot(key)).toEqual(before);
     }
-    h.update({ modelSelection: { ...pick, options: pick.options!.toReversed() } });
+    h.update({ modelSelection: { ...pick, options: [...pick.options!].reverse() } });
     expect(appAtomRegistry.get(composerDraftsAtom)[key]).toBeUndefined();
   });
 

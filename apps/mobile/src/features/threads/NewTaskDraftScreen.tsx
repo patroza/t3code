@@ -108,6 +108,7 @@ import {
   updateComposerDraftSettings,
   scheduleUnusedComposerAttachmentCleanup,
   type ComposerDraft,
+  type ComposerDraftWorkspaceSelection,
   waitForComposerDraftsLoaded,
 } from "../../state/use-composer-drafts";
 import { useEnvironmentServerConfig, useProjects, useThreadShells } from "../../state/entities";
@@ -195,6 +196,8 @@ export function NewTaskDraftScreen(props: {
     readonly worktreePath?: string | null;
     readonly cloning?: boolean;
   };
+  readonly initialWorkspaceSelection?: ComposerDraftWorkspaceSelection;
+  /** Queued outbox message id when editing an existing pending task. */
   readonly pendingTaskId?: string;
   readonly draftId?: string;
   readonly incomingShareId?: string;
@@ -720,6 +723,33 @@ export function NewTaskDraftScreen(props: {
     selectedProject,
     selectedProjectKey,
     setProject,
+  ]);
+
+  const appliedInitialWorkspaceSelectionRef = useRef<ComposerDraftWorkspaceSelection | undefined>(
+    undefined,
+  );
+  useEffect(() => {
+    const selection = props.initialWorkspaceSelection;
+    const initialEnvironmentId = props.initialProjectRef?.environmentId;
+    const initialProjectId = props.initialProjectRef?.projectId;
+    if (
+      !selection ||
+      !flow.draftKey ||
+      !selectedProject ||
+      selectedProject.environmentId !== initialEnvironmentId ||
+      selectedProject.id !== initialProjectId ||
+      appliedInitialWorkspaceSelectionRef.current === selection
+    ) {
+      return;
+    }
+    appliedInitialWorkspaceSelectionRef.current = selection;
+    updateComposerDraftSettings(flow.draftKey, { workspaceSelection: selection });
+  }, [
+    flow.draftKey,
+    props.initialProjectRef?.environmentId,
+    props.initialProjectRef?.projectId,
+    props.initialWorkspaceSelection,
+    selectedProject,
   ]);
 
   useEffect(() => {

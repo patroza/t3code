@@ -23,6 +23,7 @@ import { environmentPresentations } from "../../state/presentation";
 import { ConnectionDiagnosisDetails, useConnectionDiagnosis } from "./ConnectionDiagnosisDetails";
 import { ConnectionFormField } from "./ConnectionFormField";
 import { ConnectionStatusDot } from "./ConnectionStatusDot";
+import { HostResourceStatus } from "./HostResourceStatus";
 import { environmentStatusText } from "./environmentStatusText";
 
 function connectionStatusLabel(environment: ConnectedEnvironmentSummary): string | null {
@@ -162,6 +163,11 @@ export function ConnectionEnvironmentRow(props: {
               {`${freeze.title}. ${freeze.description}`}
             </Text>
           ) : null}
+          <HostResourceStatus
+            environmentId={props.environment.environmentId}
+            environmentLabel={props.environment.environmentLabel}
+            connected={props.environment.connectionState === "connected"}
+          />
         </Pressable>
 
         <ThemedSwitch

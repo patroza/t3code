@@ -22,8 +22,13 @@ import * as Haptics from "expo-haptics";
 import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 import { useViewabilityAmount, type LegendListRef } from "@legendapp/list/react-native";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import {
+  resolveUserMessagePresentation,
+  userMessageSenderCaption,
+  type MessageSenderSource,
+  type MessageSenderViewer,
+} from "@t3tools/client-runtime/user-message";
 import type { HandoffEndpoints } from "@t3tools/client-runtime/handoff";
-import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
 import type { WorkflowOpening } from "@t3tools/client-runtime/state/subagentRuntime";
 import {
@@ -54,7 +59,7 @@ import {
   type CodexArtifactTemplate,
 } from "@t3tools/shared/codexArtifactTemplates";
 import { resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
-import { isMarkdownFileLinkLabel } from "@t3tools/shared/markdownLinks";
+
 import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
@@ -76,7 +81,6 @@ import { useNativeWorkspaceColumnsSupported } from "../../native/NativeWorkspace
 import { useDeviceType } from "../../native/native-layout-metrics";
 import { isDuoDevice } from "../../lib/device-type";
 import {
-  createContext,
   memo,
   useCallback,
   useContext,
@@ -90,16 +94,13 @@ import {
   type RefObject,
 } from "react";
 import {
-  ActivityIndicator,
   Image,
   Platform,
   type LayoutChangeEvent,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
   Pressable,
-  ScrollView,
   StyleSheet,
-  Text as NativeText,
   type ColorValue,
   useWindowDimensions,
   View,
@@ -121,10 +122,10 @@ import { IOS_NAV_BAR_HEIGHT } from "../../lib/layoutMetrics";
 import { FONT_FAMILIES } from "../../lib/fontFamilies";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
-import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
+
 import { downloadAndShareAttachment } from "../../lib/attachmentDownload";
 import { hasWideMarkdownBlock } from "../../lib/wideMarkdownBlocks";
-import { faviconUrlForOrigin } from "@t3tools/shared/favicon";
+
 import {
   SelectableMarkdownText,
   type MarkdownFileContextMenu,
@@ -138,19 +139,14 @@ import {
 import { AppText as Text } from "../../components/ui/AppText";
 import { VideoPreviewModal, type VideoPreviewSource } from "../../components/VideoPreviewModal";
 import { VideoAttachmentTile } from "../../components/VideoAttachmentTile";
-import { MediaVideoPlayer } from "../../components/MediaVideoPlayer";
+
 import { resolveMarkdownMediaPreview } from "../../lib/markdownMedia";
-import {
-  attachmentVideoPreviewSource,
-  mediaVideoPreviewUri,
-  mediaVideoThumbnailKey,
-  type MediaVideoPreviewSource,
-} from "../../lib/videoPreviewSource";
+import { attachmentVideoPreviewSource } from "../../lib/videoPreviewSource";
 import { CopyTextButton } from "./CopyTextButton";
 import { Menu } from "../../components/ui/Menu";
 import { copyPromptLink } from "../prompt-links/prompt-link-actions";
 import { parseReviewCommentMessageSegments } from "../review/reviewCommentSelection";
-import type { ReviewDiffTheme } from "../review/shikiReviewHighlighter";
+
 import {
   ReviewCommentCard,
   useReviewCommentColors,
@@ -164,18 +160,13 @@ import {
   type LayoutVariant,
 } from "../../lib/layout";
 import { uuidv4 } from "../../lib/uuid";
-import {
-  resolveMarkdownFontSizes,
-  resolveNativeMarkdownTypography,
-} from "../../lib/appearancePreferences";
+import { resolveNativeMarkdownTypography } from "../../lib/appearancePreferences";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { markdownFileIconSource } from "../../lib/markdownFileIcons";
 import { PierreEntryIcon } from "../../components/PierreEntryIcon";
-import { markdownLinkIconSource } from "../../lib/markdownLinkIcons";
+
 import {
   normalizeNativeMarkdownUrl,
-  resolveMarkdownInlineCodePresentation,
-  resolveMarkdownLinkIcon,
   resolveMarkdownLinkPresentation,
 } from "../../lib/markdownLinks";
 import {
@@ -210,13 +201,8 @@ import { resolveThreadFeedFixedItemSize } from "./thread-feed-item-size";
 import { htmlRenderFrameHeight } from "@t3tools/shared/htmlRender";
 import { htmlRenderRowHeight, ThreadHtmlRender } from "./HtmlRenderWebView";
 import { ThreadMcpApp } from "./McpAppWebView";
-import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
-import {
-  assetEnvironment,
-  useAssetUrl,
-  useAssetUrlState,
-  useRefreshAssetUrl,
-} from "../../state/assets";
+
+import { assetEnvironment, useAssetUrl, useRefreshAssetUrl } from "../../state/assets";
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
 import { usePreparedConnection } from "../../state/session";
 import { useLiveThreadLinkLabels } from "../../state/entities";
@@ -301,6 +287,12 @@ export interface ThreadFeedProps {
   readonly pendingHandoff?: HandoffEndpoints | null;
   readonly contentPresentation: ThreadContentPresentation;
   readonly agentLabel: string;
+  /** This client's claim and source channel. Same person and channel stays unlabeled. */
+  readonly messageViewer?: MessageSenderViewer | undefined;
+  /** Thread origin, used when an agent message has no sender of its own. */
+  readonly originSource?: MessageSenderSource | null | undefined;
+  /** Conversation-message senders, for history whose turn item has no source. */
+  readonly messageSourceById?: ReadonlyMap<string, MessageSenderSource> | undefined;
   readonly latestRun: ThreadFeedLatestRun | null;
   readonly activeWorkStartedAt: string | null;
   readonly runlessWorkActive?: boolean;
@@ -943,15 +935,31 @@ function useMarkdownStyles(): MarkdownStyleSets {
   ]);
 }
 
+function UserMessageSenderCaption(props: {
+  readonly environmentId: EnvironmentId;
+  readonly senderThreadId?: ThreadId;
+  readonly label: string | undefined;
+}) {
+  if (!props.label) return null;
+  return (
+    <AgentMessageAttribution
+      environmentId={props.environmentId}
+      senderThreadId={props.senderThreadId}
+      label={props.label}
+    />
+  );
+}
+
 function AgentMessageAttribution(props: {
   readonly environmentId: EnvironmentId;
   readonly senderThreadId?: ThreadId;
+  readonly label?: string;
 }) {
   const navigation = useNavigation();
   const senderThreadId = props.senderThreadId;
   const label = (
     <Text className="mb-1 pr-1 font-t3-medium text-2xs text-foreground-muted opacity-60">
-      Sent by another agent
+      {props.label ?? "Sent by another agent"}
     </Text>
   );
   return senderThreadId ? (
@@ -984,6 +992,9 @@ function renderFeedEntry(
     | "onEditPendingMessage"
     | "threadId"
     | "workspaceRoot"
+    | "messageViewer"
+    | "originSource"
+    | "messageSourceById"
   > & {
     readonly copiedRowId: string | null;
     readonly expandedWorkRows: Record<string, boolean>;
@@ -1201,12 +1212,18 @@ function renderFeedEntry(
             <Text className="mb-1 pr-1 font-t3-medium text-2xs text-foreground-muted opacity-60">
               Sent by T3 Code
             </Text>
-          ) : presentation.attribution === "agent" ? (
-            <AgentMessageAttribution
+          ) : (
+            <UserMessageSenderCaption
               environmentId={props.environmentId}
               senderThreadId={message.senderThreadId}
+              label={userMessageSenderCaption({
+                createdBy: message.createdBy,
+                source: message.source ?? props.messageSourceById?.get(message.id),
+                originSource: props.originSource,
+                viewer: props.messageViewer,
+              })}
             />
-          ) : null}
+          )}
           <View
             className="min-w-0 gap-2 rounded-[20px] px-3.5 py-2.5"
             style={{
@@ -2464,6 +2481,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             skills: props.skills,
             workspaceRoot: props.workspaceRoot,
             workflowOpening,
+            messageViewer: props.messageViewer,
+            originSource: props.originSource,
+            messageSourceById: props.messageSourceById,
           })}
           {props.worktreeSetup && info.index === setupAnchorIndex ? (
             <WorktreeSetupCard key={props.threadId} {...props.worktreeSetup} />

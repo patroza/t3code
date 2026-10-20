@@ -17,6 +17,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import { use, useEffect, useRef, useState, type ComponentProps } from "react";
 import {
   Platform,
+  Text,
   ScrollView,
   useWindowDimensions,
   View,
@@ -77,6 +78,8 @@ import {
 } from "../threads/threadListV2";
 import { useThreadListV2ShelfPreferences } from "../threads/use-thread-list-v2-shelf-preferences";
 import type { HomeListFilterMenuEnvironment } from "./home-list-filter-menu";
+import type { OwnershipFilter, OwnershipRelation } from "./home-list-options";
+import { type HomeListMode, type HomeThreadGrouping } from "./homeListMode";
 import {
   buildHomeProjectScopes,
   findHomeProjectScope,
@@ -98,12 +101,19 @@ interface HomeScreenProps {
     HomeListFilterMenuEnvironment & Pick<WorkspaceEnvironment, "connectionState">
   >;
   readonly searchQuery: string;
-  readonly selectedEnvironmentId: EnvironmentId | null;
+  readonly listMode: HomeListMode;
+  readonly threadGrouping: HomeThreadGrouping;
+  readonly selectedEnvironmentIds: readonly EnvironmentId[];
   readonly selectedProjectKey: string | null;
+  readonly ownershipFilter: OwnershipFilter;
+  readonly ownershipRelation: OwnershipRelation;
+  readonly onOwnershipFilterChange: (filter: OwnershipFilter) => void;
+  readonly onOwnershipRelationChange: (relation: OwnershipRelation) => void;
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly projectGroupingMode: SidebarProjectGroupingMode;
   readonly onSearchQueryChange: (query: string) => void;
-  readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
+  readonly onClearEnvironments: () => void;
+  readonly onToggleEnvironment: (environmentId: EnvironmentId) => void;
   readonly onProjectChange: (projectKey: string | null) => void;
   readonly onAddConnection: () => void;
   readonly onOpenSettings: () => void;
@@ -287,18 +297,16 @@ export function HomeScreen(props: HomeScreenProps) {
     24,
     workspace?.bottomClearance ?? 0,
   );
-  const searchEnvironmentIds =
-    props.selectedEnvironmentId === null
-      ? props.environments
-          .filter((environment) => environment.connectionState === "connected")
-          .map((environment) => environment.environmentId)
-      : props.environments.some(
-            (environment) =>
-              environment.environmentId === props.selectedEnvironmentId &&
-              environment.connectionState === "connected",
-          )
-        ? [props.selectedEnvironmentId]
-        : [];
+  const searchEnvironmentIds = (() => {
+    const connectedIds = props.environments
+      .filter((environment) => environment.connectionState === "connected")
+      .map((environment) => environment.environmentId);
+    if (props.selectedEnvironmentIds.length === 0) {
+      return connectedIds;
+    }
+    const selected = new Set(props.selectedEnvironmentIds);
+    return connectedIds.filter((environmentId) => selected.has(environmentId));
+  })();
   const threadSearch = useThreadSearch(searchEnvironmentIds, props.searchQuery);
   const threadSearchMatchByKey = (() => {
     const matches = new Map<string, EnvironmentThreadSearchMatch>();
@@ -384,7 +392,7 @@ export function HomeScreen(props: HomeScreenProps) {
 
   const projectScopes = buildHomeProjectScopes({
     projects: props.projects,
-    environmentId: props.selectedEnvironmentId,
+    selectedEnvironmentIds: props.selectedEnvironmentIds,
     projectGroupingMode: props.projectGroupingMode,
   });
   const hasSearchQuery = props.searchQuery.trim().length > 0;
@@ -395,6 +403,12 @@ export function HomeScreen(props: HomeScreenProps) {
     }
     return map;
   })();
+  const projectCwdByKey = new Map(
+    props.projects.map((project) => [
+      scopedProjectKey(project.environmentId, project.id),
+      project.workspaceRoot,
+    ]),
+  );
 
   const v2ProjectScopeKey = props.selectedProjectKey;
   const v2ScopedProjectGroup = findHomeProjectScope(projectScopes, v2ProjectScopeKey);
@@ -428,7 +442,7 @@ export function HomeScreen(props: HomeScreenProps) {
   const [settledVisibleCount, setSettledVisibleCount] = useState(
     THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
   );
-  const settledResetKey = `${props.selectedEnvironmentId ?? "all"}:${v2ProjectScopeKey ?? "all"}:${props.searchQuery.trim()}`;
+  const settledResetKey = `${props.selectedEnvironmentIds.join(",") || "all"}:${v2ProjectScopeKey ?? "all"}:${props.searchQuery.trim()}`;
   const [lastSettledResetKey, setLastSettledResetKey] = useState(settledResetKey);
   if (lastSettledResetKey !== settledResetKey) {
     setLastSettledResetKey(settledResetKey);
@@ -502,8 +516,9 @@ export function HomeScreen(props: HomeScreenProps) {
     return buildThreadListV2Items({
       pendingOrder,
       threads: props.threads.filter((thread) => thread.archivedAt === null),
-      environmentId: props.selectedEnvironmentId,
+      selectedEnvironmentIds: props.selectedEnvironmentIds,
       projectRefs: v2ScopedProjectGroup === null ? null : v2ScopedProjectGroup.projectRefs,
+      orderByRecency: props.threadGrouping === "recency",
       searchQuery: props.searchQuery,
       matchedThreadKeys,
       settlementEnvironmentIds,
@@ -537,8 +552,8 @@ export function HomeScreen(props: HomeScreenProps) {
   const v2SearchQuery = props.searchQuery.trim().toLocaleLowerCase();
   const v2PendingTasks = props.pendingTasks.filter(
     (pendingTask) =>
-      (props.selectedEnvironmentId === null ||
-        pendingTask.environmentId === props.selectedEnvironmentId) &&
+      (props.selectedEnvironmentIds.length === 0 ||
+        props.selectedEnvironmentIds.includes(pendingTask.environmentId)) &&
       (v2ScopedProjectKeys === null ||
         v2ScopedProjectKeys.has(
           scopedProjectKey(pendingTask.environmentId, pendingTask.projectId),
@@ -562,6 +577,7 @@ export function HomeScreen(props: HomeScreenProps) {
     queuedThreadKeys,
     moveAvailability: threadMoveAvailability,
     shelfPreferencesLoading: !shelfPreferencesLoaded,
+    groupByRecency: props.threadGrouping === "recency",
   });
 
   useThreadJumpShortcuts(threadListV2Items, props.onSelectThread);
@@ -624,6 +640,12 @@ export function HomeScreen(props: HomeScreenProps) {
         />
       );
     }
+    if (item.type === "v2-recency-header")
+      return (
+        <View className="bg-screen px-5 pb-1 pt-3">
+          <Text className="text-xs font-t3-medium text-foreground-muted">{item.label}</Text>
+        </View>
+      );
     const thread = item.item.thread;
     return (
       <ThreadListV2Row
@@ -685,6 +707,9 @@ export function HomeScreen(props: HomeScreenProps) {
         onUnpinThread={handleUnpinThread}
         onSetThreadAutoSettle={handleSetThreadAutoSettle}
         onMoveThread={handleMoveThread}
+        projectCwd={
+          projectCwdByKey.get(scopedProjectKey(thread.environmentId, thread.projectId)) ?? null
+        }
         onSwipeableClose={handleSwipeableClose}
         onSwipeableWillOpen={handleSwipeableWillOpen}
         simultaneousSwipeGesture={homeScrollGesture}
@@ -700,6 +725,7 @@ export function HomeScreen(props: HomeScreenProps) {
   // the same reason: the clock text is precomputed per item instead.
   const v2ExtraData = {
     projectByKey,
+    projectCwdByKey,
     projectTitleByProjectKey: v2ProjectTitleByProjectKey,
     listEnvironments,
     savedConnectionsById: props.savedConnectionsById,
@@ -712,10 +738,15 @@ export function HomeScreen(props: HomeScreenProps) {
   const hasAnyThreads =
     props.threads.some((thread) => thread.archivedAt === null) || props.pendingTasks.length > 0;
   const selectedEnvironmentLabel =
-    props.selectedEnvironmentId === null
+    props.selectedEnvironmentIds.length === 0
       ? null
-      : (props.savedConnectionsById[props.selectedEnvironmentId]?.environmentLabel ??
-        "this environment");
+      : props.selectedEnvironmentIds.length === 1
+        ? (props.savedConnectionsById[props.selectedEnvironmentIds[0]!]?.environmentLabel ??
+          "this environment")
+        : `${props.selectedEnvironmentIds.length} environments`;
+  // Connection state surfaces in the header title slot
+  // (WorkspaceConnectionTitle) — nothing renders inside the list, so
+  // reconnects never shift the rows.
   const emptyState = deriveEmptyState({
     catalogState: props.catalogState,
     projectCount: props.projects.length,
@@ -776,17 +807,23 @@ export function HomeScreen(props: HomeScreenProps) {
         <ThreadListFilters
           environments={props.environments}
           projects={projectScopes.map((scope) => ({ key: scope.key, label: scope.title }))}
-          selectedEnvironmentId={props.selectedEnvironmentId}
+          selectedEnvironmentIds={props.selectedEnvironmentIds}
           selectedProjectKey={props.selectedProjectKey}
-          onEnvironmentChange={props.onEnvironmentChange}
+          ownershipFilter={props.ownershipFilter}
+          ownershipRelation={props.ownershipRelation}
+          onToggleEnvironment={props.onToggleEnvironment}
+          onClearEnvironments={props.onClearEnvironments}
           onProjectChange={props.onProjectChange}
+          onOwnershipFilterChange={props.onOwnershipFilterChange}
+          onOwnershipRelationChange={props.onOwnershipRelationChange}
         />
       ) : null}
     </>
   );
 
   const v2ListEmpty =
-    hasSearchQuery && threadSearch.isPending ? undefined : hasSearchQuery ? (
+    v2PendingTasks.length > 0 ? null : hasSearchQuery &&
+      threadSearch.isPending ? undefined : hasSearchQuery ? (
       <EmptyState
         title="No results"
         detail={`No threads matching "${props.searchQuery}".`}

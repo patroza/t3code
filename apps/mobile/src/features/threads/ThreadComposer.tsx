@@ -16,6 +16,7 @@ import {
   type MessageId,
   type ModelSelection,
   type ProviderInteractionMode,
+  type ProviderDriverKind,
   type RuntimeMode,
   type ServerConfig as T3ServerConfig,
   type UsageLimitsReport,
@@ -27,7 +28,7 @@ import {
 } from "@t3tools/shared/usageLimits";
 import { StackActions, useFocusEffect, useNavigation } from "@react-navigation/native";
 import type { ReactNode } from "react";
-import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useMemo, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { Keyboard, Platform, View, type ViewStyle } from "react-native";
 import { composerImageGallery } from "../../lib/composerImageGallery";
 import { filePreviewGallery } from "../../lib/filePreviewGallery";
@@ -78,7 +79,10 @@ import {
   ComposerInlineControl,
   ComposerToolbarRow,
 } from "../../components/ComposerToolbar";
-import { ProviderIcon } from "../../components/ProviderIcon";
+import { ProviderUsageIcon } from "../../components/ProviderUsageIcon";
+import { resolveDriverUsage } from "@t3tools/client-runtime/state/aiUsagePresentation";
+import { useAiUsageSnapshot } from "../../state/useAiUsageSnapshot";
+import { parseStandaloneComposerSlashCommand } from "@t3tools/shared/composerTrigger";
 import {
   composerStripAttachments,
   type DraftComposerFileAttachment,
@@ -570,6 +574,22 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
       if (openUsageLimits()) onChangeDraftMessage("");
       return;
     }
+    if (
+      parseStandaloneComposerSlashCommand(draftMessage) === "new" &&
+      draftAttachments.length === 0
+    ) {
+      onChangeDraftMessage("");
+      navigation.navigate("NewTaskSheet", {
+        screen: "NewTaskDraft",
+        params: {
+          environmentId: String(props.environmentId),
+          projectId: String(props.selectedThread.projectId),
+          branch: props.selectedThread.branch,
+          worktreePath: props.selectedThread.worktreePath,
+        },
+      });
+      return;
+    }
     const threadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
     if (inFlightThreadIdsRef.current.has(threadKey)) return;
     inFlightThreadIdsRef.current.add(threadKey);
@@ -606,6 +626,18 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
         option.selection.instanceId === currentModelSelection.instanceId &&
         option.selection.model === currentModelSelection.model,
     ) ?? null;
+  const aiUsageSnapshot = useAiUsageSnapshot(props.environmentId);
+  const threadUsage = useMemo(
+    () =>
+      currentModelOption
+        ? resolveDriverUsage(
+            aiUsageSnapshot,
+            currentModelOption.providerDriver as ProviderDriverKind,
+            currentModelSelection.model,
+          )
+        : null,
+    [aiUsageSnapshot, currentModelOption, currentModelSelection.model],
+  );
   const providerOptionDescriptors = resolveProviderOptionDescriptors({
     capabilities: currentModelOption?.capabilities,
     selections: currentModelSelection.options,
@@ -1063,7 +1095,8 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                         accessibilityLabel="Model and reasoning settings"
                         emphasized
                         renderIcon={(size) => (
-                          <ProviderIcon
+                          <ProviderUsageIcon
+                            marker={threadUsage?.marker ?? null}
                             iconUrl={currentModelOption?.providerIconUrl}
                             provider={currentModelOption?.providerDriver}
                             size={size}

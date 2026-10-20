@@ -12,6 +12,7 @@ import { RegistryContext } from "@effect/atom-react";
 import { ThreadArrangementHost } from "./features/threads/ThreadArrangementSheet";
 import * as Dialog from "./components/ui/Dialog";
 import { CloudAuthProvider } from "./features/cloud/CloudAuthProvider";
+import { IdentityClaimGate } from "./features/identity/IdentityClaimGate";
 import { prepareNativeShowcaseCapture } from "./features/showcase/nativeShowcaseScene";
 import { IncomingShareProvider } from "./features/sharing/IncomingShareProvider";
 import {
@@ -106,6 +107,7 @@ function AppContent() {
                   <IncomingShareProvider>
                     <Navigation linking={appLinking} theme={navigationTheme} />
                   </IncomingShareProvider>
+                  <IdentityClaimGate />
                   <Dialog.Host />
                   <ThreadArrangementHost />
                 </NativeLayoutMetricsProvider>

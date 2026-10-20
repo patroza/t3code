@@ -4,6 +4,7 @@ import { collectComposerInlineTokens } from "@t3tools/shared/composerInlineToken
 import { composerContextEditorTokens, composerSkillLabels } from "../lib/composerContext";
 import { requireNativeView } from "expo";
 import { TextInputWrapper } from "expo-paste-input";
+import { useNativePaste } from "../lib/useNativePaste";
 import {
   useCallback,
   useEffect,
@@ -14,13 +15,12 @@ import {
   type Ref,
 } from "react";
 import type { NativeSyntheticEvent, ViewProps } from "react-native";
-import { Image, Platform, StyleSheet } from "react-native";
+import { Platform, StyleSheet } from "react-native";
 
 import { markdownFileIconSource, markdownIconAssetUri } from "../lib/markdownFileIcons";
 import { composerChipSizeSuffix, contextChipPresentation } from "../lib/composerChipPresentation";
 import { resolveMarkdownFileIcon } from "../lib/markdownLinks";
 import { MOBILE_TYPOGRAPHY } from "../lib/typography";
-import { useNativePaste } from "../lib/useNativePaste";
 import { FONT_FAMILIES } from "../lib/fontFamilies";
 import { useAppearancePreferences } from "../features/settings/appearance/AppearancePreferencesProvider";
 import { useUniwindTheme } from "../lib/useUniwindTheme";

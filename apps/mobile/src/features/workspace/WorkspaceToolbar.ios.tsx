@@ -9,6 +9,7 @@ import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { NativeWorkspaceTabActivityContext } from "../../native/v5-workspace-context";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
+
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { useWorkspaceTabs } from "./WorkspaceTabsContext";
 import { useSidebarWorkspaceTabs } from "./useSystemWorkspaceTabBar";
@@ -115,7 +116,7 @@ export function WorkspaceToolbar(props: {
       {/* UIKit lays trailing items out from the edge inward. */}
       <Toolbar placement="right">
         <Toolbar.Button
-          accessibilityLabel="Settings"
+          accessibilityLabel="Open settings"
           icon="gearshape"
           onPress={() =>
             navigation.navigate("SettingsSheet", {

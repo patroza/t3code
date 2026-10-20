@@ -1,3 +1,4 @@
+import { threadMatchesAttributeQuery } from "@t3tools/shared/threadAttributeSearch";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import {
   canSnooze,
@@ -11,6 +12,10 @@ import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled"
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { resolveThreadProviderStack } from "@t3tools/client-runtime/state/models";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
+import {
+  groupSortedThreadsByRecency,
+  shouldShowRecencySectionHeaders,
+} from "@t3tools/client-runtime/state/thread-recency-groups";
 import {
   createInboxReturnTracker,
   isThreadWorking,
@@ -26,7 +31,6 @@ import {
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 
 import type { ThreadListProvider } from "../../state/thread-list-environments";
-import type { ThreadMoveAvailability } from "./threadOrder";
 
 import { relativeTime } from "../../lib/time";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
@@ -35,6 +39,7 @@ import {
   applyPendingThreadOrder,
   reconcilePendingThreadOrder,
   type PendingThreadOrder,
+  type ThreadMoveAvailability,
 } from "./threadOrder";
 
 export { snoozeWakeLabel };
@@ -190,6 +195,19 @@ function parseTimestampMs(isoDate: string): number {
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
+/** First VALID timestamp wins: a present-yet-malformed string falls through
+    to the next candidate rather than sinking the row to the epoch. */
+function firstValidTimestampMs(...candidates: ReadonlyArray<string | null | undefined>): number {
+  for (const candidate of candidates) {
+    if (candidate == null) continue;
+    const parsed = Date.parse(candidate);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return 0;
+}
+
+/** The active order shared by web and native: new/reopened rows, then the
+    saved arrangement. Activity does not move a thread. */
 export function sortThreadsForListV2<
   T extends {
     readonly id: string;
@@ -320,12 +338,20 @@ export interface ThreadListV2SettledShelfListItem {
   readonly disabled: boolean;
 }
 
+export interface ThreadListV2RecencyHeaderListItem {
+  readonly type: "v2-recency-header";
+  readonly key: string;
+  readonly label: string;
+  readonly section: "active" | "settled";
+}
+
 export type ThreadListV2ListItem =
   | ThreadListV2ThreadListItem
   | ThreadListV2PendingListItem
   | ThreadListV2WorkingShelfListItem
   | ThreadListV2SnoozedShelfListItem
-  | ThreadListV2SettledShelfListItem;
+  | ThreadListV2SettledShelfListItem
+  | ThreadListV2RecencyHeaderListItem;
 
 export function isThreadListV2ListItem(value: {
   readonly type: string;
@@ -335,7 +361,8 @@ export function isThreadListV2ListItem(value: {
     value.type === "v2-pending" ||
     value.type === "v2-working-shelf" ||
     value.type === "v2-snoozed-shelf" ||
-    value.type === "v2-settled-shelf"
+    value.type === "v2-settled-shelf" ||
+    value.type === "v2-recency-header"
   );
 }
 
@@ -394,6 +421,13 @@ export function threadListV2ListItemsAreEqual(
         previous.expanded === item.expanded &&
         previous.disabled === item.disabled
       );
+    case "v2-recency-header":
+      return (
+        previous.type === "v2-recency-header" &&
+        previous.key === item.key &&
+        previous.label === item.label &&
+        previous.section === item.section
+      );
   }
 }
 
@@ -428,13 +462,19 @@ export function buildThreadListV2ListItems(input: {
   readonly settledShelfExpanded?: boolean;
   readonly settledShelfHeaderIndex?: number | null;
   readonly snoozeLabelNow?: string;
+  /** Adds activity buckets inside active and settled sections. Pinned cards
+      remain above the active buckets. */
+  readonly groupByRecency?: boolean;
+  /** Environments whose server supports thread.snooze. Rows on other
+      environments never carry the minute clock that feeds the snooze menu.
+      Absent = no gating (tests). */
   readonly snoozeEnvironmentIds?: ReadonlySet<EnvironmentId>;
   readonly queuedThreadKeys?: ReadonlySet<string>;
   readonly moveAvailability?: ReadonlyMap<string, ThreadMoveAvailability>;
   readonly shelfPreferencesLoading?: boolean;
 }): ThreadListV2ListItem[] {
   const queuedThreadKeys = input.queuedThreadKeys?.size ? input.queuedThreadKeys : undefined;
-  const threadItems = input.items.map((item): ThreadListV2ListItem => {
+  const threadItems: ThreadListV2ThreadListItem[] = input.items.map((item) => {
     const snoozeWakeLabelText =
       item.snoozed && item.thread.snoozedUntil != null && input.snoozeLabelNow !== undefined
         ? snoozeWakeLabel(item.thread.snoozedUntil, { now: input.snoozeLabelNow })
@@ -454,7 +494,7 @@ export function buildThreadListV2ListItems(input: {
         ? input.moveAvailability?.get(`${item.thread.environmentId}:${item.thread.id}`)
         : undefined;
     return {
-      type: "v2-thread",
+      type: "v2-thread" as const,
       key: `v2-thread:${item.thread.environmentId}:${item.thread.id}`,
       item,
       snoozeWakeLabelText,
@@ -483,7 +523,41 @@ export function buildThreadListV2ListItems(input: {
   const snoozedEnd = settledShelfHeaderIndex ?? threadItems.length;
   const workingEnd = snoozedShelfHeaderIndex ?? snoozedEnd;
   const activeEnd = workingShelfHeaderIndex ?? workingEnd;
-  const result: ThreadListV2ListItem[] = [...pendingItems, ...threadItems.slice(0, activeEnd)];
+  const addRecencyHeaders = (
+    items: ReadonlyArray<ThreadListV2ThreadListItem>,
+    section: "active" | "settled",
+  ): ThreadListV2ListItem[] => {
+    if (input.groupByRecency !== true) return [...items];
+    const groups = groupSortedThreadsByRecency(
+      items.map((item) => item.item.thread),
+      input.snoozeLabelNow === undefined ? undefined : new Date(input.snoozeLabelNow),
+    );
+    if (!shouldShowRecencySectionHeaders(groups)) return [...items];
+    const itemByKey = new Map(
+      items.map((item) => [`${item.item.thread.environmentId}:${item.item.thread.id}`, item]),
+    );
+    return groups.flatMap((group) => [
+      {
+        type: "v2-recency-header" as const,
+        key: `v2-recency-header:${section}:${group.id}`,
+        label: group.label,
+        section,
+      },
+      ...group.threads.flatMap((thread) => {
+        const item = itemByKey.get(`${thread.environmentId}:${thread.id}`);
+        return item === undefined ? [] : [item];
+      }),
+    ]);
+  };
+  const activeItems = threadItems.slice(0, activeEnd);
+  const pinnedEnd = activeItems.findIndex((item) => !item.item.pinned);
+  const pinnedItems = pinnedEnd < 0 ? activeItems : activeItems.slice(0, pinnedEnd);
+  const unpinnedActiveItems = pinnedEnd < 0 ? [] : activeItems.slice(pinnedEnd);
+  const result: ThreadListV2ListItem[] = [
+    ...pendingItems,
+    ...pinnedItems,
+    ...addRecencyHeaders(unpinnedActiveItems, "active"),
+  ];
   const shelfDisabled = input.shelfPreferencesLoading === true;
   if (workingShelfHeaderIndex !== null && workingCount > 0) {
     result.push({
@@ -513,7 +587,7 @@ export function buildThreadListV2ListItems(input: {
       expanded: input.settledShelfExpanded !== false,
       disabled: shelfDisabled,
     });
-    result.push(...threadItems.slice(settledShelfHeaderIndex));
+    result.push(...addRecencyHeaders(threadItems.slice(settledShelfHeaderIndex), "settled"));
   }
   return result.map((entry, index) => {
     if (entry.type !== "v2-thread" && entry.type !== "v2-pending") return entry;
@@ -552,11 +626,20 @@ function sortSettledThreadsReusingLast(
 export function buildThreadListV2Items(input: {
   readonly pendingOrder?: PendingThreadOrder | null;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
-  readonly environmentId: EnvironmentId | null;
+  /**
+   * Multi-select environment filter. Empty = all environments.
+   * Prefer this over the legacy single-id field.
+   */
+  readonly selectedEnvironmentIds?: readonly EnvironmentId[];
+  /** @deprecated Use selectedEnvironmentIds. Kept for call-site migration. */
+  readonly environmentId?: EnvironmentId | null;
   readonly projectRefs?: ReadonlyArray<{
     readonly environmentId: EnvironmentId;
     readonly projectId: ProjectId;
   }> | null;
+  /** Default/false preserves upstream creation order. Recency changes only
+      active and pinned card order; lifecycle sections and variants stay put. */
+  readonly orderByRecency?: boolean;
   readonly searchQuery: string;
   readonly matchedThreadKeys?: ReadonlySet<string>;
   readonly settlementEnvironmentIds?: ReadonlySet<EnvironmentId>;
@@ -584,9 +667,22 @@ export function buildThreadListV2Items(input: {
           }),
         );
   const query = input.searchQuery.trim().toLocaleLowerCase();
+  const selectedEnvironmentIds =
+    input.selectedEnvironmentIds ??
+    (input.environmentId != null && input.environmentId !== undefined ? [input.environmentId] : []);
   const projectKeys = input.projectRefs
     ? new Set(input.projectRefs.map((ref) => `${ref.environmentId}:${ref.projectId}`))
     : null;
+  const orderActiveThreads = (threads: ReadonlyArray<EnvironmentThreadShell>) => {
+    const upstreamOrder = sortThreadsForListV2(threads);
+    if (input.orderByRecency !== true) return upstreamOrder;
+    return upstreamOrder.sort(
+      (left, right) =>
+        firstValidTimestampMs(right.latestUserMessageAt, right.updatedAt, right.createdAt) -
+          firstValidTimestampMs(left.latestUserMessageAt, left.updatedAt, left.createdAt) ||
+        left.id.localeCompare(right.id),
+    );
+  };
 
   const workingShelfEnabled = input.workingShelfEnabled === true;
   const pinned: EnvironmentThreadShell[] = [];
@@ -598,13 +694,23 @@ export function buildThreadListV2Items(input: {
   const queuedThreadKeys = input.queuedThreadKeys?.size ? input.queuedThreadKeys : undefined;
   for (const thread of input.threads) {
     if (thread.archivedAt !== null || thread.lineage.relationshipToParent === "subagent") continue;
-    if (input.environmentId !== null && thread.environmentId !== input.environmentId) continue;
+    // The server stamps settledOverride for the tail.
+    if (selectedEnvironmentIds.length > 0 && !selectedEnvironmentIds.includes(thread.environmentId))
+      continue;
     if (projectKeys !== null && !projectKeys.has(`${thread.environmentId}:${thread.projectId}`)) {
       continue;
     }
     if (
       query.length > 0 &&
-      !thread.title.toLocaleLowerCase().includes(query) &&
+      !threadMatchesAttributeQuery(
+        {
+          title: thread.title,
+          branch: thread.branch,
+          originSource: thread.originSource ?? null,
+          participantSummaries: thread.participantSummaries ?? [],
+        },
+        query,
+      ) &&
       !threadPullRequestSearchTerms(thread).some((term) =>
         term.toLocaleLowerCase().includes(query),
       ) &&
@@ -643,9 +749,13 @@ export function buildThreadListV2Items(input: {
     }
   }
 
+  // The beta inbox is time-ordered, so the saved arrangement (and any move in
+  // flight) is kept but not applied until the beta is off again. With the
+  // shelf off, recency grouping still reorders the active rows.
   const orderedActive = workingShelfEnabled
     ? sortInboxThreadsByReturn(active, input.inboxReturnAt)
-    : applyPendingThreadOrder(sortThreadsForListV2(active), "active", pending);
+    : applyPendingThreadOrder(orderActiveThreads(active), "active", pending);
+  // Newest send first; finishing and waking again do not move a row.
   const orderedWorking = sortWorkingThreadsBySend(working);
   const orderedSnoozed = [...snoozed].sort(
     (left, right) =>
@@ -684,6 +794,8 @@ export function buildThreadListV2Items(input: {
         );
 
   const items: ThreadListV2Item[] = [];
+  // Pins carry an explicit user order (#5581); only the unpinned rows follow
+  // the fork's grouping preference.
   for (const thread of applyPendingThreadOrder(
     sortPinnedThreadsByOrderKey(pinned),
     "pinned",

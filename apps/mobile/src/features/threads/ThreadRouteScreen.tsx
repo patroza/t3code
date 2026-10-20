@@ -11,7 +11,7 @@ import {
   useNavigation,
   type StaticScreenProps,
 } from "@react-navigation/native";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useMemo, useEffect, useRef, useState, type ReactNode } from "react";
 import * as Option from "effect/Option";
 import {
   AuthOrchestrationOperateScope,
@@ -64,6 +64,7 @@ import {
   stagePendingTerminalLaunch,
 } from "../terminal/terminalLaunchContext";
 import { terminalDebugLog } from "../terminal/terminalDebugLog";
+import { indexUserMessageSources } from "@t3tools/client-runtime/user-message";
 import { ThreadDetailScreen, type ThreadDetailScreenProps } from "./ThreadDetailScreen";
 import { GitOverviewSheet } from "./git/GitOverviewSheet";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -112,7 +113,11 @@ function firstRouteParam(value: string | string[] | undefined): string | null {
 
 function ThreadPane(props: { readonly children: ReactNode }) {
   return (
-    <View className="flex-1 bg-screen android:overflow-hidden android:rounded-t-[28px] android:bg-thread-canvas">
+    <View
+      testID="thread-conversation-surface"
+      style={{ flex: 1 }}
+      className="flex-1 bg-screen android:overflow-hidden android:rounded-t-[28px] android:bg-thread-canvas"
+    >
       {props.children}
     </View>
   );
@@ -285,6 +290,10 @@ function ThreadRouteContent(
   );
   const selectedThreadDetailState = props.selectedThreadDetailState;
   const selectedThreadDetail = Option.getOrNull(selectedThreadDetailState.data);
+  const userMessageSources = useMemo(
+    () => indexUserMessageSources(selectedThreadDetail?.messages),
+    [selectedThreadDetail?.messages],
+  );
   const { selectedThreadCwd } = useSelectedThreadWorktree();
   const composer = useThreadComposerState();
   const gitState = useSelectedThreadGitState();
@@ -898,6 +907,7 @@ function ThreadRouteContent(
           feedbackSubmissions={composer.feedbackSubmissions}
           onDismissFeedback={composer.dismissFeedback}
           selectedThreadFeed={composer.selectedThreadFeed}
+          messageSourceById={userMessageSources}
           pendingHandoff={composer.pendingHandoff}
           activityRun={composer.selectedThreadActivityRun}
           activeWorkStartedAt={

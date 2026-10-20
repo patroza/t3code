@@ -5,6 +5,7 @@
  * waiting unchanged when the edit is cancelled.
  */
 import type {
+  CommandId,
   ChatAttachment,
   MessageId,
   OrchestrationMessageContext,
@@ -19,11 +20,14 @@ import { appAtomRegistry } from "./atom-registry";
 import { queuedEditDraftKey } from "./queued-edit-draft-key";
 import {
   clearComposerDraft,
+  getComposerDraftSnapshot,
   setComposerDraftContext,
   setComposerDraftText,
 } from "./use-composer-drafts";
 
 export interface QueuedRunEdit {
+  readonly sequence: number;
+  readonly editId: CommandId;
   readonly runId: RunId;
   readonly messageId: MessageId;
   readonly originalText: string;
@@ -66,9 +70,11 @@ export function beginQueuedRunEdit(threadKey: string, edit: QueuedRunEdit): void
     clearComposerDraft(queuedEditDraftKey(threadKey, previous.runId));
   }
   const draftKey = queuedEditDraftKey(threadKey, edit.runId);
-  clearComposerDraft(draftKey);
-  setComposerDraftText(draftKey, edit.originalText);
-  setComposerDraftContext(draftKey, edit.context);
+  const draft = getComposerDraftSnapshot(draftKey);
+  if (draft.text.length === 0 && draft.attachments.length === 0) {
+    setComposerDraftText(draftKey, edit.originalText);
+    setComposerDraftContext(draftKey, edit.context);
+  }
   setQueuedRunEdit(threadKey, edit);
 }
 

@@ -1,5 +1,9 @@
 import { RegistryContext } from "@effect/atom-react";
-import { EnvironmentId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
+  DEFAULT_SIDEBAR_THREAD_SORT_ORDER,
+} from "@t3tools/contracts";
 import { AtomRegistry } from "effect/reactivity";
 import { act, createElement, useLayoutEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -19,11 +23,18 @@ vi.mock("../../state/preferences", async () => {
 });
 
 import type { ThreadListFilters } from "../../persistence/mobile-preferences";
-import { HomeListOptionsProvider, useHomeListOptions } from "./home-list-options";
+import {
+  HomeListOptionsProvider,
+  useHomeListOptions,
+  DEFAULT_OWNERSHIP_FILTER,
+  hasCustomHomeListOptions,
+  type HomeListOptions,
+} from "./home-list-options";
 
 describe("home list options across layout changes", () => {
   const environmentId = EnvironmentId.make("environment-1");
-  const availableEnvironmentIds = new Set([environmentId]);
+  const secondEnvironmentId = EnvironmentId.make("environment-2");
+  const availableEnvironmentIds = new Set([environmentId, secondEnvironmentId]);
   let root: Root;
   let latest: ReturnType<typeof useHomeListOptions>;
 
@@ -113,6 +124,22 @@ describe("home list options across layout changes", () => {
     },
   );
 
+  it("keeps multiple environments and the project filter through layout changes", async () => {
+    await showLayout("compact");
+    await act(() => {
+      latest.toggleSelectedEnvironmentId(environmentId);
+      latest.toggleSelectedEnvironmentId(secondEnvironmentId);
+      latest.setSelectedProjectKey("repository:one");
+    });
+    await showLayout("sidebar");
+    expect(latest.options.selectedEnvironmentIds).toEqual([environmentId, secondEnvironmentId]);
+    expect(latest.options.selectedProjectKey).toBe("repository:one");
+    await act(() => latest.clearSelectedEnvironments());
+    await showLayout("compact");
+    expect(latest.options.selectedEnvironmentIds).toEqual([]);
+    expect(latest.options.selectedProjectKey).toBe("repository:one");
+  });
+
   it("restores saved filters on launch and saves only real changes", async () => {
     await showLayout("compact", { environmentId, projectKey: "repository:one" });
     expect(latest.options).toMatchObject({
@@ -123,5 +150,49 @@ describe("home list options across layout changes", () => {
 
     await act(() => latest.setSelectedProjectKey(null));
     expect(saved).toEqual([{ threadListFilters: { environmentId, projectKey: null } }]);
+  });
+});
+
+const defaults: HomeListOptions = {
+  selectedEnvironmentIds: [],
+  selectedProjectKey: null,
+  ownershipFilter: DEFAULT_OWNERSHIP_FILTER,
+  ownershipRelation: "both",
+  listMode: "threads",
+  threadGrouping: "project",
+  projectSortOrder:
+    DEFAULT_SIDEBAR_PROJECT_SORT_ORDER === "manual"
+      ? "updated_at"
+      : DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
+  threadSortOrder: DEFAULT_SIDEBAR_THREAD_SORT_ORDER,
+};
+
+describe("home list options", () => {
+  it("recognizes default options", () => {
+    expect(hasCustomHomeListOptions(defaults)).toBe(false);
+  });
+
+  it("marks environment filters as customized", () => {
+    expect(
+      hasCustomHomeListOptions({
+        ...defaults,
+        selectedEnvironmentIds: ["environment-1" as never],
+      }),
+    ).toBe(true);
+    expect(
+      hasCustomHomeListOptions({ ...defaults, selectedProjectKey: "environment-1:project-1" }),
+    ).toBe(true);
+  });
+
+  it("marks ownership filters as customized", () => {
+    expect(hasCustomHomeListOptions({ ...defaults, ownershipFilter: "any" })).toBe(true);
+    expect(hasCustomHomeListOptions({ ...defaults, ownershipFilter: "theirs" })).toBe(true);
+    expect(hasCustomHomeListOptions({ ...defaults, ownershipRelation: "created" })).toBe(true);
+  });
+
+  it("marks non-default thread grouping as customized", () => {
+    expect(hasCustomHomeListOptions({ ...defaults, threadGrouping: "recency" })).toBe(true);
+    expect(hasCustomHomeListOptions({ ...defaults, threadGrouping: "none" })).toBe(true);
+    expect(hasCustomHomeListOptions({ ...defaults, threadGrouping: "project" })).toBe(false);
   });
 });

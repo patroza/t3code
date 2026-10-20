@@ -28,6 +28,10 @@ vi.mock("react", () => ({
   useEffect: () => {},
   useEffectEvent: (callback: unknown) => callback,
 }));
+// The real package is Flow, which the node test runner cannot parse.
+vi.mock("react-native", () => ({
+  Alert: { alert: () => {} },
+}));
 vi.mock("./session", () => ({
   useEnvironmentScope: (environmentId: unknown, scope: string) =>
     (environmentId === state.thread.environmentId ? state.scopes : state.primaryScopes).has(scope),
