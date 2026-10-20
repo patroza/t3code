@@ -10,6 +10,7 @@ const grok = ProviderInstanceId.make("grok");
 describe("topicRequestsFastMode", () => {
   it("matches the topic tag and ignores lookalikes", () => {
     expect(topicRequestsFastMode("omegent-link-scanner omegent-fast-mode")).toBe(true);
+    expect(topicRequestsFastMode("t3-macs-scanner\nomegent-fast-mode")).toBe(true);
     expect(topicRequestsFastMode("Alerts | OMEGENT-FAST-MODE")).toBe(true);
     expect(topicRequestsFastMode("see omegent-fast-mode.")).toBe(true);
     expect(topicRequestsFastMode("omegent-link-scanner")).toBe(false);

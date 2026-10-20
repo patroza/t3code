@@ -7,6 +7,7 @@ import * as NodePath from "node:path";
 
 import { normalizeThreadLinkInput, type ThreadLink } from "./ThreadLinkStore.ts";
 import {
+  findUniqueExternalWorkItemThread,
   normalizeGitHubPullRequestRef,
   normalizeJiraIssueKey,
   resolveUniqueT3ThreadIdForWorkItems,
@@ -109,6 +110,14 @@ describe("ServerWorkItemJoin", () => {
         serverWorkItemsPath: filePath,
       }),
     ).toBeNull();
+
+    expect(
+      findUniqueExternalWorkItemThread({
+        jiraIssueKeys: [],
+        prUrls: ["https://github.com/acme/repo/pull/9"],
+        serverWorkItemsPath: filePath,
+      }),
+    ).toBe("t-pr");
 
     expect(
       resolveUniqueT3ThreadIdForWorkItems({

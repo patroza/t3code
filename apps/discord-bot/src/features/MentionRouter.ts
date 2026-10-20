@@ -20,6 +20,7 @@ import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
@@ -126,7 +127,13 @@ import {
 } from "../presentation/sentryLinks.ts";
 import { formatOpenInOmegentLink, isThreadInfoPinContent } from "../presentation/threadInfoPin.ts";
 import {
-  resolveUniqueT3ThreadIdForWorkItems,
+  existingConversationOfferFields,
+  messageOffersNewThread,
+  NEW_THREAD_OFFER_HOLD_MESSAGE,
+  START_NEW_THREAD_ANYWAY_CUSTOM_ID_PREFIX,
+} from "../presentation/existingThreadOffer.ts";
+import {
+  findUniqueExternalWorkItemThread,
   serverWorkItemsPathFromStateSqlite,
 } from "../store/ServerWorkItemJoin.ts";
 import {
@@ -635,6 +642,11 @@ type BridgedTurnInput = {
     readonly channelId: string;
     readonly messageId: string;
   };
+  /**
+   * The user pressed "start a new thread here anyway" after we pointed at an
+   * existing conversation. Skip that offer and create a new T3 thread.
+   */
+  readonly forceNewThread?: boolean;
 };
 
 const make = (botConfig: DiscordBotConfig) =>
@@ -1103,6 +1115,20 @@ const make = (botConfig: DiscordBotConfig) =>
         });
       });
 
+    // Latest offer per Discord thread, so the button can replay that turn after a click.
+    // Lost on restart; the button then rebuilds the prompt from the thread starter.
+    // The offer message itself is the durable hold: until it is clicked, nothing links.
+    const offeredNewThreads = yield* Ref.make(new Map<string, BridgedTurnInput>());
+
+    const discordThreadHasPendingNewThreadOffer = (discordThreadId: string) =>
+      Effect.gen(function* () {
+        if ((yield* Ref.get(offeredNewThreads)).has(discordThreadId)) return true;
+        const listed = yield* rest
+          .listMessages(discordThreadId, { limit: 50 })
+          .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<unknown>));
+        return listed.some((message) => messageOffersNewThread(message));
+      });
+
     const startBridgedTurnUnlocked = (input: BridgedTurnInput) =>
       Effect.gen(function* () {
         // Fail-closed identity gate: empty map or unmapped requester → no agent turn.
@@ -1167,16 +1193,40 @@ const make = (botConfig: DiscordBotConfig) =>
         const attachments = input.attachments ?? [];
         const parentUnavailable = input.parentUnavailable === true;
 
-        let existing = yield* links.getByDiscordThreadId(input.discordThreadId);
+        const existing = yield* links.getByDiscordThreadId(input.discordThreadId);
+        if (input.forceNewThread === true && existing !== null) {
+          yield* Effect.logInfo(
+            "New-thread button ignored; this Discord thread is already linked",
+            {
+              discordThreadId: input.discordThreadId,
+              t3ThreadId: existing.t3ThreadId,
+            },
+          );
+          return existing.t3ThreadId;
+        }
         const topicShortName = parseTopicShortName(input.topic);
         const topicAlias = topicShortName === null ? null : aliases.resolve(topicShortName);
         const topicBareKeyProjects =
           topicAlias === null ? [] : (readJiraBareKeyProjects(topicAlias.workspaceRoot) ?? []);
 
-        // First-time Discord channel: follow a Jira or GitHub webhook association to
-        // the one T3 thread those systems recorded. A key or PR that only appeared
-        // in Discord does not join.
-        if (existing === null) {
+        // A new Discord thread does not join a T3 conversation that Jira or GitHub
+        // already recorded. Point at that conversation, including one that lives in
+        // another channel. Nothing links and no turn starts until the button.
+        if (existing === null && input.forceNewThread !== true) {
+          if (yield* discordThreadHasPendingNewThreadOffer(input.discordThreadId)) {
+            yield* Effect.logInfo("Holding Discord thread until the new-thread button is clicked", {
+              discordThreadId: input.discordThreadId,
+            });
+            yield* rest.createMessage(input.discordThreadId, {
+              content: NEW_THREAD_OFFER_HOLD_MESSAGE,
+              ...(typeof input.mentionMessage?.id === "string"
+                ? { message_reference: { message_id: input.mentionMessage.id } }
+                : {}),
+            });
+            yield* clearBootstrapReaction(input.pendingReadyReaction);
+            return;
+          }
+
           const joinStarter = yield* loadThreadStarter({
             discordThreadId: input.discordThreadId,
             parentChannelId: input.parentChannelId,
@@ -1197,33 +1247,49 @@ const make = (botConfig: DiscordBotConfig) =>
           );
           if (joinJiraKeys.length > 0 || joinPrUrls.length > 0) {
             const allLinks = yield* links.list();
-            const joinThreadId = resolveUniqueT3ThreadIdForWorkItems({
+            const existingThreadId = findUniqueExternalWorkItemThread({
               jiraIssueKeys: joinJiraKeys,
               prUrls: joinPrUrls,
-              discordLinks: allLinks,
               serverWorkItemsPath: serverWorkItemsPathFromStateSqlite(botConfig.stateSqlitePath),
             });
-            if (joinThreadId !== null) {
-              const joinShell = yield* t3.getThreadShell(joinThreadId);
-              if (joinShell !== null) {
-                yield* Effect.logInfo("Joining existing T3 thread via work-item identity", {
+            if (existingThreadId !== null) {
+              const existingShell = yield* t3.getThreadShell(existingThreadId);
+              if (existingShell !== null) {
+                const activeHome = allLinks.find(
+                  (link) =>
+                    link.status === "active" &&
+                    (link.sourceKind ?? "discord") === "discord" &&
+                    link.t3ThreadId === existingThreadId,
+                );
+                const discordThreadUrl =
+                  activeHome === undefined
+                    ? null
+                    : discordChannelUrl(activeHome.guildId, activeHome.discordThreadId);
+                yield* Effect.logInfo("Pointing at an existing T3 thread instead of joining it", {
                   discordThreadId: input.discordThreadId,
-                  t3ThreadId: joinThreadId,
+                  t3ThreadId: existingThreadId,
+                  existingDiscordThreadId: activeHome?.discordThreadId ?? null,
                   jiraIssueKeys: joinJiraKeys,
                   prUrls: joinPrUrls,
                 });
-                yield* links.put({
-                  discordThreadId: input.discordThreadId,
-                  t3ThreadId: joinThreadId,
-                  projectId: joinShell.projectId,
-                  channelId: input.channelId,
-                  guildId: input.guildId,
-                  createdAt: DateTime.formatIso(DateTime.nowUnsafe()),
-                  sentDiscordUserMessageIds: [],
-                  jiraIssueKeys: joinJiraKeys,
-                  prUrls: joinPrUrls,
+                yield* rest.createMessage(input.discordThreadId, {
+                  ...existingConversationOfferFields({
+                    title: existingShell.title,
+                    discordThreadUrl,
+                    webLink: t3WebThreadUrl(botConfig.webUiBaseUrl, existingThreadId),
+                    t3ThreadId: existingThreadId,
+                  }),
+                  ...(typeof input.mentionMessage?.id === "string"
+                    ? { message_reference: { message_id: input.mentionMessage.id } }
+                    : {}),
                 });
-                existing = yield* links.getByDiscordThreadId(input.discordThreadId);
+                yield* Ref.update(offeredNewThreads, (map) => {
+                  const next = new Map(map);
+                  next.set(input.discordThreadId, input);
+                  return next;
+                });
+                yield* clearBootstrapReaction(input.pendingReadyReaction);
+                return;
               }
             }
           }
@@ -1590,8 +1656,9 @@ const make = (botConfig: DiscordBotConfig) =>
 
         // New Discord thread / first link. Explicit --model wins. Otherwise
         // `omegent-default-model-<name>` on the channel topic is the default.
-        // `omegent-fast-mode` starts that thread in fast mode. Continues above
-        // keep the stored selection unless the message passes --model/--provider.
+        // `omegent-fast-mode` starts that thread in fast mode, including when the
+        // user pressed "start a new thread here anyway". Continues above keep the
+        // stored selection unless the message passes --model/--provider.
         const topicModel = input.flags.model === undefined ? topicDefaultModel(input.topic) : null;
         if (topicModel !== null) {
           const unknownModel = yield* unknownModelMessage({
@@ -3608,6 +3675,149 @@ const make = (botConfig: DiscordBotConfig) =>
       ),
     );
 
+    /**
+     * Explicit opt-in after we pointed at an existing conversation instead of joining it.
+     * Creates a new T3 thread in this Discord thread. The channel fast-mode tag applies.
+     */
+    const startNewThreadButton = Ix.messageComponent(
+      Ix.idStartsWith(START_NEW_THREAD_ANYWAY_CUSTOM_ID_PREFIX),
+      Effect.gen(function* () {
+        const ephemeral = (content: string) =>
+          Ix.response({
+            type: Discord.InteractionCallbackTypes.CHANNEL_MESSAGE_WITH_SOURCE,
+            data: {
+              content,
+              flags: Discord.MessageFlags.Ephemeral | Discord.MessageFlags.SuppressEmbeds,
+            },
+          });
+
+        const interaction = yield* Ix.Interaction;
+        const data = yield* Ix.MessageComponentData;
+        const offeredT3ThreadId = data.custom_id.slice(
+          START_NEW_THREAD_ANYWAY_CUSTOM_ID_PREFIX.length,
+        );
+        if (offeredT3ThreadId.length === 0) {
+          return ephemeral("Invalid new-thread payload.");
+        }
+
+        const channelId = interaction.channel_id;
+        if (channelId === undefined || channelId.length === 0) {
+          return ephemeral("That button only works inside a Discord thread.");
+        }
+
+        const user = interaction.member?.user ?? interaction.user;
+        const access = classifyDiscordAgentAccess({
+          people: identityMap.list(),
+          discordId: user?.id ?? null,
+          discordUsername: user?.username ?? null,
+          discordDisplayName:
+            interaction.member?.nick ?? user?.global_name ?? user?.username ?? null,
+        });
+        if (!access.allowed) {
+          return ephemeral(access.userMessage);
+        }
+
+        const link = yield* links.getByDiscordThreadId(channelId);
+        if (link !== null && link.status === "active") {
+          return ephemeral("This Discord thread already has a T3 thread.");
+        }
+
+        const pending = (yield* Ref.get(offeredNewThreads)).get(channelId);
+        const channel = yield* rest.getChannel(channelId);
+        const topicLookup = yield* resolveProjectTopic(channel);
+        const parentUnavailable = topicLookup.kind === "parent-unavailable";
+        const parentId =
+          topicLookup.kind === "parent-unavailable"
+            ? topicLookup.parentChannelId
+            : (topicLookup.parentChannelId ??
+              ("parent_id" in channel && typeof channel.parent_id === "string"
+                ? channel.parent_id
+                : null));
+        const topic = topicLookup.kind === "resolved" ? topicLookup.topic : null;
+        const guildId = interaction.guild_id ?? pending?.guildId ?? "";
+
+        let turnInput: BridgedTurnInput;
+        if (pending !== undefined) {
+          const { pendingReadyReaction: _pendingReadyReaction, ...replay } = pending;
+          turnInput = { ...replay, forceNewThread: true };
+        } else {
+          const botRoleId = guildId.length === 0 ? null : yield* resolveBotRoleId(guildId);
+          const starter = yield* loadThreadStarter({
+            discordThreadId: channelId,
+            parentChannelId: parentId,
+          });
+          const body = stripBotMention(starter?.content ?? "", botUserId, botRoleId);
+          const flags = parseMentionFlags(body);
+          if (flags.prompt.length === 0) {
+            return ephemeral(
+              "I couldn't find the original message. Mention me again in this thread.",
+            );
+          }
+          turnInput = {
+            discordThreadId: channelId,
+            channelId: parentId ?? channelId,
+            guildId,
+            prompt: flags.prompt,
+            flags,
+            topic,
+            ...(parentUnavailable ? { parentUnavailable: true } : {}),
+            parentChannelId: parentId,
+            ...(starter === null ? {} : { mentionMessage: starter }),
+            forceNewThread: true,
+          };
+        }
+
+        yield* Ref.update(offeredNewThreads, (map) => {
+          if (!map.has(channelId)) return map;
+          const next = new Map(map);
+          next.delete(channelId);
+          return next;
+        });
+
+        yield* forkSlashBackground(
+          startBridgedTurn(turnInput).pipe(
+            Effect.tap(() =>
+              Effect.logInfo("Start-new-thread button created a T3 thread", {
+                channelId,
+                offeredT3ThreadId,
+              }),
+            ),
+            Effect.catch((error) => reportError(channelId, error)),
+          ),
+        );
+
+        const messageContent =
+          typeof interaction.message === "object" &&
+          interaction.message !== null &&
+          "content" in interaction.message &&
+          typeof interaction.message.content === "string"
+            ? interaction.message.content
+            : "";
+        const started = messageContent.includes("Starting a new thread here.")
+          ? messageContent
+          : `${messageContent}\n\nStarting a new thread here.`.trim().slice(0, 2000);
+
+        return Ix.response({
+          type: Discord.InteractionCallbackTypes.UPDATE_MESSAGE,
+          data: {
+            ...idleMessageFields(started),
+          },
+        });
+      }).pipe(
+        Effect.catch((error: unknown) =>
+          Effect.succeed(
+            Ix.response({
+              type: Discord.InteractionCallbackTypes.CHANNEL_MESSAGE_WITH_SOURCE,
+              data: {
+                content: `Could not start a new thread: ${error instanceof Error ? error.message : String(error)}`,
+                flags: Discord.MessageFlags.Ephemeral | Discord.MessageFlags.SuppressEmbeds,
+              },
+            }),
+          ),
+        ),
+      ),
+    );
+
     // `/omegent` and its `/agent` alias share one handler. Discord has no native
     // aliases, so each name is a separately registered command; the cast keeps the
     // command-spec type constant across both so the single handler type-checks.
@@ -4645,6 +4855,7 @@ const make = (botConfig: DiscordBotConfig) =>
         .add(denyButton)
         .add(stopButton)
         .add(continueButton)
+        .add(startNewThreadButton)
         .catchAllCause(Effect.logError) as never,
     );
 
