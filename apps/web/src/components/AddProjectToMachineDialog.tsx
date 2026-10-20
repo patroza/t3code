@@ -144,6 +144,8 @@ function AddProjectToMachineDialog({ request }: { request: AddProjectToMachineRe
   // and holds sends until it finishes. A draft open on the source project moves
   // over with whatever was typed in it.
   const openClonedProject = (targetRef: ScopedProjectRef) => {
+    if (!project) return;
+    const logicalProjectKey = deriveLogicalProjectKeyFromSettings(project, projectGroupingSettings);
     const drafts = useComposerDraftStore.getState();
     const draftId = routeDraftId as DraftId | undefined;
     const draft = draftId ? drafts.getDraftSession(draftId) : null;
@@ -154,16 +156,15 @@ function AddProjectToMachineDialog({ request }: { request: AddProjectToMachineRe
       draft.environmentId === request.projectRef.environmentId &&
       draft.projectId === request.projectRef.projectId
     ) {
-      drafts.setLogicalProjectDraftThreadId(draft.logicalProjectKey, targetRef, draftId, {
+      drafts.setLogicalProjectDraftThreadId(logicalProjectKey, targetRef, draftId, {
         threadId: draft.threadId,
         environmentSelection: "manual",
         loadBalancedEnvironmentId: null,
       });
       return;
     }
-    if (!project) return;
     void handleNewThread(targetRef, {
-      logicalProjectKey: deriveLogicalProjectKeyFromSettings(project, projectGroupingSettings),
+      logicalProjectKey,
       environmentSelection: "manual",
     });
   };

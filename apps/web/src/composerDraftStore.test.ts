@@ -1894,7 +1894,7 @@ describe("composerDraftStore project draft thread mapping", () => {
     });
   });
 
-  it("keeps the prompt and pins a cloned project's machine without reusing source uploads", () => {
+  it("moves a pre-enrichment draft into the canonical clone group without reusing source uploads", () => {
     const store = useComposerDraftStore.getState();
     const hydratedFile: ComposerFileAttachment = {
       ...makeFile("file-cross-environment"),
@@ -1917,9 +1917,11 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(store.getComposerDraft(draftId)?.prompt).toBe("Continue on the new machine");
     expect(store.getDraftSessionByLogicalProjectKey("source-logical-project")).toMatchObject({
       environmentId: OTHER_TEST_ENVIRONMENT_ID,
+      projectId: remoteProjectRef.projectId,
       environmentSelection: "manual",
       loadBalancedEnvironmentId: null,
     });
+    expect(store.getDraftSessionByLogicalProjectKey(scopedProjectKey(projectRef))).toBeNull();
     expect(file).toMatchObject({
       id: hydratedFile.id,
       file: null,
