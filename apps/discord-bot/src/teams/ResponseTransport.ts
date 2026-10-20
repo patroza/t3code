@@ -343,6 +343,9 @@ export function makeTeamsResponseTransport(input: {
         return { ...message, controlKey: nextKey };
       } catch (cause) {
         if (messageUpdateError(cause).reason !== "message-not-found") throw cause;
+        // The tracked card is gone. Drop it before posting a replacement so a
+        // stale Stop cannot sit beside the new one.
+        await deleteControl(message.controlId);
       }
     }
     const posted = await input.send(control);
@@ -386,7 +389,10 @@ export function makeTeamsResponseTransport(input: {
       }
     }
     if (!messageId) throw new Error("Teams accepted the send without a recoverable activity ID");
-    const previous = id ? ownMessages.get(id) : undefined;
+    // Each inbound Teams message builds a new transport, while a running bridge
+    // keeps updating through the transport it started with. The ledger is the
+    // shared record of that activity's Stop card.
+    const previous = id ? (ownMessages.get(id) ?? readLedger().get(id)) : undefined;
     const message: TrackedMessage = {
       id: messageId,
       content: fields.content,

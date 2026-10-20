@@ -533,6 +533,120 @@ describe("Teams response adapter", () => {
         expect(deleteMessage.mock.calls.map(([id]) => id)).toEqual(["control-1", working.id]);
       }),
   );
+  it.effect("keeps the Stop card when another adapter updates the working text", () =>
+    Effect.gen(function* () {
+      const config = yield* DiscordBotConfig.pipe(
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnvRecord({ T3_DISCORD_BOT_DATA_DIR: directory }),
+          ),
+        ),
+      );
+      let texts = 0;
+      let controls = 0;
+      const sendFor = () =>
+        vi.fn(async (wire: TeamsResponseActivity) => {
+          if (wire.id) return { id: wire.id };
+          if (wire.attachments?.length) return { id: `control-${++controls}` };
+          return { id: `text-${++texts}` };
+        });
+      const sendA = sendFor();
+      const deleteA = vi.fn(async (_messageId: string) => {});
+      const personal = { teamId: "", channelId: "" };
+      const adapterA = makeTeamsResponseTransport({
+        ...options,
+        ...personal,
+        config,
+        send: sendA,
+        deleteMessage: deleteA,
+      });
+      const sendB = sendFor();
+      const deleteB = vi.fn(async (_messageId: string) => {});
+      const adapterB = makeTeamsResponseTransport({
+        ...options,
+        ...personal,
+        config,
+        send: sendB,
+        deleteMessage: deleteB,
+      });
+      const working = yield* adapterB.createMessage(
+        options.conversationId,
+        workingFields("Working…", "thread"),
+      );
+      yield* adapterA.updateMessage(
+        options.conversationId,
+        working.id,
+        workingFields("Checking…", "thread"),
+      );
+      expect(sendA.mock.calls).toHaveLength(1);
+      expect(sendA.mock.calls[0]?.[0]).toMatchObject({
+        id: working.id,
+        attachments: [],
+      });
+      expect(sendA.mock.calls[0]?.[0].text).toContain("Checking");
+      expect(deleteA).not.toHaveBeenCalled();
+      expect(controls).toBe(1);
+      const ledgerDir = NodePath.join(directory, "teams-response-ledger");
+      const ledgerFile = NodeFS.readdirSync(ledgerDir).find((name) => name.endsWith(".json"));
+      const rows = JSON.parse(
+        NodeFS.readFileSync(NodePath.join(ledgerDir, ledgerFile ?? ""), "utf8"),
+      ) as Array<{ id: string; controlId?: string }>;
+      expect(rows.find((row) => row.id === working.id)?.controlId).toBe("control-1");
+    }),
+  );
+  it.effect("replaces a missing Stop card with one new card", () =>
+    Effect.gen(function* () {
+      const config = yield* DiscordBotConfig.pipe(
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnvRecord({ T3_DISCORD_BOT_DATA_DIR: directory }),
+          ),
+        ),
+      );
+      let texts = 0;
+      let controls = 0;
+      const order: Array<string> = [];
+      const send = vi.fn(async (wire: TeamsResponseActivity) => {
+        order.push(`send:${wire.id ?? "new"}:${wire.attachments?.length ? "card" : "text"}`);
+        if (wire.id?.startsWith("control-")) {
+          throw { statusCode: 404 };
+        }
+        if (wire.id) return { id: wire.id };
+        if (wire.attachments?.length) return { id: `control-${++controls}` };
+        return { id: `text-${++texts}` };
+      });
+      const deleteMessage = vi.fn(async (messageId: string) => {
+        order.push(`delete:${messageId}`);
+      });
+      const adapter = makeTeamsResponseTransport({
+        ...options,
+        config,
+        send,
+        deleteMessage,
+        teamId: "",
+        channelId: "",
+      });
+      const working = yield* adapter.createMessage(
+        options.conversationId,
+        workingFields("Working…", "thread"),
+      );
+      yield* adapter.updateMessage(
+        options.conversationId,
+        working.id,
+        wakeUpFields("Still going", "thread"),
+      );
+      expect(order).toEqual([
+        "send:new:text",
+        "send:new:card",
+        `send:${working.id}:text`,
+        "send:control-1:card",
+        "delete:control-1",
+        "send:new:card",
+      ]);
+      expect(controls).toBe(2);
+      expect(deleteMessage).toHaveBeenCalledTimes(1);
+    }),
+  );
   it.effect("fails closed when the binding is revoked before a send", () =>
     Effect.gen(function* () {
       const config = yield* DiscordBotConfig.pipe(

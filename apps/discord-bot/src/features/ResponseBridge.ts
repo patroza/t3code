@@ -1315,8 +1315,11 @@ export function shouldSuppressExternalUserEcho(text: string): boolean {
  *
  * Provider-buffered continuations and subagent child prompts are
  * `createdBy: agent` + `creationSource: provider` even on a snapshot that
- * predates the notification field. A person typing in the provider CLI is
- * `createdBy: user`, so that still echoes.
+ * predates the notification field. MCP sends, including attachment captions,
+ * are `createdBy: agent` + `creationSource: mcp` and are not someone typing on
+ * another surface. A person typing in the provider CLI is `createdBy: user`,
+ * so that still echoes. Pull-request watches stay `createdBy: agent` +
+ * `creationSource: server` and still echo unless they carry a notification.
  */
 function isOrchestrationWakeUserMessage(input: {
   readonly createdBy?: string | null | undefined;
@@ -1326,7 +1329,10 @@ function isOrchestrationWakeUserMessage(input: {
 }): boolean {
   if (input.delegatedCompletion != null) return true;
   if (hasWakeNotification(input.notification)) return true;
-  return input.createdBy === "agent" && input.creationSource === "provider";
+  return (
+    input.createdBy === "agent" &&
+    (input.creationSource === "provider" || input.creationSource === "mcp")
+  );
 }
 
 function hasWakeNotification(value: unknown): boolean {
