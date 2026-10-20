@@ -1882,6 +1882,85 @@ Use get_command_or_subagent_output("call-caf23c75-09ca-4fc6-a98e-daa9bcaa8e80-41
     expect(messages.map((message) => message.id)).toEqual(["user-real-1"]);
   });
 
+  it("suppresses agent MCP sends, including attachment captions, on every surface", () => {
+    const caption =
+      "Production multiline street samples. Columns: company, source, orderId, deliveryNoteId, street. 662 rows. UTF-8, comma-separated.";
+    expect(isInternalAgentScaffoldingUserText(caption)).toBe(false);
+    expect(
+      shouldEchoUserMessageToDiscord({
+        text: caption,
+        messageId: "mcp-attachment",
+        seenUserMessageIds: [],
+        sentDiscordUserMessageIds: [],
+        createdBy: "agent",
+        creationSource: "mcp",
+      }),
+    ).toBe(false);
+    expect(
+      shouldEchoUserMessageToDiscord({
+        text: "Authorized Teams request:\nattach the samples as csv",
+        messageId: "teams-human",
+        seenUserMessageIds: [],
+        sentDiscordUserMessageIds: [],
+        createdBy: "user",
+        creationSource: "server",
+      }),
+    ).toBe(false);
+    expect(
+      shouldEchoUserMessageToDiscord({
+        text: "please also check the sheet",
+        messageId: "t3-client-human",
+        seenUserMessageIds: [],
+        sentDiscordUserMessageIds: [],
+        createdBy: "user",
+        creationSource: "server",
+      }),
+    ).toBe(true);
+    expect(
+      shouldEchoUserMessageToDiscord({
+        text: "Update on pull request #12 (https://github.com/acme/widgets/pull/12): checks passed",
+        messageId: "user-pr-watch",
+        seenUserMessageIds: [],
+        sentDiscordUserMessageIds: [],
+        createdBy: "agent",
+        creationSource: "server",
+      }),
+    ).toBe(true);
+
+    const messages = externalUserMessagesToEcho({
+      messages: [
+        {
+          id: MessageId.make("mcp-attachment"),
+          role: "user",
+          text: caption,
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-07-18T00:00:00.000Z",
+          updatedAt: "2026-07-18T00:00:00.000Z",
+          createdBy: "agent",
+          creationSource: "mcp",
+          attachments: [{ id: "file-1" }],
+          source: { channel: "teams", username: "patroza" },
+        },
+        {
+          id: MessageId.make("t3-client-human"),
+          role: "user",
+          text: "please also check the sheet",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-07-18T00:00:01.000Z",
+          updatedAt: "2026-07-18T00:00:01.000Z",
+          createdBy: "user",
+          creationSource: "server",
+        },
+      ] as never,
+      observedInitialUserSnapshot: true,
+      seenUserMessageIds: [],
+      sentDiscordUserMessageIds: [],
+    });
+    expect(messages.map((message) => message.id)).toEqual(["t3-client-human"]);
+  });
+
   it("suppresses runtime_info / pull_request_linking scaffolding as external input", () => {
     // Regression: Grok extra ACP prompt parts persist as user-role text and were
     // mirrored as 💭 from **unknown@unknown** with the raw harness instructions.

@@ -307,6 +307,9 @@ overrides:
   vite: "catalog:"
   vite-plus: "catalog:"
   yaml: "catalog:"
+  # The Android layout patch is keyed to 58.0.22. A fresh lockfile otherwise
+  # selects a newer release and pnpm fails with an unused patch.
+  expo-modules-core: 58.0.22
 
 packageExtensions:
   "@clerk/expo@*":
