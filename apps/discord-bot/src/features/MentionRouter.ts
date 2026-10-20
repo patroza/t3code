@@ -204,7 +204,11 @@ import {
 } from "../t3/T3Session.ts";
 import { formatAlertCause } from "./Alerts.ts";
 import { formatUnknownDiscordModelMessage } from "../presentation/channelInfoPin.ts";
-import { topicDefaultModel, topicRequestsFastMode } from "../presentation/fastMode.ts";
+import {
+  shouldApplyChannelFastMode,
+  topicDefaultModel,
+  topicRequestsFastMode,
+} from "../presentation/fastMode.ts";
 import { ensureChannelInfoPin } from "./ChannelInfoPin.ts";
 import { makeDiscordThreadTurnCoordinator } from "./DiscordThreadTurnCoordinator.ts";
 import {
@@ -1168,6 +1172,10 @@ const make = (botConfig: DiscordBotConfig) =>
         const parentUnavailable = input.parentUnavailable === true;
 
         let existing = yield* links.getByDiscordThreadId(input.discordThreadId);
+        // Captured before a work-item join writes the link. That first Discord
+        // message is still a new thread: the channel fast-mode tag applies.
+        // Later messages in the same Discord thread are continues.
+        const freshDiscordThread = existing === null;
         const topicShortName = parseTopicShortName(input.topic);
         const topicAlias = topicShortName === null ? null : aliases.resolve(topicShortName);
         const topicBareKeyProjects =
@@ -1415,19 +1423,27 @@ const make = (botConfig: DiscordBotConfig) =>
             reuseLiveBridge,
           });
 
-          // Omit modelSelection unless the user explicitly asked to switch — startTurn then
-          // keeps thread.modelSelection (see T3Session.startTurn).
-          const continueModelSelection = hasExplicitModelFlags
-            ? yield* t3.resolveModelSelection({
-                project: resolved.project,
-                stickyModelSelection: currentThread?.modelSelection ?? null,
-                ...(input.flags.provider === undefined
-                  ? {}
-                  : { overrideInstanceId: input.flags.provider }),
-                ...(input.flags.model === undefined ? {} : { overrideModel: input.flags.model }),
-                ...(topicRequestsFastMode(input.topic) ? { fastMode: true } : {}),
-              })
-            : undefined;
+          // Omit modelSelection on a later message unless the user asked to switch —
+          // startTurn then keeps thread.modelSelection (see T3Session.startTurn).
+          // The first message of a new Discord thread still honors omegent-fast-mode
+          // when that message joins an existing T3 conversation.
+          const applyChannelFastMode = shouldApplyChannelFastMode({
+            freshDiscordThread,
+            explicitModelChange: hasExplicitModelFlags,
+            topic: input.topic,
+          });
+          const continueModelSelection =
+            hasExplicitModelFlags || applyChannelFastMode
+              ? yield* t3.resolveModelSelection({
+                  project: resolved.project,
+                  stickyModelSelection: currentThread?.modelSelection ?? null,
+                  ...(input.flags.provider === undefined
+                    ? {}
+                    : { overrideInstanceId: input.flags.provider }),
+                  ...(input.flags.model === undefined ? {} : { overrideModel: input.flags.model }),
+                  ...(applyChannelFastMode ? { fastMode: true } : {}),
+                })
+              : undefined;
           if (currentThread?.modelSelection !== undefined && continueModelSelection !== undefined) {
             const serverConfig = yield* t3.serverConfig();
             const error = getContinuedConversationModelChangeError({
@@ -1588,10 +1604,11 @@ const make = (botConfig: DiscordBotConfig) =>
           return existing.t3ThreadId;
         }
 
-        // New Discord thread / first link. Explicit --model wins. Otherwise
-        // `omegent-default-model-<name>` on the channel topic is the default.
-        // `omegent-fast-mode` starts that thread in fast mode. Continues above
-        // keep the stored selection unless the message passes --model/--provider.
+        // New Discord thread / first link that did not join an existing T3 thread.
+        // Explicit --model wins. Otherwise `omegent-default-model-<name>` on the
+        // channel topic is the default. `omegent-fast-mode` starts that thread in
+        // fast mode. A join above applies the same tag on its first message.
+        // Later messages keep the stored selection unless they pass --model/--provider.
         const topicModel = input.flags.model === undefined ? topicDefaultModel(input.topic) : null;
         if (topicModel !== null) {
           const unknownModel = yield* unknownModelMessage({

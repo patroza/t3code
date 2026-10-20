@@ -40,6 +40,23 @@ export function topicRequestsFastMode(topic: string | null | undefined): boolean
 }
 
 /**
+ * Whether this turn should honor `omegent-fast-mode`.
+ *
+ * A new Discord thread does, including when its first message joins a T3
+ * conversation that already exists (Jira or GitHub). A later message in that
+ * same Discord thread keeps the stored selection unless the user passed
+ * `--model` or `--provider`.
+ */
+export function shouldApplyChannelFastMode(input: {
+  readonly freshDiscordThread: boolean;
+  readonly explicitModelChange: boolean;
+  readonly topic: string | null | undefined;
+}): boolean {
+  if (!topicRequestsFastMode(input.topic)) return false;
+  return input.freshDiscordThread || input.explicitModelChange;
+}
+
+/**
  * Model name from `omegent-default-model-<name>`, or null when the tag is absent.
  * The name may contain hyphens and dots (`opus-5.5`, `gpt-6.1-sol`). The first
  * tag wins. A bare `omegent-default-model` is not a tag.

@@ -1,7 +1,12 @@
 import { ProviderInstanceId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { applyFastModeSelection, topicDefaultModel, topicRequestsFastMode } from "./fastMode.ts";
+import {
+  applyFastModeSelection,
+  shouldApplyChannelFastMode,
+  topicDefaultModel,
+  topicRequestsFastMode,
+} from "./fastMode.ts";
 
 const claude = ProviderInstanceId.make("claudeAgent");
 const codex = ProviderInstanceId.make("codex");
@@ -10,6 +15,7 @@ const grok = ProviderInstanceId.make("grok");
 describe("topicRequestsFastMode", () => {
   it("matches the topic tag and ignores lookalikes", () => {
     expect(topicRequestsFastMode("omegent-link-scanner omegent-fast-mode")).toBe(true);
+    expect(topicRequestsFastMode("t3-macs-scanner\nomegent-fast-mode")).toBe(true);
     expect(topicRequestsFastMode("Alerts | OMEGENT-FAST-MODE")).toBe(true);
     expect(topicRequestsFastMode("see omegent-fast-mode.")).toBe(true);
     expect(topicRequestsFastMode("omegent-link-scanner")).toBe(false);
@@ -17,6 +23,44 @@ describe("topicRequestsFastMode", () => {
     expect(topicRequestsFastMode("omegent-link-fast-mode")).toBe(false);
     expect(topicRequestsFastMode(null)).toBe(false);
     expect(topicRequestsFastMode("")).toBe(false);
+  });
+});
+
+describe("shouldApplyChannelFastMode", () => {
+  const tagged = "t3-macs-scanner\nomegent-fast-mode";
+
+  it("applies the tag on a new Discord thread and on an explicit model change", () => {
+    expect(
+      shouldApplyChannelFastMode({
+        freshDiscordThread: true,
+        explicitModelChange: false,
+        topic: tagged,
+      }),
+    ).toBe(true);
+    expect(
+      shouldApplyChannelFastMode({
+        freshDiscordThread: false,
+        explicitModelChange: true,
+        topic: tagged,
+      }),
+    ).toBe(true);
+  });
+
+  it("leaves a later message in the same Discord thread on the stored model", () => {
+    expect(
+      shouldApplyChannelFastMode({
+        freshDiscordThread: false,
+        explicitModelChange: false,
+        topic: tagged,
+      }),
+    ).toBe(false);
+    expect(
+      shouldApplyChannelFastMode({
+        freshDiscordThread: true,
+        explicitModelChange: false,
+        topic: "t3-macs-scanner",
+      }),
+    ).toBe(false);
   });
 });
 
