@@ -36,35 +36,36 @@ export const make = Effect.gen(function* () {
   const normalizeWorktreeKey = (cwd: string) =>
     fs.realPath(cwd).pipe(Effect.orElseSucceed(() => cwd));
 
-  const adjust = (worktreePath: string | null | undefined, delta: 1 | -1) =>
-    Effect.gen(function* () {
-      const trimmed = worktreePath?.trim() ?? "";
-      if (trimmed.length === 0) {
-        return;
+  const adjust = Effect.fn("PrLookupFreeze.adjust")(function* (
+    worktreePath: string | null | undefined,
+    delta: 1 | -1,
+  ) {
+    const trimmed = worktreePath?.trim() ?? "";
+    if (trimmed.length === 0) {
+      return;
+    }
+    const key = yield* normalizeWorktreeKey(trimmed);
+    yield* Ref.update(settledRefCountByCwd, (current) => {
+      const next = new Map(current);
+      const previous = next.get(key) ?? 0;
+      const value = Math.max(0, previous + delta);
+      if (value === 0) {
+        next.delete(key);
+      } else {
+        next.set(key, value);
       }
-      const key = yield* normalizeWorktreeKey(trimmed);
-      yield* Ref.update(settledRefCountByCwd, (current) => {
-        const next = new Map(current);
-        const previous = next.get(key) ?? 0;
-        const value = Math.max(0, previous + delta);
-        if (value === 0) {
-          next.delete(key);
-        } else {
-          next.set(key, value);
-        }
-        return next;
-      });
+      return next;
     });
+  });
 
   return PrLookupFreeze.of({
     noteWorktreeSettled: (worktreePath) => adjust(worktreePath, 1),
     noteWorktreeUnsettled: (worktreePath) => adjust(worktreePath, -1),
-    isWorktreeSettledFrozen: (cwd) =>
-      Effect.gen(function* () {
-        const key = yield* normalizeWorktreeKey(cwd);
-        const counts = yield* Ref.get(settledRefCountByCwd);
-        return (counts.get(key) ?? 0) > 0;
-      }),
+    isWorktreeSettledFrozen: Effect.fn("PrLookupFreeze.isWorktreeSettledFrozen")(function* (cwd) {
+      const key = yield* normalizeWorktreeKey(cwd);
+      const counts = yield* Ref.get(settledRefCountByCwd);
+      return (counts.get(key) ?? 0) > 0;
+    }),
   });
 });
 

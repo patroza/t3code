@@ -288,118 +288,119 @@ export const make = Effect.gen(function* () {
       }),
     );
 
-  const openResolvedThread = (deepLink: DesktopThreadDeepLink): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      const resolution = yield* resolveDeepLinkFromCatalog(deepLink);
-      switch (resolution._tag) {
-        case "resolved": {
-          yield* logDeepLinkInfo("opening thread from deep link", {
-            connectionLabel: deepLink.connectionLabel,
-            // Log only that an environment was resolved — never catalog contents.
-            resolved: true,
-          });
-          yield* desktopWindow
-            .navigateToThread({
-              environmentId: resolution.environmentId,
-              threadId: deepLink.threadId,
-            })
-            .pipe(
-              Effect.catch((error) =>
-                logDeepLinkWarning("failed to navigate to deep-linked thread", {
-                  message: error.message,
-                }),
-              ),
-            );
-          return;
-        }
-        case "missing": {
-          yield* logDeepLinkWarning("deep link connection label not found", {
-            connectionLabel: deepLink.connectionLabel,
-          });
-          yield* revealOnly;
-          return;
-        }
-        case "ambiguous": {
-          yield* logDeepLinkWarning("deep link connection label is ambiguous", {
-            connectionLabel: deepLink.connectionLabel,
-          });
-          yield* revealOnly;
-          return;
-        }
-        case "invalidCatalog": {
-          yield* logDeepLinkWarning("deep link connection catalog could not be decoded", {
-            reason: "invalidCatalog",
-          });
-          yield* revealOnly;
-          return;
-        }
-      }
-    }).pipe(Effect.withSpan("desktop.deepLinks.openResolvedThread"));
-
-  const processAction = (action: PendingDeepLinkAction): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      switch (action._tag) {
-        case "reveal":
-          yield* revealOnly;
-          return;
-        case "openThread":
-          yield* openResolvedThread(action.deepLink);
-          return;
-        case "openProject":
-          yield* desktopWindow.navigateToProject(action.deepLink).pipe(
+  const openResolvedThread = Effect.fn("desktop.deepLinks.openResolvedThread")(function* (
+    deepLink: DesktopThreadDeepLink,
+  ) {
+    const resolution = yield* resolveDeepLinkFromCatalog(deepLink);
+    switch (resolution._tag) {
+      case "resolved": {
+        yield* logDeepLinkInfo("opening thread from deep link", {
+          connectionLabel: deepLink.connectionLabel,
+          // Log only that an environment was resolved — never catalog contents.
+          resolved: true,
+        });
+        yield* desktopWindow
+          .navigateToThread({
+            environmentId: resolution.environmentId,
+            threadId: deepLink.threadId,
+          })
+          .pipe(
             Effect.catch((error) =>
-              logDeepLinkWarning("failed to navigate to deep-linked project", {
+              logDeepLinkWarning("failed to navigate to deep-linked thread", {
                 message: error.message,
               }),
             ),
           );
-          return;
-      }
-    }).pipe(Effect.withSpan("desktop.deepLinks.processAction"));
-
-  const enqueueOrProcess = (action: PendingDeepLinkAction): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      const started = yield* Ref.get(startedRef);
-      if (!started) {
-        // Newest action wins while startup is still settling.
-        yield* Ref.set(pendingActionRef, Option.some(action));
         return;
       }
-      yield* processAction(action);
-    });
-
-  const handleArgv = (argv: readonly string[]): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      for (const entry of argv) {
-        const projectDeepLink = parseDesktopProjectDeepLink(entry);
-        if (Option.isSome(projectDeepLink)) {
-          yield* enqueueOrProcess({ _tag: "openProject", deepLink: projectDeepLink.value });
-          return;
-        }
-      }
-      const deepLink = findDesktopThreadDeepLinkInArgv(argv);
-      if (Option.isSome(deepLink)) {
-        yield* enqueueOrProcess({ _tag: "openThread", deepLink: deepLink.value });
+      case "missing": {
+        yield* logDeepLinkWarning("deep link connection label not found", {
+          connectionLabel: deepLink.connectionLabel,
+        });
+        yield* revealOnly;
         return;
       }
-      yield* enqueueOrProcess({ _tag: "reveal" });
-    }).pipe(Effect.withSpan("desktop.deepLinks.handleArgv"));
+      case "ambiguous": {
+        yield* logDeepLinkWarning("deep link connection label is ambiguous", {
+          connectionLabel: deepLink.connectionLabel,
+        });
+        yield* revealOnly;
+        return;
+      }
+      case "invalidCatalog": {
+        yield* logDeepLinkWarning("deep link connection catalog could not be decoded", {
+          reason: "invalidCatalog",
+        });
+        yield* revealOnly;
+        return;
+      }
+    }
+  });
 
-  const handleUrl = (url: string): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      const projectDeepLink = parseDesktopProjectDeepLink(url);
+  const processAction = Effect.fn("desktop.deepLinks.processAction")(function* (
+    action: PendingDeepLinkAction,
+  ) {
+    switch (action._tag) {
+      case "reveal":
+        yield* revealOnly;
+        return;
+      case "openThread":
+        yield* openResolvedThread(action.deepLink);
+        return;
+      case "openProject":
+        yield* desktopWindow.navigateToProject(action.deepLink).pipe(
+          Effect.catch((error) =>
+            logDeepLinkWarning("failed to navigate to deep-linked project", {
+              message: error.message,
+            }),
+          ),
+        );
+        return;
+    }
+  });
+
+  const enqueueOrProcess = Effect.fn("desktop.deepLinks.enqueueOrProcess")(function* (
+    action: PendingDeepLinkAction,
+  ) {
+    const started = yield* Ref.get(startedRef);
+    if (!started) {
+      // Newest action wins while startup is still settling.
+      yield* Ref.set(pendingActionRef, Option.some(action));
+      return;
+    }
+    yield* processAction(action);
+  });
+
+  const handleArgv = Effect.fn("desktop.deepLinks.handleArgv")(function* (argv: readonly string[]) {
+    for (const entry of argv) {
+      const projectDeepLink = parseDesktopProjectDeepLink(entry);
       if (Option.isSome(projectDeepLink)) {
         yield* enqueueOrProcess({ _tag: "openProject", deepLink: projectDeepLink.value });
         return;
       }
-      const deepLink = parseDesktopThreadDeepLink(url);
-      if (Option.isSome(deepLink)) {
-        yield* enqueueOrProcess({ _tag: "openThread", deepLink: deepLink.value });
-        return;
-      }
-      yield* logDeepLinkWarning("ignored unsupported open-url payload");
-      yield* enqueueOrProcess({ _tag: "reveal" });
-    }).pipe(Effect.withSpan("desktop.deepLinks.handleUrl"));
+    }
+    const deepLink = findDesktopThreadDeepLinkInArgv(argv);
+    if (Option.isSome(deepLink)) {
+      yield* enqueueOrProcess({ _tag: "openThread", deepLink: deepLink.value });
+      return;
+    }
+    yield* enqueueOrProcess({ _tag: "reveal" });
+  });
+
+  const handleUrl = Effect.fn("desktop.deepLinks.handleUrl")(function* (url: string) {
+    const projectDeepLink = parseDesktopProjectDeepLink(url);
+    if (Option.isSome(projectDeepLink)) {
+      yield* enqueueOrProcess({ _tag: "openProject", deepLink: projectDeepLink.value });
+      return;
+    }
+    const deepLink = parseDesktopThreadDeepLink(url);
+    if (Option.isSome(deepLink)) {
+      yield* enqueueOrProcess({ _tag: "openThread", deepLink: deepLink.value });
+      return;
+    }
+    yield* logDeepLinkWarning("ignored unsupported open-url payload");
+    yield* enqueueOrProcess({ _tag: "reveal" });
+  });
 
   const start = Effect.gen(function* () {
     const alreadyStarted = yield* Ref.getAndSet(startedRef, true);

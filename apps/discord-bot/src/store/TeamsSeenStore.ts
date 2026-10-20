@@ -69,19 +69,18 @@ export const layer = (dataDirRaw: string, fileName = "teams-seen.json") =>
           Ref.get(state).pipe(Effect.map((map) => (map.get(channelKey) ?? []).includes(messageId))),
         listSeenIds: (channelKey) =>
           Ref.get(state).pipe(Effect.map((map) => [...(map.get(channelKey) ?? [])])),
-        markSeen: (channelKey, messageId) =>
-          Effect.gen(function* () {
-            const next = yield* Ref.updateAndGet(state, (current) => {
-              const copy = new Map(current);
-              const existing = copy.get(channelKey) ?? [];
-              if (existing.includes(messageId)) {
-                return copy;
-              }
-              copy.set(channelKey, [...existing, messageId].slice(-MAX_MESSAGE_IDS_PER_CHANNEL));
+        markSeen: Effect.fn("TeamsSeenStore.markSeen")(function* (channelKey, messageId) {
+          const next = yield* Ref.updateAndGet(state, (current) => {
+            const copy = new Map(current);
+            const existing = copy.get(channelKey) ?? [];
+            if (existing.includes(messageId)) {
               return copy;
-            });
-            yield* persist(next);
-          }),
+            }
+            copy.set(channelKey, [...existing, messageId].slice(-MAX_MESSAGE_IDS_PER_CHANNEL));
+            return copy;
+          });
+          yield* persist(next);
+        }),
       });
     }),
   );

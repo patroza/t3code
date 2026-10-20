@@ -304,46 +304,44 @@ function makeService(source: IdentityMapSource, store: ClaimStore): IdentityServ
         })),
       ),
 
-    claim: (sessionId, input) =>
-      Effect.gen(function* () {
-        const snapshot = yield* source.current;
-        if (!snapshot.enabled) {
-          return yield* new IdentityError({
-            code: "identity_map_disabled",
-            message: "Identity map is not configured; claims are disabled.",
-          });
-        }
+    claim: Effect.fn("IdentityService.claim")(function* (sessionId, input) {
+      const snapshot = yield* source.current;
+      if (!snapshot.enabled) {
+        return yield* new IdentityError({
+          code: "identity_map_disabled",
+          message: "Identity map is not configured; claims are disabled.",
+        });
+      }
 
-        const person =
-          "personId" in input
-            ? (snapshot.byPersonId.get(input.personId) ?? null)
-            : (snapshot.byUsername.get(input.username) ?? null);
-        if (person === null) {
-          return yield* new IdentityError({
-            code: "identity_unknown_person",
-            message: "That identity is not in the server identity map.",
-          });
-        }
+      const person =
+        "personId" in input
+          ? (snapshot.byPersonId.get(input.personId) ?? null)
+          : (snapshot.byUsername.get(input.username) ?? null);
+      if (person === null) {
+        return yield* new IdentityError({
+          code: "identity_unknown_person",
+          message: "That identity is not in the server identity map.",
+        });
+      }
 
-        const method: SessionIdentityClaimMethod =
-          ("method" in input && input.method !== undefined ? input.method : undefined) ??
-          "typeahead";
-        const claimedAt = yield* DateTime.now.pipe(Effect.map((dt) => DateTime.formatIso(dt)));
-        const record: ClaimRecord = {
-          sessionId,
-          personId: PersonId.make(person.personId),
-          username: IdentityUsername.make(person.username),
-          claimedAt,
-          method,
-        };
-        yield* store.put(record);
-        return { claim: toPublicClaim(record) };
-      }),
+      const method: SessionIdentityClaimMethod =
+        ("method" in input && input.method !== undefined ? input.method : undefined) ?? "typeahead";
+      const claimedAt = yield* DateTime.now.pipe(Effect.map((dt) => DateTime.formatIso(dt)));
+      const record: ClaimRecord = {
+        sessionId,
+        personId: PersonId.make(person.personId),
+        username: IdentityUsername.make(person.username),
+        claimedAt,
+        method,
+      };
+      yield* store.put(record);
+      return { claim: toPublicClaim(record) };
+    }),
 
     clearClaim: (sessionId) => store.remove(sessionId).pipe(Effect.map((cleared) => ({ cleared }))),
 
-    requireOperateClaim: (sessionId, options) =>
-      Effect.gen(function* () {
+    requireOperateClaim: Effect.fn("IdentityService.requireOperateClaim")(
+      function* (sessionId, options) {
         const snapshot = yield* source.current;
         if (!snapshot.enabled) return null;
         // Integration bots: one auth session, many platform actors — not interactive claim.
@@ -374,7 +372,8 @@ function makeService(source: IdentityMapSource, store: ClaimStore): IdentityServ
           });
         }
         return toPublicClaim(existing);
-      }),
+      },
+    ),
 
     resolveByJiraAccountId: (accountId) =>
       source.current.pipe(
@@ -446,35 +445,32 @@ export const layerPersisted = Layer.effect(
     }
 
     const store: ClaimStore = {
-      get: (sessionId) =>
-        Effect.gen(function* () {
-          const cached = yield* memory.get(sessionId);
-          if (cached !== null) return cached;
-          const row = yield* repository
-            .getBySessionId(sessionId)
-            .pipe(Effect.catch(() => Effect.succeed(Option.none())));
-          if (Option.isNone(row)) return null;
-          const record: ClaimRecord = {
-            sessionId: row.value.sessionId,
-            personId: row.value.personId,
-            username: row.value.username,
-            claimedAt: row.value.claimedAt,
-            method: row.value.method,
-          };
-          yield* memory.put(record);
-          return record;
-        }),
-      put: (record) =>
-        Effect.gen(function* () {
-          yield* memory.put(record);
-          yield* repository.upsert(record).pipe(Effect.catch(() => Effect.void));
-        }),
-      remove: (sessionId) =>
-        Effect.gen(function* () {
-          const cleared = yield* memory.remove(sessionId);
-          yield* repository.deleteBySessionId(sessionId).pipe(Effect.catch(() => Effect.void));
-          return cleared;
-        }),
+      get: Effect.fn("IdentityService.store.get")(function* (sessionId) {
+        const cached = yield* memory.get(sessionId);
+        if (cached !== null) return cached;
+        const row = yield* repository
+          .getBySessionId(sessionId)
+          .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+        if (Option.isNone(row)) return null;
+        const record: ClaimRecord = {
+          sessionId: row.value.sessionId,
+          personId: row.value.personId,
+          username: row.value.username,
+          claimedAt: row.value.claimedAt,
+          method: row.value.method,
+        };
+        yield* memory.put(record);
+        return record;
+      }),
+      put: Effect.fn("IdentityService.store.put")(function* (record) {
+        yield* memory.put(record);
+        yield* repository.upsert(record).pipe(Effect.catch(() => Effect.void));
+      }),
+      remove: Effect.fn("IdentityService.store.remove")(function* (sessionId) {
+        const cleared = yield* memory.remove(sessionId);
+        yield* repository.deleteBySessionId(sessionId).pipe(Effect.catch(() => Effect.void));
+        return cleared;
+      }),
     };
 
     return makeService(source, store);

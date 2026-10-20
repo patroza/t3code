@@ -139,239 +139,237 @@ export function pickEvictionVictim(
  * Rehydrate ensure is a no-op when the same t3ThreadId is already live.
  * Different t3ThreadId always replaces the fiber.
  */
-export const makeBridgeHub = (runBridge: BridgeRunner) =>
-  Effect.gen(function* () {
-    const bridges = yield* Ref.make(new Map<string, BridgeEntry>());
+export const makeBridgeHub = Effect.fn("BridgeHub.makeBridgeHub")(function* (
+  runBridge: BridgeRunner,
+) {
+  const bridges = yield* Ref.make(new Map<string, BridgeEntry>());
 
-    const dropInternal = (discordChannelId: string) =>
-      Effect.gen(function* () {
-        const entry = yield* Ref.modify(bridges, (map) => {
-          const current = map.get(discordChannelId);
-          if (current === undefined) return [undefined, map] as const;
-          const copy = new Map(map);
-          copy.delete(discordChannelId);
-          return [current, copy] as const;
+  const dropInternal = Effect.fn("BridgeHub.dropInternal")(function* (discordChannelId: string) {
+    const entry = yield* Ref.modify(bridges, (map) => {
+      const current = map.get(discordChannelId);
+      if (current === undefined) return [undefined, map] as const;
+      const copy = new Map(map);
+      copy.delete(discordChannelId);
+      return [current, copy] as const;
+    });
+    if (entry === undefined) return;
+    yield* Fiber.interrupt(entry.fiber).pipe(Effect.ignore);
+  });
+
+  const listActiveInternal = () =>
+    Ref.get(bridges).pipe(
+      Effect.map((map) =>
+        [...map.entries()].map(([discordChannelId, entry]): ActiveBridge => ({
+          discordChannelId,
+          t3ThreadId: entry.t3ThreadId,
+          lastActivityAt: entry.lastActivityAt,
+          preferred: entry.preferred,
+          mode: entry.mode,
+        })),
+      ),
+    );
+
+  const enforceCap = Effect.fn("BridgeHub.enforceCap")(function* (exceptChannelId: string) {
+    // Leave room for the bridge we are about to start.
+    while (true) {
+      const active = yield* listActiveInternal();
+      if (active.length < MAX_ACTIVE_BRIDGES) return;
+      const victim = pickEvictionVictim(active, exceptChannelId);
+      if (victim === null) {
+        yield* Effect.logWarning("BridgeHub at hard capacity with no eviction victim", {
+          active: active.length,
+          cap: MAX_ACTIVE_BRIDGES,
+          exceptChannelId,
         });
-        if (entry === undefined) return;
-        yield* Fiber.interrupt(entry.fiber).pipe(Effect.ignore);
+        return;
+      }
+      yield* Effect.logWarning("BridgeHub evicting bridge under capacity pressure", {
+        victim: victim.discordChannelId,
+        victimT3: victim.t3ThreadId,
+        lastActivityAt: victim.lastActivityAt,
+        preferred: victim.preferred,
+        active: active.length,
+        cap: MAX_ACTIVE_BRIDGES,
       });
+      yield* dropInternal(victim.discordChannelId);
+    }
+  });
 
-    const listActiveInternal = () =>
-      Ref.get(bridges).pipe(
-        Effect.map((map) =>
-          [...map.entries()].map(([discordChannelId, entry]): ActiveBridge => ({
-            discordChannelId,
-            t3ThreadId: entry.t3ThreadId,
-            lastActivityAt: entry.lastActivityAt,
-            preferred: entry.preferred,
-            mode: entry.mode,
-          })),
-        ),
+  const ensure = (input: BridgeEnsureInput): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      const mode = input.mode ?? "interactive";
+      const preferred = input.preferred ?? mode === "interactive";
+      const activityAt = input.lastActivityAt ?? nowIso();
+      const existing = yield* Ref.get(bridges).pipe(
+        Effect.map((map) => map.get(input.discordChannelId)),
       );
 
-    const enforceCap = (exceptChannelId: string) =>
-      Effect.gen(function* () {
-        // Leave room for the bridge we are about to start.
-        while (true) {
-          const active = yield* listActiveInternal();
-          if (active.length < MAX_ACTIVE_BRIDGES) return;
-          const victim = pickEvictionVictim(active, exceptChannelId);
-          if (victim === null) {
-            yield* Effect.logWarning("BridgeHub at hard capacity with no eviction victim", {
-              active: active.length,
-              cap: MAX_ACTIVE_BRIDGES,
-              exceptChannelId,
-            });
-            return;
-          }
-          yield* Effect.logWarning("BridgeHub evicting bridge under capacity pressure", {
-            victim: victim.discordChannelId,
-            victimT3: victim.t3ThreadId,
-            lastActivityAt: victim.lastActivityAt,
-            preferred: victim.preferred,
-            active: active.length,
-            cap: MAX_ACTIVE_BRIDGES,
-          });
-          yield* dropInternal(victim.discordChannelId);
-        }
-      });
-
-    const ensure = (input: BridgeEnsureInput): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        const mode = input.mode ?? "interactive";
-        const preferred = input.preferred ?? mode === "interactive";
-        const activityAt = input.lastActivityAt ?? nowIso();
-        const existing = yield* Ref.get(bridges).pipe(
-          Effect.map((map) => map.get(input.discordChannelId)),
-        );
-
-        // Same T3 thread already bridging: reuse live fiber (mid-turn steers + rehydrate).
-        if (existing !== undefined && existing.t3ThreadId === input.t3ThreadId) {
-          yield* Effect.logInfo("BridgeHub.ensure reusing live fiber", {
-            discordChannelId: input.discordChannelId,
-            t3ThreadId: input.t3ThreadId,
-            mode,
-          });
-          yield* Ref.update(bridges, (map) => {
-            const current = map.get(input.discordChannelId);
-            if (current === undefined) return map;
-            const copy = new Map(map);
-            copy.set(input.discordChannelId, {
-              ...current,
-              lastActivityAt: activityAt,
-              preferred: preferred || current.preferred,
-              mode,
-            });
-            return copy;
-          });
-          if (
-            input.sentDiscordUserMessageIds !== undefined &&
-            input.sentDiscordUserMessageIds.length > 0
-          ) {
-            yield* existing.control.noteSentUserMessageIds(input.sentDiscordUserMessageIds);
-          }
-          if (
-            input.workingAckMessageId !== undefined &&
-            input.workingAckMessageId !== null &&
-            input.workingAckMessageId !== ""
-          ) {
-            yield* existing.control.adoptWorkingAckMessageId(input.workingAckMessageId);
-          }
-          yield* Deferred.await(existing.ready).pipe(
-            Effect.timeout("15 seconds"),
-            Effect.catch(() => Effect.void),
-          );
-          return;
-        }
-
-        if (existing !== undefined) {
-          yield* Effect.logInfo("BridgeHub.ensure interrupting previous fiber", {
-            discordChannelId: input.discordChannelId,
-            previousT3ThreadId: existing.t3ThreadId,
-            nextT3ThreadId: input.t3ThreadId,
-            mode,
-          });
-          yield* dropInternal(input.discordChannelId);
-        }
-
-        yield* enforceCap(input.discordChannelId);
-
-        const ready = yield* Deferred.make<void>();
-        const controlSlot: BridgeControlSlot = {
-          noteSentUserMessageIds: () => Effect.void,
-          adoptWorkingAckMessageId: () => Effect.void,
-          refreshThreadIndicators: () =>
-            Effect.succeed({ ok: false as const, error: "Bridge control not ready yet" }),
-        };
-
-        const fiber = yield* runBridge(input, ready, controlSlot).pipe(
-          Effect.catchCause((cause) =>
-            Effect.gen(function* () {
-              const pretty = formatAlertCause(cause);
-              yield* Effect.logError("Discord bridge fiber failed", {
-                discordChannelId: input.discordChannelId,
-                t3ThreadId: input.t3ThreadId,
-                cause: pretty,
-              });
-              yield* postFatalAlert(
-                `bridge:${input.discordChannelId}`,
-                "Discord bridge fiber failed",
-                `channel=\`${input.discordChannelId}\` thread=\`${input.t3ThreadId}\`\n${pretty}`,
-                { threadId: input.t3ThreadId, channelId: input.discordChannelId },
-              );
-              yield* Deferred.succeed(ready, undefined).pipe(Effect.ignore);
-            }).pipe(Effect.asVoid),
-          ),
-          Effect.ensuring(
-            Ref.update(bridges, (map) => {
-              const current = map.get(input.discordChannelId);
-              if (current === undefined || current.ready !== ready) return map;
-              const copy = new Map(map);
-              copy.delete(input.discordChannelId);
-              return copy;
-            }),
-          ),
-          // forkDetach: mention handler returns after startTurn; forkChild would kill the
-          // bridge mid-upload and leave Working.. + partial attachments behind.
-          Effect.forkDetach,
-        );
-
-        yield* Ref.update(bridges, (map) => {
-          const copy = new Map(map);
-          copy.set(input.discordChannelId, {
-            fiber,
-            t3ThreadId: input.t3ThreadId,
-            ready,
-            lastActivityAt: activityAt,
-            preferred,
-            mode,
-            control: controlSlot,
-          });
-          return copy;
-        });
-
-        yield* Effect.logInfo("BridgeHub fiber started; waiting for first snapshot", {
+      // Same T3 thread already bridging: reuse live fiber (mid-turn steers + rehydrate).
+      if (existing !== undefined && existing.t3ThreadId === input.t3ThreadId) {
+        yield* Effect.logInfo("BridgeHub.ensure reusing live fiber", {
           discordChannelId: input.discordChannelId,
           t3ThreadId: input.t3ThreadId,
           mode,
         });
-
-        // Do not return until subscription is live — otherwise startTurn can finish
-        // before any events are observed (fast providers).
-        yield* Deferred.await(ready).pipe(
-          Effect.timeout("15 seconds"),
-          Effect.catch((error) =>
-            Effect.logError("Timed out / failed waiting for T3 thread subscription snapshot", {
-              discordChannelId: input.discordChannelId,
-              t3ThreadId: input.t3ThreadId,
-              error: String(error),
-            }),
-          ),
-        );
-        yield* Effect.logInfo("BridgeHub subscription ready (snapshot received)", {
-          discordChannelId: input.discordChannelId,
-          t3ThreadId: input.t3ThreadId,
-        });
-      }) as Effect.Effect<void>;
-
-    return BridgeHub.of({
-      ensure,
-      drop: dropInternal,
-      dropAll: () =>
-        Effect.gen(function* () {
-          const active = yield* listActiveInternal();
-          for (const entry of active) {
-            yield* dropInternal(entry.discordChannelId);
-          }
-        }),
-      listActive: listActiveInternal,
-      activeCount: () => Ref.get(bridges).pipe(Effect.map((map) => map.size)),
-      touch: (discordChannelId, at) =>
-        Ref.update(bridges, (map) => {
-          const current = map.get(discordChannelId);
+        yield* Ref.update(bridges, (map) => {
+          const current = map.get(input.discordChannelId);
           if (current === undefined) return map;
           const copy = new Map(map);
-          copy.set(discordChannelId, {
+          copy.set(input.discordChannelId, {
             ...current,
-            lastActivityAt: at ?? nowIso(),
+            lastActivityAt: activityAt,
+            preferred: preferred || current.preferred,
+            mode,
           });
           return copy;
-        }),
-      getLive: (discordChannelId, t3ThreadId) =>
-        Ref.get(bridges).pipe(
-          Effect.map((map) => {
-            const entry = map.get(discordChannelId);
-            if (entry === undefined) return null;
-            if (t3ThreadId !== undefined && entry.t3ThreadId !== t3ThreadId) return null;
-            return {
-              t3ThreadId: entry.t3ThreadId,
-              noteSentUserMessageIds: entry.control.noteSentUserMessageIds,
-              adoptWorkingAckMessageId: entry.control.adoptWorkingAckMessageId,
-              refreshThreadIndicators: entry.control.refreshThreadIndicators,
-            } satisfies LiveDiscordBridge;
+        });
+        if (
+          input.sentDiscordUserMessageIds !== undefined &&
+          input.sentDiscordUserMessageIds.length > 0
+        ) {
+          yield* existing.control.noteSentUserMessageIds(input.sentDiscordUserMessageIds);
+        }
+        if (
+          input.workingAckMessageId !== undefined &&
+          input.workingAckMessageId !== null &&
+          input.workingAckMessageId !== ""
+        ) {
+          yield* existing.control.adoptWorkingAckMessageId(input.workingAckMessageId);
+        }
+        yield* Deferred.await(existing.ready).pipe(
+          Effect.timeout("15 seconds"),
+          Effect.catch(() => Effect.void),
+        );
+        return;
+      }
+
+      if (existing !== undefined) {
+        yield* Effect.logInfo("BridgeHub.ensure interrupting previous fiber", {
+          discordChannelId: input.discordChannelId,
+          previousT3ThreadId: existing.t3ThreadId,
+          nextT3ThreadId: input.t3ThreadId,
+          mode,
+        });
+        yield* dropInternal(input.discordChannelId);
+      }
+
+      yield* enforceCap(input.discordChannelId);
+
+      const ready = yield* Deferred.make<void>();
+      const controlSlot: BridgeControlSlot = {
+        noteSentUserMessageIds: () => Effect.void,
+        adoptWorkingAckMessageId: () => Effect.void,
+        refreshThreadIndicators: () =>
+          Effect.succeed({ ok: false as const, error: "Bridge control not ready yet" }),
+      };
+
+      const fiber = yield* runBridge(input, ready, controlSlot).pipe(
+        Effect.catchCause((cause) =>
+          Effect.gen(function* () {
+            const pretty = formatAlertCause(cause);
+            yield* Effect.logError("Discord bridge fiber failed", {
+              discordChannelId: input.discordChannelId,
+              t3ThreadId: input.t3ThreadId,
+              cause: pretty,
+            });
+            yield* postFatalAlert(
+              `bridge:${input.discordChannelId}`,
+              "Discord bridge fiber failed",
+              `channel=\`${input.discordChannelId}\` thread=\`${input.t3ThreadId}\`\n${pretty}`,
+              { threadId: input.t3ThreadId, channelId: input.discordChannelId },
+            );
+            yield* Deferred.succeed(ready, undefined).pipe(Effect.ignore);
+          }).pipe(Effect.asVoid),
+        ),
+        Effect.ensuring(
+          Ref.update(bridges, (map) => {
+            const current = map.get(input.discordChannelId);
+            if (current === undefined || current.ready !== ready) return map;
+            const copy = new Map(map);
+            copy.delete(input.discordChannelId);
+            return copy;
           }),
         ),
-    });
+        // forkDetach: mention handler returns after startTurn; forkChild would kill the
+        // bridge mid-upload and leave Working.. + partial attachments behind.
+        Effect.forkDetach,
+      );
+
+      yield* Ref.update(bridges, (map) => {
+        const copy = new Map(map);
+        copy.set(input.discordChannelId, {
+          fiber,
+          t3ThreadId: input.t3ThreadId,
+          ready,
+          lastActivityAt: activityAt,
+          preferred,
+          mode,
+          control: controlSlot,
+        });
+        return copy;
+      });
+
+      yield* Effect.logInfo("BridgeHub fiber started; waiting for first snapshot", {
+        discordChannelId: input.discordChannelId,
+        t3ThreadId: input.t3ThreadId,
+        mode,
+      });
+
+      // Do not return until subscription is live — otherwise startTurn can finish
+      // before any events are observed (fast providers).
+      yield* Deferred.await(ready).pipe(
+        Effect.timeout("15 seconds"),
+        Effect.catch((error) =>
+          Effect.logError("Timed out / failed waiting for T3 thread subscription snapshot", {
+            discordChannelId: input.discordChannelId,
+            t3ThreadId: input.t3ThreadId,
+            error: String(error),
+          }),
+        ),
+      );
+      yield* Effect.logInfo("BridgeHub subscription ready (snapshot received)", {
+        discordChannelId: input.discordChannelId,
+        t3ThreadId: input.t3ThreadId,
+      });
+    }) as Effect.Effect<void>;
+
+  return BridgeHub.of({
+    ensure,
+    drop: dropInternal,
+    dropAll: Effect.fn("BridgeHub.dropAll")(function* () {
+      const active = yield* listActiveInternal();
+      for (const entry of active) {
+        yield* dropInternal(entry.discordChannelId);
+      }
+    }),
+    listActive: listActiveInternal,
+    activeCount: () => Ref.get(bridges).pipe(Effect.map((map) => map.size)),
+    touch: (discordChannelId, at) =>
+      Ref.update(bridges, (map) => {
+        const current = map.get(discordChannelId);
+        if (current === undefined) return map;
+        const copy = new Map(map);
+        copy.set(discordChannelId, {
+          ...current,
+          lastActivityAt: at ?? nowIso(),
+        });
+        return copy;
+      }),
+    getLive: (discordChannelId, t3ThreadId) =>
+      Ref.get(bridges).pipe(
+        Effect.map((map) => {
+          const entry = map.get(discordChannelId);
+          if (entry === undefined) return null;
+          if (t3ThreadId !== undefined && entry.t3ThreadId !== t3ThreadId) return null;
+          return {
+            t3ThreadId: entry.t3ThreadId,
+            noteSentUserMessageIds: entry.control.noteSentUserMessageIds,
+            adoptWorkingAckMessageId: entry.control.adoptWorkingAckMessageId,
+            refreshThreadIndicators: entry.control.refreshThreadIndicators,
+          } satisfies LiveDiscordBridge;
+        }),
+      ),
   });
+});
 
 export const layer = (runBridge: BridgeRunner) => Layer.effect(BridgeHub, makeBridgeHub(runBridge));

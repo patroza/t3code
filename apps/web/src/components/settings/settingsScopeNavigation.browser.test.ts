@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { EnvironmentId, ProviderInstanceId, ScheduledTaskId } from "@t3tools/contracts";
 import {
   createMemoryHistory,

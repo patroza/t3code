@@ -147,31 +147,35 @@ export function buildInitialKimiProviderSnapshot(
   );
 }
 
-const runVersionCommand = (settings: KimiSettings, environment: NodeJS.ProcessEnv) =>
-  Effect.gen(function* () {
-    const command = settings.binaryPath || "kimi";
-    const spawnCommand = yield* resolveSpawnCommand(command, ["--version"], { env: environment });
-    return yield* spawnAndCollect(
-      command,
-      ChildProcess.make(spawnCommand.command, spawnCommand.args, {
-        env: environment,
-        shell: spawnCommand.shell,
-      }),
-    );
-  });
+const runVersionCommand = Effect.fn("KimiProvider.runVersionCommand")(function* (
+  settings: KimiSettings,
+  environment: NodeJS.ProcessEnv,
+) {
+  const command = settings.binaryPath || "kimi";
+  const spawnCommand = yield* resolveSpawnCommand(command, ["--version"], { env: environment });
+  return yield* spawnAndCollect(
+    command,
+    ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+      env: environment,
+      shell: spawnCommand.shell,
+    }),
+  );
+});
 
-const discoverModels = (settings: KimiSettings, environment: NodeJS.ProcessEnv) =>
-  Effect.gen(function* () {
-    const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const acp = yield* makeKimiAcpRuntime(settings, {
-      environment,
-      childProcessSpawner,
-      cwd: process.cwd(),
-      clientInfo: { name: "t3-code-provider-probe", version: "0.0.0" },
-    });
-    const started = yield* acp.start();
-    return buildKimiModelsFromConfigOptions(started.sessionSetupResult.configOptions ?? []);
-  }).pipe(Effect.scoped);
+const discoverModels = Effect.fn("KimiProvider.discoverModels")(
+  (settings: KimiSettings, environment: NodeJS.ProcessEnv) =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const acp = yield* makeKimiAcpRuntime(settings, {
+        environment,
+        childProcessSpawner,
+        cwd: process.cwd(),
+        clientInfo: { name: "t3-code-provider-probe", version: "0.0.0" },
+      });
+      const started = yield* acp.start();
+      return buildKimiModelsFromConfigOptions(started.sessionSetupResult.configOptions ?? []);
+    }).pipe(Effect.scoped),
+);
 
 export const checkKimiProviderStatus = Effect.fn("checkKimiProviderStatus")(function* (
   settings: KimiSettings,

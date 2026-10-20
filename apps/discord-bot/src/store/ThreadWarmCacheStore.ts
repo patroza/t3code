@@ -121,8 +121,8 @@ export class ThreadWarmCacheStore extends Context.Service<
   ThreadWarmCacheStoreService
 >()("@t3tools/discord-bot/store/ThreadWarmCacheStore") {}
 
-export const makeThreadWarmCacheStore = (dataDirRaw: string) =>
-  Effect.gen(function* () {
+export const makeThreadWarmCacheStore = Effect.fn("ThreadWarmCacheStore.makeThreadWarmCacheStore")(
+  function* (dataDirRaw: string) {
     const dataDir = expandHome(dataDirRaw);
     const cacheDir = NodePath.join(dataDir, "thread-cache");
     yield* Effect.promise(() => NodeFSP.mkdir(cacheDir, { recursive: true, mode: 0o700 }));
@@ -174,7 +174,8 @@ export const makeThreadWarmCacheStore = (dataDirRaw: string) =>
           ),
         ),
     });
-  });
+  },
+);
 
 export const layer = (dataDir: string) =>
   Layer.effect(ThreadWarmCacheStore, makeThreadWarmCacheStore(dataDir));

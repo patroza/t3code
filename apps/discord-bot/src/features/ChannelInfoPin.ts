@@ -80,14 +80,14 @@ async function discordApiVoid(input: {
   }
 }
 
-export const ensureChannelInfoPin = (input: {
-  readonly channelId: string;
-  readonly workspaceRoot: string;
-  readonly providers: ReadonlyArray<ServerProvider>;
-  readonly projectDefaultModelSelection?: ModelSelection | null;
-  readonly botConfig: DiscordBotConfig;
-}) =>
-  Effect.gen(function* () {
+export const ensureChannelInfoPin = Effect.fn("ChannelInfoPin.ensureChannelInfoPin")(
+  function* (input: {
+    readonly channelId: string;
+    readonly workspaceRoot: string;
+    readonly providers: ReadonlyArray<ServerProvider>;
+    readonly projectDefaultModelSelection?: ModelSelection | null;
+    readonly botConfig: DiscordBotConfig;
+  }) {
     const discordConfig = yield* DiscordConfig.DiscordConfig;
     const botToken = Redacted.value(discordConfig.token);
     const baseUrl = discordConfig.rest.baseUrl;
@@ -233,4 +233,5 @@ export const ensureChannelInfoPin = (input: {
       channelId: input.channelId,
       messageId: pinMessageId ?? "",
     } satisfies ChannelInfoPinMessageRef;
-  });
+  },
+);

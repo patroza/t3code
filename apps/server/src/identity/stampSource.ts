@@ -35,32 +35,31 @@ import * as IdentityService from "./IdentityService.ts";
  * the person claimed on this OAuth session is stamped. No claim stays anonymous.
  * Identity is optional in context so callers without the service keep today's behavior.
  */
-export const sourceRefForMcpCaller = (input: {
+export const sourceRefForMcpCaller = Effect.fn("sourceRefForMcpCaller")(function* (input: {
   readonly parentOrigin?: SourceRef | null | undefined;
   readonly clientSessionId?: string | null | undefined;
-}) =>
-  Effect.gen(function* () {
-    const parentOrigin = input.parentOrigin;
-    if (parentOrigin != null && parentOrigin.personId) return parentOrigin;
-    const rawSessionId = input.clientSessionId?.trim() ?? "";
-    if (rawSessionId.length === 0) return undefined;
-    const identity = yield* Effect.serviceOption(IdentityService.IdentityService);
-    if (Option.isNone(identity)) return undefined;
-    const found = yield* identity.value
-      .getSessionClaim(AuthSessionId.make(rawSessionId))
-      .pipe(Effect.orElseSucceed(() => ({ claim: null })));
-    const claim = found.claim;
-    if (claim === null) return undefined;
-    const people = yield* identity.value.listMapPeople();
-    const person = people.find((entry) => entry.personId === claim.personId);
-    return sourceRefForMcpClaim({
-      claim: {
-        personId: claim.personId,
-        username: claim.username,
-        displayName: person?.name ?? claim.username,
-      },
-    });
+}) {
+  const parentOrigin = input.parentOrigin;
+  if (parentOrigin != null && parentOrigin.personId) return parentOrigin;
+  const rawSessionId = input.clientSessionId?.trim() ?? "";
+  if (rawSessionId.length === 0) return undefined;
+  const identity = yield* Effect.serviceOption(IdentityService.IdentityService);
+  if (Option.isNone(identity)) return undefined;
+  const found = yield* identity.value
+    .getSessionClaim(AuthSessionId.make(rawSessionId))
+    .pipe(Effect.orElseSucceed(() => ({ claim: null })));
+  const claim = found.claim;
+  if (claim === null) return undefined;
+  const people = yield* identity.value.listMapPeople();
+  const person = people.find((entry) => entry.personId === claim.personId);
+  return sourceRefForMcpClaim({
+    claim: {
+      personId: claim.personId,
+      username: claim.username,
+      displayName: person?.name ?? claim.username,
+    },
   });
+});
 
 export function sourceRefFromOperateClaim(input: {
   readonly claim: SessionIdentityClaim;

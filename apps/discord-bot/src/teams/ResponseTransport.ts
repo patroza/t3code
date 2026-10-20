@@ -531,46 +531,45 @@ export function makeTeamsResponseTransport(input: {
           });
         return send({ content: content + note }, undefined, attachments);
       }),
-    upsertThreadInfo: (info) =>
-      Effect.gen(function* () {
-        const links = yield* ThreadLinkStore;
-        const link = yield* links.getByDiscordThreadId(info.conversationId);
-        const history = applyModelHistoryUpdate(
-          modelHistoryFromLink(link),
-          info.modelSelection ? formatModelSelectionLine(info.modelSelection) : null,
-        );
-        yield* links.setModelHistory(info.conversationId, history);
-        const jira = [
-          ...new Set([...(link?.jiraIssueKeys ?? []), ...(info.incomingJiraKeys ?? [])]),
-        ].filter((key) => !info.dropJiraIssueKeys?.includes(key));
-        const sentry = [
-          ...new Set([...(link?.sentryIssueUrls ?? []), ...(info.incomingSentryIssueUrls ?? [])]),
-        ];
-        const prs = [...new Set([...(link?.prUrls ?? []), ...(info.incomingPrUrls ?? [])])];
-        yield* links.setJiraIssueKeys(info.conversationId, jira);
-        yield* links.setSentryIssueUrls(info.conversationId, sentry);
-        yield* links.setPrUrls(info.conversationId, prs);
-        const content = renderThreadInfoPin(
-          buildThreadInfoRenderInput({
-            ...info,
-            modelHistory: history,
-            webLink: info.config.webUiBaseUrl
-              ? `${info.config.webUiBaseUrl.replace(/\/$/u, "")}/?thread=${info.threadId}`
-              : null,
-            jiraIssueKeys: jira,
-            sentryIssueUrls: sentry,
-            prUrls: prs,
-            jiraBrowseBaseUrl: info.config.jiraBrowseBaseUrl,
-          }),
-        );
-        const old = link?.infoDiscordMessageId;
-        const sent = old
-          ? yield* service
-              .updateMessage(info.conversationId, old, { content })
-              .pipe(Effect.catch(() => service.createMessage(info.conversationId, { content })))
-          : yield* service.createMessage(info.conversationId, { content });
-        yield* links.setInfoDiscordMessageId(info.conversationId, sent.id);
-      }),
+    upsertThreadInfo: Effect.fn("ResponseTransport.upsertThreadInfo")(function* (info) {
+      const links = yield* ThreadLinkStore;
+      const link = yield* links.getByDiscordThreadId(info.conversationId);
+      const history = applyModelHistoryUpdate(
+        modelHistoryFromLink(link),
+        info.modelSelection ? formatModelSelectionLine(info.modelSelection) : null,
+      );
+      yield* links.setModelHistory(info.conversationId, history);
+      const jira = [
+        ...new Set([...(link?.jiraIssueKeys ?? []), ...(info.incomingJiraKeys ?? [])]),
+      ].filter((key) => !info.dropJiraIssueKeys?.includes(key));
+      const sentry = [
+        ...new Set([...(link?.sentryIssueUrls ?? []), ...(info.incomingSentryIssueUrls ?? [])]),
+      ];
+      const prs = [...new Set([...(link?.prUrls ?? []), ...(info.incomingPrUrls ?? [])])];
+      yield* links.setJiraIssueKeys(info.conversationId, jira);
+      yield* links.setSentryIssueUrls(info.conversationId, sentry);
+      yield* links.setPrUrls(info.conversationId, prs);
+      const content = renderThreadInfoPin(
+        buildThreadInfoRenderInput({
+          ...info,
+          modelHistory: history,
+          webLink: info.config.webUiBaseUrl
+            ? `${info.config.webUiBaseUrl.replace(/\/$/u, "")}/?thread=${info.threadId}`
+            : null,
+          jiraIssueKeys: jira,
+          sentryIssueUrls: sentry,
+          prUrls: prs,
+          jiraBrowseBaseUrl: info.config.jiraBrowseBaseUrl,
+        }),
+      );
+      const old = link?.infoDiscordMessageId;
+      const sent = old
+        ? yield* service
+            .updateMessage(info.conversationId, old, { content })
+            .pipe(Effect.catch(() => service.createMessage(info.conversationId, { content })))
+        : yield* service.createMessage(info.conversationId, { content });
+      yield* links.setInfoDiscordMessageId(info.conversationId, sent.id);
+    }),
   };
   return service;
 }

@@ -17,15 +17,14 @@ const POLL_INTERVAL = Duration.seconds(10);
  * null when no static bundle is present (e.g. the dev server proxies Vite
  * instead of serving files), in which case there is nothing to watch.
  */
-const readWebVersion = (staticDir: string) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const data = yield* fs
-      .readFile(path.join(staticDir, "index.html"))
-      .pipe(Effect.orElseSucceed(() => null));
-    return data === null ? null : NodeCrypto.createHash("sha1").update(data).digest("hex");
-  });
+const readWebVersion = Effect.fn("readWebVersion")(function* (staticDir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const data = yield* fs
+    .readFile(path.join(staticDir, "index.html"))
+    .pipe(Effect.orElseSucceed(() => null));
+  return data === null ? null : NodeCrypto.createHash("sha1").update(data).digest("hex");
+});
 
 /**
  * Broadcasts a `webVersionChanged` lifecycle event whenever the served
@@ -37,31 +36,32 @@ const readWebVersion = (staticDir: string) =>
  *
  * Intended to be run with `Effect.forkScoped`; the poll loop never returns.
  */
-export const runWebVersionWatcher = (lifecycleEvents: ServerLifecycleEvents["Service"]) =>
-  Effect.gen(function* () {
-    const staticDir = yield* resolveStaticDir();
-    if (staticDir === undefined) {
-      return;
-    }
-    const initial = yield* readWebVersion(staticDir);
-    const lastRef = yield* Ref.make(initial);
-    if (initial !== null) {
+export const runWebVersionWatcher = Effect.fn("runWebVersionWatcher")(function* (
+  lifecycleEvents: ServerLifecycleEvents["Service"],
+) {
+  const staticDir = yield* resolveStaticDir();
+  if (staticDir === undefined) {
+    return;
+  }
+  const initial = yield* readWebVersion(staticDir);
+  const lastRef = yield* Ref.make(initial);
+  if (initial !== null) {
+    yield* lifecycleEvents.publish({
+      version: 1,
+      type: "webVersionChanged",
+      payload: { webVersion: initial },
+    });
+  }
+  return yield* Effect.gen(function* () {
+    const current = yield* readWebVersion(staticDir);
+    const last = yield* Ref.get(lastRef);
+    if (current !== null && current !== last) {
+      yield* Ref.set(lastRef, current);
       yield* lifecycleEvents.publish({
         version: 1,
         type: "webVersionChanged",
-        payload: { webVersion: initial },
+        payload: { webVersion: current },
       });
     }
-    return yield* Effect.gen(function* () {
-      const current = yield* readWebVersion(staticDir);
-      const last = yield* Ref.get(lastRef);
-      if (current !== null && current !== last) {
-        yield* Ref.set(lastRef, current);
-        yield* lifecycleEvents.publish({
-          version: 1,
-          type: "webVersionChanged",
-          payload: { webVersion: current },
-        });
-      }
-    }).pipe(Effect.delay(POLL_INTERVAL), Effect.forever);
-  });
+  }).pipe(Effect.delay(POLL_INTERVAL), Effect.forever);
+});

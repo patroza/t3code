@@ -209,68 +209,69 @@ export const selectRestoreCandidates = Effect.gen(function* () {
  * Running / pending / lagging links outrank idle links under the cap.
  * Catch-up finalize runs inside each bridge's first snapshot when the turn finished offline.
  */
-export const rehydrateBridges = (source: "boot" | "reconnect") =>
-  Effect.gen(function* () {
-    const hub = yield* BridgeHub;
+export const rehydrateBridges = Effect.fn("ThreadRestore.rehydrateBridges")(function* (
+  source: "boot" | "reconnect",
+) {
+  const hub = yield* BridgeHub;
 
-    yield* Effect.logInfo("Discord bridge rehydrate starting", { source });
+  yield* Effect.logInfo("Discord bridge rehydrate starting", { source });
 
-    if (source === "reconnect") {
-      // subscribeThread fibers die with the old session; clear hub registry explicitly.
-      yield* hub.dropAll();
-    }
+  if (source === "reconnect") {
+    // subscribeThread fibers die with the old session; clear hub registry explicitly.
+    yield* hub.dropAll();
+  }
 
-    const { selected, stats } = yield* selectRestoreCandidates;
-    let restored = 0;
-    let failed = 0;
+  const { selected, stats } = yield* selectRestoreCandidates;
+  let restored = 0;
+  let failed = 0;
 
-    yield* Effect.forEach(
-      selected,
-      (link) =>
-        Effect.gen(function* () {
-          yield* hub.ensure({
-            discordChannelId: link.discordThreadId,
-            t3ThreadId: link.t3ThreadId,
-            mode: "rehydrate",
-            lastActivityAt: link.lastActivityAt,
-            preferred: true,
-          });
-          restored += 1;
-          yield* Effect.logInfo("Rehydrate bridge ensured", {
-            discordThreadId: link.discordThreadId,
-            t3ThreadId: link.t3ThreadId,
-            openStreamIds: link.streamDiscordMessageIds?.length ?? 0,
-          });
-        }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.gen(function* () {
-              failed += 1;
-              const pretty = formatAlertCause(cause);
-              yield* Effect.logError("Rehydrate bridge ensure failed", {
-                discordThreadId: link.discordThreadId,
-                t3ThreadId: link.t3ThreadId,
-                cause: pretty,
-              });
-              yield* postFatalAlert(
-                `rehydrate:${link.discordThreadId}`,
-                "Bridge rehydrate failed",
-                `source=\`${source}\` channel=\`${link.discordThreadId}\` thread=\`${link.t3ThreadId}\`\n${pretty}`,
-                { threadId: link.t3ThreadId, channelId: link.discordThreadId },
-              );
-            }).pipe(Effect.asVoid),
-          ),
+  yield* Effect.forEach(
+    selected,
+    (link) =>
+      Effect.gen(function* () {
+        yield* hub.ensure({
+          discordChannelId: link.discordThreadId,
+          t3ThreadId: link.t3ThreadId,
+          mode: "rehydrate",
+          lastActivityAt: link.lastActivityAt,
+          preferred: true,
+        });
+        restored += 1;
+        yield* Effect.logInfo("Rehydrate bridge ensured", {
+          discordThreadId: link.discordThreadId,
+          t3ThreadId: link.t3ThreadId,
+          openStreamIds: link.streamDiscordMessageIds?.length ?? 0,
+        });
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.gen(function* () {
+            failed += 1;
+            const pretty = formatAlertCause(cause);
+            yield* Effect.logError("Rehydrate bridge ensure failed", {
+              discordThreadId: link.discordThreadId,
+              t3ThreadId: link.t3ThreadId,
+              cause: pretty,
+            });
+            yield* postFatalAlert(
+              `rehydrate:${link.discordThreadId}`,
+              "Bridge rehydrate failed",
+              `source=\`${source}\` channel=\`${link.discordThreadId}\` thread=\`${link.t3ThreadId}\`\n${pretty}`,
+              { threadId: link.t3ThreadId, channelId: link.discordThreadId },
+            );
+          }).pipe(Effect.asVoid),
         ),
-      { concurrency: 4 },
-    );
+      ),
+    { concurrency: 4 },
+  );
 
-    const finalStats: RehydrateStats = {
-      ...stats,
-      restored,
-      failed,
-    };
-    yield* Effect.logInfo("Discord bridge rehydrate finished", {
-      source,
-      ...finalStats,
-    });
-    return finalStats;
+  const finalStats: RehydrateStats = {
+    ...stats,
+    restored,
+    failed,
+  };
+  yield* Effect.logInfo("Discord bridge rehydrate finished", {
+    source,
+    ...finalStats,
   });
+  return finalStats;
+});

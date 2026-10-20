@@ -78,128 +78,130 @@ export const makeAcpTextGeneration = Effect.fn("makeAcpTextGeneration")(function
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const resolvedEnvironment = environment ?? process.env;
 
-  const runAcpJson = <S extends Schema.Top>({
-    operation,
-    cwd,
-    prompt,
-    outputSchemaJson,
-    modelSelection,
-  }: {
-    operation:
-      | "generateCommitMessage"
-      | "generatePrContent"
-      | "generateBranchName"
-      | "generateThreadTitle";
-    cwd: string;
-    prompt: string;
-    outputSchemaJson: S;
-    modelSelection: ModelSelection;
-  }): Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]> =>
-    Effect.gen(function* () {
-      const outputRef = yield* Ref.make("");
-      const runtime = yield* definition
-        .makeRuntime(settings, {
-          environment: resolvedEnvironment,
-          childProcessSpawner: commandSpawner,
-          cwd,
-          clientInfo: { name: "t3-code-git-text", version: "0.0.0" },
-        })
-        .pipe(Effect.provideService(Crypto.Crypto, crypto));
+  const runAcpJson = Effect.fn("AcpTextGeneration.runAcpJson")(
+    <S extends Schema.Top>({
+      operation,
+      cwd,
+      prompt,
+      outputSchemaJson,
+      modelSelection,
+    }: {
+      operation:
+        | "generateCommitMessage"
+        | "generatePrContent"
+        | "generateBranchName"
+        | "generateThreadTitle";
+      cwd: string;
+      prompt: string;
+      outputSchemaJson: S;
+      modelSelection: ModelSelection;
+    }): Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]> =>
+      Effect.gen(function* () {
+        const outputRef = yield* Ref.make("");
+        const runtime = yield* definition
+          .makeRuntime(settings, {
+            environment: resolvedEnvironment,
+            childProcessSpawner: commandSpawner,
+            cwd,
+            clientInfo: { name: "t3-code-git-text", version: "0.0.0" },
+          })
+          .pipe(Effect.provideService(Crypto.Crypto, crypto));
 
-      yield* runtime.handleSessionUpdate((notification) => {
-        const update = notification.update;
-        if (update.sessionUpdate !== "agent_message_chunk") {
-          return Effect.void;
-        }
-        const content = update.content;
-        if (content.type !== "text") {
-          return Effect.void;
-        }
-        return Ref.update(outputRef, (current) => current + content.text);
-      });
+        yield* runtime.handleSessionUpdate((notification) => {
+          const update = notification.update;
+          if (update.sessionUpdate !== "agent_message_chunk") {
+            return Effect.void;
+          }
+          const content = update.content;
+          if (content.type !== "text") {
+            return Effect.void;
+          }
+          return Ref.update(outputRef, (current) => current + content.text);
+        });
 
-      const promptResult = yield* Effect.gen(function* () {
-        yield* runtime.start();
-        yield* Effect.ignore(runtime.setMode("ask"));
-        yield* definition.applyModelSelection({
-          runtime,
-          model: modelSelection.model,
-          selections: modelSelection.options,
-          mapError: ({ cause, configId, step }) =>
-            new TextGenerationError({
-              operation,
-              detail:
-                step === "set-config-option"
-                  ? `Failed to set ${definition.providerName} ACP config option "${configId}" for text generation.`
-                  : `Failed to set ${definition.providerName} ACP base model for text generation.`,
-              cause,
+        const promptResult = yield* Effect.gen(function* () {
+          yield* runtime.start();
+          yield* Effect.ignore(runtime.setMode("ask"));
+          yield* definition.applyModelSelection({
+            runtime,
+            model: modelSelection.model,
+            selections: modelSelection.options,
+            mapError: ({ cause, configId, step }) =>
+              new TextGenerationError({
+                operation,
+                detail:
+                  step === "set-config-option"
+                    ? `Failed to set ${definition.providerName} ACP config option "${configId}" for text generation.`
+                    : `Failed to set ${definition.providerName} ACP base model for text generation.`,
+                cause,
+              }),
+          });
+
+          return yield* runtime.prompt({
+            prompt: [{ type: "text", text: prompt }],
+          });
+        }).pipe(
+          Effect.timeoutOption(CURSOR_TIMEOUT_MS),
+          Effect.flatMap(
+            Option.match({
+              onNone: () =>
+                Effect.fail(
+                  new TextGenerationError({
+                    operation,
+                    detail: `${definition.providerName} request timed out.`,
+                  }),
+                ),
+              onSome: (value) => Effect.succeed(value),
             }),
-        });
+          ),
+          Effect.mapError((cause) =>
+            isTextGenerationError(cause)
+              ? cause
+              : new TextGenerationError({
+                  operation,
+                  detail: `${definition.providerName} ACP request failed.`,
+                  cause,
+                }),
+          ),
+        );
 
-        return yield* runtime.prompt({
-          prompt: [{ type: "text", text: prompt }],
-        });
-      }).pipe(
-        Effect.timeoutOption(CURSOR_TIMEOUT_MS),
-        Effect.flatMap(
-          Option.match({
-            onNone: () =>
+        const rawResult = (yield* Ref.get(outputRef)).trim();
+        if (!rawResult) {
+          return yield* new TextGenerationError({
+            operation,
+            detail:
+              promptResult.stopReason === "cancelled"
+                ? `${definition.providerName} ACP request was cancelled.`
+                : `${definition.providerName} returned empty output.`,
+          });
+        }
+
+        const decodeOutput = Schema.decodeEffect(Schema.fromJsonString(outputSchemaJson));
+        return yield* decodeOutput(extractJsonObject(rawResult)).pipe(
+          Effect.catchTags({
+            SchemaError: (cause) =>
               Effect.fail(
                 new TextGenerationError({
                   operation,
-                  detail: `${definition.providerName} request timed out.`,
+                  detail: `${definition.providerName} returned invalid structured output.`,
+                  cause,
                 }),
               ),
-            onSome: (value) => Effect.succeed(value),
           }),
-        ),
+        );
+      }).pipe(
         Effect.mapError((cause) =>
           isTextGenerationError(cause)
             ? cause
             : new TextGenerationError({
                 operation,
-                detail: `${definition.providerName} ACP request failed.`,
+                detail: `${definition.providerName} ACP text generation failed.`,
                 cause,
               }),
         ),
-      );
-
-      const rawResult = (yield* Ref.get(outputRef)).trim();
-      if (!rawResult) {
-        return yield* new TextGenerationError({
-          operation,
-          detail:
-            promptResult.stopReason === "cancelled"
-              ? `${definition.providerName} ACP request was cancelled.`
-              : `${definition.providerName} returned empty output.`,
-        });
-      }
-
-      const decodeOutput = Schema.decodeEffect(Schema.fromJsonString(outputSchemaJson));
-      return yield* decodeOutput(extractJsonObject(rawResult)).pipe(
-        Effect.catchTags({
-          SchemaError: (cause) =>
-            Effect.fail(
-              new TextGenerationError({
-                operation,
-                detail: `${definition.providerName} returned invalid structured output.`,
-                cause,
-              }),
-            ),
-        }),
-      );
-    }).pipe(
-      Effect.mapError((cause) =>
-        isTextGenerationError(cause)
-          ? cause
-          : new TextGenerationError({
-              operation,
-              detail: `${definition.providerName} ACP text generation failed.`,
-              cause,
-            }),
+        Effect.scoped,
       ),
-      Effect.scoped,
-    );
+  );
 
   const generateCommitMessage: TextGeneration.TextGeneration["Service"]["generateCommitMessage"] =
     Effect.fn("CursorTextGeneration.generateCommitMessage")(function* (input) {

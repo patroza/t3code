@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { ProjectId, EnvironmentId } from "@t3tools/contracts";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -38,9 +37,14 @@ vi.mock("../components/Sidebar.logic", () => ({
   sortScopedProjectsForSidebar: (projects: unknown) => projects,
 }));
 vi.mock("../components/NoProjectsHero", () => ({ NoProjectsHero: "div" }));
+vi.mock("../components/HostedEmptyState", () => ({ HostedEmptyState: "div" }));
 vi.mock("../components/WorkspacePageHeader", () => ({ WorkspacePageHeader: "div" }));
 vi.mock("../components/ui/sidebar", () => ({ SidebarInset: "div" }));
-vi.mock("../components/ui/button", () => ({ Button: "button" }));
+vi.mock("../components/ui/button", () => ({
+  Button: "button",
+  InlineButton: "button",
+  buttonVariants: () => "",
+}));
 vi.mock("../components/ui/empty", () => ({
   Empty: "div",
   EmptyDescription: "div",

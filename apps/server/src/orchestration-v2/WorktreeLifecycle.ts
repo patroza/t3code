@@ -93,22 +93,25 @@ const make = Effect.gen(function* () {
   };
   const gitWorkflow = yield* GitWorkflowService;
   const providerService = {
-    stopSession: ({ threadId }: { threadId: ThreadId }) =>
-      Effect.gen(function* () {
-        const projection = yield* threads.getThreadRecords(threadId, ["providerSessions"]);
-        const now = yield* Clock.currentTimeMillis;
-        yield* Effect.forEach(
-          projection.providerSessions.filter((session) => session.status !== "stopped"),
-          (session) =>
-            threads.dispatch({
-              type: "provider-session.detach",
-              commandId: CommandId.make(`worktree-cleanup:${threadId}:${session.id}:${now}`),
-              threadId,
-              providerSessionId: session.id,
-            }),
-          { discard: true },
-        );
-      }),
+    stopSession: Effect.fn("WorktreeLifecycle.stopSession")(function* ({
+      threadId,
+    }: {
+      threadId: ThreadId;
+    }) {
+      const projection = yield* threads.getThreadRecords(threadId, ["providerSessions"]);
+      const now = yield* Clock.currentTimeMillis;
+      yield* Effect.forEach(
+        projection.providerSessions.filter((session) => session.status !== "stopped"),
+        (session) =>
+          threads.dispatch({
+            type: "provider-session.detach",
+            commandId: CommandId.make(`worktree-cleanup:${threadId}:${session.id}:${now}`),
+            threadId,
+            providerSessionId: session.id,
+          }),
+        { discard: true },
+      );
+    }),
   };
   const terminalManager = yield* TerminalManager.TerminalManager;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
@@ -375,74 +378,75 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const restoreThreadWorktree: WorktreeLifecycleShape["restoreThreadWorktree"] = <A, E, R>(
+  const restoreThreadWorktree: WorktreeLifecycleShape["restoreThreadWorktree"] = Effect.fn(
+    "WorktreeLifecycle.restoreThreadWorktree",
+  )(function* <A, E, R>(
     { threadId }: { readonly threadId: ThreadId },
     commitUnarchive: Effect.Effect<A, E, R>,
-  ): Effect.Effect<A, E | WorktreeLifecycleError, R> =>
-    Effect.gen(function* () {
-      const operation = "restore";
-      const threadRow = yield* loadNondeletedThreadRow(operation, threadId);
-      if (Option.isNone(threadRow)) {
-        // Let the dispatch path produce its canonical "unknown thread" error.
-        return yield* commitUnarchive;
-      }
-      const thread = threadRow.value;
-      const worktreePath = nonEmptyOrNull(thread.worktreePath);
-      if (worktreePath === null) {
-        return yield* commitUnarchive;
-      }
+  ): Effect.fn.Return<A, E | WorktreeLifecycleError, R> {
+    const operation = "restore";
+    const threadRow = yield* loadNondeletedThreadRow(operation, threadId);
+    if (Option.isNone(threadRow)) {
+      // Let the dispatch path produce its canonical "unknown thread" error.
+      return yield* commitUnarchive;
+    }
+    const thread = threadRow.value;
+    const worktreePath = nonEmptyOrNull(thread.worktreePath);
+    if (worktreePath === null) {
+      return yield* commitUnarchive;
+    }
 
-      const normalizedPath = normalizeProjectPathForComparison(worktreePath);
-      return yield* withWorktreePathLock(
-        normalizedPath,
-        Effect.gen(function* () {
-          const exists = yield* worktreePathExists({ operation, threadId, worktreePath });
-          if (exists) {
-            return yield* commitUnarchive;
-          }
+    const normalizedPath = normalizeProjectPathForComparison(worktreePath);
+    return yield* withWorktreePathLock(
+      normalizedPath,
+      Effect.gen(function* () {
+        const exists = yield* worktreePathExists({ operation, threadId, worktreePath });
+        if (exists) {
+          return yield* commitUnarchive;
+        }
 
-          const branch = nonEmptyOrNull(thread.branch);
-          if (branch === null) {
-            return yield* lifecycleError({
-              operation,
-              threadId,
-              detail: `The worktree at ${worktreePath} is missing and no branch is recorded to recreate it. The thread stays archived.`,
-            });
-          }
-
-          const workspaceRoot = yield* requireProjectWorkspaceRoot({ operation, thread });
-          yield* gitWorkflow
-            .createWorktree({ cwd: workspaceRoot, refName: branch, path: worktreePath })
-            .pipe(
-              Effect.mapError((cause) =>
-                lifecycleError({
-                  operation,
-                  threadId,
-                  detail: `Failed to recreate the worktree at ${worktreePath} from branch '${branch}': ${cause.detail}. The thread stays archived.`,
-                  cause,
-                }),
-              ),
-            );
-          yield* refreshVcsStatus(workspaceRoot);
-
-          const result = yield* commitUnarchive;
-
-          // The checkout was recreated from scratch, so dependencies and
-          // generated files are gone: run the worktree setup script again.
-          yield* swallowCauseUnlessInterrupted({
-            effect: setupScriptRunner.runForThread({
-              threadId,
-              projectId: thread.projectId,
-              worktreePath,
-            }),
-            message: "worktree restoration could not start the setup script",
+        const branch = nonEmptyOrNull(thread.branch);
+        if (branch === null) {
+          return yield* lifecycleError({
+            operation,
             threadId,
+            detail: `The worktree at ${worktreePath} is missing and no branch is recorded to recreate it. The thread stays archived.`,
           });
+        }
 
-          return result;
-        }),
-      );
-    });
+        const workspaceRoot = yield* requireProjectWorkspaceRoot({ operation, thread });
+        yield* gitWorkflow
+          .createWorktree({ cwd: workspaceRoot, refName: branch, path: worktreePath })
+          .pipe(
+            Effect.mapError((cause) =>
+              lifecycleError({
+                operation,
+                threadId,
+                detail: `Failed to recreate the worktree at ${worktreePath} from branch '${branch}': ${cause.detail}. The thread stays archived.`,
+                cause,
+              }),
+            ),
+          );
+        yield* refreshVcsStatus(workspaceRoot);
+
+        const result = yield* commitUnarchive;
+
+        // The checkout was recreated from scratch, so dependencies and
+        // generated files are gone: run the worktree setup script again.
+        yield* swallowCauseUnlessInterrupted({
+          effect: setupScriptRunner.runForThread({
+            threadId,
+            projectId: thread.projectId,
+            worktreePath,
+          }),
+          message: "worktree restoration could not start the setup script",
+          threadId,
+        });
+
+        return result;
+      }),
+    );
+  });
 
   return {
     previewCleanup,

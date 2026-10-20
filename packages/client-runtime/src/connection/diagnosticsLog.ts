@@ -42,6 +42,8 @@ export class ConnectionDiagnosticEvent extends Schema.Class<ConnectionDiagnostic
   attempt: Schema.optionalKey(Schema.Number),
 }) {}
 
+const decodeConnectionDiagnosticEvent = Schema.decodeSync(ConnectionDiagnosticEvent);
+
 export type ConnectionDiagnosticEventInput = {
   readonly environmentId: string;
   readonly label: string;
@@ -86,7 +88,7 @@ function readStorage(): ConnectionDiagnosticEvent[] {
     if (!Array.isArray(parsed)) return [];
     return parsed.flatMap((item) => {
       try {
-        return [Schema.decodeSync(ConnectionDiagnosticEvent)(item)];
+        return [decodeConnectionDiagnosticEvent(item)];
       } catch {
         return [];
       }
@@ -108,8 +110,8 @@ function writeStorage(events: ReadonlyArray<ConnectionDiagnosticEvent>): void {
 let memoryEvents: ConnectionDiagnosticEvent[] = [];
 
 export const make = Effect.sync(() => {
-  const record = (input: ConnectionDiagnosticEventInput): Effect.Effect<void> =>
-    Effect.gen(function* () {
+  const record = Effect.fn("ConnectionDiagnosticsLog.record")(
+    function* (input: ConnectionDiagnosticEventInput) {
       const nowMs = yield* Clock.currentTimeMillis;
       const event = new ConnectionDiagnosticEvent({
         at: input.at ?? DateTime.formatIso(yield* DateTime.now),
@@ -145,7 +147,9 @@ export const make = Effect.sync(() => {
       } else {
         memoryEvents = next;
       }
-    }).pipe(Effect.asVoid, Effect.ignore);
+    },
+    (effect) => Effect.ignore(effect),
+  );
 
   const list = Effect.gen(function* () {
     const nowMs = yield* Clock.currentTimeMillis;
