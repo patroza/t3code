@@ -7,6 +7,7 @@ import {
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as Exit from "effect/Exit";
@@ -25,7 +26,7 @@ import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Socket from "effect/socket/Socket";
 
 import { makeWsRpcProtocolClient, PING_TIMEOUT, type WsRpcProtocolClient } from "./protocol.ts";
-import { NETWORK_BLOCKING_HINT } from "../errors/network.ts";
+import { NETWORK_BLOCKING_HINT, UNRESPONSIVE_HOST_HINT } from "../errors/network.ts";
 import type {
   ConnectionAttemptError,
   ConnectionTransientError,
@@ -260,6 +261,7 @@ function serverConfigReplayEvents(
 }
 
 const isSocketErrorReason = Schema.is(Socket.SocketErrorReason);
+const PING_TIMEOUT_SECONDS = Duration.toSeconds(PING_TIMEOUT);
 
 function mapSessionRpcError(
   error: InitialConfigError | ProbeError | ServerConfigSubscriptionError,
@@ -339,16 +341,19 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
       onDisconnect: Effect.all([Deferred.isDone(connected), Ref.get(pingTimedOut)]).pipe(
         Effect.flatMap(([wasConnected, timedOut]) => {
           const close = mergeCloseCapture(closeCapture.current, causeSink.close);
-          const detail = `${formatDisconnectDetail({
-            label: connection.label,
-            wasConnected,
-            close,
-            causeMessage: timedOut
-              ? `${connection.label} stopped responding.`
-              : causeSink.causeMessage,
-          })}${networkHint}`;
+          // The network hint fits only a socket that never opened. A missed
+          // pong means the connected host stopped answering.
+          const detail =
+            wasConnected && timedOut
+              ? `${connection.label} stopped responding for ${PING_TIMEOUT_SECONDS}s. ${UNRESPONSIVE_HOST_HINT}`
+              : `${formatDisconnectDetail({
+                  label: connection.label,
+                  wasConnected,
+                  close,
+                  causeMessage: causeSink.causeMessage,
+                })}${wasConnected ? "" : networkHint}`;
           const error = new ConnectionTransientErrorClass({
-            reason: causeSink.reason ?? "transport",
+            reason: timedOut ? "timeout" : (causeSink.reason ?? "transport"),
             detail,
             ...socketFailureLocation(via),
           });
@@ -382,10 +387,14 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
           pingTimeout: PING_TIMEOUT,
           retryTransientErrors: false,
           retryPolicy: Schedule.recurs(0),
-          onPingTimeout: Effect.sync(() => {
-            causeSink.causeMessage = "ping timeout";
-            causeSink.reason = "timeout";
-          }),
+          onPingTimeout: Ref.set(pingTimedOut, true).pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                causeSink.causeMessage = "ping timeout";
+                causeSink.reason = "timeout";
+              }),
+            ),
+          ),
         }).pipe(
           Effect.provideService(Socket.Socket, socket),
           Effect.provide(RpcSerialization.layerJson),
