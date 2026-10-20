@@ -371,10 +371,6 @@ it.layer(layerTest)("LegacyV1ThreadImporter", (it) => {
         END
         WHERE thread_id = ${threadId}
       `;
-      const sourceMessages = yield* sql`
-        SELECT * FROM projection_thread_messages WHERE thread_id = ${threadId} ORDER BY message_id
-      `;
-
       yield* sql`
         INSERT INTO projection_thread_pull_requests (
           thread_id, host, repository, number, url, source, linked_at, snapshot_json
@@ -390,6 +386,9 @@ it.layer(layerTest)("LegacyV1ThreadImporter", (it) => {
 
       yield* sql`UPDATE projection_threads SET origin_source_json = ${originSourceJson}, participant_summaries_json = ${participantSummariesJson} WHERE thread_id = ${threadId}`;
       yield* sql`UPDATE projection_thread_messages SET source_json = ${originSourceJson} WHERE thread_id = ${threadId} AND role = 'user'`;
+      const sourceMessages = yield* sql`
+        SELECT * FROM projection_thread_messages WHERE thread_id = ${threadId} ORDER BY message_id
+      `;
 
       assert.equal(yield* importer.pendingThreadCount, 1);
       yield* sql`
@@ -508,7 +507,9 @@ it.layer(layerTest)("LegacyV1ThreadImporter", (it) => {
         ["message:legacy:3", "message:legacy:4"],
       );
       assert.deepStrictEqual(
-        shellProjection.messages.map((message) => [message.text, message.context]),
+        shellProjection.messages
+          .filter((message) => !message.id.startsWith("queue:"))
+          .map((message) => [message.text, message.context]),
         [
           ["Follow-up question", undefined],
           ["Partial answer", validContext],
@@ -565,8 +566,19 @@ it.layer(layerTest)("LegacyV1ThreadImporter", (it) => {
         ["Partial answer", validContext],
       ];
       assert.deepStrictEqual(
-        projection.messages.map((message) => [message.text, message.context]),
+        projection.messages
+          .filter((message) => !message.id.startsWith("queue:"))
+          .map((message) => [message.text, message.context]),
         expectedMessages,
+      );
+      assert.deepStrictEqual(
+        projection.messages
+          .filter((message) => message.id.startsWith("queue:"))
+          .map((message) => [message.id, message.text, message.context]),
+        [
+          ["queue:legacy:1", "First queued request", undefined],
+          ["queue:legacy:2", "Second queued request", undefined],
+        ],
       );
       assert.deepStrictEqual(
         yield* sql`

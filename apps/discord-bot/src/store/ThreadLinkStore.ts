@@ -115,6 +115,13 @@ export const ThreadLink = Schema.Struct({
    * (ISO timestamp). Cleared when current matches initial.
    */
   modelSinceAt: Schema.optional(Schema.String),
+  /**
+   * Editable Discord message for pull-request watch updates. Cleared when the
+   * watch ends and a normal final is posted. Empty on links saved before this.
+   */
+  backgroundDigestMessageId: Schema.optional(Schema.String),
+  /** Body of that message, without the Watching line, so the next update can append. */
+  backgroundDigestText: Schema.optional(Schema.String),
 });
 export type ThreadLink = {
   readonly sourceKind?: "discord" | "teams" | undefined;
@@ -146,6 +153,8 @@ export type ThreadLink = {
   readonly initialModelLine?: string | undefined;
   readonly currentModelLine?: string | undefined;
   readonly modelSinceAt?: string | undefined;
+  readonly backgroundDigestMessageId?: string | undefined;
+  readonly backgroundDigestText?: string | undefined;
 };
 
 /** Fields callers may omit on put — filled with durable defaults. */
@@ -179,6 +188,8 @@ export type ThreadLinkInput = {
   readonly initialModelLine?: string | undefined;
   readonly currentModelLine?: string | undefined;
   readonly modelSinceAt?: string | undefined;
+  readonly backgroundDigestMessageId?: string | undefined;
+  readonly backgroundDigestText?: string | undefined;
 };
 
 /** Partial durable bridge hints written while streaming / finalizing. */
@@ -189,6 +200,9 @@ export type ThreadLinkBridgeHints = {
   readonly lastDeliveredSequence?: number | null;
   readonly streamDiscordMessageIds?: ReadonlyArray<string>;
   readonly deliveryReceipt?: ChatDeliveryReceipt;
+  /** Pass "" to clear the watch digest. Omit to leave the stored digest alone. */
+  readonly backgroundDigestMessageId?: string | null;
+  readonly backgroundDigestText?: string | null;
 };
 
 export type ThreadLinkModelHistory = {
@@ -308,6 +322,8 @@ function asThreadLink(link: {
   readonly initialModelLine?: string | undefined;
   readonly currentModelLine?: string | undefined;
   readonly modelSinceAt?: string | undefined;
+  readonly backgroundDigestMessageId?: string | undefined;
+  readonly backgroundDigestText?: string | undefined;
 }): ThreadLink {
   return {
     sourceKind: link.sourceKind,
@@ -339,6 +355,8 @@ function asThreadLink(link: {
     initialModelLine: link.initialModelLine,
     currentModelLine: link.currentModelLine,
     modelSinceAt: link.modelSinceAt,
+    backgroundDigestMessageId: link.backgroundDigestMessageId,
+    backgroundDigestText: link.backgroundDigestText,
   };
 }
 
@@ -364,6 +382,8 @@ export function migrateV1Link(link: {
   readonly initialModelLine?: string | undefined;
   readonly currentModelLine?: string | undefined;
   readonly modelSinceAt?: string | undefined;
+  readonly backgroundDigestMessageId?: string | undefined;
+  readonly backgroundDigestText?: string | undefined;
 }): ThreadLink {
   return asThreadLink({
     discordThreadId: link.discordThreadId,
@@ -393,6 +413,8 @@ export function migrateV1Link(link: {
     initialModelLine: link.initialModelLine,
     currentModelLine: link.currentModelLine,
     modelSinceAt: link.modelSinceAt,
+    backgroundDigestMessageId: link.backgroundDigestMessageId,
+    backgroundDigestText: link.backgroundDigestText,
   });
 }
 
@@ -428,6 +450,8 @@ export function normalizeThreadLinkInput(link: ThreadLinkInput): ThreadLink {
     initialModelLine: link.initialModelLine,
     currentModelLine: link.currentModelLine,
     modelSinceAt: link.modelSinceAt,
+    backgroundDigestMessageId: link.backgroundDigestMessageId,
+    backgroundDigestText: link.backgroundDigestText,
   });
 }
 
@@ -779,6 +803,14 @@ export const makeThreadLinkStore = Effect.fn("ThreadLinkStore.makeThreadLinkStor
                       link.modelSinceAt !== undefined
                         ? normalized.modelSinceAt
                         : existing.modelSinceAt,
+                    backgroundDigestMessageId:
+                      link.backgroundDigestMessageId !== undefined
+                        ? normalized.backgroundDigestMessageId
+                        : existing.backgroundDigestMessageId,
+                    backgroundDigestText:
+                      link.backgroundDigestText !== undefined
+                        ? normalized.backgroundDigestText
+                        : existing.backgroundDigestText,
                     lastActivityAt: normalized.lastActivityAt,
                     updatedAt: nowIso(),
                   });
@@ -834,6 +866,14 @@ export const makeThreadLinkStore = Effect.fn("ThreadLinkStore.makeThreadLinkStor
                   ? [...new Set(partial.streamDiscordMessageIds.filter((id) => id.trim() !== ""))]
                   : undefined,
             }
+          : {}),
+        ...(partial.backgroundDigestMessageId !== undefined
+          ? partial.backgroundDigestMessageId == null || partial.backgroundDigestMessageId === ""
+            ? { backgroundDigestMessageId: undefined, backgroundDigestText: undefined }
+            : {
+                backgroundDigestMessageId: partial.backgroundDigestMessageId,
+                backgroundDigestText: partial.backgroundDigestText ?? undefined,
+              }
           : {}),
       }));
     },
