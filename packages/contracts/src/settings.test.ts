@@ -416,6 +416,19 @@ describe("ClientSettings composer context strip", () => {
   });
 });
 
+describe("ClientSettings retired custom launchers", () => {
+  it("ignores saved custom launcher preferences while retaining other settings", () => {
+    const settings = decodeClientSettings({
+      openWithEntries: [{ id: "terminal", name: "Terminal" }],
+      preferredOpenWith: { type: "custom", id: "terminal" },
+      wordWrap: false,
+    });
+    expect(settings).not.toHaveProperty("openWithEntries");
+    expect(settings).not.toHaveProperty("preferredOpenWith");
+    expect(settings.wordWrap).toBe(false);
+  });
+});
+
 describe("ClientSettings word wrap", () => {
   it("defaults word wrap on", () => {
     expect(decodeClientSettings({}).wordWrap).toBe(true);
@@ -430,6 +443,18 @@ describe("ClientSettings word wrap", () => {
     expect(decoded.wordWrap).toBe(true);
     expect(decoded).not.toHaveProperty("chatWordWrap");
     expect(decoded).not.toHaveProperty("diffWordWrap");
+  });
+});
+
+describe("ClientSettings sidebarHideProviderIcons", () => {
+  it("defaults to false", () => {
+    expect(decodeClientSettings({}).sidebarHideProviderIcons).toBe(false);
+  });
+
+  it("round-trips an explicit value", () => {
+    expect(decodeClientSettings({ sidebarHideProviderIcons: true }).sidebarHideProviderIcons).toBe(
+      true,
+    );
   });
 });
 
@@ -523,6 +548,18 @@ describe("ClientSettings proactive panels", () => {
     expect(decodeClientSettingsPatch({ proactivePanelsEnabled: true }).proactivePanelsEnabled).toBe(
       true,
     );
+  });
+});
+
+describe("ClientSettings worktree removal confirmation", () => {
+  it("defaults confirmation on for existing settings", () => {
+    expect(decodeClientSettings({}).confirmWorktreeRemoval).toBe(true);
+  });
+
+  it("accepts confirmation updates", () => {
+    expect(
+      decodeClientSettingsPatch({ confirmWorktreeRemoval: false }).confirmWorktreeRemoval,
+    ).toBe(false);
   });
 });
 
@@ -655,8 +692,10 @@ describe("ClientSettings environment identification", () => {
 });
 
 describe("ClientSettings sidebar", () => {
-  it("defaults to the current sidebar", () => {
-    expect(decodeClientSettings({}).legacySidebarEnabled).toBe(false);
+  it("defaults to the current sidebar with recent threads enabled", () => {
+    const settings = decodeClientSettings({});
+    expect(settings.legacySidebarEnabled).toBe(false);
+    expect(settings.sidebarRecentThreadsEnabled).toBe(true);
   });
 
   it("drops the retired sidebar v2 beta keys, resetting everyone to the default", () => {
@@ -682,6 +721,12 @@ describe("ClientSettings sidebar", () => {
     expect(decodeClientSettingsPatch({ legacySidebarEnabled: true }).legacySidebarEnabled).toBe(
       true,
     );
+  });
+
+  it("allows the recent work queue to be disabled", () => {
+    expect(
+      decodeClientSettings({ sidebarRecentThreadsEnabled: false }).sidebarRecentThreadsEnabled,
+    ).toBe(false);
   });
 
   it("keeps unpin confirmation opt-in and patchable", () => {
@@ -1160,6 +1205,32 @@ describe("ServerSettings.removeAgentCreditsOnMerge", () => {
 describe("resolveProjectProviderInstanceEnabled", () => {
   const projectId = "project-a" as ProjectId;
   const instanceId = ProviderInstanceId.make("codex_work");
+
+  it("inherits the fork's enabled Kimi default without an explicit settings entry", () => {
+    const kimi = ProviderInstanceId.make("kimi");
+    const settings: ServerSettings = { ...DEFAULT_SERVER_SETTINGS, providerInstances: {} };
+    expect(resolveProjectProviderInstanceEnabled(settings, null, kimi)).toBe(true);
+    expect(resolveProjectProviderInstanceEnabled(settings, projectId, kimi)).toBe(true);
+    expect(
+      resolveProjectProviderInstanceEnabled(
+        {
+          ...settings,
+          projectSettingsOverrides: {
+            [projectId]: { providerInstances: { [kimi]: { enabled: false } } },
+          },
+        },
+        projectId,
+        kimi,
+      ),
+    ).toBe(false);
+    expect(
+      resolveProjectProviderInstanceEnabled(
+        settings,
+        projectId,
+        ProviderInstanceId.make("kimi_work"),
+      ),
+    ).toBe(false);
+  });
 
   it("inherits the machine value when the project has no override", () => {
     const settings: ServerSettings = {

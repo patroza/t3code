@@ -21,6 +21,7 @@ import * as CommandReceiptStore from "../orchestration-v2/CommandReceiptStore.ts
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
+import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ProviderReplayHarness from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
@@ -38,6 +39,13 @@ const adapter = {
   openSession: () => Effect.die("No provider process needed for metadata commands"),
 } as ProviderAdapter.ProviderAdapterV2["Service"];
 const layerDatabase = SqlitePersistence.layerMemory;
+const layerThreadManagement = ThreadManagement.layer.pipe(
+  Layer.provide(ServerSettings.layerTest()),
+  Layer.provide(CommandReceiptStore.layer.pipe(Layer.provide(layerDatabase))),
+  Layer.provide(
+    Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({ get: () => Effect.succeed(null) }),
+  ),
+);
 const layerOrchestrator = Layer.mergeAll(
   layerDatabase,
   ProjectionStore.layer.pipe(Layer.provide(layerDatabase)),
@@ -179,14 +187,7 @@ it.layer(layerOrchestrator)("writesThreads against a mode raise", (it) => {
       const shell = yield* projections.getThreadShell(threadId);
       assert.equal(shell?.runtimeMode, "full-access");
       assert.equal(shell?.title, "Before");
-    }).pipe(
-      Effect.provide(
-        ThreadManagement.layer.pipe(
-          Layer.provide(ServerSettings.layerTest()),
-          Layer.provide(CommandReceiptStore.layer.pipe(Layer.provide(layerDatabase))),
-        ),
-      ),
-    ),
+    }).pipe(Effect.provide(layerThreadManagement)),
   );
 
   it.effect("lets the write through when the thread stays within the caller's modes", () =>
@@ -197,13 +198,6 @@ it.layer(layerOrchestrator)("writesThreads against a mode raise", (it) => {
       const outcome = yield* renameRacingTheUser(threadId, false);
       assert.deepEqual(outcome, { renamed: true });
       assert.equal((yield* projections.getThreadShell(threadId))?.title, "Renamed by the agent");
-    }).pipe(
-      Effect.provide(
-        ThreadManagement.layer.pipe(
-          Layer.provide(ServerSettings.layerTest()),
-          Layer.provide(CommandReceiptStore.layer.pipe(Layer.provide(layerDatabase))),
-        ),
-      ),
-    ),
+    }).pipe(Effect.provide(layerThreadManagement)),
   );
 });

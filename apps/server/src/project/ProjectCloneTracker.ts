@@ -417,11 +417,9 @@ export const rejectCommandsDuringClone = Effect.fn("ProjectCloneTracker.rejectCo
     },
   ): Effect.fn.Return<void, OrchestrationDispatchCommandError> {
     const projectId =
-      command.type === "thread.create"
+      command.type === "thread.create" || command.type === "message.dispatch"
         ? (command.projectId ?? null)
-        : command.type === "thread.turn.start"
-          ? bootstrapProjectId(command.bootstrap)
-          : null;
+        : null;
     if (projectId === null) return;
     const clone = yield* tracker.get(projectId);
     if (clone === null || clone.phase === "done") return;
@@ -433,12 +431,6 @@ export const rejectCommandsDuringClone = Effect.fn("ProjectCloneTracker.rejectCo
     });
   },
 );
-
-function bootstrapProjectId(bootstrap: unknown): ProjectId | null {
-  if (typeof bootstrap !== "object" || bootstrap === null) return null;
-  const createThread = (bootstrap as { createThread?: { projectId?: ProjectId } }).createThread;
-  return createThread?.projectId ?? null;
-}
 
 function describeCloneFailure(cause: Cause.Cause<unknown>): string {
   const error = Cause.squash(cause);

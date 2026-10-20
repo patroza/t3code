@@ -9,12 +9,15 @@ import { runMigrations } from "./Migrations.ts";
 import { initializeV2Database } from "./initializeV2Database.ts";
 import * as ServerConfig from "../config.ts";
 
+const makeRuntimeSqliteLayer = NodeSqliteClient.layer;
+
 export const WAL_SIZE_LIMIT_BYTES = 32 * 1024 * 1024;
 
 const layerSetup = Layer.effectDiscard(
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     // CLI and server write from separate processes; wait rather than fail with SQLITE_BUSY.
+    // Bound the wait so auth tickets cannot hang behind a writer indefinitely.
     yield* sql`PRAGMA busy_timeout = 5000;`;
     yield* sql`PRAGMA foreign_keys = ON;`;
     // Only an empty file can switch modes here; an existing database needs the
@@ -58,7 +61,7 @@ export const layerFromPath = Effect.fn("makeSqlitePersistenceLive")(function* (d
 
   return Layer.provideMerge(
     layerSetup,
-    NodeSqliteClient.layer({
+    makeRuntimeSqliteLayer({
       filename: dbPath,
       readerWorker: true,
       // Checkpoints sync the database, with F_FULLFSYNC on macOS. Run them off
@@ -74,7 +77,7 @@ export const layerFromPath = Effect.fn("makeSqlitePersistenceLive")(function* (d
 
 export const layerMemory = Layer.provideMerge(
   layerSetup,
-  NodeSqliteClient.layer({ filename: ":memory:" }),
+  makeRuntimeSqliteLayer({ filename: ":memory:" }),
 );
 
 export const layerConfig = Layer.unwrap(

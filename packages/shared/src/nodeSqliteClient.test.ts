@@ -159,17 +159,20 @@ it.effect("keeps large text and blob parameters off cached statements", () =>
 
     const small = "small";
     const queries = [
-      (value: string | Uint8Array | ArrayBuffer) => sql`SELECT length(${value}) AS size`,
-      (value: string | Uint8Array | ArrayBuffer) =>
+      (value: string | ArrayBufferView) => sql`SELECT length(${value}) AS size`,
+      (value: string | ArrayBufferView) =>
         sql.unsafe("SELECT length($value) AS size", [{ $value: value }]),
-      (value: string | Uint8Array | ArrayBuffer) =>
+      (value: string | ArrayBufferView) =>
         sql.unsafe("SELECT length($value) AS callable", [
           Object.assign(() => {}, { $value: value }),
         ]),
     ];
     const cached = new Set<NodeSqlite.StatementSync>();
     const large = new Set<NodeSqlite.StatementSync>();
-    const largeBlobs = [new Uint8Array(64 * 1024 + 1), new ArrayBuffer(64 * 1024 + 1)];
+    const largeBlobs = [
+      new Uint8Array(64 * 1024 + 1),
+      new DataView(new ArrayBuffer(64 * 1024 + 1)),
+    ];
     for (const value of [small, largeText, ...largeBlobs, small]) {
       const expected = typeof value === "string" ? value.length : value.byteLength;
       for (const query of queries) {
@@ -805,9 +808,14 @@ const withCheckpointClient = <A, E>(
     const path = yield* Path.Path;
     const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-sqlite-checkpoint-" });
     const filename = path.join(directory, "state.sqlite");
+    // Finish journal setup before the checkpoint worker opens its connection.
+    yield* Effect.acquireUseRelease(
+      Effect.sync(() => new NodeSqlite.DatabaseSync(filename)),
+      (database) => Effect.sync(() => database.exec("PRAGMA journal_mode = WAL")),
+      (database) => Effect.sync(() => database.close()),
+    );
     return yield* Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* sql`PRAGMA journal_mode = WAL`;
       return yield* use(sql, filename);
     }).pipe(Effect.provide(SqliteClient.layer({ filename, checkpointWorker: true, ...options })));
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
@@ -823,7 +831,12 @@ const supportsNoopCheckpoint = (() => {
 const checkpointWorkerReply = (worker: NodeWorkerThreads.Worker) =>
   Effect.promise(
     () =>
-      new Promise<void>((resolve) => {
+      new Promise<void>((resolve, reject) => {
+        const cleanup = () => {
+          worker.off("message", onReply);
+          worker.off("error", onError);
+          worker.off("exit", onExit);
+        };
         let replies = 0;
         const onReply = (reply: unknown) => {
           if (reply !== "barrier") return;
@@ -834,10 +847,24 @@ const checkpointWorkerReply = (worker: NodeWorkerThreads.Worker) =>
             worker.postMessage("barrier");
             return;
           }
-          worker.off("message", onReply);
+          cleanup();
           resolve();
         };
+        const onError = (cause: Error) => {
+          cleanup();
+          reject(cause);
+        };
+        const onExit = (code: number) => {
+          cleanup();
+          reject(new Error(`Checkpoint worker exited before the barrier (code ${code}).`));
+        };
         worker.on("message", onReply);
+        worker.on("error", onError);
+        worker.on("exit", onExit);
+        if (worker.threadId === -1) {
+          onExit(-1);
+          return;
+        }
         // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node workers do not accept a target origin.
         worker.postMessage("barrier");
       }),

@@ -6,8 +6,11 @@ import { it, describe, expect } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Stream from "effect/Stream";
 import * as Tracer from "effect/Tracer";
 
 import * as ServerConfig from "../config.ts";
@@ -744,6 +747,44 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
           yield* workspaceFileSystem.writeFile({ cwd, relativePath, contents: "ok\n" });
           expect(yield* fileSystem.readFileString(path.join(cwd, relativePath))).toBe("ok\n");
         }
+      }),
+    );
+  });
+
+  describe("watchFile", () => {
+    it.effect("emits when a missing workspace file is created", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        const eventFiber = yield* workspaceFileSystem
+          .watchFile({ cwd, relativePath: "t3.json" })
+          .pipe(Stream.runHead, Effect.timeout("5 seconds"), Effect.forkChild);
+
+        yield* Effect.sleep("100 millis");
+        yield* writeTextFile(cwd, "t3.json", '{"scripts":[]}');
+
+        const event = yield* Fiber.join(eventFiber);
+        expect(Option.getOrUndefined(event)).toEqual({ relativePath: "t3.json" });
+      }),
+    );
+
+    it.effect("emits when an in-workspace symlink target changes", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "src/target.txt", "initial");
+        yield* fileSystem.symlink(path.join(cwd, "src/target.txt"), path.join(cwd, "linked.txt"));
+        const eventFiber = yield* workspaceFileSystem
+          .watchFile({ cwd, relativePath: "linked.txt" })
+          .pipe(Stream.runHead, Effect.timeout("5 seconds"), Effect.forkChild);
+
+        yield* Effect.sleep("100 millis");
+        yield* writeTextFile(cwd, "src/target.txt", "updated");
+
+        const event = yield* Fiber.join(eventFiber);
+        expect(Option.getOrUndefined(event)).toEqual({ relativePath: "linked.txt" });
       }),
     );
   });

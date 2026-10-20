@@ -31,6 +31,7 @@ import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderL
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import * as ModelManifest from "../ModelManifest.ts";
+import * as DirenvEnvironment from "../DirenvEnvironment.ts";
 import {
   createProviderVersionAdvisory,
   resolveLatestProviderVersion,

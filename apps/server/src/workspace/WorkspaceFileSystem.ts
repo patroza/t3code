@@ -3,6 +3,7 @@ import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 
 import type {
+  ProjectFileChangeEvent,
   FilesystemEntryMetadata,
   FilesystemGetMetadataInput,
   FilesystemGetMetadataResult,
@@ -14,11 +15,13 @@ import type {
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 
 import * as KnownWorkspaces from "./KnownWorkspaces.ts";
 import * as WorkspaceEntries from "./WorkspaceEntries.ts";
@@ -44,10 +47,12 @@ export class WorkspaceFileSystemOperationError extends Schema.TaggedError<Worksp
     operation: Schema.Literals([
       "realpath-workspace-root",
       "realpath-target",
+      "realpath-watch-directory",
       "open",
       "stat",
       "read",
       "close",
+      "watch",
       "make-directory",
       "write-file",
     ]),
@@ -118,6 +123,13 @@ export class WorkspaceFileSystem extends Context.Service<
       input: ProjectReadFileInput,
     ) => Effect.Effect<
       ProjectReadFileResult,
+      WorkspaceFileSystemError | WorkspacePaths.WorkspacePathOutsideRootError
+    >;
+    /** Watch a workspace-relative file and emit after its directory entry changes. */
+    readonly watchFile: (
+      input: ProjectReadFileInput,
+    ) => Stream.Stream<
+      ProjectFileChangeEvent,
       WorkspaceFileSystemError | WorkspacePaths.WorkspacePathOutsideRootError
     >;
     /** Writes inside a known workspace only. */
@@ -434,6 +446,126 @@ export const make = Effect.gen(function* () {
     );
   });
 
+  const watchFile: WorkspaceFileSystem["Service"]["watchFile"] = (input) =>
+    Stream.unwrap(
+      Effect.gen(function* () {
+        const target = yield* workspacePaths.resolveRelativePathWithinRoot({
+          workspaceRoot: input.cwd,
+          relativePath: input.relativePath,
+        });
+        const watchDirectory = path.dirname(target.absolutePath);
+        const realWorkspaceRoot = yield* Effect.tryPromise({
+          try: () => NodeFSP.realpath(input.cwd),
+          catch: (cause) =>
+            new WorkspaceFileSystemOperationError({
+              workspaceRoot: input.cwd,
+              relativePath: input.relativePath,
+              resolvedPath: target.absolutePath,
+              operationPath: input.cwd,
+              operation: "realpath-workspace-root",
+              cause,
+            }),
+        });
+        const realWatchDirectory = yield* Effect.tryPromise({
+          try: () => NodeFSP.realpath(watchDirectory),
+          catch: (cause) =>
+            new WorkspaceFileSystemOperationError({
+              workspaceRoot: input.cwd,
+              relativePath: input.relativePath,
+              resolvedPath: target.absolutePath,
+              operationPath: watchDirectory,
+              operation: "realpath-watch-directory",
+              cause,
+            }),
+        });
+        const relativeRealDirectory = path.relative(realWorkspaceRoot, realWatchDirectory);
+        if (
+          relativeRealDirectory.startsWith(`..${path.sep}`) ||
+          relativeRealDirectory === ".." ||
+          path.isAbsolute(relativeRealDirectory)
+        ) {
+          return yield* new WorkspaceFilePathEscapeError({
+            workspaceRoot: input.cwd,
+            relativePath: input.relativePath,
+            resolvedWorkspaceRoot: realWorkspaceRoot,
+            resolvedPath: realWatchDirectory,
+          });
+        }
+
+        const realTargetPath = yield* Effect.tryPromise({
+          try: async () => {
+            try {
+              return await NodeFSP.realpath(target.absolutePath);
+            } catch (cause) {
+              if ((cause as NodeJS.ErrnoException).code === "ENOENT") {
+                return null;
+              }
+              throw cause;
+            }
+          },
+          catch: (cause) =>
+            new WorkspaceFileSystemOperationError({
+              workspaceRoot: input.cwd,
+              relativePath: input.relativePath,
+              resolvedPath: target.absolutePath,
+              operationPath: target.absolutePath,
+              operation: "realpath-target",
+              cause,
+            }),
+        });
+        if (realTargetPath !== null) {
+          const relativeRealTarget = path.relative(realWorkspaceRoot, realTargetPath);
+          if (
+            relativeRealTarget.startsWith(`..${path.sep}`) ||
+            relativeRealTarget === ".." ||
+            path.isAbsolute(relativeRealTarget)
+          ) {
+            return yield* new WorkspaceFilePathEscapeError({
+              workspaceRoot: input.cwd,
+              relativePath: input.relativePath,
+              resolvedWorkspaceRoot: realWorkspaceRoot,
+              resolvedPath: realTargetPath,
+            });
+          }
+        }
+
+        const watchEntry = (watchPath: string, fileName: string) => {
+          const watchedAbsolutePath = path.join(watchPath, fileName);
+          return fileSystem.watch(watchPath).pipe(
+            Stream.filter((event) => {
+              return (
+                event.path === fileName ||
+                event.path === watchedAbsolutePath ||
+                path.resolve(watchPath, event.path) === watchedAbsolutePath
+              );
+            }),
+            Stream.mapError(
+              (cause) =>
+                new WorkspaceFileSystemOperationError({
+                  workspaceRoot: input.cwd,
+                  relativePath: input.relativePath,
+                  resolvedPath: target.absolutePath,
+                  operationPath: watchPath,
+                  operation: "watch",
+                  cause,
+                }),
+            ),
+          );
+        };
+
+        const lexicalTargetPath = path.join(realWatchDirectory, path.basename(target.absolutePath));
+        const lexicalEvents = watchEntry(realWatchDirectory, path.basename(target.absolutePath));
+        const resolvedTargetEvents =
+          realTargetPath !== null && realTargetPath !== lexicalTargetPath
+            ? watchEntry(path.dirname(realTargetPath), path.basename(realTargetPath))
+            : Stream.empty;
+        return Stream.merge(lexicalEvents, resolvedTargetEvents).pipe(
+          Stream.debounce(Duration.millis(100)),
+          Stream.map(() => ({ relativePath: target.relativePath })),
+        );
+      }),
+    );
+
   /**
    * Resolves the file a write targets. The deepest existing ancestor resolves to
    * its real path before the root check, so neither the file nor the directories
@@ -565,7 +697,7 @@ export const make = Effect.gen(function* () {
     return { relativePath: target.relativePath };
   });
 
-  return WorkspaceFileSystem.of({ getMetadata, readFile, writeFile });
+  return WorkspaceFileSystem.of({ getMetadata, readFile, watchFile, writeFile });
 });
 
 export const layer = Layer.effect(WorkspaceFileSystem, make);

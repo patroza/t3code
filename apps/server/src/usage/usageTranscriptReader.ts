@@ -204,7 +204,8 @@ export async function readTranscriptRecords<State>(
     const codec = format.state;
     const decodeState = codec === undefined ? undefined : Schema.decodeUnknownOption(codec.schema);
     const encodeState = codec === undefined ? undefined : Schema.encodeSync(codec.schema);
-    let state = codec === undefined ? (undefined as State) : codec.initial();
+    // Stateless formats never read their state argument.
+    let state = codec === undefined ? (undefined as State) : codec.initial(filePath);
     let resumed = false;
     let start = 0;
     const savedState =

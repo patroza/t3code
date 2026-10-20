@@ -118,6 +118,7 @@ const CODEX_DRIVER_KIND = ProviderDriverKind.make("codex");
 const CLAUDE_DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
 const CURSOR_DRIVER_KIND = ProviderDriverKind.make("cursor");
 const GROK_DRIVER_KIND = ProviderDriverKind.make("grok");
+const KIMI_DRIVER_KIND = ProviderDriverKind.make("kimi");
 const MUSE_DRIVER_KIND = ProviderDriverKind.make("muse");
 const PI_DRIVER_KIND = ProviderDriverKind.make("pi");
 const ACP_REGISTRY_DRIVER_KIND = ProviderDriverKind.make("acpRegistry");
@@ -126,9 +127,16 @@ const OPENCODE_DRIVER_KIND = ProviderDriverKind.make("opencode");
 export const DEFAULT_MODEL = "gpt-6-astra";
 
 /**
- * The provider snapshot marks the first of these present in the live
- * `model/list` response as default; when none are available, Codex's own
- * `isDefault` flag wins.
+ * Grok's default model. Grok Build held this slot from the original Grok
+ * integration; 4.6 is the frontier model Grok's own session default reports.
+ */
+export const GROK_DEFAULT_MODEL = "grok-4.6";
+
+/**
+ * Codex default-model preference, most preferred first. The provider snapshot
+ * marks the first of these present in the live `model/list` response as
+ * default; when none are available, Codex's own `isDefault` flag wins.
+
  */
 export const PREFERRED_DEFAULT_CODEX_MODELS: ReadonlyArray<string> = [
   DEFAULT_MODEL,
@@ -147,6 +155,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Partial<Record<ProviderDriverKind, strin
   [CODEX_DRIVER_KIND]: DEFAULT_MODEL,
   [CLAUDE_DRIVER_KIND]: "claude-fable-5-1",
   [CURSOR_DRIVER_KIND]: "auto",
+  [KIMI_DRIVER_KIND]: "kimi-code/k3",
   // Product slug, not an ACP model id. The Grok adapter treats it as "the session's current model".
   [GROK_DRIVER_KIND]: "grok-build",
   [MUSE_DRIVER_KIND]: MUSE_DEFAULT_MODEL,
@@ -164,6 +173,7 @@ export const DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER: Partial<
   [ProviderDriverKind.make("antigravity")]: ANTIGRAVITY_DEFAULT_MODEL,
   [CLAUDE_DRIVER_KIND]: "claude-haiku-5-5",
   [CURSOR_DRIVER_KIND]: "composer-2",
+  [KIMI_DRIVER_KIND]: "kimi-code/k3",
   [OPENCODE_DRIVER_KIND]: "openai/gpt-5",
 };
 

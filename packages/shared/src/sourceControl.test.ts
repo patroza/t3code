@@ -1,3 +1,4 @@
+import type { VcsStatusChangeRequest, VcsStatusResult } from "@t3tools/contracts";
 import { SourceControlProviderKind } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -6,8 +7,87 @@ import {
   detectSourceControlProviderFromRemoteUrl,
   getChangeRequestTerminologyForKind,
   isSshRemoteUrl,
+  resolveChangeRequestIndicator,
   resolveChangeRequestPresentation,
+  resolveThreadChangeRequest,
 } from "./sourceControl.ts";
+
+const openPr: VcsStatusChangeRequest = {
+  number: 42,
+  title: "Add feature",
+  url: "https://github.com/org/repo/pull/42",
+  baseRef: "main",
+  headRef: "feature/demo",
+  state: "open",
+};
+
+function gitStatus(
+  overrides: Partial<VcsStatusResult> & Pick<VcsStatusResult, "refName">,
+): VcsStatusResult {
+  return {
+    isRepo: true,
+    hasPrimaryRemote: true,
+    isDefaultRef: false,
+    hasWorkingTreeChanges: false,
+    workingTree: { files: [], insertions: 0, deletions: 0 },
+    hasUpstream: true,
+    aheadCount: 0,
+    behindCount: 0,
+    aheadOfDefaultCount: 0,
+    pr: null,
+    ...overrides,
+  };
+}
+
+describe("resolveThreadChangeRequest", () => {
+  it("matches on the live ref or on the change request's head ref", () => {
+    expect(
+      resolveThreadChangeRequest("feature/demo", gitStatus({ refName: "main", pr: openPr })),
+    ).toEqual(openPr);
+    expect(
+      resolveThreadChangeRequest(
+        "feature/demo",
+        gitStatus({ refName: "feature/demo", pr: openPr }),
+      ),
+    ).toEqual(openPr);
+  });
+
+  it("returns null when the branch, the status, or the change request is absent", () => {
+    expect(
+      resolveThreadChangeRequest("feature/other", gitStatus({ refName: "main", pr: openPr })),
+    ).toBeNull();
+    expect(resolveThreadChangeRequest(null, gitStatus({ refName: "main", pr: openPr }))).toBeNull();
+    expect(resolveThreadChangeRequest("feature/demo", null)).toBeNull();
+    expect(resolveThreadChangeRequest("feature/demo", gitStatus({ refName: "main" }))).toBeNull();
+  });
+});
+
+describe("resolveChangeRequestIndicator", () => {
+  it("labels each state with the provider's own terminology", () => {
+    expect(resolveChangeRequestIndicator(openPr, undefined)).toEqual({
+      state: "open",
+      number: 42,
+      label: "PR open",
+      tooltip: "#42 PR open: Add feature",
+      url: "https://github.com/org/repo/pull/42",
+    });
+    expect(
+      resolveChangeRequestIndicator(
+        { ...openPr, state: "merged" },
+        {
+          kind: SourceControlProviderKind.make("gitlab"),
+          name: "GitLab",
+          baseUrl: "https://gitlab.com",
+        },
+      ),
+    ).toMatchObject({ state: "merged", label: "MR merged", tooltip: "#42 MR merged: Add feature" });
+  });
+
+  it("returns null without a change request", () => {
+    expect(resolveChangeRequestIndicator(null, undefined)).toBeNull();
+    expect(resolveChangeRequestIndicator(undefined, undefined)).toBeNull();
+  });
+});
 
 describe("source control presentation", () => {
   it("uses merge request terminology for GitLab", () => {
@@ -223,7 +303,7 @@ it("names an Azure DevOps repository by its own name, not its project path", () 
   // the checkout; the recorded `org/project/_git/repo` path is refused, and the repository then
   // reads as unavailable on the page.
   const selector = sourceControlRepositorySelector({
-    provider: "azure-devops",
+    provider: SourceControlProviderKind.make("azure-devops"),
     displayName: "contoso/payments/_git/checkout",
     owner: "contoso",
     name: "checkout",
@@ -233,7 +313,7 @@ it("names an Azure DevOps repository by its own name, not its project path", () 
 
 it("falls back to the path's last segment where an Azure identity has no name", () => {
   const selector = sourceControlRepositorySelector({
-    provider: "azure-devops",
+    provider: SourceControlProviderKind.make("azure-devops"),
     displayName: "contoso/payments/_git/checkout",
   });
   expect(selector).toBe("checkout");
@@ -241,7 +321,7 @@ it("falls back to the path's last segment where an Azure identity has no name", 
 
 it("keeps a GitLab identity's whole path, because a nested group is part of the name", () => {
   const selector = sourceControlRepositorySelector({
-    provider: "gitlab",
+    provider: SourceControlProviderKind.make("gitlab"),
     displayName: "group/subgroup/service",
     owner: "group",
     name: "service",
@@ -251,7 +331,7 @@ it("keeps a GitLab identity's whole path, because a nested group is part of the 
 
 it("puts owner and name back together for an identity recorded before displayName", () => {
   const selector = sourceControlRepositorySelector({
-    provider: "github",
+    provider: SourceControlProviderKind.make("github"),
     owner: "t3tools",
     name: "t3code",
   });
@@ -260,5 +340,7 @@ it("puts owner and name back together for an identity recorded before displayNam
 
 it("names nothing for a project with no remote to name it by", () => {
   expect(sourceControlRepositorySelector(null)).toBeNull();
-  expect(sourceControlRepositorySelector({ provider: "github" })).toBeNull();
+  expect(
+    sourceControlRepositorySelector({ provider: SourceControlProviderKind.make("github") }),
+  ).toBeNull();
 });

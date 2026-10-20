@@ -43,6 +43,8 @@ import {
   createProject,
   dismissThreadUserInput,
   editQueuedRun,
+  beginQueuedRunEdit,
+  cancelQueuedRunEdit,
   forkThreadFromRun,
   interruptThreadTurn,
   mergeThreadBack,
@@ -522,6 +524,7 @@ describe("V2 environment commands", () => {
         failedChecks: [],
         passed: false,
         passedChecks: [],
+        pendingChecks: [],
         remarksThrough: "2026-10-05T00:00:00.000Z",
         remarkIds: [],
         conflicting: false,
@@ -720,6 +723,44 @@ describe("V2 environment commands", () => {
         ]);
         expect(commands[5]).not.toHaveProperty("attachments");
       }).pipe(Effect.provide(layerTestCrypto)),
+  );
+
+  it.effect("keeps the accepted edit identifier on save and cancel", () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor({ commands, projects: [] });
+      const provide = Effect.provideService(
+        EnvironmentSupervisor.EnvironmentSupervisor,
+        supervisor,
+      );
+      const runId = RunId.make("editing-run");
+      const { editId, sequence } = yield* beginQueuedRunEdit({
+        commandId: CommandId.make("begin-edit"),
+        threadId: v2ThreadId,
+        runId,
+        previousEditId: null,
+      }).pipe(provide);
+      yield* editQueuedRun({
+        commandId: CommandId.make("save-edit"),
+        threadId: v2ThreadId,
+        runId,
+        editId,
+        text: "Revised",
+      }).pipe(provide);
+      yield* cancelQueuedRunEdit({
+        commandId: CommandId.make("cancel-edit"),
+        threadId: v2ThreadId,
+        runId,
+        editId,
+      }).pipe(provide);
+      expect(editId).toBe("begin-edit");
+      expect(sequence).toBe(1);
+      expect(commands).toMatchObject([
+        { type: "queued-run.edit.begin", commandId: editId, previousEditId: null },
+        { type: "queued-run.edit", editId, text: "Revised" },
+        { type: "queued-run.edit.cancel", editId },
+      ]);
+    }).pipe(Effect.provide(layerTestCrypto)),
   );
 
   it.effect("delegates model selection to the server without fetching the full projection", () =>

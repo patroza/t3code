@@ -116,25 +116,40 @@ describe("command permissions", () => {
     ),
   );
 
-  it.effect("requires the destination settings grant to check OTLP endpoints", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const registry = yield* setup;
-        const check = createCommandPermissions(runtime, WS_METHODS.serverCheckOtlpEndpoint);
-        registry.set(sessions(env), AsyncResult.success(grant(true)));
-        expect(registry.get(check.permissionAtom(env))).toBe(false);
-        registry.set(
-          sessions(env),
-          AsyncResult.success({
-            ...grant(false),
-            scopes: [AuthSettingsWriteScope],
-            permissions: [AuthSettingsWriteScope],
-          }),
-        );
-        expect(registry.get(check.permissionAtom(env))).toBe(true);
-        yield* check.authorize(registry, env);
-      }),
-    ),
+  it.effect.each([
+    { label: "OTLP endpoints", method: WS_METHODS.serverCheckOtlpEndpoint },
+    { label: "EAS accounts", method: WS_METHODS.deviceEasAccount },
+  ])(
+    "requires the destination settings grant to check $label, including after revocation",
+    ({ method }) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const registry = yield* setup;
+          const check = createCommandPermissions(runtime, method);
+          registry.set(sessions(env), AsyncResult.success(grant(true)));
+          expect(registry.get(check.permissionAtom(env))).toBe(false);
+          registry.set(
+            sessions(env),
+            AsyncResult.success({
+              ...grant(false),
+              scopes: [AuthSettingsWriteScope],
+              permissions: [AuthSettingsWriteScope],
+            }),
+          );
+          expect(registry.get(check.permissionAtom(env))).toBe(true);
+          yield* check.authorize(registry, env);
+          registry.set(sessions(other), AsyncResult.success(grant(false)));
+          expect(registry.get(check.permissionAtom(other))).toBe(false);
+          expect(
+            (yield* check.authorize(registry, other).pipe(Effect.flip)).requiredPermission,
+          ).toBe(AuthSettingsWriteScope);
+          registry.set(sessions(env), AsyncResult.success(grant(false)));
+          expect(registry.get(check.permissionAtom(env))).toBe(false);
+          expect((yield* check.authorize(registry, env).pipe(Effect.flip)).requiredPermission).toBe(
+            AuthSettingsWriteScope,
+          );
+        }),
+      ),
   );
 
   it.effect("uses the target grant for both availability and execution", () =>

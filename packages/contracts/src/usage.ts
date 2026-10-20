@@ -3,9 +3,14 @@ import * as Schema from "effect/Schema";
 import { ForwardCompatibleArray, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 /**
- * Bumped whenever the shape of {@link UsageSummary} changes incompatibly.
- * Adding providers or other array-element variants is additive: unknown entries
- * are skipped on decode and do not require a version bump.
+ * Bumped whenever the shape of {@link UsageSummary} changes incompatibly. The
+ * client renders partial coverage when an environment reports an older version
+ * rather than failing the whole page.
+ *
+ * Adding providers or other array-element variants is additive: unknown
+ * entries are skipped on decode and do not require a version bump. So are
+ * optional bucket fields, which older clients ignore.
+
  */
 export const USAGE_CONTRACT_VERSION = 6 as const;
 
@@ -15,6 +20,7 @@ export const UsageProviderKind = Schema.Literals([
   "claude",
   "codex",
   "grok",
+  "kimi",
   "cursor",
   "opencode",
   "antigravity",

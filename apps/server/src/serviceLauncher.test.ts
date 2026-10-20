@@ -480,12 +480,20 @@ setInterval(() => {}, 1_000);
           root,
           yield* Effect.promise(() => readServiceState(statePath)),
         );
+        const childrenBefore = spawnedChildren.length;
         const running = launcher.run().then(
           () => Promise.reject(new Error("launcher unexpectedly completed")),
           () => Promise.resolve(),
         );
         yield* Effect.promise(() =>
-          vi.waitFor(() => assert.equal(vi.getTimerCount(), 1), { timeout: 10_000 }),
+          vi.waitFor(
+            () => {
+              assert.equal(spawnedChildren.length, childrenBefore + 1);
+              assert.isTrue(spawnedChildren.at(-1)!.connected);
+              assert.equal(vi.getTimerCount(), 1);
+            },
+            { timeout: 10_000 },
+          ),
         );
         yield* Effect.promise(() => vi.advanceTimersByTimeAsync(121_000));
         if (prepares) spawnedChildren.at(-1)!.send({ type: "test-prepare" });

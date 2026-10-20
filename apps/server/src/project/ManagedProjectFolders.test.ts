@@ -33,11 +33,18 @@ import * as ProjectFaviconResolver from "./ProjectFaviconResolver.ts";
 import * as ProjectService from "./ProjectService.ts";
 import * as RepositoryIdentityResolver from "./RepositoryIdentityResolver.ts";
 import * as ManagedProjectFolders from "./ManagedProjectFolders.ts";
+import * as ProjectLifecycleScriptRunner from "./ProjectLifecycleScriptRunner.ts";
 
 const layerGitWorkflow = (vcsProcess?: Layer.Layer<VcsProcess.VcsProcess>) =>
   GitWorkflow.layer.pipe(
     Layer.provide(VcsDriverRegistry.layer.pipe(Layer.provide(vcsProcess ?? VcsProcess.layer))),
     Layer.provide(Layer.mock(GitManager.GitManager)({})),
+    Layer.provide(
+      Layer.mock(ProjectLifecycleScriptRunner.ProjectLifecycleScriptRunner)({
+        runWorktreeRemove: () => Effect.succeed({ status: "no-script" as const }),
+        runPrMerged: () => Effect.succeed({ status: "no-script" as const }),
+      }),
+    ),
   );
 
 const layerEnrichment = ProjectEnrichmentService.layer.pipe(
@@ -571,6 +578,7 @@ it.effect("removes the folder when the repository cannot be made", () =>
         execute: (input) =>
           Effect.fail(
             new GitCommandError({
+              failureKind: "unknown",
               operation: input.operation,
               command: "git",
               cwd: input.cwd,

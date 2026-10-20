@@ -1,5 +1,6 @@
 import {
   RelayAuthInvalidError,
+  RelayEnvironmentConnectNotAuthorizedError,
   RelayEnvironmentLinkUnavailableError,
 } from "@t3tools/contracts/relay";
 import { describe, expect, it } from "@effect/vitest";
@@ -73,5 +74,28 @@ describe("relayProtectedErrorMessage", () => {
     });
 
     expect(relayProtectedErrorMessage(error)).toBe("Relay rejected the cloud session token.");
+  });
+
+  it("explains a missing environment link instead of a credential failure", () => {
+    const error = new RelayEnvironmentConnectNotAuthorizedError({
+      code: "environment_connect_not_authorized",
+      reason: "environment_link_not_found",
+      traceId: "trace-1",
+    });
+
+    expect(relayProtectedErrorMessage(error)).toBe(
+      "Relay has no active link for this environment. If it was deregistered from T3 Connect, link it again on that machine.",
+    );
+  });
+
+  it("still decodes a not-authorized error from a relay that omits the reason", () => {
+    const error = new RelayEnvironmentConnectNotAuthorizedError({
+      code: "environment_connect_not_authorized",
+      traceId: "trace-1",
+    });
+
+    expect(relayProtectedErrorMessage(error)).toBe(
+      "Relay rejected the environment connection request.",
+    );
   });
 });

@@ -18,6 +18,8 @@ describe("T3ProjectFile", () => {
           command: "pnpm dev",
           icon: "play",
           runOnWorktreeCreate: false,
+          runOnWorktreeRemove: true,
+          runOnPrMerged: true,
           previewUrl: "http://localhost:3000",
           autoOpenPreview: true,
         },
@@ -67,5 +69,13 @@ describe("T3ProjectFile", () => {
     expect(decode({ worktreeSubmodules: "none" }).worktreeSubmodules).toBe("none");
     expect(decode({ worktreeSubmodules: "top-level" }).worktreeSubmodules).toBe("top-level");
     expect(() => decode({ worktreeSubmodules: "shallow" })).toThrow();
+  });
+
+  it("decodes several Jira project keys and rejects a token that is not a key", () => {
+    expect(decode({ jiraProjects: [" sa ", "CFG"] }).jiraProjects).toEqual(["SA", "CFG"]);
+    expect(decode({ jiraProjects: [] }).jiraProjects).toEqual([]);
+    expect(() => decode({ jiraProjects: ["SA-465"] })).toThrow();
+    expect(() => decode({ jiraProjects: ["G"] })).toThrow();
+    expect(() => decode({ jiraProjects: "SA" })).toThrow();
   });
 });

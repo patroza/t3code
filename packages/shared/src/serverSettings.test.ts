@@ -49,6 +49,19 @@ describe("fallbackTextGenerationModelSelection", () => {
     );
     expect(fallback?.instanceId).toBe(configured);
   });
+
+  it.each(["kimi", "kimi_work"])("keeps %s available as a project writer fallback", (id) => {
+    const instanceId = ProviderInstanceId.make(id);
+    const providerInstances = {
+      [instanceId]: { driver: ProviderDriverKind.make("kimi"), config: {} },
+    };
+    const fallback = fallbackTextGenerationModelSelection(
+      providerInstances,
+      (candidate) => candidate === instanceId,
+      { includeConfiguredInstances: true },
+    );
+    expect(fallback).toEqual({ instanceId, model: "kimi-code/k3" });
+  });
 });
 
 describe("serverSettings helpers", () => {

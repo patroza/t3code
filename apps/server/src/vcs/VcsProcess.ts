@@ -22,6 +22,7 @@ import {
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import * as ProcessRunner from "../processRunner.ts";
+import { ExplicitGitDirectory } from "./GitRepositoryProbe.ts";
 
 export interface VcsProcessInput {
   readonly operation: string;
@@ -162,6 +163,21 @@ const classifyNonZeroExit = (command: string, stderr: string): VcsProcessExitFai
   return "command-failed";
 };
 
+/** Guest App-wrapper lines are written for operators; they do not carry tokens. */
+const WRAPPER_DIAGNOSTIC = /^(?:t3-github-app-token|gh-app-wrapper):.+/i;
+const PUBLIC_DIAGNOSTIC_MAX = 240;
+
+export function publicDiagnosticFromStderr(stderr: string): string | undefined {
+  for (const line of stderr.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!WRAPPER_DIAGNOSTIC.test(trimmed)) continue;
+    return trimmed.length > PUBLIC_DIAGNOSTIC_MAX
+      ? `${trimmed.slice(0, PUBLIC_DIAGNOSTIC_MAX - 1)}…`
+      : trimmed;
+  }
+  return undefined;
+}
+
 // Classify before discarding stderr; keep paths and process output out of errors.
 const isTransientGitExit = (stderr: string) =>
   /unable to create [^\n]*\.lock['"]?: file exists/i.test(stderr) ||
@@ -184,8 +200,14 @@ export const make = Effect.gen(function* () {
   const vcsProcesses = yield* Semaphore.make(VCS_PROCESS_CONCURRENCY);
   const githubProcesses = yield* Semaphore.make(GITHUB_PROCESS_CONCURRENCY);
 
-  const spawn = (input: VcsProcessInput, baseError: VcsProcessErrorContext) =>
-    processRunner
+  const spawn = Effect.fn("VcsProcess.spawn")(function* (
+    input: VcsProcessInput,
+    baseError: VcsProcessErrorContext,
+  ) {
+    const explicitDirectory = yield* ExplicitGitDirectory;
+    const gitDirectoryEnv =
+      explicitDirectory?.cwd === input.cwd ? { GIT_DIR: explicitDirectory.gitDir } : {};
+    return yield* processRunner
       .run({
         command: input.command,
         args: input.args,
@@ -195,7 +217,11 @@ export const make = Effect.gen(function* () {
         ...(input.onStdoutChunk !== undefined ? { onStdoutChunk: input.onStdoutChunk } : {}),
         env: {
           ...input.env,
-          ...explicitBareRepositoryEnv({ ...process.env, ...input.env }, hostPlatform),
+          ...gitDirectoryEnv,
+          ...explicitBareRepositoryEnv(
+            { ...process.env, ...input.env, ...gitDirectoryEnv },
+            hostPlatform,
+          ),
         },
         timeout: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         maxOutputBytes: input.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
@@ -232,6 +258,7 @@ export const make = Effect.gen(function* () {
           }),
         ),
       );
+  });
 
   const runUnbounded = Effect.fn("VcsProcess.runUnbounded")(function* (input: VcsProcessInput) {
     const baseError = {
@@ -278,6 +305,7 @@ export const make = Effect.gen(function* () {
           stderrTruncated: result.stderrTruncated,
         },
         failureKind,
+        publicDiagnosticFromStderr(result.stderr),
         input.command === "git" &&
           failureKind === "command-failed" &&
           isTransientGitExit(result.stderr),

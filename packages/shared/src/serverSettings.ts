@@ -84,6 +84,7 @@ const TEXT_GENERATION_FALLBACK_DRIVERS = [
   "pi",
   "opencode",
   "antigravity",
+  "kimi",
 ].map((driver) => ProviderDriverKind.make(driver));
 
 /**
@@ -340,7 +341,7 @@ function translateLegacyProjectOverridePatch(
     for (const [projectId, value] of Object.entries(map)) {
       if (canonicalProjectIds.has(projectId)) continue;
       const entry: ProjectSettingsOverrides = {
-        ...(entries.get(projectId) ?? currentEntries[projectId] ?? {}),
+        ...(entries.get(projectId) ?? currentEntries[projectId]),
       };
       if (value === null || value === undefined) {
         delete entry[key];

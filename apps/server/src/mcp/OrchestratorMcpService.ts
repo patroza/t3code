@@ -106,6 +106,7 @@ import {
 } from "./McpInvocationContext.ts";
 import * as Metrics from "../observability/Metrics.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
+import { sourceRefForMcpCaller } from "../identity/stampSource.ts";
 
 const DEFAULT_WAIT_TIMEOUT_MS = 10 * 60 * 1_000;
 const MAX_WAIT_TIMEOUT_MS = 60 * 60 * 1_000;
@@ -238,6 +239,7 @@ function threadManagementFailure(error: unknown): OrchestratorMcpFailure {
       return failure("thread_not_found", error.message);
     case "ThreadManagementRunNotFoundError":
       return failure("run_not_found", error.message);
+    case "OrchestrationDispatchCommandError":
     case "ThreadManagementThreadArchivedError":
     case "ThreadManagementNoSteerableRunError":
       return failure("thread_not_sendable", error.message);
@@ -2411,6 +2413,10 @@ const make = Effect.gen(function* () {
         const parentNodeId = parentRun.rootNodeId;
         const providers = yield* loadProviders;
         const key = yield* requestKey(input.clientRequestId);
+        const attribution = yield* sourceRefForMcpCaller({
+          parentOrigin: parent.thread.originSource,
+          clientSessionId: scope.client?.sessionId,
+        });
         const created = yield* Effect.forEach(
           input.threads,
           (request, index) =>
@@ -2465,6 +2471,7 @@ const make = Effect.gen(function* () {
                   type: "thread.create",
                   createdBy: "agent",
                   creationSource: "mcp",
+                  ...(attribution === undefined ? {} : { originSource: attribution }),
                   commandId,
                   threadId,
                   projectId: parent.thread.projectId,
@@ -2507,6 +2514,7 @@ const make = Effect.gen(function* () {
                       index,
                     }),
                     text: request.prompt,
+                    ...(attribution === undefined ? {} : { source: attribution }),
                     attachments: [],
                     modelSelection: resolvedModelSelection,
                     dispatchMode: { type: "start_immediately" },
@@ -2705,6 +2713,10 @@ const make = Effect.gen(function* () {
       yield* resolveInteractionMode(limits.interactionMode, target.thread.interactionMode);
 
       const mode = input.mode ?? "auto";
+      const attribution = yield* sourceRefForMcpCaller({
+        parentOrigin: parent?.thread.originSource,
+        clientSessionId: scope.client?.sessionId,
+      });
       const key = yield* requestKey(input.clientRequestId);
       const messageId = stableOperationMessageId({
         scope,
@@ -2727,6 +2739,7 @@ const make = Effect.gen(function* () {
           mode,
           createdBy: "agent",
           creationSource: "mcp",
+          ...(attribution === undefined ? {} : { source: attribution }),
         })
         .pipe(
           Effect.mapError((error) =>

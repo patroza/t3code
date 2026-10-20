@@ -72,6 +72,7 @@ it.effect("parks automatic pull until activation without delaying command readin
       const dependencies: Layer.Layer<
         Layer.Services<ReturnType<typeof ServerRuntimeStartup.layerWithOptions>>
       > = Layer.mergeAll(
+        FileSystem.layerNoop({ writeFileString: () => Effect.void }),
         Layer.mock(ServerConfig.ServerConfig)({
           ...(yield* ServerConfig.deriveServerPaths(cwd, undefined).pipe(
             Effect.provide(Path.layer),
@@ -166,7 +167,6 @@ it.effect("parks automatic pull until activation without delaying command readin
         }),
         Layer.mock(AnalyticsService.AnalyticsService)({ record: () => Effect.void }),
         // No provider logins or Connect link, so startup records no owners.
-        FileSystem.layerNoop({}),
         Layer.mock(ServerSecretStore.ServerSecretStore)({ get: () => Effect.succeedNone }),
         NodeCrypto.layer,
         Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
@@ -181,7 +181,12 @@ it.effect("parks automatic pull until activation without delaying command readin
         const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
         yield* startup.markHttpListening;
 
-        yield* Effect.raceFirst(Deferred.await(prepared), Deferred.await(statusCalled));
+        // A reverted, awaited pull reaches statusDetails instead of prepareTrial.
+        // Race both receipts with readiness so a startup failure also rejects promptly.
+        yield* Effect.raceFirst(
+          Effect.raceFirst(Deferred.await(prepared), Deferred.await(statusCalled)),
+          startup.awaitCommandReady,
+        );
         expect(yield* Deferred.isDone(activation)).toBe(false);
         expect(yield* Deferred.isDone(statusCalled)).toBe(false);
         expect(yield* Deferred.isDone(prepared)).toBe(true);

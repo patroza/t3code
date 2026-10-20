@@ -35,6 +35,10 @@ export const providerTurnsTotal = Metric.counter("t3_provider_turns_total", {
   description: "Total provider turn lifecycle operations.",
 });
 
+export const providerTurnRecoveriesTotal = Metric.counter("t3_provider_turn_recoveries_total", {
+  description: "Total provider turn restart-recovery candidates and outcomes.",
+});
+
 export const providerTurnDuration = Metric.timer("t3_provider_turn_duration", {
   description: "Time for the provider adapter to start a turn, not how long the turn runs.",
 });
@@ -61,6 +65,10 @@ export const serverEventLoopUtilization = Metric.gauge("t3_server_event_loop_uti
 export const serverEventLoopDelayMax = Metric.gauge("t3_server_event_loop_delay_max", {
   description: "Longest event loop delay over the last sample.",
   attributes: { unit: "ms" },
+});
+
+const providerRuntimeEventsTotal = Metric.counter("t3_provider_runtime_events_total", {
+  description: "Total canonical provider runtime events processed.",
 });
 
 export const gitCommandsTotal = Metric.counter("t3_git_commands_total", {

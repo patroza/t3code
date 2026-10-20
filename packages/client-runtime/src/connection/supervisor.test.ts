@@ -38,6 +38,7 @@ import {
   type SupervisorConnectionState,
 } from "./model.ts";
 import * as RpcSession from "../rpc/session.ts";
+import * as ConnectionDiagnosticsLog from "./diagnosticsLog.ts";
 import { presentConnectionState } from "./presentation.ts";
 import * as EnvironmentSupervisor from "./supervisor.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
@@ -162,9 +163,13 @@ const makeHarness = Effect.fn("TestConnectionHarness.make")(function* (options?:
   readonly initialConfig?: (attempt: number) => Effect.Effect<ServerConfig, ConnectionAttemptError>;
   readonly checkRoute?: (route: ConnectionRoute) => Effect.Effect<ConnectionDriver.RouteCheck>;
 }) {
-  const networkStatus = yield* SubscriptionRef.make<NetworkStatus>(
+  // `reportedNetworkStatus` drives the change stream while `liveNetworkStatus`
+  // answers status reads, so a test can simulate a platform listener that missed
+  // a transition while the app was suspended.
+  const reportedNetworkStatus = yield* SubscriptionRef.make<NetworkStatus>(
     options?.networkStatus ?? "online",
   );
+  const liveNetworkStatus = yield* Ref.make<NetworkStatus>(options?.networkStatus ?? "online");
   const prepareCount = yield* Ref.make(0);
   const sessionCount = yield* Ref.make(0);
   const releaseCount = yield* Ref.make(0);
@@ -180,8 +185,8 @@ const makeHarness = Effect.fn("TestConnectionHarness.make")(function* (options?:
   >([]);
 
   const connectivity = Connectivity.Connectivity.of({
-    status: SubscriptionRef.get(networkStatus),
-    changes: SubscriptionRef.changes(networkStatus),
+    status: Ref.get(liveNetworkStatus),
+    changes: SubscriptionRef.changes(reportedNetworkStatus),
   });
 
   const prepare = Effect.fn("TestConnectionDriver.prepare")(function* (target: ConnectionTarget) {
@@ -259,6 +264,7 @@ const makeHarness = Effect.fn("TestConnectionHarness.make")(function* (options?:
           checkRoute(route).pipe(Effect.map((check) => check === "answered")),
       }),
     ),
+    ConnectionDiagnosticsLog.layer,
   );
 
   return {
@@ -266,7 +272,13 @@ const makeHarness = Effect.fn("TestConnectionHarness.make")(function* (options?:
     prepareCount,
     sessionCount,
     releaseCount,
-    setNetworkStatus: (status: NetworkStatus) => SubscriptionRef.set(networkStatus, status),
+    setNetworkStatus: (status: NetworkStatus) =>
+      Ref.set(liveNetworkStatus, status).pipe(
+        Effect.andThen(SubscriptionRef.set(reportedNetworkStatus, status)),
+      ),
+    // Changes the network the device is actually on without emitting a change
+    // event, mimicking a listener that was suspended while backgrounded.
+    setNetworkStatusWithoutNotifying: (status: NetworkStatus) => Ref.set(liveNetworkStatus, status),
     wake: (reason: ConnectionWakeups.ConnectionWakeup) =>
       SubscriptionRef.update(wakeups, (event) => ({
         sequence: event.sequence + 1,
@@ -1443,6 +1455,7 @@ describe("EnvironmentSupervisor", () => {
       );
 
       expect(yield* Ref.get(harness.sessionCount)).toBe(2);
+      expect(yield* Ref.get(harness.releaseCount)).toBe(1);
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
