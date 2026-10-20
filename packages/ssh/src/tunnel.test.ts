@@ -229,6 +229,18 @@ describe("ssh tunnel scripts", () => {
     assert.notInclude(script, "npx");
   });
 
+  it("prepends user-local bins before accepting an existing node", () => {
+    const script = SshTunnel.buildRemoteT3RunnerScript({
+      ...NODE_SCRIPT,
+      nodeEngineRange: TEST_NODE_ENGINE_RANGE,
+    });
+
+    assert.isBelow(
+      script.indexOf('prepend_path_if_dir "$HOME/.local/bin"'),
+      script.indexOf("if command -v node >/dev/null 2>&1"),
+    );
+  });
+
   it("embeds the runner in the launch script byte for byte", () => {
     const runner = SshTunnel.buildRemoteT3RunnerScript(ARCHIVE);
     assert.include(SshTunnel.buildRemoteLaunchScript(ARCHIVE), runner);
