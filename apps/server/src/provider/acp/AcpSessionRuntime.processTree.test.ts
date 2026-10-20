@@ -254,7 +254,6 @@ describe("terminatePosixOwnedProcessTree", () => {
       populated: () => false,
       remove: () => undefined,
     };
-    const packagedExecPath = vi.spyOn(process, "execPath", "get").mockReturnValue("/bin/sh");
     try {
       const wrapped = AcpSessionRuntime.wrapCommandForLinuxCgroup(lease, "/bin/sh", [
         "-c",
@@ -316,7 +315,6 @@ describe("terminatePosixOwnedProcessTree", () => {
         expect(missingTargetBash.stderr).toContain("/nonexistent-t3-probe");
       }
     } finally {
-      packagedExecPath.mockRestore();
       NodeFS.rmSync(scratch, { recursive: true, force: true });
     }
   });

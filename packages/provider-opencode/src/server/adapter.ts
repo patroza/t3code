@@ -1,3 +1,4 @@
+import { resolveCurrentProviderEnvironment } from "@t3tools/provider-core/server/DirenvEnvironment";
 import type {
   Event as OpenCodeEvent,
   Message as OpenCodeMessage,
@@ -947,7 +948,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           binaryPath: options.settings.binaryPath,
           directory: cwd,
           serverUrl: options.settings.serverUrl,
-          environment: options.environment,
+          environment: yield* resolveCurrentProviderEnvironment(cwd, options.environment),
         });
         const client = runtime.createOpenCodeSdkClient({
           baseUrl: connection.url,

@@ -259,6 +259,7 @@ export class OpenCodeRuntime extends Context.Service<
       readonly directory: string;
       readonly serverPassword?: string;
       readonly environment?: NodeJS.ProcessEnv;
+      readonly cwd?: string;
       readonly port?: number;
       readonly hostname?: string;
       readonly timeoutMs?: number;
@@ -270,6 +271,7 @@ export class OpenCodeRuntime extends Context.Service<
       readonly serverUrl?: string | null;
       readonly serverPassword?: string;
       readonly environment?: NodeJS.ProcessEnv;
+      readonly cwd?: string;
       readonly port?: number;
       readonly hostname?: string;
       readonly timeoutMs?: number;
@@ -716,6 +718,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
     const child = yield* spawner
       .spawn(
         ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+          ...(input.cwd ? { cwd: input.cwd } : {}),
           detached: hostPlatform !== "win32",
           shell: spawnCommand.shell,
           env: {
@@ -942,6 +945,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       directory: input.directory,
       ...(input.serverPassword !== undefined ? { serverPassword: input.serverPassword } : {}),
       ...(input.environment !== undefined ? { environment: input.environment } : {}),
+      ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
       ...(input.port !== undefined ? { port: input.port } : {}),
       ...(input.hostname !== undefined ? { hostname: input.hostname } : {}),
       ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),

@@ -494,6 +494,84 @@ describe("AcpRuntimeModel", () => {
         },
       },
     ]);
+
+    const usageResult = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "usage_update",
+        used: 53000,
+        size: 200000,
+      },
+    } satisfies EffectAcpSchema.SessionNotification);
+
+    expect(usageResult.events).toEqual([
+      {
+        _tag: "UsageUpdated",
+        usage: { usedTokens: 53000, maxTokens: 200000 },
+        rawPayload: {
+          sessionId: "session-1",
+          update: {
+            sessionUpdate: "usage_update",
+            used: 53000,
+            size: 200000,
+          },
+        },
+      },
+    ]);
+
+    const grokMetaUsage = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: {
+          type: "text",
+          text: "hello from grok",
+        },
+        _meta: {
+          totalTokens: 139_982,
+          eventId: "evt-1",
+        },
+      },
+    } satisfies EffectAcpSchema.SessionNotification);
+
+    expect(grokMetaUsage.events).toEqual([
+      {
+        _tag: "ContentDelta",
+        text: "hello from grok",
+        rawPayload: {
+          sessionId: "session-1",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: {
+              type: "text",
+              text: "hello from grok",
+            },
+            _meta: {
+              totalTokens: 139_982,
+              eventId: "evt-1",
+            },
+          },
+        },
+      },
+      {
+        _tag: "UsageUpdated",
+        usage: { usedTokens: 139_982 },
+        rawPayload: {
+          sessionId: "session-1",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: {
+              type: "text",
+              text: "hello from grok",
+            },
+            _meta: {
+              totalTokens: 139_982,
+              eventId: "evt-1",
+            },
+          },
+        },
+      },
+    ]);
   });
 
   it("keeps thought chunks separate from assistant text", () => {
