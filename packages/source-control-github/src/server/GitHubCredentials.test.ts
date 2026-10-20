@@ -5,7 +5,7 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import { ChildProcessSpawner } from "effect/process";
 
-import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
+import { VcsProcessExitError, DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
 import type * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
 import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
@@ -31,9 +31,13 @@ function harness(
   tokens: Record<string, string> = {},
 ) {
   const calls: Array<ReadonlyArray<string>> = [];
+  const inputs: Array<
+    Parameters<SourceControlHost.SourceControlHost["Service"]["process"]["run"]>[0]
+  > = [];
   const run: SourceControlHost.SourceControlHost["Service"]["process"]["run"] = (input) =>
     Effect.sync(() => {
       calls.push(input.args);
+      inputs.push(input);
       const user = input.args[input.args.indexOf("--user") + 1];
       if (input.args.includes("--user") && user !== undefined && signedOut.includes(user)) {
         return {
@@ -46,7 +50,11 @@ function harness(
       }
       return {
         exitCode: ChildProcessSpawner.ExitCode(0),
-        stdout: input.args.includes("--user") ? `token-for-${user}\n` : "active-token\n",
+        stdout: input.env?.GH_REPO
+          ? `token-for-${input.env.GH_REPO}\n`
+          : input.args.includes("--user")
+            ? `token-for-${user}\n`
+            : "active-token\n",
         stderr: "",
         stdoutTruncated: false,
         stderrTruncated: false,
@@ -63,7 +71,7 @@ function harness(
     ),
     Layer.provide(NodeCrypto.layer),
   );
-  return { layer, calls };
+  return { layer, calls, inputs };
 }
 
 describe("GitHubCredentials", () => {
@@ -81,6 +89,45 @@ describe("GitHubCredentials", () => {
       const credential = yield* credentials.get("GitHub.com");
       expect(Redacted.value(credential.token)).toBe("active-token");
       expect(calls).toEqual([["auth", "token", "--hostname", "github.com"]]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("mints and caches installation credentials per requested repository", () => {
+    const { layer, inputs } = harness();
+    return Effect.gen(function* () {
+      const credentials = yield* GitHubCredentials.GitHubCredentials;
+      const fork = { cwd: "/server", repository: "owner/fork" };
+      const privateRepo = { cwd: "/scanner", repository: "organization/scanner" };
+      const first = yield* credentials.get("github.com", fork);
+      const second = yield* credentials.get("github.com", privateRepo);
+      expect(Redacted.value(first.token)).toBe("token-for-github.com/owner/fork");
+      expect(Redacted.value(second.token)).toBe("token-for-github.com/organization/scanner");
+      expect(first.fingerprint).not.toBe(second.fingerprint);
+      expect((yield* credentials.get("github.com", privateRepo)).fingerprint).toBe(
+        second.fingerprint,
+      );
+      expect(inputs).toHaveLength(2);
+      expect(inputs[1]).toMatchObject({
+        cwd: "/scanner",
+        env: {
+          GH_REPO: "github.com/organization/scanner",
+          BASH_ENV: "",
+          GH_DEBUG: "",
+        },
+      });
+      yield* credentials.invalidate("github.com", privateRepo);
+      yield* credentials.get("github.com", fork);
+      yield* credentials.get("github.com", privateRepo);
+      expect(inputs).toHaveLength(3);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("uses the caller checkout when no repository was supplied", () => {
+    const { layer, inputs } = harness();
+    return Effect.gen(function* () {
+      const credentials = yield* GitHubCredentials.GitHubCredentials;
+      yield* credentials.get("github.com", { cwd: "/project" });
+      expect(inputs[0]).toMatchObject({ cwd: "/project", env: { GH_REPO: "", BASH_ENV: "" } });
     }).pipe(Effect.provide(layer));
   });
 
@@ -181,4 +228,35 @@ describe("GitHubCredentials", () => {
       );
     }).pipe(Effect.provide(layer));
   });
+});
+
+it.effect("preserves a GitHub App wrapper diagnostic from credential acquisition", () => {
+  const publicDiagnostic = "t3-github-app-token: app is not installed on acme/web";
+  const layer = GitHubCredentials.layer.pipe(
+    Layer.provideMerge(
+      TestSourceControlHost.layer({
+        process: {
+          run: () =>
+            Effect.fail(
+              new VcsProcessExitError({
+                operation: "GitHubCredentials.ghAuthToken",
+                command: "gh",
+                cwd: "/repo",
+                exitCode: 1,
+                failureKind: "command-failed",
+                detail: "Process exited with a non-zero status.",
+                publicDiagnostic,
+              }),
+            ),
+        },
+      }),
+    ),
+    Layer.provide(NodeCrypto.layer),
+  );
+  return Effect.gen(function* () {
+    const credentials = yield* GitHubCredentials.GitHubCredentials;
+    const error = yield* credentials.get("github.com").pipe(Effect.flip);
+    expect(error._tag).toBe("GitHubCliFailedError");
+    expect(error.message).toBe(publicDiagnostic);
+  }).pipe(Effect.provide(layer));
 });

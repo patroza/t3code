@@ -13,7 +13,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/process";
-import { assert, it } from "@effect/vitest";
+import { assert, describe, it } from "@effect/vitest";
 
 import { CheckpointRef, GitCommandError, VcsProcessExitError } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -22,7 +22,7 @@ import * as ServerConfig from "../config.ts";
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
-import type * as VcsDriver from "./VcsDriver.ts";
+import * as VcsDriver from "./VcsDriver.ts";
 import * as VcsDriverRegistry from "./VcsDriverRegistry.ts";
 import * as VcsProcess from "./VcsProcess.ts";
 import { runVcsDriverContractSuite } from "./testing/VcsDriverContractHarness.ts";
@@ -99,6 +99,130 @@ runVcsDriverContractSuite<GitVcsDriver.GitVcsDriver, GitContractError>({
   },
 });
 
+const withTempDir = <A, E, R>(use: (cwd: string) => Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-git-bare-" });
+    return yield* use(cwd);
+  }).pipe(Effect.scoped, Effect.provide(layerGitContract));
+
+describe("GitVcsDriver bare repositories", () => {
+  it.effect("detects a bare repository instead of reporting no repository", () =>
+    withTempDir((cwd) =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const driver = yield* VcsDriver.VcsDriver;
+        yield* runGit(cwd, ["init", "--bare"]);
+
+        const identity = yield* driver.detectRepository(cwd);
+
+        assert.equal(identity?.kind, "git");
+        assert.equal(identity?.bare, true);
+        // A bare repository has no toplevel, so the metadata directory is the root.
+        assert.equal(identity?.rootPath, path.normalize(cwd));
+        assert.isFalse(yield* driver.isInsideWorkTree(cwd));
+      }),
+    ),
+  );
+
+  it.effect("detects a repository whose config marks an existing checkout bare", () =>
+    withTempDir((cwd) =>
+      Effect.gen(function* () {
+        const driver = yield* VcsDriver.VcsDriver;
+        yield* runGit(cwd, ["init"]);
+        // The shape a repository lands in when `core.bare` is flipped under a
+        // populated checkout: every Git route used to fail detection outright.
+        yield* runGit(cwd, ["config", "core.bare", "true"]);
+
+        const identity = yield* driver.detectRepository(cwd);
+
+        assert.equal(identity?.kind, "git");
+        assert.equal(identity?.bare, true);
+      }),
+    ),
+  );
+
+  it.effect("still reports no repository outside one", () =>
+    withTempDir((cwd) =>
+      Effect.gen(function* () {
+        const driver = yield* VcsDriver.VcsDriver;
+        assert.equal(yield* driver.detectRepository(cwd), null);
+      }),
+    ),
+  );
+
+  it.effect("does not opt a nested folder into its bare ancestor", () =>
+    withTempDir((cwd) =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const driver = yield* VcsDriver.VcsDriver;
+        const gitDriver = yield* GitVcsDriver.GitVcsDriver;
+        yield* runGit(cwd, ["init", "--bare"]);
+        const nested = path.join(cwd, "nested");
+        yield* fileSystem.makeDirectory(nested);
+
+        assert.equal(yield* driver.detectRepository(nested), null);
+        const result = yield* gitDriver.execute({
+          operation: "test.implicit-bare-discovery",
+          cwd,
+          args: ["rev-parse", "--is-bare-repository"],
+          allowNonZeroExit: true,
+        });
+        assert.notEqual(result.exitCode, 0);
+        assert.include(result.stderr, "safe.bareRepository");
+      }),
+    ),
+  );
+
+  it.effect("does not classify an ordinary checkout's git directory as a bare source", () =>
+    withTempDir((cwd) =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const driver = yield* VcsDriver.VcsDriver;
+        yield* runGit(cwd, ["init"]);
+        assert.equal(yield* driver.detectRepository(path.join(cwd, ".git")), null);
+      }),
+    ),
+  );
+
+  it.effect("creates a usable worktree from a bare repository", () =>
+    withTempDir((root) =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const driver = yield* VcsDriver.VcsDriver;
+        const gitDriver = yield* GitVcsDriver.GitVcsDriver;
+
+        const source = path.join(root, "source");
+        const bare = path.join(root, "bare.git");
+        const worktree = path.join(root, "worktree");
+        yield* fileSystem.makeDirectory(source, { recursive: true });
+        yield* runGit(source, ["init"]);
+        yield* runGit(source, ["config", "user.email", "test@test.com"]);
+        yield* runGit(source, ["config", "user.name", "Test"]);
+        yield* runGit(source, ["commit", "--allow-empty", "-m", "init"]);
+        // Explicit branch name: `git init` defaults vary by host config.
+        yield* runGit(source, ["branch", "t3-base"]);
+        yield* runGit(root, ["clone", "--bare", source, bare]);
+
+        const result = yield* gitDriver.createWorktree({
+          cwd: bare,
+          refName: "t3-base",
+          newRefName: "feature",
+          path: worktree,
+        });
+
+        assert.equal(result.worktree.path, worktree);
+        assert.equal(result.worktree.refName, "feature");
+        // The thread's checkout is a real working tree even though its source has none.
+        assert.isTrue(yield* driver.isInsideWorkTree(worktree));
+        const worktreeIdentity = yield* driver.detectRepository(worktree);
+        assert.equal(worktreeIdentity?.bare, false);
+      }),
+    ),
+  );
+});
 it.effect("lists the fetch and push URLs of a partial clone remote", () =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;

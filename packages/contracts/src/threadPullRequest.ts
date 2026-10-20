@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 
 import {
   IsoDateTime,
+  MessageId,
   NonNegativeInt,
   PositiveInt,
   ProjectId,
@@ -89,12 +90,28 @@ export const ThreadPullRequestWatch = Schema.Struct({
   passedChecks: Schema.Array(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
+  /**
+   * Checks that were pending on the last pass. One that then finishes without
+   * failing is news, including a check the base branch does not require. A
+   * check that first appears already passed is not in this list. Empty on
+   * watches saved before this field existed.
+   */
+  pendingChecks: Schema.Array(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+  /** Remarks from others created up to this host time were reported. */
+
   remarksThrough: IsoDateTime,
   /** Remarks created exactly at `remarksThrough` that were reported, so a late one still counts. */
   remarkIds: Schema.Array(TrimmedNonEmptyString),
   conflicting: Schema.Boolean,
   /** Comment-only wakes in a row. Watching stops at a limit, so bots cannot loop it. */
   wakes: NonNegativeInt,
+  /**
+   * Wakes for this watch that may still be queued. Ending the watch cancels those
+   * runs. A wake that already started is not in this list's concern.
+   */
+  pendingWakeMessageIds: Schema.optional(Schema.Array(MessageId)),
 });
 export type ThreadPullRequestWatch = typeof ThreadPullRequestWatch.Type;
 

@@ -7,6 +7,7 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import * as Redacted from "effect/Redacted";
@@ -14,6 +15,7 @@ import * as Redacted from "effect/Redacted";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
 import * as GitHubRest from "./GitHubRest.ts";
+import * as GitHubGraphQlClient from "./gitHubGraphQlClient.ts";
 import * as GitHubRequestPolicy from "./GitHubRequestPolicy.ts";
 import * as GitHubCredentials from "./GitHubCredentials.ts";
 import * as GitHubQuota from "./GitHubQuota.ts";
@@ -88,6 +90,8 @@ const coreResponse = (pullRequest: Readonly<Record<string, unknown>> = {}) => ({
 type ApiCall =
   | {
       readonly kind: "graphql";
+      readonly repository?: string | undefined;
+      readonly cwd?: string | undefined;
       readonly authorization: string | undefined;
       readonly partial?: boolean;
       /** The generated operation's name, which the routes below match on. */
@@ -102,7 +106,7 @@ type ApiCall =
 type ApiAnswer = Effect.Effect<GitHubRest.GitHubRestResponse, GitHubRequestPolicy.GitHubApiError>;
 
 const mockedExecute = vi.fn<(call: ApiCall) => ApiAnswer>();
-const defaultCredential = (host: string) =>
+const defaultCredential = (host: string, _target?: GitHubCredentials.GitHubCredentialTarget) =>
   Effect.succeed({ token: Redacted.make("token"), fingerprint: `${host}:token` });
 const mockedCredential = vi.fn(defaultCredential);
 const mockedStackMemberships = vi.fn<(call: ApiCall) => ApiAnswer>(() =>
@@ -114,7 +118,8 @@ const mockApi = Layer.succeed(
   GitHubRest.GitHubRest,
   GitHubRest.GitHubRest.of({
     rest: (input) => mockedExecute({ kind: "rest", ...input }),
-    credential: (host) => mockedCredential(host),
+    credential: (host, target) =>
+      target === undefined ? mockedCredential(host) : mockedCredential(host, target),
   }),
 );
 
@@ -136,11 +141,23 @@ const mockHttp = Layer.succeed(
               readonly variables: Readonly<Record<string, unknown>>;
             })
           : { query: "", operationName: "", variables: {} };
+      const target = yield* Effect.serviceOption(GitHubGraphQlClient.GitHubGraphQlTarget).pipe(
+        Effect.map(
+          Option.getOrElse(() => ({
+            host,
+            operation: "batch",
+            cwd: undefined,
+            repository: undefined,
+          })),
+        ),
+      );
       const call: ApiCall = {
         kind: "graphql",
         authorization: request.headers["authorization"],
         host,
-        operation: "batch",
+        operation: target.operation,
+        repository: target.repository,
+        cwd: target.cwd,
         operationName: sent.operationName,
         query: sent.query,
         variables: sent.variables,
@@ -184,8 +201,11 @@ const layer = it.layer(
     Layer.provideMerge(mockHttp),
     Layer.provideMerge(
       Layer.succeed(GitHubCredentials.GitHubCredentials, {
-        get: (host) =>
-          Effect.map(mockedCredential(host), (held) => ({ ...held, host, source: "gh" as const })),
+        get: (host, target) =>
+          Effect.map(
+            target === undefined ? mockedCredential(host) : mockedCredential(host, target),
+            (held) => ({ ...held, host, source: "gh" as const }),
+          ),
         invalidate: () => Effect.void,
       }),
     ),
@@ -724,6 +744,58 @@ it.effect(
 );
 
 layer("GitHubPullRequestApi.layer", (it) => {
+  it.effect(
+    "loads a private PR and verifies the installation bot with repository credentials",
+    () =>
+      Effect.gen(function* () {
+        mockedCredential.mockImplementation((host) =>
+          Effect.succeed({
+            token: Redacted.make("ghs_scanner-installation"),
+            fingerprint: `${host}:scanner`,
+          }),
+        );
+        mockedExecute.mockImplementation((call) => {
+          if (call.kind === "rest")
+            return Effect.fail(
+              new GitHubRequestPolicy.GitHubApiNotFoundError({
+                host: call.host,
+                operation: call.operation,
+              }),
+            );
+          if (call.operation === "getRoutingIdentity")
+            return Effect.succeed(
+              output(
+                encodeJson({
+                  data: { viewer: { databaseId: 123, login: "review-app[bot]" } },
+                }),
+              ),
+            );
+          if (call.repository !== "organization/scanner")
+            return Effect.fail(
+              new GitHubRequestPolicy.GitHubApiNotFoundError({
+                host: call.host,
+                operation: call.operation,
+              }),
+            );
+          return Effect.succeed(output(encodeJson(coreResponse({ number: 2375 }))));
+        });
+        const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+        const input = {
+          cwd: "/scanner",
+          host: "github.com",
+          repository: "organization/scanner",
+          number: 2375,
+        };
+        const identity = yield* cli.getRoutingIdentity(input);
+        expect(identity).toEqual({ accountId: "123", viewer: "review-app[bot]" });
+        expect((yield* cli.getPullRequestDetail(input)).number).toBe(2375);
+        expect(mockedCredential).toHaveBeenCalledWith("github.com", input);
+        expect(
+          mockedExecute.mock.calls.some(([call]) => call.kind === "rest" && call.path === "user"),
+        ).toBe(false);
+      }),
+  );
+
   it.effect("holds background previews once an answer reports the reserve, until it resets", () =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
@@ -963,6 +1035,66 @@ layer("GitHubPullRequestApi.layer", (it) => {
         _0_stacks: true,
         _1_number: 8,
       });
+    }),
+  );
+
+  it.effect("keeps watched PRs from different installations in separate credential batches", () =>
+    Effect.gen(function* () {
+      mockedCredential.mockImplementation((host, target) =>
+        Effect.succeed({
+          token: Redacted.make(`ghs_${target?.repository}`),
+          fingerprint: `${host}:${target?.repository}`,
+        }),
+      );
+      mockedExecute.mockImplementation((call) => {
+        if (call.kind !== "graphql" || call.variables?._1_owner !== undefined || !call.repository) {
+          return Effect.fail(
+            new GitHubRequestPolicy.GitHubApiNotFoundError({
+              host: call.host,
+              operation: call.operation,
+            }),
+          );
+        }
+        return Effect.succeed(
+          output(
+            encodeJson({
+              data: {
+                _0_repository: {
+                  pullRequest: {
+                    state: "OPEN",
+                    mergeable: "MERGEABLE",
+                    headRefOid: "abc123",
+                    comments: { totalCount: 1, nodes: [] },
+                    reviews: { totalCount: 0, nodes: [] },
+                    reviewThreads: { totalCount: 0 },
+                    commits: { nodes: [{ commit: { statusCheckRollup: null } }] },
+                  },
+                },
+              },
+            }),
+          ),
+        );
+      });
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      const reads = yield* Effect.forEach(
+        ["owner/fork", "organization/scanner"],
+        (repository) =>
+          cli.getPullRequestWatchFingerprint({
+            cwd: "/w",
+            repository,
+            host: "github.com",
+            number: 7,
+          }),
+        { concurrency: "unbounded" },
+      ).pipe(Effect.forkChild);
+      yield* TestClock.adjust("10 millis");
+      const fingerprints = yield* Fiber.join(reads);
+      expect(fingerprints.every((fingerprint) => fingerprint?.remarks.startsWith("1 "))).toBe(true);
+      expect(mockedExecute).toHaveBeenCalledTimes(2);
+      expect(mockedExecute.mock.calls.map(([call]) => call.repository).toSorted()).toEqual([
+        "organization/scanner",
+        "owner/fork",
+      ]);
     }),
   );
 
@@ -1769,6 +1901,65 @@ layer("GitHubPullRequestApi.layer", (it) => {
       expect(empty.items).toEqual([]);
       expect(enterprise.items.map((item) => item.number)).toEqual([7]);
       expect(mockedStackMemberships).not.toHaveBeenCalled();
+    }),
+  );
+
+  it.effect("separates line-count batches by repository for installation tokens", () =>
+    Effect.gen(function* () {
+      mockedCredential.mockImplementation((host) =>
+        Effect.succeed({
+          token: Redacted.make("ghs_installation"),
+          fingerprint: `${host}:installation`,
+        }),
+      );
+      mockedExecute.mockImplementation(() =>
+        Effect.succeed(
+          output(
+            encodeJson({
+              data: { _0_repository: { pullRequest: { additions: 4, deletions: 1 } } },
+            }),
+          ),
+        ),
+      );
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      const stats = yield* cli.listPullRequestStats({
+        cwd: "/w",
+        host: "github.com",
+        changeRequests: [
+          { repository: "owner/fork", number: 1 },
+          { repository: "organization/scanner", number: 2375 },
+        ],
+      });
+      expect(stats.map((row) => row.repository)).toEqual(["owner/fork", "organization/scanner"]);
+      expect(mockedExecute.mock.calls.map(([call]) => call.repository)).toEqual([
+        "owner/fork",
+        "organization/scanner",
+      ]);
+    }),
+  );
+
+  it.effect("falls back from cross-repository search for installation credentials", () =>
+    Effect.gen(function* () {
+      mockedCredential.mockImplementation((host) =>
+        Effect.succeed({
+          token: Redacted.make("ghs_installation"),
+          fingerprint: `${host}:installation`,
+        }),
+      );
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      const result = yield* cli
+        .searchPullRequests({
+          cwd: "/w",
+          host: "github.com",
+          repositories: ["owner/fork", "organization/scanner"],
+          state: "open",
+          involvement: "all",
+          viewer: "review-app[bot]",
+          limit: 25,
+        })
+        .pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      expect(mockedExecute).not.toHaveBeenCalled();
     }),
   );
 
@@ -3739,7 +3930,10 @@ layer("GitHubPullRequestApi.layer", (it) => {
       const login = yield* cli.getViewerLogin({ cwd: "/w", host: "github.acme.com" });
 
       expect(login).toBe("enterprise-user");
-      expect(mockedCredential).toHaveBeenCalledWith("github.acme.com");
+      expect(mockedCredential).toHaveBeenCalledWith("github.acme.com", {
+        cwd: "/w",
+        host: "github.acme.com",
+      });
       expect(callAt(0)).toMatchObject({ kind: "rest", host: "github.acme.com", path: "user" });
     }),
   );

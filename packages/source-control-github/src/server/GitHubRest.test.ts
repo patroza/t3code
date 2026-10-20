@@ -25,12 +25,14 @@ function harness(respond: (request: HttpClientRequest.HttpClientRequest) => Resp
   let tokens = ["first", "second"];
   let invalidations = 0;
   let credentialReads = 0;
+  const targets: Array<GitHubCredentials.GitHubCredentialTarget | undefined> = [];
   const credentials = Layer.succeed(
     GitHubCredentials.GitHubCredentials,
     GitHubCredentials.GitHubCredentials.of({
-      get: (host) =>
+      get: (host, target) =>
         Effect.sync(() => {
           credentialReads++;
+          targets.push(target);
           return {
             host,
             token: Redacted.make(tokens[0]!),
@@ -60,6 +62,7 @@ function harness(respond: (request: HttpClientRequest.HttpClientRequest) => Resp
   return {
     layer,
     requests,
+    targets,
     invalidations: () => invalidations,
     credentialReads: () => credentialReads,
   };
@@ -106,6 +109,21 @@ describe("environmentToken", () => {
 });
 
 describe("GitHubRest", () => {
+  it.effect("selects repository credentials for a REST read", () => {
+    const { layer, targets } = harness(() => json({ ok: true }));
+    return Effect.gen(function* () {
+      const api = yield* GitHubRest.GitHubRest;
+      yield* api.rest({
+        host: "github.com",
+        repository: "organization/scanner",
+        cwd: "/scanner",
+        operation: "detail",
+        path: "repos/organization/scanner/pulls/1",
+      });
+      expect(targets).toEqual([{ repository: "organization/scanner", cwd: "/scanner" }]);
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("traces the operation, path and quota, never the query string or the token", () => {
     const spans: Array<Tracer.NativeSpan> = [];
     const tracer = Tracer.make({
