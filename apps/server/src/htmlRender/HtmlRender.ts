@@ -1,4 +1,5 @@
 import type { ThreadId } from "@t3tools/contracts";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   clampHtmlRenderHeight,
@@ -310,6 +311,7 @@ const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const config = yield* ServerConfig.ServerConfig;
   const previewBrowser = yield* PreviewBrowser.PreviewBrowser;
+  const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const services = yield* Effect.context<
     FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
   >();
@@ -341,11 +343,11 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const measure = (html: string) =>
-    Effect.gen(function* () {
+  const measure = Effect.fn("HtmlRender.measure")(
+    function* (html: string) {
       const executable = yield* previewBrowser.installed;
       if (Option.isNone(executable)) return undefined;
-      const { heights, outline } = yield* launching(executable.value, (noSandbox) =>
+      const heights = yield* launching(executable.value, (noSandbox) =>
         HeadlessChrome.measureHtmlHeights({
           executable: executable.value,
           noSandbox,
@@ -364,15 +366,14 @@ const make = Effect.gen(function* () {
             ),
         }),
       );
-      return { heights: heights.toSorted(([left], [right]) => left - right), outline };
-    }).pipe(
-      Effect.catch((cause) =>
-        Effect.logWarning("Could not measure an HTML render; publishing it without heights.", {
-          cause,
-        }).pipe(Effect.as(undefined)),
-      ),
-      Effect.withSpan("HtmlRender.measure"),
-    );
+      return heights.toSorted(([left], [right]) => left - right);
+    },
+    Effect.catch((cause) =>
+      Effect.logWarning("Could not measure an HTML render; publishing it without heights.", {
+        cause,
+      }).pipe(Effect.as(undefined)),
+    ),
+  );
 
   // The bootstrap goes in first so its head scan never runs over inlined image data.
   const inline = (html: string) =>
@@ -405,20 +406,35 @@ const make = Effect.gen(function* () {
     if (attachmentId === null || filePath === null) {
       return yield* new HtmlRenderStoreError({ cause: new Error("Invalid thread id.") });
     }
-    const measured = yield* fileSystem.writeFileString(filePath, html).pipe(
-      Effect.mapError((cause) => new HtmlRenderStoreError({ cause })),
-      Effect.andThen(measure(html)),
-      // Only the returned reference lets thread deletion find the page, so a
-      // publish that fails or is interrupted before returning removes it.
-      Effect.onError(() => fileSystem.remove(filePath, { force: true }).pipe(Effect.ignore)),
-    );
-    return {
+    const baseReference: HtmlRenderReference = {
       attachmentId,
       title: input.title.trim().slice(0, HTML_RENDER_MAX_TITLE_LENGTH) || "HTML",
       height: clampHtmlRenderHeight(input.height),
-      ...(measured === undefined ? {} : { heights: measured.heights }),
-      ...(measured?.outline === undefined ? {} : { outline: measured.outline }),
-    } satisfies HtmlRenderReference;
+    };
+    return yield* fileSystem.writeFileString(filePath, html).pipe(
+      Effect.mapError((cause) => new HtmlRenderStoreError({ cause })),
+      Effect.uninterruptible,
+      Effect.andThen(measure(html)),
+      Effect.andThen((heights) => {
+        const reference: HtmlRenderReference = {
+          ...baseReference,
+          ...(heights === undefined ? {} : { heights }),
+        };
+        return mcpSessions
+          .recordHtmlRender(input.threadId, input, reference)
+          .pipe(Effect.as(reference));
+      }),
+      // An interrupted publish must leave neither an attachment nor a recoverable reference.
+      Effect.onError(() =>
+        Effect.all(
+          [
+            fileSystem.remove(filePath, { force: true }).pipe(Effect.ignore),
+            mcpSessions.takeHtmlRender(input.threadId, input, baseReference).pipe(Effect.ignore),
+          ],
+          { discard: true },
+        ),
+      ),
+    );
   });
 
   const preview = Effect.fn("HtmlRender.preview")(function* (input: {

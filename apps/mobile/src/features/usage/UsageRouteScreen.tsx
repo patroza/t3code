@@ -1,3 +1,4 @@
+import { Button } from "../../components/ui/Button";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { ChatGptUsageSummary } from "./ChatGptUsageSummary";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
@@ -427,16 +428,15 @@ function CursorEnableAction({
     if (result._tag === "Success") onEnabled();
   };
   return (
-    <Pressable
-      accessibilityRole="button"
+    <Button
+      label={buttonText}
+      tone="primary"
       accessibilityLabel={`Enable Cursor usage from ${label}`}
       accessibilityHint={CURSOR_KEYCHAIN_COPY}
       disabled={pending}
       onPress={() => void enable()}
-      className="rounded-full bg-primary px-4 py-2"
-    >
-      <Text className="text-sm font-medium text-primary-foreground">{buttonText}</Text>
-    </Pressable>
+      loading={pending}
+    />
   );
 }
 
@@ -546,13 +546,20 @@ function ChartCard(props: {
         </View>
       )}
 
-      <View className="flex-row items-center justify-between">
-        <Text className="text-xs text-foreground-tertiary">
-          {props.isPast24Hours
-            ? formatHourShort(props.days[0] ?? "", props.timeZone)
-            : formatDayShort(props.sinceDay)}
-        </Text>
-        <View className="flex-row items-center gap-4">
+      <View className="gap-2">
+        <View className="flex-row items-center justify-between">
+          <Text className="text-xs text-foreground-tertiary">
+            {props.isPast24Hours
+              ? formatHourShort(props.days[0] ?? "", props.timeZone)
+              : formatDayShort(props.sinceDay)}
+          </Text>
+          <Text className="text-xs text-foreground-tertiary">
+            {props.isPast24Hours
+              ? formatHourShort(props.days[props.days.length - 1] ?? "", props.timeZone)
+              : formatDayShort(props.untilDay)}
+          </Text>
+        </View>
+        <View className="flex-row flex-wrap items-center gap-x-4 gap-y-1">
           {merged.providers.map((provider) => (
             <View key={provider.provider} className="flex-row items-center gap-1.5">
               <View
@@ -565,11 +572,6 @@ function ChartCard(props: {
             </View>
           ))}
         </View>
-        <Text className="text-xs text-foreground-tertiary">
-          {props.isPast24Hours
-            ? formatHourShort(props.days[props.days.length - 1] ?? "", props.timeZone)
-            : formatDayShort(props.untilDay)}
-        </Text>
       </View>
     </View>
   );

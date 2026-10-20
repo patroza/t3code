@@ -25,7 +25,7 @@ const decodePreparePullRequestThreadResult = Schema.decodeUnknownSync(
 const decodeRunStackedActionInput = Schema.decodeUnknownSync(GitRunStackedActionInput);
 const decodeRunStackedActionResult = Schema.decodeUnknownSync(GitRunStackedActionResult);
 const decodeActionProgressEvent = Schema.decodeUnknownSync(GitActionProgressEvent);
-const decodeGitCommandError = Schema.decodeUnknownSync(GitCommandError);
+const decodeGitCommandError = Schema.decodeUnknownSync(Schema.toCodecJson(GitCommandError));
 const decodeResolvePullRequestResult = Schema.decodeUnknownSync(GitResolvePullRequestResult);
 const decodeVcsStatusLocalResult = Schema.decodeUnknownSync(VcsStatusLocalResult);
 
@@ -39,6 +39,24 @@ describe("VcsStatusInput", () => {
   it("accepts list mode for high-cardinality list subscriptions", () => {
     const parsed = decodeVcsStatusInput({ cwd: "/repo/worktree", mode: "list" });
     expect(parsed.mode).toBe("list");
+  });
+});
+
+describe("GitCommandError", () => {
+  it("decodes an unknown failure reason as absent", () => {
+    const error = decodeGitCommandError({
+      _tag: "GitCommandError",
+      operation: "GitVcsDriver.createWorktree",
+      command: "git",
+      cwd: "/repo",
+      detail: "git worktree add failed",
+      reason: "added_by_a_newer_server",
+    });
+
+    expect(error.reason).toBeUndefined();
+    expect(error.message).toBe(
+      "Git command failed in GitVcsDriver.createWorktree (/repo): git worktree add failed",
+    );
   });
 });
 

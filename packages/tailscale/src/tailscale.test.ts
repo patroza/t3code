@@ -156,7 +156,20 @@ describe("tailscale", () => {
       assert.deepEqual(status, {
         magicDnsName: "desktop.tail.ts.net",
         tailnetIpv4Addresses: ["100.100.100.100"],
+        httpsServeEnabled: null,
       });
+    }),
+  );
+
+  it.effect("reads the HTTPS serve capability from the status capability map", () =>
+    Effect.gen(function* () {
+      const enabled = yield* parseTailscaleStatus(
+        `{"Self":{"CapMap":{"https":null,"funnel":null}}}`,
+      );
+      assert.equal(enabled.httpsServeEnabled, true);
+
+      const disabled = yield* parseTailscaleStatus(`{"Self":{"CapMap":{"funnel":null}}}`);
+      assert.equal(disabled.httpsServeEnabled, false);
     }),
   );
 
@@ -289,6 +302,7 @@ describe("tailscale", () => {
       assert.deepEqual(status, {
         magicDnsName: "desktop.tail.ts.net",
         tailnetIpv4Addresses: ["100.90.1.2"],
+        httpsServeEnabled: null,
       });
     });
   });
@@ -409,9 +423,9 @@ describe("tailscale", () => {
       assert.equal(error.executable, "tailscale");
       assert.equal(error.subcommand, "status");
       assert.equal(error.argumentCount, 2);
-      assert.equal(error.timeoutMs, 1_500);
+      assert.equal(error.timeoutMs, 3_500);
       assert.isTrue(Cause.isTimeoutError(error.cause));
-      assert.equal(error.message, "tailscale status timed out after 1500ms.");
+      assert.equal(error.message, "tailscale status timed out after 3500ms.");
     }).pipe(Effect.provide(layer));
   });
 

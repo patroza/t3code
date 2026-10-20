@@ -27,14 +27,25 @@ export interface UpdatesHarnessOptions {
   readonly setUpdateChannelError?: DesktopAppSettings.DesktopSettingsWriteError;
   readonly setDisableDifferentialDownload?: Effect.Effect<void>;
   readonly downloadUpdate?: Effect.Effect<void>;
+  /** sha512 of a download an earlier launch left in electron-updater's cache. */
+  readonly cachedDownloadSha512?: string;
+  readonly cachedDownloadInfo?: string;
+  readonly cachedFileExists?: boolean;
+  readonly updater?: ElectronUpdater.ElectronUpdater["Service"];
+  readonly fileSystem?: FileSystem.FileSystem;
+  readonly runningUnderArm64Translation?: boolean;
   readonly quitAndInstall?: Effect.Effect<void, ElectronUpdater.ElectronUpdaterQuitAndInstallError>;
   readonly stopBackend?: Effect.Effect<void>;
   readonly startBackend?: Effect.Effect<void>;
+  readonly backendDesiredRunning?: boolean;
+  readonly backendInstances?: ReadonlyArray<DesktopBackendPool.DesktopBackendInstance>;
   readonly env?: Record<string, string | undefined>;
   readonly platform?: NodeJS.Platform;
   readonly packageType?: string | undefined;
   readonly installRecord?: string | undefined;
 }
+
+const PENDING_DOWNLOAD_DIRECTORY = "/cache/t3code-updater/pending";
 
 export function makeHarness(options: UpdatesHarnessOptions = {}) {
   let checkCount = 0;
@@ -64,7 +75,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     }
   };
 
-  const layerUpdater = Layer.succeed(ElectronUpdater.ElectronUpdater, {
+  const stubUpdater = {
     setFeedURL: (options) =>
       Effect.sync(() => {
         feedUrls.push(options);
@@ -83,6 +94,11 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
         fullChangelog = value;
       }),
     setDisableDifferentialDownload: () => options.setDisableDifferentialDownload ?? Effect.void,
+    pendingDownloadDirectory: Effect.succeed(
+      options.cachedDownloadSha512 === undefined
+        ? Option.none()
+        : Option.some(PENDING_DOWNLOAD_DIRECTORY),
+    ),
     checkForUpdates: Effect.sync(() => {
       checkCount += 1;
     }).pipe(Effect.andThen(options.checkForUpdates ?? Effect.void)),
@@ -104,7 +120,11 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
             removeListener(eventName, listener as unknown as (...args: readonly unknown[]) => void);
           }),
       ).pipe(Effect.asVoid),
-  } satisfies ElectronUpdater.ElectronUpdater["Service"]);
+  } satisfies ElectronUpdater.ElectronUpdater["Service"];
+  const layerUpdater = Layer.succeed(
+    ElectronUpdater.ElectronUpdater,
+    options.updater ?? stubUpdater,
+  );
 
   const layerElectronApp = Layer.succeed(ElectronApp.ElectronApp, {
     metadata: Effect.die("unexpected metadata read"),
@@ -148,24 +168,31 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     syncAllAppearance: () => Effect.void,
   } satisfies ElectronWindow.ElectronWindow["Service"]);
 
+  let backendDesiredRunning = options.backendDesiredRunning ?? true;
   const stubBackendInstance: DesktopBackendPool.DesktopBackendInstance = {
     id: DesktopBackendPool.PRIMARY_INSTANCE_ID,
     label: Effect.succeed("Windows"),
     start: Effect.sync(() => {
+      backendDesiredRunning = true;
       installSteps.push("startBackend");
     }).pipe(Effect.andThen(options.startBackend ?? Effect.void)),
-    stop: () => options.stopBackend ?? Effect.void,
+    stop: () =>
+      Effect.sync(() => {
+        backendDesiredRunning = false;
+      }).pipe(Effect.andThen(options.stopBackend ?? Effect.void)),
     currentConfig: Effect.succeedNone,
-    snapshot: Effect.succeed({
-      desiredRunning: false,
+    snapshot: Effect.sync(() => ({
+      desiredRunning: backendDesiredRunning,
       ready: false,
       activePid: Option.none(),
       restartAttempt: 0,
       restartScheduled: false,
-    }),
+    })),
     waitForReady: () => Effect.succeed(true),
   };
-  const layerBackend = DesktopBackendPool.layerTest([stubBackendInstance]);
+  const layerBackend = DesktopBackendPool.layerTest(
+    options.backendInstances ?? [stubBackendInstance],
+  );
 
   const layerEnvironment = DesktopEnvironment.layer({
     dirname: "/repo/apps/desktop/src",
@@ -176,7 +203,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     appPath: "/repo",
     isPackaged: true,
     resourcesPath: "/missing/resources",
-    runningUnderArm64Translation: false,
+    runningUnderArm64Translation: options.runningUnderArm64Translation ?? false,
   }).pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -233,7 +260,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
   let previousInstallRecord = options.installRecord;
   const isInstallRecord = (path: string) =>
     path.endsWith(DesktopUpdates.DESKTOP_UPDATE_INSTALL_RECORD_FILE);
-  const layerFileSystem = FileSystem.layerNoop({
+  const stubFileSystem = FileSystem.layerNoop({
     readFileString: (path) => {
       const installRecord = isInstallRecord(path)
         ? (installRecords.get(path) ?? previousInstallRecord)
@@ -241,15 +268,28 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
       if (installRecord !== undefined) return Effect.succeed(installRecord);
       return path === "/missing/resources/package-type" && options.packageType !== undefined
         ? Effect.succeed(options.packageType)
-        : Effect.fail(
-            PlatformError.systemError({
-              module: "FileSystem",
-              method: "readFileString",
-              _tag: "NotFound",
-              pathOrDescriptor: path,
-            }),
-          );
+        : path === `${PENDING_DOWNLOAD_DIRECTORY}/update-info.json` &&
+            options.cachedDownloadSha512 !== undefined
+          ? Effect.succeed(
+              options.cachedDownloadInfo ??
+                JSON.stringify({
+                  fileName: "update.zip",
+                  sha512: options.cachedDownloadSha512,
+                }),
+            )
+          : Effect.fail(
+              PlatformError.systemError({
+                module: "FileSystem",
+                method: "readFileString",
+                _tag: "NotFound",
+                pathOrDescriptor: path,
+              }),
+            );
     },
+    exists: (path) =>
+      Effect.succeed(
+        options.cachedFileExists !== false && path === `${PENDING_DOWNLOAD_DIRECTORY}/update.zip`,
+      ),
     makeDirectory: () => Effect.void,
     writeFileString: (path, data) =>
       Effect.sync(() => {
@@ -264,6 +304,9 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
       }),
   });
 
+  const layerFileSystem = options.fileSystem
+    ? Layer.succeed(FileSystem.FileSystem, options.fileSystem)
+    : stubFileSystem;
   const layer = DesktopUpdates.layer.pipe(
     Layer.provide(layerFileSystem),
     Layer.provideMerge(layerUpdater),

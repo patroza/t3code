@@ -8,7 +8,13 @@ import { HttpClient, HttpClientRequest } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 export const DEFAULT_TAILSCALE_SERVE_PORT = 443;
-export const TAILSCALE_STATUS_TIMEOUT = Duration.millis(1_500);
+/**
+ * Bounds `tailscale status` and `tailscale debug prefs`. Allows the 1.8-2.6 s
+ * `tailscale status` has been measured at when T3 Code spawns it on Windows.
+ * A CLI that never answers takes longer than this to fail, because the kill
+ * that follows the timeout also takes time (`taskkill` on Windows).
+ */
+export const TAILSCALE_STATUS_TIMEOUT = Duration.millis(3_500);
 const TAILSCALE_SERVE_TIMEOUT = Duration.seconds(10);
 const TAILSCALE_PROBE_TIMEOUT = Duration.millis(2_500);
 
@@ -128,6 +134,7 @@ export class TailscaleServeStatusParseError extends Schema.TaggedError<Tailscale
 const TailscaleStatusSelf = Schema.Struct({
   DNSName: Schema.optional(Schema.Unknown),
   TailscaleIPs: Schema.optional(Schema.Unknown),
+  CapMap: Schema.optional(Schema.Unknown),
 });
 
 const TailscaleStatusJson = Schema.Struct({
@@ -139,6 +146,12 @@ export type TailscaleStatusJson = typeof TailscaleStatusJson.Type;
 export interface TailscaleStatus {
   readonly magicDnsName: string | null;
   readonly tailnetIpv4Addresses: readonly string[];
+  /**
+   * `tailscale serve --https` needs the `https` capability, which the control
+   * plane grants once the tailnet enables HTTPS certificates. `null` when the
+   * CLI reports no capability map (older CLI), so callers still attempt serve.
+   */
+  readonly httpsServeEnabled: boolean | null;
 }
 
 const collectStdout = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.Effect<string, E> =>
@@ -206,9 +219,14 @@ export const parseTailscaleStatus = (
         }
       }
 
+      const capMap = parsed.Self?.CapMap;
       return {
         magicDnsName: normalizeMagicDnsName(parsed),
         tailnetIpv4Addresses,
+        httpsServeEnabled:
+          typeof capMap === "object" && capMap !== null && !Array.isArray(capMap)
+            ? Object.hasOwn(capMap, "https")
+            : null,
       };
     }),
   );
@@ -218,12 +236,12 @@ export const parseTailscaleStatus = (
  * spawn/exit/timeout error mapping as the rest of this module. `serve status`
  * and `status` differ only in arguments and how the payload is decoded.
  */
-const readTailscaleCommandStdout = (input: {
-  readonly args: readonly string[];
-  readonly subcommand: "status" | "serve" | "debug";
-  readonly timeout: Duration.Duration;
-}) =>
-  Effect.gen(function* () {
+const readTailscaleCommandStdout = Effect.fn("tailscale.readTailscaleCommandStdout")(
+  function* (input: {
+    readonly args: readonly string[];
+    readonly subcommand: "status" | "serve" | "debug";
+    readonly timeout: Duration.Duration;
+  }) {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const hostPlatform = yield* HostProcess.Platform;
     const executable = tailscaleCommandForPlatform(hostPlatform);
@@ -280,7 +298,8 @@ const readTailscaleCommandStdout = (input: {
           ),
       }),
     );
-  });
+  },
+);
 
 export const readTailscaleStatus = readTailscaleCommandStdout({
   args: ["status", "--json"],
@@ -429,58 +448,57 @@ export function buildTailscaleHttpsBaseUrl(input: {
   return url.toString();
 }
 
-const runTailscaleCommand = (
+const runTailscaleCommand = Effect.fn("tailscale.runTailscaleCommand")(function* (
   args: readonly string[],
   timeoutInput: Duration.Input,
-): Effect.Effect<void, TailscaleCommandError, ChildProcessSpawner.ChildProcessSpawner> =>
-  Effect.gen(function* () {
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const hostPlatform = yield* HostProcess.Platform;
-    const executable = tailscaleCommandForPlatform(hostPlatform);
-    const commandContext = {
-      executable,
-      subcommand: "serve" as const,
-      argumentCount: args.length,
-    };
-    const timeout = Duration.fromInputUnsafe(timeoutInput);
-    return yield* Effect.gen(function* () {
-      const child = yield* spawner.spawn(ChildProcess.make(executable, args)).pipe(
-        Effect.mapError((cause) => new TailscaleCommandSpawnError({ ...commandContext, cause })),
-        Effect.catchDefect((cause) =>
-          Effect.fail(new TailscaleCommandSpawnError({ ...commandContext, cause })),
-        ),
-      );
-      const [stderr, exitCode] = yield* Effect.all(
-        [collectStderr(child.stderr), child.exitCode.pipe(Effect.map(Number))],
-        { concurrency: "unbounded" },
-      ).pipe(
-        Effect.mapError((cause) => new TailscaleCommandOutputError({ ...commandContext, cause })),
-      );
-      if (exitCode !== 0) {
-        return yield* new TailscaleCommandExitError({
-          ...commandContext,
-          exitCode,
-          stderrLength: stderr.length,
-          ...(stderrDiagnosticOf(stderr) !== undefined
-            ? { stderrDiagnostic: stderrDiagnosticOf(stderr) }
-            : {}),
-        });
-      }
-    }).pipe(
-      Effect.scoped,
-      Effect.timeout(timeout),
-      Effect.catchTags({
-        TimeoutError: (cause) =>
-          Effect.fail(
-            new TailscaleCommandTimeoutError({
-              ...commandContext,
-              timeoutMs: Duration.toMillis(timeout),
-              cause,
-            }),
-          ),
-      }),
+): Effect.fn.Return<void, TailscaleCommandError, ChildProcessSpawner.ChildProcessSpawner> {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const hostPlatform = yield* HostProcess.Platform;
+  const executable = tailscaleCommandForPlatform(hostPlatform);
+  const commandContext = {
+    executable,
+    subcommand: "serve" as const,
+    argumentCount: args.length,
+  };
+  const timeout = Duration.fromInputUnsafe(timeoutInput);
+  return yield* Effect.gen(function* () {
+    const child = yield* spawner.spawn(ChildProcess.make(executable, args)).pipe(
+      Effect.mapError((cause) => new TailscaleCommandSpawnError({ ...commandContext, cause })),
+      Effect.catchDefect((cause) =>
+        Effect.fail(new TailscaleCommandSpawnError({ ...commandContext, cause })),
+      ),
     );
-  });
+    const [stderr, exitCode] = yield* Effect.all(
+      [collectStderr(child.stderr), child.exitCode.pipe(Effect.map(Number))],
+      { concurrency: "unbounded" },
+    ).pipe(
+      Effect.mapError((cause) => new TailscaleCommandOutputError({ ...commandContext, cause })),
+    );
+    if (exitCode !== 0) {
+      return yield* new TailscaleCommandExitError({
+        ...commandContext,
+        exitCode,
+        stderrLength: stderr.length,
+        ...(stderrDiagnosticOf(stderr) !== undefined
+          ? { stderrDiagnostic: stderrDiagnosticOf(stderr) }
+          : {}),
+      });
+    }
+  }).pipe(
+    Effect.scoped,
+    Effect.timeout(timeout),
+    Effect.catchTags({
+      TimeoutError: (cause) =>
+        Effect.fail(
+          new TailscaleCommandTimeoutError({
+            ...commandContext,
+            timeoutMs: Duration.toMillis(timeout),
+            cause,
+          }),
+        ),
+    }),
+  );
+});
 
 export const ensureTailscaleServe = (input: {
   readonly localPort: number;
@@ -493,24 +511,20 @@ export const ensureTailscaleServe = (input: {
   return runTailscaleCommand(args, TAILSCALE_SERVE_TIMEOUT);
 };
 
-export const disableTailscaleServe = (
+export const disableTailscaleServe = Effect.fn("tailscale.disableTailscaleServe")(function* (
   input: {
     readonly servePort?: number;
   } = {},
-): Effect.Effect<void, TailscaleCommandError, ChildProcessSpawner.ChildProcessSpawner> =>
-  Effect.gen(function* () {
-    const servePort = input.servePort ?? DEFAULT_TAILSCALE_SERVE_PORT;
-    return yield* runTailscaleCommand(
-      ["serve", `--https=${servePort}`, "off"],
-      TAILSCALE_SERVE_TIMEOUT,
-    );
-  });
+): Effect.fn.Return<void, TailscaleCommandError, ChildProcessSpawner.ChildProcessSpawner> {
+  const servePort = input.servePort ?? DEFAULT_TAILSCALE_SERVE_PORT;
+  return yield* runTailscaleCommand(
+    ["serve", `--https=${servePort}`, "off"],
+    TAILSCALE_SERVE_TIMEOUT,
+  );
+});
 
-export const probeTailscaleHttpsEndpoint = (input: {
-  readonly baseUrl: string;
-  readonly timeout?: Duration.Input;
-}): Effect.Effect<boolean, never, HttpClient.HttpClient> =>
-  Effect.gen(function* () {
+export const probeTailscaleHttpsEndpoint = Effect.fn("tailscale.probeTailscaleHttpsEndpoint")(
+  function* (input: { readonly baseUrl: string; readonly timeout?: Duration.Input }) {
     const client = yield* HttpClient.HttpClient;
     const response = yield* Effect.gen(function* () {
       const url = new URL("/.well-known/t3/environment", input.baseUrl);
@@ -522,4 +536,6 @@ export const probeTailscaleHttpsEndpoint = (input: {
       onNone: () => false,
       onSome: (httpResponse) => httpResponse.status >= 200 && httpResponse.status < 300,
     });
-  }).pipe(Effect.orElseSucceed(() => false));
+  },
+  Effect.orElseSucceed(() => false),
+);

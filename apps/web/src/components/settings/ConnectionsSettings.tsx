@@ -48,6 +48,7 @@ import {
   RelayConnectionRegistration,
   RelayConnectionTarget,
   connectionRoutes,
+  hasSavedBearerRoute,
   connectionStatusText,
   environmentMcpUrl,
 } from "@t3tools/client-runtime/connection";
@@ -72,6 +73,8 @@ import {
   canRevokeOtherClients,
   isQrShareableEndpoint,
   isWslSettingsRowVisible,
+  missingTailscaleEndpointDescription,
+  resolveLocalVersionStatusLabel,
   selectQrEndpointOption,
   togglePairingScopeSelection,
 } from "./ConnectionsSettings.logic";
@@ -85,6 +88,11 @@ import { LocalEnvironmentSetting } from "./LocalEnvironmentSetting";
 import { searchableSetting } from "./settingsSearch";
 import { EnvironmentIconMenu } from "./EnvironmentIconPicker";
 import { EnvironmentRoutesList } from "./EnvironmentRoutesList";
+import {
+  ConnectionDiagnosisPanel,
+  ConnectionDiagnosisSummary,
+  useConnectionDiagnosis,
+} from "./ConnectionDiagnosisDetails";
 import { usePreparedConnection } from "~/state/session";
 import {
   EnvironmentRow,
@@ -177,6 +185,7 @@ import {
 } from "~/state/desktopNetworkAccess";
 import { desktopSshHostsStateAtom, filterDiscoveredSshHosts } from "~/state/desktopSshHosts";
 import { desktopWslStateAtom, refreshDesktopWslState } from "~/state/desktopWslState";
+import { useDesktopUpdateState } from "~/state/desktopUpdate";
 import {
   type EnvironmentPresentation,
   useEnvironments,
@@ -1555,8 +1564,10 @@ function SavedBackendListRow({
 }: SavedBackendListRowProps) {
   const [routesOpen, setRoutesOpen] = useState(false);
   const [permissionsOpen, setPermissionsOpen] = useState(false);
+  const [diagnosisOpen, setDiagnosisOpen] = useState(false);
   const environmentId = environment.environmentId;
   const unsupported = environment.connection.phase === "unsupported";
+  const blocked = unsupported && !hasSavedBearerRoute(environment.entry);
   const enabled = environment.entry.enabled && !unsupported;
   const isConnected = environment.connection.phase === "connected";
   const isRemoving = removingEnvironmentId === environmentId;
@@ -1627,6 +1638,13 @@ function SavedBackendListRow({
   ) {
     setLastRelayHttpBaseUrl(discoveredRelayHttpBaseUrl);
   }
+  const retryNow = useAtomCommand(environmentCatalog.retryNow);
+  const {
+    diagnosis: currentDiagnosis,
+    state: connectionState,
+    relayOnly,
+  } = useConnectionDiagnosis(environment);
+  const diagnosis = resumingServerUpdate ? null : currentDiagnosis;
   const prepared = usePreparedConnection(environmentId);
   const connectedTarget = isConnected && prepared._tag === "Some" ? prepared.value.target : null;
   const mcpUrl = environmentMcpUrl({
@@ -1641,7 +1659,8 @@ function SavedBackendListRow({
   const routeCount = connectionRoutes(environment.entry).length;
   const subtitleText = [
     environmentTransportLabel(environment, connectedTarget),
-    resumingServerUpdate ? "Restarting" : status.text,
+    // The headline below names the failure in full.
+    diagnosis ? null : resumingServerUpdate ? "Restarting" : status.text,
     enabled && versionMismatch ? serverVersion : null,
   ]
     .filter((value): value is string => value !== null)
@@ -1684,6 +1703,7 @@ function SavedBackendListRow({
                     enabled &&
                       status.tone === "error" &&
                       !resumingServerUpdate &&
+                      !diagnosis &&
                       "text-destructive",
                   )}
                 />
@@ -1736,6 +1756,15 @@ function SavedBackendListRow({
       }
       below={
         <>
+          {diagnosis ? (
+            <ConnectionDiagnosisSummary
+              diagnosis={diagnosis}
+              retryAt={connectionState.phase === "backoff" ? connectionState.retryAt : null}
+              attempt={connectionState.attempt}
+              expanded={diagnosisOpen}
+              onToggle={() => setDiagnosisOpen((open) => !open)}
+            />
+          ) : null}
           {serverUpdateState.status !== "idle" ? (
             <div className="mt-1 max-w-md">
               <ServerUpdateProgress state={serverUpdateState} />
@@ -1753,6 +1782,14 @@ function SavedBackendListRow({
       }
       detail={
         <>
+          {diagnosis && diagnosisOpen ? (
+            <ConnectionDiagnosisPanel
+              hostLabel={environment.label}
+              diagnosis={diagnosis}
+              onRetry={() => void retryNow(environmentId)}
+              onAddRoute={relayOnly ? () => onAddRoute(environment) : null}
+            />
+          ) : null}
           {routesOpen && (
             <EnvironmentRoutesList
               environment={environment}
@@ -1804,14 +1841,14 @@ function SavedBackendListRow({
             <Switch
               size="sm"
               checked={enabled}
-              disabled={isRemoving || unsupported}
+              disabled={isRemoving || blocked}
               aria-label={`${enabled ? "Switch off" : "Switch on"} ${environment.label}`}
               onCheckedChange={(checked) => onSetEnabled(environmentId, checked)}
             />
           }
         />
         <TooltipPopup side="top">
-          {unsupported ? "Client not supported" : enabled ? "Switch off" : "Switch on"}
+          {blocked ? "Client not supported" : enabled ? "Switch off" : "Switch on"}
         </TooltipPopup>
       </Tooltip>
       <Menu>
@@ -2101,6 +2138,16 @@ function CloudRemoteEnvironmentRows({
   ) : null;
 }
 
+// Subscribes on its own so desktop download progress does not re-render the page.
+function LocalVersionStatusLabel() {
+  const updateState = useDesktopUpdateState();
+  return (
+    <span className="text-xs text-muted-foreground">
+      {resolveLocalVersionStatusLabel(updateState)}
+    </span>
+  );
+}
+
 export function ConnectionsSettings() {
   const desktopBridge = window.desktopBridge;
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -2173,7 +2220,7 @@ export function ConnectionsSettings() {
   const loadBalancingEnvironments = [
     ...(primaryEnvironment ? [primaryEnvironment] : []),
     ...savedEnvironments.filter((environment) => environment.entry.enabled),
-  ];
+  ].filter((environment) => environment.connection.phase !== "unsupported");
   const savedDesktopSshEnvironmentKeys = (() => {
     const keys = new Set<string>();
     for (const environment of savedEnvironments) {
@@ -2296,7 +2343,7 @@ export function ConnectionsSettings() {
     const address = formatDesktopSshTarget(target);
     return (
       !savedDesktopSshEnvironmentKeys.has(target.alias) &&
-      !savedDesktopSshEnvironmentKeys.has(address)
+      (target.source === "ssh-config" || !savedDesktopSshEnvironmentKeys.has(address))
     );
   });
   const filteredDiscoveredSshHosts = filterDiscoveredSshHosts(
@@ -3326,9 +3373,16 @@ export function ConnectionsSettings() {
                   Off
                 </SelectItem>
                 {desktopWslState.distros.length === 0 ? (
-                  <SelectItem hideIndicator value={BACKEND_VALUE_DEFAULT_WSL}>
-                    Default distro
-                  </SelectItem>
+                  <>
+                    <SelectItem hideIndicator value={BACKEND_VALUE_DEFAULT_WSL}>
+                      Default distro
+                    </SelectItem>
+                    {desktopWslState.distro !== null ? (
+                      <SelectItem hideIndicator value={desktopWslState.distro}>
+                        {desktopWslState.distro}
+                      </SelectItem>
+                    ) : null}
+                  </>
                 ) : (
                   desktopWslState.distros.map((distro) => (
                     <SelectItem hideIndicator key={distro.name} value={distro.name}>
@@ -3368,7 +3422,7 @@ export function ConnectionsSettings() {
           ? tailscaleHttpsEndpoint.status === "available"
             ? tailscaleHttpsEndpoint.httpBaseUrl
             : "Use Tailscale Serve to expose this backend through a MagicDNS HTTPS URL."
-          : "Start Tailscale to set up HTTPS access through MagicDNS."
+          : missingTailscaleEndpointDescription(desktopServerExposureState)
       }
       control={
         tailscaleHttpsEndpoint ? (
@@ -3568,7 +3622,7 @@ export function ConnectionsSettings() {
                       }
                     />
                   ) : primaryServerUpdateState.status === "idle" && primaryServerConfig ? (
-                    <span className="text-xs text-muted-foreground">Up to date</span>
+                    <LocalVersionStatusLabel />
                   ) : undefined
                 }
               />

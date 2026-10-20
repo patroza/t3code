@@ -1,13 +1,12 @@
 import { useNavigation, type ParamListBase } from "@react-navigation/native";
 import type {
+  NativeStackHeaderItemMenu,
   NativeStackNavigationOptions,
   NativeStackNavigationProp,
 } from "@react-navigation/native-stack";
 import { use, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { NativeWorkspaceTabActivityContext } from "./v5-workspace-context";
 import type { ColorValue } from "react-native";
-
-export { NativeHeaderToolbar } from "./NativeHeaderToolbar";
 
 export {
   nativeHeaderScrollEdgeEffects,
@@ -21,6 +20,7 @@ export type AppNativeStackNavigationOptions = Omit<
   "headerTintColor" | "unstable_headerLeftItems" | "unstable_headerRightItems"
 > & {
   readonly nativeContentInsetHorizontally?: boolean;
+  readonly nativeSidebarFilter?: NativeStackHeaderItemMenu;
   readonly headerTintColor?: string | ColorValue;
   readonly unstable_headerCenterItems?: unknown;
   readonly unstable_headerLeftItems?: unknown;

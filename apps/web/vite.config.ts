@@ -42,6 +42,10 @@ const configuredRelayTracingDataset = repoEnv.VITE_RELAY_OTLP_TRACES_DATASET?.tr
 const configuredRelayTracingToken = repoEnv.VITE_RELAY_OTLP_TRACES_TOKEN?.trim() || "";
 const configuredHostedAppChannel = process.env.VITE_HOSTED_APP_CHANNEL?.trim() || "";
 const configuredAppVersion = process.env.APP_VERSION?.trim() || pkg.version;
+const configuredDesktopUpdateRepository =
+  process.env.T3CODE_DESKTOP_UPDATE_REPOSITORY?.trim() ||
+  process.env.GITHUB_REPOSITORY?.trim() ||
+  "";
 const configuredHostedAppUrl = (() => {
   const explicitHostedAppUrl = process.env.VITE_HOSTED_APP_URL?.trim();
   if (explicitHostedAppUrl) {
@@ -68,8 +72,6 @@ const buildSourcemap: boolean | "hidden" =
       : true;
 
 const isolatedUnitTestFiles = [
-  // Workspace picker mocks replace entity and composer stores.
-  "src/components/BranchToolbar.panel.test.tsx",
   // Retained action toasts use scoped server and runtime mocks.
   "src/components/GitActionsControl.lifecycle.test.ts",
   // Route lifecycle tests substitute the router and environment stores.
@@ -465,6 +467,9 @@ export default defineConfig(() => {
       "import.meta.env.VITE_RELAY_OTLP_TRACES_TOKEN": JSON.stringify(configuredRelayTracingToken),
       "import.meta.env.VITE_HOSTED_APP_URL": JSON.stringify(configuredHostedAppUrl ?? ""),
       "import.meta.env.VITE_HOSTED_APP_CHANNEL": JSON.stringify(configuredHostedAppChannel),
+      "import.meta.env.T3CODE_DESKTOP_UPDATE_REPOSITORY": JSON.stringify(
+        configuredDesktopUpdateRepository,
+      ),
       "import.meta.env.APP_VERSION": JSON.stringify(configuredAppVersion),
     },
     resolve: {

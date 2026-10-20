@@ -235,6 +235,7 @@ import {
   archiveSelectedThreadEntries,
   buildMultiSelectThreadContextMenuItems,
   deleteSelectedThreadEntries,
+  filterSidebarV2VisibleThreads,
   getSidebarThreadIdsToPrewarm,
   resolveAdjacentThreadId,
   isContextMenuPointerDown,
@@ -263,11 +264,10 @@ import { sortThreads } from "../lib/threadSort";
 import { resolveSettledThreadTimestamp } from "@t3tools/client-runtime/state/thread-sort";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
-import { useIsMobile } from "~/hooks/useMediaQuery";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useNowMinute } from "~/hooks/useNowMinute";
 import { CommandDialogTrigger } from "./ui/command";
-import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings";
+import { useClientSettings, updateClientSettings } from "~/hooks/useSettings";
 import {
   DEFAULT_HIDE_SETTLED_PROJECTS,
   DEFAULT_HIDE_SETTLED_RECENT,
@@ -587,7 +587,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     environmentId: thread.environmentId,
     threadId: thread.id,
   });
-  const isMobile = useIsMobile();
+  const { isMobile } = useSidebar();
   const discoveredPorts = useThreadDiscoveredPorts({
     environmentId: thread.environmentId,
     threadId: thread.id,
@@ -1206,7 +1206,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
   return (
     <SidebarMenuSub
       ref={attachThreadListAutoAnimateRef}
-      className="mx-0.5 my-0 w-full translate-x-0 overflow-hidden sm:mx-1"
+      className="mx-0.5 my-0 w-full translate-x-0 overflow-hidden empty:hidden sm:mx-1"
     >
       {shouldShowThreadPanel && showEmptyThreadState ? (
         <SidebarMenuSubItem className="w-full" data-thread-selection-safe>
@@ -1332,6 +1332,152 @@ function resolveProjectThreadStatus(
   });
 }
 
+// Thread derivations for one project row. Built in their own hooks so they reach
+// SidebarProjectItem frozen: inline, its later calls made the compiler fuse the
+// ordered keys with the route-dependent panel, handing every row a new array.
+function useProjectThreads(
+  project: SidebarProjectSnapshot,
+  input: Pick<
+    SidebarProjectItemProps,
+    | "selectedEnvironmentIds"
+    | "ownershipFilter"
+    | "ownershipRelation"
+    | "claimPersonIdByEnvironment"
+    | "hideSettledThreads"
+    | "settledThreadKeys"
+  >,
+) {
+  const {
+    selectedEnvironmentIds,
+    ownershipFilter,
+    ownershipRelation,
+    claimPersonIdByEnvironment,
+    hideSettledThreads,
+    settledThreadKeys,
+  } = input;
+  const sidebarThreads = useThreadShellsForProjectRefs(project.memberProjectRefs);
+  const ownershipMatchedThreads = (() =>
+    sidebarThreads.filter((thread) =>
+      threadMatchesMine({
+        claimPersonId: claimPersonIdForEnvironment(
+          claimPersonIdByEnvironment,
+          thread.environmentId,
+        ),
+        originPersonId: thread.originSource?.personId ?? null,
+        participantPersonIds: (thread.participantSummaries ?? []).map(
+          (participant) => participant.personId,
+        ),
+        mode: ownershipFilter,
+        relation: ownershipRelation,
+      }),
+    ))();
+  const sidebarThreadByKey = (() =>
+    new Map(
+      ownershipMatchedThreads.map(
+        (thread) =>
+          [scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)), thread] as const,
+      ),
+    ))();
+  const projectThreads = (() =>
+    hideSettledThreads
+      ? ownershipMatchedThreads.filter(
+          (thread) =>
+            !settledThreadKeys.has(
+              scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+            ),
+        )
+      : ownershipMatchedThreads)();
+  const memberProjectByScopedKey = (() =>
+    new Map(
+      project.memberProjects.map((member) => [
+        scopedProjectKey(scopeProjectRef(member.environmentId, member.id)),
+        member,
+      ]),
+    ))();
+  const memberThreadCountByPhysicalKey = (() => {
+    const counts = new Map<string, number>(
+      project.memberProjects.map((member) => [member.physicalProjectKey, 0] as const),
+    );
+    for (const thread of projectThreads) {
+      const member = memberProjectByScopedKey.get(
+        scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
+      );
+      if (!member) {
+        continue;
+      }
+      counts.set(member.physicalProjectKey, (counts.get(member.physicalProjectKey) ?? 0) + 1);
+    }
+    return counts;
+  })();
+
+  const threadSortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
+  const threadLastVisitedAts = useUiStateStore(
+    useShallow((state) =>
+      projectThreads.map(
+        (thread) =>
+          state.threadLastVisitedAtById[
+            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))
+          ] ?? null,
+      ),
+    ),
+  );
+  const {
+    projectStatus,
+    visibleProjectThreads,
+    orderedProjectThreadKeys,
+    lastVisitedAtByThreadKey,
+  } = (() => {
+    const lastVisitedAtByThreadKey = new Map(
+      projectThreads.map((thread, index) => [
+        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+        resolveThreadLastVisitedAt(thread.lastVisitedAt, threadLastVisitedAts[index] ?? undefined),
+      ]),
+    );
+    const resolveProjectThreadStatus = (thread: SidebarThreadSummary) => {
+      const lastVisitedAt = lastVisitedAtByThreadKey.get(
+        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+      );
+      return resolveThreadStatusPill({
+        thread: {
+          ...thread,
+          ...(lastVisitedAt !== null && lastVisitedAt !== undefined ? { lastVisitedAt } : {}),
+        },
+      });
+    };
+    const visibleProjectThreads = sortThreads(
+      projectThreads.filter(
+        (thread) =>
+          thread.archivedAt === null &&
+          matchesEnvironmentFilter(thread.environmentId, selectedEnvironmentIds),
+      ),
+      threadSortOrder,
+    );
+    const projectStatus = resolveProjectStatusIndicator(
+      visibleProjectThreads.map((thread) => resolveProjectThreadStatus(thread)),
+    );
+    return {
+      orderedProjectThreadKeys: visibleProjectThreads.map((thread) =>
+        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+      ),
+      projectStatus,
+      visibleProjectThreads,
+      lastVisitedAtByThreadKey,
+    };
+  })();
+
+  return {
+    sidebarThreads,
+    sidebarThreadByKey,
+    projectThreads,
+    memberProjectByScopedKey,
+    memberThreadCountByPhysicalKey,
+    projectStatus,
+    visibleProjectThreads,
+    orderedProjectThreadKeys,
+    lastVisitedAtByThreadKey,
+  };
+}
+
 function useProjectThreadPanel(input: {
   visibleProjectThreads: readonly SidebarThreadSummary[];
   lastVisitedAtByThreadKey: ReadonlyMap<string, string | undefined>;
@@ -1438,7 +1584,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const updateThreadMetadata = useOrchestrationCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
-  const updateSettings = useUpdateClientSettings();
   const router = useRouter();
   const queuePendingFileDrop = useSidebarPendingFileDropStore((s) => s.queuePendingFileDrop);
   const clearPendingFileDrop = useSidebarPendingFileDropStore((s) => s.clearPendingFileDrop);
@@ -1490,29 +1635,24 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     },
   });
   const openPrLink = useOpenPrLink();
-  const sidebarThreads = useThreadShellsForProjectRefs(project.memberProjectRefs);
-  const ownershipMatchedThreads = (() =>
-    sidebarThreads.filter((thread) =>
-      threadMatchesMine({
-        claimPersonId: claimPersonIdForEnvironment(
-          claimPersonIdByEnvironment,
-          thread.environmentId,
-        ),
-        originPersonId: thread.originSource?.personId ?? null,
-        participantPersonIds: (thread.participantSummaries ?? []).map(
-          (participant) => participant.personId,
-        ),
-        mode: ownershipFilter,
-        relation: ownershipRelation,
-      }),
-    ))();
-  const sidebarThreadByKey = (() =>
-    new Map(
-      ownershipMatchedThreads.map(
-        (thread) =>
-          [scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)), thread] as const,
-      ),
-    ))();
+  const {
+    sidebarThreads,
+    sidebarThreadByKey,
+    projectThreads,
+    memberProjectByScopedKey,
+    memberThreadCountByPhysicalKey,
+    projectStatus,
+    visibleProjectThreads,
+    orderedProjectThreadKeys,
+    lastVisitedAtByThreadKey,
+  } = useProjectThreads(project, {
+    selectedEnvironmentIds,
+    ownershipFilter,
+    ownershipRelation,
+    claimPersonIdByEnvironment,
+    hideSettledThreads,
+    settledThreadKeys,
+  });
   // Keep a ref so callbacks can read the latest map without appearing in
   // dependency arrays (avoids invalidating every thread-row memo on each
   // thread-list change).
@@ -1520,15 +1660,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   useLayoutEffect(() => {
     sidebarThreadByKeyRef.current = sidebarThreadByKey;
   }, [sidebarThreadByKey, sidebarThreadByKeyRef]);
-  const projectThreads = (() =>
-    hideSettledThreads
-      ? ownershipMatchedThreads.filter(
-          (thread) =>
-            !settledThreadKeys.has(
-              scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-            ),
-        )
-      : ownershipMatchedThreads)();
   const projectPreferenceKeys = (() => projectExpansionPreferenceKeys(project))();
   const projectExpanded = useUiStateStore((state) =>
     resolveProjectExpanded(state.projectExpandedById, projectPreferenceKeys),
@@ -1552,84 +1683,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const renamingCommittedRef = useRef(false);
   const renamingInputRef = useRef<HTMLInputElement | null>(null);
   const confirmArchiveButtonRefs = useRef(new Map<string, HTMLButtonElement>());
-  const memberProjectByScopedKey = (() =>
-    new Map(
-      project.memberProjects.map((member) => [
-        scopedProjectKey(scopeProjectRef(member.environmentId, member.id)),
-        member,
-      ]),
-    ))();
-  const memberThreadCountByPhysicalKey = (() => {
-    const counts = new Map<string, number>(
-      project.memberProjects.map((member) => [member.physicalProjectKey, 0] as const),
-    );
-    for (const thread of projectThreads) {
-      const member = memberProjectByScopedKey.get(
-        scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
-      );
-      if (!member) {
-        continue;
-      }
-      counts.set(member.physicalProjectKey, (counts.get(member.physicalProjectKey) ?? 0) + 1);
-    }
-    return counts;
-  })();
-
-  const threadSortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
-  const threadLastVisitedAts = useUiStateStore(
-    useShallow((state) =>
-      projectThreads.map(
-        (thread) =>
-          state.threadLastVisitedAtById[
-            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))
-          ] ?? null,
-      ),
-    ),
-  );
-  const {
-    projectStatus,
-    visibleProjectThreads,
-    orderedProjectThreadKeys,
-    lastVisitedAtByThreadKey,
-  } = (() => {
-    const lastVisitedAtByThreadKey = new Map(
-      projectThreads.map((thread, index) => [
-        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-        resolveThreadLastVisitedAt(thread.lastVisitedAt, threadLastVisitedAts[index] ?? undefined),
-      ]),
-    );
-    const resolveProjectThreadStatus = (thread: SidebarThreadSummary) => {
-      const lastVisitedAt = lastVisitedAtByThreadKey.get(
-        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-      );
-      return resolveThreadStatusPill({
-        thread: {
-          ...thread,
-          ...(lastVisitedAt !== null && lastVisitedAt !== undefined ? { lastVisitedAt } : {}),
-        },
-      });
-    };
-    const visibleProjectThreads = sortThreads(
-      projectThreads.filter(
-        (thread) =>
-          thread.archivedAt === null &&
-          matchesEnvironmentFilter(thread.environmentId, selectedEnvironmentIds),
-      ),
-      threadSortOrder,
-    );
-    const projectStatus = resolveProjectStatusIndicator(
-      visibleProjectThreads.map((thread) => resolveProjectThreadStatus(thread)),
-    );
-    return {
-      orderedProjectThreadKeys: visibleProjectThreads.map((thread) =>
-        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-      ),
-      projectStatus,
-      visibleProjectThreads,
-      lastVisitedAtByThreadKey,
-    };
-  })();
-
   const {
     hasOverflowingThreads,
     hiddenThreadStatus,
@@ -2391,7 +2444,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     } else {
       nextOverrides[overrideKey] = projectGroupingSelection;
     }
-    updateSettings({
+    updateClientSettings({
       sidebarProjectGroupingOverrides: nextOverrides,
     });
     closeProjectGroupingDialog();
@@ -2586,7 +2639,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                 <span className="absolute inset-0 flex items-center justify-center transition-opacity duration-150 group-hover/project-header:opacity-0">
                   <span
                     className={`size-[9px] rounded-full ${projectStatus.dotClass} ${
-                      projectStatus.pulse ? "animate-status-pulse" : ""
+                      projectStatus.pulse ? "motion-safe:animate-status-pulse" : ""
                     }`}
                   />
                 </span>
@@ -3074,7 +3127,6 @@ interface SidebarProjectsContentProps {
   projectSortOrder: SidebarProjectSortOrder;
   threadSortOrder: SidebarThreadSortOrder;
   threadPreviewCount: SidebarThreadPreviewCount;
-  updateSettings: ReturnType<typeof useUpdateClientSettings>;
   openAddProject: () => void;
   isManualProjectSorting: boolean;
   projectDnDSensors: ReturnType<typeof useSensors>;
@@ -4328,7 +4380,6 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     projectSortOrder,
     threadSortOrder,
     threadPreviewCount,
-    updateSettings,
     openAddProject,
     isManualProjectSorting,
     projectDnDSensors,
@@ -4411,13 +4462,13 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
       settledRecencyHeadersEnabled !== DEFAULT_SIDEBAR_V2_SETTLED_RECENCY_HEADERS);
 
   const handleProjectSortOrderChange = (sortOrder: SidebarProjectSortOrder) => {
-    updateSettings({ sidebarProjectSortOrder: sortOrder });
+    updateClientSettings({ sidebarProjectSortOrder: sortOrder });
   };
   const handleThreadSortOrderChange = (sortOrder: SidebarThreadSortOrder) => {
-    updateSettings({ sidebarThreadSortOrder: sortOrder });
+    updateClientSettings({ sidebarThreadSortOrder: sortOrder });
   };
   const handleThreadPreviewCountChange = (count: SidebarThreadPreviewCount) => {
-    updateSettings({ sidebarThreadPreviewCount: count });
+    updateClientSettings({ sidebarThreadPreviewCount: count });
   };
 
   const { isMobile, setOpenMobile } = useSidebar();
@@ -5041,6 +5092,67 @@ function openAddProjectCommandPalette() {
   openCommandPalette({ open: "add-project" });
 }
 
+// Project and thread derivations live in their own hooks so they reach
+// LegacySidebar frozen and cached on their real inputs; inline, its later hook
+// calls made the compiler recompute them, and the props of every row with them.
+function useLegacySidebarProjects() {
+  const projects = useProjects();
+  const projectOrder = useUiStateStore((store) => store.projectOrder);
+  const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
+  const { environments } = useEnvironments();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const environmentLabelById = new Map(
+    environments.map((environment) => [environment.environmentId, environment.label] as const),
+  );
+  const desktopLocalEnvironmentIds = new Set(
+    environments
+      .filter((environment) => isDesktopLocalConnectionTarget(environment.entry.target))
+      .map((environment) => environment.environmentId),
+  );
+  const wslEnvironmentIds = new Set(
+    environments
+      .filter((environment) => isWslConnectionTarget(environment.entry.target))
+      .map((environment) => environment.environmentId),
+  );
+  const orderedProjects = orderItemsByPreferredIds({
+    items: projects,
+    preferredIds: projectOrder,
+    getId: getProjectOrderKey,
+    getPreferenceIds: (project) => [
+      getProjectOrderKey(project),
+      legacyProjectCwdPreferenceKey(project.workspaceRoot),
+    ],
+  });
+  const physicalToLogicalKey = buildPhysicalToLogicalProjectKeyMap({
+    projects: orderedProjects,
+    settings: projectGroupingSettings,
+    primaryEnvironmentId,
+  });
+  const projectPhysicalKeyByScopedRef = new Map(
+    orderedProjects.map((project) => [
+      scopedProjectKey(scopeProjectRef(project.environmentId, project.id)),
+      derivePhysicalProjectKey(project),
+    ]),
+  );
+  const sidebarProjects: SidebarProjectSnapshot[] = buildSidebarProjectSnapshots({
+    projects: orderedProjects,
+    settings: projectGroupingSettings,
+    primaryEnvironmentId,
+    resolveEnvironmentLabel: (environmentId) => environmentLabelById.get(environmentId) ?? null,
+    isDesktopLocalEnvironment: (environmentId) => desktopLocalEnvironmentIds.has(environmentId),
+    isWslEnvironment: (environmentId) => wslEnvironmentIds.has(environmentId),
+  });
+  return {
+    projectsLength: projects.length,
+    orderedProjects,
+    physicalToLogicalKey,
+    projectPhysicalKeyByScopedRef,
+    sidebarProjects,
+  };
+}
+
+// Kept apart from useLegacySidebarProjects so a thread change re-sorts the
+// projects without rebuilding their snapshots, which every project row keys on.
 export default function LegacySidebar() {
   const projects = useProjects();
   const sidebarThreads = useThreadShells();
@@ -5054,7 +5166,6 @@ export default function LegacySidebar() {
   const sidebarThreadSortOrder = useClientSettings((s) => s.sidebarThreadSortOrder);
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
   const sidebarThreadPreviewCount = useClientSettings((s) => s.sidebarThreadPreviewCount);
-  const updateSettings = useUpdateClientSettings();
   const handleNewThread = useNewThreadHandler();
   const { archiveThread, deleteThread, settleThread, unsettleThread, markThreadUnread } =
     useThreadActions();
@@ -5192,59 +5303,8 @@ export default function LegacySidebar() {
   const handleSelectedEnvironmentIdsChange = (next: readonly EnvironmentId[]) => {
     setStoredEnvironmentFilter([...next]);
   };
-  const environmentLabelById = (() =>
-    new Map(
-      environments.map((environment) => [environment.environmentId, environment.label] as const),
-    ))();
-  const desktopLocalEnvironmentIds = (() =>
-    new Set(
-      environments
-        .filter((environment) => isDesktopLocalConnectionTarget(environment.entry.target))
-        .map((environment) => environment.environmentId),
-    ))();
-  const wslEnvironmentIds = (() =>
-    new Set(
-      environments
-        .filter((environment) => isWslConnectionTarget(environment.entry.target))
-        .map((environment) => environment.environmentId),
-    ))();
-  const orderedProjects = (() => {
-    return orderItemsByPreferredIds({
-      items: projects,
-      preferredIds: projectOrder,
-      getId: getProjectOrderKey,
-      getPreferenceIds: (project) => [
-        getProjectOrderKey(project),
-        legacyProjectCwdPreferenceKey(project.workspaceRoot),
-      ],
-    });
-  })();
-
-  const physicalToLogicalKey = (() => {
-    return buildPhysicalToLogicalProjectKeyMap({
-      projects: orderedProjects,
-      settings: projectGroupingSettings,
-      primaryEnvironmentId,
-    });
-  })();
-  const projectPhysicalKeyByScopedRef = (() =>
-    new Map(
-      orderedProjects.map((project) => [
-        scopedProjectKey(scopeProjectRef(project.environmentId, project.id)),
-        derivePhysicalProjectKey(project),
-      ]),
-    ))();
-
-  const sidebarProjects = (() => {
-    return buildSidebarProjectSnapshots({
-      projects: orderedProjects,
-      settings: projectGroupingSettings,
-      primaryEnvironmentId,
-      resolveEnvironmentLabel: (environmentId) => environmentLabelById.get(environmentId) ?? null,
-      isDesktopLocalEnvironment: (environmentId) => desktopLocalEnvironmentIds.has(environmentId),
-      isWslEnvironment: (environmentId) => wslEnvironmentIds.has(environmentId),
-    });
-  })() as SidebarProjectSnapshot[];
+  const { orderedProjects, physicalToLogicalKey, projectPhysicalKeyByScopedRef, sidebarProjects } =
+    useLegacySidebarProjects();
 
   const sidebarProjectByKey = (() =>
     new Map(sidebarProjects.map((project) => [project.projectKey, project] as const)))();
@@ -5859,7 +5919,6 @@ export default function LegacySidebar() {
         projectSortOrder={sidebarProjectSortOrder}
         threadSortOrder={sidebarThreadSortOrder}
         threadPreviewCount={sidebarThreadPreviewCount}
-        updateSettings={updateSettings}
         openAddProject={openAddProjectCommandPalette}
         isManualProjectSorting={isManualProjectSorting}
         projectDnDSensors={projectDnDSensors}

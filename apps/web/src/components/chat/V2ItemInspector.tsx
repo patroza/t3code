@@ -16,7 +16,7 @@ import { isJavaScriptReplTool } from "@t3tools/shared/toolActivity";
 import { ExternalLinkIcon, GitBranchIcon, RotateCcwIcon } from "lucide-react";
 import { memo, type ReactNode, Suspense, use } from "react";
 
-import { useTheme } from "../../hooks/useTheme";
+import { useRenderedAppearance } from "../../hooks/useTheme";
 import { cn } from "../../lib/utils";
 import { resolveDiffThemeName } from "../../lib/diffRendering";
 import { getSyntaxHighlighterPromise } from "../../lib/syntaxHighlighting";
@@ -52,7 +52,7 @@ function SyntaxTokens({
   readonly text: string;
   readonly language: "json" | "typescript";
 }) {
-  const { resolvedTheme } = useTheme();
+  const resolvedTheme = useRenderedAppearance();
   const highlighter = use(getSyntaxHighlighterPromise(language));
   const { tokens } = highlighter.codeToTokens(text, {
     lang: language,
@@ -288,8 +288,8 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
             </span>
             {item.additions !== undefined || item.deletions !== undefined ? (
               <span>
-                <span className="text-success">+{formatDiffCount(item.additions ?? 0)}</span>{" "}
-                <span className="text-destructive">-{formatDiffCount(item.deletions ?? 0)}</span>
+                <span className="text-diff-addition">+{formatDiffCount(item.additions ?? 0)}</span>{" "}
+                <span className="text-diff-deletion">-{formatDiffCount(item.deletions ?? 0)}</span>
               </span>
             ) : null}
             {item.runId !== null ? (

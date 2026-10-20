@@ -45,7 +45,6 @@ import * as ExternalLauncher from "../process/externalLauncher.ts";
 import { readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
 import { resolveCliCommand } from "./invocation.ts";
-import { offerServiceDuringOnboarding, recoverServiceOnboardingOffer } from "./service.ts";
 import * as CliService from "./service.ts";
 
 const jsonFlag = Flag.Boolean("json").pipe(
@@ -349,6 +348,11 @@ const unlinkRelayEnvironment = Effect.fn("cloud.cli.unlink_relay_environment")(f
     : ({ status: "not-linked" } satisfies RelayUnlinkResult);
 });
 
+/**
+ * Prints the local disconnect outcome, then whether the relay record was revoked.
+ * A missing CLI login or a failed relay DELETE leaves that record registered, so
+ * those outcomes warn to deregister it from the T3 Connect account page.
+ */
 export const reportCloudDisconnectResults = Effect.fn("cloud.cli.report_disconnect_results")(
   function* (input: {
     readonly clearAuthorization: boolean;
@@ -377,7 +381,11 @@ export const reportCloudDisconnectResults = Effect.fn("cloud.cli.report_disconne
       yield* Console.warn(
         input.clearAuthorization
           ? "Could not revoke the relay-side environment record before signing out.\nThe stored CLI authorization was still removed locally."
-          : "Could not revoke the relay-side environment record yet.\nRun `t3 connect unlink` again when the relay is reachable.",
+          : "Could not revoke the relay-side environment record yet.\nRun `t3 connect unlink` again when the relay is reachable, or deregister it from the T3 Connect page of your T3 account.",
+      );
+    } else if (input.relayResult.value.status === "not-authenticated") {
+      yield* Console.warn(
+        "The relay-side environment record was not revoked.\nDeregister it from the T3 Connect page of your T3 account, or run `t3 connect login` and retry.",
       );
     } else if (input.relayResult.value.status === "revoked") {
       yield* Console.log("Revoked the relay-side environment record.");
@@ -676,6 +684,30 @@ const connectLogoutCommand = Command.make("logout", {
   ),
 );
 
+export const reportServiceOnboarding = Effect.fn("cli.connect.report_service_onboarding")(
+  function* (outcome: CliService.ServiceOnboardingOutcome) {
+    if (outcome === "pending") {
+      yield* Console.log(
+        "\nBackground service restarting\n\nThe server establishes the T3 Connect link once it is back. Check the log above if it does not come back.",
+      );
+      return;
+    }
+    if (outcome === "ready") {
+      const platform = yield* HostProcess.Platform;
+      yield* Console.log(
+        platform === "darwin"
+          ? "\n✓ Background service ready\n\nT3 Code is set to run while you are logged in to this Mac. The server establishes the T3 Connect link on startup."
+          : "\n✓ Background service ready\n\nT3 Code is set to keep running after you log out. The server establishes the T3 Connect link on startup.",
+      );
+      return;
+    }
+    const serveCommand = yield* resolveCliCommand("serve");
+    yield* Console.log(
+      `\nNext\n  Start the server with \`${serveCommand}\` to make this machine reachable.`,
+    );
+  },
+);
+
 export const connectCommand = Command.make("connect", {
   ...projectLocationFlags,
   headless: headlessFlag,
@@ -692,19 +724,8 @@ export const connectCommand = Command.make("connect", {
         }
         yield* Console.log(`✓ Authorized${connectedAs(linked.identity)}`);
 
-        const background = yield* recoverServiceOnboardingOffer(offerServiceDuringOnboarding);
-        if (background) {
-          const platform = yield* HostProcess.Platform;
-          yield* Console.log(
-            platform === "darwin"
-              ? "\n✓ Background service ready\n\nT3 Code is set to run while you are logged in to this Mac. The server establishes the T3 Connect link on startup."
-              : "\n✓ Background service ready\n\nT3 Code is set to keep running after you log out. The server establishes the T3 Connect link on startup.",
-          );
-          return;
-        }
-        const serveCommand = yield* resolveCliCommand("serve");
-        yield* Console.log(
-          `\nNext\n  Start the server with \`${serveCommand}\` to make this machine reachable.`,
+        yield* reportServiceOnboarding(
+          yield* CliService.recoverServiceOnboardingOffer(CliService.offerServiceDuringOnboarding),
         );
       }),
     ),

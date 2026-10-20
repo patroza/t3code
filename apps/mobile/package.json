@@ -46,7 +46,7 @@
     "sync:pierre-icons": "node scripts/sync-pierre-file-icons.mjs",
     "measure-renders": "node scripts/measure-renders.mts",
     "generate": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/generate-uniwind-themes.mts",
-    "test": "vp test run --config ../../vite.config.ts --dir .",
+    "test": "vp test run --project unit --project react",
     "typecheck": "tsc-rs --noEmit"
   },
   "dependencies": {
@@ -61,6 +61,7 @@
     "@noble/curves": "catalog:",
     "@pierre/diffs": "catalog:",
     "@react-native-ai/apple": "0.12.0",
+    "@react-native-async-storage/async-storage": "3.1.1",
     "@react-native-menu/menu": "^2.0.0",
     "@react-navigation/elements": "2.9.45",
     "@react-navigation/native": "7.5.1",
@@ -87,6 +88,7 @@
     "diff": "8.0.3",
     "effect": "catalog:",
     "expo": "58.0.14",
+    "expo-application": "~58.1.2",
     "expo-asset": "~58.0.16",
     "expo-audio": "58.0.9",
     "expo-auth-session": "~58.0.13",
@@ -122,16 +124,19 @@
     "expo-video": "~58.0.11",
     "expo-web-browser": "~58.0.6",
     "expo-widgets": "58.0.20",
-    "react": "19.3.0",
-    "react-dom": "19.3.0",
+    "react": "catalog:",
+    "react-dom": "catalog:",
     "react-native": "0.88.0",
-    "react-native-enriched-markdown": "file:deps/react-native-enriched-markdown-1.2.0-t3.15.tgz",
+    "react-native-blob-util": "0.25.1",
+    "react-native-enriched-markdown": "file:deps/react-native-enriched-markdown-1.2.0-t3.15-fee84114.tgz",
     "react-native-gesture-handler": "~3.3.0",
     "react-native-image-viewing": "^0.2.2",
     "react-native-keyboard-controller": "1.22.7",
+    "react-native-nitro-modules": "0.37.1",
+    "react-native-pdf-jsi": "5.0.0",
     "react-native-reanimated": "4.7.1",
     "react-native-safe-area-context": "~5.10.1",
-    "react-native-screens": "file:deps/react-native-screens-5.0.0-t3.27.tgz",
+    "react-native-screens": "file:deps/react-native-screens-5.0.0-t3.29.tgz",
     "react-native-shiki-engine": "^0.3.12",
     "react-native-svg": "15.16.0",
     "react-native-webview": "14.0.1",
@@ -141,7 +146,7 @@
     "shiki": "4.2.0",
     "tailwind-merge": "^3.5.0",
     "unified": "catalog:",
-    "uniwind": "1.12.1"
+    "uniwind": "1.13.0"
   },
   "devDependencies": {
     "@babel/core": "^7.29.7",
@@ -149,15 +154,15 @@
     "@effect/vitest": "catalog:",
     "@pierre/trees": "1.0.0-beta.6",
     "@types/mdast": "^4.0.4",
-    "@types/react": "~19.3.0",
-    "@types/react-dom": "~19.2.3",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
     "babel-preset-expo": "~58.0.17",
     "jsdom": "^30.0.1",
     "tailwindcss": "^4.0.0",
     "typescript": "catalog:"
   },
   "enriched-markdown": {
-    "enableMath": false,
+    "enableMath": true,
     "enableVideo": false
   },
   "expo": {
@@ -177,7 +182,8 @@
         "react-native-screens",
         "react-native-reanimated",
         "@react-native-menu/menu",
-        "expo-audio"
+        "expo-audio",
+        "expo-network"
       ]
     }
   },

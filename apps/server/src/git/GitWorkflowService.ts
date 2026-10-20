@@ -1,6 +1,7 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as FileSystem from "effect/FileSystem";
 
 import {
   GitManagerError,
@@ -36,6 +37,7 @@ import * as ProjectLifecycleScriptRunner from "../project/ProjectLifecycleScript
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import { ExplicitGitDirectory } from "../vcs/GitRepositoryProbe.ts";
+import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 
 export class GitWorkflowService extends Context.Service<
   GitWorkflowService,
@@ -104,6 +106,14 @@ export class GitWorkflowService extends Context.Service<
       readonly fallbackRemoteName: string;
     }) => Effect.Effect<
       { readonly commitSha: string; readonly remoteRefName: string },
+      GitCommandError
+    >;
+    readonly resolveWorktreeBaseRemote: GitVcsDriver.GitVcsDriver["Service"]["resolveWorktreeBaseRemote"];
+    readonly fetchWorktreeBaseCommit: (input: {
+      readonly cwd: string;
+      readonly refName: string;
+    }) => Effect.Effect<
+      { readonly commitSha: string; readonly remoteRefName: string } | null,
       GitCommandError
     >;
     readonly removeWorktree: (
@@ -213,6 +223,14 @@ export const make = Effect.gen(function* () {
    */
   const bareRepositoryDetail = (operation: string, cwd: string) =>
     `The ${operation} operation needs a working tree, but ${cwd} is a bare Git repository (no checkout of its own). Run it inside a worktree, or give the project a checkout.`;
+  const fileSystem = yield* FileSystem.FileSystem;
+
+  // Nested projects and path aliases must share the checkout's branch-mutation lease.
+  const withCheckoutLease = <A, E, R>(rootPath: string, effect: Effect.Effect<A, E, R>) =>
+    fileSystem.realPath(rootPath).pipe(
+      Effect.orElseSucceed(() => rootPath),
+      Effect.flatMap((cwd) => withWorkspaceLease(cwd, effect)),
+    );
 
   const ensureGit = Effect.fn("GitWorkflowService.ensureGit")(function* (
     operation: string,
@@ -445,7 +463,11 @@ export const make = Effect.gen(function* () {
       ),
     runStackedAction: (input, options) =>
       ensureGit("GitWorkflowService.runStackedAction", input.cwd).pipe(
-        Effect.andThen(gitManager.runStackedAction(input, options)),
+        Effect.flatMap((handle) =>
+          input.featureBranch
+            ? withCheckoutLease(handle.rootPath, gitManager.runStackedAction(input, options))
+            : gitManager.runStackedAction(input, options),
+        ),
       ),
     resolvePullRequest: routeGitManager(
       "GitWorkflowService.resolvePullRequest",
@@ -455,10 +477,14 @@ export const make = Effect.gen(function* () {
       "GitWorkflowService.resolveBranchChangeRequest",
       gitManager.resolveBranchChangeRequest,
     ),
-    preparePullRequestThread: routeGitManager(
-      "GitWorkflowService.preparePullRequestThread",
-      gitManager.preparePullRequestThread,
-    ),
+    preparePullRequestThread: (input) =>
+      ensureGit("GitWorkflowService.preparePullRequestThread", input.cwd).pipe(
+        Effect.flatMap((handle) =>
+          input.mode === "local"
+            ? withCheckoutLease(handle.rootPath, gitManager.preparePullRequestThread(input))
+            : gitManager.preparePullRequestThread(input),
+        ),
+      ),
     listRefs: (input) =>
       detectGitRepositoryForCommand("GitWorkflowService.listRefs", input.cwd).pipe(
         Effect.flatMap((repository) =>
@@ -493,6 +519,14 @@ export const make = Effect.gen(function* () {
       ensureGitCommand("GitWorkflowService.resolveRemoteTrackingCommit", input.cwd, {
         allowBare: true,
       }).pipe(Effect.flatMap(runInRepository(input.cwd, git.resolveRemoteTrackingCommit(input)))),
+    resolveWorktreeBaseRemote: (input) =>
+      ensureGitCommand("GitWorkflowService.resolveWorktreeBaseRemote", input.cwd, {
+        allowBare: true,
+      }).pipe(Effect.flatMap(runInRepository(input.cwd, git.resolveWorktreeBaseRemote(input)))),
+    fetchWorktreeBaseCommit: (input) =>
+      ensureGitCommand("GitWorkflowService.fetchWorktreeBaseCommit", input.cwd, {
+        allowBare: true,
+      }).pipe(Effect.flatMap(runInRepository(input.cwd, git.fetchWorktreeBaseCommit(input)))),
     removeWorktree: (input) =>
       ensureGitCommand("GitWorkflowService.removeWorktree", input.cwd, { allowBare: true }).pipe(
         Effect.flatMap(
@@ -547,13 +581,22 @@ export const make = Effect.gen(function* () {
       ),
     createRef: (input) =>
       ensureGitCommand("GitWorkflowService.createRef", input.cwd, {
-        // Creating the branch is pure ref plumbing; only checking it out after
-        // creation needs a working tree.
         allowBare: input.switchRef !== true,
-      }).pipe(Effect.flatMap(runInRepository(input.cwd, git.createRef(input)))),
+      }).pipe(
+        Effect.flatMap((repository) =>
+          runInRepository(
+            input.cwd,
+            input.switchRef
+              ? withCheckoutLease(repository.rootPath, git.createRef(input))
+              : git.createRef(input),
+          )(repository),
+        ),
+      ),
     switchRef: (input) =>
       ensureGitCommand("GitWorkflowService.switchRef", input.cwd).pipe(
-        Effect.andThen(Effect.scoped(git.switchRef(input))),
+        Effect.flatMap((handle) =>
+          withCheckoutLease(handle.rootPath, Effect.scoped(git.switchRef(input))),
+        ),
       ),
     renameBranch: (input) =>
       ensureGit("GitWorkflowService.renameBranch", input.cwd, { allowBare: true }).pipe(

@@ -66,9 +66,9 @@ import { readCodexSetupMode } from "./CodexSetupSection.logic";
 import {
   getProviderVersionAdvisoryPresentation,
   PROVIDER_STATUS_STYLES,
+  getProviderStatusKey,
   getProviderSummary,
   getProviderVersionLabel,
-  type ProviderStatusKey,
 } from "./providerStatus";
 
 const ENVIRONMENT_VARIABLE_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
@@ -645,13 +645,12 @@ export function ProviderInstanceCard({
   projectOverride,
 }: ProviderInstanceCardProps) {
   const enabled = projectOverride?.effectiveEnabled ?? resolveProviderInstanceEnabled(instance);
+  const effectiveProvider = liveProvider && { ...liveProvider, enabled };
   const compatibility = enabled ? liveProvider?.compatibilityAdvisory : undefined;
-  const statusKey: ProviderStatusKey = enabled
-    ? ((liveProvider?.status as ProviderStatusKey | undefined) ?? "warning")
-    : "disabled";
+  const statusKey = enabled ? getProviderStatusKey(effectiveProvider) : "disabled";
   const statusStyle = PROVIDER_STATUS_STYLES[statusKey];
   const summary = enabled
-    ? getProviderSummary(liveProvider && { ...liveProvider, enabled: true })
+    ? getProviderSummary(effectiveProvider)
     : { headline: "Disabled", detail: null };
   const authEmail = liveProvider?.auth.email?.trim();
   const isAuthenticated = enabled && liveProvider?.auth.status === "authenticated";
@@ -907,7 +906,7 @@ export function ProviderInstanceCard({
             </p>
             <p
               className={cn(
-                "text-xs leading-snug",
+                "text-xs leading-snug [overflow-wrap:anywhere]",
                 versionAdvisory.emphasis === "strong" ? "text-warning" : "text-muted-foreground",
               )}
             >
@@ -1184,26 +1183,24 @@ export function ProviderInstanceCard({
       {setup || environmentFields.length > 0 ? (
         <SettingsSection title="Setup">
           {setup}
-          <div
-            inert={readOnly}
-            aria-disabled={readOnly || undefined}
-            className={readOnly ? "opacity-50 select-none" : undefined}
-          >
-            {environmentFields.length > 0 ? (
-              <>
-                {environmentFields.map((field) => (
-                  <ProviderEnvironmentFieldRow
-                    key={field.name}
-                    field={field}
-                    variable={readProviderEnvironmentVariable(instance.environment, field.name)}
-                    idPrefix={`provider-instance-${instanceId}`}
-                    onCommit={updateEnvironmentField}
-                    onRemove={removeEnvironmentField}
-                  />
-                ))}
-              </>
-            ) : null}
-          </div>
+          {environmentFields.length > 0 ? (
+            <div
+              inert={readOnly}
+              aria-disabled={readOnly || undefined}
+              className={readOnly ? "opacity-50 select-none" : undefined}
+            >
+              {environmentFields.map((field) => (
+                <ProviderEnvironmentFieldRow
+                  key={field.name}
+                  field={field}
+                  variable={readProviderEnvironmentVariable(instance.environment, field.name)}
+                  idPrefix={`provider-instance-${instanceId}`}
+                  onCommit={updateEnvironmentField}
+                  onRemove={removeEnvironmentField}
+                />
+              ))}
+            </div>
+          ) : null}
         </SettingsSection>
       ) : null}
 

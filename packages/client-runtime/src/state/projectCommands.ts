@@ -104,8 +104,12 @@ export function createProjectEnvironmentAtoms<R, E>(
     label: "environment-data:projects:read-file-query",
     tag: WS_METHODS.projectsReadFile,
     execute: (input) =>
-      fileMetadata.seedAfterRead(request(WS_METHODS.projectsReadFile, input), (result, isCurrent) =>
-        fileMetadata.rememberFile(input.cwd, result, isCurrent),
+      fileMetadata.seedAfterRead(
+        request(WS_METHODS.projectsReadFile, input),
+        (result, isCurrent) =>
+          result.exists === false
+            ? Effect.void
+            : fileMetadata.rememberFile(input.cwd, result, isCurrent),
       ),
     // Workspace files can change outside T3 Code, so always revalidate cached reads on mount.
     staleTimeMs: 0,

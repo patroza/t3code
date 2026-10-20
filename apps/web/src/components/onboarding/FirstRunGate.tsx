@@ -9,8 +9,7 @@ import {
   useClientSettings,
   useClientSettingsHydrationStatus,
 } from "../../hooks/useSettings";
-import { isLocalEnvironmentDisabled } from "../../localEnvironment";
-import { useCompleteOnboarding } from "../../onboarding/firstRun";
+import { completeOnboarding } from "../../onboarding/firstRun";
 import {
   isFirstRunWorkspaceProvenanceAuthoritative,
   isFreshFirstRunWorkspace,
@@ -82,10 +81,9 @@ export function FirstRunGate({
   const pathname = useLocation({ select: (location) => location.pathname });
   const hydrationStatus = useClientSettingsHydrationStatus();
   const hydrated = hydrationStatus === "ready";
-  const completeOnboarding = useCompleteOnboarding();
   const onboardingCompletedAt = useClientSettings((settings) => settings.onboardingCompletedAt);
   const bootstrapped = useAllEnvironmentShellsBootstrapped();
-  const { environments, isReady: environmentCatalogReady } = useEnvironments();
+  const { isReady: environmentCatalogReady } = useEnvironments();
   const projects = useProjects();
   const threadCount = useAtomValue(threadCountAtom);
   const soleThread = useAtomValue(soleThreadAtom);
@@ -122,13 +120,7 @@ export function FirstRunGate({
     });
 
   const { decision: nextDecision, persistCompletion } = hostedStatic
-    ? resolveHostedFirstRunDecision({
-        localEnvironmentDisabled: isLocalEnvironmentDisabled(),
-        hydrated,
-        completed: onboardingCompletedAt !== null,
-        catalogReady: environmentCatalogReady,
-        environmentCount: environments.length,
-      })
+    ? resolveHostedFirstRunDecision(hydrated)
     : resolveFirstRunDecision({
         enabled,
         hydrated,
@@ -147,7 +139,7 @@ export function FirstRunGate({
         threadCount,
       });
 
-  if (decision !== "wizard" && hydrated) {
+  if (hydrated) {
     const transitioned = transitionFirstRunGateState(gateState, {
       type: "evidence",
       decision: nextDecision,
@@ -160,7 +152,7 @@ export function FirstRunGate({
     if (persistCompletion && onboardingCompletedAt === null) {
       void completeOnboarding().catch(() => undefined);
     }
-  }, [completeOnboarding, decision, hydrated, onboardingCompletedAt, persistCompletion]);
+  }, [decision, hydrated, onboardingCompletedAt, persistCompletion]);
 
   useEffect(() => {
     if (!enabled || decision !== "pending" || !hydrated) return;
@@ -171,14 +163,20 @@ export function FirstRunGate({
     return () => window.clearTimeout(timer);
   }, [decision, enabled, hydrated]);
 
+  // Setup opens by itself only from the home route. A direct link, such as
+  // Settings, opens as asked so setup can never lock a user out of the app.
+  const wizardOwnsRoute = pathname === "/";
   useEffect(() => {
-    if (decision === "wizard" && pathname !== "/welcome") {
+    if (decision === "wizard" && wizardOwnsRoute) {
       void navigate({ to: "/welcome", replace: true });
     }
-  }, [decision, navigate, pathname]);
+  }, [decision, navigate, wizardOwnsRoute]);
 
   if (settingsReadFailed) {
     return <FirstRunRecovery reason="settings" retrying={hydrationStatus === "retrying"} />;
+  }
+  if (decision === "wizard" && !wizardOwnsRoute) {
+    return children;
   }
   if (decision !== "app") {
     return stalled ? <FirstRunRecovery reason="connection" /> : null;

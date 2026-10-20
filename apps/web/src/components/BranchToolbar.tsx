@@ -1,9 +1,10 @@
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
+import { formatFilePathForClipboard } from "@t3tools/client-runtime/media-actions";
 import { readLocalApi } from "../localApi";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { ComposerContextLabel } from "./ComposerContextLabel";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import {
   ChevronDownIcon,
   FolderGit2Icon,
@@ -25,7 +26,7 @@ import {
 
 import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
-import { useProject, useQuietThreadShell, useThreadShellsForProjectRefs } from "../state/entities";
+import { useProject, useThreadShellsForProjectRefs } from "../state/entities";
 import {
   type EnvMode,
   type EnvironmentOption,
@@ -45,6 +46,7 @@ import {
   type BranchToolbarBranchSelectorHandle,
 } from "./BranchToolbarBranchSelector";
 import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSelector";
+import type { PendingServerUpdate } from "./ServerUpdateAction";
 import { BranchToolbarEnvModeSelector } from "./BranchToolbarEnvModeSelector";
 import { PreviousWorktreeItemContent } from "./PreviousWorktreeItemContent";
 import { ThreadDetailsControl } from "./chat/ThreadDetailsControl";
@@ -85,11 +87,15 @@ interface BranchToolbarProps {
   ref?: Ref<BranchToolbarHandle>;
   environmentId: EnvironmentId;
   threadId: ThreadId;
+  projectId: ProjectId;
+  worktreePath: string | null;
+  isServerThread: boolean;
   showGitControls: boolean;
   draftId?: DraftId;
   onWorkspaceTargetChange?: (target: WorkspaceTarget) => void;
   onEnvModeChange?: (mode: EnvMode) => void;
   effectiveEnvModeOverride?: EnvMode;
+  envMode?: EnvMode;
   activeThreadBranchOverride?: string | null;
   onActiveThreadBranchOverrideChange?: (branch: string | null) => void;
   startFromOrigin: boolean;
@@ -105,6 +111,7 @@ interface BranchToolbarProps {
   onEnvironmentChange?: (environmentId: EnvironmentId) => void;
   composerControlsHostRef?: (element: HTMLDivElement | null) => void;
   contextStripVisible?: boolean;
+  serverUpdate?: PendingServerUpdate | null;
 }
 
 function showWorkspaceContextMenu(event: ReactMouseEvent, workspacePath: string) {
@@ -119,13 +126,14 @@ function showWorkspaceContextMenu(event: ReactMouseEvent, workspacePath: string)
     })
     .then((action) => {
       if (action !== "copy-path") return;
-      void writeTextToClipboard(workspacePath, "workspace path").then(
+      const clipboardPath = formatFilePathForClipboard(workspacePath);
+      void writeTextToClipboard(clipboardPath, "workspace path").then(
         (didCopy) => {
           if (didCopy) {
             toastManager.add({
               type: "success",
               title: "Path copied",
-              description: workspacePath,
+              description: clipboardPath,
             });
           }
         },
@@ -441,8 +449,13 @@ function useLabelsOverflow(element: HTMLDivElement | null): boolean {
     const current = element;
     const compact = overflows;
     if (!current) return;
-    const available = current.clientWidth;
-    if (available === 0) return;
+    const stripWidth = current.clientWidth;
+    if (stripWidth === 0) return;
+    const stripStyle = getComputedStyle(current);
+    const available =
+      stripWidth -
+      (Number.parseFloat(stripStyle.paddingInlineStart) || 0) -
+      (Number.parseFloat(stripStyle.paddingInlineEnd) || 0);
     const contentWidth = (parent: Element): number => {
       const gap = Number.parseFloat(getComputedStyle(parent).columnGap) || 0;
       let width = 0;
@@ -461,7 +474,7 @@ function useLabelsOverflow(element: HTMLDivElement | null): boolean {
       }
       return width + gap * Math.max(0, counted - 1);
     };
-    const stripGap = Number.parseFloat(getComputedStyle(current).columnGap) || 0;
+    const stripGap = Number.parseFloat(stripStyle.columnGap) || 0;
     let needed = 0;
     let groups = 0;
     for (const child of current.children) {
@@ -579,11 +592,15 @@ export const BranchToolbar = memo(function BranchToolbar({
   ref,
   environmentId,
   threadId,
+  projectId,
+  worktreePath,
+  isServerThread,
   showGitControls,
   draftId,
   onEnvModeChange = () => {},
   onWorkspaceTargetChange: requestedWorkspaceTargetChange,
   effectiveEnvModeOverride,
+  envMode,
   activeThreadBranchOverride,
   onActiveThreadBranchOverrideChange,
   startFromOrigin,
@@ -599,41 +616,26 @@ export const BranchToolbar = memo(function BranchToolbar({
   onEnvironmentChange,
   composerControlsHostRef,
   contextStripVisible = true,
+  serverUpdate = null,
 }: BranchToolbarProps) {
   const onWorkspaceTargetChange =
     requestedWorkspaceTargetChange ??
     ((target: WorkspaceTarget) => onEnvModeChange(target === "local" ? "local" : "worktree"));
   const branchSelectorRef = useRef<BranchToolbarBranchSelectorHandle>(null);
   const threadRef = scopeThreadRef(environmentId, threadId);
-  const draftThread = useComposerDraftStore((store) =>
-    draftId ? store.getDraftSession(draftId) : store.getDraftThreadByRef(threadRef),
-  );
-  const serverThread = useQuietThreadShell(threadRef);
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
-  const activeProjectRef = serverThread
-    ? scopeProjectRef(serverThread.environmentId, serverThread.projectId)
-    : draftThread
-      ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
-      : null;
+  // The composer retains resolved thread details while bootstrap cleanup can remove its shell.
+  const activeProjectRef = scopeProjectRef(environmentId, projectId);
   const activeProject = useProject(activeProjectRef);
-  const hasActiveThread = serverThread !== null || draftThread !== null;
-  const activeWorktreePath = forceNewWorktree
-    ? null
-    : (serverThread?.worktreePath ?? draftThread?.worktreePath ?? null);
-  const effectiveEnvMode =
-    (forceNewWorktree ? "worktree" : effectiveEnvModeOverride) ??
-    resolveEffectiveEnvMode({
-      activeWorktreePath,
-      hasServerThread: serverThread !== null,
-      draftThreadEnvMode: draftThread?.envMode,
-    });
+  const activeWorktreePath = forceNewWorktree ? null : worktreePath;
+  const effectiveEnvMode = forceNewWorktree
+    ? "worktree"
+    : (effectiveEnvModeOverride ?? envMode ?? (activeWorktreePath ? "worktree" : "local"));
+  const envModeLocked = envLocked || (isServerThread && activeWorktreePath !== null);
   const workspaceTarget = resolveWorkspaceTarget({ effectiveEnvMode, activeWorktreePath });
-  const envModeLocked = envLocked || (serverThread !== null && activeWorktreePath !== null);
 
-  const canUsePreviousWorktree =
-    draftThread !== null && serverThread === null && !envModeLocked && !forceNewWorktree;
-  const projectRefsForWorktreeLookup =
-    canUsePreviousWorktree && activeProjectRef ? [activeProjectRef] : [];
+  const canUsePreviousWorktree = !isServerThread && !envModeLocked && !forceNewWorktree;
+  const projectRefsForWorktreeLookup = canUsePreviousWorktree ? [activeProjectRef] : [];
   const projectThreads = useThreadShellsForProjectRefs(projectRefsForWorktreeLookup);
   const previousWorktreeSeed = canUsePreviousWorktree
     ? resolvePreviousWorktreeSeed({
@@ -645,7 +647,7 @@ export const BranchToolbar = memo(function BranchToolbar({
     ? resolvePreviousWorktreeLabel(previousWorktreeSeed)
     : null;
   const onUsePreviousWorktree = () => {
-    if (!previousWorktreeSeed || !activeProjectRef) return;
+    if (!previousWorktreeSeed) return;
     setDraftThreadContext(draftId ?? threadRef, {
       branch: previousWorktreeSeed.branch,
       worktreePath: previousWorktreeSeed.worktreePath,
@@ -673,19 +675,21 @@ export const BranchToolbar = memo(function BranchToolbar({
     ],
   );
 
-  const showEnvironmentPicker = Boolean(
-    availableEnvironments && availableEnvironments.length > 1 && onEnvironmentChange,
-  );
+  const hasMultipleEnvironments = (availableEnvironments?.length ?? 0) > 1;
+  const showEnvironmentPicker = hasMultipleEnvironments && onEnvironmentChange !== undefined;
   const activeEnvironmentOption =
     availableEnvironments?.find((env) => env.environmentId === environmentId) ?? null;
+  // Started threads get no handler but still show which machine they run on,
+  // matching the strip visibility ChatView computes from the same inputs.
   const showEnvironmentIndicator = shouldShowEnvironmentIndicator({
     activeEnvironment: activeEnvironmentOption,
-    canPickEnvironment: showEnvironmentPicker,
+    canPickEnvironment: hasMultipleEnvironments,
+    serverUpdateAvailable: serverUpdate !== null,
   });
   const [stripElement, setStripElement] = useState<HTMLDivElement | null>(null);
   const labelsOverflow = useLabelsOverflow(stripElement);
 
-  if (!hasActiveThread || !activeProject) return null;
+  if (!activeProject) return null;
 
   if (layout === "panel") {
     return (
@@ -747,6 +751,17 @@ export const BranchToolbar = memo(function BranchToolbar({
         !contextStripVisible && "pointer-events-none invisible absolute inset-x-0 top-full",
       )}
     >
+      {serverUpdate && availableEnvironments ? (
+        <BranchToolbarEnvironmentSelector
+          autoEnvironmentLabel={autoEnvironmentLabel}
+          onAutoEnvironment={onAutoEnvironment}
+          envLocked={envLocked}
+          environmentId={environmentId}
+          availableEnvironments={availableEnvironments}
+          {...(showEnvironmentPicker ? { onEnvironmentChange } : {})}
+          serverUpdate={serverUpdate}
+        />
+      ) : null}
       {showGitControls ? (
         <div className="contents @3xl/composer-surface:hidden">
           <RunContextSelector
@@ -757,8 +772,8 @@ export const BranchToolbar = memo(function BranchToolbar({
             envModeLocked={envModeLocked}
             environmentId={environmentId}
             availableEnvironments={availableEnvironments}
-            showEnvironmentPicker={showEnvironmentPicker}
-            showEnvironmentIndicator={showEnvironmentIndicator}
+            showEnvironmentPicker={showEnvironmentPicker && serverUpdate === null}
+            showEnvironmentIndicator={showEnvironmentIndicator && serverUpdate === null}
             onEnvironmentChange={onEnvironmentChange}
             workspaceTarget={workspaceTarget}
             activeWorktreePath={activeWorktreePath}
@@ -769,7 +784,7 @@ export const BranchToolbar = memo(function BranchToolbar({
           />
         </div>
       ) : null}
-      {showGitControls || showEnvironmentIndicator ? (
+      {showGitControls || (showEnvironmentIndicator && serverUpdate === null) ? (
         <div
           className={cn(
             "min-h-7 min-w-10 items-center gap-1 sm:min-h-6",
@@ -779,14 +794,16 @@ export const BranchToolbar = memo(function BranchToolbar({
         >
           {showEnvironmentIndicator && availableEnvironments && (
             <>
-              <BranchToolbarEnvironmentSelector
-                autoEnvironmentLabel={autoEnvironmentLabel}
-                onAutoEnvironment={onAutoEnvironment}
-                envLocked={envLocked}
-                environmentId={environmentId}
-                availableEnvironments={availableEnvironments}
-                {...(showEnvironmentPicker && onEnvironmentChange ? { onEnvironmentChange } : {})}
-              />
+              {serverUpdate === null ? (
+                <BranchToolbarEnvironmentSelector
+                  autoEnvironmentLabel={autoEnvironmentLabel}
+                  onAutoEnvironment={onAutoEnvironment}
+                  envLocked={envLocked}
+                  environmentId={environmentId}
+                  availableEnvironments={availableEnvironments}
+                  {...(showEnvironmentPicker ? { onEnvironmentChange } : {})}
+                />
+              ) : null}
               {showGitControls ? (
                 <Separator
                   orientation="vertical"

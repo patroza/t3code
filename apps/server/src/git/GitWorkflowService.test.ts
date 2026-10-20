@@ -70,7 +70,7 @@ function bareHandle(cwd: string): VcsDriverRegistry.VcsDriverHandle {
   };
 }
 
-describe("GitWorkflowService", () => {
+it.layer(NodeServices.layer)("GitWorkflowService", (it) => {
   it.effect("reports a non-Git VCS repository as not a Git repository", () =>
     Effect.gen(function* () {
       const workflow = yield* GitWorkflowService.GitWorkflowService;
