@@ -26,6 +26,21 @@ const mentionRouterSource = NodeFS.readFileSync(
   "utf8",
 );
 
+describe("existing work-item conversation", () => {
+  it("links the existing conversation instead of joining it", () => {
+    expect(mentionRouterSource).toContain(
+      "Pointing at an existing T3 thread instead of joining it",
+    );
+    expect(mentionRouterSource).toContain("existingConversationOfferFields");
+    expect(mentionRouterSource).toContain("forceNewThread");
+    expect(mentionRouterSource).toContain("START_NEW_THREAD_ANYWAY_CUSTOM_ID_PREFIX");
+    expect(mentionRouterSource).not.toContain("Joining existing T3 thread via work-item identity");
+    expect(mentionRouterSource).not.toContain(
+      "links.put({\n                  discordThreadId: input.discordThreadId,\n                  t3ThreadId: joinThreadId,",
+    );
+  });
+});
+
 describe("T3 connect-wait queue", () => {
   it("waits for T3 readiness on bridged turns instead of bouncing immediately", () => {
     expect(mentionRouterSource).toContain("waitForT3ReadyForInbound");

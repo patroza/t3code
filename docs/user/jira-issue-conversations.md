@@ -66,10 +66,11 @@ How associations get there:
 3. **Discord** — does not create work-item identity. The thread-info pin may list Jira
    links, plus bare keys whose project is named in that repository's `t3.json`
    `jiraProjects` (a repository can name more than one). A token that only looks like a
-   key is left off. Pin backfill uses the same rule. A later Discord mention follows an
-   association only when Jira or GitHub already recorded it. Mentioning the key in
-   Discord does not retarget it. On a lookup miss, Discord-only rows are removed from
-   the store.
+   key is left off. Pin backfill uses the same rule. A later Discord mention does not
+   join that conversation. It links to the existing one and adds a button,
+   "start a new thread here anyway", which starts a separate thread in this Discord
+   thread. Mentioning the key in Discord does not retarget the existing conversation.
+   On a lookup miss, Discord-only rows are removed from the store.
 4. **Future** — authenticated API / web UI / agent tools to attach work items without Discord
 
 Fail closed when:
