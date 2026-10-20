@@ -7716,10 +7716,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                         yield* flushPreSettleBackgroundCompletions();
                         for (const [taskId, completion] of context.backgroundCommands) {
                           if (completion === null || pendingCompletions.has(taskId)) continue;
-                          yield* finishRegisteredBackgroundTool(
-                            { taskId, ...completion },
-                            { settledInTurn: true },
-                          );
+                          // Reportless completions still need a continuation to report
+                          // their result; only the explicit command queue is handled.
+                          yield* finishRegisteredBackgroundTool({ taskId, ...completion });
                         }
                         if (hasDeferredBackgroundWork(context)) {
                           // The agent finished this prompt's reply. Background work

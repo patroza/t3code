@@ -153,6 +153,7 @@ export default mergeConfig(
               "src/os-jank.test.ts",
               "src/serviceLauncher.test.ts",
               "src/provider/ClaudeCapabilitiesProbe.test.ts",
+              "src/provider/ProviderInstanceRegistry.test.ts",
               "src/orchestration-v2/Adapters/ClaudeAgentSdkQueryRunner.test.ts",
               "src/provider/ProviderRegistry.test.ts",
               "src/orchestration-v2/Adapters/CursorAgentSdk.test.ts",
@@ -251,9 +252,10 @@ export default mergeConfig(
             testTimeout: serverTestTimeout,
             include: [
               // Spies `@anthropic-ai/claude-agent-sdk`.query. Under isolate:false
-              // ClaudeProvider already bound the real query. Keep this file out
+              // ClaudeProvider already bound the real query. Keep these files out
               // of other module mocks so the real query is never cached first.
               "src/provider/ClaudeCapabilitiesProbe.test.ts",
+              "src/provider/ProviderInstanceRegistry.test.ts",
               "src/orchestration-v2/Adapters/ClaudeAgentSdkQueryRunner.test.ts",
             ],
           },

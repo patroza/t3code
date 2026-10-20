@@ -436,6 +436,7 @@ function waitForProjection(
   orchestrator: Orchestrator.OrchestratorV2Shape,
   threadId: ThreadId,
   predicate: (projection: OrchestrationV2ThreadProjection) => boolean,
+  phase?: string,
 ) {
   return Effect.gen(function* () {
     for (let attempt = 0; attempt < 1_000; attempt += 1) {
@@ -446,7 +447,9 @@ function waitForProjection(
       yield* Effect.sleep("5 millis");
     }
     return yield* Effect.die(
-      new Error(`Timed out waiting for orchestration projection ${threadId}.`),
+      new Error(
+        `Timed out waiting for orchestration projection ${threadId}${phase ? ` (${phase})` : ""}.`,
+      ),
     );
   });
 }
@@ -549,6 +552,7 @@ describe("orchestrator MCP toolkit", () => {
           const steerReceivedGates = new Map<string, Deferred.Deferred<void>>();
           const parentTerminalGates = new Map<ThreadId, Deferred.Deferred<void>>();
           const deliveryTerminalGates = new Map<ThreadId, Deferred.Deferred<void>>();
+          const fanoutDeliveryGates = new Map<MessageId, Deferred.Deferred<void>>();
           // Holds a delegated child whose thread id is not known until it starts.
           const promptTerminalGates = new Map<string, Deferred.Deferred<void>>();
           const layerRegistry = ProviderAdapterRegistry.layerFromAdapters([
@@ -565,7 +569,8 @@ describe("orchestrator MCP toolkit", () => {
               terminalGate: (turn) =>
                 turn.message.text.startsWith("Delegated task") ||
                 turn.message.text.startsWith("Delegated tasks")
-                  ? deliveryTerminalGates.get(turn.threadId)
+                  ? (fanoutDeliveryGates.get(turn.message.messageId) ??
+                    deliveryTerminalGates.get(turn.threadId))
                   : (parentTerminalGates.get(turn.threadId) ??
                     promptTerminalGates.get(turn.message.text)),
               response: (turn) => `Codex completed: ${turn.message.text}`,
@@ -579,7 +584,8 @@ describe("orchestrator MCP toolkit", () => {
               terminalGate: (turn) =>
                 turn.message.text.startsWith("Delegated task") ||
                 turn.message.text.startsWith("Delegated tasks")
-                  ? deliveryTerminalGates.get(turn.threadId)
+                  ? (fanoutDeliveryGates.get(turn.message.messageId) ??
+                    deliveryTerminalGates.get(turn.threadId))
                   : parentTerminalGates.get(turn.threadId),
               response: (turn) =>
                 turn.message.text === delegatedPrompt
@@ -3778,7 +3784,6 @@ describe("orchestrator MCP toolkit", () => {
             const firstFanoutDeliveryGate = yield* Deferred.make<void>();
             const secondFanoutDeliveryGate = yield* Deferred.make<void>();
             parentTerminalGates.set(fanoutParentThreadId, fanoutParentGate);
-            deliveryTerminalGates.set(fanoutParentThreadId, firstFanoutDeliveryGate);
             yield* Ref.set(continuationOffers, []);
             yield* orchestrator.dispatch({
               type: "thread.create",
@@ -3812,6 +3817,7 @@ describe("orchestrator MCP toolkit", () => {
               (projection) =>
                 projection.runs.some((run) => run.status === "running") &&
                 projection.providerTurns.some((turn) => turn.status === "running"),
+              "fan-out parent start",
             );
             const fanoutRun = fanoutStarted.runs.find((run) => run.status === "running");
             if (fanoutRun === undefined || fanoutRun.rootNodeId === null) {
@@ -3941,18 +3947,21 @@ describe("orchestrator MCP toolkit", () => {
                 deliveryStates(projection, beforeFirstStarts).every(
                   (state) => state === "claimed",
                 ) && fanoutDelivery(projection)?.taskIds.length === 2,
+              "first fan-out delivery reserved",
             );
             const firstFanoutDelivery = fanoutDelivery(firstReserved);
             if (firstFanoutDelivery === null) {
               return yield* Effect.die(new Error("First fan-out delivery missing."));
             }
             expect(sortedIds(firstFanoutDelivery.taskIds)).toEqual(idsOf(beforeFirstStarts));
+            fanoutDeliveryGates.set(firstFanoutDelivery.messageId, firstFanoutDeliveryGate);
             yield* dispatchFanoutDelivery("first", firstFanoutDelivery);
             yield* Deferred.succeed(fanoutParentGate, undefined);
             yield* waitForProjection(
               orchestrator,
               fanoutParentThreadId,
               (projection) => deliveryRunStatus(projection, firstFanoutDelivery) === "running",
+              "first fan-out delivery running",
             );
 
             yield* finishFanoutChildren(duringFirst);
@@ -3961,11 +3970,11 @@ describe("orchestrator MCP toolkit", () => {
               fanoutParentThreadId,
               (projection) =>
                 deliveryStates(projection, duringFirst).every((state) => state === "pending"),
+              "children pending during first delivery",
             );
             expect(fanoutDelivery(pendingDuringFirst)).toEqual(firstFanoutDelivery);
             expectAtMostOneOutstandingDelivery(pendingDuringFirst);
 
-            deliveryTerminalGates.set(fanoutParentThreadId, secondFanoutDeliveryGate);
             yield* Deferred.succeed(firstFanoutDeliveryGate, undefined);
             const secondReserved = yield* waitForProjection(
               orchestrator,
@@ -3973,6 +3982,7 @@ describe("orchestrator MCP toolkit", () => {
               (projection) =>
                 deliveryRunStatus(projection, firstFanoutDelivery) === "completed" &&
                 fanoutDelivery(projection)?.generation === firstFanoutDelivery.generation + 1,
+              "second fan-out delivery reserved",
             );
             expect(sortedIds(fanoutDelivery(secondReserved)?.taskIds ?? [])).toEqual(
               idsOf(duringFirst),
@@ -3990,6 +4000,7 @@ describe("orchestrator MCP toolkit", () => {
                 deliveryStates(projection, beforeSecondStarts).every(
                   (state) => state === "claimed",
                 ) && fanoutDelivery(projection)?.taskIds.length === 8,
+              "second fan-out delivery extended",
             );
             const secondFanoutDelivery = fanoutDelivery(secondJoined);
             if (secondFanoutDelivery === null) {
@@ -3999,11 +4010,13 @@ describe("orchestrator MCP toolkit", () => {
               idsOf([...duringFirst, ...beforeSecondStarts]),
             );
             expectAtMostOneOutstandingDelivery(secondJoined);
+            fanoutDeliveryGates.set(secondFanoutDelivery.messageId, secondFanoutDeliveryGate);
             yield* dispatchFanoutDelivery("second", secondFanoutDelivery);
             yield* waitForProjection(
               orchestrator,
               fanoutParentThreadId,
               (projection) => deliveryRunStatus(projection, secondFanoutDelivery) === "running",
+              "second fan-out delivery running",
             );
 
             yield* finishFanoutChildren(duringSecond);
@@ -4012,10 +4025,10 @@ describe("orchestrator MCP toolkit", () => {
               fanoutParentThreadId,
               (projection) =>
                 deliveryStates(projection, duringSecond).every((state) => state === "pending"),
+              "children pending during second delivery",
             );
             expectAtMostOneOutstandingDelivery(pendingDuringSecond);
 
-            deliveryTerminalGates.delete(fanoutParentThreadId);
             yield* Deferred.succeed(secondFanoutDeliveryGate, undefined);
             const thirdReserved = yield* waitForProjection(
               orchestrator,
@@ -4023,6 +4036,7 @@ describe("orchestrator MCP toolkit", () => {
               (projection) =>
                 deliveryRunStatus(projection, secondFanoutDelivery) === "completed" &&
                 fanoutDelivery(projection)?.generation === secondFanoutDelivery.generation + 1,
+              "third fan-out delivery reserved",
             );
             const thirdFanoutDelivery = fanoutDelivery(thirdReserved);
             if (thirdFanoutDelivery === null) {
@@ -4036,6 +4050,7 @@ describe("orchestrator MCP toolkit", () => {
               (projection) =>
                 deliveryRunStatus(projection, thirdFanoutDelivery) === "completed" &&
                 fanoutDelivery(projection) === null,
+              "final fan-out delivery drained",
             );
             expect(deliveryStates(fanoutDrained, fanoutTasks)).toEqual(
               fanoutTasks.map(() => "delivered"),
