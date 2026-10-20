@@ -6803,6 +6803,7 @@ export default function ChatView(props: ChatViewProps) {
       isRevertingCheckpoint ||
       !clientSettingsHydrated ||
       threadDetailLoading ||
+      projectCloneSendBlockReason !== null ||
       readPendingEnvironmentChange() !== null ||
       sendInFlightRef.current ||
       feedbackUploadsInFlightRef.current.has(routeThreadKey)

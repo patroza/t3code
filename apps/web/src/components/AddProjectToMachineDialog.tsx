@@ -20,6 +20,10 @@ import { useAddProjectTargets } from "../hooks/useAddProjectTargets";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useLogicalProjectEnvironments } from "../hooks/useLogicalProjectEnvironments";
 import {
+  deriveLogicalProjectKeyFromSettings,
+  selectProjectGroupingSettings,
+} from "../logicalProject";
+import {
   COPYABLE_FILE_MAX_BYTES,
   type CloneProtocol,
   addProjectToMachine,
@@ -31,6 +35,7 @@ import { formatBytes } from "../lib/formatBytes";
 import { newProjectId } from "../lib/utils";
 import { useProject } from "../state/entities";
 import { useEnvironments } from "../state/environments";
+import { useClientSettings } from "../hooks/useSettings";
 import { projectEnvironment } from "../state/projects";
 import { useEnvironmentQuery } from "../state/query";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
@@ -77,6 +82,7 @@ function AddProjectToMachineDialog({ request }: { request: AddProjectToMachineRe
   const project = useProject(request.projectRef);
   const handleNewThread = useNewThreadHandler();
   const { draftId: routeDraftId } = useParams({ strict: false });
+  const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const { environments } = useEnvironments();
   const targets = useAddProjectTargets(project, useLogicalProjectEnvironments(project, false));
   const [targetId, setTargetId] = useState(request.targetEnvironmentId);
@@ -148,14 +154,18 @@ function AddProjectToMachineDialog({ request }: { request: AddProjectToMachineRe
       draft.environmentId === request.projectRef.environmentId &&
       draft.projectId === request.projectRef.projectId
     ) {
-      drafts.setDraftThreadContext(draftId, {
-        projectRef: targetRef,
+      drafts.setLogicalProjectDraftThreadId(draft.logicalProjectKey, targetRef, draftId, {
+        threadId: draft.threadId,
         environmentSelection: "manual",
         loadBalancedEnvironmentId: null,
       });
       return;
     }
-    void handleNewThread(targetRef);
+    if (!project) return;
+    void handleNewThread(targetRef, {
+      logicalProjectKey: deriveLogicalProjectKeyFromSettings(project, projectGroupingSettings),
+      environmentSelection: "manual",
+    });
   };
 
   const submit = async () => {

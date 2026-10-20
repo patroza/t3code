@@ -1894,7 +1894,7 @@ describe("composerDraftStore project draft thread mapping", () => {
     });
   });
 
-  it("clears stale upload metadata when retargeting a draft to another environment", () => {
+  it("keeps the prompt and pins a cloned project's machine without reusing source uploads", () => {
     const store = useComposerDraftStore.getState();
     const hydratedFile: ComposerFileAttachment = {
       ...makeFile("file-cross-environment"),
@@ -1904,11 +1904,22 @@ describe("composerDraftStore project draft thread mapping", () => {
     };
 
     store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+    store.setPrompt(draftId, "Continue on the new machine");
     store.addFiles(draftId, [hydratedFile]);
 
-    store.setProjectDraftThreadId(remoteProjectRef, draftId, { threadId });
+    store.setLogicalProjectDraftThreadId("source-logical-project", remoteProjectRef, draftId, {
+      threadId,
+      environmentSelection: "manual",
+      loadBalancedEnvironmentId: null,
+    });
 
     const file = store.getComposerDraft(draftId)?.files[0];
+    expect(store.getComposerDraft(draftId)?.prompt).toBe("Continue on the new machine");
+    expect(store.getDraftSessionByLogicalProjectKey("source-logical-project")).toMatchObject({
+      environmentId: OTHER_TEST_ENVIRONMENT_ID,
+      environmentSelection: "manual",
+      loadBalancedEnvironmentId: null,
+    });
     expect(file).toMatchObject({
       id: hydratedFile.id,
       file: null,
