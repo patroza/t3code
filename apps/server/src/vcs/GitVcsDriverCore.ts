@@ -2267,13 +2267,11 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }
     files.sort((a, b) => a.path.localeCompare(b.path));
 
-    const branchRepositoryPaths = options?.includeBranchChanges
-      ? yield* resolveRepositoryPaths(cwd).pipe(
-          Effect.catchTags({ GitCommandError: () => Effect.succeed(null) }),
-        )
-      : null;
+    const repositoryPaths = yield* resolveRepositoryPaths(cwd).pipe(
+      Effect.catchTags({ GitCommandError: () => Effect.succeed(null) }),
+    );
     const branchChanges = options?.includeBranchChanges
-      ? yield* readBranchChangeTotals(branchRepositoryPaths?.worktreeRoot ?? cwd, refName).pipe(
+      ? yield* readBranchChangeTotals(repositoryPaths?.worktreeRoot ?? cwd, refName).pipe(
           Effect.orElseSucceed(() => undefined),
         )
       : undefined;
@@ -2286,9 +2284,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       upstreamRef,
       hasWorkingTreeChanges,
       workingTree: {
-        ...(branchRepositoryPaths?.worktreeRoot
-          ? { rootPath: branchRepositoryPaths.worktreeRoot }
-          : {}),
+        ...(repositoryPaths?.worktreeRoot ? { rootPath: repositoryPaths.worktreeRoot } : {}),
         files,
         insertions,
         deletions,
