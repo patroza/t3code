@@ -53,7 +53,7 @@ import {
 } from "../WorkspaceBreadcrumb";
 import { observeResize } from "~/lib/observeResize";
 import { cn } from "~/lib/utils";
-import { useIsMobile } from "~/hooks/useMediaQuery";
+import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { Button } from "../ui/button";
 import { Menu, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
 import { useAiUsageSnapshot } from "../../hooks/useAiUsageSnapshot";
@@ -173,7 +173,7 @@ export const ChatHeader = memo(function ChatHeader({
       breakpoint: { value: HEADER_ACTIONS_EXPANDED_BREAKPOINT_REM, unit: "rem" },
     });
   }, [panelAnimationDurationMs, panelAnimationsActive]);
-  const isMobile = useIsMobile();
+  const isMobile = useMediaQuery("max-md");
   // Side panels can leave a desktop header narrower than a phone.
   const [isNarrowHeader, setIsNarrowHeader] = useState(false);
   useEffect(() => {
@@ -201,7 +201,7 @@ export const ChatHeader = memo(function ChatHeader({
   if (!actionsCollapsed && actionsOpen) setActionsOpen(false);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const activeEnvironment = useEnvironment(activeThreadEnvironmentId);
-  const activeProjectName = activeProject?.title;
+  const activeProjectName = activeProject?.isScratch ? "No project" : activeProject?.title;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const fileScripts = useT3ProjectFileScripts(
     activeThreadEnvironmentId,

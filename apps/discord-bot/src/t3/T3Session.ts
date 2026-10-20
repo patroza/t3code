@@ -550,8 +550,10 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
         },
       }).pipe(Effect.asVoid);
 
-    const claimBrowserHost = (threadId: ThreadId) =>
-      Effect.gen(function* () {
+    const claimBrowserHost = Effect.fn("T3Session.claimBrowserHost")(function* (
+      threadId: ThreadId,
+    ) {
+      yield* Effect.gen(function* () {
         const claim = browserHost?.claim(threadId);
         if (claim === null || claim === undefined) return;
         yield* requireSession().client[WS_METHODS.previewAutomationFocusHost](claim);
@@ -564,6 +566,7 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
           }),
         ),
       );
+    });
 
     // Parameter must not be named `httpBaseUrl` — that shadows the outer
     // connection-state binding, so `httpBaseUrl = normalizedBaseUrl` would only
@@ -758,24 +761,24 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
             : new T3SessionError(messageFromCause(cause), { cause }),
       });
 
-    const persistBootstrappedBearer = (accessToken: string, expiresInSeconds: number) =>
-      Effect.gen(function* () {
-        const nowMs = yield* Clock.currentTimeMillis;
-        try {
-          writePersistedBearerSession(botConfig.dataDir, {
-            accessToken,
-            expiresAt: persistedBearerExpiresAtIso(nowMs, expiresInSeconds),
-            httpBaseUrl: botConfig.t3HttpBaseUrl,
-          });
-        } catch (cause) {
-          yield* Effect.logWarning(
-            `Could not persist T3 bearer session: ${messageFromCause(cause)}`,
-          );
-        }
-      });
+    const persistBootstrappedBearer = Effect.fn("T3Session.persistBootstrappedBearer")(function* (
+      accessToken: string,
+      expiresInSeconds: number,
+    ) {
+      const nowMs = yield* Clock.currentTimeMillis;
+      try {
+        writePersistedBearerSession(botConfig.dataDir, {
+          accessToken,
+          expiresAt: persistedBearerExpiresAtIso(nowMs, expiresInSeconds),
+          httpBaseUrl: botConfig.t3HttpBaseUrl,
+        });
+      } catch (cause) {
+        yield* Effect.logWarning(`Could not persist T3 bearer session: ${messageFromCause(cause)}`);
+      }
+    });
 
-    const connectWithBootstrapCredential = () =>
-      Effect.gen(function* () {
+    const connectWithBootstrapCredential = Effect.fn("T3Session.connectWithBootstrapCredential")(
+      function* () {
         const tokenSession = yield* Effect.tryPromise({
           try: () =>
             runtime.runPromise(
@@ -790,63 +793,59 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
         });
         yield* persistBootstrappedBearer(tokenSession.access_token, tokenSession.expires_in);
         yield* connectPrepared(botConfig.t3HttpBaseUrl, tokenSession.access_token);
-      });
+      },
+    );
 
-    const connect = () =>
-      Effect.gen(function* () {
-        if (botConfig.t3BearerToken !== undefined && botConfig.t3BearerToken !== "") {
-          yield* connectPrepared(botConfig.t3HttpBaseUrl, botConfig.t3BearerToken);
-          return;
-        }
+    const connect = Effect.fn("T3Session.connect")(function* () {
+      if (botConfig.t3BearerToken !== undefined && botConfig.t3BearerToken !== "") {
+        yield* connectPrepared(botConfig.t3HttpBaseUrl, botConfig.t3BearerToken);
+        return;
+      }
 
-        const nowMs = yield* Clock.currentTimeMillis;
-        const persisted = readPersistedBearerSession(botConfig.dataDir);
-        if (
-          persisted !== null &&
-          shouldReusePersistedBearer({
-            record: persisted,
-            nowMs,
-            httpBaseUrl: botConfig.t3HttpBaseUrl,
-          })
-        ) {
-          const persistedConnect = yield* Effect.result(
-            connectPrepared(botConfig.t3HttpBaseUrl, persisted.accessToken),
-          );
-          if (Result.isSuccess(persistedConnect)) return;
-          if (!isT3InvalidCredentialError(persistedConnect.failure)) {
-            return yield* Effect.fail(persistedConnect.failure);
-          }
-          yield* Effect.logWarning("Persisted T3 bearer rejected; falling back to bootstrap");
-          clearPersistedBearerSession(botConfig.dataDir);
+      const nowMs = yield* Clock.currentTimeMillis;
+      const persisted = readPersistedBearerSession(botConfig.dataDir);
+      if (
+        persisted !== null &&
+        shouldReusePersistedBearer({
+          record: persisted,
+          nowMs,
+          httpBaseUrl: botConfig.t3HttpBaseUrl,
+        })
+      ) {
+        const persistedConnect = yield* Effect.result(
+          connectPrepared(botConfig.t3HttpBaseUrl, persisted.accessToken),
+        );
+        if (Result.isSuccess(persistedConnect)) return;
+        if (!isT3InvalidCredentialError(persistedConnect.failure)) {
+          return yield* Effect.fail(persistedConnect.failure);
         }
+        yield* Effect.logWarning("Persisted T3 bearer rejected; falling back to bootstrap");
+        clearPersistedBearerSession(botConfig.dataDir);
+      }
 
-        if (
-          botConfig.t3BootstrapCredential !== undefined &&
-          botConfig.t3BootstrapCredential !== ""
-        ) {
-          yield* connectWithBootstrapCredential();
-          return;
-        }
-        yield* connectPrepared(botConfig.t3HttpBaseUrl);
-      });
+      if (botConfig.t3BootstrapCredential !== undefined && botConfig.t3BootstrapCredential !== "") {
+        yield* connectWithBootstrapCredential();
+        return;
+      }
+      yield* connectPrepared(botConfig.t3HttpBaseUrl);
+    });
 
     /**
      * Boot path: Discord may start before guest T3 is listening. Retry forever
      * with the same schedule as mid-life reconnect instead of exiting the process.
      */
-    const connectUntilReady = () =>
-      Effect.gen(function* () {
-        for (let attempt = 0; ; attempt += 1) {
-          const outcome = yield* Effect.result(connect());
-          if (Result.isSuccess(outcome)) return;
-          const delay =
-            RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)] ?? 16_000;
-          yield* Effect.logWarning(
-            `T3 boot connect attempt ${attempt + 1} failed: ${messageFromCause(outcome.failure)}; retrying in ${delay}ms`,
-          );
-          yield* Effect.sleep(Duration.millis(delay));
-        }
-      });
+    const connectUntilReady = Effect.fn("T3Session.connectUntilReady")(function* () {
+      for (let attempt = 0; ; attempt += 1) {
+        const outcome = yield* Effect.result(connect());
+        if (Result.isSuccess(outcome)) return;
+        const delay =
+          RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)] ?? 16_000;
+        yield* Effect.logWarning(
+          `T3 boot connect attempt ${attempt + 1} failed: ${messageFromCause(outcome.failure)}; retrying in ${delay}ms`,
+        );
+        yield* Effect.sleep(Duration.millis(delay));
+      }
+    });
 
     /**
      * Wait for a live shell so Discord intake can park work across boot/reconnect
@@ -854,32 +853,33 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
      * {@link isReady}; does not itself drive reconnect (that is connectUntilReady /
      * reconnectLoop).
      */
-    const waitUntilReady = (options?: { readonly timeoutMs?: number }) =>
-      Effect.gen(function* () {
-        if (session !== null && shell !== null) return;
-        const timeoutMs = options?.timeoutMs ?? DEFAULT_T3_WAIT_UNTIL_READY_TIMEOUT_MS;
-        const startedAt = yield* Clock.currentTimeMillis;
-        yield* Effect.logInfo("Waiting for T3 shell readiness", { timeoutMs });
-        for (;;) {
-          const ready = session !== null && shell !== null;
-          const now = yield* Clock.currentTimeMillis;
-          const decision = shouldContinueWaitingForT3Ready({
-            ready,
-            elapsedMs: now - startedAt,
-            timeoutMs,
+    const waitUntilReady = Effect.fn("T3Session.waitUntilReady")(function* (options?: {
+      readonly timeoutMs?: number;
+    }) {
+      if (session !== null && shell !== null) return;
+      const timeoutMs = options?.timeoutMs ?? DEFAULT_T3_WAIT_UNTIL_READY_TIMEOUT_MS;
+      const startedAt = yield* Clock.currentTimeMillis;
+      yield* Effect.logInfo("Waiting for T3 shell readiness", { timeoutMs });
+      for (;;) {
+        const ready = session !== null && shell !== null;
+        const now = yield* Clock.currentTimeMillis;
+        const decision = shouldContinueWaitingForT3Ready({
+          ready,
+          elapsedMs: now - startedAt,
+          timeoutMs,
+        });
+        if (decision === "ready") {
+          yield* Effect.logInfo("T3 became ready while waiting", {
+            waitedMs: now - startedAt,
           });
-          if (decision === "ready") {
-            yield* Effect.logInfo("T3 became ready while waiting", {
-              waitedMs: now - startedAt,
-            });
-            return;
-          }
-          if (decision === "timeout") {
-            return yield* Effect.fail(new T3SessionError(T3_STILL_CONNECTING_MESSAGE));
-          }
-          yield* Effect.sleep(Duration.millis(T3_WAIT_UNTIL_READY_POLL_MS));
+          return;
         }
-      });
+        if (decision === "timeout") {
+          return yield* Effect.fail(new T3SessionError(T3_STILL_CONNECTING_MESSAGE));
+        }
+        yield* Effect.sleep(Duration.millis(T3_WAIT_UNTIL_READY_POLL_MS));
+      }
+    });
 
     const providersForSelection = (): ReadonlyArray<ServerProvider> =>
       serverConfig?.providers ?? [];
@@ -962,8 +962,8 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
             : { ...shell, threads: shell.threads.map(integrationThreadShellView) },
         ),
       serverConfig: () => Effect.succeed(serverConfig),
-      findProjectByWorkspaceRoot: (workspaceRoot) =>
-        Effect.gen(function* () {
+      findProjectByWorkspaceRoot: Effect.fn("T3Session.findProjectByWorkspaceRoot")(
+        function* (workspaceRoot) {
           // Mentions can land while shell is still filling after reconnect.
           for (let attempt = 0; attempt < PROJECT_LOOKUP_SHELL_WAIT_ATTEMPTS; attempt += 1) {
             // shell/session are mutated by connect/teardown/shellFiber, not this loop body.
@@ -977,7 +977,8 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
               (project) => normalizeWorkspacePath(project.workspaceRoot) === target,
             ) ?? null
           );
-        }),
+        },
+      ),
       getProjectShell: (projectId) =>
         Effect.sync(() => shell?.projects.find((project) => project.id === projectId) ?? null),
       resolveModelSelection: ({
@@ -1045,166 +1046,158 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
               { cause },
             ),
         }),
-      startTurnWithWorktree: (input) =>
-        Effect.gen(function* () {
-          const threadId = newThreadId();
-          const messageId = newMessageId();
-          const title = formatThreadTitle(
-            input.titleSeed ?? input.prompt,
-            72,
-            input.sourceHint?.channel === "teams" ? "Teams thread" : "Discord thread",
-          );
-          const interactionMode = input.interactionMode ?? "default";
-          const runtimeMode = input.runtimeMode ?? botConfig.t3DefaultRuntimeMode;
-          const worktreeBranch = newChatWorktreeBranch(input.sourceHint?.channel);
+      startTurnWithWorktree: Effect.fn("T3Session.startTurnWithWorktree")(function* (input) {
+        const threadId = newThreadId();
+        const messageId = newMessageId();
+        const title = formatThreadTitle(
+          input.titleSeed ?? input.prompt,
+          72,
+          input.sourceHint?.channel === "teams" ? "Teams thread" : "Discord thread",
+        );
+        const interactionMode = input.interactionMode ?? "default";
+        const runtimeMode = input.runtimeMode ?? botConfig.t3DefaultRuntimeMode;
+        const worktreeBranch = newChatWorktreeBranch(input.sourceHint?.channel);
 
-          yield* claimBrowserHost(threadId);
-          const attachments = yield* persistAttachments(
-            threadId,
-            messageId,
-            input.attachments ?? [],
-          );
-          yield* Effect.tryPromise({
-            try: () =>
-              runtime.runPromise(
-                requireSession().client[ORCHESTRATION_V2_WS_METHODS.launchThread]({
-                  commandId: newCommandId(),
-                  threadId,
-                  projectId: input.project.id,
-                  title,
-                  modelSelection: input.modelSelection,
-                  runtimeMode,
-                  interactionMode,
-                  creationSource: "server",
-                  workspaceStrategy: input.local
-                    ? { type: "root" }
-                    : {
-                        type: "worktree",
-                        baseRef: input.baseBranch,
-                        branch: worktreeBranch,
-                        startFromOrigin: true,
-                      },
-                  initialMessage: { messageId, text: input.prompt, attachments },
-                  ...(input.sourceHint ? { sourceHint: input.sourceHint } : {}),
-                }),
-              ),
-            catch: (cause) =>
-              new T3SessionError(`Thread launch failed: ${messageFromCause(cause)}`, { cause }),
-          });
+        yield* claimBrowserHost(threadId);
+        const attachments = yield* persistAttachments(threadId, messageId, input.attachments ?? []);
+        yield* Effect.tryPromise({
+          try: () =>
+            runtime.runPromise(
+              requireSession().client[ORCHESTRATION_V2_WS_METHODS.launchThread]({
+                commandId: newCommandId(),
+                threadId,
+                projectId: input.project.id,
+                title,
+                modelSelection: input.modelSelection,
+                runtimeMode,
+                interactionMode,
+                creationSource: "server",
+                workspaceStrategy: input.local
+                  ? { type: "root" }
+                  : {
+                      type: "worktree",
+                      baseRef: input.baseBranch,
+                      branch: worktreeBranch,
+                      startFromOrigin: true,
+                    },
+                initialMessage: { messageId, text: input.prompt, attachments },
+                ...(input.sourceHint ? { sourceHint: input.sourceHint } : {}),
+              }),
+            ),
+          catch: (cause) =>
+            new T3SessionError(`Thread launch failed: ${messageFromCause(cause)}`, { cause }),
+        });
 
-          return { threadId, messageId };
-        }),
-      startTurn: (input) =>
-        Effect.gen(function* () {
-          const thread = shell?.threads.find((entry) => entry.id === input.threadId);
-          const messageId = input.messageId ?? newMessageId();
-          // Sticky model on continue: never re-apply bot defaults (codex/gpt-5.4).
-          // Explicit overrides come only from Discord --provider/--model flags.
-          // modelSelection is optional on message.dispatch; omit when unknown so the
-          // server keeps the thread's existing selection (Grok refuses mid-thread switches).
-          const modelSelection = input.modelSelection ?? thread?.modelSelection;
-          yield* claimBrowserHost(input.threadId);
-          const attachments = yield* persistAttachments(
-            input.threadId,
-            messageId,
-            input.attachments ?? [],
-          );
-          if (
-            shouldPersistThreadModelSelectionForNextTurn({
-              ...(thread?.modelSelection === undefined
-                ? {}
-                : { currentModelSelection: thread.modelSelection }),
-              ...(modelSelection === undefined ? {} : { nextModelSelection: modelSelection }),
-            })
-          ) {
-            yield* dispatch({
-              type: thread?.modelSelection
-                ? modelSelectionCommandType(thread.modelSelection.instanceId, modelSelection!)
-                : "thread.model-selection.set",
-              commandId: newCommandId(),
-              threadId: input.threadId,
-              modelSelection: modelSelection!,
-            });
-          }
-          if (input.runtimeMode !== undefined && input.runtimeMode !== thread?.runtimeMode)
-            yield* dispatch({
-              type: "thread.runtime-mode.set",
-              commandId: newCommandId(),
-              threadId: input.threadId,
-              runtimeMode: input.runtimeMode,
-            });
-          if (
-            input.interactionMode !== undefined &&
-            input.interactionMode !== thread?.interactionMode
-          )
-            yield* dispatch({
-              type: "thread.interaction-mode.set",
-              commandId: newCommandId(),
-              threadId: input.threadId,
-              interactionMode: input.interactionMode,
-            });
+        return { threadId, messageId };
+      }),
+      startTurn: Effect.fn("T3Session.startTurn")(function* (input) {
+        const thread = shell?.threads.find((entry) => entry.id === input.threadId);
+        const messageId = input.messageId ?? newMessageId();
+        // Sticky model on continue: never re-apply bot defaults (codex/gpt-5.4).
+        // Explicit overrides come only from Discord --provider/--model flags.
+        // modelSelection is optional on message.dispatch; omit when unknown so the
+        // server keeps the thread's existing selection (Grok refuses mid-thread switches).
+        const modelSelection = input.modelSelection ?? thread?.modelSelection;
+        yield* claimBrowserHost(input.threadId);
+        const attachments = yield* persistAttachments(
+          input.threadId,
+          messageId,
+          input.attachments ?? [],
+        );
+        if (
+          shouldPersistThreadModelSelectionForNextTurn({
+            ...(thread?.modelSelection === undefined
+              ? {}
+              : { currentModelSelection: thread.modelSelection }),
+            ...(modelSelection === undefined ? {} : { nextModelSelection: modelSelection }),
+          })
+        ) {
           yield* dispatch({
-            type: "message.dispatch",
+            type: thread?.modelSelection
+              ? modelSelectionCommandType(thread.modelSelection.instanceId, modelSelection!)
+              : "thread.model-selection.set",
             commandId: newCommandId(),
             threadId: input.threadId,
-            messageId,
-            text: input.prompt,
-            attachments,
-            createdBy: "user",
-            creationSource: "server",
-            dispatchMode: { type: "queue_after_active" },
-            ...(modelSelection ? { modelSelection } : {}),
-            ...(input.sourceHint ? { sourceHint: input.sourceHint } : {}),
+            modelSelection: modelSelection!,
           });
+        }
+        if (input.runtimeMode !== undefined && input.runtimeMode !== thread?.runtimeMode)
+          yield* dispatch({
+            type: "thread.runtime-mode.set",
+            commandId: newCommandId(),
+            threadId: input.threadId,
+            runtimeMode: input.runtimeMode,
+          });
+        if (
+          input.interactionMode !== undefined &&
+          input.interactionMode !== thread?.interactionMode
+        )
+          yield* dispatch({
+            type: "thread.interaction-mode.set",
+            commandId: newCommandId(),
+            threadId: input.threadId,
+            interactionMode: input.interactionMode,
+          });
+        yield* dispatch({
+          type: "message.dispatch",
+          commandId: newCommandId(),
+          threadId: input.threadId,
+          messageId,
+          text: input.prompt,
+          attachments,
+          createdBy: "user",
+          creationSource: "server",
+          dispatchMode: { type: "queue_after_active" },
+          ...(modelSelection ? { modelSelection } : {}),
+          ...(input.sourceHint ? { sourceHint: input.sourceHint } : {}),
+        });
 
-          return { messageId };
-        }),
-      steerQueuedMessage: (input) =>
-        Effect.gen(function* () {
-          const snapshot = yield* fetchThreadProjectionHttp(input.threadId);
-          if (snapshot === null)
-            return yield* Effect.fail(
-              new T3SessionError("Could not load the queued runs from this server."),
-            );
-          const queued = snapshot?.projection.runs.find(
-            (run) => run.status === "queued" && run.userMessageId === input.messageId,
+        return { messageId };
+      }),
+      steerQueuedMessage: Effect.fn("T3Session.steerQueuedMessage")(function* (input) {
+        const snapshot = yield* fetchThreadProjectionHttp(input.threadId);
+        if (snapshot === null)
+          return yield* Effect.fail(
+            new T3SessionError("Could not load the queued runs from this server."),
           );
-          const active = snapshot?.projection.runs.findLast((run) =>
-            ["preparing", "starting", "running", "waiting"].includes(run.status),
-          );
-          if (!queued) return;
-          if (!active)
-            return yield* dispatch({
-              type: "queue.resume",
-              commandId: newCommandId(),
-              threadId: input.threadId,
-            });
-          yield* dispatch({
-            type: "queued-message.promote-to-steer",
+        const queued = snapshot?.projection.runs.find(
+          (run) => run.status === "queued" && run.userMessageId === input.messageId,
+        );
+        const active = snapshot?.projection.runs.findLast((run) =>
+          ["preparing", "starting", "running", "waiting"].includes(run.status),
+        );
+        if (!queued) return;
+        if (!active)
+          return yield* dispatch({
+            type: "queue.resume",
             commandId: newCommandId(),
             threadId: input.threadId,
-            queuedRunId: queued.id,
-            targetRunId: active.id,
           });
-        }),
-      removeQueuedMessage: (input) =>
-        Effect.gen(function* () {
-          const snapshot = yield* fetchThreadProjectionHttp(input.threadId);
-          if (snapshot === null)
-            return yield* Effect.fail(
-              new T3SessionError("Could not load the queued runs from this server."),
-            );
-          const queued = snapshot?.projection.runs.find(
-            (run) => run.status === "queued" && run.userMessageId === input.messageId,
+        yield* dispatch({
+          type: "queued-message.promote-to-steer",
+          commandId: newCommandId(),
+          threadId: input.threadId,
+          queuedRunId: queued.id,
+          targetRunId: active.id,
+        });
+      }),
+      removeQueuedMessage: Effect.fn("T3Session.removeQueuedMessage")(function* (input) {
+        const snapshot = yield* fetchThreadProjectionHttp(input.threadId);
+        if (snapshot === null)
+          return yield* Effect.fail(
+            new T3SessionError("Could not load the queued runs from this server."),
           );
-          if (!queued) return;
-          yield* dispatch({
-            type: "queued-run.cancel",
-            commandId: newCommandId(),
-            threadId: input.threadId,
-            runId: queued.id,
-          });
-        }),
+        const queued = snapshot?.projection.runs.find(
+          (run) => run.status === "queued" && run.userMessageId === input.messageId,
+        );
+        if (!queued) return;
+        yield* dispatch({
+          type: "queued-run.cancel",
+          commandId: newCommandId(),
+          threadId: input.threadId,
+          runId: queued.id,
+        });
+      }),
       /**
        * Subscribe to thread events and run `onThread` in the **caller's** Effect context.
        *
@@ -1215,8 +1208,8 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
        * Client-aligned via {@link followOrchestrationThread} (same apply/reload/retry
        * semantics as EnvironmentThreadState; no core package edits).
        */
-      subscribeThread: (threadId, onThread, options) =>
-        Effect.gen(function* () {
+      subscribeThread: Effect.fn("T3Session.subscribeThread")(
+        function* (threadId, onThread, options) {
           const active = requireSession();
           yield* followOrchestrationThread({
             threadId,
@@ -1243,29 +1236,29 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
               ),
             retryForever: true,
           });
-        }),
-      subscribeVcsStatus: (cwd, onStatus) =>
-        Effect.gen(function* () {
-          const active = requireSession();
+        },
+      ),
+      subscribeVcsStatus: Effect.fn("T3Session.subscribeVcsStatus")(function* (cwd, onStatus) {
+        const active = requireSession();
 
-          yield* active.client[WS_METHODS.subscribeVcsStatus]({
-            cwd,
-          }).pipe(
-            Stream.runForEach((event) =>
-              onStatus(event).pipe(
-                Effect.catchCause((cause) =>
-                  Effect.logError("Thread bridge onVcsStatus failed", { cwd, cause }),
-                ),
+        yield* active.client[WS_METHODS.subscribeVcsStatus]({
+          cwd,
+        }).pipe(
+          Stream.runForEach((event) =>
+            onStatus(event).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logError("Thread bridge onVcsStatus failed", { cwd, cause }),
               ),
             ),
-            Effect.mapError(
-              (cause) =>
-                new T3SessionError(`VCS status subscription failed: ${messageFromCause(cause)}`, {
-                  cause,
-                }),
-            ),
-          );
-        }),
+          ),
+          Effect.mapError(
+            (cause) =>
+              new T3SessionError(`VCS status subscription failed: ${messageFromCause(cause)}`, {
+                cause,
+              }),
+          ),
+        );
+      }),
       refreshVcsStatus: (cwd) =>
         Effect.tryPromise({
           try: () =>
@@ -1298,21 +1291,20 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
           requestId: RuntimeRequestId.make(requestId),
           answers,
         }),
-      interrupt: (threadId) =>
-        Effect.gen(function* () {
-          const snapshot = yield* fetchThreadProjectionHttp(threadId);
-          const active = snapshot?.projection.runs.findLast((run) =>
-            ["preparing", "starting", "running", "waiting"].includes(run.status),
-          );
-          if (!active) return;
-          yield* dispatch({
-            type: "run.interrupt",
-            commandId: newCommandId(),
-            threadId,
-            runId: active.id,
-            holdQueue: true,
-          });
-        }),
+      interrupt: Effect.fn("T3Session.interrupt")(function* (threadId) {
+        const snapshot = yield* fetchThreadProjectionHttp(threadId);
+        const active = snapshot?.projection.runs.findLast((run) =>
+          ["preparing", "starting", "running", "waiting"].includes(run.status),
+        );
+        if (!active) return;
+        yield* dispatch({
+          type: "run.interrupt",
+          commandId: newCommandId(),
+          threadId,
+          runId: active.id,
+          holdQueue: true,
+        });
+      }),
       compact: () =>
         Effect.fail(
           new T3SessionError(

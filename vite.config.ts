@@ -2,6 +2,8 @@ import "vite-plus/test/config";
 import { defineConfig } from "vite-plus";
 import * as NodeURL from "node:url";
 
+const DOM_TEST_ENVIRONMENT_ALLOWLIST: Array<string> = [];
+
 const RESTRICTED_IMPORT_PATHS = [
   {
     name: "@t3tools/client-runtime",
@@ -99,6 +101,7 @@ export default defineConfig({
       "**/routeTree.gen.ts",
       "**/*.graphql.ts",
       "packages/source-control-github/schema/**",
+      "apps/server/schema/**",
       "apps/mobile/android/**",
       "apps/mobile/ios/**",
       "apps/mobile/uniwind-types.d.ts",
@@ -126,6 +129,7 @@ export default defineConfig({
       "**/routeTree.gen.ts",
       "**/*.graphql.ts",
       "packages/source-control-github/schema/**",
+      "apps/server/schema/**",
       "apps/mobile/android/**",
       "apps/mobile/ios/**",
       "apps/mobile/uniwind-types.d.ts",
@@ -184,10 +188,24 @@ export default defineConfig({
       "t3code/no-unscoped-has": "error",
       "t3code/namespace-node-imports": "error",
       "t3code/prefer-catch-tags": "error",
+      "t3code/prefer-effect-fn": "error",
       "t3code/require-centered-scroll-gutter": "error",
       "t3code/require-suppression-reason": "error",
     },
     overrides: [
+      {
+        files: [
+          "**/*.{test,spec,testkit}.{ts,tsx}",
+          "**/{test,tests,testkit,testing,fixtures,integration}/**",
+          "packages/provider-testing/**",
+        ],
+        rules: { "t3code/prefer-effect-fn": "off" },
+      },
+      {
+        files: ["apps/**/src/**", "packages/**/src/**"],
+        excludeFiles: DOM_TEST_ENVIRONMENT_ALLOWLIST,
+        rules: { "t3code/no-dom-test-environment": "error" },
+      },
       {
         files: ["packages/client-runtime/src/state/**", "apps/{web,mobile,desktop}/src/**"],
         rules: { "t3code/no-rpc-permission-bypass": ["error", { allowRawClientAccess: false }] },
@@ -392,6 +410,13 @@ export default defineConfig({
         rules: { "t3code/no-manual-memo": ["error", { allowMemoHooks: true }] },
       },
       {
+        // The compiler only compiles a use* function that calls a hook; one that calls none is
+        // silently left as a plain function, so whatever it returns loses its caching.
+        files: ["apps/web/src/**/*.{ts,tsx}", "apps/mobile/src/**/*.{ts,tsx}"],
+        excludeFiles: ["**/*.test.ts", "**/*.test.tsx"],
+        rules: { "t3code/no-hookless-use-function": "error" },
+      },
+      {
         files: [
           "apps/mobile/src/features/archive/ArchivedThreadsScreen.tsx",
           "apps/mobile/src/features/connection/ConnectionsNewRouteScreen.tsx",
@@ -412,10 +437,8 @@ export default defineConfig({
           "apps/mobile/src/features/settings/appearance/components/FontSizeSliderRow.tsx",
           "apps/mobile/src/features/threads/NewTaskContextPickerScreens.tsx",
           "apps/mobile/src/features/threads/ThreadQueueControl.tsx",
-          "apps/mobile/src/features/threads/ThreadAgentsSheet.tsx",
           "apps/mobile/src/features/review/ReviewCommentCard.tsx",
           "apps/mobile/src/features/threads/ThreadSettingsSheet.tsx",
-          "apps/mobile/src/features/threads/git/GitOverviewSheet.tsx",
           "apps/mobile/src/features/threads/thread-list-items.tsx",
           "apps/mobile/src/features/threads/thread-list-v2-items.tsx",
           "apps/mobile/src/lib/useMobileNavigationTheme.ts",

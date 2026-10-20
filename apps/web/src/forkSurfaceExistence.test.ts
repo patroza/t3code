@@ -18,6 +18,12 @@ function readSrc(relativePath: string): string {
 }
 
 describe("fork surface existence (anti stack-drop)", () => {
+  it("keeps the EAS account check available in device host settings", () => {
+    expect(readSrc("components/settings/EasDeviceHostsSettings.tsx")).toContain(
+      'data-testid="eas-device-account-check"',
+    );
+  });
+
   it("uses the browser ownership guard for native rendering and keeps the streamed surface", () => {
     expect(readSrc("browser/ElectronBrowserHost.tsx")).toContain("rendersServerTabNatively(");
     const view = readSrc("components/preview/PreviewView.tsx");
@@ -139,7 +145,8 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(composer).toContain(
       "!readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)",
     );
-    expect(composer.match(/sendDisabledReason=\{sendDisabledReason\}/g)).toHaveLength(3);
+    expect(composer.match(/sendDisabledReason=\{sendDisabledReason\}/g)).toHaveLength(2);
+    expect(composer).toContain("sendDisabledReason={props.sendDisabledReason}");
     expect(composer).not.toContain("sendDisabledReason={null}");
   });
 
@@ -187,7 +194,8 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(sidebarV2).toContain('"Filter threads"');
     expect(filters).toContain('["project", "recency"] as const');
     expect(sidebarV2).toContain('threadGrouping !== "recency"');
-    expect(sidebarV2).toContain("orderForThreadGrouping(sortThreadsForSidebar(active))");
+    expect(sidebarV2).toContain("orderActiveThreads: orderForThreadGrouping");
+    expect(sidebarV2).toContain("input.orderActiveThreads(sortThreadsForSidebar(active))");
     expect(sidebarV2).toContain("sidebar-${section}-recency-${group.id}");
     expect(sidebarV2).toContain('const rowVariant = isCard ? "card" : "slim"');
     expect(webGrouping).toContain('project: "Group by default"');

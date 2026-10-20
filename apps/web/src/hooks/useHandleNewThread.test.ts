@@ -28,7 +28,7 @@ const testState = vi.hoisted(() => {
   };
   const draftStore = {
     getComposerDraft: vi.fn(() => ({})),
-    getDraftSessionByLogicalProjectKey: vi.fn(() => storedDraft),
+    getDraftSessionByLogicalProjectKey: vi.fn((_key: string) => storedDraft),
     getDraftSession: vi.fn(() => null),
     getDraftThread: vi.fn(() => null),
     applyStickyState: vi.fn(),
@@ -70,7 +70,8 @@ const testState = vi.hoisted(() => {
       router.state.location.href = "/";
       router.navigate.mockClear();
       draftStore.setDraftThreadContext.mockClear();
-      draftStore.setLogicalProjectDraftThreadId.mockClear();
+      draftStore.setLogicalProjectDraftThreadId.mockReset();
+      draftStore.getDraftSessionByLogicalProjectKey.mockImplementation(() => storedDraft);
       projectFileRead = new Promise<null>((resolve) => {
         completeProjectFileRead = resolve;
       });
@@ -103,14 +104,12 @@ vi.mock("@effect/atom-react", () => ({
       ? { newWorktreesStartFromOrigin: !testState.targetSettings.newWorktreesStartFromOrigin }
       : testServerConfigs(),
 }));
-vi.mock("@t3tools/client-runtime/environment", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@t3tools/client-runtime/environment")>()),
+vi.mock("@t3tools/client-runtime/environment", () => ({
   scopedProjectKey: () => "remote-project",
   scopeProjectRef: (environmentId: string, projectId: string) => ({ environmentId, projectId }),
   scopeThreadRef: (environmentId: string, threadId: string) => ({ environmentId, threadId }),
 }));
-vi.mock("@t3tools/contracts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@t3tools/contracts")>()),
+vi.mock("@t3tools/contracts", () => ({
   DEFAULT_RUNTIME_MODE: "default",
   DEFAULT_SERVER_SETTINGS: {},
 }));
@@ -321,4 +320,62 @@ describe.each([
       );
     },
   );
+});
+
+it("opens a cloned project on its chosen machine before the target projection arrives", async () => {
+  testState.reset(null);
+  // The clone start reply can arrive before the target project is in the client projection.
+  testState.removeProject();
+  const draftsByLogicalProject = new Map<
+    string,
+    {
+      draftId: string;
+      environmentId: string;
+      projectId: string;
+      threadId: string;
+      promotedTo: null;
+      environmentSelection: string;
+      loadBalancedEnvironmentId: string | null;
+    }
+  >();
+  testState.draftStore.getDraftSessionByLogicalProjectKey.mockImplementation(
+    (key: string) => draftsByLogicalProject.get(key) ?? null,
+  );
+  testState.draftStore.setLogicalProjectDraftThreadId.mockImplementation(
+    (
+      key: string,
+      projectRef: { environmentId: string; projectId: string },
+      draftId: string,
+      options: {
+        threadId: string;
+        environmentSelection: string;
+        loadBalancedEnvironmentId: string | null;
+      },
+    ) => {
+      draftsByLogicalProject.set(key, {
+        draftId,
+        ...projectRef,
+        threadId: options.threadId,
+        promotedTo: null,
+        environmentSelection: options.environmentSelection,
+        loadBalancedEnvironmentId: options.loadBalancedEnvironmentId,
+      });
+    },
+  );
+
+  const opened = await useNewThreadHandler()(
+    { environmentId: "environment-ssh", projectId: "project-remote" } as never,
+    { logicalProjectKey: "source-logical-project", environmentSelection: "manual" },
+  );
+
+  expect(opened).not.toBeNull();
+  expect(testState.router.state.location.href).toBe(`/draft/${opened!.draftId}`);
+  expect(draftsByLogicalProject.get("source-logical-project")).toMatchObject({
+    draftId: opened!.draftId,
+    environmentId: "environment-ssh",
+    projectId: "project-remote",
+    environmentSelection: "manual",
+    loadBalancedEnvironmentId: null,
+  });
+  expect(draftsByLogicalProject.size).toBe(1);
 });

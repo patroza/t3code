@@ -843,311 +843,310 @@ export function formatAlertCause(cause: unknown, maxLen?: number): string {
  * or channel unset. Does not require DiscordREST in the caller — uses the
  * watchdog-held poster.
  */
-export const postFatalAlert = (
+export const postFatalAlert = Effect.fn("Alerts.postFatalAlert")(function* (
   key: string,
   title: string,
   detail: string,
   identity?: AlertIdentity,
-) =>
-  Effect.gen(function* () {
-    const p = poster;
-    if (p === null) {
-      yield* Effect.logError(`Fatal (no alerts channel): ${title}`, { detail, ...identity });
-      return;
-    }
-    const delivery = fatalAlertDelivery(title, detail, identity);
-    yield* p(`fatal:${key}`, delivery.content, FATAL_COOLDOWN_MS, delivery.files);
-  });
+) {
+  const p = poster;
+  if (p === null) {
+    yield* Effect.logError(`Fatal (no alerts channel): ${title}`, { detail, ...identity });
+    return;
+  }
+  const delivery = fatalAlertDelivery(title, detail, identity);
+  yield* p(`fatal:${key}`, delivery.content, FATAL_COOLDOWN_MS, delivery.files);
+});
 
 /**
  * Post a **bridge** ops alert (medium cooldown). Use for onThread failures,
  * stream/heartbeat Discord errors, and other bridge soft-failures that leave
  * Discord threads desynced while T3 still advances.
  */
-export const postBridgeAlert = (
+export const postBridgeAlert = Effect.fn("Alerts.postBridgeAlert")(function* (
   key: string,
   title: string,
   detail: string,
   identity?: AlertIdentity,
-) =>
-  Effect.gen(function* () {
-    const p = poster;
-    if (p === null) {
-      yield* Effect.logError(`Bridge alert (no alerts channel): ${title}`, { detail, ...identity });
-      return;
-    }
-    const delivery = bridgeAlertDelivery(title, detail, identity);
-    yield* p(`bridge:${key}`, delivery.content, BRIDGE_ALERT_COOLDOWN_MS, delivery.files);
-  });
+) {
+  const p = poster;
+  if (p === null) {
+    yield* Effect.logError(`Bridge alert (no alerts channel): ${title}`, { detail, ...identity });
+    return;
+  }
+  const delivery = bridgeAlertDelivery(title, detail, identity);
+  yield* p(`bridge:${key}`, delivery.content, BRIDGE_ALERT_COOLDOWN_MS, delivery.files);
+});
 
 /**
  * Periodic guest watchdog → Discord alerts channel.
  * No-op (log only) when `alertsChannelId` is unset.
  */
-export const runAlertWatchdog = (botConfig: DiscordBotConfig) =>
-  Effect.gen(function* () {
-    const channelId = botConfig.alertsChannelId;
-    if (channelId === undefined || channelId.trim() === "") {
-      yield* Effect.logInfo(
-        "Discord alerts channel unset (DISCORD_ALERTS_CHANNEL_ID); watchdog idle",
-      );
-      return;
-    }
+export const runAlertWatchdog = Effect.fn("Alerts.runAlertWatchdog")(function* (
+  botConfig: DiscordBotConfig,
+) {
+  const channelId = botConfig.alertsChannelId;
+  if (channelId === undefined || channelId.trim() === "") {
+    yield* Effect.logInfo(
+      "Discord alerts channel unset (DISCORD_ALERTS_CHANNEL_ID); watchdog idle",
+    );
+    return;
+  }
 
-    const rest = yield* DiscordREST;
-    const discordConfig = yield* DiscordConfig.DiscordConfig;
-    const alertProcessRules = loadAlertProcessRulesFromFileSync(botConfig.alertProcessRulesPath);
-    const lastSent = new Map<string, number>();
-    /** Highest long-turn milestone already posted per `turnId` (0.25h × 2ⁿ ladder). */
-    const lastTurnMilestones = new Map<string, number>();
+  const rest = yield* DiscordREST;
+  const discordConfig = yield* DiscordConfig.DiscordConfig;
+  const alertProcessRules = loadAlertProcessRulesFromFileSync(botConfig.alertProcessRulesPath);
+  const lastSent = new Map<string, number>();
+  /** Highest long-turn milestone already posted per `turnId` (0.25h × 2ⁿ ladder). */
+  const lastTurnMilestones = new Map<string, number>();
 
-    const postAlert: Poster = (key, content, cooldownMs = COOLDOWN_MS, files = []) =>
-      Effect.gen(function* () {
-        const now = yield* Clock.currentTimeMillis;
-        const prev = lastSent.get(key) ?? 0;
-        if (now - prev < cooldownMs) return;
-        lastSent.set(key, now);
-        const body =
-          content.length > DISCORD_ALERT_MESSAGE_LIMIT
-            ? `${content.slice(0, DISCORD_ALERT_MESSAGE_LIMIT)}…`
-            : content;
-        yield* Effect.gen(function* () {
-          if (files.length === 0) {
-            yield* rest.createMessage(channelId, { content: body });
-          } else {
-            yield* Effect.tryPromise({
-              try: () =>
-                createMessageWithAttachments({
-                  baseUrl: discordConfig.rest.baseUrl,
-                  botToken: Redacted.value(discordConfig.token),
-                  channelId,
-                  content: body,
-                  files,
-                }),
-              catch: (cause) =>
-                cause instanceof DiscordUploadError
-                  ? cause
-                  : new DiscordUploadError(cause instanceof Error ? cause.message : String(cause)),
-            });
-          }
-          yield* Effect.logInfo("Posted Discord ops alert", {
-            key,
-            channelId,
-            fileCount: files.length,
-          });
-        }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logError("Failed to post Discord ops alert").pipe(
-              Effect.andThen(Effect.logError(cause)),
-            ),
-          ),
-        );
-      });
-
-    poster = postAlert;
-
-    // Prime CPU sample so the next tick has a delta. No boot/idle chatter —
-    // only post when a check fails.
-    sampleCpuPercent();
-
-    yield* Effect.repeat(
-      Effect.gen(function* () {
-        const nowMs = yield* Clock.currentTimeMillis;
-        const snap = collectHostSnapshot({
-          stateSqlitePath: botConfig.stateSqlitePath,
-          nowMs,
-          alertProcessRules,
+  const postAlert: Poster = Effect.fn("Alerts.postAlert")(function* (
+    key,
+    content,
+    cooldownMs = COOLDOWN_MS,
+    files = [],
+  ) {
+    const now = yield* Clock.currentTimeMillis;
+    const prev = lastSent.get(key) ?? 0;
+    if (now - prev < cooldownMs) return;
+    lastSent.set(key, now);
+    const body =
+      content.length > DISCORD_ALERT_MESSAGE_LIMIT
+        ? `${content.slice(0, DISCORD_ALERT_MESSAGE_LIMIT)}…`
+        : content;
+    yield* Effect.gen(function* () {
+      if (files.length === 0) {
+        yield* rest.createMessage(channelId, { content: body });
+      } else {
+        yield* Effect.tryPromise({
+          try: () =>
+            createMessageWithAttachments({
+              baseUrl: discordConfig.rest.baseUrl,
+              botToken: Redacted.value(discordConfig.token),
+              channelId,
+              content: body,
+              files,
+            }),
+          catch: (cause) =>
+            cause instanceof DiscordUploadError
+              ? cause
+              : new DiscordUploadError(cause instanceof Error ? cause.message : String(cause)),
         });
-        const loadLimit = snap.nproc * LOAD_RATIO;
-
-        if (snap.load1 >= loadLimit && snap.load1 >= 2) {
-          yield* postAlert(
-            "load",
-            [
-              "**High load**",
-              `load1=${snap.load1.toFixed(2)} load5=${snap.load5.toFixed(2)}`,
-              `threshold≈${loadLimit.toFixed(2)} on ${snap.nproc} CPUs`,
-              `cpu≈${snap.cpuPercent?.toFixed(0) ?? "?"}%; mem avail=${snap.memAvailableMb.toFixed(0)} MiB`,
-            ].join("\n"),
-          );
-        }
-
-        if (snap.cpuPercent !== null && snap.cpuPercent >= CPU_PERCENT_ALERT) {
-          yield* postAlert(
-            "cpu",
-            [
-              "**High CPU**",
-              `cpu≈${snap.cpuPercent.toFixed(0)}% (alert ≥${CPU_PERCENT_ALERT}%)`,
-              `load1=${snap.load1.toFixed(2)} nproc=${snap.nproc}`,
-              snap.fatProcesses.length > 0
-                ? `sustained:\n${snap.fatProcesses
-                    .slice(0, 5)
-                    .map(
-                      (p) =>
-                        `• pid=${p.pid} rss=${p.rssMb.toFixed(0)}MiB cpu≈${p.cpuPercent.toFixed(0)}% ${p.label}`,
-                    )
-                    .join("\n")}`
-                : "",
-            ]
-              .filter(Boolean)
-              .join("\n"),
-          );
-        }
-
-        if (snap.memAvailableMb > 0 && snap.memAvailableMb < MEM_AVAILABLE_MIN_MB) {
-          yield* postAlert(
-            "mem",
-            [
-              "**Low memory**",
-              `available=${snap.memAvailableMb.toFixed(0)} MiB (min ${MEM_AVAILABLE_MIN_MB})`,
-              `total=${snap.memTotalMb.toFixed(0)} MiB`,
-              snap.runaways.length > 0
-                ? `runaways: ${snap.runaways.map((s) => `pid=${s.pid} ${s.rssMb.toFixed(0)}MiB`).join(", ")}`
-                : "",
-            ]
-              .filter(Boolean)
-              .join("\n"),
-          );
-        }
-
-        for (const d of snap.disks) {
-          if (d.freePercent < DISK_FREE_MIN_PERCENT || d.freeGb < DISK_FREE_MIN_GB) {
-            yield* postAlert(
-              `disk:${d.path}`,
-              [
-                "**Low disk space**",
-                `path=\`${d.path}\``,
-                `free=${d.freeGb.toFixed(1)} GiB (${d.freePercent.toFixed(0)}%) of ${d.totalGb.toFixed(1)} GiB`,
-                `thresholds: <${DISK_FREE_MIN_PERCENT}% or <${DISK_FREE_MIN_GB} GiB`,
-              ].join("\n"),
-            );
-          }
-        }
-
-        const runaways = snap.runaways;
-        if (runaways.length >= SENTRY_COUNT_ALERT) {
-          yield* postAlert(
-            "runaway-count",
-            [
-              `**Legacy Sentry MCP stdio process(es)** (${runaways.length})`,
-              ...runaways.map(
-                (s) =>
-                  `• pid=${s.pid} rss=${s.rssMb.toFixed(0)} MiB cpuTime=${s.cpuSeconds.toFixed(0)}s ${s.label}`,
-              ),
-              "_Not auto-killed. Prefer shared proxy `shared-sentry-mcp-proxy` + `/etc/shared-mcp-setup`._",
-            ].join("\n"),
-          );
-        } else {
-          const fat = runaways.filter((s) => s.rssMb >= SENTRY_RSS_ALERT_MB);
-          if (fat.length > 0) {
-            yield* postAlert(
-              "runaway-rss",
-              [
-                "**Legacy Sentry MCP high RSS**",
-                ...fat.map(
-                  (s) =>
-                    `• pid=${s.pid} rss=${s.rssMb.toFixed(0)} MiB (alert ≥${SENTRY_RSS_ALERT_MB}) ${s.label}`,
-                ),
-                "_Not auto-killed. Check agent MCP config points at http://127.0.0.1:7391/mcp._",
-              ].join("\n"),
-            );
-          }
-        }
-
-        const fatNonRunaway = snap.fatProcesses.filter(
-          (p) => !runaways.some((k) => k.pid === p.pid),
-        );
-        if (fatNonRunaway.length > 0) {
-          yield* postAlert(
-            "stuck-proc",
-            [
-              "**Sustained high RSS / CPU process(es)**",
-              ...fatNonRunaway.map(
-                (p) =>
-                  `• pid=${p.pid} rss=${p.rssMb.toFixed(0)}MiB cpu≈${p.cpuPercent.toFixed(0)}% ` +
-                  `for ${Math.round(p.sustainedMs / 60_000)}m ${p.label}`,
-              ),
-              ...fatNonRunaway.map((p) => {
-                const parts = [];
-                if (p.rssMbThreshold !== null) parts.push(`RSS≥${p.rssMbThreshold.toFixed(0)}MiB`);
-                if (p.cpuPercentThreshold !== null) {
-                  parts.push(`CPU≥${p.cpuPercentThreshold.toFixed(0)}% of a core`);
-                }
-                return `_rule=${p.ruleId}; sustained ≥${Math.round(p.sustainedForMs / 60_000)}m; ${parts.join(" or ")}._`;
-              }),
-            ].join("\n"),
-          );
-        }
-
-        const longTurnIds = new Set(snap.longTurns.map((t) => t.turnId));
-        for (const turnId of lastTurnMilestones.keys()) {
-          if (!longTurnIds.has(turnId)) lastTurnMilestones.delete(turnId);
-        }
-        for (const turn of snap.longTurns) {
-          const ageMs = turn.ageMin * 60_000;
-          const decision = shouldAlertLongRunningTurn(ageMs, lastTurnMilestones.get(turn.turnId));
-          if (!decision.alert) continue;
-          lastTurnMilestones.set(turn.turnId, decision.milestoneMs);
-          const milestoneLabel = formatLongRunningTurnMilestone(decision.milestoneMs);
-          const nextLabel = formatLongRunningTurnMilestone(
-            nextLongRunningTurnMilestoneMs(decision.milestoneMs),
-          );
-          // Cooldown 0: cadence is the age-milestone ladder, not wall-clock spacing.
-          yield* postAlert(
-            `turn:${turn.turnId}`,
-            [
-              "**Long-running T3 turn**",
-              `thread=\`${turn.threadId}\``,
-              `turn=\`${turn.turnId}\``,
-              `age≈${turn.ageMin} min · milestone ${milestoneLabel} (next ~${nextLabel}; ladder 15m×2ⁿ)`,
-            ].join("\n"),
-            0,
-          );
-        }
-
-        const sessionSelection = selectSessionErrorsForAlert(
-          snap.sessionErrors,
-          SESSION_ERROR_ALERT_MAX,
-          {
-            nowMs,
-            maxAgeMs: SESSION_ERROR_MAX_AGE_MS,
-          },
-        );
-        for (const err of sessionSelection.fatals) {
-          const delivery = sessionErrorAlertDelivery(err.threadId, err.lastError);
-          yield* postAlert(
-            sessionErrorAlertKey(err.threadId, err.lastError),
-            delivery.content,
-            SESSION_ERROR_FATAL_COOLDOWN_MS,
-            delivery.files,
-          );
-        }
-        // Expected recoveries and sticky multi-day last_error rows are intentionally not
-        // posted — recoveries are high volume after restarts; stickies re-page forever
-        // without an age gate (see SESSION_ERROR_MAX_AGE_MS).
-        if (sessionSelection.ignoredRecoveryCount > 0 || sessionSelection.ignoredStaleCount > 0) {
-          yield* Effect.logDebug("Skipped non-actionable session last_error rows", {
-            recoveryCount: sessionSelection.ignoredRecoveryCount,
-            staleCount: sessionSelection.ignoredStaleCount,
-          });
-        }
-
-        if (snap.failedUnits.length > 0) {
-          yield* postAlert(
-            "systemd-failed",
-            ["**FATAL: systemd failed units**", ...snap.failedUnits.map((u) => `• \`${u}\``)].join(
-              "\n",
-            ),
-            FATAL_COOLDOWN_MS,
-          );
-        }
-      }).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logError("Alert watchdog tick failed").pipe(
-            Effect.andThen(Effect.logError(cause)),
-          ),
+      }
+      yield* Effect.logInfo("Posted Discord ops alert", {
+        key,
+        channelId,
+        fileCount: files.length,
+      });
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logError("Failed to post Discord ops alert").pipe(
+          Effect.andThen(Effect.logError(cause)),
         ),
       ),
-      Schedule.spaced(POLL),
     );
   });
+
+  poster = postAlert;
+
+  // Prime CPU sample so the next tick has a delta. No boot/idle chatter —
+  // only post when a check fails.
+  sampleCpuPercent();
+
+  yield* Effect.repeat(
+    Effect.gen(function* () {
+      const nowMs = yield* Clock.currentTimeMillis;
+      const snap = collectHostSnapshot({
+        stateSqlitePath: botConfig.stateSqlitePath,
+        nowMs,
+        alertProcessRules,
+      });
+      const loadLimit = snap.nproc * LOAD_RATIO;
+
+      if (snap.load1 >= loadLimit && snap.load1 >= 2) {
+        yield* postAlert(
+          "load",
+          [
+            "**High load**",
+            `load1=${snap.load1.toFixed(2)} load5=${snap.load5.toFixed(2)}`,
+            `threshold≈${loadLimit.toFixed(2)} on ${snap.nproc} CPUs`,
+            `cpu≈${snap.cpuPercent?.toFixed(0) ?? "?"}%; mem avail=${snap.memAvailableMb.toFixed(0)} MiB`,
+          ].join("\n"),
+        );
+      }
+
+      if (snap.cpuPercent !== null && snap.cpuPercent >= CPU_PERCENT_ALERT) {
+        yield* postAlert(
+          "cpu",
+          [
+            "**High CPU**",
+            `cpu≈${snap.cpuPercent.toFixed(0)}% (alert ≥${CPU_PERCENT_ALERT}%)`,
+            `load1=${snap.load1.toFixed(2)} nproc=${snap.nproc}`,
+            snap.fatProcesses.length > 0
+              ? `sustained:\n${snap.fatProcesses
+                  .slice(0, 5)
+                  .map(
+                    (p) =>
+                      `• pid=${p.pid} rss=${p.rssMb.toFixed(0)}MiB cpu≈${p.cpuPercent.toFixed(0)}% ${p.label}`,
+                  )
+                  .join("\n")}`
+              : "",
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        );
+      }
+
+      if (snap.memAvailableMb > 0 && snap.memAvailableMb < MEM_AVAILABLE_MIN_MB) {
+        yield* postAlert(
+          "mem",
+          [
+            "**Low memory**",
+            `available=${snap.memAvailableMb.toFixed(0)} MiB (min ${MEM_AVAILABLE_MIN_MB})`,
+            `total=${snap.memTotalMb.toFixed(0)} MiB`,
+            snap.runaways.length > 0
+              ? `runaways: ${snap.runaways.map((s) => `pid=${s.pid} ${s.rssMb.toFixed(0)}MiB`).join(", ")}`
+              : "",
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        );
+      }
+
+      for (const d of snap.disks) {
+        if (d.freePercent < DISK_FREE_MIN_PERCENT || d.freeGb < DISK_FREE_MIN_GB) {
+          yield* postAlert(
+            `disk:${d.path}`,
+            [
+              "**Low disk space**",
+              `path=\`${d.path}\``,
+              `free=${d.freeGb.toFixed(1)} GiB (${d.freePercent.toFixed(0)}%) of ${d.totalGb.toFixed(1)} GiB`,
+              `thresholds: <${DISK_FREE_MIN_PERCENT}% or <${DISK_FREE_MIN_GB} GiB`,
+            ].join("\n"),
+          );
+        }
+      }
+
+      const runaways = snap.runaways;
+      if (runaways.length >= SENTRY_COUNT_ALERT) {
+        yield* postAlert(
+          "runaway-count",
+          [
+            `**Legacy Sentry MCP stdio process(es)** (${runaways.length})`,
+            ...runaways.map(
+              (s) =>
+                `• pid=${s.pid} rss=${s.rssMb.toFixed(0)} MiB cpuTime=${s.cpuSeconds.toFixed(0)}s ${s.label}`,
+            ),
+            "_Not auto-killed. Prefer shared proxy `shared-sentry-mcp-proxy` + `/etc/shared-mcp-setup`._",
+          ].join("\n"),
+        );
+      } else {
+        const fat = runaways.filter((s) => s.rssMb >= SENTRY_RSS_ALERT_MB);
+        if (fat.length > 0) {
+          yield* postAlert(
+            "runaway-rss",
+            [
+              "**Legacy Sentry MCP high RSS**",
+              ...fat.map(
+                (s) =>
+                  `• pid=${s.pid} rss=${s.rssMb.toFixed(0)} MiB (alert ≥${SENTRY_RSS_ALERT_MB}) ${s.label}`,
+              ),
+              "_Not auto-killed. Check agent MCP config points at http://127.0.0.1:7391/mcp._",
+            ].join("\n"),
+          );
+        }
+      }
+
+      const fatNonRunaway = snap.fatProcesses.filter((p) => !runaways.some((k) => k.pid === p.pid));
+      if (fatNonRunaway.length > 0) {
+        yield* postAlert(
+          "stuck-proc",
+          [
+            "**Sustained high RSS / CPU process(es)**",
+            ...fatNonRunaway.map(
+              (p) =>
+                `• pid=${p.pid} rss=${p.rssMb.toFixed(0)}MiB cpu≈${p.cpuPercent.toFixed(0)}% ` +
+                `for ${Math.round(p.sustainedMs / 60_000)}m ${p.label}`,
+            ),
+            ...fatNonRunaway.map((p) => {
+              const parts = [];
+              if (p.rssMbThreshold !== null) parts.push(`RSS≥${p.rssMbThreshold.toFixed(0)}MiB`);
+              if (p.cpuPercentThreshold !== null) {
+                parts.push(`CPU≥${p.cpuPercentThreshold.toFixed(0)}% of a core`);
+              }
+              return `_rule=${p.ruleId}; sustained ≥${Math.round(p.sustainedForMs / 60_000)}m; ${parts.join(" or ")}._`;
+            }),
+          ].join("\n"),
+        );
+      }
+
+      const longTurnIds = new Set(snap.longTurns.map((t) => t.turnId));
+      for (const turnId of lastTurnMilestones.keys()) {
+        if (!longTurnIds.has(turnId)) lastTurnMilestones.delete(turnId);
+      }
+      for (const turn of snap.longTurns) {
+        const ageMs = turn.ageMin * 60_000;
+        const decision = shouldAlertLongRunningTurn(ageMs, lastTurnMilestones.get(turn.turnId));
+        if (!decision.alert) continue;
+        lastTurnMilestones.set(turn.turnId, decision.milestoneMs);
+        const milestoneLabel = formatLongRunningTurnMilestone(decision.milestoneMs);
+        const nextLabel = formatLongRunningTurnMilestone(
+          nextLongRunningTurnMilestoneMs(decision.milestoneMs),
+        );
+        // Cooldown 0: cadence is the age-milestone ladder, not wall-clock spacing.
+        yield* postAlert(
+          `turn:${turn.turnId}`,
+          [
+            "**Long-running T3 turn**",
+            `thread=\`${turn.threadId}\``,
+            `turn=\`${turn.turnId}\``,
+            `age≈${turn.ageMin} min · milestone ${milestoneLabel} (next ~${nextLabel}; ladder 15m×2ⁿ)`,
+          ].join("\n"),
+          0,
+        );
+      }
+
+      const sessionSelection = selectSessionErrorsForAlert(
+        snap.sessionErrors,
+        SESSION_ERROR_ALERT_MAX,
+        {
+          nowMs,
+          maxAgeMs: SESSION_ERROR_MAX_AGE_MS,
+        },
+      );
+      for (const err of sessionSelection.fatals) {
+        const delivery = sessionErrorAlertDelivery(err.threadId, err.lastError);
+        yield* postAlert(
+          sessionErrorAlertKey(err.threadId, err.lastError),
+          delivery.content,
+          SESSION_ERROR_FATAL_COOLDOWN_MS,
+          delivery.files,
+        );
+      }
+      // Expected recoveries and sticky multi-day last_error rows are intentionally not
+      // posted — recoveries are high volume after restarts; stickies re-page forever
+      // without an age gate (see SESSION_ERROR_MAX_AGE_MS).
+      if (sessionSelection.ignoredRecoveryCount > 0 || sessionSelection.ignoredStaleCount > 0) {
+        yield* Effect.logDebug("Skipped non-actionable session last_error rows", {
+          recoveryCount: sessionSelection.ignoredRecoveryCount,
+          staleCount: sessionSelection.ignoredStaleCount,
+        });
+      }
+
+      if (snap.failedUnits.length > 0) {
+        yield* postAlert(
+          "systemd-failed",
+          ["**FATAL: systemd failed units**", ...snap.failedUnits.map((u) => `• \`${u}\``)].join(
+            "\n",
+          ),
+          FATAL_COOLDOWN_MS,
+        );
+      }
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logError("Alert watchdog tick failed").pipe(Effect.andThen(Effect.logError(cause))),
+      ),
+    ),
+    Schedule.spaced(POLL),
+  );
+});

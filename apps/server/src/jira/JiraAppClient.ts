@@ -101,11 +101,8 @@ export const make = Effect.gen(function* () {
    * ("Parent comment not found, and no child comments exist"). Resolve any comment id to
    * the thread root via GET `/rest/api/3/issue/{key}/comment/{id}` (`parentId` or self).
    */
-  const resolveThreadRootCommentId = (
-    issueKey: string,
-    commentId: string,
-  ): Effect.Effect<string | null> =>
-    Effect.gen(function* () {
+  const resolveThreadRootCommentId = Effect.fn("JiraAppClient.resolveThreadRootCommentId")(
+    function* (issueKey: string, commentId: string): Effect.fn.Return<string | null> {
       const trimmed = commentId.trim();
       if (trimmed.length === 0) return null;
       if (!config.enabled) return trimmed;
@@ -156,19 +153,19 @@ export const make = Effect.gen(function* () {
             ),
             Effect.orElseSucceed(() => trimmed),
           ),
-        orElse: (failed) =>
-          Effect.gen(function* () {
-            const detail = yield* failed.text.pipe(Effect.orElseSucceed(() => ""));
-            yield* Effect.logWarning("Jira comment GET rejected; using id as root candidate", {
-              issueKey,
-              commentId: trimmed,
-              status: failed.status,
-              detail: detail.slice(0, 300),
-            });
-            return trimmed;
-          }),
+        orElse: Effect.fn("JiraAppClient.resolveThreadRootCommentId.rejected")(function* (failed) {
+          const detail = yield* failed.text.pipe(Effect.orElseSucceed(() => ""));
+          yield* Effect.logWarning("Jira comment GET rejected; using id as root candidate", {
+            issueKey,
+            commentId: trimmed,
+            status: failed.status,
+            detail: detail.slice(0, 300),
+          });
+          return trimmed;
+        }),
       });
-    });
+    },
+  );
 
   const addIssueComment = Effect.fn("JiraAppClient.addIssueComment")(function* (input: {
     readonly issueKey: string;
@@ -241,48 +238,48 @@ export const make = Effect.gen(function* () {
       | { readonly _tag: "retry_next" }
       | { readonly _tag: "failed" };
 
-    const tryPost = (parentCommentId: string | null): Effect.Effect<Attempt> =>
-      Effect.gen(function* () {
-        const payload: Record<string, unknown> = { body: adfBody };
-        // Jira Cloud: parentId threads under a **root** comment only.
-        if (parentCommentId !== null) {
-          payload.parentId = parentIdValue(parentCommentId);
-        }
-        const response = yield* postOnce(payload, parentCommentId);
-        if (response === null) return { _tag: "failed" as const };
+    const tryPost = Effect.fn("JiraAppClient.addIssueComment.tryPost")(function* (
+      parentCommentId: string | null,
+    ): Effect.fn.Return<Attempt> {
+      const payload: Record<string, unknown> = { body: adfBody };
+      // Jira Cloud: parentId threads under a **root** comment only.
+      if (parentCommentId !== null) {
+        payload.parentId = parentIdValue(parentCommentId);
+      }
+      const response = yield* postOnce(payload, parentCommentId);
+      if (response === null) return { _tag: "failed" as const };
 
-        return yield* HttpClientResponse.matchStatus(response, {
-          "2xx": (success) =>
-            decodeSuccess(success, parentCommentId).pipe(
-              Effect.map((parsed) =>
-                parsed === null
-                  ? ({ _tag: "failed" } as const)
-                  : ({ _tag: "ok", id: parsed.id, parentId: parsed.parentId } as const),
-              ),
+      return yield* HttpClientResponse.matchStatus(response, {
+        "2xx": (success) =>
+          decodeSuccess(success, parentCommentId).pipe(
+            Effect.map((parsed) =>
+              parsed === null
+                ? ({ _tag: "failed" } as const)
+                : ({ _tag: "ok", id: parsed.id, parentId: parsed.parentId } as const),
             ),
-          orElse: (failed) =>
-            Effect.gen(function* () {
-              const detail = yield* failed.text.pipe(Effect.orElseSucceed(() => ""));
-              // Threading can fail if parentId is invalid / not a root — try next parent.
-              if (parentCommentId !== null && (failed.status === 400 || failed.status === 404)) {
-                yield* Effect.logWarning("Jira threaded comment rejected; trying next parent", {
-                  issueKey: input.issueKey,
-                  parentCommentId,
-                  status: failed.status,
-                  detail: detail.slice(0, 500),
-                });
-                return { _tag: "retry_next" as const };
-              }
-              yield* Effect.logWarning("Jira comment create rejected", {
-                issueKey: input.issueKey,
-                parentCommentId,
-                status: failed.status,
-                detail: detail.slice(0, 500),
-              });
-              return { _tag: "failed" as const };
-            }),
-        });
+          ),
+        orElse: Effect.fn("JiraAppClient.addIssueComment.rejected")(function* (failed) {
+          const detail = yield* failed.text.pipe(Effect.orElseSucceed(() => ""));
+          // Threading can fail if parentId is invalid / not a root — try next parent.
+          if (parentCommentId !== null && (failed.status === 400 || failed.status === 404)) {
+            yield* Effect.logWarning("Jira threaded comment rejected; trying next parent", {
+              issueKey: input.issueKey,
+              parentCommentId,
+              status: failed.status,
+              detail: detail.slice(0, 500),
+            });
+            return { _tag: "retry_next" as const };
+          }
+          yield* Effect.logWarning("Jira comment create rejected", {
+            issueKey: input.issueKey,
+            parentCommentId,
+            status: failed.status,
+            detail: detail.slice(0, 500),
+          });
+          return { _tag: "failed" as const };
+        }),
       });
+    });
 
     const primary = input.parentCommentId?.trim() || null;
     const secondary = input.fallbackParentCommentId?.trim() || null;
@@ -367,18 +364,17 @@ export const make = Effect.gen(function* () {
       if (response === null) continue;
       const ok = yield* HttpClientResponse.matchStatus(response, {
         "2xx": () => Effect.succeed(true),
-        orElse: (failed) =>
-          Effect.gen(function* () {
-            if (failed.status === 404 || failed.status === 405) return false;
-            const detail = yield* failed.text.pipe(Effect.orElseSucceed(() => ""));
-            yield* Effect.logDebug("Jira comment reaction attempt rejected", {
-              issueKey: input.issueKey,
-              commentId: input.commentId,
-              status: failed.status,
-              detail: detail.slice(0, 200),
-            });
-            return false;
-          }),
+        orElse: Effect.fn("JiraAppClient.addCommentReaction.rejected")(function* (failed) {
+          if (failed.status === 404 || failed.status === 405) return false;
+          const detail = yield* failed.text.pipe(Effect.orElseSucceed(() => ""));
+          yield* Effect.logDebug("Jira comment reaction attempt rejected", {
+            issueKey: input.issueKey,
+            commentId: input.commentId,
+            status: failed.status,
+            detail: detail.slice(0, 200),
+          });
+          return false;
+        }),
       });
       if (ok) {
         yield* Effect.logInfo("Added Jira comment acknowledgment reaction", {
@@ -602,37 +598,35 @@ export const make = Effect.gen(function* () {
         return null;
       }
 
-      const findPage = (title: string) =>
-        Effect.gen(function* () {
-          const result = yield* confluenceCall("GET", "/api/v2/pages", {
-            "space-id": spaceId,
-            title,
-            status: "current",
-            limit: "5",
-          });
-          yield* warnUnlessOk("Confluence page lookup rejected", result);
-          if (result === null || result.status < 200 || result.status >= 300) return null;
-          return pagesFromList(result.payload).find((page) => page.title === title) ?? null;
+      const findPage = Effect.fn("JiraAppClient.findPage")(function* (title: string) {
+        const result = yield* confluenceCall("GET", "/api/v2/pages", {
+          "space-id": spaceId,
+          title,
+          status: "current",
+          limit: "5",
         });
+        yield* warnUnlessOk("Confluence page lookup rejected", result);
+        if (result === null || result.status < 200 || result.status >= 300) return null;
+        return pagesFromList(result.payload).find((page) => page.title === title) ?? null;
+      });
 
-      const createPage = (
+      const createPage = Effect.fn("JiraAppClient.createPage")(function* (
         title: string,
         pageParentId: string | null,
         doc: JiraAdfDoc,
-      ): Effect.Effect<{ readonly id: string; readonly payload: unknown } | null> =>
-        Effect.gen(function* () {
-          const result = yield* confluenceCall("POST", "/api/v2/pages", undefined, {
-            spaceId,
-            status: "current",
-            title,
-            ...(pageParentId === null ? {} : { parentId: pageParentId, parentType: "page" }),
-            body: { representation: "atlas_doc_format", value: encodeUnknownJson(doc) },
-          });
-          yield* warnUnlessOk("Confluence page create rejected", result);
-          if (result === null || result.status < 200 || result.status >= 300) return null;
-          const page = pageRecord(result.payload);
-          return page === null ? null : { id: page.id, payload: result.payload };
+      ): Effect.fn.Return<{ readonly id: string; readonly payload: unknown } | null> {
+        const result = yield* confluenceCall("POST", "/api/v2/pages", undefined, {
+          spaceId,
+          status: "current",
+          title,
+          ...(pageParentId === null ? {} : { parentId: pageParentId, parentType: "page" }),
+          body: { representation: "atlas_doc_format", value: encodeUnknownJson(doc) },
         });
+        yield* warnUnlessOk("Confluence page create rejected", result);
+        if (result === null || result.status < 200 || result.status >= 300) return null;
+        const page = pageRecord(result.payload);
+        return page === null ? null : { id: page.id, payload: result.payload };
+      });
 
       let parentId: string | null = null;
       for (const title of input.parentTitles) {
@@ -672,52 +666,54 @@ export const make = Effect.gen(function* () {
       };
 
       const section = markdownToAdf(input.markdown, { platform: "confluence" });
-      const append = (pageId: string, attempt: number): Effect.Effect<JiraStoredOverflow | null> =>
-        Effect.gen(function* () {
-          const current = yield* confluenceCall(
-            "GET",
-            `/api/v2/pages/${encodeURIComponent(pageId)}`,
+      const append = Effect.fn("JiraAppClient.append")(function* (
+        pageId: string,
+        attempt: number,
+      ): Effect.fn.Return<JiraStoredOverflow | null> {
+        const current = yield* confluenceCall(
+          "GET",
+          `/api/v2/pages/${encodeURIComponent(pageId)}`,
+          {
+            "body-format": "atlas_doc_format",
+          },
+        );
+        yield* warnUnlessOk("Confluence page read rejected", current);
+        if (current === null || current.status < 200 || current.status >= 300) return null;
+        const existing = readConfluenceAtlasDoc(readField(current.payload, "body"));
+        const version = versionNumber(current.payload);
+        const title = readString(current.payload, "title") ?? input.title;
+        if (existing === null || version === null) {
+          yield* Effect.logWarning(
+            "Confluence page body was not readable; left the page unchanged",
             {
-              "body-format": "atlas_doc_format",
+              issueKey: input.issueKey,
+              pageId,
             },
           );
-          yield* warnUnlessOk("Confluence page read rejected", current);
-          if (current === null || current.status < 200 || current.status >= 300) return null;
-          const existing = readConfluenceAtlasDoc(readField(current.payload, "body"));
-          const version = versionNumber(current.payload);
-          const title = readString(current.payload, "title") ?? input.title;
-          if (existing === null || version === null) {
-            yield* Effect.logWarning(
-              "Confluence page body was not readable; left the page unchanged",
-              {
-                issueKey: input.issueKey,
-                pageId,
-              },
-            );
-            return null;
-          }
-          const next = appendAdfSection(existing, input.heading, section);
-          const parent = readString(current.payload, "parentId");
-          const updated = yield* confluenceCall(
-            "PUT",
-            `/api/v2/pages/${encodeURIComponent(pageId)}`,
-            undefined,
-            {
-              id: pageId,
-              status: "current",
-              title,
-              spaceId,
-              ...(parent === null ? {} : { parentId: parent, parentType: "page" }),
-              body: { representation: "atlas_doc_format", value: encodeUnknownJson(next) },
-              version: { number: version + 1, message: "Omegent reply" },
-            },
-          );
-          if (updated !== null && updated.status === 409 && attempt === 0)
-            return yield* append(pageId, 1);
-          yield* warnUnlessOk("Confluence page update rejected", updated);
-          if (updated === null || updated.status < 200 || updated.status >= 300) return null;
-          return stored(updated.payload, pageId) ?? stored(current.payload, pageId);
-        });
+          return null;
+        }
+        const next = appendAdfSection(existing, input.heading, section);
+        const parent = readString(current.payload, "parentId");
+        const updated = yield* confluenceCall(
+          "PUT",
+          `/api/v2/pages/${encodeURIComponent(pageId)}`,
+          undefined,
+          {
+            id: pageId,
+            status: "current",
+            title,
+            spaceId,
+            ...(parent === null ? {} : { parentId: parent, parentType: "page" }),
+            body: { representation: "atlas_doc_format", value: encodeUnknownJson(next) },
+            version: { number: version + 1, message: "Omegent reply" },
+          },
+        );
+        if (updated !== null && updated.status === 409 && attempt === 0)
+          return yield* append(pageId, 1);
+        yield* warnUnlessOk("Confluence page update rejected", updated);
+        if (updated === null || updated.status < 200 || updated.status >= 300) return null;
+        return stored(updated.payload, pageId) ?? stored(current.payload, pageId);
+      });
 
       const existingLeaf = yield* findPage(input.title);
       if (existingLeaf !== null) return yield* append(existingLeaf.id, 0);

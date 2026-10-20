@@ -38,7 +38,6 @@ import * as Persistence from "../platform/persistence.ts";
 import * as RpcSession from "./session.ts";
 import { makeEnvironmentServerConfigState } from "../state/server.ts";
 import { applyServerConfigProjection } from "../state/serverConfigProjection.ts";
-import { NETWORK_BLOCKING_HINT } from "../errors/network.ts";
 
 type SocketEventType = "open" | "message" | "close" | "error";
 type SocketEvent = {
@@ -370,7 +369,8 @@ describe("RpcSessionFactory", () => {
         expect(error).toBeInstanceOf(ConnectionTransientError);
         expect(error).toMatchObject({
           reason: "timeout",
-          message: "Test environment ping timeout.",
+          message:
+            "Test environment stopped responding for 15s. It may be overloaded, asleep, or off the network.",
         });
       }),
     ),
@@ -1135,10 +1135,22 @@ describe("RpcSessionFactory", () => {
     }),
   );
 
-  it.effect("closes the session after 15 seconds without a frame from the server", () =>
+  // Over T3 Connect too: the socket opened, so blaming DNS or a firewall misleads.
+  it.effect.each([
+    { relay: false, label: "direct" },
+    { relay: true, label: "relay" },
+  ])("closes the $label session after 15 seconds without a frame from the server", ({ relay }) =>
     Effect.gen(function* () {
       const { factory, sockets } = yield* makeFactory();
-      const session = yield* factory.connect(PREPARED);
+      const session = yield* factory.connect({
+        ...PREPARED,
+        target: relay
+          ? new RelayConnectionTarget({
+              environmentId: TARGET.environmentId,
+              label: TARGET.label,
+            })
+          : TARGET,
+      });
       const readyFiber = yield* Effect.forkChild(session.ready);
       const closedFiber = yield* Effect.forkChild(Effect.flip(session.closed));
       const socket = yield* awaitSocket(sockets);
@@ -1158,9 +1170,13 @@ describe("RpcSessionFactory", () => {
       yield* TestClock.adjust("5 seconds");
       const error = yield* Fiber.join(closedFiber);
       expect(error).toBeInstanceOf(ConnectionTransientError);
-      // Fork: a missed-pong close is reported as a labelled ping timeout, not
-      // a bare transport disconnect (see the ping-timeout test above).
-      expect(error).toMatchObject({ reason: "timeout" });
+      expect(error).toMatchObject({
+        reason: "timeout",
+        detail:
+          "Test environment stopped responding for 15s. It may be overloaded, asleep, or off the network.",
+        hop: relay ? "tunnel" : "server",
+        via: relay ? "relay" : "direct",
+      });
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );
 

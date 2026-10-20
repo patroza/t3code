@@ -21,20 +21,21 @@ export interface DiscordThreadTurnCoordinator {
 export const makeDiscordThreadTurnCoordinator = Effect.gen(function* () {
   const locksRef = yield* Ref.make<ReadonlyMap<string, Semaphore.Semaphore>>(new Map());
 
-  const getLock = (discordThreadId: string) =>
-    Effect.gen(function* () {
-      const existing = (yield* Ref.get(locksRef)).get(discordThreadId);
-      if (existing !== undefined) return existing;
+  const getLock = Effect.fn("DiscordThreadTurnCoordinator.getLock")(function* (
+    discordThreadId: string,
+  ) {
+    const existing = (yield* Ref.get(locksRef)).get(discordThreadId);
+    if (existing !== undefined) return existing;
 
-      const created = yield* Semaphore.make(1);
-      return yield* Ref.modify(locksRef, (locks) => {
-        const current = locks.get(discordThreadId);
-        if (current !== undefined) return [current, locks] as const;
-        const next = new Map(locks);
-        next.set(discordThreadId, created);
-        return [created, next] as const;
-      });
+    const created = yield* Semaphore.make(1);
+    return yield* Ref.modify(locksRef, (locks) => {
+      const current = locks.get(discordThreadId);
+      if (current !== undefined) return [current, locks] as const;
+      const next = new Map(locks);
+      next.set(discordThreadId, created);
+      return [created, next] as const;
     });
+  });
 
   return {
     withLock: (discordThreadId, effect) =>

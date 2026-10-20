@@ -304,9 +304,16 @@ describe("terminatePosixOwnedProcessTree", () => {
           encoding: "utf8",
         },
       );
-      // Some POSIX shells run the wrapper exit trap after a failed exec.
-      expect([125, 127]).toContain(missingTargetResult.status);
-      expect(missingTargetResult.stderr).toContain("/nonexistent-t3-probe");
+      expect(missingTargetResult.status, missingTargetResult.stderr).toBe(125);
+      // CI's /bin/sh is dash, which runs the EXIT trap after a failed exec. Bash does not,
+      // so run the same wrapper under bash too.
+      const missingTargetBash = NodeChildProcess.spawnSync("bash", missingTarget.args, {
+        encoding: "utf8",
+      });
+      if ((missingTargetBash.error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
+        expect(missingTargetBash.status, missingTargetBash.stderr).toBe(125);
+        expect(missingTargetBash.stderr).toContain("/nonexistent-t3-probe");
+      }
     } finally {
       NodeFS.rmSync(scratch, { recursive: true, force: true });
     }

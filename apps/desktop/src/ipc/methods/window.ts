@@ -16,6 +16,7 @@ import {
 import { PROJECT_FAVICON_EXTENSIONS } from "@t3tools/shared/projectFavicon";
 import { resolveEditorCommand } from "@t3tools/shared/editor";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { isRelayTracingEnabled } from "@t3tools/shared/otelEnvironment";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Effect from "effect/Effect";
@@ -68,6 +69,14 @@ export const getAppBranding = DesktopIpc.makeSyncIpcMethod({
   handler: Effect.fn("desktop.ipc.window.getAppBranding")(function* () {
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     return environment.branding;
+  }),
+});
+
+export const getRelayTelemetryEnabled = DesktopIpc.makeSyncIpcMethod({
+  channel: IpcChannels.GET_RELAY_TELEMETRY_ENABLED_CHANNEL,
+  result: Schema.Boolean,
+  handler: Effect.fn("desktop.ipc.window.getRelayTelemetryEnabled")(function* () {
+    return isRelayTracingEnabled(yield* HostProcess.Environment);
   }),
 });
 
@@ -134,12 +143,9 @@ export const getLocalEnvironmentBootstraps = DesktopIpc.makeSyncIpcMethod({
           config.value.bootstrapDelivery === "fd3" &&
           bootstrap.desktopBrowserFd !== undefined &&
           bootstrap.desktopBrowserControlFd !== undefined,
-        // A backend launched with the desktop secret accepts whichever token
-        // the secret derives for the current window, so hand out that one
-        // rather than the token frozen into its launch config. Every backend
-        // the desktop launches (primary, staged or mounted WSL runtime) is the
-        // server build bundled with this desktop, so it understands the secret.
-
+        // A backend launched with the desktop secret accepts whichever token the secret derives
+        // for the current window, so hand out that one rather than the token frozen into its
+        // launch config.
         ...(bootstrap.desktopBootstrapSecret
           ? { bootstrapToken: yield* configuration.currentBootstrapToken }
           : bootstrap.desktopBootstrapToken
@@ -357,6 +363,24 @@ export const pasteAsText = DesktopIpc.makeIpcMethod({
     ) {
       focused.paste();
     }
+  }),
+});
+
+export const revealWindow = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.REVEAL_WINDOW_CHANNEL,
+  payload: Schema.Undefined,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.window.revealWindow")(function* (_input, event) {
+    const electronWindow = yield* ElectronWindow.ElectronWindow;
+    const window = yield* electronWindow.main;
+    if (
+      event === undefined ||
+      Option.isNone(window) ||
+      window.value.webContents.id !== event.sender.id
+    ) {
+      return;
+    }
+    yield* electronWindow.reveal(window.value);
   }),
 });
 

@@ -185,125 +185,120 @@ export const make = Effect.gen(function* () {
     return null;
   };
 
-  const resolve = (request: PreviewPortResolveRequest) =>
-    Effect.gen(function* () {
-      const { port } = request;
+  const resolve = Effect.fn("PortExposure.resolve")(function* (request: PreviewPortResolveRequest) {
+    const { port } = request;
 
-      // A client on the same machine reaches the port directly; publishing it
-      // on the tailnet would expose a dev server nobody asked to share.
-      const clientUrl = yield* Effect.try({
-        try: () => new URL(request.clientBaseUrl),
-        catch: () => null,
-      }).pipe(Effect.orElseSucceed(() => null));
-      if (clientUrl !== null && isLoopbackHost(clientUrl.hostname)) {
-        return {
-          origin: `http://localhost:${port}`,
-          strategy: "loopback",
-          createdExposure: false,
-        } satisfies PreviewPortResolution;
-      }
-
-      yield* reconcile;
-
-      if (yield* net.isPortAvailableOnLoopback(port)) {
-        return yield* fail(port, "not-listening", REMEDY_BY_REASON["not-listening"]);
-      }
-
-      // Read the tailnet's routes before probing anything. A host without
-      // tailscale is not an error yet — the port may still answer directly —
-      // so a failure here only rules out the tailnet branch.
-      const mappings = yield* readTailscaleServeMappings.pipe(
-        Effect.catch((cause) =>
-          Effect.logWarning("Failed to read tailnet serve mappings", { cause, port }).pipe(
-            Effect.as(null),
-          ),
-        ),
-      );
-
-      const existing = mappings && findRootServeMappingForLocalPort(mappings, port);
-      if (existing) {
-        return {
-          origin: originOf(existing.url),
-          strategy: "tailnet-serve",
-          createdExposure: false,
-        } satisfies PreviewPortResolution;
-      }
-
-      // A dev server bound to a wildcard or interface address already answers on
-      // the environment's own address — WSL, a LAN, an SSH tunnel. Publishing a
-      // tailnet route for it would be redundant, so this is checked before any
-      // route is created. Verified rather than assumed: whether a listener is
-      // loopback-only is exactly what the old client-side guess got wrong.
-      //
-      // Skipped when a serve mapping already occupies that number for some other
-      // local port: the probe would find *that* app answering and hand back a URL
-      // to the wrong thing.
-      const shadowedByOtherMapping =
-        mappings?.some((mapping) => mapping.servePort === port && mapping.localPort !== port) ??
-        false;
-      if (clientUrl !== null && !shadowedByOtherMapping) {
-        const directOrigin = `${clientUrl.protocol}//${clientUrl.hostname}:${port}`;
-        if (yield* isReachable(directOrigin)) {
-          return {
-            origin: directOrigin,
-            strategy: "direct-private-network",
-            createdExposure: false,
-          } satisfies PreviewPortResolution;
-        }
-      }
-
-      if (mappings === null) {
-        return yield* fail(
-          port,
-          "tailscale-unavailable",
-          REMEDY_BY_REASON["tailscale-unavailable"],
-        );
-      }
-
-      const servePort = pickServePort(port, mappings);
-      if (servePort === null) {
-        return yield* fail(port, "serve-port-conflict", conflictRemedy(port, port));
-      }
-
-      yield* ensureTailscaleServe({
-        localPort: port,
-        servePort,
-        localHost: SERVE_TARGET_HOST,
-      }).pipe(
-        Effect.catch((cause) =>
-          Effect.logWarning("Failed to publish preview port on the tailnet", {
-            cause,
-            port,
-            servePort,
-          }).pipe(Effect.andThen(fail(port, reasonForTailscaleError(cause), exposureRemedy(port)))),
-        ),
-      );
-      yield* Ref.update(created, (entries) => new Map(entries).set(port, servePort));
-
-      const published = yield* readTailscaleServeMappings.pipe(
-        Effect.map((refreshed) => findRootServeMappingForLocalPort(refreshed, port)),
-        Effect.orElseSucceed(() => undefined),
-      );
-      if (!published) {
-        yield* withdraw(port, servePort);
-        return yield* fail(port, "exposure-failed", exposureRemedy(port));
-      }
-
-      const origin = originOf(published.url);
-      // Verify before answering: a URL that resolves but does not serve is the
-      // failure this whole path exists to remove.
-      if (!(yield* becomesReachable(origin))) {
-        yield* withdraw(port, servePort);
-        return yield* fail(port, "not-reachable", unreachableRemedy(port, origin));
-      }
-
-      yield* Effect.logInfo("Published preview port on the tailnet", { port, servePort, origin });
+    // A client on the same machine reaches the port directly; publishing it
+    // on the tailnet would expose a dev server nobody asked to share.
+    const clientUrl = yield* Effect.try({
+      try: () => new URL(request.clientBaseUrl),
+      catch: () => null,
+    }).pipe(Effect.orElseSucceed(() => null));
+    if (clientUrl !== null && isLoopbackHost(clientUrl.hostname)) {
       return {
-        origin,
-        strategy: "tailnet-serve",
-        createdExposure: true,
+        origin: `http://localhost:${port}`,
+        strategy: "loopback",
+        createdExposure: false,
       } satisfies PreviewPortResolution;
-    });
+    }
+
+    yield* reconcile;
+
+    if (yield* net.isPortAvailableOnLoopback(port)) {
+      return yield* fail(port, "not-listening", REMEDY_BY_REASON["not-listening"]);
+    }
+
+    // Read the tailnet's routes before probing anything. A host without
+    // tailscale is not an error yet — the port may still answer directly —
+    // so a failure here only rules out the tailnet branch.
+    const mappings = yield* readTailscaleServeMappings.pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("Failed to read tailnet serve mappings", { cause, port }).pipe(
+          Effect.as(null),
+        ),
+      ),
+    );
+
+    const existing = mappings && findRootServeMappingForLocalPort(mappings, port);
+    if (existing) {
+      return {
+        origin: originOf(existing.url),
+        strategy: "tailnet-serve",
+        createdExposure: false,
+      } satisfies PreviewPortResolution;
+    }
+
+    // A dev server bound to a wildcard or interface address already answers on
+    // the environment's own address — WSL, a LAN, an SSH tunnel. Publishing a
+    // tailnet route for it would be redundant, so this is checked before any
+    // route is created. Verified rather than assumed: whether a listener is
+    // loopback-only is exactly what the old client-side guess got wrong.
+    //
+    // Skipped when a serve mapping already occupies that number for some other
+    // local port: the probe would find *that* app answering and hand back a URL
+    // to the wrong thing.
+    const shadowedByOtherMapping =
+      mappings?.some((mapping) => mapping.servePort === port && mapping.localPort !== port) ??
+      false;
+    if (clientUrl !== null && !shadowedByOtherMapping) {
+      const directOrigin = `${clientUrl.protocol}//${clientUrl.hostname}:${port}`;
+      if (yield* isReachable(directOrigin)) {
+        return {
+          origin: directOrigin,
+          strategy: "direct-private-network",
+          createdExposure: false,
+        } satisfies PreviewPortResolution;
+      }
+    }
+
+    if (mappings === null) {
+      return yield* fail(port, "tailscale-unavailable", REMEDY_BY_REASON["tailscale-unavailable"]);
+    }
+
+    const servePort = pickServePort(port, mappings);
+    if (servePort === null) {
+      return yield* fail(port, "serve-port-conflict", conflictRemedy(port, port));
+    }
+
+    yield* ensureTailscaleServe({
+      localPort: port,
+      servePort,
+      localHost: SERVE_TARGET_HOST,
+    }).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("Failed to publish preview port on the tailnet", {
+          cause,
+          port,
+          servePort,
+        }).pipe(Effect.andThen(fail(port, reasonForTailscaleError(cause), exposureRemedy(port)))),
+      ),
+    );
+    yield* Ref.update(created, (entries) => new Map(entries).set(port, servePort));
+
+    const published = yield* readTailscaleServeMappings.pipe(
+      Effect.map((refreshed) => findRootServeMappingForLocalPort(refreshed, port)),
+      Effect.orElseSucceed(() => undefined),
+    );
+    if (!published) {
+      yield* withdraw(port, servePort);
+      return yield* fail(port, "exposure-failed", exposureRemedy(port));
+    }
+
+    const origin = originOf(published.url);
+    // Verify before answering: a URL that resolves but does not serve is the
+    // failure this whole path exists to remove.
+    if (!(yield* becomesReachable(origin))) {
+      yield* withdraw(port, servePort);
+      return yield* fail(port, "not-reachable", unreachableRemedy(port, origin));
+    }
+
+    yield* Effect.logInfo("Published preview port on the tailnet", { port, servePort, origin });
+    return {
+      origin,
+      strategy: "tailnet-serve",
+      createdExposure: true,
+    } satisfies PreviewPortResolution;
+  });
 
   yield* Effect.addFinalizer(() =>
     Effect.gen(function* () {

@@ -285,7 +285,7 @@ export function isXAiMonitorTool(toolCall: AcpToolCallState): boolean {
  * while the process still runs. Like a monitor, it ends with `task_completed`
  * for that task id (`x.ai/task_completed`, or a session update on 1.0.50).
  */
-function xAiBackgroundShellTaskId(toolCall: AcpToolCallState): string | undefined {
+export function xAiBackgroundShellTaskId(toolCall: AcpToolCallState): string | undefined {
   const rawOutput = unknownRecord(toolCall.data.rawOutput);
   return nonEmptyString(rawOutput?.type) === "BackgroundTaskStarted"
     ? nonEmptyString(rawOutput?.task_id)
@@ -501,37 +501,38 @@ function xAiSessionUpdateTaskStatus(sessionUpdate: string): "running" | "complet
  * the task ends (or the model kills it via kill_command_or_subagent).
 
  */
-export const registerXAiBackgroundTaskTracking = (
+export const registerXAiBackgroundTaskTracking = Effect.fn(
+  "XAiAcpExtension.registerXAiBackgroundTaskTracking",
+)(function* (
   runtime: Pick<AcpSessionRuntime.AcpSessionRuntime["Service"], "handleExtNotification">,
   apply: (mutation: XAiBackgroundTaskLifecycleMutation) => Effect.Effect<void>,
-): Effect.Effect<void, EffectAcpErrors.AcpError> =>
-  Effect.gen(function* () {
-    yield* Effect.forEach(
-      [
-        ["x.ai/task_backgrounded", "running"],
-        ["_x.ai/task_backgrounded", "running"],
-        ["x.ai/task_completed", "completed"],
-        ["_x.ai/task_completed", "completed"],
-      ] as const,
-      ([method, status]) =>
-        runtime.handleExtNotification(method, XAiTaskLifecycleNotification, (notification) => {
-          const mutation = xAiBackgroundTaskLifecycleMutation(notification, status);
-          return mutation === null ? Effect.void : apply(mutation);
-        }),
-      { discard: true },
-    );
-    yield* Effect.forEach(
-      xAiSessionNotificationMethods,
-      (method) =>
-        runtime.handleExtNotification(method, XAiTaskLifecycleNotification, (notification) => {
-          const status = xAiSessionUpdateTaskStatus(notification.update.sessionUpdate);
-          if (status === null) return Effect.void;
-          const mutation = xAiBackgroundTaskLifecycleMutation(notification, status);
-          return mutation === null ? Effect.void : apply(mutation);
-        }),
-      { discard: true },
-    );
-  });
+): Effect.fn.Return<void, EffectAcpErrors.AcpError> {
+  yield* Effect.forEach(
+    [
+      ["x.ai/task_backgrounded", "running"],
+      ["_x.ai/task_backgrounded", "running"],
+      ["x.ai/task_completed", "completed"],
+      ["_x.ai/task_completed", "completed"],
+    ] as const,
+    ([method, status]) =>
+      runtime.handleExtNotification(method, XAiTaskLifecycleNotification, (notification) => {
+        const mutation = xAiBackgroundTaskLifecycleMutation(notification, status);
+        return mutation === null ? Effect.void : apply(mutation);
+      }),
+    { discard: true },
+  );
+  yield* Effect.forEach(
+    xAiSessionNotificationMethods,
+    (method) =>
+      runtime.handleExtNotification(method, XAiTaskLifecycleNotification, (notification) => {
+        const status = xAiSessionUpdateTaskStatus(notification.update.sessionUpdate);
+        if (status === null) return Effect.void;
+        const mutation = xAiBackgroundTaskLifecycleMutation(notification, status);
+        return mutation === null ? Effect.void : apply(mutation);
+      }),
+    { discard: true },
+  );
+});
 
 /**
  * A background subagent's end, sent on its PARENT session as `{ sessionUpdate:
@@ -1613,58 +1614,57 @@ export const makeXAiPromptCompletionRuntime = Effect.fn("makeXAiPromptCompletion
               sessionNotificationHandlers.set(method, handlers);
             })
           : runtime.handleExtNotification(method, payload, handler),
-      prompt: (payload, promptOptions?) =>
-        Effect.gen(function* () {
-          const started = yield* runtime.start();
-          const promptId = yield* allocatePromptFallbackId;
-          const fallback = yield* registerXAiPromptCompletionFallback(
-            pendingXAiPromptCompletionsRef,
-            started.sessionId,
-            promptId,
-          );
-          const cancelledResponse = promptResponseFromXAi({
-            sessionId: started.sessionId,
-            promptId: fallback.promptId,
-            stopReason: "cancelled",
-            agentResult: null,
-          });
-          const promptRpcFiber = yield* runtime
-            .prompt(
-              {
-                ...payload,
-                _meta: {
-                  ...payload._meta,
-                  promptId: fallback.promptId,
-                  requestId: fallback.promptId,
-                },
+      prompt: Effect.fn("xaiAcpExtension.prompt")(function* (payload, promptOptions?) {
+        const started = yield* runtime.start();
+        const promptId = yield* allocatePromptFallbackId;
+        const fallback = yield* registerXAiPromptCompletionFallback(
+          pendingXAiPromptCompletionsRef,
+          started.sessionId,
+          promptId,
+        );
+        const cancelledResponse = promptResponseFromXAi({
+          sessionId: started.sessionId,
+          promptId: fallback.promptId,
+          stopReason: "cancelled",
+          agentResult: null,
+        });
+        const promptRpcFiber = yield* runtime
+          .prompt(
+            {
+              ...payload,
+              _meta: {
+                ...payload._meta,
+                promptId: fallback.promptId,
+                requestId: fallback.promptId,
               },
-              promptOptions,
-            )
-            .pipe(Effect.forkChild);
-          return yield* Effect.raceFirst(
-            Fiber.join(promptRpcFiber).pipe(
-              Effect.catchCause((cause) =>
-                Cause.hasInterruptsOnly(cause)
-                  ? Effect.succeed(cancelledResponse)
-                  : Effect.failCause(cause),
-              ),
+            },
+            promptOptions,
+          )
+          .pipe(Effect.forkChild);
+        return yield* Effect.raceFirst(
+          Fiber.join(promptRpcFiber).pipe(
+            Effect.catchCause((cause) =>
+              Cause.hasInterruptsOnly(cause)
+                ? Effect.succeed(cancelledResponse)
+                : Effect.failCause(cause),
             ),
-            Deferred.await(fallback.deferred),
-          ).pipe(
-            Effect.tap((response) =>
-              rememberCompletedXAiPromptId(completedXAiPromptIdsRef, response, fallback.promptId),
-            ),
-            Effect.ensuring(
-              Effect.gen(function* () {
-                yield* Fiber.interrupt(promptRpcFiber).pipe(Effect.ignore);
-                yield* unregisterXAiPromptCompletionFallback(
-                  pendingXAiPromptCompletionsRef,
-                  fallback.deferred,
-                );
-              }),
-            ),
-          );
-        }),
+          ),
+          Deferred.await(fallback.deferred),
+        ).pipe(
+          Effect.tap((response) =>
+            rememberCompletedXAiPromptId(completedXAiPromptIdsRef, response, fallback.promptId),
+          ),
+          Effect.ensuring(
+            Effect.gen(function* () {
+              yield* Fiber.interrupt(promptRpcFiber).pipe(Effect.ignore);
+              yield* unregisterXAiPromptCompletionFallback(
+                pendingXAiPromptCompletionsRef,
+                fallback.deferred,
+              );
+            }),
+          ),
+        );
+      }),
       cancel: Effect.gen(function* () {
         // Do not call start here: cancellation must be able to reach the
         // underlying runtime when startup is stalled.

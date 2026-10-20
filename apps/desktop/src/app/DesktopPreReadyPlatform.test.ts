@@ -15,6 +15,7 @@ const {
   writeFileSyncMock,
   copyFileSyncMock,
   execFileSyncMock,
+  readFileSyncMock,
 } = vi.hoisted(() => ({
   appendSwitchMock: vi.fn(),
   getSwitchValueMock: vi.fn(),
@@ -25,6 +26,7 @@ const {
   writeFileSyncMock: vi.fn(),
   copyFileSyncMock: vi.fn(),
   execFileSyncMock: vi.fn(),
+  readFileSyncMock: vi.fn(),
 }));
 
 vi.mock("electron", () => ({
@@ -45,7 +47,7 @@ vi.mock("electron", () => ({
 }));
 
 vi.mock("node:fs", () => ({
-  readFileSync: () => "{}",
+  readFileSync: readFileSyncMock,
   mkdirSync: mkdirSyncMock,
   writeFileSync: writeFileSyncMock,
   copyFileSync: copyFileSyncMock,
@@ -68,6 +70,66 @@ describe("DesktopPreReadyPlatform", () => {
     writeFileSyncMock.mockReset();
     copyFileSyncMock.mockReset();
     execFileSyncMock.mockReset();
+    readFileSyncMock.mockReset().mockReturnValue("{}");
+  });
+
+  it.effect("persists Linux scaling synchronously across relaunches and settings rewrites", () => {
+    vi.stubEnv("T3CODE_HOME", "/isolated");
+    vi.stubEnv("VITE_DEV_SERVER_URL", "");
+    const settingsPath = "/isolated/userdata/desktop-settings.json";
+    const files = new Map([[settingsPath, "{}"]]);
+    const commandLine = new Map<string, string>();
+    readFileSyncMock.mockImplementation((path: string) => {
+      const contents = files.get(path);
+      if (contents === undefined) throw new Error("ENOENT");
+      return contents;
+    });
+    writeFileSyncMock.mockImplementation((path: string, contents: string) => {
+      files.set(path, contents);
+    });
+    hasSwitchMock.mockImplementation((name: string) => commandLine.has(name));
+    getSwitchValueMock.mockImplementation((name: string) => commandLine.get(name) ?? "");
+    appendSwitchMock.mockImplementation((name: string, value: string) => {
+      commandLine.set(name, value);
+    });
+    const launch = Effect.gen(function* () {
+      const startup = Promise.resolve().then(() => commandLine.get("force-device-scale-factor"));
+      yield* DesktopPreReadyPlatform.make;
+      return yield* Effect.promise(() => startup);
+    });
+
+    return Effect.gen(function* () {
+      for (const explicitScale of ["1.75", "1"]) {
+        commandLine.clear();
+        commandLine.set("force-device-scale-factor", explicitScale);
+        appendSwitchMock.mockClear();
+        assert.equal(yield* launch, explicitScale);
+        assert.isFalse(
+          appendSwitchMock.mock.calls.some(([name]) => name === "force-device-scale-factor"),
+        );
+
+        // The settings service discards fields it does not own when rewriting its document.
+        files.set(settingsPath, JSON.stringify({ linuxPasswordStore: "basic" }));
+        commandLine.clear();
+        assert.equal(yield* launch, explicitScale);
+      }
+    }).pipe(
+      Effect.provideService(HostProcess.Platform, "linux"),
+      Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())),
+    );
+  });
+
+  it.effect.each(["darwin", "win32"] as const)("leaves device scaling alone on %s", (platform) => {
+    readFileSyncMock.mockReturnValue("1.75");
+    hasSwitchMock.mockImplementation((name: string) => name === "force-device-scale-factor");
+    getSwitchValueMock.mockReturnValue("2");
+
+    return Effect.gen(function* () {
+      yield* DesktopPreReadyPlatform.make;
+      assert.deepEqual(readFileSyncMock.mock.calls, []);
+      assert.deepEqual(writeFileSyncMock.mock.calls, []);
+      assert.deepEqual(appendSwitchMock.mock.calls, []);
+    }).pipe(Effect.provideService(HostProcess.Platform, platform));
   });
 
   it.effect("preserves an explicit Linux password-store switch", () => {
@@ -139,52 +201,52 @@ describe("DesktopPreReadyPlatform", () => {
     );
   });
 
-  it.effect.each([undefined, 'Exec="/Applications/deleted-previous.AppImage" %U'])(
-    "prepares a Linux desktop entry before startup yields (%s)",
-    (previousEntry) => {
-      vi.stubEnv("VITE_DEV_SERVER_URL", "");
-      vi.stubEnv("XDG_DATA_HOME", "/xdg");
-      vi.stubEnv("APPIMAGE", "/Applications/current.AppImage");
-      getSwitchValueMock.mockReturnValue("");
-      let desktopName = "t3code.desktop";
-      let desktopEntry = previousEntry;
-      let iconInstalled = false;
-      copyFileSyncMock.mockImplementation((_source: string, destination: string) => {
-        iconInstalled = destination === "/xdg/icons/com.t3tools.T3Code.desktop.png";
-      });
-      setDesktopNameMock.mockImplementation((name: string) => {
-        desktopName = name;
-      });
-      writeFileSyncMock.mockImplementation((path: string, contents: string) => {
-        if (path === "/xdg/applications/com.t3tools.T3Code.desktop") desktopEntry = contents;
-      });
+  it.effect.each([
+    { previousEntry: undefined, label: "missing" },
+    { previousEntry: 'Exec="/Applications/deleted-previous.AppImage" %U', label: "stale" },
+  ])("prepares a $label Linux desktop entry before startup yields", ({ previousEntry }) => {
+    vi.stubEnv("VITE_DEV_SERVER_URL", "");
+    vi.stubEnv("XDG_DATA_HOME", "/xdg");
+    vi.stubEnv("APPIMAGE", "/Applications/current.AppImage");
+    getSwitchValueMock.mockReturnValue("");
+    let desktopName = "t3code.desktop";
+    let desktopEntry = previousEntry;
+    let iconInstalled = false;
+    copyFileSyncMock.mockImplementation((_source: string, destination: string) => {
+      iconInstalled = destination === "/xdg/icons/com.t3tools.T3Code.desktop.png";
+    });
+    setDesktopNameMock.mockImplementation((name: string) => {
+      desktopName = name;
+    });
+    writeFileSyncMock.mockImplementation((path: string, contents: string) => {
+      if (path === "/xdg/applications/com.t3tools.T3Code.desktop") desktopEntry = contents;
+    });
 
-      return Effect.scoped(
-        Effect.gen(function* () {
-          const portalIdentity = Promise.resolve().then(() => ({
-            desktopName,
-            desktopEntry,
-            iconInstalled,
-          }));
-          yield* Layer.build(
-            DesktopPreReadyPlatform.layer.pipe(
-              Layer.provide(Layer.succeed(HostProcess.Platform, "linux")),
-            ),
-          );
-          const identity = yield* Effect.promise(() => portalIdentity);
-          assert.equal(identity.desktopName, "com.t3tools.T3Code.desktop");
-          assert.include(identity.desktopEntry ?? "", "Exec=/Applications/current.AppImage %U");
-          assert.include(identity.desktopEntry ?? "", "Name=T3 Code (Beta)");
-          assert.include(identity.desktopEntry ?? "", "MimeType=x-scheme-handler/t3code;");
-          assert.include(
-            identity.desktopEntry ?? "",
-            "Icon=/xdg/icons/com.t3tools.T3Code.desktop.png",
-          );
-          assert.isTrue(identity.iconInstalled);
-        }),
-      ).pipe(Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())));
-    },
-  );
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const portalIdentity = Promise.resolve().then(() => ({
+          desktopName,
+          desktopEntry,
+          iconInstalled,
+        }));
+        yield* Layer.build(
+          DesktopPreReadyPlatform.layer.pipe(
+            Layer.provide(Layer.succeed(HostProcess.Platform, "linux")),
+          ),
+        );
+        const identity = yield* Effect.promise(() => portalIdentity);
+        assert.equal(identity.desktopName, "com.t3tools.T3Code.desktop");
+        assert.include(identity.desktopEntry ?? "", "Exec=/Applications/current.AppImage %U");
+        assert.include(identity.desktopEntry ?? "", "Name=T3 Code (Beta)");
+        assert.include(identity.desktopEntry ?? "", "MimeType=x-scheme-handler/t3code;");
+        assert.include(
+          identity.desktopEntry ?? "",
+          "Icon=/xdg/icons/com.t3tools.T3Code.desktop.png",
+        );
+        assert.isTrue(identity.iconInstalled);
+      }),
+    ).pipe(Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())));
+  });
 
   it.effect("keeps startup available when the early desktop entry cannot be written", () => {
     getSwitchValueMock.mockReturnValue("");

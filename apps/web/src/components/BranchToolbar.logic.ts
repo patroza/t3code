@@ -22,6 +22,10 @@ export interface EnvironmentOption {
   machine: EnvironmentMachineKind;
 }
 
+/** "Add to another machine" stays muted until hovered: easy to find, quieter than the machines. */
+export const ADD_TO_MACHINE_LABEL_CLASS =
+  "flex min-w-0 items-center gap-1.5 opacity-55 in-data-highlighted:opacity-100 in-data-popup-open:opacity-100";
+
 export const EnvMode = Schema.Literals(["local", "worktree"]);
 export type EnvMode = typeof EnvMode.Type;
 export type WorkspaceTarget = EnvMode | "current-worktree";
@@ -232,14 +236,11 @@ export function resolveBranchTriggerLabel(input: {
   // Reused base branch is checked out as-is (Tim #15); otherwise "From X" for
   // new worktree branches, with optional origin/ prefix (upstream #4680).
   if (effectiveEnvMode === "worktree" && !activeWorktreePath) {
-    if (reuseBaseBranch) {
-      return resolvedActiveBranch;
-    }
-    const baseRef =
-      startFromOrigin && resolvedActiveBranchIsRemote === false
-        ? `origin/${resolvedActiveBranch}`
-        : resolvedActiveBranch;
-    return `From ${baseRef}`;
+    if (reuseBaseBranch) return resolvedActiveBranch;
+    // Only the server can determine a local branch's configured remote.
+    return startFromOrigin && resolvedActiveBranchIsRemote === false
+      ? `From ${resolvedActiveBranch} (remote)`
+      : `From ${resolvedActiveBranch}`;
   }
   return resolvedActiveBranch;
 }

@@ -16,7 +16,10 @@ import { getConnectionAwareBrandHeaderOptions } from "./WorkspaceConnectionTitle
 import { useNativeMailSearchToolbar } from "../../native/use-native-mail-search-toolbar";
 import { useDeviceType } from "../../native/native-layout-metrics";
 import { buildHomeListFilterMenu } from "./home-list-filter-menu";
-import { createSidebarHeaderItems } from "../threads/sidebar-native-header-items";
+import {
+  createSidebarFilterHeaderItem,
+  createSidebarHeaderItems,
+} from "../threads/sidebar-native-header-items";
 import {
   DEFAULT_OWNERSHIP_FILTER,
   OWNERSHIP_FILTER_LABELS,
@@ -117,7 +120,19 @@ export function HomeHeader(props: HomeHeaderProps) {
   const headerTitle = HOME_LIST_MODE_TITLES[props.listMode];
 
   if (props.usesWorkspaceToolbar) {
-    return null;
+    return deviceType === "duo-unfolded" ? (
+      <NativeStackScreenOptions
+        optionsVersion={filterMenu.items}
+        options={{
+          nativeSidebarFilter: createSidebarFilterHeaderItem({
+            filterIcon: hasCustomListOptions
+              ? "line.3.horizontal.decrease.circle.fill"
+              : "line.3.horizontal.decrease.circle",
+            filterMenu,
+          }),
+        }}
+      />
+    ) : null;
   }
 
   return (

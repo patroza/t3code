@@ -296,6 +296,12 @@ export function createVcsEnvironmentAtoms<R, E>(
      * Full VCS status (includes server remote poller). Use for the active thread /
      * git chrome only — not for high-cardinality lists.
      */
+    // An uncached read for decisions that must match the repository now, not
+    // the persisted list a picker renders from.
+    readRefs: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:vcs:read-refs",
+      tag: WS_METHODS.vcsListRefs,
+    }),
     status: createEnvironmentSubscriptionAtomFamily(runtime, {
       label: "environment-data:vcs:status",
       idleTtlMs: VCS_STATUS_IDLE_TTL_MS,

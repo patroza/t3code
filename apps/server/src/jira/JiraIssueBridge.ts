@@ -239,16 +239,17 @@ const make = Effect.gen(function* () {
   const hostedAppUrl = yield* hostedAppUrlConfig;
   const environmentId = yield* serverEnvironment.getEnvironmentId;
 
-  const resolveActorTrust = (invocation: JiraIssueInvocation) =>
-    Effect.gen(function* () {
-      const people = yield* identity.listMapPeople();
-      const mapEnabled = yield* identity.isMapEnabled();
-      return classifyJiraActorTrust({
-        identityMapEnabled: mapEnabled,
-        actorAccountId: invocation.actorAccountId,
-        people,
-      }) satisfies JiraActorTrustDecision;
-    });
+  const resolveActorTrust = Effect.fn("JiraIssueBridge.resolveActorTrust")(function* (
+    invocation: JiraIssueInvocation,
+  ) {
+    const people = yield* identity.listMapPeople();
+    const mapEnabled = yield* identity.isMapEnabled();
+    return classifyJiraActorTrust({
+      identityMapEnabled: mapEnabled,
+      actorAccountId: invocation.actorAccountId,
+      people,
+    }) satisfies JiraActorTrustDecision;
+  });
 
   /**
    * Post a bridge response as an **inline threaded reply** under the user's mention.
@@ -261,68 +262,72 @@ const make = Effect.gen(function* () {
    * Never intentionally posts a bare top-level comment first; flat fallback is only
    * if every resolved parentId is rejected (see JiraAppClient).
    */
-  const storeOverflow = (delivery: StoredJiraDelivery, overflow: string) =>
-    Effect.gen(function* () {
-      const heading = jiraResponseStamp(DateTime.formatIso(yield* DateTime.now));
-      const target = config.enabled
-        ? confluencePageForProject(config.confluencePages, delivery.projectKey)
-        : null;
-      const published =
-        target === null
-          ? null
-          : yield* jira.publishConfluenceSection({
-              issueKey: delivery.issueKey,
-              spaceKey: target.spaceKey,
-              parentTitles: target.parentTitles,
-              title: delivery.issueKey,
-              heading,
-              markdown: overflow,
-            });
-      const stored =
-        published ??
-        (yield* jira.addIssueAttachment({
-          issueKey: delivery.issueKey,
-          filename: jiraAttachmentFilename(delivery.issueKey, heading),
-          markdown: overflow,
-        }));
-      return jiraOverflowNotice(stored);
-    });
-
-  const postComment = (delivery: StoredJiraDelivery, body: string) =>
-    Effect.gen(function* () {
-      const mentionParent = delivery.sourceCommentId.trim();
-      const replyParent = delivery.replyToCommentId.trim();
-      // Prefer the mention itself so we always answer that comment's thread; client
-      // walks parentId up to the root when the mention is already a nested reply.
-      const parentCommentId = mentionParent.length > 0 ? mentionParent : null;
-      const prepared = partitionJiraComment(body);
-      const notice =
-        prepared.overflow === null ? null : yield* storeOverflow(delivery, prepared.overflow);
-      const inline = [prepared.inline, notice]
-        .filter((part): part is string => part !== null && part.trim().length > 0)
-        .join("\n\n");
-      return yield* jira.addIssueComment({
+  const storeOverflow = Effect.fn("JiraIssueBridge.storeOverflow")(function* (
+    delivery: StoredJiraDelivery,
+    overflow: string,
+  ) {
+    const heading = jiraResponseStamp(DateTime.formatIso(yield* DateTime.now));
+    const target = config.enabled
+      ? confluencePageForProject(config.confluencePages, delivery.projectKey)
+      : null;
+    const published =
+      target === null
+        ? null
+        : yield* jira.publishConfluenceSection({
+            issueKey: delivery.issueKey,
+            spaceKey: target.spaceKey,
+            parentTitles: target.parentTitles,
+            title: delivery.issueKey,
+            heading,
+            markdown: overflow,
+          });
+    const stored =
+      published ??
+      (yield* jira.addIssueAttachment({
         issueKey: delivery.issueKey,
-        body: formatJiraComment(
-          appendJiraT3ThreadLink(
-            inline,
-            delivery.threadId === null
-              ? null
-              : {
-                  hostedAppUrl,
-                  environmentId,
-                  threadId: delivery.threadId,
-                },
-          ),
+        filename: jiraAttachmentFilename(delivery.issueKey, heading),
+        markdown: overflow,
+      }));
+    return jiraOverflowNotice(stored);
+  });
+
+  const postComment = Effect.fn("JiraIssueBridge.postComment")(function* (
+    delivery: StoredJiraDelivery,
+    body: string,
+  ) {
+    const mentionParent = delivery.sourceCommentId.trim();
+    const replyParent = delivery.replyToCommentId.trim();
+    // Prefer the mention itself so we always answer that comment's thread; client
+    // walks parentId up to the root when the mention is already a nested reply.
+    const parentCommentId = mentionParent.length > 0 ? mentionParent : null;
+    const prepared = partitionJiraComment(body);
+    const notice =
+      prepared.overflow === null ? null : yield* storeOverflow(delivery, prepared.overflow);
+    const inline = [prepared.inline, notice]
+      .filter((part): part is string => part !== null && part.trim().length > 0)
+      .join("\n\n");
+    return yield* jira.addIssueComment({
+      issueKey: delivery.issueKey,
+      body: formatJiraComment(
+        appendJiraT3ThreadLink(
+          inline,
+          delivery.threadId === null
+            ? null
+            : {
+                hostedAppUrl,
+                environmentId,
+                threadId: delivery.threadId,
+              },
         ),
-        parentCommentId,
-        fallbackParentCommentId:
-          replyParent.length > 0 && replyParent !== mentionParent ? replyParent : null,
-        // Normal Jira reply style: @ the human who triggered the bot.
-        mentionAccountId: delivery.actorAccountId,
-        mentionDisplayName: delivery.actorDisplayName,
-      });
+      ),
+      parentCommentId,
+      fallbackParentCommentId:
+        replyParent.length > 0 && replyParent !== mentionParent ? replyParent : null,
+      // Normal Jira reply style: @ the human who triggered the bot.
+      mentionAccountId: delivery.actorAccountId,
+      mentionDisplayName: delivery.actorDisplayName,
     });
+  });
 
   const updateDelivery = (delivery: StoredJiraDelivery, patch: Partial<StoredJiraDelivery>) =>
     DateTime.now.pipe(

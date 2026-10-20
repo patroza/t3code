@@ -652,26 +652,27 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
           HashMap.empty<ThreadId, "waiting" | "running" | "checkAgain">(),
         );
 
-        const enqueueThreadActivity = (threadId: ThreadId): Effect.Effect<void> =>
-          Effect.gen(function* () {
-            const action = yield* Ref.modify(pendingThreads, (threads) => {
-              const state = HashMap.get(threads, threadId);
+        const enqueueThreadActivity = Effect.fn("NTBSProcessor.enqueueThreadActivity")(function* (
+          threadId: ThreadId,
+        ): Effect.fn.Return<void> {
+          const action = yield* Ref.modify(pendingThreads, (threads) => {
+            const state = HashMap.get(threads, threadId);
 
-              if (Option.isNone(state)) {
-                return ["enqueue", HashMap.set(threads, threadId, "waiting")] as const;
-              }
-
-              if (state.value === "running") {
-                return ["skip", HashMap.set(threads, threadId, "checkAgain")] as const;
-              }
-
-              return ["skip", threads] as const;
-            });
-
-            if (action === "enqueue") {
-              yield* Queue.offer(activityQueue, { type: "thread", threadId });
+            if (Option.isNone(state)) {
+              return ["enqueue", HashMap.set(threads, threadId, "waiting")] as const;
             }
+
+            if (state.value === "running") {
+              return ["skip", HashMap.set(threads, threadId, "checkAgain")] as const;
+            }
+
+            return ["skip", threads] as const;
           });
+
+          if (action === "enqueue") {
+            yield* Queue.offer(activityQueue, { type: "thread", threadId });
+          }
+        });
 
         /*
           A failed pass is logged and dropped: the next event or the sweeper runs the exchange again. Defects get the same treatment, so one cannot kill a worker; only interruption ends a worker.

@@ -626,439 +626,436 @@ async function atomicWriteFile(filePath: string, contents: string): Promise<void
   await NodeFSP.rename(tempPath, filePath);
 }
 
-export const makeThreadLinkStore = (dataDirRaw: string) =>
-  Effect.gen(function* () {
-    const dataDir = expandHome(dataDirRaw);
-    const filePath = NodePath.join(dataDir, "links.json");
-    yield* Effect.promise(() => NodeFSP.mkdir(dataDir, { recursive: true, mode: 0o700 }));
+export const makeThreadLinkStore = Effect.fn("ThreadLinkStore.makeThreadLinkStore")(function* (
+  dataDirRaw: string,
+) {
+  const dataDir = expandHome(dataDirRaw);
+  const filePath = NodePath.join(dataDir, "links.json");
+  yield* Effect.promise(() => NodeFSP.mkdir(dataDir, { recursive: true, mode: 0o700 }));
 
-    // Missing/unreadable file is fine (first run). Effect async failures are not JS throwables,
-    // so recover with orElseSucceed rather than try/catch around yield*.
-    const loaded = yield* Effect.tryPromise({
-      try: () => NodeFSP.readFile(filePath, "utf8"),
-      catch: () => "unreadable" as const,
-    }).pipe(
-      Effect.map((raw) => {
-        try {
-          return parseLinksDocument(JSON.parse(raw) as unknown);
-        } catch {
-          return parseLinksDocument(null);
-        }
-      }),
-      Effect.orElseSucceed(() => parseLinksDocument(null)),
+  // Missing/unreadable file is fine (first run). Effect async failures are not JS throwables,
+  // so recover with orElseSucceed rather than try/catch around yield*.
+  const loaded = yield* Effect.tryPromise({
+    try: () => NodeFSP.readFile(filePath, "utf8"),
+    catch: () => "unreadable" as const,
+  }).pipe(
+    Effect.map((raw) => {
+      try {
+        return parseLinksDocument(JSON.parse(raw) as unknown);
+      } catch {
+        return parseLinksDocument(null);
+      }
+    }),
+    Effect.orElseSucceed(() => parseLinksDocument(null)),
+  );
+
+  const state = yield* Ref.make(
+    new Map(loaded.links.map((link) => [link.discordThreadId, link] as const)),
+  );
+
+  // Persist migrated v1 → v2 so the next boot does not re-migrate.
+  if (loaded.migratedFromV1 && loaded.links.length > 0) {
+    yield* Effect.promise(() =>
+      atomicWriteFile(filePath, serializeLinksDocument(loaded.links)),
+    ).pipe(Effect.uninterruptible);
+  }
+
+  const persist = (map: Map<string, ThreadLink>) =>
+    Effect.promise(() => atomicWriteFile(filePath, serializeLinksDocument([...map.values()])));
+
+  // Node filesystem promises cannot be cancelled. Finish each locked mutation+write
+  // before interruption so shutdown cannot release storage while a rename is pending.
+  // Serialize mutate+persist so concurrent hint writers cannot flush a stale map
+  // over a newer in-memory state (stream ids vs sequence marker, etc.).
+  const writeLock = yield* Semaphore.make(1);
+
+  const updateLink = (
+    discordThreadId: string,
+    mutate: (current: ThreadLink) => ThreadLink,
+  ): Effect.Effect<ThreadLink | null> =>
+    writeLock.withPermit(
+      Effect.gen(function* () {
+        let updated: ThreadLink | null = null;
+        const next = yield* Ref.updateAndGet(state, (map) => {
+          const current = map.get(discordThreadId);
+          if (current === undefined) return map;
+          updated = mutate(current);
+          const copy = new Map(map);
+          copy.set(discordThreadId, updated);
+          return copy;
+        });
+        if (updated === null) return null;
+        yield* persist(next);
+        return updated;
+      }).pipe(Effect.uninterruptible),
     );
 
-    const state = yield* Ref.make(
-      new Map(loaded.links.map((link) => [link.discordThreadId, link] as const)),
-    );
+  return ThreadLinkStore.of({
+    getByDiscordThreadId: (discordThreadId) =>
+      Ref.get(state).pipe(Effect.map((map) => map.get(discordThreadId) ?? null)),
 
-    // Persist migrated v1 → v2 so the next boot does not re-migrate.
-    if (loaded.migratedFromV1 && loaded.links.length > 0) {
-      yield* Effect.promise(() =>
-        atomicWriteFile(filePath, serializeLinksDocument(loaded.links)),
-      ).pipe(Effect.uninterruptible);
-    }
+    getByT3ThreadId: (t3ThreadId) =>
+      Ref.get(state).pipe(
+        Effect.map((map) => {
+          for (const link of map.values()) {
+            if (link.t3ThreadId === t3ThreadId) return link;
+          }
+          return null;
+        }),
+      ),
 
-    const persist = (map: Map<string, ThreadLink>) =>
-      Effect.promise(() => atomicWriteFile(filePath, serializeLinksDocument([...map.values()])));
+    getBySourceThread: (sourceKind, sourceThreadId) =>
+      Ref.get(state).pipe(
+        Effect.map((map) => {
+          for (const link of map.values()) {
+            const linkSourceKind = link.sourceKind ?? "discord";
+            const linkSourceThreadId = link.sourceThreadId ?? link.discordThreadId;
+            if (linkSourceKind === sourceKind && linkSourceThreadId === sourceThreadId) {
+              return link;
+            }
+          }
+          return null;
+        }),
+      ),
 
-    // Node filesystem promises cannot be cancelled. Finish each locked mutation+write
-    // before interruption so shutdown cannot release storage while a rename is pending.
-    // Serialize mutate+persist so concurrent hint writers cannot flush a stale map
-    // over a newer in-memory state (stream ids vs sequence marker, etc.).
-    const writeLock = yield* Semaphore.make(1);
-
-    const updateLink = (
-      discordThreadId: string,
-      mutate: (current: ThreadLink) => ThreadLink,
-    ): Effect.Effect<ThreadLink | null> =>
+    put: (link) =>
       writeLock.withPermit(
         Effect.gen(function* () {
-          let updated: ThreadLink | null = null;
+          const normalized = normalizeThreadLinkInput(link);
           const next = yield* Ref.updateAndGet(state, (map) => {
-            const current = map.get(discordThreadId);
-            if (current === undefined) return map;
-            updated = mutate(current);
+            const existing = map.get(normalized.discordThreadId);
+            // Preserve durable bridge hints when callers re-put a minimal link.
+            const merged =
+              existing === undefined
+                ? normalized
+                : asThreadLink({
+                    ...normalized,
+                    // Never wipe durable hints on a minimal re-put (overlapping writers).
+                    sourceKind:
+                      link.sourceKind !== undefined ? normalized.sourceKind : existing.sourceKind,
+                    sourceThreadId:
+                      link.sourceThreadId !== undefined
+                        ? normalized.sourceThreadId
+                        : existing.sourceThreadId,
+                    lastFinalizedAssistantId:
+                      link.lastFinalizedAssistantId !== undefined
+                        ? normalized.lastFinalizedAssistantId
+                        : existing.lastFinalizedAssistantId,
+                    lastSeenTurnId:
+                      link.lastSeenTurnId !== undefined
+                        ? normalized.lastSeenTurnId
+                        : existing.lastSeenTurnId,
+                    lastThreadSnapshotSequence:
+                      link.lastThreadSnapshotSequence !== undefined
+                        ? normalized.lastThreadSnapshotSequence
+                        : existing.lastThreadSnapshotSequence,
+                    lastDeliveredSequence:
+                      link.lastDeliveredSequence !== undefined
+                        ? normalized.lastDeliveredSequence
+                        : existing.lastDeliveredSequence,
+                    deliveryReceipt: link.deliveryReceipt ?? existing.deliveryReceipt,
+                    streamDiscordMessageIds:
+                      link.streamDiscordMessageIds !== undefined
+                        ? normalized.streamDiscordMessageIds
+                        : existing.streamDiscordMessageIds,
+                    taskDiscordMessageId:
+                      link.taskDiscordMessageId !== undefined
+                        ? normalized.taskDiscordMessageId
+                        : existing.taskDiscordMessageId,
+                    threadTalkMode:
+                      link.threadTalkMode !== undefined
+                        ? normalized.threadTalkMode
+                        : existing.threadTalkMode,
+                    sentDiscordUserMessageIds:
+                      link.sentDiscordUserMessageIds !== undefined
+                        ? normalized.sentDiscordUserMessageIds
+                        : existing.sentDiscordUserMessageIds,
+                    jiraIssueKeys:
+                      link.jiraIssueKeys !== undefined
+                        ? normalized.jiraIssueKeys
+                        : existing.jiraIssueKeys,
+                    linkedJiraIssueKeys:
+                      link.linkedJiraIssueKeys !== undefined
+                        ? normalized.linkedJiraIssueKeys
+                        : existing.linkedJiraIssueKeys,
+                    backfillJiraIssueKeys:
+                      link.backfillJiraIssueKeys !== undefined
+                        ? normalized.backfillJiraIssueKeys
+                        : existing.backfillJiraIssueKeys,
+                    sentryIssueUrls:
+                      link.sentryIssueUrls !== undefined
+                        ? normalized.sentryIssueUrls
+                        : existing.sentryIssueUrls,
+                    prUrls: link.prUrls !== undefined ? normalized.prUrls : existing.prUrls,
+                    infoDiscordMessageId:
+                      link.infoDiscordMessageId !== undefined
+                        ? normalized.infoDiscordMessageId
+                        : existing.infoDiscordMessageId,
+                    initialModelLine:
+                      link.initialModelLine !== undefined
+                        ? normalized.initialModelLine
+                        : existing.initialModelLine,
+                    currentModelLine:
+                      link.currentModelLine !== undefined
+                        ? normalized.currentModelLine
+                        : existing.currentModelLine,
+                    modelSinceAt:
+                      link.modelSinceAt !== undefined
+                        ? normalized.modelSinceAt
+                        : existing.modelSinceAt,
+                    backgroundDigestMessageId:
+                      link.backgroundDigestMessageId !== undefined
+                        ? normalized.backgroundDigestMessageId
+                        : existing.backgroundDigestMessageId,
+                    backgroundDigestText:
+                      link.backgroundDigestText !== undefined
+                        ? normalized.backgroundDigestText
+                        : existing.backgroundDigestText,
+                    lastActivityAt: normalized.lastActivityAt,
+                    updatedAt: nowIso(),
+                  });
             const copy = new Map(map);
-            copy.set(discordThreadId, updated);
+            copy.set(merged.discordThreadId, merged);
             return copy;
           });
-          if (updated === null) return null;
           yield* persist(next);
-          return updated;
         }).pipe(Effect.uninterruptible),
-      );
+      ),
 
-    return ThreadLinkStore.of({
-      getByDiscordThreadId: (discordThreadId) =>
-        Ref.get(state).pipe(Effect.map((map) => map.get(discordThreadId) ?? null)),
+    touch: (discordThreadId, at) => {
+      const when = at ?? nowIso();
+      return updateLink(discordThreadId, (current) => ({
+        ...current,
+        lastActivityAt: when,
+        updatedAt: when,
+      }));
+    },
 
-      getByT3ThreadId: (t3ThreadId) =>
-        Ref.get(state).pipe(
-          Effect.map((map) => {
-            for (const link of map.values()) {
-              if (link.t3ThreadId === t3ThreadId) return link;
+    tombstone: (discordThreadId) => {
+      const when = nowIso();
+      return updateLink(discordThreadId, (current) => ({
+        ...current,
+        status: "tombstone",
+        updatedAt: when,
+      }));
+    },
+
+    updateBridgeHints: (discordThreadId, partial) => {
+      const when = nowIso();
+      return updateLink(discordThreadId, (current) => ({
+        ...current,
+        updatedAt: when,
+        lastActivityAt: when,
+        ...(partial.lastSeenTurnId !== undefined ? { lastSeenTurnId: partial.lastSeenTurnId } : {}),
+        ...(partial.lastFinalizedAssistantId !== undefined
+          ? { lastFinalizedAssistantId: partial.lastFinalizedAssistantId }
+          : {}),
+        ...(partial.lastThreadSnapshotSequence !== undefined
+          ? { lastThreadSnapshotSequence: partial.lastThreadSnapshotSequence }
+          : {}),
+        ...(partial.lastDeliveredSequence !== undefined
+          ? { lastDeliveredSequence: partial.lastDeliveredSequence }
+          : {}),
+        ...(partial.deliveryReceipt !== undefined
+          ? { deliveryReceipt: partial.deliveryReceipt }
+          : {}),
+        ...(partial.streamDiscordMessageIds !== undefined
+          ? {
+              streamDiscordMessageIds:
+                partial.streamDiscordMessageIds.length > 0
+                  ? [...new Set(partial.streamDiscordMessageIds.filter((id) => id.trim() !== ""))]
+                  : undefined,
             }
-            return null;
-          }),
-        ),
-
-      getBySourceThread: (sourceKind, sourceThreadId) =>
-        Ref.get(state).pipe(
-          Effect.map((map) => {
-            for (const link of map.values()) {
-              const linkSourceKind = link.sourceKind ?? "discord";
-              const linkSourceThreadId = link.sourceThreadId ?? link.discordThreadId;
-              if (linkSourceKind === sourceKind && linkSourceThreadId === sourceThreadId) {
-                return link;
+          : {}),
+        ...(partial.backgroundDigestMessageId !== undefined
+          ? partial.backgroundDigestMessageId == null || partial.backgroundDigestMessageId === ""
+            ? { backgroundDigestMessageId: undefined, backgroundDigestText: undefined }
+            : {
+                backgroundDigestMessageId: partial.backgroundDigestMessageId,
+                backgroundDigestText: partial.backgroundDigestText ?? undefined,
               }
-            }
-            return null;
-          }),
-        ),
+          : {}),
+      }));
+    },
 
-      put: (link) =>
-        writeLock.withPermit(
-          Effect.gen(function* () {
-            const normalized = normalizeThreadLinkInput(link);
-            const next = yield* Ref.updateAndGet(state, (map) => {
-              const existing = map.get(normalized.discordThreadId);
-              // Preserve durable bridge hints when callers re-put a minimal link.
-              const merged =
-                existing === undefined
-                  ? normalized
-                  : asThreadLink({
-                      ...normalized,
-                      // Never wipe durable hints on a minimal re-put (overlapping writers).
-                      sourceKind:
-                        link.sourceKind !== undefined ? normalized.sourceKind : existing.sourceKind,
-                      sourceThreadId:
-                        link.sourceThreadId !== undefined
-                          ? normalized.sourceThreadId
-                          : existing.sourceThreadId,
-                      lastFinalizedAssistantId:
-                        link.lastFinalizedAssistantId !== undefined
-                          ? normalized.lastFinalizedAssistantId
-                          : existing.lastFinalizedAssistantId,
-                      lastSeenTurnId:
-                        link.lastSeenTurnId !== undefined
-                          ? normalized.lastSeenTurnId
-                          : existing.lastSeenTurnId,
-                      lastThreadSnapshotSequence:
-                        link.lastThreadSnapshotSequence !== undefined
-                          ? normalized.lastThreadSnapshotSequence
-                          : existing.lastThreadSnapshotSequence,
-                      lastDeliveredSequence:
-                        link.lastDeliveredSequence !== undefined
-                          ? normalized.lastDeliveredSequence
-                          : existing.lastDeliveredSequence,
-                      deliveryReceipt: link.deliveryReceipt ?? existing.deliveryReceipt,
-                      streamDiscordMessageIds:
-                        link.streamDiscordMessageIds !== undefined
-                          ? normalized.streamDiscordMessageIds
-                          : existing.streamDiscordMessageIds,
-                      taskDiscordMessageId:
-                        link.taskDiscordMessageId !== undefined
-                          ? normalized.taskDiscordMessageId
-                          : existing.taskDiscordMessageId,
-                      threadTalkMode:
-                        link.threadTalkMode !== undefined
-                          ? normalized.threadTalkMode
-                          : existing.threadTalkMode,
-                      sentDiscordUserMessageIds:
-                        link.sentDiscordUserMessageIds !== undefined
-                          ? normalized.sentDiscordUserMessageIds
-                          : existing.sentDiscordUserMessageIds,
-                      jiraIssueKeys:
-                        link.jiraIssueKeys !== undefined
-                          ? normalized.jiraIssueKeys
-                          : existing.jiraIssueKeys,
-                      linkedJiraIssueKeys:
-                        link.linkedJiraIssueKeys !== undefined
-                          ? normalized.linkedJiraIssueKeys
-                          : existing.linkedJiraIssueKeys,
-                      backfillJiraIssueKeys:
-                        link.backfillJiraIssueKeys !== undefined
-                          ? normalized.backfillJiraIssueKeys
-                          : existing.backfillJiraIssueKeys,
-                      sentryIssueUrls:
-                        link.sentryIssueUrls !== undefined
-                          ? normalized.sentryIssueUrls
-                          : existing.sentryIssueUrls,
-                      prUrls: link.prUrls !== undefined ? normalized.prUrls : existing.prUrls,
-                      infoDiscordMessageId:
-                        link.infoDiscordMessageId !== undefined
-                          ? normalized.infoDiscordMessageId
-                          : existing.infoDiscordMessageId,
-                      initialModelLine:
-                        link.initialModelLine !== undefined
-                          ? normalized.initialModelLine
-                          : existing.initialModelLine,
-                      currentModelLine:
-                        link.currentModelLine !== undefined
-                          ? normalized.currentModelLine
-                          : existing.currentModelLine,
-                      modelSinceAt:
-                        link.modelSinceAt !== undefined
-                          ? normalized.modelSinceAt
-                          : existing.modelSinceAt,
-                      backgroundDigestMessageId:
-                        link.backgroundDigestMessageId !== undefined
-                          ? normalized.backgroundDigestMessageId
-                          : existing.backgroundDigestMessageId,
-                      backgroundDigestText:
-                        link.backgroundDigestText !== undefined
-                          ? normalized.backgroundDigestText
-                          : existing.backgroundDigestText,
-                      lastActivityAt: normalized.lastActivityAt,
-                      updatedAt: nowIso(),
-                    });
-              const copy = new Map(map);
-              copy.set(merged.discordThreadId, merged);
-              return copy;
-            });
-            yield* persist(next);
-          }).pipe(Effect.uninterruptible),
-        ),
+    setThreadTalkMode: (discordThreadId, mode) =>
+      updateLink(discordThreadId, (existing) => ({
+        ...existing,
+        threadTalkMode: mode ?? undefined,
+        updatedAt: nowIso(),
+      })).pipe(Effect.asVoid),
 
-      touch: (discordThreadId, at) => {
-        const when = at ?? nowIso();
-        return updateLink(discordThreadId, (current) => ({
-          ...current,
-          lastActivityAt: when,
-          updatedAt: when,
-        }));
-      },
+    setTaskDiscordMessageId: (discordThreadId, taskDiscordMessageId) =>
+      updateLink(discordThreadId, (existing) => ({
+        ...existing,
+        taskDiscordMessageId: taskDiscordMessageId ?? undefined,
+        updatedAt: nowIso(),
+      })).pipe(Effect.asVoid),
 
-      tombstone: (discordThreadId) => {
-        const when = nowIso();
-        return updateLink(discordThreadId, (current) => ({
-          ...current,
-          status: "tombstone",
-          updatedAt: when,
-        }));
-      },
+    setStreamDiscordMessageIds: (discordThreadId, streamDiscordMessageIds) => {
+      const normalizedIds = [...new Set(streamDiscordMessageIds.filter((id) => id.trim() !== ""))];
+      return updateLink(discordThreadId, (existing) => ({
+        ...existing,
+        streamDiscordMessageIds: normalizedIds.length > 0 ? normalizedIds : undefined,
+        updatedAt: nowIso(),
+        lastActivityAt: nowIso(),
+      })).pipe(Effect.asVoid);
+    },
 
-      updateBridgeHints: (discordThreadId, partial) => {
-        const when = nowIso();
-        return updateLink(discordThreadId, (current) => ({
-          ...current,
-          updatedAt: when,
-          lastActivityAt: when,
-          ...(partial.lastSeenTurnId !== undefined
-            ? { lastSeenTurnId: partial.lastSeenTurnId }
-            : {}),
-          ...(partial.lastFinalizedAssistantId !== undefined
-            ? { lastFinalizedAssistantId: partial.lastFinalizedAssistantId }
-            : {}),
-          ...(partial.lastThreadSnapshotSequence !== undefined
-            ? { lastThreadSnapshotSequence: partial.lastThreadSnapshotSequence }
-            : {}),
-          ...(partial.lastDeliveredSequence !== undefined
-            ? { lastDeliveredSequence: partial.lastDeliveredSequence }
-            : {}),
-          ...(partial.deliveryReceipt !== undefined
-            ? { deliveryReceipt: partial.deliveryReceipt }
-            : {}),
-          ...(partial.streamDiscordMessageIds !== undefined
-            ? {
-                streamDiscordMessageIds:
-                  partial.streamDiscordMessageIds.length > 0
-                    ? [...new Set(partial.streamDiscordMessageIds.filter((id) => id.trim() !== ""))]
-                    : undefined,
-              }
-            : {}),
-          ...(partial.backgroundDigestMessageId !== undefined
-            ? partial.backgroundDigestMessageId == null || partial.backgroundDigestMessageId === ""
-              ? { backgroundDigestMessageId: undefined, backgroundDigestText: undefined }
-              : {
-                  backgroundDigestMessageId: partial.backgroundDigestMessageId,
-                  backgroundDigestText: partial.backgroundDigestText ?? undefined,
-                }
-            : {}),
-        }));
-      },
+    setSentDiscordUserMessageIds: (discordThreadId, sentDiscordUserMessageIds) => {
+      const normalizedIds = [
+        ...new Set(sentDiscordUserMessageIds.filter((id) => id.trim() !== "")),
+      ];
+      return updateLink(discordThreadId, (existing) => ({
+        ...existing,
+        sentDiscordUserMessageIds: normalizedIds.length > 0 ? normalizedIds : undefined,
+        updatedAt: nowIso(),
+      })).pipe(Effect.asVoid);
+    },
 
-      setThreadTalkMode: (discordThreadId, mode) =>
-        updateLink(discordThreadId, (existing) => ({
+    appendJiraIssueKeys: (discordThreadId, jiraIssueKeys) =>
+      updateLink(discordThreadId, (existing) => {
+        const merged = mergeJiraKeysOrdered(existing.jiraIssueKeys, jiraIssueKeys);
+        if (
+          merged.length === (existing.jiraIssueKeys?.length ?? 0) &&
+          merged.every((key, index) => key === existing.jiraIssueKeys?.[index])
+        ) {
+          return existing;
+        }
+        return {
           ...existing,
-          threadTalkMode: mode ?? undefined,
+          jiraIssueKeys: merged.length > 0 ? merged : undefined,
           updatedAt: nowIso(),
-        })).pipe(Effect.asVoid),
+        };
+      }),
 
-      setTaskDiscordMessageId: (discordThreadId, taskDiscordMessageId) =>
-        updateLink(discordThreadId, (existing) => ({
+    setJiraIssueKeys: (discordThreadId, jiraIssueKeys) =>
+      updateLink(discordThreadId, (existing) => {
+        const merged = mergeJiraKeysOrdered([], jiraIssueKeys);
+        return {
           ...existing,
-          taskDiscordMessageId: taskDiscordMessageId ?? undefined,
+          jiraIssueKeys: merged.length > 0 ? merged : undefined,
           updatedAt: nowIso(),
-        })).pipe(Effect.asVoid),
+        };
+      }),
 
-      setStreamDiscordMessageIds: (discordThreadId, streamDiscordMessageIds) => {
-        const normalizedIds = [
-          ...new Set(streamDiscordMessageIds.filter((id) => id.trim() !== "")),
-        ];
-        return updateLink(discordThreadId, (existing) => ({
+    setJiraKeyRoles: (discordThreadId, roles) =>
+      updateLink(discordThreadId, (existing) => {
+        const pin = mergeJiraKeysOrdered([], roles.jiraIssueKeys);
+        const merged = mergePromotedLinkedKeys({
+          classifiedLinkedKeys: roles.linkedJiraIssueKeys,
+          classifiedBackfillKeys: roles.backfillJiraIssueKeys,
+          linkedKeysAtStart: roles.linkedKeysAtStart,
+          linkedKeysNow: existing.linkedJiraIssueKeys,
+        });
+        return {
           ...existing,
-          streamDiscordMessageIds: normalizedIds.length > 0 ? normalizedIds : undefined,
+          jiraIssueKeys: pin.length > 0 ? pin : undefined,
+          // Keep an empty array so a later backfill can tell "split, nothing
+          // linkable" from "this row has never been split".
+          linkedJiraIssueKeys: merged.linkedKeys,
+          backfillJiraIssueKeys: merged.backfillKeys.length > 0 ? merged.backfillKeys : undefined,
           updatedAt: nowIso(),
-          lastActivityAt: nowIso(),
-        })).pipe(Effect.asVoid);
-      },
+        };
+      }),
 
-      setSentDiscordUserMessageIds: (discordThreadId, sentDiscordUserMessageIds) => {
-        const normalizedIds = [
-          ...new Set(sentDiscordUserMessageIds.filter((id) => id.trim() !== "")),
-        ];
-        return updateLink(discordThreadId, (existing) => ({
+    promoteJiraIssueKeysToLinked: (discordThreadId, jiraIssueKeys) =>
+      updateLink(discordThreadId, (existing) => {
+        const incoming = mergeJiraKeysOrdered([], jiraIssueKeys);
+        if (incoming.length === 0) return existing;
+        const incomingSet = new Set(incoming);
+        const linked = mergeJiraKeysOrdered(existing.linkedJiraIssueKeys, incoming);
+        const backfill = mergeJiraKeysOrdered([], existing.backfillJiraIssueKeys).filter(
+          (key) => !incomingSet.has(key),
+        );
+        return {
           ...existing,
-          sentDiscordUserMessageIds: normalizedIds.length > 0 ? normalizedIds : undefined,
+          linkedJiraIssueKeys: linked.length > 0 ? linked : undefined,
+          backfillJiraIssueKeys: backfill.length > 0 ? backfill : undefined,
           updatedAt: nowIso(),
-        })).pipe(Effect.asVoid);
-      },
+        };
+      }),
 
-      appendJiraIssueKeys: (discordThreadId, jiraIssueKeys) =>
-        updateLink(discordThreadId, (existing) => {
-          const merged = mergeJiraKeysOrdered(existing.jiraIssueKeys, jiraIssueKeys);
-          if (
-            merged.length === (existing.jiraIssueKeys?.length ?? 0) &&
-            merged.every((key, index) => key === existing.jiraIssueKeys?.[index])
-          ) {
-            return existing;
-          }
-          return {
-            ...existing,
-            jiraIssueKeys: merged.length > 0 ? merged : undefined,
-            updatedAt: nowIso(),
-          };
-        }),
-
-      setJiraIssueKeys: (discordThreadId, jiraIssueKeys) =>
-        updateLink(discordThreadId, (existing) => {
-          const merged = mergeJiraKeysOrdered([], jiraIssueKeys);
-          return {
-            ...existing,
-            jiraIssueKeys: merged.length > 0 ? merged : undefined,
-            updatedAt: nowIso(),
-          };
-        }),
-
-      setJiraKeyRoles: (discordThreadId, roles) =>
-        updateLink(discordThreadId, (existing) => {
-          const pin = mergeJiraKeysOrdered([], roles.jiraIssueKeys);
-          const merged = mergePromotedLinkedKeys({
-            classifiedLinkedKeys: roles.linkedJiraIssueKeys,
-            classifiedBackfillKeys: roles.backfillJiraIssueKeys,
-            linkedKeysAtStart: roles.linkedKeysAtStart,
-            linkedKeysNow: existing.linkedJiraIssueKeys,
-          });
-          return {
-            ...existing,
-            jiraIssueKeys: pin.length > 0 ? pin : undefined,
-            // Keep an empty array so a later backfill can tell "split, nothing
-            // linkable" from "this row has never been split".
-            linkedJiraIssueKeys: merged.linkedKeys,
-            backfillJiraIssueKeys: merged.backfillKeys.length > 0 ? merged.backfillKeys : undefined,
-            updatedAt: nowIso(),
-          };
-        }),
-
-      promoteJiraIssueKeysToLinked: (discordThreadId, jiraIssueKeys) =>
-        updateLink(discordThreadId, (existing) => {
-          const incoming = mergeJiraKeysOrdered([], jiraIssueKeys);
-          if (incoming.length === 0) return existing;
-          const incomingSet = new Set(incoming);
-          const linked = mergeJiraKeysOrdered(existing.linkedJiraIssueKeys, incoming);
-          const backfill = mergeJiraKeysOrdered([], existing.backfillJiraIssueKeys).filter(
-            (key) => !incomingSet.has(key),
-          );
-          return {
-            ...existing,
-            linkedJiraIssueKeys: linked.length > 0 ? linked : undefined,
-            backfillJiraIssueKeys: backfill.length > 0 ? backfill : undefined,
-            updatedAt: nowIso(),
-          };
-        }),
-
-      appendSentryIssueUrls: (discordThreadId, sentryIssueUrls) =>
-        updateLink(discordThreadId, (existing) => {
-          const merged = mergeSentryIssueUrls(existing.sentryIssueUrls, sentryIssueUrls);
-          if (
-            merged.length === (existing.sentryIssueUrls?.length ?? 0) &&
-            merged.every((url, index) => url === existing.sentryIssueUrls?.[index])
-          ) {
-            return existing;
-          }
-          return {
-            ...existing,
-            sentryIssueUrls: merged.length > 0 ? merged : undefined,
-            updatedAt: nowIso(),
-          };
-        }),
-
-      setSentryIssueUrls: (discordThreadId, sentryIssueUrls) =>
-        updateLink(discordThreadId, (existing) => {
-          const merged = mergeSentryIssueUrls([], sentryIssueUrls);
-          return {
-            ...existing,
-            sentryIssueUrls: merged.length > 0 ? merged : undefined,
-            updatedAt: nowIso(),
-          };
-        }),
-
-      appendPrUrls: (discordThreadId, prUrls) =>
-        updateLink(discordThreadId, (existing) => {
-          const merged = mergePrUrlsOrdered(existing.prUrls, prUrls);
-          if (
-            merged.length === (existing.prUrls?.length ?? 0) &&
-            merged.every((url, index) => url === existing.prUrls?.[index])
-          ) {
-            return existing;
-          }
-          return {
-            ...existing,
-            prUrls: merged.length > 0 ? merged : undefined,
-            updatedAt: nowIso(),
-          };
-        }),
-
-      setPrUrls: (discordThreadId, prUrls) =>
-        updateLink(discordThreadId, (existing) => {
-          const merged = mergePrUrlsOrdered([], prUrls);
-          return {
-            ...existing,
-            prUrls: merged.length > 0 ? merged : undefined,
-            updatedAt: nowIso(),
-          };
-        }),
-
-      setInfoDiscordMessageId: (discordThreadId, infoDiscordMessageId) =>
-        updateLink(discordThreadId, (existing) => ({
+    appendSentryIssueUrls: (discordThreadId, sentryIssueUrls) =>
+      updateLink(discordThreadId, (existing) => {
+        const merged = mergeSentryIssueUrls(existing.sentryIssueUrls, sentryIssueUrls);
+        if (
+          merged.length === (existing.sentryIssueUrls?.length ?? 0) &&
+          merged.every((url, index) => url === existing.sentryIssueUrls?.[index])
+        ) {
+          return existing;
+        }
+        return {
           ...existing,
-          infoDiscordMessageId: infoDiscordMessageId ?? undefined,
+          sentryIssueUrls: merged.length > 0 ? merged : undefined,
           updatedAt: nowIso(),
-        })).pipe(Effect.asVoid),
+        };
+      }),
 
-      setModelHistory: (discordThreadId, history) =>
-        updateLink(discordThreadId, (existing) => ({
+    setSentryIssueUrls: (discordThreadId, sentryIssueUrls) =>
+      updateLink(discordThreadId, (existing) => {
+        const merged = mergeSentryIssueUrls([], sentryIssueUrls);
+        return {
           ...existing,
-          initialModelLine:
-            history.initialModelLine === undefined
-              ? existing.initialModelLine
-              : (history.initialModelLine ?? undefined),
-          currentModelLine:
-            history.currentModelLine === undefined
-              ? existing.currentModelLine
-              : (history.currentModelLine ?? undefined),
-          modelSinceAt:
-            history.modelSinceAt === undefined
-              ? existing.modelSinceAt
-              : (history.modelSinceAt ?? undefined),
+          sentryIssueUrls: merged.length > 0 ? merged : undefined,
           updatedAt: nowIso(),
-        })),
+        };
+      }),
 
-      list: () => Ref.get(state).pipe(Effect.map((map) => [...map.values()])),
-    });
+    appendPrUrls: (discordThreadId, prUrls) =>
+      updateLink(discordThreadId, (existing) => {
+        const merged = mergePrUrlsOrdered(existing.prUrls, prUrls);
+        if (
+          merged.length === (existing.prUrls?.length ?? 0) &&
+          merged.every((url, index) => url === existing.prUrls?.[index])
+        ) {
+          return existing;
+        }
+        return {
+          ...existing,
+          prUrls: merged.length > 0 ? merged : undefined,
+          updatedAt: nowIso(),
+        };
+      }),
+
+    setPrUrls: (discordThreadId, prUrls) =>
+      updateLink(discordThreadId, (existing) => {
+        const merged = mergePrUrlsOrdered([], prUrls);
+        return {
+          ...existing,
+          prUrls: merged.length > 0 ? merged : undefined,
+          updatedAt: nowIso(),
+        };
+      }),
+
+    setInfoDiscordMessageId: (discordThreadId, infoDiscordMessageId) =>
+      updateLink(discordThreadId, (existing) => ({
+        ...existing,
+        infoDiscordMessageId: infoDiscordMessageId ?? undefined,
+        updatedAt: nowIso(),
+      })).pipe(Effect.asVoid),
+
+    setModelHistory: (discordThreadId, history) =>
+      updateLink(discordThreadId, (existing) => ({
+        ...existing,
+        initialModelLine:
+          history.initialModelLine === undefined
+            ? existing.initialModelLine
+            : (history.initialModelLine ?? undefined),
+        currentModelLine:
+          history.currentModelLine === undefined
+            ? existing.currentModelLine
+            : (history.currentModelLine ?? undefined),
+        modelSinceAt:
+          history.modelSinceAt === undefined
+            ? existing.modelSinceAt
+            : (history.modelSinceAt ?? undefined),
+        updatedAt: nowIso(),
+      })),
+
+    list: () => Ref.get(state).pipe(Effect.map((map) => [...map.values()])),
   });
+});
 
 export const layer = (dataDir: string) =>
   Layer.effect(ThreadLinkStore, makeThreadLinkStore(dataDir));

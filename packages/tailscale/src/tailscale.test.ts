@@ -16,10 +16,12 @@ import {
   ensureTailscaleServe,
   findRootServeMappingForLocalPort,
   isTailscaleIpv4Address,
+  parseTailscaleExitNode,
   parseTailscaleMagicDnsName,
   parseTailscaleServeMappings,
   parseTailscaleStatus,
   readTailscaleServeMappings,
+  readTailscaleExitNode,
   parseTailscaleSshEnabled,
   readTailscaleSshEnabled,
   readTailscaleStatus,
@@ -156,7 +158,44 @@ describe("tailscale", () => {
       assert.deepEqual(status, {
         magicDnsName: "desktop.tail.ts.net",
         tailnetIpv4Addresses: ["100.100.100.100"],
+        httpsServeEnabled: null,
       });
+    }),
+  );
+
+  it.effect("names the exit node in use", () =>
+    Effect.gen(function* () {
+      const inUse = yield* parseTailscaleExitNode(
+        JSON.stringify({
+          ExitNodeStatus: { ID: "nX", Online: true, TailscaleIPs: ["100.101.102.103/32"] },
+          Peer: {
+            "nodekey:a": { HostName: "laptop", DNSName: "laptop.tail.ts.net.", ExitNode: false },
+            "nodekey:b": {
+              HostName: "raspberrypi",
+              DNSName: "home-pi.tail.ts.net.",
+              ExitNode: true,
+            },
+          },
+        }),
+      );
+      assert.deepEqual(inUse, { name: "home-pi", online: true });
+
+      const unnamed = yield* parseTailscaleExitNode(`{"ExitNodeStatus":{"Online":false}}`);
+      assert.deepEqual(unnamed, { name: null, online: false });
+
+      assert.equal(yield* parseTailscaleExitNode(tailscaleStatusJson), null);
+    }),
+  );
+
+  it.effect("reads the HTTPS serve capability from the status capability map", () =>
+    Effect.gen(function* () {
+      const enabled = yield* parseTailscaleStatus(
+        `{"Self":{"CapMap":{"https":null,"funnel":null}}}`,
+      );
+      assert.equal(enabled.httpsServeEnabled, true);
+
+      const disabled = yield* parseTailscaleStatus(`{"Self":{"CapMap":{"funnel":null}}}`);
+      assert.equal(disabled.httpsServeEnabled, false);
     }),
   );
 
@@ -275,6 +314,25 @@ describe("tailscale", () => {
     }),
   );
 
+  it.effect("reads the active exit node through the shared status command", () => {
+    const layer = layerMockSpawner((command, args) => {
+      assert.equal(command, "tailscale");
+      assert.deepEqual(args, ["status", "--json"]);
+      return {
+        stdout: JSON.stringify({
+          ExitNodeStatus: { Online: true },
+          Peer: { gateway: { DNSName: "gateway.tail.ts.net.", ExitNode: true } },
+        }),
+      };
+    });
+    return Effect.gen(function* () {
+      assert.deepEqual(yield* readTailscaleExitNode.pipe(Effect.provide(layer)), {
+        name: "gateway",
+        online: true,
+      });
+    });
+  });
+
   it.effect("reads tailscale status through the process spawner service", () => {
     const layer = layerMockSpawner((command, args) => {
       assert.equal(command, "tailscale");
@@ -289,6 +347,7 @@ describe("tailscale", () => {
       assert.deepEqual(status, {
         magicDnsName: "desktop.tail.ts.net",
         tailnetIpv4Addresses: ["100.90.1.2"],
+        httpsServeEnabled: null,
       });
     });
   });
@@ -409,9 +468,9 @@ describe("tailscale", () => {
       assert.equal(error.executable, "tailscale");
       assert.equal(error.subcommand, "status");
       assert.equal(error.argumentCount, 2);
-      assert.equal(error.timeoutMs, 1_500);
+      assert.equal(error.timeoutMs, 3_500);
       assert.isTrue(Cause.isTimeoutError(error.cause));
-      assert.equal(error.message, "tailscale status timed out after 1500ms.");
+      assert.equal(error.message, "tailscale status timed out after 3500ms.");
     }).pipe(Effect.provide(layer));
   });
 

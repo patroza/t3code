@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 import { Button } from "~/components/ui/button";
-import { refreshDeviceHubAccess, useDeviceHubAccess } from "~/state/device";
+import { refreshDeviceHubAccess, renewDeviceHubAccess, useDeviceHubAccess } from "~/state/device";
 import { createCanvasFrameSink } from "@t3tools/client-runtime/device/frame";
 import { resolveDeviceShape } from "@t3tools/client-runtime/device/shape-profile";
 import { deviceKeyboard, deviceModel } from "./deviceModels";
@@ -164,6 +164,7 @@ export function DeviceStreamView(props: {
           setMjpegUrl(url);
           setMjpegGeneration((generation) => generation + 1);
         },
+        onCanvasVideo: () => setMjpegUrl(null),
         onInputConnected: (connected, detail) => {
           setInputState({ connected, ...(detail ? { detail } : {}) });
           if (!connected) setShowRestartNotice(false);
@@ -343,6 +344,7 @@ export function DeviceStreamView(props: {
                   screenWidth={screen?.width}
                   screenHeight={screen?.height}
                   onFoldAngle={setFoldAngle}
+                  renewAccess={() => renewDeviceHubAccess(props.environmentId, props.hostId)}
                 />
               ) : showPhone && isDuo && screen?.supportsHingeAngle ? (
                 <DeviceDuoControls
@@ -377,6 +379,8 @@ export function DeviceStreamView(props: {
         ref={hostRef}
         className={cn(
           "relative flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden outline-none",
+          // Overlay the stream; focus (including pointer-driven focus) marks keyboard capture.
+          "after:pointer-events-none after:absolute after:inset-0 after:z-10 focus:after:ring-2 focus:after:ring-inset focus:after:ring-ring",
           controlsInset && "pr-14",
         )}
         tabIndex={0}
@@ -385,8 +389,20 @@ export function DeviceStreamView(props: {
         onKeyDown={(event) => {
           if (event.target !== event.currentTarget) return;
           if (event.metaKey && !["r", "R"].includes(event.key)) return;
+          // Let browser paste chords fire the paste event.
+          if (
+            (event.ctrlKey && (event.key === "v" || event.key === "V")) ||
+            (event.shiftKey && event.key === "Insert")
+          ) {
+            return;
+          }
           event.preventDefault();
           clientRef.current?.sendKey(event.nativeEvent, "down");
+        }}
+        onPaste={(event) => {
+          if (event.target !== event.currentTarget) return;
+          event.preventDefault();
+          clientRef.current?.sendText(event.clipboardData.getData("text/plain"));
         }}
         onKeyUp={(event) => {
           if (event.target !== event.currentTarget) return;
@@ -397,6 +413,7 @@ export function DeviceStreamView(props: {
           className={cn("relative select-none", showPhone && "invisible pointer-events-none")}
           style={{ width: frame.width, height: frame.height }}
           onPointerDown={(event) => {
+            if (event.button !== 0) return;
             event.currentTarget.setPointerCapture(event.pointerId);
             (event.currentTarget.parentElement as HTMLElement | null)?.focus();
             pointerActive.current = true;

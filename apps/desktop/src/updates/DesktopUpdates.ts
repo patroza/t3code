@@ -274,13 +274,15 @@ function parseAppUpdateYml(raw: string): Effect.Effect<Option.Option<AppUpdateYm
 
 function createBaseUpdateState(
   channel: DesktopUpdateChannel,
-  enabled: boolean,
+  disabledReason: Option.Option<string>,
   environment: DesktopEnvironment.DesktopEnvironment["Service"],
 ): DesktopUpdateState {
+  const enabled = Option.isNone(disabledReason);
   return {
     ...createInitialDesktopUpdateState(environment.appVersion, environment.runtimeInfo, channel),
     enabled,
     status: enabled ? "idle" : "disabled",
+    message: Option.getOrNull(disabledReason),
   };
 }
 
@@ -355,6 +357,9 @@ export const make = Effect.gen(function* () {
 
   const appUpdateYmlConfigRef = yield* Ref.make<Option.Option<AppUpdateYmlConfig>>(Option.none());
   const activeUpdateActionRef = yield* Ref.make<Option.Option<UpdateAction>>(Option.none());
+  const installRunningBackendsRef = yield* Ref.make<
+    ReadonlyArray<DesktopBackendPool.DesktopBackendInstance>
+  >([]);
   const finishedUpdateActions = yield* PubSub.unbounded<UpdateAction>();
   const updaterConfiguredRef = yield* Ref.make(false);
   const lastLoggedDownloadMilestoneRef = yield* Ref.make(-1);
@@ -410,34 +415,35 @@ export const make = Effect.gen(function* () {
       catch: () => null,
     }).pipe(Effect.orElseSucceed(() => null));
 
-  const applyLocalDirBuildUpdate = (reason: string) =>
-    Effect.gen(function* () {
-      const state = yield* Ref.get(updateStateRef);
-      if (state.status === "downloading") return;
+  const applyLocalDirBuildUpdate = Effect.fn("DesktopUpdates.applyLocalDirBuildUpdate")(function* (
+    reason: string,
+  ) {
+    const state = yield* Ref.get(updateStateRef);
+    if (state.status === "downloading") return;
 
-      const onDiskVersion = yield* probeOnDiskVersion();
-      const runningVersion = state.currentVersion;
-      const versionChanged = !!onDiskVersion && onDiskVersion !== runningVersion;
+    const onDiskVersion = yield* probeOnDiskVersion();
+    const runningVersion = state.currentVersion;
+    const versionChanged = !!onDiskVersion && onDiskVersion !== runningVersion;
 
-      if (!versionChanged) {
-        const onDiskC = yield* readOnDiskCommitHash();
-        if (Option.isNone(onDiskC)) return;
-      }
+    if (!versionChanged) {
+      const onDiskC = yield* readOnDiskCommitHash();
+      if (Option.isNone(onDiskC)) return;
+    }
 
-      yield* logUpdaterInfo("different build detected on disk for dir install", {
-        reason,
-        onDiskVersion,
-        runningVersion,
-      });
-
-      const targetVer = onDiskVersion ?? runningVersion;
-      yield* setState(
-        reduceDesktopUpdateStateOnDownloadComplete(
-          { ...state, availableVersion: targetVer },
-          targetVer,
-        ),
-      );
+    yield* logUpdaterInfo("different build detected on disk for dir install", {
+      reason,
+      onDiskVersion,
+      runningVersion,
     });
+
+    const targetVer = onDiskVersion ?? runningVersion;
+    yield* setState(
+      reduceDesktopUpdateStateOnDownloadComplete(
+        { ...state, availableVersion: targetVer },
+        targetVer,
+      ),
+    );
+  });
 
   const dirBaselineMtimeRef = yield* Ref.make<number | null>(null);
 
@@ -579,8 +585,6 @@ export const make = Effect.gen(function* () {
       fullChangelog: allowsPrerelease,
     });
   });
-
-  const shouldEnableAutoUpdates = resolveDisabledReason.pipe(Effect.map(Option.isNone));
 
   const checkForUpdates = Effect.fn("desktop.updates.checkForUpdates")(function* (
     reason: string,
@@ -753,10 +757,10 @@ export const make = Effect.gen(function* () {
     ),
   );
 
-  const baseUpdateState = (channel: DesktopUpdateChannel, enabled: boolean) =>
+  const baseUpdateState = (channel: DesktopUpdateChannel, disabledReason: Option.Option<string>) =>
     Ref.get(notAppliedVersionRef).pipe(
       Effect.map((notAppliedVersion) => ({
-        ...createBaseUpdateState(channel, enabled, environment),
+        ...createBaseUpdateState(channel, disabledReason, environment),
         ...Option.match(notAppliedVersion, {
           onNone: () => ({}),
           onSome: (version) => ({ notAppliedVersion: version }),
@@ -768,6 +772,7 @@ export const make = Effect.gen(function* () {
     [
       finishUpdateAction("install"),
       Ref.set(desktopState.quitting, false),
+      Ref.set(installRunningBackendsRef, []),
       removeUpdateRestartMarker,
       removeInstallRecord,
     ],
@@ -788,7 +793,10 @@ export const make = Effect.gen(function* () {
     yield* removeUpdateRestartMarker;
     yield* removeInstallRecord;
     yield* Effect.gen(function* () {
-      const instances = yield* pool.list;
+      const runningInstances = yield* Ref.getAndSet(installRunningBackendsRef, []);
+      const instances = (yield* pool.list).filter((instance) =>
+        runningInstances.includes(instance),
+      );
       const restartExit = yield* Effect.forEach(instances, (instance) => instance.start, {
         concurrency: "unbounded",
         discard: true,
@@ -855,6 +863,7 @@ export const make = Effect.gen(function* () {
         }
 
         yield* Ref.set(desktopState.quitting, true);
+        yield* Ref.set(installRunningBackendsRef, []);
 
         return yield* Effect.gen(function* () {
           yield* writeUpdateRestartMarker;
@@ -866,6 +875,11 @@ export const make = Effect.gen(function* () {
           // has a chance to run its stop finalizer, so the WSL child gets
           // hard-killed by the OS instead of receiving SIGTERM + grace.
           const instances = yield* pool.list;
+          // stop clears desiredRunning, so retain the recovery set beforehand.
+          const runningInstances = yield* Effect.filter(instances, (instance) =>
+            instance.snapshot.pipe(Effect.map((snapshot) => snapshot.desiredRunning)),
+          );
+          yield* Ref.set(installRunningBackendsRef, runningInstances);
           yield* Effect.forEach(
             instances,
             (instance) => instance.stop({ timeout: Duration.seconds(5) }),
@@ -1181,9 +1195,9 @@ export const make = Effect.gen(function* () {
       }
 
       const settings = yield* desktopSettings.get;
-      const enabled = yield* shouldEnableAutoUpdates;
-      yield* setState(yield* baseUpdateState(settings.updateChannel, enabled));
-      if (!enabled) {
+      const disabledReason = yield* resolveDisabledReason;
+      yield* setState(yield* baseUpdateState(settings.updateChannel, disabledReason));
+      if (Option.isSome(disabledReason)) {
         return;
       }
 
@@ -1262,10 +1276,10 @@ export const make = Effect.gen(function* () {
             ),
           );
 
-        const enabled = yield* shouldEnableAutoUpdates;
-        yield* setState(yield* baseUpdateState(nextChannel, enabled));
+        const disabledReason = yield* resolveDisabledReason;
+        yield* setState(yield* baseUpdateState(nextChannel, disabledReason));
 
-        if (!enabled || !(yield* Ref.get(updaterConfiguredRef))) {
+        if (Option.isSome(disabledReason) || !(yield* Ref.get(updaterConfiguredRef))) {
           return yield* Ref.get(updateStateRef);
         }
 

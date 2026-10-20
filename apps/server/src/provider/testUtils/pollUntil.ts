@@ -27,27 +27,28 @@ export interface PollUntilOptions<A, E, R> {
  * Polls asynchronous OS work using real time even when an Effect test uses
  * TestClock. This gives child processes and libuv callbacks time to progress.
  */
-export const pollUntil = <A, E, R>(options: PollUntilOptions<A, E, R>) =>
-  Effect.gen(function* () {
-    const timeoutMillis = Duration.toMillis(options.timeout ?? "10 seconds");
-    const interval = options.interval ?? "25 millis";
-    const startedAt = yield* TestClock.withLive(Clock.currentTimeMillis);
+export const pollUntil = Effect.fn("pollUntil")(function* <A, E, R>(
+  options: PollUntilOptions<A, E, R>,
+) {
+  const timeoutMillis = Duration.toMillis(options.timeout ?? "10 seconds");
+  const interval = options.interval ?? "25 millis";
+  const startedAt = yield* TestClock.withLive(Clock.currentTimeMillis);
 
-    for (;;) {
-      const value = yield* options.poll;
-      if (options.until(value)) {
-        return value;
-      }
-
-      const now = yield* TestClock.withLive(Clock.currentTimeMillis);
-      if (now - startedAt >= timeoutMillis) {
-        return yield* Effect.die(
-          new Error(
-            `Timed out after ${timeoutMillis}ms waiting for ${options.description}. ` +
-              `Last polled value: ${describeValue(value)}`,
-          ),
-        );
-      }
-      yield* TestClock.withLive(Effect.sleep(interval));
+  for (;;) {
+    const value = yield* options.poll;
+    if (options.until(value)) {
+      return value;
     }
-  });
+
+    const now = yield* TestClock.withLive(Clock.currentTimeMillis);
+    if (now - startedAt >= timeoutMillis) {
+      return yield* Effect.die(
+        new Error(
+          `Timed out after ${timeoutMillis}ms waiting for ${options.description}. ` +
+            `Last polled value: ${describeValue(value)}`,
+        ),
+      );
+    }
+    yield* TestClock.withLive(Effect.sleep(interval));
+  }
+});

@@ -2,9 +2,9 @@
 import * as NodePath from "node:path";
 import { assert, it } from "@effect/vitest";
 import { PNG } from "pngjs";
+import { MOBILE_DEFAULT_THEME_ID } from "@t3tools/shared/themePalettes";
 
 import showcaseConfig, {
-  DEFAULT_SHOWCASE_THEME,
   resolveShowcaseAndroidAbi,
   SHOWCASE_THEMES,
   type ShowcaseConfig,
@@ -264,9 +264,9 @@ it("enforces store screenshot count limits", () => {
 });
 
 it("defaults every device to the app's own palette", () => {
-  assert.equal(DEFAULT_SHOWCASE_THEME, "t3-code");
+  assert.equal(MOBILE_DEFAULT_THEME_ID, "t3-code");
   assert.equal(
-    showcaseConfig.devices.every((device) => device.theme === DEFAULT_SHOWCASE_THEME),
+    showcaseConfig.devices.every((device) => device.theme === MOBILE_DEFAULT_THEME_ID),
     true,
   );
 });

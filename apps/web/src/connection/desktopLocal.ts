@@ -122,7 +122,6 @@ export function hasDesktopBridge(): boolean {
   return desktopSecondaryBootstrapsReader.hasBridge();
 }
 
-/** Read the topology while preserving failures for platform cache policy. */
 export function readDesktopSecondaryBootstrapsResult(): DesktopSecondaryBootstrapsRead {
   return desktopSecondaryBootstrapsReader.readResult();
 }

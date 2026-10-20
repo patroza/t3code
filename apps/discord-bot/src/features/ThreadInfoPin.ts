@@ -214,11 +214,11 @@ export function buildThreadInfoRenderInput(input: {
  * Resolve the channel/project GitHub `owner/repo` for PR label disambiguation.
  * Prefers the thread worktree, then the linked project workspace root.
  */
-const resolveChannelGithubRepoSlug = (input: {
-  readonly worktreePath?: string | null | undefined;
-  readonly projectId?: ProjectId | string | null | undefined;
-}) =>
-  Effect.gen(function* () {
+const resolveChannelGithubRepoSlug = Effect.fn("ThreadInfoPin.resolveChannelGithubRepoSlug")(
+  function* (input: {
+    readonly worktreePath?: string | null | undefined;
+    readonly projectId?: ProjectId | string | null | undefined;
+  }) {
     const t3 = yield* T3Session;
     let cwd =
       input.worktreePath !== null &&
@@ -241,200 +241,203 @@ const resolveChannelGithubRepoSlug = (input: {
     }).pipe(Effect.orElseSucceed(() => null as string | null));
 
     return normalizeGithubRepoSlug(githubUrl);
-  });
+  },
+);
 
 /**
  * Load Discord thread starter (public-thread parent message or oldest thread message)
  * and the current thread title for hardcoded PR attribution footers.
  */
-const loadDiscordThreadAttributionContext = (input: {
+const loadDiscordThreadAttributionContext = Effect.fn(
+  "ThreadInfoPin.loadDiscordThreadAttributionContext",
+)(function* (input: {
   readonly discordThreadId: string;
   readonly parentChannelId: string | null;
   readonly guildId: string;
   readonly baseUrl: string;
   readonly botToken: string;
-}) =>
-  Effect.gen(function* () {
-    const channel = yield* Effect.tryPromise({
+}) {
+  const channel = yield* Effect.tryPromise({
+    try: () =>
+      discordApiJson<DiscordChannelSummary>({
+        baseUrl: input.baseUrl,
+        botToken: input.botToken,
+        path: `/channels/${input.discordThreadId}`,
+      }),
+    catch: (cause) => cause,
+  }).pipe(Effect.orElseSucceed((): DiscordChannelSummary | null => null));
+
+  const parentChannelId =
+    input.parentChannelId ??
+    (channel?.parent_id !== null && channel?.parent_id !== undefined && channel.parent_id !== ""
+      ? channel.parent_id
+      : null);
+
+  let starter: DiscordThreadStarterLike | null = null;
+  if (parentChannelId !== null) {
+    // Public threads created from a message use the starter message id as the thread id.
+    starter = yield* Effect.tryPromise({
       try: () =>
-        discordApiJson<DiscordChannelSummary>({
+        discordApiJson<DiscordMessageSummary>({
           baseUrl: input.baseUrl,
           botToken: input.botToken,
-          path: `/channels/${input.discordThreadId}`,
+          path: `/channels/${parentChannelId}/messages/${input.discordThreadId}`,
         }),
       catch: (cause) => cause,
-    }).pipe(Effect.orElseSucceed((): DiscordChannelSummary | null => null));
+    }).pipe(
+      Effect.map((message): DiscordThreadStarterLike => ({
+        id: message.id,
+        author: {
+          id: message.author?.id,
+          username: message.author?.username,
+          displayName: message.author?.global_name ?? message.author?.username,
+        },
+      })),
+      Effect.orElseSucceed((): DiscordThreadStarterLike | null => null),
+    );
+  }
 
-    const parentChannelId =
-      input.parentChannelId ??
-      (channel?.parent_id !== null && channel?.parent_id !== undefined && channel.parent_id !== ""
-        ? channel.parent_id
-        : null);
-
-    let starter: DiscordThreadStarterLike | null = null;
-    if (parentChannelId !== null) {
-      // Public threads created from a message use the starter message id as the thread id.
-      starter = yield* Effect.tryPromise({
-        try: () =>
-          discordApiJson<DiscordMessageSummary>({
-            baseUrl: input.baseUrl,
-            botToken: input.botToken,
-            path: `/channels/${parentChannelId}/messages/${input.discordThreadId}`,
-          }),
-        catch: (cause) => cause,
-      }).pipe(
-        Effect.map((message): DiscordThreadStarterLike => ({
-          id: message.id,
-          author: {
-            id: message.author?.id,
-            username: message.author?.username,
-            displayName: message.author?.global_name ?? message.author?.username,
-          },
-        })),
-        Effect.orElseSucceed((): DiscordThreadStarterLike | null => null),
-      );
-    }
-
-    if (starter === null) {
-      const listed = yield* Effect.tryPromise({
-        try: () =>
-          discordApiJson<ReadonlyArray<DiscordMessageSummary>>({
-            baseUrl: input.baseUrl,
-            botToken: input.botToken,
-            path: `/channels/${input.discordThreadId}/messages?limit=5&after=0`,
-          }),
-        catch: (cause) => cause,
-      }).pipe(Effect.orElseSucceed((): ReadonlyArray<DiscordMessageSummary> => []));
-
-      const oldest = listed.at(-1) ?? listed[0];
-      if (oldest !== undefined) {
-        starter = {
-          id: oldest.id,
-          author: {
-            id: oldest.author?.id,
-            username: oldest.author?.username,
-            displayName: oldest.author?.global_name ?? oldest.author?.username,
-          },
-        };
-      }
-    }
-
-    const threadTitle =
-      channel?.name !== null && channel?.name !== undefined && channel.name.trim() !== ""
-        ? channel.name.trim()
-        : "Discord thread";
-
-    const userId = starterUserId(starter);
-    if (userId === null) return null;
-
-    return {
-      footer: formatDiscordPrAttributionFooter({
-        starterDisplayName: starterDisplayName(starter),
-        starterUserId: userId,
-        threadTitle,
-        threadJumpUrl: buildDiscordThreadJumpUrl({
-          guildId: input.guildId,
-          discordThreadId: input.discordThreadId,
-          messageId: starter?.id ?? null,
+  if (starter === null) {
+    const listed = yield* Effect.tryPromise({
+      try: () =>
+        discordApiJson<ReadonlyArray<DiscordMessageSummary>>({
+          baseUrl: input.baseUrl,
+          botToken: input.botToken,
+          path: `/channels/${input.discordThreadId}/messages?limit=5&after=0`,
         }),
-      }),
-      threadTitle,
+      catch: (cause) => cause,
+    }).pipe(Effect.orElseSucceed((): ReadonlyArray<DiscordMessageSummary> => []));
+
+    const oldest = listed.at(-1) ?? listed[0];
+    if (oldest !== undefined) {
+      starter = {
+        id: oldest.id,
+        author: {
+          id: oldest.author?.id,
+          username: oldest.author?.username,
+          displayName: oldest.author?.global_name ?? oldest.author?.username,
+        },
+      };
+    }
+  }
+
+  const threadTitle =
+    channel?.name !== null && channel?.name !== undefined && channel.name.trim() !== ""
+      ? channel.name.trim()
+      : "Discord thread";
+
+  const userId = starterUserId(starter);
+  if (userId === null) return null;
+
+  return {
+    footer: formatDiscordPrAttributionFooter({
+      starterDisplayName: starterDisplayName(starter),
       starterUserId: userId,
-    } as const;
-  });
+      threadTitle,
+      threadJumpUrl: buildDiscordThreadJumpUrl({
+        guildId: input.guildId,
+        discordThreadId: input.discordThreadId,
+        messageId: starter?.id ?? null,
+      }),
+    }),
+    threadTitle,
+    starterUserId: userId,
+  } as const;
+});
 
 /**
  * When GitHub PR URLs are observed on a Discord-linked thread, hard-append the
  * Discord attribution footer using the **thread starter** + thread title.
  * Idempotent (skips bodies that already have the footer). Best-effort only.
  */
-const ensureAttributionFootersForIncomingPrs = (input: {
+const ensureAttributionFootersForIncomingPrs = Effect.fn(
+  "ThreadInfoPin.ensureAttributionFootersForIncomingPrs",
+)(function* (input: {
   readonly discordThreadId: string;
   readonly link: ThreadLink | null;
   readonly incomingPrUrls: ReadonlyArray<string>;
   readonly webUiBaseUrl?: string | undefined;
   readonly publicWebUiBaseUrl?: string | undefined;
-}) =>
-  Effect.gen(function* () {
-    const prUrls = mergePullRequestUrls([], input.incomingPrUrls);
-    if (prUrls.length === 0) return;
+}) {
+  const prUrls = mergePullRequestUrls([], input.incomingPrUrls);
+  if (prUrls.length === 0) return;
 
-    const links = yield* ThreadLinkStore;
-    const link = input.link ?? (yield* links.getByDiscordThreadId(input.discordThreadId));
-    if (link === null) {
-      yield* Effect.logWarning("Skipping Discord PR attribution footer: no thread link", {
-        discordThreadId: input.discordThreadId,
-        prCount: prUrls.length,
-      });
-      return;
-    }
-
-    const discordConfig = yield* DiscordConfig.DiscordConfig;
-    const botToken = Redacted.value(discordConfig.token);
-    const baseUrl = discordConfig.rest.baseUrl;
-
-    const attribution = yield* loadDiscordThreadAttributionContext({
+  const links = yield* ThreadLinkStore;
+  const link = input.link ?? (yield* links.getByDiscordThreadId(input.discordThreadId));
+  if (link === null) {
+    yield* Effect.logWarning("Skipping Discord PR attribution footer: no thread link", {
       discordThreadId: input.discordThreadId,
-      parentChannelId: link.channelId,
-      guildId: link.guildId,
-      baseUrl,
-      botToken,
+      prCount: prUrls.length,
     });
-    if (attribution === null) {
-      yield* Effect.logWarning("Skipping Discord PR attribution footer: no thread starter", {
-        discordThreadId: input.discordThreadId,
-        prCount: prUrls.length,
-      });
-      return;
-    }
+    return;
+  }
 
-    const t3FullThreadUrl = buildT3WebThreadUrl(input.webUiBaseUrl, link.t3ThreadId);
+  const discordConfig = yield* DiscordConfig.DiscordConfig;
+  const botToken = Redacted.value(discordConfig.token);
+  const baseUrl = discordConfig.rest.baseUrl;
 
-    const results = yield* Effect.tryPromise({
-      try: () =>
-        ensureDiscordPrAttributionFooters({
-          prUrls,
-          footer: attribution.footer,
-          t3FullThreadUrl,
-          publicWebUiBaseUrl: input.publicWebUiBaseUrl,
-        }),
-      catch: (cause) => cause,
-    }).pipe(
-      Effect.catch((error) =>
-        Effect.logWarning("Discord PR attribution footer ensure failed", {
-          discordThreadId: input.discordThreadId,
-          error: String(error),
-        }).pipe(Effect.as([] as const)),
-      ),
-    );
-
-    for (const result of results) {
-      if (result.status === "updated") {
-        yield* Effect.logInfo("Appended Discord PR attribution footer", {
-          discordThreadId: input.discordThreadId,
-          prUrl: result.url,
-          threadTitle: attribution.threadTitle,
-          starterUserId: attribution.starterUserId,
-        });
-      } else if (result.status === "error") {
-        yield* Effect.logWarning("Failed to append Discord PR attribution footer", {
-          discordThreadId: input.discordThreadId,
-          prUrl: result.url,
-          detail: result.detail ?? null,
-        });
-      }
-    }
+  const attribution = yield* loadDiscordThreadAttributionContext({
+    discordThreadId: input.discordThreadId,
+    parentChannelId: link.channelId,
+    guildId: link.guildId,
+    baseUrl,
+    botToken,
   });
+  if (attribution === null) {
+    yield* Effect.logWarning("Skipping Discord PR attribution footer: no thread starter", {
+      discordThreadId: input.discordThreadId,
+      prCount: prUrls.length,
+    });
+    return;
+  }
+
+  const t3FullThreadUrl = buildT3WebThreadUrl(input.webUiBaseUrl, link.t3ThreadId);
+
+  const results = yield* Effect.tryPromise({
+    try: () =>
+      ensureDiscordPrAttributionFooters({
+        prUrls,
+        footer: attribution.footer,
+        t3FullThreadUrl,
+        publicWebUiBaseUrl: input.publicWebUiBaseUrl,
+      }),
+    catch: (cause) => cause,
+  }).pipe(
+    Effect.catch((error) =>
+      Effect.logWarning("Discord PR attribution footer ensure failed", {
+        discordThreadId: input.discordThreadId,
+        error: String(error),
+      }).pipe(Effect.as([] as const)),
+    ),
+  );
+
+  for (const result of results) {
+    if (result.status === "updated") {
+      yield* Effect.logInfo("Appended Discord PR attribution footer", {
+        discordThreadId: input.discordThreadId,
+        prUrl: result.url,
+        threadTitle: attribution.threadTitle,
+        starterUserId: attribution.starterUserId,
+      });
+    } else if (result.status === "error") {
+      yield* Effect.logWarning("Failed to append Discord PR attribution footer", {
+        discordThreadId: input.discordThreadId,
+        prUrl: result.url,
+        detail: result.detail ?? null,
+      });
+    }
+  }
+});
 
 /**
  * Create or update the pinned thread-info message and ensure it stays pinned.
  */
-export const ensureThreadInfoPin = (input: {
-  readonly channelId: string;
-  readonly content: string;
-  readonly existingMessageId?: string | null;
-}) =>
-  Effect.gen(function* () {
+export const ensureThreadInfoPin = Effect.fn("ThreadInfoPin.ensureThreadInfoPin")(
+  function* (input: {
+    readonly channelId: string;
+    readonly content: string;
+    readonly existingMessageId?: string | null;
+  }) {
     const discordConfig = yield* DiscordConfig.DiscordConfig;
     const botToken = Redacted.value(discordConfig.token);
     const baseUrl = discordConfig.rest.baseUrl;
@@ -546,45 +549,47 @@ export const ensureThreadInfoPin = (input: {
       channelId: input.channelId,
       messageId,
     } as const;
-  });
+  },
+);
 
 /**
  * Prefixes from the linked project's t3.json.
  * `null` when the project or its file cannot be read, so a pin refresh does not drop stored keys.
  * A resolved project with no file, or a file that omits `jiraProjects`, is `[]` (links only).
  */
-const bareKeyProjectsForDiscordLink = (projectId: string | undefined) =>
-  Effect.gen(function* () {
+const bareKeyProjectsForDiscordLink = Effect.fn("ThreadInfoPin.bareKeyProjectsForDiscordLink")(
+  function* (projectId: string | undefined) {
     if (projectId === undefined || projectId.length === 0) return null;
     const t3 = yield* T3Session;
     const project = yield* t3.getProjectShell(projectId as ProjectId);
     if (project === null) return null;
     return readJiraBareKeyProjects(project.workspaceRoot);
-  });
+  },
+);
 
 /**
  * Persist any newly observed Jira keys / Sentry / PR URLs, then create/update + pin the thread-info message.
  */
-export const upsertThreadInfoPin = (input: {
-  readonly discordThreadId: string;
-  readonly t3ThreadId: string;
-  readonly botConfig: DiscordBotConfig;
-  readonly incomingJiraKeys?: ReadonlyArray<string>;
-  /** Sentry short ids that were previously stored as Jira keys and should be dropped. */
-  readonly dropJiraIssueKeys?: ReadonlyArray<string>;
-  readonly incomingSentryIssueUrls?: ReadonlyArray<string>;
-  readonly incomingPrUrls?: ReadonlyArray<string>;
-  readonly modelSelection?: { readonly instanceId: string; readonly model: string } | null;
-  readonly worktreePath?: string | null;
-  readonly baseBranchLabel?: string | null;
-  readonly local?: boolean;
-  readonly workspaceStatus?: "preparing" | "failed" | undefined;
-  /** Skip GitHub repo slug enrichment on latency-sensitive bootstrap paths. */
-  readonly skipChannelRepoLookup?: boolean;
-  readonly extraLines?: ReadonlyArray<string | null | undefined>;
-  readonly titleLine?: string | null;
-}) =>
-  Effect.gen(function* () {
+export const upsertThreadInfoPin = Effect.fn("ThreadInfoPin.upsertThreadInfoPin")(
+  function* (input: {
+    readonly discordThreadId: string;
+    readonly t3ThreadId: string;
+    readonly botConfig: DiscordBotConfig;
+    readonly incomingJiraKeys?: ReadonlyArray<string>;
+    /** Sentry short ids that were previously stored as Jira keys and should be dropped. */
+    readonly dropJiraIssueKeys?: ReadonlyArray<string>;
+    readonly incomingSentryIssueUrls?: ReadonlyArray<string>;
+    readonly incomingPrUrls?: ReadonlyArray<string>;
+    readonly modelSelection?: { readonly instanceId: string; readonly model: string } | null;
+    readonly worktreePath?: string | null;
+    readonly baseBranchLabel?: string | null;
+    readonly local?: boolean;
+    readonly workspaceStatus?: "preparing" | "failed" | undefined;
+    /** Skip GitHub repo slug enrichment on latency-sensitive bootstrap paths. */
+    readonly skipChannelRepoLookup?: boolean;
+    readonly extraLines?: ReadonlyArray<string | null | undefined>;
+    readonly titleLine?: string | null;
+  }) {
     const links = yield* ThreadLinkStore;
     const existing = yield* links.getByDiscordThreadId(input.discordThreadId);
 
@@ -709,7 +714,8 @@ export const upsertThreadInfoPin = (input: {
       sentryIssueUrls,
       prUrls,
     } satisfies ThreadInfoPinMessageRef;
-  });
+  },
+);
 
 const BACKFILL_MESSAGE_PAGES = 5;
 const BACKFILL_PAGE_SIZE = 100;
@@ -719,220 +725,222 @@ const BACKFILL_CONCURRENCY = 2;
  * On bot start: scan linked Discord threads for Jira keys and PR URLs
  * (chronological first-seen), rewrite the thread-info message, and ensure it is pinned.
  */
-export const backfillThreadInfoPins = (botConfig: DiscordBotConfig) =>
-  Effect.gen(function* () {
-    const links = yield* ThreadLinkStore;
-    const t3 = yield* T3Session;
+export const backfillThreadInfoPins = Effect.fn("ThreadInfoPin.backfillThreadInfoPins")(function* (
+  botConfig: DiscordBotConfig,
+) {
+  const links = yield* ThreadLinkStore;
+  const t3 = yield* T3Session;
 
-    const all = yield* links.list();
-    const active = all
-      .filter((link) => link.status === "active")
-      .toSorted((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
-    // Tombstoned rows can still hold pin keys that were imported as join identity.
-    // Classify those too so a bot-only key cannot keep linking after the Discord
-    // row is no longer active.
-    const classify = all
-      .filter((link) => linkNeedsJiraRoleScan(link))
-      .toSorted((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
-    // Already-split tombstones are not fetched again. Their backfill keys still
-    // participate in the cross-link pass so a sibling thread cannot confirm them.
-    const alreadySplitIdle = all.filter(
-      (link) => link.status !== "active" && link.linkedJiraIssueKeys !== undefined,
-    );
+  const all = yield* links.list();
+  const active = all
+    .filter((link) => link.status === "active")
+    .toSorted((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
+  // Tombstoned rows can still hold pin keys that were imported as join identity.
+  // Classify those too so a bot-only key cannot keep linking after the Discord
+  // row is no longer active.
+  const classify = all
+    .filter((link) => linkNeedsJiraRoleScan(link))
+    .toSorted((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
+  // Already-split tombstones are not fetched again. Their backfill keys still
+  // participate in the cross-link pass so a sibling thread cannot confirm them.
+  const alreadySplitIdle = all.filter(
+    (link) => link.status !== "active" && link.linkedJiraIssueKeys !== undefined,
+  );
 
-    yield* Effect.logInfo("Thread info pin backfill starting", {
-      activeLinks: active.length,
-      classifyLinks: classify.length,
-      alreadySplitIdle: alreadySplitIdle.length,
-      jiraBrowseBaseUrl: botConfig.jiraBrowseBaseUrl ?? "(unset)",
-    });
+  yield* Effect.logInfo("Thread info pin backfill starting", {
+    activeLinks: active.length,
+    classifyLinks: classify.length,
+    alreadySplitIdle: alreadySplitIdle.length,
+    jiraBrowseBaseUrl: botConfig.jiraBrowseBaseUrl ?? "(unset)",
+  });
 
-    let updated = 0;
-    let failed = 0;
-    let skipped = 0;
+  let updated = 0;
+  let failed = 0;
+  let skipped = 0;
 
-    const classified: Array<{
-      readonly link: ThreadLink;
-      readonly pinKeys: ReadonlyArray<string>;
-      readonly linkedKeys: ReadonlyArray<string>;
-      readonly backfillKeys: ReadonlyArray<string>;
-      readonly botOnlyKeys: ReadonlyArray<string>;
-      readonly explicitLinkedKeys: ReadonlyArray<string> | undefined;
-      readonly sentryMaskedFromHistory: ReadonlyArray<string>;
-      readonly sentryUrlsFromHistory: ReadonlyArray<string>;
-      readonly prUrlsFromHistory: ReadonlyArray<string>;
-      readonly discoveredInfoMessageId: string | null;
-    }> = [];
+  const classified: Array<{
+    readonly link: ThreadLink;
+    readonly pinKeys: ReadonlyArray<string>;
+    readonly linkedKeys: ReadonlyArray<string>;
+    readonly backfillKeys: ReadonlyArray<string>;
+    readonly botOnlyKeys: ReadonlyArray<string>;
+    readonly explicitLinkedKeys: ReadonlyArray<string> | undefined;
+    readonly sentryMaskedFromHistory: ReadonlyArray<string>;
+    readonly sentryUrlsFromHistory: ReadonlyArray<string>;
+    readonly prUrlsFromHistory: ReadonlyArray<string>;
+    readonly discoveredInfoMessageId: string | null;
+  }> = [];
 
-    yield* Effect.forEach(
-      classify,
-      (link) =>
-        Effect.gen(function* () {
-          const result = yield* classifyThreadJiraKeys(link).pipe(Effect.result);
+  yield* Effect.forEach(
+    classify,
+    (link) =>
+      Effect.gen(function* () {
+        const result = yield* classifyThreadJiraKeys(link).pipe(Effect.result);
 
-          if (result._tag === "Failure") {
-            failed += 1;
-            yield* Effect.logWarning("Thread info pin backfill failed", {
-              discordThreadId: link.discordThreadId,
-              t3ThreadId: link.t3ThreadId,
-              error: String(result.failure),
-            });
-            return;
-          }
-          if (result.success === null) {
-            skipped += 1;
-            return;
-          }
-          classified.push(result.success);
-        }),
-      { concurrency: BACKFILL_CONCURRENCY },
-    );
+        if (result._tag === "Failure") {
+          failed += 1;
+          yield* Effect.logWarning("Thread info pin backfill failed", {
+            discordThreadId: link.discordThreadId,
+            t3ThreadId: link.t3ThreadId,
+            error: String(result.failure),
+          });
+          return;
+        }
+        if (result.success === null) {
+          skipped += 1;
+          return;
+        }
+        classified.push(result.success);
+      }),
+    { concurrency: BACKFILL_CONCURRENCY },
+  );
 
-    const linkedAfterCrossLink = new Map(
-      excludeBotOnlyKeysAcrossLinks([
-        ...classified.map((row) => ({
-          t3ThreadId: row.link.t3ThreadId,
-          botOnlyKeys: mergeJiraIssueKeys(row.botOnlyKeys, row.link.backfillJiraIssueKeys),
-          linkedKeys: row.linkedKeys,
-          explicitLinkedKeys: row.explicitLinkedKeys,
-          discordThreadId: row.link.discordThreadId,
-        })),
-        ...alreadySplitIdle.map((link) => ({
-          t3ThreadId: link.t3ThreadId,
-          botOnlyKeys: mergeJiraIssueKeys([], link.backfillJiraIssueKeys),
-          linkedKeys: link.linkedJiraIssueKeys ?? [],
-          explicitLinkedKeys: link.linkedJiraIssueKeys,
-          discordThreadId: link.discordThreadId,
-        })),
-      ]).map((row) => [row.discordThreadId, row.linkedKeys]),
-    );
-
-    for (const row of classified) {
-      const linkedKeys = linkedAfterCrossLink.get(row.link.discordThreadId) ?? row.linkedKeys;
-      const backfillKeys = mergeJiraIssueKeys(row.backfillKeys, row.botOnlyKeys).filter(
-        (key) => !linkedKeys.includes(key),
-      );
-      yield* links.setJiraKeyRoles(row.link.discordThreadId, {
-        jiraIssueKeys: row.pinKeys,
-        linkedJiraIssueKeys: linkedKeys,
-        backfillJiraIssueKeys: backfillKeys,
-        linkedKeysAtStart: row.explicitLinkedKeys,
-      });
-      if (row.link.status !== "active") {
-        updated += 1;
-        continue;
-      }
-      if (
-        row.discoveredInfoMessageId !== null &&
-        row.discoveredInfoMessageId !== row.link.infoDiscordMessageId
-      ) {
-        yield* links.setInfoDiscordMessageId(row.link.discordThreadId, row.discoveredInfoMessageId);
-      }
-      yield* links.setSentryIssueUrls(
-        row.link.discordThreadId,
-        mergeSentryIssueUrls(row.link.sentryIssueUrls, row.sentryUrlsFromHistory),
-      );
-      yield* links.setPrUrls(
-        row.link.discordThreadId,
-        mergePullRequestUrls(row.link.prUrls, row.prUrlsFromHistory),
-      );
-      const shell = yield* t3.getThreadShell(row.link.t3ThreadId as ThreadId);
-      yield* upsertThreadInfoPin({
-        discordThreadId: row.link.discordThreadId,
+  const linkedAfterCrossLink = new Map(
+    excludeBotOnlyKeysAcrossLinks([
+      ...classified.map((row) => ({
         t3ThreadId: row.link.t3ThreadId,
-        botConfig,
-        incomingJiraKeys: [],
-        dropJiraIssueKeys: row.sentryMaskedFromHistory,
-        incomingSentryIssueUrls: [],
-        incomingPrUrls: [],
-        modelSelection: shell?.modelSelection ?? null,
-        worktreePath: shell?.worktreePath ?? null,
-        local: shell?.worktreePath === null,
-      });
+        botOnlyKeys: mergeJiraIssueKeys(row.botOnlyKeys, row.link.backfillJiraIssueKeys),
+        linkedKeys: row.linkedKeys,
+        explicitLinkedKeys: row.explicitLinkedKeys,
+        discordThreadId: row.link.discordThreadId,
+      })),
+      ...alreadySplitIdle.map((link) => ({
+        t3ThreadId: link.t3ThreadId,
+        botOnlyKeys: mergeJiraIssueKeys([], link.backfillJiraIssueKeys),
+        linkedKeys: link.linkedJiraIssueKeys ?? [],
+        explicitLinkedKeys: link.linkedJiraIssueKeys,
+        discordThreadId: link.discordThreadId,
+      })),
+    ]).map((row) => [row.discordThreadId, row.linkedKeys]),
+  );
+
+  for (const row of classified) {
+    const linkedKeys = linkedAfterCrossLink.get(row.link.discordThreadId) ?? row.linkedKeys;
+    const backfillKeys = mergeJiraIssueKeys(row.backfillKeys, row.botOnlyKeys).filter(
+      (key) => !linkedKeys.includes(key),
+    );
+    yield* links.setJiraKeyRoles(row.link.discordThreadId, {
+      jiraIssueKeys: row.pinKeys,
+      linkedJiraIssueKeys: linkedKeys,
+      backfillJiraIssueKeys: backfillKeys,
+      linkedKeysAtStart: row.explicitLinkedKeys,
+    });
+    if (row.link.status !== "active") {
       updated += 1;
+      continue;
     }
-
-    yield* Effect.logInfo("Thread info pin backfill finished", {
-      considered: classify.length,
-      updated,
-      skipped,
-      failed,
-    });
-  });
-
-const classifyThreadJiraKeys = (link: ThreadLink) =>
-  Effect.gen(function* () {
-    const rest = yield* DiscordREST;
-
-    const channelOk = yield* rest.getChannel(link.discordThreadId).pipe(
-      Effect.as(true as const),
-      Effect.orElseSucceed(() => false as const),
-    );
-    if (!channelOk) return null;
-
-    const history = yield* fetchChannelMessagesOldestFirst(link.discordThreadId);
-
-    const bareKeyProjects = yield* bareKeyProjectsForDiscordLink(link.projectId);
-    const extractProjects = bareKeyProjects ?? [];
-    const humanKeys: string[] = [];
-    const botKeys: string[] = [];
-    const sentryMaskedFromHistory: string[] = [];
-    const sentryUrlsFromHistory: string[] = [];
-    const prUrlsFromHistory: string[] = [];
-    let discoveredInfoMessageId: string | null = link.infoDiscordMessageId ?? null;
-
-    for (const message of history) {
-      if (isThreadInfoPinContent(message.content)) {
-        if (discoveredInfoMessageId === null) discoveredInfoMessageId = message.id;
-        // Do not re-parse our own pin — it can echo previously misclassified Jira keys.
-        continue;
-      }
-      const keys = extractJiraIssueKeysFromDiscordMessage(message, extractProjects);
-      const bucket = message.author?.bot === true ? botKeys : humanKeys;
-      for (const key of keys) bucket.push(key);
-      for (const key of jiraIssueKeysMaskedBySentryContext(message, extractProjects)) {
-        sentryMaskedFromHistory.push(key);
-      }
-      for (const url of extractSentryIssueUrlsFromDiscordMessage(message)) {
-        sentryUrlsFromHistory.push(url);
-      }
-      const prUrls = extractPullRequestUrlsFromDiscordMessage(message);
-      for (const url of prUrls) prUrlsFromHistory.push(url);
+    if (
+      row.discoveredInfoMessageId !== null &&
+      row.discoveredInfoMessageId !== row.link.infoDiscordMessageId
+    ) {
+      yield* links.setInfoDiscordMessageId(row.link.discordThreadId, row.discoveredInfoMessageId);
     }
-
-    const split = splitJiraKeysForPinAndLink({
-      existingPinKeys: link.jiraIssueKeys,
-      existingLinkedKeys: link.linkedJiraIssueKeys,
-      existingBackfillKeys: link.backfillJiraIssueKeys,
-      humanKeys,
-      botKeys,
-      maskedKeys: sentryMaskedFromHistory,
-    });
-    // Keep the sentry false-positive filter used by the pin, including keys that
-    // were already stored and are only masked inside a Sentry message.
-    const pinKeys = jiraIssueKeysAfterExcludingSentryFalsePositives(
-      split.pinKeys,
-      [],
-      sentryMaskedFromHistory,
-      bareKeyProjects,
+    yield* links.setSentryIssueUrls(
+      row.link.discordThreadId,
+      mergeSentryIssueUrls(row.link.sentryIssueUrls, row.sentryUrlsFromHistory),
     );
+    yield* links.setPrUrls(
+      row.link.discordThreadId,
+      mergePullRequestUrls(row.link.prUrls, row.prUrlsFromHistory),
+    );
+    const shell = yield* t3.getThreadShell(row.link.t3ThreadId as ThreadId);
+    yield* upsertThreadInfoPin({
+      discordThreadId: row.link.discordThreadId,
+      t3ThreadId: row.link.t3ThreadId,
+      botConfig,
+      incomingJiraKeys: [],
+      dropJiraIssueKeys: row.sentryMaskedFromHistory,
+      incomingSentryIssueUrls: [],
+      incomingPrUrls: [],
+      modelSelection: shell?.modelSelection ?? null,
+      worktreePath: shell?.worktreePath ?? null,
+      local: shell?.worktreePath === null,
+    });
+    updated += 1;
+  }
 
-    return {
-      link,
-      pinKeys,
-      linkedKeys: split.linkedKeys,
-      backfillKeys: split.backfillKeys,
-      botOnlyKeys: split.botOnlyKeys,
-      explicitLinkedKeys: link.linkedJiraIssueKeys,
-      sentryMaskedFromHistory,
-      sentryUrlsFromHistory,
-      prUrlsFromHistory,
-      discoveredInfoMessageId,
-    };
+  yield* Effect.logInfo("Thread info pin backfill finished", {
+    considered: classify.length,
+    updated,
+    skipped,
+    failed,
   });
+});
 
-const fetchChannelMessagesOldestFirst = (channelId: string) =>
-  Effect.gen(function* () {
+const classifyThreadJiraKeys = Effect.fn("ThreadInfoPin.classifyThreadJiraKeys")(function* (
+  link: ThreadLink,
+) {
+  const rest = yield* DiscordREST;
+
+  const channelOk = yield* rest.getChannel(link.discordThreadId).pipe(
+    Effect.as(true as const),
+    Effect.orElseSucceed(() => false as const),
+  );
+  if (!channelOk) return null;
+
+  const history = yield* fetchChannelMessagesOldestFirst(link.discordThreadId);
+
+  const bareKeyProjects = yield* bareKeyProjectsForDiscordLink(link.projectId);
+  const extractProjects = bareKeyProjects ?? [];
+  const humanKeys: string[] = [];
+  const botKeys: string[] = [];
+  const sentryMaskedFromHistory: string[] = [];
+  const sentryUrlsFromHistory: string[] = [];
+  const prUrlsFromHistory: string[] = [];
+  let discoveredInfoMessageId: string | null = link.infoDiscordMessageId ?? null;
+
+  for (const message of history) {
+    if (isThreadInfoPinContent(message.content)) {
+      if (discoveredInfoMessageId === null) discoveredInfoMessageId = message.id;
+      // Do not re-parse our own pin — it can echo previously misclassified Jira keys.
+      continue;
+    }
+    const keys = extractJiraIssueKeysFromDiscordMessage(message, extractProjects);
+    const bucket = message.author?.bot === true ? botKeys : humanKeys;
+    for (const key of keys) bucket.push(key);
+    for (const key of jiraIssueKeysMaskedBySentryContext(message, extractProjects)) {
+      sentryMaskedFromHistory.push(key);
+    }
+    for (const url of extractSentryIssueUrlsFromDiscordMessage(message)) {
+      sentryUrlsFromHistory.push(url);
+    }
+    const prUrls = extractPullRequestUrlsFromDiscordMessage(message);
+    for (const url of prUrls) prUrlsFromHistory.push(url);
+  }
+
+  const split = splitJiraKeysForPinAndLink({
+    existingPinKeys: link.jiraIssueKeys,
+    existingLinkedKeys: link.linkedJiraIssueKeys,
+    existingBackfillKeys: link.backfillJiraIssueKeys,
+    humanKeys,
+    botKeys,
+    maskedKeys: sentryMaskedFromHistory,
+  });
+  // Keep the sentry false-positive filter used by the pin, including keys that
+  // were already stored and are only masked inside a Sentry message.
+  const pinKeys = jiraIssueKeysAfterExcludingSentryFalsePositives(
+    split.pinKeys,
+    [],
+    sentryMaskedFromHistory,
+    bareKeyProjects,
+  );
+
+  return {
+    link,
+    pinKeys,
+    linkedKeys: split.linkedKeys,
+    backfillKeys: split.backfillKeys,
+    botOnlyKeys: split.botOnlyKeys,
+    explicitLinkedKeys: link.linkedJiraIssueKeys,
+    sentryMaskedFromHistory,
+    sentryUrlsFromHistory,
+    prUrlsFromHistory,
+    discoveredInfoMessageId,
+  };
+});
+
+const fetchChannelMessagesOldestFirst = Effect.fn("ThreadInfoPin.fetchChannelMessagesOldestFirst")(
+  function* (channelId: string) {
     const rest = yield* DiscordREST;
     const newestFirst: DiscordMessageSummary[] = [];
     let before: string | undefined;
@@ -955,4 +963,5 @@ const fetchChannelMessagesOldestFirst = (channelId: string) =>
 
     // Discord returns newest-first; reverse for chronological first-seen key order.
     return newestFirst.toReversed();
-  });
+  },
+);

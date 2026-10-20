@@ -33,6 +33,7 @@ import * as ConnectionDiagnosticsLog from "./diagnosticsLog.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
 import {
   connectionRouteId,
+  connectionRouteKind,
   connectionRoutes,
   entryWithRoutes,
   type ReportedEndpoint,
@@ -428,6 +429,34 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     );
   });
 
+  // Low-cardinality dimensions for time-to-connected dashboards; the error
+  // detail stays in the span status, never in an attribute.
+  const annotateAttemptOutcome = Effect.fnUntraced(function* (
+    exit: Exit.Exit<ConnectionDriver.EnvironmentConnectionLease, ConnectionAttemptError>,
+  ) {
+    if (Exit.isSuccess(exit)) {
+      const leaseTarget = exit.value.prepared.target;
+      const route = (yield* currentRoutes).find(
+        (candidate) => connectionRouteId(candidate.target) === connectionRouteId(leaseTarget),
+      );
+      return yield* Effect.annotateCurrentSpan({
+        "connection.outcome": "connected",
+        "connection.route": connectionRouteKind(
+          route ?? { target: leaseTarget, profile: Option.none() },
+        ),
+      });
+    }
+    if (Cause.hasInterruptsOnly(exit.cause)) {
+      return yield* Effect.annotateCurrentSpan("connection.outcome", "interrupted");
+    }
+    const failure = exit.cause.reasons.find(Cause.isFailReason)?.error;
+    yield* Effect.annotateCurrentSpan({
+      "connection.outcome": "failed",
+      "connection.failure.tag": failure?._tag ?? "defect",
+      "connection.failure.reason": failure?.reason ?? "defect",
+    });
+  });
+
   const traceRelayEstablishment = (
     effect: Effect.Effect<
       ConnectionDriver.EnvironmentConnectionLease,
@@ -438,8 +467,12 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     generation: number,
     pendingRetry: Option.Option<PendingRetryTrace>,
   ) => {
+    // The span must end with the ConnectionAttemptError itself: the exporter
+    // can only describe an Error-like failure, and a TracedAttemptFailure
+    // wrapper reached it as "[object Object]". The wrapper is added outside.
+    let attemptSpan = Option.none<Tracer.Span>();
     const traced = Effect.gen(function* () {
-      const attemptSpan = yield* Effect.currentSpan.pipe(Effect.orDie);
+      attemptSpan = Option.some(yield* Effect.currentSpan.pipe(Effect.orDie));
       yield* annotateTarget(target);
       yield* Effect.annotateCurrentSpan({
         "connection.attempt": attempt,
@@ -449,13 +482,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           onSome: (retry) => retry.failureCount,
         }),
       });
-      const lease = yield* effect.pipe(
-        Effect.mapError((error): TracedAttemptFailure => ({
-          error,
-          attemptSpan: Option.some(attemptSpan),
-        })),
-      );
-      return { attemptSpan: Option.some(attemptSpan), lease };
+      return yield* effect.pipe(Effect.onExit(annotateAttemptOutcome));
     }).pipe(Effect.withSpan("relay.connection.attempt", { root: true }));
 
     return Option.match(pendingRetry, {
@@ -467,7 +494,11 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
             "connection.retry.reason": retry.reason,
           }),
         ),
-    }).pipe(withRelayClientTracing);
+    }).pipe(
+      Effect.map((lease) => ({ attemptSpan, lease })),
+      Effect.mapError((error): TracedAttemptFailure => ({ error, attemptSpan })),
+      withRelayClientTracing,
+    );
   };
 
   const establishTracedConnection = Effect.fnUntraced(function* (
@@ -908,9 +939,13 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       const failedProbe = yield* Ref.getAndSet(probeUnanswered, false);
       if (outcome.established) {
         generation = nextGeneration;
+        // A session came up, so no earlier failure describes the connection.
+        // Losing a live session is not a failed connection either, for example
+        // a socket the OS killed while the app was suspended: its replacement
+        // reports no failure until it fails itself.
+        latestFailure = null;
         if (outcome.stable) {
           resetRetryLadder();
-          latestFailure = null;
         }
       }
       if (outcome._tag === "Interrupted") {
@@ -934,7 +969,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           ...(error.traceId !== undefined ? { traceId: error.traceId } : {}),
         });
       }
-      latestFailure = error;
+      if (!outcome.established) latestFailure = error;
       if (error._tag === "ConnectionBlockedError") {
         yield* recordDiagnostic({ kind: "blocked", error, attempt });
         const blockedIntent = yield* Ref.get(intent);
@@ -957,7 +992,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
 
       if (failedProbe) {
         resetRetryLadder();
-        yield* setState(connectingState(yield* Ref.get(intent), generation, 1, error));
+        yield* setState(connectingState(yield* Ref.get(intent), generation, 1, latestFailure));
         continue;
       }
 
@@ -982,7 +1017,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         stage: null,
         attempt,
         generation,
-        lastFailure: error,
+        lastFailure: latestFailure,
         retryAt: (yield* Clock.currentTimeMillis) + delayMs,
       });
       const applicationActivated = yield* waitForRetrySignal(delayMs);

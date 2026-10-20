@@ -534,33 +534,32 @@ export const make = Effect.gen(function* () {
    * Runs a generated read against `target`. GitHub's refusals and `errors` fail the way REST
    * ones do; an answer that does not decode is a `decodeDetail` failure.
    */
-  const graphqlRead = <A, E, R>(
+  const graphqlRead = Effect.fn("GitHubSourceControlProvider.graphqlRead")(function* <A, E, R>(
     target: GitHubGraphQlClient.GitHubGraphQlTarget["Service"],
     decodeDetail: string,
     effect: Effect.Effect<A, E, R>,
-  ) =>
-    Effect.gen(function* () {
-      const credential = yield* api
-        .credential(target.host, target)
-        .pipe(Effect.mapError((error) => fromGitHubApiError(error)));
-      const read = Redacted.value(credential.token).startsWith("ghs_")
-        ? effect.pipe(
-            Effect.provideService(GitHubRequestPolicy.PinnedGitHubCredential, {
-              host: target.host.toLowerCase(),
-              token: credential.token,
-              credentialFingerprint: credential.fingerprint,
-            }),
-          )
-        : effect;
-      return yield* read.pipe(
-        GitHubGraphQlClient.call(target),
-        Effect.mapError((error) =>
-          GraphQLClientError.isGraphQLClientError(error)
-            ? failure(decodeDetail, error)
-            : fromGitHubApiError(error as GitHubRequestPolicy.GitHubApiError),
-        ),
-      );
-    });
+  ) {
+    const credential = yield* api
+      .credential(target.host, target)
+      .pipe(Effect.mapError((error) => fromGitHubApiError(error)));
+    const read = Redacted.value(credential.token).startsWith("ghs_")
+      ? effect.pipe(
+          Effect.provideService(GitHubRequestPolicy.PinnedGitHubCredential, {
+            host: target.host.toLowerCase(),
+            token: credential.token,
+            credentialFingerprint: credential.fingerprint,
+          }),
+        )
+      : effect;
+    return yield* read.pipe(
+      GitHubGraphQlClient.call(target),
+      Effect.mapError((error) =>
+        GraphQLClientError.isGraphQLClientError(error)
+          ? failure(decodeDetail, error)
+          : fromGitHubApiError(error as GitHubRequestPolicy.GitHubApiError),
+      ),
+    );
+  });
 
   const rest = (input: GitHubRest.GitHubRestInput, notFoundDetail?: string) =>
     api.rest(input).pipe(Effect.mapError((error) => fromGitHubApiError(error, notFoundDetail)));
@@ -987,8 +986,8 @@ export const make = Effect.gen(function* () {
           providerError("getChangeRequest", input.cwd, { reference: input.reference }),
         ),
       ),
-    createChangeRequest: (input) =>
-      Effect.gen(function* () {
+    createChangeRequest: Effect.fn("GitHubSourceControlProvider.createChangeRequest")(
+      function* (input) {
         const locator = yield* resolveRepository(input);
         const body = yield* fileSystem
           .readFileString(input.bodyFile)
@@ -1013,13 +1012,16 @@ export const make = Effect.gen(function* () {
             maintainer_can_modify: true,
           },
         });
-      }).pipe(
-        Effect.mapError(
-          providerError("createChangeRequest", input.cwd, { reference: input.headSelector }),
+      },
+      (effect, input) =>
+        effect.pipe(
+          Effect.mapError(
+            providerError("createChangeRequest", input.cwd, { reference: input.headSelector }),
+          ),
         ),
-      ),
-    getRepositoryCloneUrls: (input) =>
-      Effect.gen(function* () {
+    ),
+    getRepositoryCloneUrls: Effect.fn("GitHubSourceControlProvider.getRepositoryCloneUrls")(
+      function* (input) {
         const fallbackHost = (yield* resolveRepository(input).pipe(
           Effect.map((locator) => locator.host),
           Effect.orElseSucceed(() => environment.GH_HOST ?? "github.com"),
@@ -1032,13 +1034,16 @@ export const make = Effect.gen(function* () {
             : null);
         if (locator === null) return yield* failure("Repositories are named owner/name.");
         return repositoryCloneUrls(yield* readRepository(locator));
-      }).pipe(
-        Effect.mapError(
-          providerError("getRepositoryCloneUrls", input.cwd, { repository: input.repository }),
+      },
+      (effect, input) =>
+        effect.pipe(
+          Effect.mapError(
+            providerError("getRepositoryCloneUrls", input.cwd, { repository: input.repository }),
+          ),
         ),
-      ),
-    createRepository: (input) =>
-      Effect.gen(function* () {
+    ),
+    createRepository: Effect.fn("GitHubSourceControlProvider.createRepository")(
+      function* (input) {
         const locator = parseGitHubRepositorySelector(
           input.repository,
           (environment.GH_HOST ?? "github.com").toLowerCase(),
@@ -1066,13 +1071,16 @@ export const make = Effect.gen(function* () {
           return yield* failure("GitHub returned an invalid repository.", decoded.failure);
         }
         return repositoryCloneUrls(decoded.success);
-      }).pipe(
-        Effect.mapError(
-          providerError("createRepository", input.cwd, { repository: input.repository }),
+      },
+      (effect, input) =>
+        effect.pipe(
+          Effect.mapError(
+            providerError("createRepository", input.cwd, { repository: input.repository }),
+          ),
         ),
-      ),
-    getDefaultBranch: (input) =>
-      Effect.gen(function* () {
+    ),
+    getDefaultBranch: Effect.fn("GitHubSourceControlProvider.getDefaultBranch")(
+      function* (input) {
         const locator = yield* resolveRepository({
           cwd: input.cwd,
           host: contextHost(input.context),
@@ -1081,7 +1089,9 @@ export const make = Effect.gen(function* () {
         const repository = yield* readRepository(locator);
         const branch = repository.default_branch?.trim() ?? "";
         return branch.length > 0 ? branch : null;
-      }).pipe(Effect.mapError(providerError("getDefaultBranch", input.cwd))),
+      },
+      (effect, input) => effect.pipe(Effect.mapError(providerError("getDefaultBranch", input.cwd))),
+    ),
     checkoutChangeRequest: (input) =>
       checkoutPullRequest(input).pipe(
         Effect.mapError(

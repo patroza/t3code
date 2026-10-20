@@ -210,23 +210,25 @@ export function followOrchestrationThread<R>(
     Number.isFinite(warmSeed.snapshotSequence) &&
     warmSeed.snapshotSequence >= 0;
 
-  const deliver = (thread: OrchestrationThread, sequence: number) =>
-    Effect.gen(function* () {
-      // Trim only the renderer view; the retained reducer base stays native.
-      const view = integrationThreadView(thread);
-      const projected = projectThread !== undefined ? projectThread(view) : view;
-      if (input.onProjection) yield* input.onProjection(thread, sequence);
-      yield* noteSequence(sequence);
-      yield* input.onThread(projected).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logError("Thread follower onThread failed", {
-            threadId: input.threadId,
-            cause: formatAlertCause(cause),
-          }),
-        ),
-      );
-      return thread;
-    });
+  const deliver = Effect.fn("DiscordThreadFollower.deliver")(function* (
+    thread: OrchestrationThread,
+    sequence: number,
+  ) {
+    // Trim only the renderer view; the retained reducer base stays native.
+    const view = integrationThreadView(thread);
+    const projected = projectThread !== undefined ? projectThread(view) : view;
+    if (input.onProjection) yield* input.onProjection(thread, sequence);
+    yield* noteSequence(sequence);
+    yield* input.onThread(projected).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logError("Thread follower onThread failed", {
+          threadId: input.threadId,
+          cause: formatAlertCause(cause),
+        }),
+      ),
+    );
+    return thread;
+  });
 
   // Retained across SocketClose retries so we never re-paint Discord from a stale
   // in-memory warmSeed after the tip has already been applied this process.

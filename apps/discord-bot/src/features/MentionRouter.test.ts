@@ -173,14 +173,14 @@ describe("shouldShowThreadBootstrapReaction", () => {
   });
 
   it("wires 👀 addition to channel intake and removal to initial-pin success", () => {
-    expect(mentionRouterSource).toContain(
-      ".addMyMessageReaction(\n              pendingReadyReaction.channelId",
+    expect(mentionRouterSource).toMatch(
+      /\.addMyMessageReaction\(\s*pendingReadyReaction\.channelId/,
     );
-    expect(mentionRouterSource).toContain(
-      "Effect.tap(() =>\n            input.pendingReadyReaction === undefined",
+    expect(mentionRouterSource).toMatch(
+      /Effect\.tap\(\(\) =>\s*input\.pendingReadyReaction === undefined/,
     );
-    expect(mentionRouterSource).toContain(
-      ".deleteMyMessageReaction(\n                    input.pendingReadyReaction.channelId",
+    expect(mentionRouterSource).toMatch(
+      /\.deleteMyMessageReaction\(\s*input\.pendingReadyReaction\.channelId/,
     );
     expect(mentionRouterSource).toContain("const discordThread = yield* openOrReuseThread(");
   });

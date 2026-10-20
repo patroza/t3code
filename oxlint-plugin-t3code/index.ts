@@ -1,8 +1,10 @@
 import { definePlugin } from "@oxlint/plugins";
 
 import namespaceNodeImports from "./rules/namespace-node-imports.ts";
+import noDomTestEnvironment from "./rules/no-dom-test-environment.ts";
 import noGlobalProcessRuntime from "./rules/no-global-process-runtime.ts";
 import noHermesUnsupportedApis from "./rules/no-hermes-unsupported-apis.ts";
+import noHooklessUseFunction from "./rules/no-hookless-use-function.ts";
 import noInlineSchemaCompile from "./rules/no-inline-schema-compile.ts";
 import noLowValueComments from "./rules/no-low-value-comments.ts";
 import noManualMemo from "./rules/no-manual-memo.ts";
@@ -18,6 +20,7 @@ import noTestInLoop from "./rules/no-test-in-loop.ts";
 import noRpcPermissionBypass from "./rules/no-rpc-permission-bypass.ts";
 import noUnscopedHas from "./rules/no-unscoped-has.ts";
 import preferCatchTags from "./rules/prefer-catch-tags.ts";
+import preferEffectFn from "./rules/prefer-effect-fn.ts";
 import requireCenteredScrollGutter from "./rules/require-centered-scroll-gutter.ts";
 import requireSuppressionReason from "./rules/require-suppression-reason.ts";
 
@@ -27,8 +30,10 @@ export default definePlugin({
   },
   rules: {
     "namespace-node-imports": namespaceNodeImports,
+    "no-dom-test-environment": noDomTestEnvironment,
     "no-global-process-runtime": noGlobalProcessRuntime,
     "no-hermes-unsupported-apis": noHermesUnsupportedApis,
+    "no-hookless-use-function": noHooklessUseFunction,
     "no-inline-schema-compile": noInlineSchemaCompile,
     "no-low-value-comments": noLowValueComments,
     "no-manual-effect-runtime-in-tests": noManualEffectRuntimeInTests,
@@ -44,6 +49,7 @@ export default definePlugin({
     "no-rpc-permission-bypass": noRpcPermissionBypass,
     "no-unscoped-has": noUnscopedHas,
     "prefer-catch-tags": preferCatchTags,
+    "prefer-effect-fn": preferEffectFn,
     "require-centered-scroll-gutter": requireCenteredScrollGutter,
     "require-suppression-reason": requireSuppressionReason,
   },

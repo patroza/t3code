@@ -12,6 +12,7 @@ import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
@@ -33,6 +34,30 @@ import {
   subscribe,
 } from "../rpc/client.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
+import type * as RpcSession from "../rpc/session.ts";
+
+const isEnvironmentRpcUnavailable = Schema.is(EnvironmentRpcUnavailableError);
+
+/**
+ * Holds back the unavailable failure of a query whose session went away. The
+ * query atom reruns when it sees that session change, so settling first would
+ * show a failure for a query that is about to retry. While `session` is still
+ * current no rerun is coming, and the failure stands.
+ */
+const pendingOnceSessionReplaced =
+  (session: RpcSession.RpcSession) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(
+      // The query's error type is generic, so its tags are unknown to `catchTags`.
+      Effect.catchIf(isEnvironmentRpcUnavailable, (error) =>
+        EnvironmentSupervisor.EnvironmentSupervisor.pipe(
+          Effect.flatMap((supervisor) => SubscriptionRef.get(supervisor.session)),
+          Effect.flatMap((current) =>
+            Option.isSome(current) && current.value === session ? Effect.fail(error) : Effect.never,
+          ),
+        ),
+      ),
+    );
 
 interface EnvironmentAtomOptions<Input, A, E, R> {
   readonly label: string;
@@ -297,14 +322,15 @@ export function createAtomCommandScheduler(): AtomCommandScheduler {
   };
 }
 
-export function scheduleAtomCommandEffect<W, A, E, R>(
-  registry: AtomRegistry.AtomRegistry,
-  scheduler: AtomCommandScheduler,
-  concurrency: AtomCommandConcurrency<W>,
-  input: W,
-  effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E, R> {
-  return Effect.gen(function* () {
+export const scheduleAtomCommandEffect =
+  /* Every atom command passes through this scheduler; the command owns its tracing boundary. */
+  Effect.fnUntraced(function* <W, A, E, R>(
+    registry: AtomRegistry.AtomRegistry,
+    scheduler: AtomCommandScheduler,
+    concurrency: AtomCommandConcurrency<W>,
+    input: W,
+    effect: Effect.Effect<A, E, R>,
+  ): Effect.fn.Return<A, E, R> {
     const context = yield* Effect.context<R>();
     const result = yield* Effect.promise((signal) =>
       scheduler.schedule<W, A, E>(registry, concurrency, input, async () => {
@@ -316,7 +342,6 @@ export function scheduleAtomCommandEffect<W, A, E, R>(
     );
     return result._tag === "Success" ? result.value : yield* Effect.failCause(result.cause);
   });
-}
 
 export async function runAtomCommand<W, A, E>(
   registry: AtomRegistry.AtomRegistry,
@@ -624,7 +649,12 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
           switch (connectionState.phase) {
             case "connected":
               return Option.isSome(session)
-                ? runInEnvironment(target.environmentId, options.execute(target.input, emit))
+                ? runInEnvironment(
+                    target.environmentId,
+                    options
+                      .execute(target.input, emit)
+                      .pipe(pendingOnceSessionReplaced(session.value)),
+                  )
                 : Effect.never;
             case "connecting":
             case "backoff":
@@ -705,9 +735,9 @@ export function createEnvironmentSubscriptionAtomFamily<R, ER, Input, A, E>(
     const target = parseEnvironmentRpcKey<Input>(key);
     return runtime
       .atom(
-        followStreamInEnvironment(target.environmentId, options.subscribe(target.input)).pipe(
-          options.completeWhen ? Stream.takeUntil(options.completeWhen) : (stream) => stream,
-        ),
+        Stream.suspend(() =>
+          followStreamInEnvironment(target.environmentId, options.subscribe(target.input)),
+        ).pipe(options.completeWhen ? Stream.takeUntil(options.completeWhen) : (stream) => stream),
       )
       .pipe(
         Atom.setIdleTTL(options.idleTtlMs ?? 5 * 60_000),

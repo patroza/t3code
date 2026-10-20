@@ -1,7 +1,5 @@
 import { useEnvironments } from "~/state/environments";
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
-import { useMemo } from "react";
-import { useCallback } from "react";
 import { threadChangeRequestSnapshotsAtom } from "./ThreadStatusIndicators";
 import { type EnvironmentId, type ScopedProjectRef } from "@t3tools/contracts";
 import { CollapsibleSectionHeader } from "./ui/collapsible-section-header";
@@ -157,6 +155,7 @@ import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useNowMinute } from "../hooks/useNowMinute";
+import { useNowSecond } from "../hooks/useNowSecond";
 import {
   useEnvironmentIdentities,
   useConnectedEnvironmentIds,
@@ -246,6 +245,7 @@ import {
   type SidebarListItem,
   type SidebarListMarker,
   type SidebarSection,
+  resolveSidebarRowThreadId,
 } from "./Sidebar.logic";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
@@ -336,6 +336,7 @@ type SidebarProviderEntry = Pick<
   ProviderInstanceEntry,
   | "instanceId"
   | "driverKind"
+  | "enabled"
   | "displayName"
   | "accentColor"
   | "acpRegistryAgentId"
@@ -353,6 +354,7 @@ function sameSidebarProviderEntries(
     if (
       other === undefined ||
       other.driverKind !== entry.driverKind ||
+      other.enabled !== entry.enabled ||
       other.displayName !== entry.displayName ||
       other.accentColor !== entry.accentColor ||
       other.acpRegistryAgentId !== entry.acpRegistryAgentId ||
@@ -425,6 +427,8 @@ interface SidebarThreadPartitionInput {
   // Snooze wakes and the queued-turn grace depend on the clock, so the minute
   // tick and the precise snooze-wake tick are inputs: a new key repartitions.
   readonly clockKey: string;
+  readonly matchesThread: (thread: EnvironmentThreadShell) => boolean;
+  readonly orderActiveThreads: (threads: EnvironmentThreadShell[]) => EnvironmentThreadShell[];
 }
 
 function threadShellKey(thread: Pick<SidebarThreadSummary, "environmentId" | "id">): string {
@@ -483,11 +487,29 @@ function useSidebarThreads(input: {
   readonly scopedProjectKeys: ReadonlySet<string> | null;
   readonly serverConfigs: ReadonlyMap<EnvironmentId, EnvironmentServerConfig>;
   readonly optimisticDrop: SidebarOptimisticDrop | null;
-  readonly routeThreadKey: string | null;
+  readonly routeThreadRef: ScopedThreadRef | null;
+  readonly matchesThread: (thread: EnvironmentThreadShell) => boolean;
+  readonly orderActiveThreads: (threads: EnvironmentThreadShell[]) => EnvironmentThreadShell[];
+  readonly settledShelfExpanded: boolean;
+  readonly setSettledShelfExpanded: (update: (value: boolean) => boolean) => void;
+  readonly filterKey: string;
 }) {
-  const { projectScopeKey, scopedProjectKeys, serverConfigs, optimisticDrop, routeThreadKey } =
+  const { projectScopeKey, scopedProjectKeys, serverConfigs, optimisticDrop, routeThreadRef } =
     input;
   const threads = useThreadShells();
+  const routeRowThreadKey =
+    routeThreadRef === null
+      ? null
+      : scopedThreadKey(
+          scopeThreadRef(
+            routeThreadRef.environmentId,
+            resolveSidebarRowThreadId(
+              routeThreadRef.threadId,
+              routeThreadRef.environmentId,
+              threads,
+            ),
+          ),
+        );
   const workingShelfEnabled = useClientSettings((s) => s.sidebarWorkingShelfEnabled);
   const nowMinute = useNowMinute();
   // Snooze wake times are second-precise, so classifying with the quantized
@@ -498,11 +520,7 @@ function useSidebarThreads(input: {
     () => scheduleSnoozeWake(nextSnoozeWakeAt, () => bumpSnoozeWakeTick((tick) => tick + 1)),
     [nextSnoozeWakeAt],
   );
-  const [settledShelfExpanded, setSettledShelfExpanded] = useLocalStorage(
-    SETTLED_SHELF_EXPANDED_KEY,
-    false,
-    Schema.Boolean,
-  );
+  const { settledShelfExpanded, setSettledShelfExpanded } = input;
   const [snoozedShelfExpanded, setSnoozedShelfExpanded] = useLocalStorage(
     SNOOZED_SHELF_EXPANDED_KEY,
     false,
@@ -515,14 +533,19 @@ function useSidebarThreads(input: {
   );
   // The settled tail restarts whenever the project scope changes.
   const [settledTail, setSettledTail] = useState({
-    scopeKey: projectScopeKey,
+    scopeKey: `${projectScopeKey}:${input.filterKey}`,
     count: SETTLED_TAIL_INITIAL_COUNT,
   });
-  if (settledTail.scopeKey !== projectScopeKey) {
-    setSettledTail({ scopeKey: projectScopeKey, count: SETTLED_TAIL_INITIAL_COUNT });
+  if (settledTail.scopeKey !== `${projectScopeKey}:${input.filterKey}`) {
+    setSettledTail({
+      scopeKey: `${projectScopeKey}:${input.filterKey}`,
+      count: SETTLED_TAIL_INITIAL_COUNT,
+    });
   }
   const settledVisibleCount =
-    settledTail.scopeKey === projectScopeKey ? settledTail.count : SETTLED_TAIL_INITIAL_COUNT;
+    settledTail.scopeKey === `${projectScopeKey}:${input.filterKey}`
+      ? settledTail.count
+      : SETTLED_TAIL_INITIAL_COUNT;
 
   const partition = partitionSidebarThreads({
     threads,
@@ -531,6 +554,8 @@ function useSidebarThreads(input: {
     optimisticDrop,
     workingShelfEnabled,
     clockKey: `${nowMinute}:${snoozeWakeTick}`,
+    matchesThread: input.matchesThread,
+    orderActiveThreads: input.orderActiveThreads,
   });
   const partitionNextWakeAt = partition.snoozedThreads[0]?.snoozedUntil ?? null;
   if (partitionNextWakeAt !== nextSnoozeWakeAt) setNextSnoozeWakeAt(partitionNextWakeAt);
@@ -540,23 +565,23 @@ function useSidebarThreads(input: {
   const visibleSettledThreads = (() => {
     if (settledThreads.length <= settledVisibleCount) return settledThreads;
     const visible = settledThreads.slice(0, settledVisibleCount);
-    if (routeThreadKey !== null) {
+    if (routeRowThreadKey !== null) {
       const routeThread = settledThreads
         .slice(settledVisibleCount)
-        .find((thread) => threadShellKey(thread) === routeThreadKey);
+        .find((thread) => threadShellKey(thread) === routeRowThreadKey);
       if (routeThread !== undefined) visible.push(routeThread);
     }
     return visible;
   })();
   const renderedSettledThreads = settledShelfExpanded
     ? visibleSettledThreads
-    : routeThreadOnly(visibleSettledThreads, routeThreadKey);
+    : routeThreadOnly(visibleSettledThreads, routeRowThreadKey);
   const visibleSnoozedThreads = snoozedShelfExpanded
     ? snoozedThreads
-    : routeThreadOnly(snoozedThreads, routeThreadKey);
+    : routeThreadOnly(snoozedThreads, routeRowThreadKey);
   const visibleWorkingThreads = workingShelfExpanded
     ? workingThreads
-    : routeThreadOnly(workingThreads, routeThreadKey);
+    : routeThreadOnly(workingThreads, routeRowThreadKey);
   const orderedThreads = [
     ...pinnedThreads,
     ...activeThreads,
@@ -575,6 +600,7 @@ function useSidebarThreads(input: {
     for (const thread of list) sectionByThreadKey.set(threadShellKey(thread), section);
   }
   return {
+    routeRowThreadKey,
     ...partition,
     threads,
     workingShelfEnabled,
@@ -620,7 +646,9 @@ function useSidebarThreads(input: {
 function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
   const { threads, scopedProjectKeys, serverConfigs, optimisticDrop, workingShelfEnabled } = input;
   const preciseNow = new Date().toISOString();
-  const visible = filterSidebarV2VisibleThreads(threads, scopedProjectKeys);
+  const visible = filterSidebarV2VisibleThreads(threads, scopedProjectKeys).filter(
+    input.matchesThread,
+  );
   inboxReturns.observe(workingShelfEnabled ? threads : null);
   const pinned: EnvironmentThreadShell[] = [];
   const active: EnvironmentThreadShell[] = [];
@@ -679,7 +707,7 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
   const sortedPinned = sortPinnedThreadsForSidebar(pinned);
   const sortedActive = workingShelfEnabled
     ? sortInboxThreadsByReturn(active, inboxReturns.returnedAt)
-    : sortThreadsForSidebar(active);
+    : input.orderActiveThreads(sortThreadsForSidebar(active));
   return {
     pinnedThreads:
       optimisticDrop?.section !== "pinned" || optimisticDrop.order === null
@@ -705,7 +733,7 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
         firstValidTimestampMs(left.snoozedUntil ?? null) -
         firstValidTimestampMs(right.snoozedUntil ?? null),
     ),
-    settledThreads: sortSettledThreads(settled),
+    settledThreads: sortSettledThreadsForSidebar(settled),
     snoozeNow: preciseNow,
   };
 }
@@ -885,18 +913,19 @@ function JumpHintBadge(props: { label: string }) {
   );
 }
 
-// Self-ticking so only this span re-renders each second, not the whole row.
 function WorkingDuration(props: { startedAt: string | null }) {
   const startedMs = props.startedAt !== null ? Date.parse(props.startedAt) : Number.NaN;
-  // Mount time is close enough for the first frame; the interval keeps it current.
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  useEffect(() => {
-    if (Number.isNaN(startedMs)) return;
-    const id = window.setInterval(() => setNowMs(Date.now()), 1_000);
-    return () => window.clearInterval(id);
-  }, [startedMs]);
   if (Number.isNaN(startedMs)) return null;
-  return <span className="tabular-nums">{formatWorkingDurationLabel(nowMs - startedMs)}</span>;
+  return <WorkingDurationLabel startedMs={startedMs} />;
+}
+
+// Self-ticking so only this span re-renders each second, not the whole row;
+// the shared tick lands every working row's update in the same frame.
+function WorkingDurationLabel(props: { startedMs: number }) {
+  const nowMs = useNowSecond();
+  return (
+    <span className="tabular-nums">{formatWorkingDurationLabel(nowMs - props.startedMs)}</span>
+  );
 }
 
 function terminalProcessLabel(count: number): string {
@@ -923,8 +952,8 @@ function SidebarProviderStack(props: {
       acpRegistryAgentId={currentEntry.acpRegistryAgentId}
       acpRegistryIconUrl={currentEntry.acpRegistryIconUrl}
       showBadge={showInstanceBadge}
-      iconClassName="size-3.5 opacity-60"
-      badgeClassName="right-[-0.1875rem] bottom-[-0.1875rem] h-3 min-w-3 px-0.5 text-5xs"
+      size="compact"
+      iconClassName="opacity-60"
     />
   );
   if (stack.length === 1) {
@@ -1571,6 +1600,9 @@ type SidebarThreadRowProps = {
   snoozeWakeLabelText: string | null;
   wokeAt: string | null;
   isActive: boolean;
+  // Unlike isActive, never true for the ancestor standing in for an open
+  // subagent: drafts and PR clicks care about which composer is on screen.
+  isRouteThread: boolean;
   openPullRequestsInRightPanel: boolean;
   jumpLabel: string | null;
   currentEnvironmentId: string | null;
@@ -1646,7 +1678,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   });
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
   const terminalProcessCount = runningTerminalIds.length;
-  const hasUnsentDraft = useThreadHasUnsentDraft(threadRef) && !props.isActive;
+  const hasUnsentDraft = useThreadHasUnsentDraft(threadRef) && !props.isRouteThread;
   const handleDiscardDraftClick = (event: ReactMouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
@@ -1947,7 +1979,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     if (!url) return;
     const showInRightPanel = targetUrl !== undefined || openPullRequestsInRightPanel;
     const openedInRightPanel = openPrLink(event, url, showInRightPanel ? threadRef : undefined);
-    if (openedInRightPanel && showInRightPanel && !props.isActive) {
+    if (openedInRightPanel && showInRightPanel && !props.isRouteThread) {
       onThreadActivate(threadRef);
     }
   };
@@ -2077,7 +2109,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     : null;
   const handlePrListClick = () => {
     useRightPanelStore.getState().open(threadRef, "pull-requests");
-    if (!props.isActive) onThreadActivate(threadRef);
+    if (!props.isRouteThread) onThreadActivate(threadRef);
   };
   const prBadge =
     prBadgeShape?.kind === "stack" || pr || currentLinkedPr ? (
@@ -2945,7 +2977,6 @@ export default function Sidebar() {
   const changeRequestSnapshotByKey = useAtomValue(threadChangeRequestSnapshotsAtom);
   // Snooze wake times are second-precise, so classifying with the quantized
   // minute would hold a woken thread on the shelf for up to a minute.
-  const [snoozeWakeTick, bumpSnoozeWakeTick] = useState(0);
 
   const persistedProjectScopeKey = useUiStateStore((store) => store.sidebarProjectScopeKey);
   const setPersistedProjectScopeKey = useUiStateStore((store) => store.setSidebarProjectScopeKey);
@@ -3140,128 +3171,43 @@ export default function Sidebar() {
     snoozedThreads,
     settledThreads,
     snoozeNow,
-  } = (() => {
-    // Snooze classification uses a REAL clock, not the quantized minute:
-    // wake times are second-precise and a woken thread must not linger on
-    // the shelf for the rest of the minute. snoozeWakeTick re-runs this
-    // memo exactly at the next wake boundary. nowMinute also retriggers so
-    // recency grouping of the same visible set can move across buckets.
-    void nowMinute;
-    void snoozeWakeTick;
-    const preciseNow = new Date().toISOString();
-    // Subagent child threads live in the parent's Agents surface, not the
-    // sidebar roster (v2 models them as real threads with lineage).
-    const visible = filterSidebarV2VisibleThreads(threads, scopedProjectKeys).filter(
-      (thread) =>
-        matchesEnvironmentFilter(thread.environmentId, selectedEnvironmentIds) &&
-        ownershipPredicate(thread),
-    );
-    inboxReturns.observe(workingShelfEnabled ? threads : null);
-    const pinned: EnvironmentThreadShell[] = [];
-    const active: EnvironmentThreadShell[] = [];
-    const working: EnvironmentThreadShell[] = [];
-    const inbox = (thread: EnvironmentThreadShell) =>
-      workingShelfEnabled && isSidebarThreadWorking(thread) ? working : active;
-    const snoozed: EnvironmentThreadShell[] = [];
-    const settled: EnvironmentThreadShell[] = [];
-    const draggable = new Set<string>();
-    const activeReorderable = new Set<string>();
-    for (const thread of visible) {
-      const capabilities = serverConfigs.get(thread.environmentId)?.environment.capabilities;
-      const supportsSettlement = capabilities?.threadSettlement === true;
-      const supportsSnooze = capabilities?.threadSnooze === true;
-      const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-      if (capabilities?.threadActiveReorder === true) activeReorderable.add(threadKey);
-      if (capabilities?.threadPinning === true && capabilities.threadPinReorder === true) {
-        draggable.add(threadKey);
-      }
-      // Snooze outranks settlement and pinning until the thread wakes.
-      // Settlement outranks pinning so a pinned thread that has settled
-      // stays in the settled tail (#7969) instead of a separate pin bucket.
-      if (optimisticDrop?.key === threadKey) {
-        const projected = applySidebarThreadDrop(
-          thread,
-          optimisticDrop.section,
-          optimisticDrop.occurredAt,
-          optimisticDrop.assignedKeys.get(threadKey),
-        );
-        (optimisticDrop.section === "pinned"
-          ? pinned
-          : optimisticDrop.section === "settled"
-            ? settled
-            : inbox(projected)
-        ).push(
-          optimisticDrop.clearsSnooze
-            ? projected
-            : { ...projected, snoozedAt: thread.snoozedAt, snoozedUntil: thread.snoozedUntil },
-        );
-      } else if (supportsSnooze && effectiveSnoozed(thread, { now: preciseNow })) {
-        snoozed.push(thread);
-      } else if (supportsSettlement && thread.settledOverride === "settled") {
-        settled.push(thread);
-      } else if (thread.pinnedAt != null) {
-        pinned.push(thread);
-      } else {
-        const section = resolveSidebarThreadSection({
-          snoozed: supportsSnooze && effectiveSnoozed(thread, { now: preciseNow }),
-          settled: supportsSettlement && thread.settledOverride === "settled",
-          pinned: thread.pinnedAt != null,
-        });
-        (section === "snoozed"
-          ? snoozed
-          : section === "settled"
-            ? settled
-            : section === "pinned"
-              ? pinned
-              : inbox(thread)
-        ).push(thread);
-      }
-    }
-    // Server capability only gates DRAGGING — it must not influence the
-    // sort, or mixed-version fleets would render different pinned orders on
-    // web and mobile from the same data. The fork's grouping
-    // preference therefore applies to the active rows, not to pins.
-    const sortedPinned = sortPinnedThreadsForSidebar(pinned);
-    const sortedActive = workingShelfEnabled
-      ? sortInboxThreadsByReturn(active, inboxReturns.returnedAt)
-      : orderForThreadGrouping(sortThreadsForSidebar(active));
-    return {
-      pinnedThreads:
-        optimisticDrop?.section !== "pinned" || optimisticDrop.order === null
-          ? sortedPinned
-          : orderItemsByPreferredIds({
-              items: sortedPinned,
-              preferredIds: optimisticDrop.order,
-              getId: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-            }),
-      draggableThreadKeys: draggable,
-      activeReorderableThreadKeys: activeReorderable,
-      activeThreads:
-        optimisticDrop?.section !== "active" || optimisticDrop.order === null
-          ? sortedActive
-          : orderItemsByPreferredIds({
-              items: sortedActive,
-              preferredIds: optimisticDrop.order,
-              getId: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-            }),
-      workingThreads: sortWorkingThreadsBySend(working),
-      snoozedThreads: snoozed.toSorted(
-        (left, right) =>
-          firstValidTimestampMs(left.snoozedUntil ?? null) -
-          firstValidTimestampMs(right.snoozedUntil ?? null),
-      ),
-      settledThreads: sortSettledThreadsForSidebar(settled),
-      snoozeNow: preciseNow,
-    };
-  })();
+    searchableThreads,
+    settledVisibleCount,
+    hiddenSettledCount,
+    showMoreSettled,
+    toggleSettledShelf,
+    snoozedShelfExpanded,
+    toggleSnoozedShelf,
+    workingShelfExpanded,
+    toggleWorkingShelf,
+    renderedSettledThreads,
+    visibleSnoozedThreads,
+    visibleWorkingThreads,
+    orderedThreadKeys,
+    threadByKey,
+    settledThreadKeys,
+    snoozedThreadKeys,
+    sectionByThreadKey,
+    pinnedKeys,
+    activeKeys,
+    pinnedKeysById,
+    activeKeysById,
+    routeRowThreadKey,
+  } = useSidebarThreads({
+    projectScopeKey,
+    scopedProjectKeys,
+    serverConfigs,
+    optimisticDrop,
+    routeThreadRef,
+    matchesThread: (thread) =>
+      matchesEnvironmentFilter(thread.environmentId, selectedEnvironmentIds) &&
+      ownershipPredicate(thread),
+    orderActiveThreads: orderForThreadGrouping,
+    settledShelfExpanded,
+    setSettledShelfExpanded,
+    filterKey: `${selectedEnvironmentIds.join(",")}:${ownershipFilter}:${ownershipRelation}`,
+  });
 
-  const searchableThreads = [
-    ...pinnedThreads,
-    ...activeThreads,
-    ...workingThreads,
-    ...snoozedThreads,
-    ...settledThreads,
-  ];
   const isSearchingThreads = threadSearchQuery.trim().length > 0;
   const threadSearchMatchByKey = new Map(
     threadSearch.matches.map((match) => [threadSearchMatchKey(match), match] as const),
@@ -3300,116 +3246,6 @@ export default function Sidebar() {
       ?.scrollIntoView({ block: "nearest" });
   }, [activeSearchResultKey]);
 
-  useEffect(
-    () =>
-      scheduleSnoozeWake(snoozedThreads[0]?.snoozedUntil ?? null, () =>
-        bumpSnoozeWakeTick((tick) => tick + 1),
-      ),
-    [snoozedThreads],
-  );
-  const settledResetKey = `${projectScopeKey ?? "all"}:${selectedEnvironmentIds.join(",")}`;
-  const [settledTail, setSettledTail] = useState({
-    key: settledResetKey,
-    count: SETTLED_TAIL_INITIAL_COUNT,
-  });
-  if (settledTail.key !== settledResetKey)
-    setSettledTail({ key: settledResetKey, count: SETTLED_TAIL_INITIAL_COUNT });
-  const settledVisibleCount =
-    settledTail.key === settledResetKey ? settledTail.count : SETTLED_TAIL_INITIAL_COUNT;
-  const setSettledVisibleCount = (update: (count: number) => number) =>
-    setSettledTail((current) => ({ ...current, count: update(current.count) }));
-  const visibleSettledThreads = (() => {
-    if (settledThreads.length <= settledVisibleCount) return settledThreads;
-    const visible = settledThreads.slice(0, settledVisibleCount);
-    if (routeThreadKey !== null) {
-      const routeThread = settledThreads
-        .slice(settledVisibleCount)
-        .find(
-          (thread) =>
-            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeThreadKey,
-        );
-      if (routeThread !== undefined) visible.push(routeThread);
-    }
-    return visible;
-  })();
-  const hiddenSettledCount = settledThreads.length - visibleSettledThreads.length;
-  const showMoreSettled = () => setSettledVisibleCount((count) => count + SETTLED_TAIL_PAGE_COUNT);
-
-  const toggleSettledShelf = () => setSettledShelfExpanded((value) => !value);
-  const renderedSettledThreads = (() => {
-    if (settledShelfExpanded) return visibleSettledThreads;
-    if (routeThreadKey === null) return EMPTY_THREADS;
-    const routeThread = visibleSettledThreads.find(
-      (thread) =>
-        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeThreadKey,
-    );
-    return routeThread === undefined ? EMPTY_THREADS : [routeThread];
-  })();
-
-  const [snoozedShelfExpanded, setSnoozedShelfExpanded] = useLocalStorage(
-    SNOOZED_SHELF_EXPANDED_KEY,
-    false,
-    Schema.Boolean,
-  );
-  const toggleSnoozedShelf = () => setSnoozedShelfExpanded((value) => !value);
-  const visibleSnoozedThreads = (() => {
-    if (snoozedShelfExpanded) return snoozedThreads;
-    if (routeThreadKey === null) return EMPTY_THREADS;
-    const routeThread = snoozedThreads.find(
-      (thread) =>
-        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeThreadKey,
-    );
-    return routeThread === undefined ? EMPTY_THREADS : [routeThread];
-  })();
-
-  const [workingShelfExpanded, setWorkingShelfExpanded] = useLocalStorage(
-    WORKING_SHELF_EXPANDED_KEY,
-    false,
-    Schema.Boolean,
-  );
-  const toggleWorkingShelf = () => setWorkingShelfExpanded((value) => !value);
-  const visibleWorkingThreads = (() => {
-    if (workingShelfExpanded) return workingThreads;
-    if (routeThreadKey === null) return EMPTY_THREADS;
-    const routeThread = workingThreads.find(
-      (thread) =>
-        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeThreadKey,
-    );
-    return routeThread === undefined ? EMPTY_THREADS : [routeThread];
-  })();
-
-  const orderedThreads = (() => [
-    ...pinnedThreads,
-    ...activeThreads,
-    ...visibleWorkingThreads,
-    ...visibleSnoozedThreads,
-    ...renderedSettledThreads,
-  ])();
-  const orderedThreadKeys = (() =>
-    orderedThreads.map((thread) =>
-      scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-    ))();
-  const threadByKey = new Map(orderedThreads.map((thread) => [threadShellKey(thread), thread]));
-  const settledThreadKeys = new Set(settledThreads.map(threadShellKey));
-  const snoozedThreadKeys = new Set(snoozedThreads.map(threadShellKey));
-  const sectionByThreadKey = new Map<string, SidebarSection>();
-  for (const [list, section] of [
-    [pinnedThreads, "pinned"],
-    [activeThreads, "active"],
-    [workingThreads, "working"],
-    [snoozedThreads, "snoozed"],
-    [settledThreads, "settled"],
-  ] as const) {
-    for (const thread of list) sectionByThreadKey.set(threadShellKey(thread), section);
-  }
-  const pinnedKeys = pinnedThreads.map(threadShellKey);
-  const activeKeys = activeThreads.map(threadShellKey);
-  const pinnedKeysById = new Map(
-    pinnedThreads.map((thread) => [threadShellKey(thread), thread.pinOrderKey]),
-  );
-  const activeKeysById = new Map(
-    activeThreads.map((thread) => [threadShellKey(thread), thread.activeOrderKey]),
-  );
   const orderedThreadKeysRef = useRef(orderedThreadKeys);
   // Handlers read these through refs: depending on per-update Map/Set
   // identities would give every row a fresh callback prop on each shell
@@ -4013,7 +3849,7 @@ export default function Sidebar() {
     ...(draggedActiveOrder === undefined ? {} : { activeOrder: draggedActiveOrder }),
     settledExpanded: settledShelfExpanded,
     settledVisibleCount,
-    routeThreadKey,
+    routeThreadKey: routeRowThreadKey,
     snoozedThreadCount: snoozedThreads.length,
   });
   const draggedThreadKey = dragState?.activeKey;
@@ -4850,7 +4686,7 @@ export default function Sidebar() {
         navigateToThreadKey(
           resolveAdjacentThreadId({
             threadIds: orderedThreadKeys,
-            currentThreadId: routeThreadKey,
+            currentThreadId: routeRowThreadKey,
             direction: traversalDirection,
           }),
         );
@@ -4866,8 +4702,8 @@ export default function Sidebar() {
     keybindings,
     navigateToThread,
     orderedThreadKeys,
+    routeRowThreadKey,
     routeTerminalOpen,
-    routeThreadKey,
     threadByKey,
   ]);
 
@@ -5139,7 +4975,7 @@ export default function Sidebar() {
                           EMPTY_PROVIDER_ENTRIES
                         }
                         isHighlighted={activeSearchResultIndex === index}
-                        isRouteActive={routeThreadKey === threadKey}
+                        isRouteActive={routeRowThreadKey === threadKey}
                         resultId={`sidebar-thread-search-result-${index}`}
                         searchMatch={
                           threadSearchMatchByKey.get(
@@ -5260,7 +5096,8 @@ export default function Sidebar() {
                                 : null
                             }
                             wokeAt={threadWokeAt(thread, { now: snoozeNow })}
-                            isActive={routeThreadKey === threadKey}
+                            isActive={routeRowThreadKey === threadKey}
+                            isRouteThread={routeThreadKey === threadKey}
                             openPullRequestsInRightPanel={routeThreadRef !== null}
                             jumpLabel={
                               showJumpHints ? (jumpLabelByKey.get(threadKey) ?? null) : null
