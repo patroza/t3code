@@ -1961,20 +1961,18 @@ describe("UsageService", () => {
             if (malformed > 0) assert.match(source?.message ?? "", /1 malformed or inconsistent/);
             else assert.notMatch(source?.message ?? "", /malformed|inconsistent/);
           };
-          const open = vi.spyOn(NodeFSP, "open");
-          open.mockClear();
-          yield* Effect.addFinalizer(() => Effect.sync(() => open.mockRestore()));
           const first = yield* UsageService.make;
           const cold = yield* first.readSummary(WINDOW);
-          assert.isTrue(open.mock.calls.some(([path]) => path === transcript));
           verify(cold, 20, 20, 1);
           yield* first.awaitPersisted;
+          // With the transcript temporarily unavailable, these reads must come
+          // from the persisted cache rather than scanning it again.
+          const hiddenTranscript = `${transcript}.hidden`;
+          yield* Effect.promise(() => NodeFSP.rename(transcript, hiddenTranscript));
           const restarted = yield* UsageService.make;
-          open.mockClear();
           verify(yield* first.readSummary(WINDOW), 20, 20, 1);
           verify(yield* restarted.readSummary(WINDOW), 20, 20, 1);
-          assert.isFalse(open.mock.calls.some(([path]) => path === transcript));
-          open.mockRestore();
+          yield* Effect.promise(() => NodeFSP.rename(hiddenTranscript, transcript));
 
           const append = "\n" + counted(10, 2, 140, 30) + "\n";
           content += append;
