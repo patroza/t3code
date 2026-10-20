@@ -6,6 +6,14 @@ import { readBrowserClientSettings, writeBrowserClientSettings } from "./clientP
 
 let cachedApi: LocalApi | undefined;
 
+function unavailableLocalBackendError(): Error {
+  return new Error("Local backend API is unavailable before a backend is paired.");
+}
+
+function rejectUnavailable(): Promise<never> {
+  return Promise.reject(unavailableLocalBackendError());
+}
+
 function createBrowserLocalApi(): LocalApi {
   return {
     dialogs: {
@@ -18,6 +26,7 @@ function createBrowserLocalApi(): LocalApi {
       },
     },
     shell: {
+      openInEditor: async () => rejectUnavailable(),
       openExternal: async (url) => {
         if (window.desktopBridge) {
           const opened = await window.desktopBridge.openExternal(url);
@@ -72,6 +81,20 @@ function createBrowserLocalApi(): LocalApi {
         writeBrowserClientSettings(settings);
       },
     },
+    server: {
+      getConfig: () => rejectUnavailable(),
+      refreshProviders: () => rejectUnavailable(),
+      updateProvider: () => rejectUnavailable(),
+      upsertKeybinding: () => rejectUnavailable(),
+      removeKeybinding: () => rejectUnavailable(),
+      getSettings: () => rejectUnavailable(),
+      updateSettings: () => rejectUnavailable(),
+      discoverSourceControl: () => rejectUnavailable(),
+      getTraceDiagnostics: () => rejectUnavailable(),
+      getProcessDiagnostics: () => rejectUnavailable(),
+      getProcessResourceHistory: () => rejectUnavailable(),
+      signalProcess: () => rejectUnavailable(),
+    },
   };
 }
 
@@ -82,6 +105,12 @@ export function createLocalApi(): LocalApi {
 export function readLocalApi(): LocalApi | undefined {
   if (typeof window === "undefined") return undefined;
   if (cachedApi) return cachedApi;
+
+  const nativeApi = (window as Window & { nativeApi?: LocalApi }).nativeApi;
+  if (nativeApi) {
+    cachedApi = nativeApi;
+    return cachedApi;
+  }
 
   cachedApi = createLocalApi();
   return cachedApi;

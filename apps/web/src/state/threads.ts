@@ -17,7 +17,12 @@ import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { environmentSnapshotAtom } from "./shell";
 
-export const threadEnvironment = createThreadEnvironmentAtoms(
+type ThreadEnvironmentAtoms =
+  typeof connectionAtomRuntime extends Atom.AtomRuntime<infer R, infer E>
+    ? ReturnType<typeof createThreadEnvironmentAtoms<R, E>>
+    : never;
+
+export const threadEnvironment: ThreadEnvironmentAtoms = createThreadEnvironmentAtoms(
   connectionAtomRuntime,
   environmentSnapshotAtom,
 );

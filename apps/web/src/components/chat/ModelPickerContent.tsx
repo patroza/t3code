@@ -1,5 +1,6 @@
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
+  type AiUsageSnapshot,
   type ProviderInstanceId,
   type EnvironmentId,
   type ProviderDriverKind,
@@ -62,6 +63,8 @@ import {
   type ProviderInstanceEntry,
 } from "../../providerInstances";
 import { providerModelKey, sortProviderModelItems } from "../../modelOrdering";
+import { resolveDriverUsages } from "../../aiUsageState";
+import { AiUsageStats } from "./AiUsageStats";
 
 type ModelPickerItem = {
   slug: string;
@@ -350,6 +353,8 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   lockedProvider: ProviderDriverKind | null;
   lockedContinuationGroupKey?: string | null;
   instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
+  /** Latest AI-usage snapshot for rail markers + per-provider stats. */
+  usageSnapshot?: AiUsageSnapshot | null;
   keybindings?: ResolvedKeybindingsConfig;
   modelOptionsByInstance: ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>>;
   terminalOpen: boolean;
@@ -615,7 +620,13 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     return [...available, ...disabled];
   })();
   const showSidebar = !isSearching && sidebarInstanceEntries.length > 0;
-  const instanceOrder = instanceEntries.map((entry) => entry.instanceId);
+  const selectedUsages = (() => {
+    const usageInstanceId =
+      selectedInstanceId === "favorites" ? props.activeInstanceId : selectedInstanceId;
+    const entry = entryByInstanceId.get(usageInstanceId);
+    return resolveDriverUsages(props.usageSnapshot, entry?.driverKind ?? null);
+  })();
+  const instanceOrder = (() => instanceEntries.map((entry) => entry.instanceId))();
 
   const filteredModels = (() => {
     let result = flatModels;
@@ -808,6 +819,9 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
             onSelectInstance={handleSelectInstance}
             onFocusSearch={focusSearchInput}
             instanceEntries={sidebarInstanceEntries}
+            usageSnapshot={props.usageSnapshot ?? null}
+            activeInstanceId={props.activeInstanceId}
+            activeModel={props.model}
             showFavorites
             {...(selectableUnavailableInstanceIds ? { selectableUnavailableInstanceIds } : {})}
             {...(lockedDisabledInstanceIds
@@ -1002,6 +1016,18 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
               onRequestClose={onRequestClose}
               onOpenProviderSetup={onOpenProviderSetup}
             />
+            {!isSearching && selectedUsages.length > 0 ? (
+              <div className="flex max-h-40 shrink-0 flex-col gap-2 overflow-y-auto border-t bg-muted/40 px-4 py-2 text-xs [scrollbar-width:thin]">
+                {selectedUsages.map((usage) => (
+                  <AiUsageStats
+                    key={usage.provider}
+                    item={usage.item}
+                    compact
+                    className="min-w-0"
+                  />
+                ))}
+              </div>
+            ) : null}
           </div>
         </Combobox>
       </div>

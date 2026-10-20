@@ -108,4 +108,11 @@ describe("Integrations browser discovery", () => {
     await openSettings();
     expect(listBrowserImportSources).not.toHaveBeenCalled();
   });
+
+  it("places device settings after browser settings", async () => {
+    await openSettings();
+    const sections = [...container.querySelectorAll("section[id]")].map((section) => section.id);
+    expect(sections.indexOf("browser")).toBeGreaterThanOrEqual(0);
+    expect(sections.indexOf("devices")).toBeGreaterThan(sections.indexOf("browser"));
+  });
 });

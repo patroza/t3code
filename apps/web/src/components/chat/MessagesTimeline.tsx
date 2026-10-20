@@ -38,7 +38,12 @@ import {
 import { parseScopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { useAtomValue } from "@effect/atom-react";
 import { environmentThreadDetails } from "../../state/threads";
-import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
+import {
+  resolveUserMessagePresentation,
+  userMessageSenderCaption,
+  type MessageSenderSource,
+  type MessageSenderViewer,
+} from "@t3tools/client-runtime/user-message";
 import { Link } from "@tanstack/react-router";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
 import { notificationChildThreadId } from "@t3tools/client-runtime/state/thread-execution";
@@ -332,6 +337,12 @@ interface TimelineRowSharedState {
   displayThreadKey?: string;
   onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
+  /** This client's claim and source channel. Same person and channel stays unlabeled. */
+  messageViewer?: MessageSenderViewer | undefined;
+  /** Thread origin, used when an agent message has no sender of its own. */
+  originSource?: MessageSenderSource | null | undefined;
+  /** Conversation-message senders, for history whose turn item has no source. */
+  messageSourceById?: ReadonlyMap<string, MessageSenderSource> | undefined;
   workflowOpening: WorkflowOpening | null;
   onForkFromRun: (input: {
     readonly sourceThreadId: ThreadId;
@@ -471,6 +482,12 @@ interface MessagesTimelineProps {
   paintOnly?: boolean;
   onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
+  /** This client's claim and source channel. Same person and channel stays unlabeled. */
+  messageViewer?: MessageSenderViewer | undefined;
+  /** Thread origin, used when an agent message has no sender of its own. */
+  originSource?: MessageSenderSource | null | undefined;
+  /** Conversation-message senders, for history whose turn item has no source. */
+  messageSourceById?: ReadonlyMap<string, MessageSenderSource> | undefined;
   parentThreadLink?: {
     readonly threadId: ThreadId;
     readonly title: string;
@@ -581,6 +598,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
   paintOnly = false,
   onOpenTurnDiff,
   onOpenThread,
+  messageViewer,
+  originSource,
+  messageSourceById,
   parentThreadLink = null,
   workflowOpening = null,
   onForkFromRun,
@@ -1282,7 +1302,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Rows and chat width resize the content without resizing the viewport.
   }, [timelineViewportElement, rows.length, reportContentOverflow, chatWidth]);
 
-  const sharedState: TimelineRowSharedState = {
+  const sharedState = (() => ({
     citationRequest: readyCitationRequest,
     listRef,
     timestampFormat,
@@ -1306,6 +1326,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
     openPullRequest,
     onOpenTurnDiff,
     onOpenThread,
+    messageViewer,
+    originSource,
+    messageSourceById,
     workflowOpening,
     onForkFromRun,
     onRollbackCheckpoint,
@@ -1319,7 +1342,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     onWorktreeSetupWorkLocally: onWorktreeSetupWorkLocally ?? null,
     onOpenWorktreeSetupTerminal: onOpenWorktreeSetupTerminal ?? null,
     workGroupViewState,
-  };
+  }))() as TimelineRowSharedState;
   const compactionAwaitingRow =
     isCompacting && !rows.some((row) => row.kind === "context-compaction" && row.active);
   const backgroundWorktreeSetup =
@@ -1953,7 +1976,6 @@ function TimelineMinimapNavigationButton({
 
 type TimelineWorkEntry = Extract<MessagesTimelineRow, { kind: "work" }>["groupedEntries"][number];
 type TimelineRow = MessagesTimelineRow;
-
 const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: TimelineRow }) {
   const isExpandedToolGroup = row.kind === "work" && row.isExpandedToolGroup;
   const isSubagentGroup = row.kind === "event" && row.projectedItem.item.type === "subagent";
@@ -2164,7 +2186,13 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   const ctx = use(TimelineRowCtx);
   const { onImageExpand, onFileOpen } = ctx;
   const senderThreadId = row.message.senderThreadId;
-  const resources = selectMessageImageResources(row.message.attachments);
+  const senderCaption = userMessageSenderCaption({
+    createdBy: row.message.createdBy,
+    source: row.message.source ?? ctx.messageSourceById?.get(row.message.id),
+    originSource: ctx.originSource,
+    viewer: ctx.messageViewer,
+  });
+  const resources = (() => selectMessageImageResources(row.message.attachments))();
   const previewUrls = useAssetUrls(ctx.activeThreadEnvironmentId, resources);
   const [projectPreviews] = useState(createMessageAttachmentPreviewProjector);
   const previewUrlsById = new Map(
@@ -2319,18 +2347,21 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
         >
           Sent by T3 Code
         </p>
-      ) : userMessage.attribution === "agent" ? (
-        <p className="me-1 text-2xs text-muted-foreground/70" data-user-message-attribution="agent">
+      ) : senderCaption ? (
+        <p
+          className="me-1 text-2xs text-muted-foreground/70"
+          data-user-message-attribution="sender"
+        >
           {senderThreadId ? (
             <InlineButton
               onClick={() => ctx.onOpenThread(senderThreadId)}
               tone="muted"
               aria-label="Open sending thread"
             >
-              Sent by another agent
+              {senderCaption}
             </InlineButton>
           ) : (
-            "Sent by another agent"
+            senderCaption
           )}
         </p>
       ) : null}
@@ -4028,6 +4059,11 @@ function WorkGroupHeader(props: {
   );
 }
 
+/**
+ * A clarifying-question round trip: what the agent asked and what the user
+ * picked. The interactive prompt lives in the composer, so this row is the
+ * thread's only lasting record of the exchange.
+ */
 /** Subscribes directly to the UI state store for expand/collapse state,
  *  so toggling re-renders only this component — not the entire list. */
 const AssistantChangedFilesSection = memo(function AssistantChangedFilesSection({

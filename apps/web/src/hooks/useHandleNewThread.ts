@@ -47,6 +47,7 @@ interface NewThreadWorkspaceOptions {
   worktreePath?: string | null;
   envMode?: DraftThreadEnvMode;
   startFromOrigin?: boolean;
+  reuseBaseBranch?: boolean;
 }
 
 function pickExplicitWorkspaceOptions(options: NewThreadWorkspaceOptions | undefined) {
@@ -55,6 +56,7 @@ function pickExplicitWorkspaceOptions(options: NewThreadWorkspaceOptions | undef
     ...(options?.worktreePath !== undefined ? { worktreePath: options.worktreePath } : {}),
     ...(options?.envMode !== undefined ? { envMode: options.envMode } : {}),
     ...(options?.startFromOrigin !== undefined ? { startFromOrigin: options.startFromOrigin } : {}),
+    ...(options?.reuseBaseBranch !== undefined ? { reuseBaseBranch: options.reuseBaseBranch } : {}),
   };
 }
 
@@ -73,12 +75,13 @@ export function useNewThreadHandler() {
       worktreePath?: string | null;
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
+      reuseBaseBranch?: boolean;
       replace?: boolean;
+      logicalProjectKey?: string;
+      environmentSelection?: "manual";
     },
   ): Promise<{ draftId: DraftId; threadId: ThreadId } | null> => {
     const projects = readProjects();
-    // Read at call time: every provider status push replaces the config map, and
-    // subscribing would hand every sidebar row a new handler.
     const environmentServerConfigs = appAtomRegistry.get(environmentServerConfigsAtom);
     const targetServerSettings =
       environmentServerConfigs.get(projectRef.environmentId)?.settings ?? DEFAULT_SERVER_SETTINGS;
@@ -111,6 +114,11 @@ export function useNewThreadHandler() {
       ? (carrySourceComposer?.modelSelectionByProvider[composerActiveProvider] ?? null)
       : null;
     const carryModelSelection = composerModelSelection ?? carrySourceShell?.modelSelection ?? null;
+    const carryRuntimeMode =
+      carrySourceComposer?.runtimeMode ??
+      carrySourceShell?.runtimeMode ??
+      carrySourceDraft?.runtimeMode ??
+      null;
     const carryInteractionMode =
       carrySourceComposer?.interactionMode ??
       carrySourceShell?.interactionMode ??
@@ -160,13 +168,20 @@ export function useNewThreadHandler() {
         ),
       });
     };
-    const logicalProjectKey = project
-      ? deriveLogicalProjectKeyFromSettings(project, projectGroupingSettings)
-      : scopedProjectKey(projectRef);
+    const logicalProjectKey =
+      options?.logicalProjectKey ??
+      (project
+        ? deriveLogicalProjectKeyFromSettings(project, projectGroupingSettings)
+        : scopedProjectKey(projectRef));
+    const environmentContext =
+      options?.environmentSelection === "manual"
+        ? { environmentSelection: "manual" as const, loadBalancedEnvironmentId: null }
+        : {};
     const hasBranchOption = options?.branch !== undefined;
     const hasWorktreePathOption = options?.worktreePath !== undefined;
     const hasEnvModeOption = options?.envMode !== undefined;
     const hasStartFromOriginOption = options?.startFromOrigin !== undefined;
+    const hasReuseBaseBranchOption = options?.reuseBaseBranch !== undefined;
     const storedDraftThread = getDraftSessionByLogicalProjectKey(logicalProjectKey);
     const storedDraftThreadRef = storedDraftThread
       ? scopeThreadRef(storedDraftThread.environmentId, storedDraftThread.threadId)
@@ -197,7 +212,20 @@ export function useNewThreadHandler() {
           currentRouteTarget?.kind === "draft" &&
           currentRouteTarget.draftId === emptyStoredDraftThread.draftId;
         const hasExplicitWorkspaceOption =
-          hasBranchOption || hasWorktreePathOption || hasEnvModeOption || hasStartFromOriginOption;
+          hasBranchOption ||
+          hasWorktreePathOption ||
+          hasEnvModeOption ||
+          hasStartFromOriginOption ||
+          hasReuseBaseBranchOption;
+        // Resurrecting an empty stored draft must not resurrect its stale
+        // context: explicit workspace options win outright; otherwise the
+        // env context resets to the configured defaults so drafts seeded
+        // before a defaults change (or by the old carry-over behavior) stop
+        // landing on "current checkout" branches forever. When the draft is
+        // already open and no options were passed, leave its workspace
+        // context alone entirely — the user may have just picked a branch
+        // in the composer. Model selection has its own explicit-pick rule
+        // below and does not follow this guard.
         let workspaceContext: NewThreadWorkspaceOptions | null = null;
         if (hasExplicitWorkspaceOption) {
           workspaceContext = pickExplicitWorkspaceOptions(options);
@@ -236,6 +264,7 @@ export function useNewThreadHandler() {
               envMode: defaultEnvMode,
               newWorktreesStartFromOrigin: projectSettings.settings.newWorktreesStartFromOrigin,
             }),
+            reuseBaseBranch: false,
           };
         }
         if (workspaceContext) {
@@ -243,6 +272,7 @@ export function useNewThreadHandler() {
             ...workspaceContext,
             ...(!isDraftAlreadyOpen ? { runtimeMode: defaultRuntimeMode } : {}),
             ...(carryInteractionMode ? { interactionMode: carryInteractionMode } : {}),
+            ...environmentContext,
           });
         }
         const storedDraft = getComposerDraft(emptyStoredDraftThread.draftId);
@@ -271,6 +301,7 @@ export function useNewThreadHandler() {
             ...workspaceContext,
             ...(!isDraftAlreadyOpen ? { runtimeMode: defaultRuntimeMode } : {}),
             ...(carryInteractionMode ? { interactionMode: carryInteractionMode } : {}),
+            ...environmentContext,
           },
         );
         const opened = {
@@ -304,7 +335,8 @@ export function useNewThreadHandler() {
         hasBranchOption ||
         hasWorktreePathOption ||
         hasEnvModeOption ||
-        hasStartFromOriginOption
+        hasStartFromOriginOption ||
+        hasReuseBaseBranchOption
       ) {
         setDraftThreadContext(currentRouteTarget.draftId, pickExplicitWorkspaceOptions(options));
       }
@@ -314,6 +346,7 @@ export function useNewThreadHandler() {
         runtimeMode: latestActiveDraftThread.runtimeMode,
         interactionMode: latestActiveDraftThread.interactionMode,
         ...pickExplicitWorkspaceOptions(options),
+        ...environmentContext,
       });
       return Promise.resolve({
         draftId: currentRouteTarget.draftId,
@@ -345,6 +378,7 @@ export function useNewThreadHandler() {
           runtimeMode: racedDraft.runtimeMode,
           interactionMode: racedDraft.interactionMode,
           ...pickExplicitWorkspaceOptions(options),
+          ...environmentContext,
         });
         await router.navigate({
           to: "/draft/$draftId",
@@ -365,8 +399,10 @@ export function useNewThreadHandler() {
             envMode: initialEnvMode,
             newWorktreesStartFromOrigin: projectSettings.settings.newWorktreesStartFromOrigin,
           }),
-        runtimeMode: defaultRuntimeMode,
+        reuseBaseBranch: options?.reuseBaseBranch ?? false,
+        runtimeMode: carryRuntimeMode ?? defaultRuntimeMode,
         ...(carryInteractionMode ? { interactionMode: carryInteractionMode } : {}),
+        ...environmentContext,
       });
       applyStickyState(draftId);
       const modelSelectionOverride = resolveModelSelectionOverride(draftId);

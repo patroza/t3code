@@ -351,6 +351,17 @@ describe("composerDraftStore addImages", () => {
     expect(revokeSpy).toHaveBeenCalledWith("blob:b");
   });
 
+  it("adds one image to a new-thread draft before it has a server thread mapping", () => {
+    const draftId = DraftId.make("draft-single-image");
+    const image = makeImage({
+      id: "img-draft",
+      previewUrl: "blob:draft",
+    });
+
+    expect(useComposerDraftStore.getState().addImage(draftId, image)).toBe(true);
+    expect(useComposerDraftStore.getState().getComposerDraft(draftId)?.images).toEqual([image]);
+  });
+
   it("returns false when addImage receives an existing image id", () => {
     const first = makeImage({ id: "img-same", previewUrl: "blob:first" });
     const duplicate = makeImage({
@@ -1883,7 +1894,7 @@ describe("composerDraftStore project draft thread mapping", () => {
     });
   });
 
-  it("clears stale upload metadata when retargeting a draft to another environment", () => {
+  it("moves a pre-enrichment draft into the canonical clone group without reusing source uploads", () => {
     const store = useComposerDraftStore.getState();
     const hydratedFile: ComposerFileAttachment = {
       ...makeFile("file-cross-environment"),
@@ -1893,11 +1904,24 @@ describe("composerDraftStore project draft thread mapping", () => {
     };
 
     store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+    store.setPrompt(draftId, "Continue on the new machine");
     store.addFiles(draftId, [hydratedFile]);
 
-    store.setProjectDraftThreadId(remoteProjectRef, draftId, { threadId });
+    store.setLogicalProjectDraftThreadId("source-logical-project", remoteProjectRef, draftId, {
+      threadId,
+      environmentSelection: "manual",
+      loadBalancedEnvironmentId: null,
+    });
 
     const file = store.getComposerDraft(draftId)?.files[0];
+    expect(store.getComposerDraft(draftId)?.prompt).toBe("Continue on the new machine");
+    expect(store.getDraftSessionByLogicalProjectKey("source-logical-project")).toMatchObject({
+      environmentId: OTHER_TEST_ENVIRONMENT_ID,
+      projectId: remoteProjectRef.projectId,
+      environmentSelection: "manual",
+      loadBalancedEnvironmentId: null,
+    });
+    expect(store.getDraftSessionByLogicalProjectKey(scopedProjectKey(projectRef))).toBeNull();
     expect(file).toMatchObject({
       id: hydratedFile.id,
       file: null,

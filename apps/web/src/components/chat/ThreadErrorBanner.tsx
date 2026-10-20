@@ -2,6 +2,7 @@ import type { OrchestrationV2ProviderFailureClass } from "@t3tools/contracts";
 import { memo } from "react";
 import { Alert, AlertAction, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
+import { ErrorDetailCopyButton } from "../ui/errorDetailText";
 import { CircleAlertIcon, XIcon } from "lucide-react";
 import { OpenAI } from "../Icons";
 import { ChatGptUsageButton } from "../settings/ChatGptUsageButton";
@@ -78,7 +79,10 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
               <p>Review your usage settings in ChatGPT to continue.</p>
             </div>
           ) : (
-            <ExpandableText text={error} collapsedText={getThreadErrorBannerMessage(error)} />
+            <div className="flex min-w-0 items-start gap-2">
+              <ExpandableText text={error} collapsedText={getThreadErrorBannerMessage(error)} />
+              <ErrorDetailCopyButton text={error} />
+            </div>
           )}
         </AlertDescription>
         {(chatGptUsageLimit || onDismiss) && (

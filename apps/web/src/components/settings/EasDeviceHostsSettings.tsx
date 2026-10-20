@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import { useEffect, useEffectEvent, useId, useRef, useState } from "react";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
@@ -163,6 +164,7 @@ function EasDeviceHostEditor(props: {
   onClose: () => void;
 }) {
   const check = useAtomCommand(deviceEnvironment.easAccount, { reportFailure: false });
+  const canCheck = useAtomValue(deviceEnvironment.easAccount.permissionAtom(props.environmentId));
   const [draft, setDraft] = useState(props.host);
   const tokenId = useId();
   // A saved token arrives redacted; only a replacement or a clear changes it.
@@ -175,7 +177,7 @@ function EasDeviceHostEditor(props: {
     | { status: "signed-in"; account: DeviceEasAccount }
     | { status: "failed"; error: string }
     // The editor checks the account as it opens.
-  >({ status: "checking" });
+  >({ status: canCheck ? "checking" : "idle" });
   const next: EasDeviceHostConfig = {
     ...draft,
     label: draft.label.trim(),
@@ -199,6 +201,7 @@ function EasDeviceHostEditor(props: {
     setAccount({ status: "idle" });
   };
   const requestCheck = async () => {
+    if (!canCheck) return;
     const run = ++latestCheck.current;
     const result = await check({
       environmentId: props.environmentId,
@@ -221,6 +224,7 @@ function EasDeviceHostEditor(props: {
     );
   };
   const checkAccount = () => {
+    if (!canCheck) return;
     setAccount({ status: "checking" });
     void requestCheck();
   };
@@ -345,7 +349,8 @@ function EasDeviceHostEditor(props: {
                 type="button"
                 size="sm"
                 variant="outline"
-                disabled={props.busy || account.status === "checking"}
+                data-testid="eas-device-account-check"
+                disabled={!canCheck || props.busy || account.status === "checking"}
                 onClick={() => void checkAccount()}
               >
                 {account.status === "checking" ? <Spinner size="xs" /> : null} Check account

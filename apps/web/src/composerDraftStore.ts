@@ -316,6 +316,7 @@ const PersistedDraftThreadState = Schema.Struct({
   worktreePath: Schema.NullOr(Schema.String),
   envMode: DraftThreadEnvModeSchema,
   startFromOrigin: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  reuseBaseBranch: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   promotedTo: Schema.optionalKey(
     Schema.NullOr(
       Schema.Struct({
@@ -407,6 +408,7 @@ export interface DraftSessionState {
   worktreePath: string | null;
   envMode: DraftThreadEnvMode;
   startFromOrigin: boolean;
+  reuseBaseBranch: boolean;
   promotedTo?: ScopedThreadRef | null;
 }
 
@@ -452,6 +454,7 @@ interface ComposerDraftStoreState {
       createdAt?: string;
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
+      reuseBaseBranch?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
       environmentSelection?: "auto" | "manual";
@@ -468,6 +471,7 @@ interface ComposerDraftStoreState {
       createdAt?: string;
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
+      reuseBaseBranch?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
       environmentSelection?: "auto" | "manual";
@@ -483,6 +487,7 @@ interface ComposerDraftStoreState {
       createdAt?: string;
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
+      reuseBaseBranch?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
       environmentSelection?: "auto" | "manual";
@@ -878,6 +883,35 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     draft.activeProvider === null &&
     draft.runtimeMode === null &&
     draft.interactionMode === null
+  );
+}
+
+/**
+ * True when the composer holds unsent user content (text, images, or
+ * attached contexts). Model/mode sticky state alone does not count — sidebar
+ * draft dots should only light when there's a message to send.
+ */
+export function hasComposerDraftMessage(
+  draft:
+    | {
+        readonly prompt: string;
+        readonly images: readonly unknown[];
+        readonly persistedAttachments: readonly unknown[];
+        readonly terminalContexts: readonly unknown[];
+        readonly previewAnnotations: readonly unknown[];
+        readonly reviewComments: readonly unknown[];
+      }
+    | null
+    | undefined,
+): boolean {
+  if (!draft) return false;
+  return (
+    draft.prompt.trim().length > 0 ||
+    draft.images.length > 0 ||
+    draft.persistedAttachments.length > 0 ||
+    draft.terminalContexts.length > 0 ||
+    draft.previewAnnotations.length > 0 ||
+    draft.reviewComments.length > 0
   );
 }
 
@@ -1410,6 +1444,7 @@ function createDraftThreadState(
     createdAt?: string;
     envMode?: DraftThreadEnvMode;
     startFromOrigin?: boolean;
+    reuseBaseBranch?: boolean;
     runtimeMode?: RuntimeMode;
     interactionMode?: ProviderInteractionMode;
     environmentSelection?: "auto" | "manual";
@@ -1439,6 +1474,12 @@ function createDraftThreadState(
     options?.startFromOrigin === undefined
       ? (existingThread?.startFromOrigin ?? false)
       : options.startFromOrigin;
+  const nextReuseBaseBranch =
+    options?.reuseBaseBranch === undefined
+      ? projectChanged
+        ? false
+        : (existingThread?.reuseBaseBranch ?? false)
+      : options.reuseBaseBranch;
   const environmentSelection =
     options?.environmentSelection ?? existingThread?.environmentSelection;
   return {
@@ -1465,6 +1506,7 @@ function createDraftThreadState(
     envMode:
       options?.envMode ?? (nextWorktreePath ? "worktree" : (existingThread?.envMode ?? "local")),
     startFromOrigin: nextStartFromOrigin,
+    reuseBaseBranch: nextReuseBaseBranch,
     promotedTo: null,
   };
 }
@@ -1499,6 +1541,7 @@ function draftThreadsEqual(left: DraftThreadState | undefined, right: DraftThrea
     left.worktreePath === right.worktreePath &&
     left.envMode === right.envMode &&
     left.startFromOrigin === right.startFromOrigin &&
+    left.reuseBaseBranch === right.reuseBaseBranch &&
     scopedThreadRefsEqual(left.promotedTo, right.promotedTo)
   );
 }
@@ -1599,6 +1642,7 @@ function normalizePersistedDraftThreads(
       const branch = candidateDraftThread.branch;
       const worktreePath = candidateDraftThread.worktreePath;
       const startFromOrigin = candidateDraftThread.startFromOrigin === true;
+      const reuseBaseBranch = candidateDraftThread.reuseBaseBranch === true;
       const normalizedWorktreePath = typeof worktreePath === "string" ? worktreePath : null;
       const promotedToCandidate = candidateDraftThread.promotedTo;
       const promotedToRecord =
@@ -1647,6 +1691,7 @@ function normalizePersistedDraftThreads(
         worktreePath: normalizedWorktreePath,
         envMode: normalizeDraftThreadEnvMode(candidateDraftThread.envMode, normalizedWorktreePath),
         startFromOrigin,
+        reuseBaseBranch,
         ...(candidateDraftThread.environmentSelection === "manual" ||
         candidateDraftThread.environmentSelection === "auto"
           ? { environmentSelection: candidateDraftThread.environmentSelection }
@@ -1709,6 +1754,7 @@ function normalizePersistedDraftThreads(
           worktreePath: null,
           envMode: "local",
           startFromOrigin: false,
+          reuseBaseBranch: false,
           promotedTo: null,
         };
       } else if (
@@ -2386,6 +2432,7 @@ function toHydratedDraftThreadState(
     worktreePath: persistedDraftThread.worktreePath,
     envMode: persistedDraftThread.envMode,
     startFromOrigin: persistedDraftThread.startFromOrigin,
+    reuseBaseBranch: persistedDraftThread.reuseBaseBranch,
     ...(persistedDraftThread.environmentSelection
       ? { environmentSelection: persistedDraftThread.environmentSelection }
       : {}),
@@ -2653,6 +2700,12 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               options.startFromOrigin === undefined
                 ? existing.startFromOrigin
                 : options.startFromOrigin;
+            const nextReuseBaseBranch =
+              options.reuseBaseBranch === undefined
+                ? projectChanged
+                  ? false
+                  : existing.reuseBaseBranch
+                : options.reuseBaseBranch;
             const environmentSelection =
               options.environmentSelection ??
               (options.branch != null || options.worktreePath != null
@@ -2681,6 +2734,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               envMode:
                 options.envMode ?? (nextWorktreePath ? "worktree" : (existing.envMode ?? "local")),
               startFromOrigin: nextStartFromOrigin,
+              reuseBaseBranch: nextReuseBaseBranch,
               promotedTo: existing.promotedTo ?? null,
             };
             const isUnchanged =
@@ -2696,6 +2750,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               nextDraftThread.worktreePath === existing.worktreePath &&
               nextDraftThread.envMode === existing.envMode &&
               nextDraftThread.startFromOrigin === existing.startFromOrigin &&
+              nextDraftThread.reuseBaseBranch === existing.reuseBaseBranch &&
               scopedThreadRefsEqual(nextDraftThread.promotedTo, existing.promotedTo);
             if (isUnchanged) {
               return state;
@@ -3185,15 +3240,16 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
         },
         addImage: (threadRef, image) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef);
-          const threadId = resolveComposerThreadId(get(), threadRef);
-          if (!threadKey || !threadId) {
+          if (!threadKey) {
             return false;
           }
+          const alreadyAdded =
+            get().draftsByThreadKey[threadKey]?.images.some(({ id }) => id === image.id) ?? false;
           const acceptedIds = get().addImages(
             typeof threadRef === "string" ? DraftId.make(threadKey) : threadRef,
             [image],
           );
-          return acceptedIds.includes(image.id);
+          return !alreadyAdded && acceptedIds.includes(image.id);
         },
         addImages: (threadRef, images, options) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef) ?? "";

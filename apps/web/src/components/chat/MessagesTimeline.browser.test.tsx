@@ -4,7 +4,9 @@ import {
   CheckpointRef,
   ComposerContextId,
   EnvironmentId,
+  IdentityUsername,
   MessageId,
+  PersonId,
   RunId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -705,14 +707,69 @@ describe("MessagesTimeline messages", () => {
     expect(buttons(/Show full message|Show less/)).toHaveLength(0);
   });
 
-  it("identifies user-role messages sent by another agent", async () => {
-    await renderTimeline([
-      message("Review this area", { createdBy: "agent", creationSource: "provider" }),
-    ]);
+  it("attributes user messages that this client did not send", async () => {
+    const messageViewer = {
+      personId: "patroza",
+      username: "patroza",
+      channel: "desktop",
+      identityReady: true,
+    };
+    await renderTimeline(
+      [message("Review this area", { createdBy: "agent", creationSource: "provider" })],
+      { messageViewer },
+    );
     expect(text()).toContain("Sent by another agent");
-    await act(async () => roots.pop()!.unmount());
-    await renderTimeline([message("Review this area")]);
+    expect(container.querySelector('[data-user-message-attribution="sender"]')).not.toBeNull();
+
+    await renderTimeline([message("Review this area")], { messageViewer });
     expect(text()).not.toContain("Sent by another agent");
+    expect(container.querySelector("[data-user-message-attribution]")).toBeNull();
+
+    await renderTimeline(
+      [
+        message("Review this area", {
+          createdBy: "user",
+          source: {
+            channel: "bot",
+            personId: PersonId.make("andreasimonecosta"),
+            username: IdentityUsername.make("andreasimonecosta"),
+          },
+        }),
+      ],
+      { messageViewer },
+    );
+    expect(text()).toContain("andreasimonecosta@bot");
+
+    await renderTimeline(
+      [
+        message("Review this area", {
+          createdBy: "user",
+          source: {
+            channel: "discord",
+            personId: PersonId.make("patroza"),
+            username: IdentityUsername.make("patroza"),
+          },
+        }),
+      ],
+      { messageViewer },
+    );
+    expect(text()).toContain("discord");
+    expect(text()).not.toContain("patroza@discord");
+
+    await renderTimeline(
+      [
+        message("Review this area", {
+          createdBy: "user",
+          source: {
+            channel: "desktop",
+            personId: PersonId.make("patroza"),
+            username: IdentityUsername.make("patroza"),
+          },
+        }),
+      ],
+      { messageViewer },
+    );
+    expect(container.querySelector("[data-user-message-attribution]")).toBeNull();
   });
 
   it("shows steer intent ahead of committed user messages", async () => {

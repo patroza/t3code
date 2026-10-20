@@ -9,7 +9,10 @@ import {
 import { useAtomValue } from "@effect/atom-react";
 import { type ComponentProps, useEffect, useEffectEvent, useState } from "react";
 
-import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
+import {
+  primaryEnvironmentIdAtom,
+  primaryEnvironmentNativeBrowserAtom,
+} from "~/state/primaryEnvironment";
 
 import { isElectron } from "~/env";
 import { useClientSettingsHydrated } from "~/hooks/useSettings";
@@ -30,6 +33,7 @@ import { previewRuntimeTabId } from "./previewRuntimeTabId";
 export function ElectronBrowserHost() {
   const previewByThreadKey = useActivePreviewSessions();
   const primaryEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
+  const nativeServerBrowser = useAtomValue(primaryEnvironmentNativeBrowserAtom);
   useDesktopHostedPreviewSessions(primaryEnvironmentId);
   const activeSessions = Object.entries(previewByThreadKey).flatMap(([threadKey, previewState]) => {
     const threadRef = parseScopedThreadKey(threadKey);
@@ -38,7 +42,12 @@ export function ElectronBrowserHost() {
           .filter(
             (snapshot) =>
               snapshot.runtime !== "server" ||
-              rendersServerTabNatively(threadRef.environmentId, primaryEnvironmentId, snapshot),
+              rendersServerTabNatively(
+                threadRef.environmentId,
+                primaryEnvironmentId,
+                snapshot,
+                nativeServerBrowser,
+              ),
           )
           .map((snapshot) => ({
             threadRef,

@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import {
   AuthOrchestrationOperateScope,
   AuthSettingsWriteScope,
@@ -89,6 +90,9 @@ export interface NewProjectScriptInput {
   command: string;
   icon: ProjectScriptIcon;
   runOnWorktreeCreate: boolean;
+  runOnWorktreeRemove: boolean;
+  runOnPrMerged: boolean;
+  /** Setup scripts only: hold the agent until the script exits. */
   waitForSetup: boolean;
   runOnSettle: boolean;
   /** Omit to preserve the current shortcut when the form did not edit it. */
@@ -104,6 +108,8 @@ export const EMPTY_PROJECT_SCRIPT_INPUT: NewProjectScriptInput = {
   command: "",
   icon: "play",
   runOnWorktreeCreate: false,
+  runOnWorktreeRemove: false,
+  runOnPrMerged: false,
   waitForSetup: false,
   runOnSettle: false,
   keybinding: null,
@@ -128,6 +134,8 @@ export function editorRequestForScript(
       command: script.command,
       icon: script.icon,
       runOnWorktreeCreate: script.runOnWorktreeCreate,
+      runOnWorktreeRemove: script.runOnWorktreeRemove === true,
+      runOnPrMerged: script.runOnPrMerged === true,
       waitForSetup: script.runOnWorktreeCreate && script.async === false,
       runOnSettle: script.runOnSettle ?? false,
       keybinding: keybindingValueForCommand(keybindings, commandForProjectScript(script.id)),
@@ -175,6 +183,7 @@ export function ProjectScriptEditorDialog({
   };
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useComposerMenuState(!canEditActions);
   const [deleteName, setDeleteName] = useState("");
+  const [deleteRequest, setDeleteRequest] = useState<ProjectScriptEditorRequest | null>(null);
 
   return (
     <>
@@ -196,6 +205,7 @@ export function ProjectScriptEditorDialog({
             onSubmit={onSubmit}
             onRequestDelete={(name) => {
               setDeleteName(name);
+              setDeleteRequest(request);
               setDeleteConfirmOpen(true);
             }}
             onClose={onClose}
@@ -203,7 +213,10 @@ export function ProjectScriptEditorDialog({
         </DialogPopup>
       </Dialog>
 
-      <AlertDialog open={deleteConfirmOpen && canEditActions} onOpenChange={setDeleteConfirmOpen}>
+      <AlertDialog
+        open={deleteConfirmOpen && canEditActions && deleteRequest === request}
+        onOpenChange={setDeleteConfirmOpen}
+      >
         <AlertDialogPopup>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete action "{deleteName}"?</AlertDialogTitle>
@@ -266,6 +279,8 @@ function ProjectScriptEditorForm({
   const [icon, setIcon] = useState<ProjectScriptIcon>("play");
   const [iconPickerOpen, setIconPickerOpen] = useComposerMenuState(!canEditActions);
   const [runOnWorktreeCreate, setRunOnWorktreeCreate] = useState(false);
+  const [runOnWorktreeRemove, setRunOnWorktreeRemove] = useState(false);
+  const [runOnPrMerged, setRunOnPrMerged] = useState(false);
   const [waitForSetup, setWaitForSetup] = useState(false);
   const [runOnSettle, setRunOnSettle] = useState(false);
   const [keybinding, setKeybinding] = useState("");
@@ -287,14 +302,16 @@ function ProjectScriptEditorForm({
   );
 
   const [formRequest, setFormRequest] = useState<ProjectScriptEditorRequest | null>(null);
-  if (request !== formRequest) {
+  if (formRequest !== request) {
     setFormRequest(request);
-    if (request) {
+    if (request !== null) {
       setName(request.initial.name);
       setCommand(request.initial.command);
       setIcon(request.initial.icon);
       setIconPickerOpen(false);
       setRunOnWorktreeCreate(request.initial.runOnWorktreeCreate);
+      setRunOnWorktreeRemove(request.initial.runOnWorktreeRemove);
+      setRunOnPrMerged(request.initial.runOnPrMerged);
       setWaitForSetup(request.initial.waitForSetup);
       setRunOnSettle(request.initial.runOnSettle);
       setKeybinding(request.initial.keybinding ?? "");
@@ -369,6 +386,8 @@ function ProjectScriptEditorForm({
         command: trimmedCommand,
         icon,
         runOnWorktreeCreate,
+        runOnWorktreeRemove,
+        runOnPrMerged,
         waitForSetup: runOnWorktreeCreate && waitForSetup,
         runOnSettle,
         ...((request.scriptId === null && canChangeKeybinding) || changesKeybinding
@@ -512,6 +531,20 @@ function ProjectScriptEditorForm({
               <Switch
                 checked={runOnWorktreeCreate}
                 onCheckedChange={(checked) => setRunOnWorktreeCreate(Boolean(checked))}
+              />
+            </label>
+            <label className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-sm dark:border-transparent dark:bg-white/[0.035]">
+              <span>Run automatically before worktree removal (waits for exit)</span>
+              <Switch
+                checked={runOnWorktreeRemove}
+                onCheckedChange={(checked) => setRunOnWorktreeRemove(Boolean(checked))}
+              />
+            </label>
+            <label className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-sm dark:border-transparent dark:bg-white/[0.035]">
+              <span>Run automatically when the PR/MR merges</span>
+              <Switch
+                checked={runOnPrMerged}
+                onCheckedChange={(checked) => setRunOnPrMerged(Boolean(checked))}
               />
             </label>
             <label

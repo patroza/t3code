@@ -214,7 +214,20 @@ describe("resolveBranchTriggerLabel", () => {
     ).toBe("From main");
   });
 
-  it("does not add a remote marker for an explicit remote ref", () => {
+  it("shows the bare branch name when reusing the selected worktree base branch", () => {
+    expect(
+      resolveBranchTriggerLabel({
+        activeWorktreePath: null,
+        effectiveEnvMode: "worktree",
+        resolvedActiveBranch: "main",
+        resolvedActiveBranchIsRemote: false,
+        startFromOrigin: true,
+        reuseBaseBranch: true,
+      }),
+    ).toBe("main");
+  });
+
+  it("does not duplicate the origin prefix for an explicit remote ref", () => {
     expect(
       resolveBranchTriggerLabel({
         activeWorktreePath: null,

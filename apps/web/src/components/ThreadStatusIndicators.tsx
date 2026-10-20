@@ -27,6 +27,7 @@ import {
   type ThreadPullRequestBadge,
   visibleThreadPullRequests,
 } from "@t3tools/shared/threadPullRequests";
+import { CircleCheckIcon, CircleDashedIcon, FolderPlusIcon, PencilRulerIcon } from "lucide-react";
 import { useRender } from "@base-ui/react/use-render";
 import {
   type ReactNode,
@@ -49,6 +50,7 @@ import {
   pullRequestMatchesSearchQuery,
   resolveThreadLastVisitedAt,
   resolveThreadStatusPill,
+  type SidebarV2TopStatus,
   type ThreadStatusPill,
   useRetainedValue,
   useSidebarRowSubscriptionLease,
@@ -776,18 +778,68 @@ export function ThreadTerminalStatusButton({
 
 export function ThreadWorktreeIndicator({
   thread,
+  onCreateSession,
 }: {
   thread: Pick<SidebarThreadSummary, "id" | "branch" | "worktreePath">;
+  onCreateSession?: (event: React.MouseEvent<HTMLButtonElement>) => void;
 }) {
   const worktreePath = thread.worktreePath?.trim();
-  if (!worktreePath) {
+  if (!worktreePath && !onCreateSession) {
     return null;
   }
 
-  const displayPath = formatWorktreePathForDisplay(worktreePath);
-  const tooltip = thread.branch
-    ? `Worktree: ${displayPath} (${thread.branch})`
-    : `Worktree: ${displayPath}`;
+  const tooltip = worktreePath
+    ? thread.branch
+      ? `Worktree: ${formatWorktreePathForDisplay(worktreePath)} (${thread.branch})`
+      : `Worktree: ${formatWorktreePathForDisplay(worktreePath)}`
+    : thread.branch
+      ? `New worktree from ${thread.branch}`
+      : "New worktree";
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          onCreateSession ? (
+            <button
+              type="button"
+              aria-label={worktreePath ? "New session on this worktree" : tooltip}
+              data-testid={`thread-worktree-new-session-${thread.id}`}
+              className="inline-flex cursor-pointer items-center justify-center rounded-sm text-muted-foreground/55 outline-hidden transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+              onPointerDown={(event) => {
+                event.stopPropagation();
+              }}
+              onClick={onCreateSession}
+            />
+          ) : (
+            <span
+              role="img"
+              aria-label={tooltip}
+              data-testid={`thread-worktree-${thread.id}`}
+              className="inline-flex items-center justify-center"
+            />
+          )
+        }
+      >
+        {onCreateSession ? (
+          <FolderPlusIcon className="size-3" />
+        ) : (
+          <FolderGit2Icon className="size-3 text-muted-foreground/40" />
+        )}
+      </TooltipTrigger>
+      <TooltipPopup side="top">{tooltip}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
+export function ThreadPlanModeIndicator({
+  thread,
+}: {
+  thread: Pick<SidebarThreadSummary, "id" | "interactionMode">;
+}) {
+  if (thread.interactionMode !== "plan") {
+    return null;
+  }
 
   return (
     <Tooltip>
@@ -795,16 +847,73 @@ export function ThreadWorktreeIndicator({
         render={
           <span
             role="img"
-            aria-label={tooltip}
-            data-testid={`thread-worktree-${thread.id}`}
+            aria-label="Plan-only thread"
+            data-testid={`thread-plan-mode-${thread.id}`}
             className="inline-flex items-center justify-center"
           />
         }
       >
-        <FolderGit2Icon className="size-3 text-muted-foreground/40" />
+        <PencilRulerIcon className="size-3 text-primary" />
       </TooltipTrigger>
-      <TooltipPopup side="top">{tooltip}</TooltipPopup>
+      <TooltipPopup side="top">Plan-only thread</TooltipPopup>
     </Tooltip>
+  );
+}
+
+export function ThreadSettledIndicator({ thread }: { thread: Pick<SidebarThreadSummary, "id"> }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            aria-label="Settled thread"
+            data-testid={`thread-settled-${thread.id}`}
+            className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground/60"
+          />
+        }
+      >
+        <CircleCheckIcon className="size-4 shrink-0" />
+        <span className="hidden md:inline">Settled</span>
+      </TooltipTrigger>
+      <TooltipPopup side="top">Settled</TooltipPopup>
+    </Tooltip>
+  );
+}
+
+export function ThreadStatusV2Indicator({
+  status,
+  className,
+}: {
+  status: SidebarV2TopStatus;
+  className?: string;
+}) {
+  return (
+    <span
+      role="status"
+      className={cn(
+        "inline-flex items-center gap-1 text-xs font-medium",
+        status.className,
+        className,
+      )}
+    >
+      {status.icon === "working" ? (
+        <CircleDashedIcon aria-hidden className="size-4 shrink-0" />
+      ) : status.icon === "done" ? (
+        <CircleCheckIcon aria-hidden className="size-4 shrink-0" />
+      ) : null}
+      {status.label}
+    </span>
+  );
+}
+
+/** Sidebar cue for an unsent composer draft on a thread row. */
+export function ComposerDraftDot({ className }: { className?: string }) {
+  return (
+    <span
+      aria-label="Unsent draft"
+      data-testid="composer-draft-dot"
+      className={cn("size-1.5 shrink-0 rounded-full bg-primary", className)}
+    />
   );
 }
 

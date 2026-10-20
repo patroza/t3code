@@ -40,6 +40,7 @@ const state = vi.hoisted(() => ({
 
 vi.mock("react", () => ({
   useCallback: (callback: unknown) => callback,
+  useLayoutEffect: (effect: () => void) => effect(),
   useMemo: (factory: () => unknown) => factory(),
   useRef: (current: unknown) => ({ current }),
 }));
@@ -95,6 +96,9 @@ vi.mock("../state/threads", () => ({
 vi.mock("../state/vcs", () => ({
   vcsEnvironment: { removeWorktree: "removeWorktree", refreshStatus: "refreshStatus" },
 }));
+vi.mock("../state/terminal", () => ({
+  terminalEnvironment: { close: "closeTerminal" },
+}));
 vi.mock("../state/entities", () => ({
   readEnvironmentSupportsPinning: () => true,
   readEnvironmentSupportsPinReorder: () => true,
@@ -128,12 +132,15 @@ vi.mock("../terminalUiStateStore", () => ({
       clearTerminalUiState: () => state.localEffects.push("clear-terminal-ui"),
     }),
 }));
-vi.mock("../uiStateStore", () => ({
-  useUiStateStore: (select: (store: unknown) => unknown) =>
-    select({
-      markThreadVisited: () => state.localEffects.push("mark-visited"),
-    }),
-}));
+vi.mock("../uiStateStore", () => {
+  const store = {
+    markThreadVisited: () => state.localEffects.push("mark-visited"),
+    removeThread: () => state.localEffects.push("remove-ui-state"),
+  };
+  const useUiStateStore = (select: (value: typeof store) => unknown) => select(store);
+  useUiStateStore.getState = () => store;
+  return { useUiStateStore };
+});
 vi.mock("../lib/archivedThreadsState", () => ({
   refreshArchivedThreadsForEnvironment: () => state.localEffects.push("refresh-archive"),
 }));
@@ -328,7 +335,11 @@ describe("thread action permissions", () => {
     state.sessionLookupFails = sessionLookupFails;
     expect((await useThreadActions().deleteThread(target))._tag).toBe("Success");
     expect(state.confirm).not.toHaveBeenCalled();
-    expect(state.requests.map((request) => request.action)).toEqual(["stopSession", "delete"]);
+    expect(state.requests.map((request) => request.action)).toEqual([
+      "stopSession",
+      "closeTerminal",
+      "delete",
+    ]);
     expect(state.localEffects).toContain("clear-terminal-ui");
   });
 
@@ -343,7 +354,11 @@ describe("thread action permissions", () => {
     try {
       const result = await useThreadActions().deleteThread(target);
       expect(result._tag).toBe("Success");
-      expect(state.requests.map((request) => request.action)).toEqual(["stopSession", "delete"]);
+      expect(state.requests.map((request) => request.action)).toEqual([
+        "stopSession",
+        "closeTerminal",
+        "delete",
+      ]);
       expect(state.toasts).toContain("Failed to delete worktree");
       expect(state.localEffects).toContain("clear-terminal-ui");
     } finally {

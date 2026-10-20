@@ -22,6 +22,7 @@ import {
   CHAT_MARKDOWN_REHYPE_PLUGINS,
 } from "@t3tools/shared/markdownPipeline";
 import { useAtomValue } from "@effect/atom-react";
+import { DiffsHighlighter, getSharedHighlighter, SupportedLanguages } from "@pierre/diffs";
 import {
   COMPOSER_CONTEXT_CLIPBOARD_MIME,
   encodeComposerContextClipboardHtml,
@@ -160,7 +161,7 @@ import { openInEditorMenuLabel } from "../editorLabels";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
 import { fnv1a32 } from "../lib/diffRendering";
 import { LRUCache } from "../lib/lruCache";
-import { getSyntaxHighlighterPromise } from "../lib/syntaxHighlighting";
+
 import { GitHubIcon } from "./Icons";
 import { createIncrementalHighlightedDocument } from "../lib/incrementalHighlighting";
 import { HighlightedCodeLines } from "./chat/HighlightedCodeLines";
@@ -230,6 +231,7 @@ import { observeResize } from "~/lib/observeResize";
 import { useOpenLink } from "../browser/useOpenLink";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { isPreviewAvailableFor } from "../browser/previewRuntime";
+import { isLocalMarkdownImageSrc, normalizeLocalMarkdownImageSrc } from "../markdown-images";
 import {
   isBrowserPreviewFile,
   openFileInPreview,
@@ -414,6 +416,7 @@ const highlightedCodeCache = new LRUCache<string>(
   MAX_HIGHLIGHT_CACHE_ENTRIES,
   MAX_HIGHLIGHT_CACHE_MEMORY_BYTES,
 );
+const highlighterPromiseCache = new Map<string, Promise<DiffsHighlighter>>();
 
 function findTaskListMarkerOffset(markdown: string, listItemStart: number): number | null {
   const firstLineEnd = markdown.indexOf("\n", listItemStart);
@@ -581,6 +584,27 @@ function createHighlightCacheKey(code: string, language: string, themeName: Diff
 
 function estimateHighlightedSize(html: string, code: string): number {
   return Math.max(html.length * 2, code.length * 3);
+}
+
+function getHighlighterPromise(language: string): Promise<DiffsHighlighter> {
+  const cached = highlighterPromiseCache.get(language);
+  if (cached) return cached;
+
+  const promise = getSharedHighlighter({
+    themes: [resolveDiffThemeName("dark"), resolveDiffThemeName("light")],
+    langs: [language as SupportedLanguages],
+    preferredHighlighter: "shiki-js",
+  }).catch((err) => {
+    highlighterPromiseCache.delete(language);
+    if (language === "text") {
+      // "text" itself failed — Shiki cannot initialize at all, surface the error
+      throw err;
+    }
+    // Language not supported by Shiki — fall back to "text"
+    return getHighlighterPromise("text");
+  });
+  highlighterPromiseCache.set(language, promise);
+  return promise;
 }
 
 function readInitialWordWrapSetting(): boolean {
@@ -1182,10 +1206,11 @@ function UncachedShikiCodeBlock({
   isStreaming,
   preserveLines,
 }: UncachedShikiCodeBlockProps) {
-  const highlighter = use(getSyntaxHighlighterPromise(language));
-  const incrementalHighlight = preserveLines
-    ? createIncrementalHighlightedDocument(highlighter, language, themeName)
-    : null;
+  const highlighter = use(getHighlighterPromise(language));
+  const incrementalHighlight = (() =>
+    preserveLines
+      ? createIncrementalHighlightedDocument(highlighter, language, themeName)
+      : null)();
   const highlighted = (() => {
     try {
       if (incrementalHighlight) return incrementalHighlight(code);
@@ -3396,6 +3421,26 @@ const CHAT_MARKDOWN_COMPONENTS = {
           style={authoredSizeStyle}
           workspaceRoot={cwd}
           workspaceMutationId={workspaceMutationId}
+          onImageExpand={imageExpand}
+        />
+      );
+    }
+    // Codex ACP uses `attachment:` / generated_images host paths that the
+    // shared classifier treats as blocked URI schemes.
+    if (isLocalMarkdownImageSrc(srcString) && threadRef) {
+      return (
+        <ChatMarkdownAssetImage
+          environmentId={threadRef.environmentId}
+          resource={{
+            _tag: "workspace-file",
+            threadId: threadRef.threadId,
+            path: normalizeLocalMarkdownImageSrc(srcString),
+          }}
+          alt={altText}
+          kind={kind}
+          copyMarkdown={copyMarkdown}
+          srcFragment={markdownImageSourceFragment(classifiedSrc)}
+          style={authoredSizeStyle}
           onImageExpand={imageExpand}
         />
       );

@@ -1320,6 +1320,15 @@ export function restorePlanFollowUpComposer(input: {
   });
 }
 
+export function isVideoPreviewRequestCurrent(
+  requestThreadKey: string,
+  currentThreadKey: string | null,
+  requestId: number,
+  currentRequestId: number,
+): boolean {
+  return requestThreadKey === currentThreadKey && requestId === currentRequestId;
+}
+
 /**
  * Adds a directly sent preview annotation to the composer's images and
  * annotations. Its screenshot rides along only while the turn has room for

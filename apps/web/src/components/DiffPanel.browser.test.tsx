@@ -66,6 +66,7 @@ const turns = [1, 2].map((ordinal) => ({
   runId: RunId.make(`turn-${ordinal}`),
   checkpointTurnCount: ordinal,
   completedAt: "2026-10-16T00:00:00Z",
+  files: [],
 }));
 const paths = ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt"];
 function filePatch(path: string) {

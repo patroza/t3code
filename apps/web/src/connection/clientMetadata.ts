@@ -3,7 +3,9 @@ import type {
   AuthClientPresentationMetadata,
   ClientOs,
   DesktopBridge,
+  SourceChannel,
 } from "@t3tools/contracts";
+import { sourceChannelFromDeviceType } from "@t3tools/shared/sourceAttribution";
 
 interface BrowserIdentity {
   readonly userAgent: string;
@@ -67,6 +69,23 @@ export function browserDeviceType(identity: BrowserIdentity): AuthClientMetadata
   }
   if (/iphone|ipod|android.+mobile|mobile/i.test(userAgent)) return "mobile";
   return "desktop";
+}
+
+/** Source channel of the client running this page. Web is not a device type. */
+export function currentClientSourceChannel(): SourceChannel {
+  if (typeof navigator === "undefined") return "unknown";
+  return sourceChannelFromDeviceType(
+    clientPresentationMetadata({
+      appVersion: "0.0.0",
+      hosted: false,
+      identity: {
+        userAgent: navigator.userAgent,
+        platform: navigator.platform,
+        maxTouchPoints: navigator.maxTouchPoints,
+      },
+      desktopBridge: typeof window === "undefined" ? undefined : window.desktopBridge,
+    }).deviceType,
+  );
 }
 
 export function clientPresentationMetadata(input: {

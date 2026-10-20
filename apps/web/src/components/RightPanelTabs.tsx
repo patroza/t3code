@@ -1333,6 +1333,9 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                 </MenuTrigger>
                 <MenuPopup
                   align="start"
+                  finalFocus={(closeType) =>
+                    closeType === "keyboard" ? addSurfaceTriggerRef.current : true
+                  }
                   side="bottom"
                   sideOffset={6}
                   onKeyDownCapture={handleAddSurfaceMenuKeyDown}

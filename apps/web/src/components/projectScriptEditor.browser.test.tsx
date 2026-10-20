@@ -100,6 +100,23 @@ describe("project action editor save lifecycle", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it("requires a new delete confirmation when the editor switches actions", async () => {
+    await open(request("build"));
+    await act(async () => button("Delete").click());
+    expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain('"build"');
+    const staleConfirm = button("Delete action");
+
+    await open(request("test"));
+    await vi.waitFor(() => expect(document.querySelector('[role="alertdialog"]')).toBeNull());
+    await act(async () => staleConfirm.click());
+    expect(onDelete).not.toHaveBeenCalled();
+
+    await act(async () => button("Delete").click());
+    expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain('"test"');
+    await act(async () => button("Delete action").click());
+    expect(onDelete).toHaveBeenCalledExactlyOnceWith("test");
+  });
+
   it("does not close a replacement request or release its in-flight save", async () => {
     const first = deferredSave();
     const second = deferredSave();

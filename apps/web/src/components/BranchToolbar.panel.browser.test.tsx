@@ -129,7 +129,7 @@ it.each([
   "copies only an existing workspace path with mode %s and worktree %s",
   async (envMode, worktreePath, copiedPath) => {
     state.worktreePath = worktreePath;
-    await render({ envMode });
+    await render({ effectiveEnvModeOverride: envMode });
     const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
     await act(async () => {
       container.querySelector('[aria-label="Run context"]')!.dispatchEvent(event);

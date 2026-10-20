@@ -8,6 +8,7 @@ import { environmentShell } from "./state/shell";
 import { BrowserProfileReporter } from "./browser/BrowserProfileReporter";
 import { ElectronBrowserHost } from "./browser/ElectronBrowserHost";
 import { QuitHoldOverlay } from "./components/QuitHoldOverlay";
+import { WebUpdateBanner } from "./components/WebUpdateBanner";
 import { appAtomRegistry, AppAtomRegistryProvider } from "./rpc/atomRegistry";
 import type { AppRouter } from "./router";
 
@@ -31,6 +32,7 @@ export function AppRoot({ router }: { readonly router: AppRouter }) {
     <AppAtomRegistryProvider>
       <RouterProvider router={router} />
       <ElectronBrowserHost />
+      <WebUpdateBanner />
       <BrowserProfileReporter />
       <QuitHoldOverlay />
     </AppAtomRegistryProvider>

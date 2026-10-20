@@ -694,6 +694,7 @@ it("shows the current checkout recovery detail on the first failure and on retry
     detail: "This PR branch is already checked out in the main repo. Use Local.",
   });
   const second = new GitCommandError({
+    failureKind: "unknown",
     cwd: "/workspace",
     operation: "GitVcsDriver.createWorktree",
     command: "git worktree add",

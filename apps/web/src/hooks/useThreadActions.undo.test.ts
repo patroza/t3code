@@ -28,6 +28,7 @@ vi.mock("../state/session", async (original) => ({
 vi.mock("react", async (original) => ({
   ...(await original<typeof import("react")>()),
   useCallback: (callback: unknown) => callback,
+  useLayoutEffect: (effect: () => void) => effect(),
   useMemo: (create: () => unknown) => create(),
   useRef: (value: unknown) => ({ current: value }),
 }));

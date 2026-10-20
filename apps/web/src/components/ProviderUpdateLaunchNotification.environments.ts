@@ -1,11 +1,9 @@
-import type { ConnectionCatalogEntry } from "@t3tools/client-runtime/connection";
-
 import {
   useEnvironmentProviders,
   useEnvironments,
   usePrimaryEnvironmentId,
 } from "~/state/environments";
-import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
+import { isLocalConnectionTarget } from "~/connection/desktopLocal";
 import {
   buildLocalEnvironmentUpdateGroups,
   deriveEnvironmentDisplayLabel,
@@ -13,10 +11,6 @@ import {
   type LocalEnvironmentProvidersInput,
   type LocalEnvironmentUpdateGroup,
 } from "./ProviderUpdateLaunchNotification.logic";
-
-function isLocalConnectionTarget(target: ConnectionCatalogEntry["target"]): boolean {
-  return target._tag === "PrimaryConnectionTarget" || isDesktopLocalConnectionTarget(target);
-}
 
 function normalizeConnectionState(phase: string | undefined): EnvironmentUpdateConnectionState {
   switch (phase) {

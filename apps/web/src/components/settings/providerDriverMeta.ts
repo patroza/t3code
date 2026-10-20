@@ -2,6 +2,7 @@ import {
   AntigravitySettings,
   ClaudeSettings,
   CodexSettings,
+  KimiSettings,
   ProviderDriverKind,
 } from "@t3tools/contracts";
 import { acpRegistryClient } from "@t3tools/provider-acp-registry/client";
@@ -26,6 +27,12 @@ export const providerClients = makeProviderClientRegistry([
   cursorClient,
   grokClient,
   openCodeClient,
+  {
+    driverKind: ProviderDriverKind.make("kimi"),
+    label: "Kimi Code",
+    badgeLabel: "Early Access",
+    settingsSchema: KimiSettings,
+  },
   {
     driverKind: ProviderDriverKind.make("antigravity"),
     label: "Antigravity",
