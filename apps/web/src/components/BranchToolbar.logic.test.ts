@@ -13,7 +13,7 @@ import {
   resolveBranchToolbarPrBranch,
   resolveBranchToolbarValue,
   resolveLockedWorkspaceLabel,
-  resolveCheckoutBranchMismatch,
+  resolveLocalCheckoutBranchMismatch,
   resolvePreviousWorktreeLabel,
   resolvePreviousWorktreeSeed,
   sanitizeNewRefName,
@@ -314,10 +314,10 @@ describe("resolveBranchToolbarPrBranch", () => {
   });
 });
 
-describe("resolveCheckoutBranchMismatch", () => {
+describe("resolveLocalCheckoutBranchMismatch", () => {
   it("detects when a local thread is associated with a different branch than the checkout", () => {
     expect(
-      resolveCheckoutBranchMismatch({
+      resolveLocalCheckoutBranchMismatch({
         effectiveEnvMode: "local",
         activeWorktreePath: null,
         activeThreadBranch: "feature/thread",
@@ -326,13 +326,12 @@ describe("resolveCheckoutBranchMismatch", () => {
     ).toEqual({
       threadBranch: "feature/thread",
       currentBranch: "feature/current",
-      canRestoreThreadBranch: true,
     });
   });
 
   it("ignores matching local checkout state", () => {
     expect(
-      resolveCheckoutBranchMismatch({
+      resolveLocalCheckoutBranchMismatch({
         effectiveEnvMode: "local",
         activeWorktreePath: null,
         activeThreadBranch: "feature/thread",
@@ -341,34 +340,20 @@ describe("resolveCheckoutBranchMismatch", () => {
     ).toBeNull();
   });
 
-  it("warns about worktree branch drift without restore, but ignores a pending rename status", () => {
-    const worktree = {
-      effectiveEnvMode: "worktree" as const,
-      activeWorktreePath: "/repo/.t3/worktrees/feature-thread",
-      activeThreadBranch: "t3code/fix-sidebar",
-    };
-
+  it("ignores dedicated worktrees because their checkout is already thread-scoped", () => {
     expect(
-      resolveCheckoutBranchMismatch({
-        ...worktree,
-        currentGitBranch: "t3code/1a2b3c4d",
+      resolveLocalCheckoutBranchMismatch({
+        effectiveEnvMode: "worktree",
+        activeWorktreePath: "/repo/.t3/worktrees/feature-thread",
+        activeThreadBranch: "feature/thread",
+        currentGitBranch: "feature/current",
       }),
     ).toBeNull();
-    expect(
-      resolveCheckoutBranchMismatch({
-        ...worktree,
-        currentGitBranch: "feature/checkout",
-      }),
-    ).toEqual({
-      threadBranch: worktree.activeThreadBranch,
-      currentBranch: "feature/checkout",
-      canRestoreThreadBranch: false,
-    });
   });
 
   it("ignores new-worktree base selection before a worktree exists", () => {
     expect(
-      resolveCheckoutBranchMismatch({
+      resolveLocalCheckoutBranchMismatch({
         effectiveEnvMode: "worktree",
         activeWorktreePath: null,
         activeThreadBranch: "feature/base",
@@ -452,37 +437,6 @@ describe("shouldShowEnvironmentIndicator", () => {
 });
 
 describe("shouldShowComposerContextStrip", () => {
-  it("keeps a sole primary server update reachable in a non-Git draft", () => {
-    const environment = {
-      activeEnvironment: { isPrimary: true },
-      canPickEnvironment: false,
-      serverUpdateAvailable: true,
-    };
-    const showEnvironmentIndicator = shouldShowEnvironmentIndicator(environment);
-    expect(showEnvironmentIndicator).toBe(true);
-    expect(
-      shouldShowComposerContextStrip({
-        isDraftHeroState: true,
-        persistInActiveThreads: false,
-        hasActiveProject: true,
-        isGitRepo: false,
-        showEnvironmentIndicator,
-        hostsRestingComposerControls: false,
-      }),
-    ).toBe(true);
-    expect(
-      shouldShowComposerContextStrip({
-        isDraftHeroState: false,
-        persistInActiveThreads: false,
-        hasActiveProject: true,
-        isGitRepo: false,
-        showEnvironmentIndicator,
-        serverUpdateAvailable: true,
-        hostsRestingComposerControls: false,
-      }),
-    ).toBe(true);
-  });
-
   it.each([false, true])(
     "honors the active-thread preference with resting controls %s",
     (hostsRestingComposerControls) => {

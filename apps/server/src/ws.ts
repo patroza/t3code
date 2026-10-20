@@ -1375,7 +1375,6 @@ export const layerWsRpc = (
         currentSession.scopes.includes(AuthOrchestrationOperateScope)
           ? result
           : {
-              ...result,
               tasks: result.tasks.map(({ webhook: _webhook, ...task }) => task),
             };
       // RpcScopeAuthorization checks each RPC's declared scope before its handler

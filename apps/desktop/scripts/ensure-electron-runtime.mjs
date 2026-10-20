@@ -128,6 +128,8 @@ function installElectronRuntime(electronDir, version) {
       "--retry-all-errors",
       "--connect-timeout",
       "15",
+      "--max-time",
+      "300",
       `https://github.com/electron/electron/releases/download/v${version}/electron-v${version}-${hostPlatform}-${hostArch}.zip`,
       "-o",
       zipPath,
