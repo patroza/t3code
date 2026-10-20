@@ -179,6 +179,16 @@ describe("DesktopLinuxUrlHandler", () => {
     assert.include(entry, "Icon=/home/al ice/icons/T3\\\\x.png");
   });
 
+  it("leaves safe executable paths unquoted for generic xdg-open compatibility", () => {
+    const entry = DesktopLinuxUrlHandler.renderUrlHandlerDesktopEntry({
+      displayName: "T3 Code (Alpha)",
+      execTarget: "/home/alice/Applications/T3-Code.AppImage",
+      scheme: "t3code",
+    });
+
+    assert.include(entry, "Exec=/home/alice/Applications/T3-Code.AppImage %U");
+  });
+
   it.each([
     {
       execTarget: "/opt/T3(beta)/t3code.AppImage",

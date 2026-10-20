@@ -1,6 +1,6 @@
 import { it as effectIt } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import { DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER } from "@t3tools/contracts";
+import { DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER, DesktopBrowserEvent } from "@t3tools/contracts";
 import type {
   DesktopPreviewRecordingFrame,
   DesktopPreviewRecordingInputEvent,
@@ -16,6 +16,7 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
@@ -212,6 +213,7 @@ const {
   createFromPath,
   fromId,
   getFocusedWebContents,
+  getFocusedWindow,
   mkdir,
   previewSession,
   showItemInFolder,
@@ -220,6 +222,7 @@ const {
   writeClipboard,
 } = vi.hoisted(() => ({
   browserWindowConstructor: vi.fn(),
+  getFocusedWindow: vi.fn<() => Electron.BrowserWindow | null>(() => null),
   clipboardItemConstructor: vi.fn(),
   createFromPath: vi.fn((): { readonly isEmpty: () => boolean; readonly toPNG: () => Buffer } => ({
     isEmpty: () => false,
@@ -236,7 +239,7 @@ const {
 }));
 
 vi.mock("electron", () => ({
-  BrowserWindow: browserWindowConstructor,
+  BrowserWindow: Object.assign(browserWindowConstructor, { getFocusedWindow }),
   ClipboardItem: class {
     constructor(data: Record<string, unknown>) {
       clipboardItemConstructor(data);
@@ -595,6 +598,8 @@ describe("PreviewManager", () => {
     fromId.mockClear();
     getFocusedWebContents.mockReset();
     getFocusedWebContents.mockReturnValue(null);
+    getFocusedWindow.mockReset();
+    getFocusedWindow.mockReturnValue({} as Electron.BrowserWindow);
     mkdir.mockClear();
     previewSession.on.mockClear();
     writeFile.mockClear();
@@ -3041,6 +3046,54 @@ describe("PreviewManager", () => {
       yield* manager.closeTab("tab_1");
       expect(yield* nextType).toBe("detached");
     }).pipe(Effect.provide(managerLayer()), Effect.scoped),
+  );
+
+  effectIt.effect.each(["before-create", "before-attach", "after-attach"] as const)(
+    "keeps the server page connected when navigating %s",
+    (phase) =>
+      Effect.gen(function* () {
+        const host = yield* DesktopBrowserHost.DesktopBrowserHost;
+        const manager = yield* PreviewManager.PreviewManager;
+        const serverTab = { threadId: "thread-1", tabId: "server-tab-1" };
+        const events = yield* Queue.unbounded<DesktopBrowserEvent>();
+        const decode = Schema.decodeUnknownEffect(Schema.fromJsonString(DesktopBrowserEvent));
+        yield* host.events.pipe(
+          Stream.runForEach((line) =>
+            decode(new TextDecoder().decode(line)).pipe(
+              Effect.flatMap((event) => Queue.offer(events, event)),
+            ),
+          ),
+          Effect.forkScoped,
+        );
+        const nextAttached = Stream.fromQueue(events).pipe(
+          Stream.filter((event) => event.type === "attached"),
+          Stream.runHead,
+        );
+        const capturePage = vi.fn(async () => ({
+          toPNG: () => Buffer.from("png"),
+          toJPEG: () => Buffer.from("jpeg"),
+          getSize: () => ({ width: 100, height: 80 }),
+        }));
+        const makePage = (id: number) =>
+          Object.assign(makeTestPreviewWebContents(capturePage, id), {
+            getURL: () => "about:blank",
+            loadURL: vi.fn(async () => undefined),
+            isDevToolsOpened: () => false,
+            getUserAgent: () => "Electron",
+          });
+        fromId.mockReturnValue(makePage(42));
+        if (phase === "before-create") yield* manager.navigate("tab_1", "https://example.com");
+        yield* manager.createTab("tab_1", { serverTab });
+        if (phase === "before-attach") yield* manager.navigate("tab_1", "https://example.com");
+        yield* manager.registerWebview("tab_1", 42);
+        expect(yield* nextAttached).toEqual(Option.some({ type: "attached", ...serverTab }));
+        if (phase === "after-attach") {
+          yield* manager.navigate("tab_1", "https://example.com");
+          fromId.mockReturnValue(makePage(43));
+          yield* manager.registerWebview("tab_1", 43);
+          expect(yield* nextAttached).toEqual(Option.some({ type: "attached", ...serverTab }));
+        }
+      }).pipe(Effect.provide(managerLayer()), Effect.scoped),
   );
 
   effectIt.effect("stops capture retries when the tab swaps during the retry delay", () =>

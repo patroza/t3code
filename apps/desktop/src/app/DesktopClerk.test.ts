@@ -8,6 +8,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
 import { beforeEach, vi } from "vite-plus/test";
 
 const { createClerkBridgeMock, requestSingleInstanceLockMock, storageAdapter, storageMock } =
@@ -38,6 +39,7 @@ import * as ElectronShell from "../electron/ElectronShell.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopClerk from "./DesktopClerk.ts";
 import * as DesktopWebLinks from "./DesktopWebLinks.ts";
+import * as DesktopDeepLinks from "./DesktopDeepLinks.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import * as DesktopPreReadyFileSystem from "./DesktopPreReadyFileSystem.ts";
 
@@ -45,6 +47,17 @@ const ignoreWebLinks = DesktopWebLinks.DesktopWebLinks.of({
   receive: () => Effect.void,
   setRendererReady: () => Effect.void,
 });
+
+const noopDeepLinks = {
+  handleArgv: () => Effect.void,
+  handleUrl: () => Effect.void,
+  start: Effect.void,
+} satisfies DesktopDeepLinks.DesktopDeepLinks["Service"];
+
+const noopElectronWindow = {
+  currentMainOrFirst: Effect.succeed(Option.none()),
+  reveal: () => Effect.void,
+} as unknown as ElectronWindow.ElectronWindow["Service"];
 
 const layerDesktopClerk = (
   isDevelopment = true,
@@ -59,10 +72,12 @@ const layerDesktopClerk = (
     copyText: () => Effect.void,
   },
   listeners = new Map<string, (...args: unknown[]) => void>(),
+  isPackaged = false,
 ) => {
   const environment = DesktopEnvironment.DesktopEnvironment.of({
     stateDir: "/tmp/t3-state",
     isDevelopment,
+    isPackaged,
     appDataDirectory: "/tmp/app-data",
     platform,
   } as unknown as DesktopEnvironment.DesktopEnvironment["Service"]);
@@ -110,6 +125,191 @@ describe("DesktopClerk", () => {
     createClerkBridgeMock.mockReset();
     requestSingleInstanceLockMock.mockReset().mockReturnValue(true);
     storageMock.mockReset();
+  });
+
+  it("derives the Clerk Frontend API hostname used by the desktop CSP", () => {
+    const publishableKey = `pk_test_${btoa("clerk.t3.codes$")}`;
+
+    assert.equal(
+      DesktopClerk.resolveDesktopClerkFrontendApiHostname(publishableKey),
+      "clerk.t3.codes",
+    );
+    assert.equal(DesktopClerk.resolveDesktopClerkFrontendApiHostname(""), undefined);
+    assert.equal(DesktopClerk.resolveDesktopClerkFrontendApiHostname("invalid"), undefined);
+  });
+
+  it.effect.each([
+    { isDevelopment: true, scheme: "t3code-dev" },
+    { isDevelopment: false, scheme: "t3code" },
+  ] as const)(
+    "configures the SDK with the $scheme renderer origin",
+    ({ isDevelopment, scheme }) => {
+      const bridge = { cleanup: vi.fn(), isPrimaryInstance: true };
+      storageMock.mockReturnValue(storageAdapter);
+      createClerkBridgeMock.mockReturnValue(bridge);
+
+      return Effect.gen(function* () {
+        yield* Effect.scoped(Layer.build(layerDesktopClerk(isDevelopment)));
+        assert.deepEqual(storageMock.mock.calls, [[{ path: "/tmp/t3-state" }]]);
+        assert.deepEqual(createClerkBridgeMock.mock.calls, [
+          [
+            {
+              storage: storageAdapter,
+              manageSingleInstanceLock: false,
+              passkeys: true,
+              renderer: { scheme, host: "app" },
+            },
+          ],
+        ]);
+        storageMock.mockClear();
+        createClerkBridgeMock.mockClear();
+      });
+    },
+  );
+
+  it.effect(
+    "wires second-instance argv into deep links and registers the protocol when packaged",
+    () => {
+      storageMock.mockReturnValue(storageAdapter);
+      createClerkBridgeMock.mockReturnValue({ cleanup: vi.fn(), isPrimaryInstance: true });
+
+      return Effect.gen(function* () {
+        const handledArgv = yield* Ref.make<Array<readonly string[]>>([]);
+        const handledUrls = yield* Ref.make<string[]>([]);
+        const listeners = new Map<string, (...args: readonly unknown[]) => void>();
+        let protocolClientRegistered = false;
+
+        const deepLinksLayer = Layer.succeed(DesktopDeepLinks.DesktopDeepLinks, {
+          handleArgv: (argv) =>
+            Ref.update(handledArgv, (items) => [...items, argv]).pipe(Effect.asVoid),
+          handleUrl: (url) =>
+            Ref.update(handledUrls, (items) => [...items, url]).pipe(Effect.asVoid),
+          start: Effect.void,
+        } satisfies DesktopDeepLinks.DesktopDeepLinks["Service"]);
+
+        const electronAppLayer = Layer.succeed(ElectronApp.ElectronApp, {
+          metadata: Effect.die("unexpected metadata"),
+          name: Effect.succeed("T3 Code"),
+          whenReady: Effect.void,
+          quit: Effect.void,
+          exit: () => Effect.void,
+          relaunch: () => Effect.void,
+          setPath: () => Effect.void,
+          setName: () => Effect.void,
+          setAboutPanelOptions: () => Effect.void,
+          setAppUserModelId: () => Effect.void,
+          requestSingleInstanceLock: Effect.succeed(true),
+          setAsDefaultProtocolClient: (protocol: string) =>
+            Effect.sync(() => {
+              protocolClientRegistered = protocol === "t3code";
+              return true;
+            }),
+          setDesktopName: () => Effect.void,
+          setDockIcon: () => Effect.void,
+          appendCommandLineSwitch: () => Effect.void,
+          on: <Args extends ReadonlyArray<unknown>>(
+            eventName: string,
+            listener: (...args: Args) => void,
+          ) =>
+            Effect.sync(() => {
+              listeners.set(eventName, listener as (...args: readonly unknown[]) => void);
+            }).pipe(Effect.asVoid),
+        } as unknown as ElectronApp.ElectronApp["Service"]);
+
+        const runtimeLayer = Layer.mergeAll(
+          layerDesktopClerk(false, [], "darwin", undefined, undefined, listeners, true),
+          deepLinksLayer,
+          Layer.succeed(DesktopWebLinks.DesktopWebLinks, ignoreWebLinks),
+          electronAppLayer,
+          Layer.succeed(ElectronWindow.ElectronWindow, noopElectronWindow),
+        );
+
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const clerk = yield* DesktopClerk.DesktopClerk;
+            yield* clerk.configure;
+
+            assert.isTrue(protocolClientRegistered);
+            assert.isTrue(listeners.has("second-instance"));
+            assert.isTrue(listeners.has("open-url"));
+
+            // Initial process.argv is captured during configure.
+            const initialHandled = yield* Ref.get(handledArgv);
+            assert.isTrue(initialHandled.length >= 1);
+
+            const secondInstance = listeners.get("second-instance");
+            assert.isDefined(secondInstance);
+            secondInstance?.({}, [
+              "t3code",
+              "t3code://open/thread?connection=t3vm&thread=ebf3a84d-7f60-4809-a5e0-bbd574275463",
+            ]);
+            // Allow the fire-and-forget runPromise callback to settle.
+            yield* Effect.yieldNow;
+            yield* Effect.yieldNow;
+
+            const afterSecond = yield* Ref.get(handledArgv);
+            assert.isTrue(
+              afterSecond.some((argv) =>
+                argv.some((entry) => entry.startsWith("t3code://open/thread")),
+              ),
+            );
+
+            const openUrl = listeners.get("open-url");
+            assert.isDefined(openUrl);
+            const preventDefault = vi.fn();
+            openUrl?.(
+              { preventDefault },
+              "t3code://open/thread?connection=t3vm&thread=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            );
+            yield* Effect.yieldNow;
+            yield* Effect.yieldNow;
+            assert.equal(preventDefault.mock.calls.length, 1);
+            const urls = yield* Ref.get(handledUrls);
+            assert.deepEqual(urls, [
+              "t3code://open/thread?connection=t3vm&thread=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            ]);
+          }).pipe(Effect.provide(runtimeLayer)),
+        );
+      });
+    },
+  );
+
+  it.effect("does not register the OS protocol client in development", () => {
+    storageMock.mockReturnValue(storageAdapter);
+    createClerkBridgeMock.mockReturnValue({ cleanup: vi.fn(), isPrimaryInstance: true });
+
+    return Effect.gen(function* () {
+      let protocolClientRegistered = false;
+
+      const deepLinksLayer = Layer.succeed(DesktopDeepLinks.DesktopDeepLinks, noopDeepLinks);
+
+      const electronAppLayer = Layer.succeed(ElectronApp.ElectronApp, {
+        requestSingleInstanceLock: Effect.succeed(true),
+        setAsDefaultProtocolClient: () =>
+          Effect.sync(() => {
+            protocolClientRegistered = true;
+            return true;
+          }),
+        on: () => Effect.void,
+        quit: Effect.void,
+      } as unknown as ElectronApp.ElectronApp["Service"]);
+
+      const runtimeLayer = Layer.mergeAll(
+        layerDesktopClerk(true),
+        deepLinksLayer,
+        Layer.succeed(DesktopWebLinks.DesktopWebLinks, ignoreWebLinks),
+        electronAppLayer,
+        Layer.succeed(ElectronWindow.ElectronWindow, noopElectronWindow),
+      );
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const clerk = yield* DesktopClerk.DesktopClerk;
+          yield* clerk.configure;
+          assert.isFalse(protocolClientRegistered);
+        }).pipe(Effect.provide(runtimeLayer)),
+      );
+    });
   });
 
   it.effect("acquires and releases the SDK bridge with the layer", () => {
@@ -277,10 +477,12 @@ describe("DesktopClerk", () => {
         assert.strictEqual(yield* Effect.promise(() => revealed.promise), window);
       }).pipe(
         Effect.scoped,
+        Effect.provideService(DesktopDeepLinks.DesktopDeepLinks, noopDeepLinks),
         Effect.provide(layerDesktopClerk(true, [], "darwin", undefined, undefined, listeners)),
         Effect.provideService(ElectronApp.ElectronApp, electronApp),
         Effect.provideService(ElectronWindow.ElectronWindow, electronWindow),
         Effect.provideService(DesktopWebLinks.DesktopWebLinks, ignoreWebLinks),
+        Effect.provideService(DesktopDeepLinks.DesktopDeepLinks, noopDeepLinks),
       );
     },
   );
@@ -314,6 +516,7 @@ describe("DesktopClerk", () => {
       assert.deepEqual(received, [first, second, later]);
     }).pipe(
       Effect.scoped,
+      Effect.provideService(DesktopDeepLinks.DesktopDeepLinks, noopDeepLinks),
       Effect.provide(layerDesktopClerk(true, [], "darwin", undefined, undefined, listeners)),
       Effect.provideService(ElectronApp.ElectronApp, electronApp),
       Effect.provideService(
@@ -403,10 +606,12 @@ it.effect(
       assert.equal(event.preventDefault.mock.calls.length, 1);
     }).pipe(
       Effect.scoped,
+      Effect.provideService(DesktopDeepLinks.DesktopDeepLinks, noopDeepLinks),
       Effect.provide(layerDesktopClerk(true, [], "darwin", undefined, undefined, listeners)),
       Effect.provideService(ElectronApp.ElectronApp, electronApp),
       Effect.provideService(ElectronWindow.ElectronWindow, electronWindow),
       Effect.provideService(DesktopWebLinks.DesktopWebLinks, ignoreWebLinks),
+      Effect.provideService(DesktopDeepLinks.DesktopDeepLinks, noopDeepLinks),
     );
   },
 );
@@ -485,6 +690,7 @@ it.effect.each(["startup", "open-url", "early-second-instance"] as const)(
         assert.strictEqual(delivery?.flowId, request.flowId);
         assert.strictEqual(delivery?.returnUrl, request.returnUrl);
       }).pipe(
+        Effect.provideService(DesktopDeepLinks.DesktopDeepLinks, noopDeepLinks),
         Effect.provide(layerDesktopClerk(true, [], "darwin", undefined, shell, listeners)),
         Effect.provideService(HostProcess.Arguments, entry === "startup" ? ["t3", link] : ["t3"]),
         Effect.provideService(ElectronApp.ElectronApp, electronApp),
@@ -493,6 +699,7 @@ it.effect.each(["startup", "open-url", "early-second-instance"] as const)(
           {} as ElectronWindow.ElectronWindow["Service"],
         ),
         Effect.provideService(DesktopWebLinks.DesktopWebLinks, ignoreWebLinks),
+        Effect.provideService(DesktopDeepLinks.DesktopDeepLinks, noopDeepLinks),
       );
     }).pipe(Effect.scoped),
 );
@@ -532,6 +739,7 @@ it.effect("hands web and app links to the renderer and leaves other links alone"
         "t3code://threads/env-1/thread-1",
       ]);
     }).pipe(
+      Effect.provideService(DesktopDeepLinks.DesktopDeepLinks, noopDeepLinks),
       Effect.provide(layerDesktopClerk(true, [], "darwin", undefined, undefined, listeners)),
       Effect.provideService(HostProcess.Arguments, ["t3"]),
       Effect.provideService(ElectronApp.ElectronApp, electronApp),

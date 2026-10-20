@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import { DesktopEnvironmentBootstrapSchema } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as FileSystem from "effect/FileSystem";
@@ -6,6 +7,7 @@ import * as Path from "effect/Path";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { vi } from "vite-plus/test";
 
 import type * as Electron from "electron";
@@ -88,6 +90,45 @@ const bootstrapsLayer = (instances: ReadonlyArray<DesktopBackendManager.DesktopB
   Layer.merge(DesktopBackendPool.layerTest([...instances]), backendConfigurationLayer);
 
 describe("getLocalEnvironmentBootstraps", () => {
+  it.effect.each([
+    [false, "fd3", true, true],
+    [true, "fd3", true, false],
+    [true, "fd3", false, false],
+    [false, "fd3", false, false],
+    [false, "stdin", true, false],
+  ] as const)(
+    "reports native browser ownership for reused=%s, delivery=%s, connected=%s",
+    ([reuseExisting, bootstrapDelivery, connected, expected]) =>
+      Effect.gen(function* () {
+        const result = yield* getLocalEnvironmentBootstraps
+          .handler()
+          .pipe(
+            Effect.flatMap(
+              Schema.decodeUnknownEffect(Schema.Array(DesktopEnvironmentBootstrapSchema)),
+            ),
+          );
+        assert.equal(result[0]?.nativeServerBrowser, expected);
+      }).pipe(
+        Effect.provide(
+          bootstrapsLayer([
+            {
+              ...defaultWslInstance,
+              id: DesktopBackendManager.BackendInstanceId("primary"),
+              currentConfig: Effect.succeedSome({
+                ...readyWslConfig,
+                reuseExisting,
+                bootstrapDelivery,
+                bootstrap: {
+                  ...readyWslConfig.bootstrap,
+                  ...(connected ? { desktopBrowserFd: 5, desktopBrowserControlFd: 6 } : {}),
+                },
+              }),
+            },
+          ]),
+        ),
+      ),
+  );
+
   it.effect("publishes the concrete running distro without replacing the stable instance id", () =>
     Effect.gen(function* () {
       const result = yield* getLocalEnvironmentBootstraps.handler();
@@ -99,6 +140,7 @@ describe("getLocalEnvironmentBootstraps", () => {
           runningDistro: "Ubuntu",
           httpBaseUrl: "http://127.0.0.1:3774/",
           wsBaseUrl: "ws://127.0.0.1:3774/",
+          nativeServerBrowser: false,
           bootstrapToken: "bootstrap-token",
         },
       ]);
@@ -116,6 +158,7 @@ describe("getLocalEnvironmentBootstraps", () => {
           runningDistro: "Ubuntu",
           httpBaseUrl: "http://127.0.0.1:3774/",
           wsBaseUrl: "ws://127.0.0.1:3774/",
+          nativeServerBrowser: false,
           bootstrapToken: "current-window-token",
         },
       ]);

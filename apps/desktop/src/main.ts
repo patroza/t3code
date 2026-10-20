@@ -22,6 +22,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import type { RemoteT3RunnerOptions } from "@t3tools/ssh/tunnel";
 import serverPackageJson from "../../server/package.json" with { type: "json" };
 
+import { configureDesktopEarlyStartup } from "./electron/DesktopEarlyStartup.ts";
 import * as DesktopIpc from "./ipc/DesktopIpc.ts";
 import * as ElectronApp from "./electron/ElectronApp.ts";
 import * as ElectronDialog from "./electron/ElectronDialog.ts";
@@ -39,6 +40,7 @@ import * as DesktopWebLinks from "./app/DesktopWebLinks.ts";
 import * as DesktopAppIdentity from "./app/DesktopAppIdentity.ts";
 import * as DesktopConnectionCatalogStore from "./app/DesktopConnectionCatalogStore.ts";
 import * as DesktopClerk from "./app/DesktopClerk.ts";
+import * as DesktopDeepLinks from "./app/DesktopDeepLinks.ts";
 import * as DesktopCliCommand from "./app/DesktopCliCommand.ts";
 import * as DesktopApplicationMenu from "./window/DesktopApplicationMenu.ts";
 import * as DesktopAssets from "./app/DesktopAssets.ts";
@@ -77,14 +79,17 @@ import * as DesktopWslBackend from "./wsl/DesktopWslBackend.ts";
 import * as DesktopWslEnvironment from "./wsl/DesktopWslEnvironment.ts";
 import * as DesktopWslServerTree from "./wsl/DesktopWslServerTree.ts";
 
-if (process.argv.includes("--version")) {
-  try {
-    NodeFS.writeSync(process.stdout.fd, `${Electron.app.getVersion()}\n`);
-  } catch (error) {
-    if (!(error instanceof Error) || !("code" in error) || error.code !== "EPIPE") throw error;
-  }
-  Electron.app.exit(0);
-}
+configureDesktopEarlyStartup({
+  app: Electron.app,
+  argv: process.argv,
+  writeStdout: (value) => {
+    try {
+      NodeFS.writeSync(process.stdout.fd, value);
+    } catch (error) {
+      if (!(error instanceof Error) || !("code" in error) || error.code !== "EPIPE") throw error;
+    }
+  },
+});
 
 const layerDesktopEnvironment = Layer.unwrap(
   Effect.gen(function* () {
@@ -176,10 +181,16 @@ const layerDesktopWindow = DesktopWindow.layer.pipe(
   Layer.provideMerge(layerDesktopPreview),
 );
 
+const layerDesktopDeepLinks = DesktopDeepLinks.layer.pipe(
+  Layer.provideMerge(layerDesktopWindow),
+  Layer.provideMerge(layerDesktopFoundation),
+);
+
 const layerDesktopSnapShot = DesktopSnapShot.layer.pipe(
   Layer.provideMerge(layerDesktopWindow),
   Layer.provideMerge(layerDesktopFoundation),
 );
+
 const layerDesktopAppActivation = DesktopAppActivation.layer.pipe(
   Layer.provide(layerDesktopWindow),
 );
@@ -211,7 +222,9 @@ const layerDesktopApplication = Layer.mergeAll(
   DesktopCliCommand.layer,
   layerDesktopSsh,
 ).pipe(
+  Layer.provideMerge(layerDesktopDeepLinks),
   Layer.provideMerge(layerDesktopSnapShot),
+
   Layer.provideMerge(DesktopUpdates.layer),
   Layer.provideMerge(layerDesktopWslBackend),
   Layer.provideMerge(layerDesktopLocalEnvironmentAuth),
