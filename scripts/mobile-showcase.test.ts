@@ -2,8 +2,9 @@
 import * as NodePath from "node:path";
 import { assert, it } from "@effect/vitest";
 import { PNG } from "pngjs";
+import { MOBILE_DEFAULT_THEME_ID } from "@t3tools/shared/themePalettes";
 
-import {
+import showcaseConfig, {
   resolveShowcaseAndroidAbi,
   SHOWCASE_THEMES,
   type ShowcaseConfig,
@@ -260,6 +261,33 @@ it("enforces store screenshot count limits", () => {
   assert.doesNotThrow(() => validateStoreAssetCount(googleSpec, 5, true));
   assert.throws(() => validateStoreAssetCount(googleSpec, 1, true), /requires at least 2/u);
   assert.throws(() => validateStoreAssetCount(googleSpec, 9, false), /allows at most 8/u);
+});
+
+it("defaults every device to the app's own palette", () => {
+  assert.equal(MOBILE_DEFAULT_THEME_ID, "t3-code");
+  assert.equal(
+    showcaseConfig.devices.every((device) => device.theme === MOBILE_DEFAULT_THEME_ID),
+    true,
+  );
+});
+
+it("configures every default device with an exact upload-ready store target", () => {
+  assert.deepStrictEqual(
+    showcaseConfig.devices.map((device) => [
+      device.id,
+      device.storeAsset.directory,
+      device.storeAsset.width,
+      device.storeAsset.height,
+    ]),
+    [
+      ["iphone-6.9", "apple/iphone-6.9", 1320, 2868],
+      ["iphone-6.5", "apple/iphone-6.5", 1284, 2778],
+      ["ipad-13", "apple/ipad-13", 2064, 2752],
+      ["pixel", "google-play/phone", 1080, 1920],
+      ["android-tablet-7", "google-play/tablet-7", 1080, 1920],
+      ["android-tablet-10", "google-play/tablet-10", 1440, 2560],
+    ],
+  );
 });
 
 it("selects a reachable LAN IPv4 address", () => {

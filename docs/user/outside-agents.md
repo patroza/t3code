@@ -93,3 +93,15 @@ Agents without OAuth support cannot connect.
 Approved agents appear under **Settings → Connections** like other clients.
 Revoke one there to cut off its access immediately. A sign-in lasts 30 days;
 after that the agent asks you to approve it again.
+
+## Who the agent is
+
+The name the agent sends, such as `mcpx-server`, is only a label. Every install
+of that app shares it. On the agent's row in **Settings → Connections**, set
+**Identity** to the person it should act as. A message from someone else then
+shows that person's username and the source, such as `andreasimonecosta@bot`.
+A message you sent from this app stays unlabeled. A message you sent from
+somewhere else shows only that source, such as `discord`. Leave the agent
+unassigned and its messages stay anonymous: the source alone, or "Sent by
+another agent" when no source is known. An agent already working inside
+someone else's thread keeps that thread's person.

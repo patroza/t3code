@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - Tests use Node's glob matcher to verify electron-builder exclusions.
 import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -15,8 +16,9 @@ import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as Sink from "effect/Sink";
 import * as Schema from "effect/Schema";
+import { fromYaml } from "@t3tools/shared/schemaYaml";
+import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
@@ -49,6 +51,7 @@ import {
   MacPasskeySigningConfigurationResolutionError,
   MissingMacPasskeyProvisioningProfileError,
   packWindowsServerAsar,
+  promoteDesktopBuildArtifacts,
   preflightLinuxDesktopBuild,
   preflightMacDesktopBuild,
   preflightWindowsDesktopBuild,
@@ -278,6 +281,40 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
 });
 
 it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
+  it.effect("promotes unpacked desktop directories recursively", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({
+        prefix: "desktop-artifact-promotion-",
+      });
+      const stageDist = path.join(root, "stage-dist");
+      const output = path.join(root, "release");
+      const executable = path.join(stageDist, "linux-unpacked", "t3code");
+      const resource = path.join(stageDist, "linux-unpacked", "resources", "app.asar");
+
+      yield* fs.makeDirectory(path.dirname(resource), { recursive: true });
+      yield* fs.writeFileString(executable, "binary");
+      yield* fs.writeFileString(resource, "asar");
+      yield* fs.writeFileString(path.join(stageDist, "builder-debug.yml"), "debug");
+
+      const artifacts = yield* promoteDesktopBuildArtifacts(stageDist, output, "linux", "x64");
+
+      assert.deepStrictEqual(artifacts.map((artifact) => path.basename(artifact)).sort(), [
+        "builder-debug.yml",
+        "linux-unpacked",
+      ]);
+      assert.equal(
+        yield* fs.readFileString(path.join(output, "linux-unpacked", "t3code")),
+        "binary",
+      );
+      assert.equal(
+        yield* fs.readFileString(path.join(output, "linux-unpacked", "resources", "app.asar")),
+        "asar",
+      );
+    }),
+  );
+
   it.effect("rejects overlapping builds from another process until restoration finishes", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -784,6 +821,23 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     });
   });
 
+  it("keeps repo allowBuilds entries as booleans", () => {
+    const text = NodeFS.readFileSync(
+      NodePath.join(import.meta.dirname, "..", "pnpm-workspace.yaml"),
+      "utf8",
+    );
+    const decoded = Schema.decodeUnknownSync(
+      fromYaml(
+        Schema.Struct({
+          allowBuilds: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)),
+        }),
+      ),
+    )(text);
+    const allowBuilds = decoded.allowBuilds ?? {};
+    assert.ok(Object.keys(allowBuilds).length > 0);
+    assert.strictEqual(allowBuilds["msgpackr-extract"], true);
+  });
+
   // pnpm writes "set this to true or false" placeholders into allowBuilds when a
   // tarball changes. pnpm ignores them, but the release build decode rejects them.
   it.effect("decodes the repo allowBuilds and every file: tarball it names exists", () =>
@@ -964,6 +1018,14 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         ...DESKTOP_EXTRA_RESOURCES,
         ...WINDOWS_SERVER_EXTRA_RESOURCES,
       ]);
+      // Native binaries and helper executables cannot load from inside an
+      // asar; everything else stays packed. The Claude SDK platform packages
+      // and .bin shims never ship.
+      assert.equal(
+        WINDOWS_NATIVE_ASAR_UNPACK_GLOB,
+        "{*.node,**/*.node,*.dll,**/*.dll,*.exe,**/*.exe,*.so,**/*.so,*.so.*,**/*.so.*,*.dylib,**/*.dylib}",
+      );
+
       assert.deepStrictEqual(win.nsis, {
         differentialPackage: true,
         include: "apps/desktop/resources/installer.nsh",
@@ -1178,7 +1240,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         const tempDir = yield* fs.makeTempDirectoryScoped({
           prefix: "t3-windows-architecture-test-",
         });
-        const sourceDir = path.join(tempDir, "server");
+        const sourceDir = path.join(tempDir, ".hidden", "server");
         const nativeFiles = [
           "node_modules/node-pty/prebuilds/win32-x64/conpty/OpenConsole.exe",
           "node_modules/node-pty/prebuilds/win32-arm64/conpty/OpenConsole.exe",

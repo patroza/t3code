@@ -789,6 +789,38 @@ export class WindowsPackagedPayloadValidationError extends Schema.TaggedError<Wi
   }
 }
 
+export const promoteDesktopBuildArtifacts = Effect.fn("promoteDesktopBuildArtifacts")(function* (
+  stageDistDir: string,
+  outputDir: string,
+  platform: typeof BuildPlatform.Type,
+  arch: typeof BuildArch.Type,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const stageEntries = yield* fs.readDirectory(stageDistDir);
+  yield* fs.makeDirectory(outputDir, { recursive: true });
+
+  const copiedArtifacts: string[] = [];
+  for (const entry of stageEntries) {
+    const from = path.join(stageDistDir, entry);
+    const stat = yield* fs.stat(from).pipe(Effect.orElseSucceed(() => null));
+    if (!stat || (stat.type !== "File" && stat.type !== "Directory")) continue;
+
+    const to = path.join(outputDir, entry);
+    yield* fs.copy(from, to);
+    copiedArtifacts.push(to);
+  }
+
+  if (copiedArtifacts.length === 0) {
+    return yield* new DesktopBuildNoArtifactsProducedError({
+      distPath: stageDistDir,
+      platform,
+      arch,
+    });
+  }
+  return copiedArtifacts;
+});
+
 export class LinuxIconResizeError extends Schema.TaggedError<LinuxIconResizeError>()(
   "LinuxIconResizeError",
   {
@@ -1037,13 +1069,25 @@ export const WINDOWS_SERVER_ASAR_RESOURCE = "server.asar";
 // dlopen/spawn need real files, so native modules, shared libraries, and
 // helper executables live in each archive's .unpacked sibling (the standard
 // asar redirect convention). Everything else stays packed.
+// Include both `*.ext` and `**/*.ext`. `@electron/asar` 3.4's unpack matcher
+// treats `*.node` as a basename match at any depth on some hosts, and
+// `**/*.node` as the nested match on others; either pattern alone can leave
+// `.unpacked` siblings missing and fail the pack.
 export const WINDOWS_NATIVE_ASAR_UNPACK_GLOB =
-  "{**/*.node,**/*.dll,**/*.exe,**/*.so,**/*.so.*,**/*.dylib}";
+  "{*.node,**/*.node,*.dll,**/*.dll,*.exe,**/*.exe,*.so,**/*.so,*.so.*,**/*.so.*,*.dylib,**/*.dylib}";
+
+// The server sidecar unpacks .node files separately, keeping only Windows ones.
+
 export const WINDOWS_SERVER_ASAR_UNPACK_GLOBS = [
+  "*.dll",
   "**/*.dll",
+  "*.exe",
   "**/*.exe",
+  "*.so",
   "**/*.so",
+  "*.so.*",
   "**/*.so.*",
+  "*.dylib",
   "**/*.dylib",
 ] as const;
 // Mirrors DESKTOP_FILE_EXCLUSIONS for the hand-packed sidecar: the Claude SDK
@@ -2963,17 +3007,21 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       category: "Development",
       synopsis: "Desktop GUI for coding agents",
       maintainer: "T3 Tools <hello@t3.codes>",
+      desktop: {
+        entry: {
+          StartupWMClass: "t3code",
+          // Register the external deep-link scheme so xdg-open can launch T3.
+          // electron-builder keeps %U on Exec when MimeType is present.
+          MimeType: "x-scheme-handler/t3code;x-scheme-handler/t3code-dev;",
+        },
+      },
+
       protocols: [
         {
           name: "T3 Code",
           schemes: ["t3code", "t3code-dev"],
         },
       ],
-      desktop: {
-        entry: {
-          StartupWMClass: "t3code",
-        },
-      },
     };
     buildConfig.deb = {
       // FPM runs outside the staged app directory, so source paths must be absolute.
@@ -3100,6 +3148,13 @@ export const packWindowsServerAsar = Effect.fn("packWindowsServerAsar")(function
   // the darwin and linux prebuilds some packages (node-pty) ship alongside
   // their win32 ones. The Windows primary never loads those, so they stay packed.
   const unpackGlobs: string[] = [...WINDOWS_SERVER_ASAR_UNPACK_GLOBS];
+  // asar matches unpack globs against absolute paths without dot matching.
+  // Anchor selected addons so hidden parent directories do not block unpacking.
+  const sourceGlobPath = path
+    .resolve(input.sourceDir)
+    .split(path.sep)
+    .join("/")
+    .replace(/[\\*?[\]{}(),]/g, "\\$&");
   for (const entry of yield* fs.readDirectory(input.sourceDir, { recursive: true })) {
     if (!entry.endsWith(".node")) continue;
     const addonPath = path.join(input.sourceDir, entry);
@@ -3114,7 +3169,7 @@ export const packWindowsServerAsar = Effect.fn("packWindowsServerAsar")(function
         cause: new Error(`native addon path contains glob syntax: ${posixPath}`),
       });
     }
-    unpackGlobs.push(`**/${posixPath}`);
+    unpackGlobs.push(`${sourceGlobPath}/${posixPath}`);
   }
   yield* Effect.tryPromise({
     try: () =>
@@ -4072,27 +4127,12 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     });
   }
 
-  const stageEntries = yield* fs.readDirectory(stageDistDir);
-  yield* fs.makeDirectory(options.outputDir, { recursive: true });
-
-  const copiedArtifacts: string[] = [];
-  for (const entry of stageEntries) {
-    const from = path.join(stageDistDir, entry);
-    const stat = yield* fs.stat(from).pipe(Effect.orElseSucceed(() => null));
-    if (!stat || stat.type !== "File") continue;
-
-    const to = path.join(options.outputDir, entry);
-    yield* fs.copyFile(from, to);
-    copiedArtifacts.push(to);
-  }
-
-  if (copiedArtifacts.length === 0) {
-    return yield* new DesktopBuildNoArtifactsProducedError({
-      distPath: stageDistDir,
-      platform: options.platform,
-      arch: options.arch,
-    });
-  }
+  const copiedArtifacts = yield* promoteDesktopBuildArtifacts(
+    stageDistDir,
+    options.outputDir,
+    options.platform,
+    options.arch,
+  );
 
   yield* Effect.log("[desktop-artifact] Done. Artifacts:").pipe(
     Effect.annotateLogs({ artifacts: copiedArtifacts }),

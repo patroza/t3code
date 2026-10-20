@@ -27,6 +27,7 @@ allowBuilds:
   workerd: false
 
 catalog:
+  dfx: 1.0.16
   "@clerk/backend": 3.25.0
   "@clerk/clerk-js": 6.39.1
   "@clerk/electron": 0.1.1
@@ -121,7 +122,7 @@ minimumReleaseAgeExclude:
   - "@legendapp/list@3.3.5"
   - "@expo/cli@58.1.1 || 58.1.9 || 58.1.11"
   - "@expo/env@2.5.1"
-  - "@expo/fingerprint@0.21.2"
+  - "@expo/fingerprint@0.21.5"
   - "@expo/metro-config@58.0.14"
   - expo-constants@58.0.12
   - expo-font@58.0.8
@@ -273,6 +274,7 @@ overrides:
   expo-router: 58.0.20
   "expo-sharing>@expo/config-plugins": 58.0.9
   "expo-sharing>@expo/config-types": 58.0.3
+
   "@pierre/diffs>@shikijs/transformers": ^4.2.0
   # Resolve below remark-math so Vite, Metro and Node use the same tokenizer.
   "remark-math>micromark-extension-math": npm:micromark-extension-llm-math@3.1.0
@@ -344,6 +346,7 @@ patchedDependencies:
   node-pty@1.2.0-beta.15: patches/node-pty@1.2.0-beta.15.patch
   react-native-gesture-handler@3.3.0: patches/react-native-gesture-handler@3.3.0.patch
   react-native-keyboard-controller@1.22.7: patches/react-native-keyboard-controller@1.22.7.patch
+  dfx@1.0.16: patches/dfx@1.0.16.patch
   react-native-pdf-jsi@5.0.0: patches/react-native-pdf-jsi@5.0.0.patch
   # Android: a nested WebView hands a vertical drag to its scrolling parent at the page's edge.
   react-native-webview@14.0.1: patches/react-native-webview@14.0.1.patch
@@ -371,3 +374,5 @@ supportedArchitectures:
   cpu: [current, x64]
   libc: [current, glibc]
   os: [current, linux]
+
+# (workspace already includes apps/*)
