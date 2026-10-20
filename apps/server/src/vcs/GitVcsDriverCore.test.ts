@@ -655,7 +655,7 @@ describe("pullCurrentBranch", () => {
       yield* Fiber.join(recoveredStatus);
       assert.equal(yield* Ref.get(fixture.attempts), 3);
 
-      yield* TestClock.adjust("15 seconds");
+      yield* TestClock.adjust("90 seconds");
       const failedAgainStatus = yield* fixture.status().pipe(Effect.forkScoped);
       const failedAgain = yield* Queue.take(fixture.started);
       yield* Deferred.succeed(failedAgain.release, ChildProcessSpawner.ExitCode(128));
@@ -5545,7 +5545,13 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         yield* git(cwd, ["add", "upstream.txt"]);
         yield* git(cwd, ["commit", "-m", "source advance"]);
         const remoteHead = yield* git(cwd, ["rev-parse", "HEAD"]);
-        yield* git(source, ["--git-dir=.", "fetch", cwd, "stable:refs/heads/release"]);
+        yield* git(source, [
+          "--git-dir=.",
+          "fetch",
+          "--no-prune",
+          cwd,
+          "stable:refs/heads/release",
+        ]);
         yield* git(cwd, ["reset", "--hard", localHead]);
         const driver = yield* GitVcsDriver.GitVcsDriver;
 

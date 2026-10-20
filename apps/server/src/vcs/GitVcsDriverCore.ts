@@ -1378,7 +1378,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     ];
     const key = `${gitCommonDir}\0${remoteName}`;
     const failure = statusRemoteRefreshFailures.get(key);
-    if (failure && (yield* Clock.currentTimeMillis) < failure.retryAt) return;
+    if (failure && (yield* Clock.currentTimeMillis) < failure.retryAt) return false;
     const fiber = yield* Effect.uninterruptible(
       Effect.gen(function* () {
         const pending = statusFetches.get(key);
@@ -1420,6 +1420,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         "Background Git fetch is still running; using the last fetched references.",
       );
     }
+    return Option.isSome(result);
   });
 
   const resolveRepositoryPathsUncached = Effect.fn("resolveRepositoryPathsUncached")(function* (
@@ -1591,20 +1592,19 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const refreshStatusRemoteCacheEntry = Effect.fn("refreshStatusRemoteCacheEntry")(function* (
     cacheKey: StatusRemoteRefreshCacheKey,
   ) {
-    return yield* fetchRemoteForStatus(cacheKey.gitCommonDir, cacheKey.remoteName).pipe(
-      Effect.as(true as const),
-    );
+    return yield* fetchRemoteForStatus(cacheKey.gitCommonDir, cacheKey.remoteName);
   });
 
   const statusRemoteRefreshCache = yield* Cache.makeWith(refreshStatusRemoteCacheEntry, {
     capacity: STATUS_UPSTREAM_REFRESH_CACHE_CAPACITY,
-    // A failed background fetch is intentionally cached and exponentially
-    // backed off. Status reads swallow this failure and use the last fetched
-    // refs, so repeated thread mounts cannot turn a slow or unavailable remote
-    // into a repository-wide Git subprocess storm.
+    // A worker can fail after the status wait times out. Retry the cache entry
+    // sooner in that case; the failure map still prevents a new fetch until its
+    // cooldown ends, and the pending-fiber map prevents concurrent fetches.
     timeToLive: (exit, cacheKey) =>
       Exit.isSuccess(exit)
-        ? STATUS_UPSTREAM_REFRESH_INTERVAL
+        ? exit.value
+          ? STATUS_UPSTREAM_REFRESH_INTERVAL
+          : STATUS_UPSTREAM_REFRESH_FAILURE_BASE_COOLDOWN
         : statusUpstreamRefreshFailureCooldown(
             statusRemoteRefreshFailures.get(statusRemoteRefreshFailureKey(cacheKey))?.count ?? 1,
           ),
