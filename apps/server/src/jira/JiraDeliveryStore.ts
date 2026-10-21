@@ -33,6 +33,9 @@ export const JiraDelivery = Schema.Struct({
   status: Schema.Literals(["received", "processing", "completed", "rejected"]),
   createdAt: Schema.String,
   updatedAt: Schema.String,
+  /** `bug-report` deliveries are not posted back onto the public Jira issue. */
+  kind: Schema.optional(Schema.Literals(["comment", "bug-report"])),
+  discordThreadId: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 export type StoredJiraDelivery = {
@@ -53,6 +56,8 @@ export type StoredJiraDelivery = {
   readonly status: "received" | "processing" | "completed" | "rejected";
   readonly createdAt: string;
   readonly updatedAt: string;
+  readonly kind?: "comment" | "bug-report" | undefined;
+  readonly discordThreadId?: string | null | undefined;
 };
 
 const decodeDeliveries = Schema.decodeUnknownSync(

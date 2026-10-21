@@ -8,6 +8,7 @@ import {
   WebhookDebugLog,
   type WebhookDebugAppendInput,
 } from "../webhooks/WebhookDebugLog.ts";
+import { isMonitoredJiraProject, routeJiraWebhook } from "./JiraBugReport.ts";
 import { JiraAppConfig, isJiraProjectAllowed } from "./JiraAppConfig.ts";
 import { JiraIssueBridge } from "./JiraIssueBridge.ts";
 import {
@@ -114,6 +115,63 @@ export const jiraWebhookRouteLayer = HttpRouter.add(
         mention: config.mention,
       });
       return HttpServerResponse.text("Unauthorized", { status: 401 });
+    }
+
+    const routed = routeJiraWebhook(body);
+    if (routed._tag === "ignore") {
+      yield* logDebug({
+        outcome: "ignored_202",
+        status: 202,
+        reason: routed.reason,
+        bodyBytes,
+        bodyPreview,
+        mention: config.mention,
+      });
+      return HttpServerResponse.empty({ status: 202 });
+    }
+    if (routed._tag === "bug") {
+      const report = routed.report;
+      if (!isMonitoredJiraProject(report.projectKey, config.projectMap, config.allowedProjects)) {
+        yield* Effect.logInfo("Ignoring Jira bug outside the configured spaces", {
+          issueKey: report.issueKey,
+          projectKey: report.projectKey,
+        });
+        yield* logDebug({
+          outcome: "project_denied_202",
+          status: 202,
+          reason: `bug_project_not_monitored=${report.projectKey}`,
+          bodyBytes,
+          issueKey: report.issueKey,
+          projectKey: report.projectKey,
+          webhookEvent: "jira:issue_created",
+          mention: config.mention,
+        });
+        return HttpServerResponse.empty({ status: 202 });
+      }
+      const deliveryId = `jira-issue-created:${report.issueKey}:${report.issueId}`;
+      yield* logDebug({
+        outcome: "accepted_202",
+        status: 202,
+        bodyBytes,
+        deliveryId,
+        issueKey: report.issueKey,
+        projectKey: report.projectKey,
+        webhookEvent: "jira:issue_created",
+        mention: config.mention,
+      });
+      const bridge = yield* JiraIssueBridge;
+      yield* Effect.forkDetach(
+        bridge.handleBug({ deliveryId, report }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logError("Jira bug report delivery failed", {
+              deliveryId,
+              issueKey: report.issueKey,
+              cause,
+            }),
+          ),
+        ),
+      );
+      return HttpServerResponse.empty({ status: 202 });
     }
 
     const parsed = parseWebhook(body, config.mention, config.botAccountId);

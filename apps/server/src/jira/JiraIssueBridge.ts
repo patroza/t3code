@@ -46,6 +46,19 @@ import {
 } from "../workItems/ThreadWorkItemStore.ts";
 import { JiraAppClient } from "./JiraAppClient.ts";
 import {
+  bugOpener,
+  bugThreadTitle,
+  buildJiraBugReportPrompt,
+  collectBugMilestones,
+  discordAlertMessages,
+  fallbackBugMilestones,
+  soleGuildId,
+  teamDiscordMentionIds,
+  teamDiscordMentionLine,
+  type BugMilestones,
+  type JiraBugReport,
+} from "./JiraBugReport.ts";
+import {
   JiraAppConfig,
   isJiraProjectAllowed,
   resolveMappedT3ProjectId,
@@ -61,7 +74,9 @@ import { JiraDeliveryStore, type StoredJiraDelivery } from "./JiraDeliveryStore.
 import { resolveDiscordLinkForJiraIssue } from "./JiraThreadLookup.ts";
 import { classifyJiraActorTrust, type JiraActorTrustDecision } from "./jiraActorTrust.ts";
 import {
+  findDiscordAlertChannels,
   formatDiscordJiraContextNote,
+  openDiscordThreadFromMessage,
   postDiscordChannelMessage,
   resolveDiscordBotToken,
 } from "./jiraDiscordContext.ts";
@@ -194,8 +209,18 @@ export class JiraIssueBridge extends Context.Service<
       readonly deliveryId: string;
       readonly invocation: JiraIssueInvocation;
     }) => Effect.Effect<void>;
+    readonly handleBug: (input: {
+      readonly deliveryId: string;
+      readonly report: JiraBugReport;
+    }) => Effect.Effect<void>;
   }
 >()("t3/jira/JiraIssueBridge") {}
+
+type JiraWorkTarget = {
+  readonly issueKey: string;
+  readonly issueSummary: string | null;
+  readonly projectKey: string;
+};
 
 const make = Effect.gen(function* () {
   const config = yield* JiraAppConfig;
@@ -407,7 +432,7 @@ const make = Effect.gen(function* () {
    * Order: projectMap[jiraKey] → defaultProjectId → sole shell project.
    */
   const resolveCreateProjectId = Effect.fn("JiraIssueBridge.resolveCreateProjectId")(function* (
-    invocation: JiraIssueInvocation,
+    invocation: JiraWorkTarget,
   ) {
     if (!config.enabled) return null as string | null;
     const shell = yield* projection.getShellSnapshot().pipe(Effect.orElseSucceed(() => null));
@@ -452,7 +477,7 @@ const make = Effect.gen(function* () {
    * Later surfaces join via ThreadWorkItemStore.
    */
   const createThreadForIssue = Effect.fn("JiraIssueBridge.createThreadForIssue")(function* (
-    invocation: JiraIssueInvocation,
+    invocation: JiraWorkTarget,
   ) {
     return yield* createLock.withPermit(
       Effect.gen(function* () {
@@ -931,6 +956,402 @@ const make = Effect.gen(function* () {
     );
   });
 
+  const postBugDiscord = Effect.fn("JiraIssueBridge.postBugDiscord")(function* (
+    discordThreadId: string | null | undefined,
+    token: string | null,
+    text: string,
+    mentionLine: string,
+    mentionIds: ReadonlyArray<string>,
+  ) {
+    if (token === null || discordThreadId === null || discordThreadId === undefined) {
+      return true;
+    }
+    const messages = discordAlertMessages({
+      text,
+      mentionLine,
+    });
+    for (const content of messages) {
+      const mentionsThisChunk = mentionLine.length > 0 && content.includes(mentionLine);
+      const posted = yield* Effect.promise(() =>
+        postDiscordChannelMessage({
+          token,
+          channelId: discordThreadId,
+          content,
+          mentionUserIds: mentionsThisChunk ? mentionIds : [],
+        })
+          .then(() => ({ _tag: "ok" as const }))
+          .catch((cause: unknown) => ({ _tag: "err" as const, cause })),
+      );
+      if (posted._tag === "err") {
+        yield* Effect.logError("Failed to post Jira bug update to Discord", {
+          cause: posted.cause,
+        });
+        return false;
+      }
+    }
+    return true;
+  });
+
+  /**
+   * Watch a bug-report turn. The public Jira issue is not commented.
+   * Discord is mentioned when the analysis is ready, and again for a fix.
+   */
+  const watchBugReport = Effect.fn("JiraIssueBridge.watchBugReport")(function* (
+    delivery: StoredJiraDelivery,
+  ) {
+    if (delivery.threadId === null) {
+      yield* deliveries.put({
+        ...delivery,
+        status: "rejected",
+        updatedAt: DateTime.formatIso(yield* DateTime.now),
+      });
+      return;
+    }
+
+    const startedAt = yield* Clock.currentTimeMillis;
+    const timeoutMs = config.enabled ? config.turnTimeoutMs : 0;
+    let tracked: StoredJiraDelivery = delivery;
+    let announced: BugMilestones = { analysis: null, fix: null };
+    const people = yield* identity.listMapPeople();
+    const mentionLine = teamDiscordMentionLine(people);
+    const mentionIds = teamDiscordMentionIds(people);
+    const token = yield* Effect.promise(() => resolveDiscordBotToken());
+
+    const publish = (text: string, mentions: boolean) =>
+      postBugDiscord(tracked.discordThreadId, token, text, mentions ? mentionLine : "", mentionIds);
+
+    while ((yield* Clock.currentTimeMillis) - startedAt < timeoutMs) {
+      const snapshot = yield* projection
+        .getThreadDetailById(tracked.threadId as ThreadId)
+        .pipe(Effect.orElseSucceed(() => Option.none()));
+      if (Option.isNone(snapshot)) {
+        yield* publish("The review stopped before an analysis was ready.", false);
+        yield* deliveries.put({
+          deliveryId: tracked.deliveryId,
+          issueKey: tracked.issueKey,
+          projectKey: tracked.projectKey,
+          sourceCommentId: tracked.sourceCommentId,
+          replyToCommentId: tracked.replyToCommentId,
+          commentSurface: tracked.commentSurface,
+          responseCommentId: tracked.responseCommentId,
+          acknowledgmentEmojiId: tracked.acknowledgmentEmojiId,
+          actorAccountId: tracked.actorAccountId,
+          actorDisplayName: tracked.actorDisplayName,
+          threadId: tracked.threadId,
+          previousTurnId: tracked.previousTurnId,
+          userMessageId: tracked.userMessageId,
+          targetTurnId: tracked.targetTurnId,
+          status: "rejected",
+          createdAt: tracked.createdAt,
+          updatedAt: DateTime.formatIso(yield* DateTime.now),
+          kind: tracked.kind,
+          discordThreadId: tracked.discordThreadId,
+        });
+        return;
+      }
+      const thread = snapshot.value;
+      const resolveOptions = {
+        userMessageId: tracked.userMessageId,
+        previousTurnId: tracked.previousTurnId,
+        knownTargetTurnId: tracked.targetTurnId,
+      };
+      const discoveredTurnId = discoverGitHubTargetTurnId(thread, resolveOptions);
+      if (discoveredTurnId !== null && discoveredTurnId !== tracked.targetTurnId) {
+        tracked = {
+          deliveryId: tracked.deliveryId,
+          issueKey: tracked.issueKey,
+          projectKey: tracked.projectKey,
+          sourceCommentId: tracked.sourceCommentId,
+          replyToCommentId: tracked.replyToCommentId,
+          commentSurface: tracked.commentSurface,
+          responseCommentId: tracked.responseCommentId,
+          acknowledgmentEmojiId: tracked.acknowledgmentEmojiId,
+          actorAccountId: tracked.actorAccountId,
+          actorDisplayName: tracked.actorDisplayName,
+          threadId: tracked.threadId,
+          previousTurnId: tracked.previousTurnId,
+          userMessageId: tracked.userMessageId,
+          targetTurnId: discoveredTurnId as TurnId,
+          status: tracked.status,
+          createdAt: tracked.createdAt,
+          updatedAt: DateTime.formatIso(yield* DateTime.now),
+          kind: tracked.kind,
+          discordThreadId: tracked.discordThreadId,
+        };
+        yield* deliveries.put(tracked);
+      }
+
+      const assistantTexts =
+        discoveredTurnId === null
+          ? []
+          : thread.messages
+              .filter(
+                (message) =>
+                  message.role === "assistant" &&
+                  !message.streaming &&
+                  message.turnId === discoveredTurnId,
+              )
+              .map((message) => message.text);
+      const milestones = collectBugMilestones(assistantTexts);
+      if (milestones.analysis !== null && announced.analysis === null) {
+        if (yield* publish(milestones.analysis, true)) {
+          announced = { analysis: milestones.analysis, fix: announced.fix };
+        }
+      }
+      if (milestones.fix !== null && announced.fix === null) {
+        if (yield* publish(milestones.fix, true)) {
+          announced = { analysis: announced.analysis, fix: milestones.fix };
+        }
+      }
+
+      const outcome = resolveGitHubBridgeTurnOutcome(thread, {
+        ...resolveOptions,
+        knownTargetTurnId: tracked.targetTurnId,
+      });
+      if (outcome._tag === "terminal") {
+        const finalMilestones = fallbackBugMilestones({
+          announced,
+          finalText: outcome.status === "completed" ? outcome.body : "",
+        });
+        if (finalMilestones.analysis !== null && announced.analysis === null) {
+          if (yield* publish(finalMilestones.analysis, true)) {
+            announced = { analysis: finalMilestones.analysis, fix: announced.fix };
+          }
+        }
+        if (finalMilestones.fix !== null && announced.fix === null) {
+          yield* publish(finalMilestones.fix, true);
+        }
+        if (outcome.status !== "completed" && announced.analysis === null) {
+          yield* publish("The review stopped before an analysis was ready.", false);
+        }
+        yield* deliveries.put({
+          ...tracked,
+          status: outcome.status === "completed" ? "completed" : "rejected",
+          updatedAt: DateTime.formatIso(yield* DateTime.now),
+        });
+        return;
+      }
+
+      yield* Effect.sleep("1 second");
+    }
+
+    yield* deliveries.put({
+      ...tracked,
+      status: "completed",
+      updatedAt: DateTime.formatIso(yield* DateTime.now),
+    });
+  });
+
+  const handleBugUnsafe = Effect.fn("JiraIssueBridge.handleBug")(function* (input: {
+    readonly deliveryId: string;
+    readonly report: JiraBugReport;
+  }) {
+    if (!config.enabled) return;
+    const report = input.report;
+    if (!isJiraProjectAllowed(config.allowedProjects, report.projectKey)) return;
+    if (!config.projectMap.has(report.projectKey)) return;
+
+    const botAccountId = config.botAccountId?.trim().toLowerCase() ?? "";
+    const reporterAccountId = report.reporterAccountId?.trim().toLowerCase() ?? "";
+    if (botAccountId.length > 0 && reporterAccountId === botAccountId) {
+      yield* Effect.logInfo("Ignoring Jira bug created by the bot account", {
+        issueKey: report.issueKey,
+      });
+      return;
+    }
+
+    const now = DateTime.formatIso(yield* DateTime.now);
+    const initial: StoredJiraDelivery = {
+      deliveryId: input.deliveryId,
+      issueKey: report.issueKey,
+      projectKey: report.projectKey,
+      sourceCommentId: `issue-created:${report.issueId}`,
+      replyToCommentId: `issue-created:${report.issueId}`,
+      commentSurface: "issue",
+      responseCommentId: null,
+      acknowledgmentEmojiId: null,
+      actorAccountId: report.reporterAccountId,
+      actorDisplayName: report.reporterDisplayName,
+      threadId: null,
+      previousTurnId: null,
+      userMessageId: null,
+      targetTurnId: null,
+      status: "received",
+      createdAt: now,
+      updatedAt: now,
+      kind: "bug-report",
+      discordThreadId: null,
+    };
+    if (!(yield* deliveries.claim(initial))) return;
+
+    yield* Effect.logInfo("Accepted Jira bug report", {
+      deliveryId: input.deliveryId,
+      issueKey: report.issueKey,
+      projectKey: report.projectKey,
+    });
+
+    const token = yield* Effect.promise(() => resolveDiscordBotToken());
+    const linksPath = config.discordLinksPath;
+    const linksRaw =
+      linksPath === null || linksPath.length === 0
+        ? ""
+        : yield* fileSystem.readFileString(linksPath).pipe(Effect.orElseSucceed(() => ""));
+    const guildId = config.alertGuildId ?? soleGuildId(linksRaw);
+    let discordThreadId: string | null = null;
+    if (token === null || guildId === null) {
+      yield* Effect.logWarning("Jira bug has no Discord guild or bot token", {
+        issueKey: report.issueKey,
+        hasToken: token !== null,
+        guildId,
+      });
+    } else {
+      const channels = yield* Effect.promise(() =>
+        findDiscordAlertChannels({
+          token,
+          guildId,
+          projectKey: report.projectKey,
+        })
+          .then((channelIds) => ({ _tag: "ok" as const, channelIds }))
+          .catch((cause: unknown) => ({ _tag: "err" as const, cause })),
+      );
+      if (channels._tag === "err") {
+        yield* Effect.logError("Jira bug could not list Discord channels", {
+          issueKey: report.issueKey,
+          cause: channels.cause,
+        });
+      } else if (channels.channelIds.length !== 1) {
+        yield* Effect.logWarning("Jira bug needs exactly one omegent-alert-link channel", {
+          issueKey: report.issueKey,
+          projectKey: report.projectKey,
+          channelIds: channels.channelIds,
+        });
+      } else {
+        const channelId = channels.channelIds[0]!;
+        const opened = yield* Effect.promise(() =>
+          postDiscordChannelMessage({
+            token,
+            channelId,
+            content: bugOpener(report),
+          })
+            .then((message) =>
+              openDiscordThreadFromMessage({
+                token,
+                channelId,
+                messageId: message.id,
+                name: bugThreadTitle(report),
+              }),
+            )
+            .then((threadId) => ({ _tag: "ok" as const, threadId }))
+            .catch((cause: unknown) => ({ _tag: "err" as const, cause })),
+        );
+        if (opened._tag === "err") {
+          yield* Effect.logError("Jira bug could not open a Discord thread", {
+            issueKey: report.issueKey,
+            channelId,
+            cause: opened.cause,
+          });
+        } else {
+          discordThreadId = opened.threadId;
+        }
+      }
+    }
+
+    const thread = yield* createThreadForIssue({
+      issueKey: report.issueKey,
+      issueSummary: report.summary,
+      projectKey: report.projectKey,
+    });
+    if (thread === null) {
+      if (discordThreadId !== null && token !== null) {
+        yield* postBugDiscord(discordThreadId, token, "The review did not start.", "", []);
+      }
+      yield* deliveries.put({
+        ...initial,
+        discordThreadId,
+        status: "rejected",
+        updatedAt: DateTime.formatIso(yield* DateTime.now),
+      });
+      return;
+    }
+
+    yield* workItems
+      .appendForThread({
+        threadId: thread.id,
+        jiraIssueKeys: [report.issueKey],
+        source: "jira-webhook",
+      })
+      .pipe(Effect.ignore);
+
+    const commandId = CommandId.make(yield* crypto.randomUUIDv4());
+    const messageId = MessageId.make(yield* crypto.randomUUIDv4());
+    const processing: StoredJiraDelivery = {
+      ...initial,
+      threadId: thread.id,
+      previousTurnId: thread.latestTurn?.turnId ?? null,
+      userMessageId: messageId,
+      discordThreadId,
+      status: "processing",
+      updatedAt: DateTime.formatIso(yield* DateTime.now),
+    };
+    yield* deliveries.put(processing);
+
+    const mapPeople = yield* identity.listMapPeople();
+    const source = buildIntegrationSourceRef({
+      people: mapPeople,
+      channel: "jira",
+      platformId: report.reporterAccountId,
+      displayName: report.reporterDisplayName,
+      location: {
+        projectKey: report.projectKey,
+        issueKey: report.issueKey,
+      },
+    });
+    const dispatched = yield* engine
+      .dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "server",
+        dispatchMode: { type: "queue_after_active" },
+        commandId,
+        threadId: thread.id,
+        messageId,
+        text: buildJiraBugReportPrompt(report),
+        attachments: [],
+        modelSelection: thread.modelSelection,
+        titleSeed: report.summary?.slice(0, 80) || report.issueKey,
+        source,
+      })
+      .pipe(
+        Effect.as(true),
+        Effect.catch((cause) =>
+          Effect.logError("Failed to dispatch Jira bug report", {
+            issueKey: report.issueKey,
+            cause,
+          }).pipe(Effect.as(false)),
+        ),
+      );
+    if (!dispatched) {
+      yield* deliveries.put({
+        ...processing,
+        status: "rejected",
+        updatedAt: DateTime.formatIso(yield* DateTime.now),
+      });
+      return;
+    }
+
+    yield* Effect.forkDetach(
+      watchBugReport(processing).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logError("Jira bug report watch stopped", {
+            deliveryId: processing.deliveryId,
+            issueKey: report.issueKey,
+            cause,
+          }),
+        ),
+      ),
+    );
+  });
+
   const handle = (input: {
     readonly deliveryId: string;
     readonly invocation: JiraIssueInvocation;
@@ -945,17 +1366,35 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  const handleBug = (input: { readonly deliveryId: string; readonly report: JiraBugReport }) =>
+    handleBugUnsafe(input).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logError("Jira bug report failed", {
+          deliveryId: input.deliveryId,
+          issueKey: input.report.issueKey,
+          cause,
+        }),
+      ),
+    );
+
   const restore = deliveries.listProcessing().pipe(
     Effect.flatMap((pending) =>
-      Effect.forEach(pending, (delivery) => Effect.forkDetach(bridgeTurn(delivery)), {
-        concurrency: 4,
-        discard: true,
-      }),
+      Effect.forEach(
+        pending,
+        (delivery) =>
+          Effect.forkDetach(
+            delivery.kind === "bug-report" ? watchBugReport(delivery) : bridgeTurn(delivery),
+          ),
+        {
+          concurrency: 4,
+          discard: true,
+        },
+      ),
     ),
   );
   if (config.enabled) yield* restore;
 
-  return JiraIssueBridge.of({ handle });
+  return JiraIssueBridge.of({ handle, handleBug });
 });
 
 export const layer = Layer.effect(JiraIssueBridge, make);

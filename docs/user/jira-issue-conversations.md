@@ -150,6 +150,7 @@ webhook.
 | `T3CODE_JIRA_ACK_EMOJI_ID`       | no       | `1f440` | Read receipt on the trigger comment (`👀`); empty string disables |
 | `T3CODE_JIRA_BOT_ACCOUNT_ID`     | no       | —       | Alias for wiki/ADF `[~accountId:…]` mention matching              |
 | `T3CODE_JIRA_CONFLUENCE_PAGES`   | no       | empty   | Where a reply goes when it does not fit in a comment (see below)  |
+| `T3CODE_JIRA_ALERT_GUILD_ID`     | no       | —       | Discord guild scanned for `omegent-alert-link-<KEY>`              |
 
 \*When any required value is missing, the integration is **disabled** (webhook returns 404).
 
@@ -199,11 +200,28 @@ so you can see the mention was read before the answer is ready. That reply stays
 follows as another reply when the turn finishes. An empty `T3CODE_JIRA_ACK_EMOJI_ID` skips the
 receipt. `1f44d` sends 👍 instead. A failed receipt does not block the turn.
 
+## Bug reports
+
+A Bug created in a configured Jira space is picked up on its own. The Jira webhook has to send Issue created, as well as the comment events it already sends. Configured spaces are the keys in `T3CODE_JIRA_PROJECT_MAP` (for example `SA` and `CFG`). When `T3CODE_JIRA_ALLOWED_PROJECTS` is set, the key has to be in that list too.
+
+The report is public input. It is not a prompt. Nothing in the summary or description is run, and the review is not posted back on the Jira issue.
+
+Put `omegent-alert-link-SA` on the Discord channel topic for that space (several keys can share a channel). The same token in a Teams channel description names that channel; this posts in Discord. The channel still needs `omegent-link-<shortName>` when a person mentions the bot there.
+
+The bot opens a thread, studies the repository, and prepares a fix. It mentions the mapped Discord team when the analysis is ready, and again when a fix is proposed.
+
+```text
+omegent-link-macs-scanner omegent-alert-link-SA
+```
+
+When the links file names exactly one guild, `T3CODE_JIRA_ALERT_GUILD_ID` can stay empty.
+
 ## Security
 
 - Require a shared secret on every delivery (`Authorization: Bearer …` or `X-T3-Webhook-Secret`).
 - Cap body size at 1 MiB.
-- Ignore events that are not `comment_created`.
+- Comment turns accept `comment_created` and `comment_updated` only, and only with an explicit mention.
+- Bug turns accept `jira:issue_created` for issue type Bug in a configured space. The report text is data.
 - Allowlist projects when configured.
 - Do not put secrets in prompts, delivery logs, or git.
 - Prefer the free Atlassian **service account** for REST replies (see
