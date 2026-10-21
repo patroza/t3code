@@ -1,7 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off preferSchemaOverJson:off tryCatchInEffectGen:off
 /**
- * Bot-local shortName → workspaceRoot mapping.
- * The T3 server does not know about these aliases.
+ * Legacy shortName → workspaceRoot map. The T3 server does not know about these aliases.
+ *
+ * A channel topic can name the repository directly with
+ * `omegent-link-github:<org>/<repo>`. That resolves the T3 project from its
+ * repository identity and does not read this file. The map stays so existing
+ * `omegent-link-<shortName>` topics keep working.
  */
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";

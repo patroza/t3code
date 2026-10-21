@@ -105,11 +105,15 @@ import {
 } from "../presentation/discordInboundImages.ts";
 import {
   bridgedTurnTopicResolutionError,
+  MISSING_PROJECT_TOPIC_TAG_ERROR,
   missingProjectBindingMessage,
   parseMentionFlags,
   parseMentionIntent,
-  parseTopicShortName,
+  parseTopicProjectBinding,
   projectTopicFromParentLookup,
+  selectProjectForGithubRepository,
+  topicHasProjectBinding,
+  topicProjectBindingLabel,
   normalizeWorkspacePath,
   resolveDiscordFollowUpDelivery,
   shouldPostWorkingAckForContinue,
@@ -847,13 +851,71 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
     },
   );
 
+  const topicBindingLabel = (topic: string | null | undefined): string | null => {
+    const binding = parseTopicProjectBinding(topic);
+    return binding === null ? null : topicProjectBindingLabel(binding);
+  };
+
+  const describeGithubSelection = (
+    repository: { readonly owner: string; readonly repo: string },
+    selected:
+      | { readonly kind: "none" }
+      | {
+          readonly kind: "ambiguous";
+          readonly projects: ReadonlyArray<{
+            readonly title: string;
+            readonly workspaceRoot: string;
+          }>;
+        },
+  ) => {
+    const label = `${repository.owner}/${repository.repo}`;
+    if (selected.kind === "none") {
+      return `No T3 project matches GitHub repository \`${label}\`. Add that repository in T3 first.`;
+    }
+    const listed = selected.projects
+      .map((project) => `${project.title} (${project.workspaceRoot})`)
+      .join(", ");
+    return `More than one T3 project matches GitHub repository \`${label}\`: ${listed}.`;
+  };
+
   const resolveProjectFromTopic = Effect.fn("MentionRouter.resolveProjectFromTopic")(function* (
     topic: string | null | undefined,
+    wait: "full" | "short" | "none" = "full",
   ) {
-    const shortName = parseTopicShortName(topic);
-    if (shortName === null) {
-      return yield* Effect.fail("Channel topic has no omegent-link-<shortName> tag." as const);
+    const binding = parseTopicProjectBinding(topic);
+    if (binding === null) {
+      return yield* Effect.fail(MISSING_PROJECT_TOPIC_TAG_ERROR);
     }
+    if (binding.kind === "github") {
+      let projects = yield* t3.listProjects();
+      if (projects === null && wait !== "none") {
+        const ready = yield* t3.isReady();
+        if (!ready) {
+          const waited = yield* t3
+            .waitUntilReady(wait === "short" ? { timeoutMs: 2_500 } : {})
+            .pipe(Effect.result);
+          if (Result.isFailure(waited)) {
+            return yield* Effect.fail(T3_STILL_CONNECTING_MESSAGE);
+          }
+          projects = yield* t3.listProjects();
+        }
+      }
+      if (projects === null) {
+        return yield* Effect.fail(T3_STILL_CONNECTING_MESSAGE);
+      }
+      const selected = selectProjectForGithubRepository(projects, binding.repository);
+      if (selected.kind !== "match") {
+        return yield* Effect.fail(describeGithubSelection(binding.repository, selected));
+      }
+      const label = topicProjectBindingLabel(binding);
+      return {
+        shortName: label,
+        alias: { shortName: label, workspaceRoot: selected.project.workspaceRoot },
+        project: selected.project,
+      };
+    }
+
+    const shortName = binding.shortName;
     const alias = aliases.resolve(shortName);
     if (alias === null) {
       return yield* Effect.fail(
@@ -861,12 +923,15 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
       );
     }
     let project = yield* t3.findProjectByWorkspaceRoot(alias.workspaceRoot);
-    if (project === null) {
+    if (project === null && wait !== "none") {
       const ready = yield* t3.isReady();
       if (!ready) {
         // Wait for shell fill / reconnect, then re-resolve the alias once.
         // Map the session error to a string so topic-resolution stays string-typed.
-        const waited = yield* t3.waitUntilReady().pipe(Effect.result);
+        // Slash help uses the short wait so it can answer inside Discord's window.
+        const waited = yield* t3
+          .waitUntilReady(wait === "short" ? { timeoutMs: 2_500 } : {})
+          .pipe(Effect.result);
         if (Result.isFailure(waited)) {
           return yield* Effect.fail(T3_STILL_CONNECTING_MESSAGE);
         }
@@ -881,21 +946,40 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
     return { shortName, alias, project };
   });
 
+  /**
+   * Bare Jira keys need the channel's workspace before the turn starts.
+   * A GitHub tag uses the shell already in hand. It does not wait out a
+   * reconnect, so the existing-thread offer is not blocked on a full shell.
+   */
+  const bareKeyProjectsForTopic = Effect.fn("MentionRouter.bareKeyProjectsForTopic")(function* (
+    topic: string | null | undefined,
+  ) {
+    const binding = parseTopicProjectBinding(topic);
+    if (binding === null || binding.kind === "shortName") {
+      const shortName = binding?.kind === "shortName" ? binding.shortName : null;
+      const alias = shortName === null ? null : aliases.resolve(shortName);
+      return alias === null ? [] : (readJiraBareKeyProjects(alias.workspaceRoot) ?? []);
+    }
+    const projects = yield* t3.listProjects();
+    if (projects === null) return [];
+    const selected = selectProjectForGithubRepository(projects, binding.repository);
+    if (selected.kind !== "match") return [];
+    return readJiraBareKeyProjects(selected.project.workspaceRoot) ?? [];
+  });
+
   const refreshChannelInfoPin = Effect.fn("MentionRouter.refreshChannelInfoPin")(function* (
     channelId: string,
     topic: string | null | undefined,
   ) {
-    const shortName = parseTopicShortName(topic);
-    if (shortName === null) return null;
-    const alias = aliases.resolve(shortName);
-    if (alias === null) return null;
-    const project = yield* t3.findProjectByWorkspaceRoot(alias.workspaceRoot);
+    const resolved = yield* resolveProjectFromTopic(topic, "none").pipe(Effect.result);
+    if (Result.isFailure(resolved)) return null;
+    const { shortName, project } = resolved.success;
     const serverConfig = yield* t3.serverConfig();
     return yield* ensureChannelInfoPin({
       channelId,
-      workspaceRoot: alias.workspaceRoot,
+      workspaceRoot: project.workspaceRoot,
       providers: serverConfig?.providers ?? [],
-      projectDefaultModelSelection: project?.defaultModelSelection ?? null,
+      projectDefaultModelSelection: project.defaultModelSelection ?? null,
       botConfig,
     }).pipe(
       Effect.catch((error) =>
@@ -913,47 +997,39 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
     channelId: string,
     topic: string | null | undefined,
   ) {
-    const shortName = parseTopicShortName(topic);
-    if (shortName === null) {
-      return {
-        kind: "no-topic" as const,
-      };
-    }
-    const alias = aliases.resolve(shortName);
-    if (alias === null) {
-      return {
-        kind: "unknown-alias" as const,
-        shortName,
-      };
-    }
-    let project = yield* t3.findProjectByWorkspaceRoot(alias.workspaceRoot);
-    if (project === null) {
-      const ready = yield* t3.isReady();
-      if (!ready) {
-        // Slash help must answer inside Discord's interaction window (no defer here).
-        // Wait only a short beat for shell race; otherwise report connecting.
-        const waited = yield* t3.waitUntilReady({ timeoutMs: 2_500 }).pipe(Effect.result);
-        if (Result.isFailure(waited)) {
-          return {
-            kind: "t3-connecting" as const,
-            shortName,
-            workspaceRoot: alias.workspaceRoot,
-          };
-        }
-        project = yield* t3.findProjectByWorkspaceRoot(alias.workspaceRoot);
+    const resolved = yield* resolveProjectFromTopic(topic, "short").pipe(Effect.result);
+    if (Result.isFailure(resolved)) {
+      const failure = String(resolved.failure);
+      if (failure === T3_STILL_CONNECTING_MESSAGE) {
+        return { kind: "t3-connecting" as const };
       }
+      if (failure.startsWith("Unknown project alias '")) {
+        return {
+          kind: "unknown-alias" as const,
+          shortName: failure.slice("Unknown project alias '".length).split("'")[0] ?? "",
+        };
+      }
+      const missingProject = /^No T3 project registered at (.+) \(alias '([^']+)'\)/u.exec(failure);
+      if (missingProject !== null) {
+        return {
+          kind: "no-project" as const,
+          shortName: missingProject[2] ?? "",
+          workspaceRoot: missingProject[1] ?? "",
+        };
+      }
+      if (
+        failure.startsWith("No T3 project matches") ||
+        failure.startsWith("More than one T3 project")
+      ) {
+        return { kind: "github-unresolved" as const, message: failure };
+      }
+      return { kind: "no-topic" as const };
     }
-    if (project === null) {
-      return {
-        kind: "no-project" as const,
-        shortName,
-        workspaceRoot: alias.workspaceRoot,
-      };
-    }
+    const { shortName, project } = resolved.success;
     const serverConfig = yield* t3.serverConfig();
     const pin = yield* ensureChannelInfoPin({
       channelId,
-      workspaceRoot: alias.workspaceRoot,
+      workspaceRoot: project.workspaceRoot,
       providers: serverConfig?.providers ?? [],
       projectDefaultModelSelection: project.defaultModelSelection ?? null,
       botConfig,
@@ -970,7 +1046,7 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
       return {
         kind: "pin-failed" as const,
         shortName,
-        workspaceRoot: alias.workspaceRoot,
+        workspaceRoot: project.workspaceRoot,
       };
     }
     return {
@@ -1206,10 +1282,7 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
       });
       return existing.t3ThreadId;
     }
-    const topicShortName = parseTopicShortName(input.topic);
-    const topicAlias = topicShortName === null ? null : aliases.resolve(topicShortName);
-    const topicBareKeyProjects =
-      topicAlias === null ? [] : (readJiraBareKeyProjects(topicAlias.workspaceRoot) ?? []);
+    const topicBareKeyProjects = yield* bareKeyProjectsForTopic(input.topic);
 
     // A new Discord thread does not join a T3 conversation that Jira or GitHub
     // already recorded. Point at that conversation, including one that lives in
@@ -1315,10 +1388,11 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
               topicError: fromTopic.failure,
             },
           );
+          const shortName = topicBindingLabel(input.topic) ?? "linked";
           return {
-            shortName: parseTopicShortName(input.topic) ?? "linked",
+            shortName,
             alias: {
-              shortName: parseTopicShortName(input.topic) ?? "linked",
+              shortName,
               workspaceRoot: project.workspaceRoot,
             },
             project,
@@ -2132,8 +2206,7 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
 
         // Prefer binding to the project of the T3 thread; when the channel has a topic,
         // require it to resolve to the same project so the Discord home is correct.
-        const shortName = parseTopicShortName(input.topic);
-        if (shortName !== null) {
+        if (parseTopicProjectBinding(input.topic) !== null) {
           const resolved = yield* resolveProjectFromTopic(input.topic).pipe(Effect.result);
           if (Result.isFailure(resolved)) {
             return yield* postReply(String(resolved.failure));
@@ -2666,7 +2739,7 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
 
     const parentUnavailable = topicLookup.kind === "parent-unavailable";
     const title = sentryMonitorThreadTitle(message);
-    if (parentUnavailable || parseTopicShortName(topic) === null) {
+    if (parentUnavailable || !topicHasProjectBinding(topic)) {
       const discordThread = yield* openOrReuseThread(event.channel_id, event.id, title).pipe(
         Effect.catch((error) =>
           Effect.logWarning("Sentry monitor could not open a thread", {
@@ -3061,7 +3134,7 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
           });
           return;
         }
-        if (pin === null || parseTopicShortName(topic) === null) {
+        if (pin === null || !topicHasProjectBinding(topic)) {
           yield* rest.createMessage(event.channel_id, {
             content: missingProjectBindingMessage({
               inThread: true,
@@ -3087,7 +3160,7 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
           });
           return;
         }
-        const shortName = parseTopicShortName(topic);
+        const shortName = topicBindingLabel(topic);
         if (shortName === null || parentId === null) {
           yield* rest.createMessage(event.channel_id, {
             content: missingProjectBindingMessage({
@@ -3123,7 +3196,7 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
       }
 
       if (intent.kind === "link-thread") {
-        if (parentUnavailable && parseTopicShortName(topic) === null) {
+        if (parentUnavailable && !topicHasProjectBinding(topic)) {
           yield* rest.createMessage(event.channel_id, {
             content: missingProjectBindingMessage({ inThread: true, parentUnavailable: true }),
             message_reference: { message_id: event.id },
@@ -3314,7 +3387,7 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
     const topic = topicLookup.kind === "resolved" ? topicLookup.topic : null;
     const pin = parentUnavailable ? null : yield* refreshChannelInfoPin(event.channel_id, topic);
     if (intent.kind === "help") {
-      if (parentUnavailable || pin === null || parseTopicShortName(topic) === null) {
+      if (parentUnavailable || pin === null || !topicHasProjectBinding(topic)) {
         yield* rest.createMessage(event.channel_id, {
           content: missingProjectBindingMessage({
             inThread: false,
@@ -3333,7 +3406,7 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
     }
 
     if (intent.kind === "today-recap") {
-      const shortName = parseTopicShortName(topic);
+      const shortName = topicBindingLabel(topic);
       if (parentUnavailable || shortName === null) {
         yield* rest.createMessage(event.channel_id, {
           content: missingProjectBindingMessage({
@@ -3369,7 +3442,7 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
     }
 
     if (intent.kind === "link-thread") {
-      if (parentUnavailable && parseTopicShortName(topic) === null) {
+      if (parentUnavailable && !topicHasProjectBinding(topic)) {
         yield* rest.createMessage(event.channel_id, {
           content: missingProjectBindingMessage({
             inThread: false,
@@ -3391,7 +3464,7 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
       return;
     }
 
-    if (parentUnavailable || parseTopicShortName(topic) === null) {
+    if (parentUnavailable || !topicHasProjectBinding(topic)) {
       if (pendingReadyReaction !== undefined) {
         yield* rest
           .deleteMyMessageReaction(
@@ -4260,7 +4333,7 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
             const topic = topicLookup.kind === "resolved" ? topicLookup.topic : null;
 
             // New work needs a topic; continue turns can recover from an existing link.
-            if (parseTopicShortName(topic) === null) {
+            if (!topicHasProjectBinding(topic)) {
               const existingLink = inThread ? yield* links.getByDiscordThreadId(channelId) : null;
               if (existingLink === null) {
                 return slashReply(missingProjectBindingMessage({ inThread, parentUnavailable }), {
@@ -4396,7 +4469,7 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
             const topicLookup = yield* resolveProjectTopic(channel);
             const parentUnavailable = topicLookup.kind === "parent-unavailable";
             const topic = topicLookup.kind === "resolved" ? topicLookup.topic : null;
-            const shortName = parseTopicShortName(topic);
+            const shortName = topicBindingLabel(topic);
             if (parentUnavailable || shortName === null) {
               return slashReply(missingProjectBindingMessage({ inThread, parentUnavailable }), {
                 ephemeral: true,
@@ -4523,6 +4596,9 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
                 `Alias \`${binding.shortName}\` → \`${binding.workspaceRoot}\`, but no T3 project is registered at that path.`,
                 { ephemeral: true },
               );
+            }
+            if (binding.kind === "github-unresolved") {
+              return slashReply(binding.message, { ephemeral: true });
             }
             return slashReply(
               `Project \`${binding.shortName}\` is linked, but the channel-info pin could not be refreshed (often: pin content exceeded Discord’s 2000-character limit). Check bot logs for details.`,

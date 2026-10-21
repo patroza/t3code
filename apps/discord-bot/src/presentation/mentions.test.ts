@@ -49,6 +49,10 @@ describe("parseTopicShortName", () => {
     expect(parseTopicShortName("notes omegent-ips t3-example")).toBe("example");
     expect(parseTopicShortName("omegent-ips omegent-link-example")).toBe("example");
     expect(parseTopicShortName("omegent-ipsum")).toBeNull();
+    expect(parseTopicShortName("omegent-link-github:acme/example-project")).toBeNull();
+    expect(parseTopicShortName("omegent-link-github:acme/app omegent-link-scanner")).toBe(
+      "scanner",
+    );
   });
 });
 
@@ -107,10 +111,13 @@ describe("project topic lookup", () => {
       "Discord API may be degraded",
     );
     expect(missingProjectBindingMessage({ inThread: true, parentUnavailable: false })).toContain(
-      "omegent-link-<shortName>",
+      "omegent-link-github:<org>/<repo>",
     );
     expect(missingProjectBindingMessage({ inThread: false, parentUnavailable: false })).toContain(
-      "omegent-link-example-project",
+      "omegent-link-github:acme/example-project",
+    );
+    expect(missingProjectBindingMessage({ inThread: false, parentUnavailable: false })).toContain(
+      "omegent-link-<shortName>",
     );
     expect(
       bridgedTurnTopicResolutionError({

@@ -231,6 +231,11 @@ export interface T3SessionService {
   readonly findProjectByWorkspaceRoot: (
     workspaceRoot: string,
   ) => Effect.Effect<OrchestrationProjectShell | null>;
+  /**
+   * Projects from the shell snapshot. Null when the shell has not arrived.
+   * Waits briefly for the snapshot the same way {@link findProjectByWorkspaceRoot} does.
+   */
+  readonly listProjects: () => Effect.Effect<ReadonlyArray<OrchestrationProjectShell> | null>;
   readonly getProjectShell: (
     projectId: ProjectId,
   ) => Effect.Effect<OrchestrationProjectShell | null>;
@@ -951,6 +956,16 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
         ),
       );
 
+    const listProjects = Effect.fn("T3Session.listProjects")(function* () {
+      // Mentions can land while shell is still filling after reconnect.
+      for (let attempt = 0; attempt < PROJECT_LOOKUP_SHELL_WAIT_ATTEMPTS; attempt += 1) {
+        // shell/session are mutated by connect/teardown/shellFiber, not this loop body.
+        if (shell !== null || session === null) break;
+        yield* Effect.sleep(Duration.millis(SHELL_SNAPSHOT_POLL_MS));
+      }
+      return shell?.projects ?? null;
+    });
+
     return T3Session.of({
       connect,
       connectUntilReady,
@@ -967,20 +982,15 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
             : { ...shell, threads: shell.threads.map(integrationThreadShellView) },
         ),
       serverConfig: () => Effect.succeed(serverConfig),
+      listProjects,
       findProjectByWorkspaceRoot: Effect.fn("T3Session.findProjectByWorkspaceRoot")(
         function* (workspaceRoot) {
-          // Mentions can land while shell is still filling after reconnect.
-          for (let attempt = 0; attempt < PROJECT_LOOKUP_SHELL_WAIT_ATTEMPTS; attempt += 1) {
-            // shell/session are mutated by connect/teardown/shellFiber, not this loop body.
-            if (shell !== null || session === null) break;
-            yield* Effect.sleep(Duration.millis(SHELL_SNAPSHOT_POLL_MS));
-          }
-          if (shell === null) return null;
+          const projects = yield* listProjects();
+          if (projects === null) return null;
           const target = normalizeWorkspacePath(workspaceRoot);
           return (
-            shell.projects.find(
-              (project) => normalizeWorkspacePath(project.workspaceRoot) === target,
-            ) ?? null
+            projects.find((project) => normalizeWorkspacePath(project.workspaceRoot) === target) ??
+            null
           );
         },
       ),

@@ -1,4 +1,4 @@
-/** Channel topic `omegent-link-<shortName>` (legacy `t3-<shortName>`) picks the repo. No schedule. */
+/** Channel topic `omegent-link-github:<org>/<repo>` picks the repo. Legacy `omegent-link-<shortName>` and `t3-<shortName>` still do. No schedule. */
 
 export const TODAY_RECAP_SUBCOMMAND = "today-recap" as const;
 

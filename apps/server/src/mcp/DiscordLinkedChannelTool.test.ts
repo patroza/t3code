@@ -22,8 +22,11 @@ describe("parseTopicShortName", () => {
     expect(__testing.parseTopicShortName("omegent-ips")).toBeNull();
     expect(__testing.parseTopicShortName("notes omegent-ips t3-example")).toBe("example");
     expect(__testing.parseTopicShortName("no tag")).toBeNull();
+    expect(__testing.parseTopicShortName("omegent-link-github:acme/app")).toBeNull();
   });
 });
+
+const scannerRepo = { owner: "macs-holding", repo: "scanner" };
 
 describe("pickLinkedDiscordChannel", () => {
   it("returns a unique linked channel match", () => {
@@ -38,7 +41,7 @@ describe("pickLinkedDiscordChannel", () => {
           ],
         ],
       ]),
-      shortName: "example-project",
+      target: { shortName: "example-project", repositories: [] },
     });
     expect(result.match).toEqual({
       guildId: "guild-1",
@@ -49,6 +52,93 @@ describe("pickLinkedDiscordChannel", () => {
       topic: "team t3-example-project",
     });
     expect(result.conflicts).toEqual([]);
+  });
+
+  it("prefers the GitHub tag over a different short-name channel", () => {
+    const result = __testing.pickLinkedDiscordChannel({
+      guilds: [{ id: "guild-1", name: "Main" }],
+      channelsByGuildId: new Map([
+        [
+          "guild-1",
+          [
+            { id: "chan-short", name: "legacy", type: 0, topic: "omegent-link-scanner" },
+            {
+              id: "chan-github",
+              name: "scanner",
+              type: 0,
+              topic: "omegent-link-github:Macs-Holding/Scanner omegent-link-other",
+            },
+          ],
+        ],
+      ]),
+      target: { shortName: "scanner", repositories: [scannerRepo] },
+    });
+    expect(result.match?.channelId).toBe("chan-github");
+    expect(result.match?.shortName).toBe("macs-holding/scanner");
+    expect(result.conflicts).toEqual([]);
+  });
+
+  it("matches a GitHub tag when there is no alias short name", () => {
+    const result = __testing.pickLinkedDiscordChannel({
+      guilds: [{ id: "guild-1", name: "Main" }],
+      channelsByGuildId: new Map([
+        [
+          "guild-1",
+          [
+            {
+              id: "chan-github",
+              name: "scanner",
+              type: 0,
+              topic: "omegent-link-github:macs-holding/scanner",
+            },
+          ],
+        ],
+      ]),
+      target: { shortName: null, repositories: [scannerRepo] },
+    });
+    expect(result.match?.channelId).toBe("chan-github");
+    expect(result.conflicts).toEqual([]);
+  });
+
+  it("reports two GitHub channels for the same repository", () => {
+    const result = __testing.pickLinkedDiscordChannel({
+      guilds: [{ id: "guild-1", name: "Main" }],
+      channelsByGuildId: new Map([
+        [
+          "guild-1",
+          [
+            { id: "chan-a", name: "a", type: 0, topic: "omegent-link-github:macs-holding/scanner" },
+            { id: "chan-b", name: "b", type: 0, topic: "omegent-link-github:macs-holding/scanner" },
+            { id: "chan-short", name: "legacy", type: 0, topic: "omegent-link-scanner" },
+          ],
+        ],
+      ]),
+      target: { shortName: "scanner", repositories: [scannerRepo] },
+    });
+    expect(result.match).toBeNull();
+    expect(result.conflicts.map((entry) => entry.channelId)).toEqual(["chan-a", "chan-b"]);
+  });
+
+  it("does not use a sibling short name when the GitHub tag is a different repository", () => {
+    const result = __testing.pickLinkedDiscordChannel({
+      guilds: [{ id: "guild-1", name: "Main" }],
+      channelsByGuildId: new Map([
+        [
+          "guild-1",
+          [
+            {
+              id: "chan-both",
+              name: "both",
+              type: 0,
+              topic: "omegent-link-github:acme/other omegent-link-scanner",
+            },
+            { id: "chan-short", name: "legacy", type: 0, topic: "omegent-link-scanner" },
+          ],
+        ],
+      ]),
+      target: { shortName: "scanner", repositories: [scannerRepo] },
+    });
+    expect(result.match?.channelId).toBe("chan-short");
   });
 });
 

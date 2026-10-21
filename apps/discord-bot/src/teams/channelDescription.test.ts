@@ -36,6 +36,12 @@ describe("Teams description tags", () => {
       "not approved",
     );
     expect(() => teamsDescriptionProject("omegent-link-", policy)).toThrow("invalid");
+    expect(() => teamsDescriptionProject("omegent-link-github:acme/app", policy)).toThrow(
+      "approved omegent-link-<shortName>",
+    );
+    expect(
+      teamsDescriptionProject("omegent-link-github:acme/app omegent-link-macs-scanner", policy),
+    ).toBe("macs-scanner");
     expect(teamsDescriptionProject("t3-macs-scanner t3-ips", policy)).toBe("macs-scanner");
     expect(
       teamsDescriptionProject("omegent-link-macs-scanner", { projectShortName: "t3code" }),
