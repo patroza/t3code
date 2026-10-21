@@ -72,9 +72,8 @@ it.live.each(["links", "warm-cache"] as const)(
         const interrupted = yield* Deferred.make<void>();
         yield* Fiber.interrupt(writer).pipe(
           Effect.andThen(Deferred.succeed(interrupted, undefined)),
-          Effect.forkChild,
+          Effect.forkChild({ startImmediately: true }),
         );
-        yield* Effect.sleep("10 millis");
         expect(yield* Deferred.isDone(interrupted)).toBe(false);
         release.resolve();
         yield* Deferred.await(interrupted);

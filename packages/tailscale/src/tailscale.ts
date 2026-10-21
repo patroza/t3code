@@ -14,7 +14,7 @@ export const DEFAULT_TAILSCALE_SERVE_PORT = 443;
  * A CLI that never answers takes longer than this to fail, because the kill
  * that follows the timeout also takes time (`taskkill` on Windows).
  */
-export const TAILSCALE_STATUS_TIMEOUT = Duration.millis(3_500);
+const TAILSCALE_STATUS_TIMEOUT = Duration.millis(3_500);
 const TAILSCALE_SERVE_TIMEOUT = Duration.seconds(10);
 const TAILSCALE_PROBE_TIMEOUT = Duration.millis(2_500);
 
@@ -176,14 +176,6 @@ function normalizeMagicDnsName(status: TailscaleStatusJson): string | null {
   const normalized = dnsName.trim().replace(/\.$/u, "");
   return normalized.length > 0 ? normalized : null;
 }
-
-export const parseTailscaleMagicDnsName = (
-  rawStatusJson: string,
-): Effect.Effect<string | null, TailscaleStatusParseError> =>
-  decodeTailscaleStatusJson(rawStatusJson).pipe(
-    Effect.mapError((cause) => new TailscaleStatusParseError({ cause })),
-    Effect.map(normalizeMagicDnsName),
-  );
 
 export function isTailscaleIpv4Address(address: string): boolean {
   const parts = address.split(".");

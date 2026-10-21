@@ -1,3 +1,4 @@
+import { ThreadUndoNotice } from "./ThreadUndoNotice";
 import { Toolbar } from "../../components/ui/Toolbar";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import {
@@ -385,6 +386,7 @@ export function HomeRouteScreen() {
           onOwnershipRelationChange={setOwnershipRelation}
           threads={ownershipFilteredThreads}
         />
+        <ThreadUndoNotice visible={visible} />
       </>
     </AndroidHomeFabLayout>
   );

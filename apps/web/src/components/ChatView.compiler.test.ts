@@ -18,4 +18,4 @@ it("memoizes the ChatView component body", async () => {
   // Compiled helpers alone do not protect ChatView's render-state hooks from
   // freshly allocated inputs when the component itself silently bails out.
   expect(result.code).toMatch(/export default function ChatView\(props\) \{\s*const \$ = _c\(/);
-}, 30_000);
+});

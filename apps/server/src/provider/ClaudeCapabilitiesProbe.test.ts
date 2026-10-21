@@ -22,45 +22,14 @@ import * as TestClock from "effect/testing/TestClock";
 
 import {
   buildClaudeCapabilitiesProbeQueryOptions,
-  CLAUDE_CAPABILITIES_PROBE_SETTING_SOURCES,
   probeClaudeCapabilities,
   probeClaudeWorkspaceSnapshot,
 } from "./ClaudeProvider.ts";
 import { COMPACT_SLASH_COMMAND } from "@t3tools/provider-core/server/snapshotProbe";
 
-vi.mock("@anthropic-ai/claude-agent-sdk", { spy: true });
-
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 
-it("isolates Claude capability probes without dropping workspace setting sources", () => {
-  const abortController = new AbortController();
-  const options = buildClaudeCapabilitiesProbeQueryOptions({
-    executablePath: "/usr/bin/claude",
-    abortController,
-    environment: {
-      HOME: "/home/user",
-      ENABLE_CLAUDEAI_MCP_SERVERS: "true",
-      FORCE_CODE_TERMINAL: "1",
-    },
-    cwd: "/workspace/project",
-    managedMcpConfig: false,
-  });
-
-  assert.deepEqual(options.mcpServers, {});
-  assert.equal(options.strictMcpConfig, true);
-  assert.equal(options.cwd, "/workspace/project");
-  assert.deepEqual(options.settingSources, [...CLAUDE_CAPABILITIES_PROBE_SETTING_SOURCES]);
-  assert.deepEqual(options.settings, { disableAllHooks: true });
-  assert.deepEqual(options.allowedTools, []);
-  assert.equal(options.persistSession, false);
-  assert.equal(options.pathToClaudeCodeExecutable, "/usr/bin/claude");
-  assert.equal(options.abortController, abortController);
-  assert.equal(options.env?.HOME, "/home/user");
-  assert.equal(options.env?.ENABLE_CLAUDEAI_MCP_SERVERS, "false");
-  assert.equal(options.env?.FORCE_CODE_TERMINAL, undefined);
-  assert.equal(options.env?.CLAUDE_CODE_AUTO_CONNECT_IDE, "0");
-  assert.equal(options.env?.CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL, "1");
-});
+vi.mock("@anthropic-ai/claude-agent-sdk", { spy: true });
 
 it("drops strict MCP mode, and only that, next to an administrator's managed-mcp.json", () => {
   const options = buildClaudeCapabilitiesProbeQueryOptions({

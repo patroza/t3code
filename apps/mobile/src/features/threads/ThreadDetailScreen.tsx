@@ -1,4 +1,8 @@
-import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import {
+  isAtomCommandInterrupted,
+  settlePromise,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
 import { AsyncResult } from "effect/reactivity";
 import * as Dialog from "../../components/ui/Dialog";
 import { useAtomValue } from "@effect/atom-react";
@@ -8,7 +12,13 @@ import {
   useThreadShell,
 } from "../../state/entities";
 import { UsageLimitRecoveryCard } from "./UsageLimitRecoveryCard";
-import { StackActions, useNavigation } from "@react-navigation/native";
+import { StackActions, useFocusEffect, useNavigation } from "@react-navigation/native";
+import {
+  effectiveSnoozed,
+  threadWokeAt,
+  isThreadWokeUnseen,
+  snoozeWakeLabel,
+} from "@t3tools/client-runtime/state/thread-settled";
 import type { WorktreeSetupCardProps } from "./worktree-setup-card";
 import type { ComposerTextPaste } from "../../native/T3ComposerEditor.types";
 import { type EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
@@ -33,7 +43,6 @@ import type {
   EnvironmentId,
   MessageId,
   ModelSelection,
-  ProviderApprovalDecision,
   ProviderInteractionMode,
   RuntimeMode,
   RuntimeRequestId,
@@ -46,7 +55,11 @@ import {
   appendCodexArtifactTemplateUsePrompt,
   type CodexArtifactTemplate,
 } from "@t3tools/shared/codexArtifactTemplates";
-import type { ThreadUserInputQuestion } from "@t3tools/client-runtime/state/thread-requests";
+import {
+  declinePendingApprovals,
+  type ApprovalResponder,
+  type ThreadUserInputQuestion,
+} from "@t3tools/client-runtime/state/thread-requests";
 import {
   presentPendingBackgroundWork,
   presentProviderGoal,
@@ -203,6 +216,7 @@ export interface ThreadDetailScreenProps {
     | { readonly kind: "failed"; readonly reason: string; readonly onEditTask: () => void }
     | null;
   readonly activePendingApproval: PendingApproval | null;
+  readonly activePendingApprovals: ReadonlyArray<PendingApproval>;
   readonly respondingApprovalId: RuntimeRequestId | null;
   readonly activePendingUserInput: PendingUserInput | null;
   readonly activePendingUserInputDrafts: Record<string, PendingUserInputDraftAnswer>;
@@ -240,16 +254,16 @@ export interface ThreadDetailScreenProps {
   readonly onStopThread: () => void;
   /** Present while the thread's queue is held. */
   readonly onResumeQueue: (() => Promise<void>) | null;
-  readonly onSendMessage: (followUp?: ActiveTurnComposerAction) => Promise<MessageId | null>;
+  readonly onSendMessage: (
+    followUp?: ActiveTurnComposerAction,
+    beforeDispatch?: () => Promise<boolean>,
+  ) => Promise<MessageId | null>;
   readonly onReconnectEnvironment: () => void;
   readonly canSwitchThreadProvider: boolean;
   readonly onUpdateThreadModelSelection: (modelSelection: ModelSelection) => void;
   readonly onUpdateThreadRuntimeMode: (runtimeMode: RuntimeMode) => void;
   readonly onUpdateThreadInteractionMode: (interactionMode: ProviderInteractionMode) => void;
-  readonly onRespondToApproval: (
-    requestId: RuntimeRequestId,
-    decision: ProviderApprovalDecision,
-  ) => Promise<unknown>;
+  readonly onRespondToApproval: ApprovalResponder;
   readonly onSelectUserInputOption: (
     requestId: RuntimeRequestId,
     question: ThreadUserInputQuestion,
@@ -363,7 +377,25 @@ function ThreadVisitWatermark(props: {
   const lastDispatchedVisitRef = useRef<string | null>(null);
   const lastVisitDispatchRef = useRef({ threadKey: selectedThreadKey, at: 0 });
   const selectedThreadId = thread.id;
-  const selectedThreadUpdatedAt = thread.updatedAt;
+  const snoozedUntil = thread.snoozedUntil;
+  // Keep the clock in state so React Compiler invalidates the wake calculation.
+  const [wakeNow, setWakeNow] = useState(() => new Date().toISOString());
+  useEffect(() => {
+    if (!showContent || snoozedUntil == null) return;
+    const delay = Date.parse(snoozedUntil) - Date.now();
+    if (!Number.isFinite(delay)) return;
+    const timer = setTimeout(() => setWakeNow(new Date().toISOString()), Math.max(0, delay) + 50);
+    return () => clearTimeout(timer);
+  }, [showContent, snoozedUntil]);
+  const selectedThreadWokeAt = threadWokeAt(thread, {
+    now: wakeNow,
+  });
+  // A scheduled wake can happen without a newer server update.
+  const selectedThreadUpdatedAt =
+    selectedThreadWokeAt !== null && Date.parse(selectedThreadWokeAt) > Date.parse(thread.updatedAt)
+      ? selectedThreadWokeAt
+      : thread.updatedAt;
+  const wakeIsLatestUpdate = selectedThreadUpdatedAt === selectedThreadWokeAt;
   const selectedThreadLastVisitedAt = thread.lastVisitedAt;
   const selectedThreadCompletedAt = thread.latestRun?.completedAt;
   useEffect(() => {
@@ -390,7 +422,14 @@ function ThreadVisitWatermark(props: {
       (Number.isNaN(lastVisitedAtMs) || completedAtMs > lastVisitedAtMs);
     const previous = lastVisitDispatchRef.current;
     const elapsed = Date.now() - previous.at;
-    if (previous.threadKey !== selectedThreadKey || hasUnseenCompletion || elapsed >= 10_000) {
+    // Like a completion, a wake the user is looking at must not wait out the throttle:
+    // leaving within it would cancel the dispatch and keep Woke in the list.
+    if (
+      previous.threadKey !== selectedThreadKey ||
+      hasUnseenCompletion ||
+      wakeIsLatestUpdate ||
+      elapsed >= 10_000
+    ) {
       dispatch();
       return;
     }
@@ -405,6 +444,7 @@ function ThreadVisitWatermark(props: {
     selectedThreadUpdatedAt,
     showContent,
     visitThread,
+    wakeIsLatestUpdate,
   ]);
   return null;
 }
@@ -548,6 +588,96 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
     }
   })();
   const threadSyncLabel = useDelayedStatus(selectedThreadKey, realThreadSyncLabel);
+  const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, {
+    reportFailure: false,
+  });
+  const unsnoozeThread = useAtomCommand(threadEnvironment.unsnooze, { reportFailure: false });
+  const unsettleThread = useAtomCommand(threadEnvironment.unsettle, { reportFailure: false });
+  const updateMetadata = useAtomCommand(threadEnvironment.updateMetadata, { reportFailure: false });
+  const visitThread = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
+  const [statusRequest, setStatusRequest] = useState<{ threadKey: string } | null>(null);
+  const statusPending = statusRequest?.threadKey === selectedThreadKey;
+  const [lifecycleNow, setLifecycleNow] = useState(() => new Date().toISOString());
+  useFocusEffect(
+    useCallback(() => {
+      setLifecycleNow(new Date().toISOString());
+      const timer = setInterval(() => setLifecycleNow(new Date().toISOString()), 60_000);
+      return () => clearInterval(timer);
+    }, []),
+  );
+  const snoozed =
+    props.serverConfig?.environment.capabilities.threadSnooze === true &&
+    effectiveSnoozed(props.selectedThread, { now: lifecycleNow });
+  const snoozedUntil = props.selectedThread.snoozedUntil;
+  useEffect(() => {
+    if (!snoozed || snoozedUntil === null) return;
+    const timer = setTimeout(
+      () => setLifecycleNow(new Date().toISOString()),
+      Math.min(Math.max(0, Date.parse(snoozedUntil) - Date.now()) + 50, 2_147_483_647),
+    );
+    return () => clearTimeout(timer);
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Re-arm if timer clamping fires before the wake time.
+  }, [snoozed, snoozedUntil, lifecycleNow]);
+  const settled =
+    props.serverConfig?.environment.capabilities.threadSettlement === true &&
+    props.selectedThread.settledOverride === "settled";
+  const wokeAt =
+    props.serverConfig?.environment.capabilities.threadSnooze === true
+      ? threadWokeAt(props.selectedThread, { now: lifecycleNow })
+      : null;
+  const woke = isThreadWokeUnseen({
+    wokeAt,
+    settled,
+    lastVisitedAt: props.selectedThread.lastVisitedAt,
+    latestRunCompletedAt: props.selectedThread.latestRun?.completedAt ?? null,
+  });
+  const runStatusAction = async (action: "stop" | "wake" | "unsettle" | "dismiss") => {
+    if (statusPending || !props.canOperateThread) return;
+    const request = { threadKey: selectedThreadKey };
+    setStatusRequest(request);
+    const target = {
+      environmentId: props.environmentId,
+      input: { threadId: props.selectedThread.id },
+    };
+    const recovery = props.selectedThread.limitRecovery;
+    const recoveryOwnsSnooze =
+      recovery?.snooze === true &&
+      recovery.runId === props.selectedThread.latestRun?.runId &&
+      snoozedUntil !== null &&
+      Date.parse(snoozedUntil) === Date.parse(recovery.resetAt);
+    const result =
+      action === "stop"
+        ? await interruptThreadTurn(target)
+        : action === "wake"
+          ? recoveryOwnsSnooze
+            ? await updateMetadata({
+                ...target,
+                input: {
+                  ...target.input,
+                  limitRecovery: {
+                    runId: recovery.runId,
+                    resetAt: recovery.resetAt,
+                    snooze: false,
+                  },
+                },
+              })
+            : await unsnoozeThread({ ...target, input: { ...target.input, reason: "user" } })
+          : action === "unsettle"
+            ? await unsettleThread({ ...target, input: { ...target.input, reason: "user" } })
+            : await visitThread({
+                ...target,
+                input: { ...target.input, visitedAt: wokeAt ?? lifecycleNow },
+              });
+    // An accepted interrupt can leave tasks running. Release the action for retry.
+    setStatusRequest((current) => (current === request ? null : current));
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      Dialog.alert(
+        "Could not update thread",
+        error instanceof Error ? error.message : "Try again.",
+      );
+    }
+  };
   const pendingBackgroundWork = presentPendingBackgroundWork(
     props.selectedThread.pendingBackgroundTasks,
   );
@@ -608,6 +738,46 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
           .map((item) => item.label)
           .join(", ")}`,
         waiting: pendingBackgroundWork.waiting,
+        onPress: () => {
+          Keyboard.dismiss();
+          navigation.navigate("ThreadBackgroundWork", {
+            environmentId: props.environmentId,
+            threadId: props.selectedThread.id,
+          });
+        },
+        action: {
+          label: statusPending ? "Stopping..." : "Stop",
+          accessibilityLabel: "Stop background work",
+          disabled: !props.canOperateThread || statusPending,
+          onPress: () => void runStatusAction("stop"),
+        },
+      };
+    }
+    if (contentPresentationKind === "ready" && (snoozed || settled || woke)) {
+      const state = snoozed ? "snoozed" : settled ? "settled" : "woke";
+      const label =
+        snoozed && snoozedUntil !== null
+          ? `Snoozed, wakes in ${snoozeWakeLabel(snoozedUntil, { now: lifecycleNow })}`
+          : settled
+            ? "Settled"
+            : "Woke from snooze";
+      const actionLabel = snoozed ? "Wake now" : settled ? "Un-settle" : "Dismiss";
+      return {
+        kind: "lifecycle",
+        state,
+        label,
+        action: {
+          label: statusPending
+            ? snoozed
+              ? "Waking..."
+              : settled
+                ? "Un-settling..."
+                : "Dismissing..."
+            : actionLabel,
+          accessibilityLabel: actionLabel,
+          disabled: !props.canOperateThread || statusPending,
+          onPress: () => void runStatusAction(snoozed ? "wake" : settled ? "unsettle" : "dismiss"),
+        },
       };
     }
     if (props.selectedThread.goal !== null && contentPresentationKind === "ready") {
@@ -1018,12 +1188,37 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
     selectedThreadKey,
   ]);
 
-  const handleSendMessage = async (followUp?: ActiveTurnComposerAction) => {
+  const activePendingApprovalsRef = useRef(props.activePendingApprovals);
+  useLayoutEffect(() => {
+    activePendingApprovalsRef.current = props.activePendingApprovals;
+  }, [props.activePendingApprovals]);
+  const handleSendMessage = async (
+    followUp?: ActiveTurnComposerAction,
+    stillSendable?: () => boolean,
+  ) => {
     const targetThreadKey = selectedThreadKey;
     const hasUserMessage = selectedThreadFeed.some(
       (entry) => entry.type === "message" && entry.message.role === "user",
     );
-    const messageId = await props.onSendMessage(followUp);
+    // Runs only once the send path has validated the draft and is about to deliver it, so an
+    // empty submit, a queued-message edit, or `/feedback` leaves approvals alone.
+    const approvalsToDecline = props.activePendingApprovals;
+    const declineBeforeDispatch =
+      approvalsToDecline.length > 0 && props.activePendingUserInput === null
+        ? async () =>
+            props.respondingApprovalId === null &&
+            (await declinePendingApprovals(approvalsToDecline, props.onRespondToApproval)) &&
+            selectedThreadKeyRef.current === targetThreadKey &&
+            // A draft edited or pasted into during the decline isn't what the user sent.
+            stillSendable?.() !== false &&
+            // An approval that arrived during the decline would block the redirect; the draft
+            // stays so the next send declines it too.
+            !activePendingApprovalsRef.current.some(
+              (approval) =>
+                !approvalsToDecline.some((declined) => declined.requestId === approval.requestId),
+            )
+        : undefined;
+    const messageId = await props.onSendMessage(followUp, declineBeforeDispatch);
     if (messageId === null || selectedThreadKeyRef.current !== targetThreadKey) {
       return messageId;
     }
@@ -1437,7 +1632,11 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
                         canOperateThread={props.canOperateThread}
                         reportedModelSelection={reportedModelSelection}
                         editorRef={composerEditorRef}
-                        placeholder="Ask the repo agent, or run a command…"
+                        placeholder={
+                          props.activePendingApproval
+                            ? "Send a message to decline and redirect the agent"
+                            : "Ask the repo agent, or run a command…"
+                        }
                         contentMaxWidth={contentMaxWidth}
                         connectionState={props.connectionStateLabel}
                         environmentLabel={props.environmentLabel}
@@ -1461,7 +1660,12 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
                             : null
                         }
                         draftKey={props.composerDraftKey ?? undefined}
-                        followUpBehavior={props.followUpBehavior}
+                        followUpBehavior={
+                          props.activePendingApprovals.length > 0 &&
+                          props.activePendingUserInput === null
+                            ? "steer"
+                            : props.followUpBehavior
+                        }
                         canSteerActiveTurn={props.canSteerActiveTurn}
                         hidden={composerSlotHidden}
                         queuedEdit={

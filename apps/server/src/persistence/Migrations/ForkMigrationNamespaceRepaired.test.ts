@@ -38,7 +38,7 @@ layer("fork migration namespace for a repaired database", (it) => {
       const backup = yield* sql<LedgerRow>`
         SELECT migration_id, name FROM ${sql(legacyMigrationBackupTable)} ORDER BY migration_id
       `;
-      assert.deepStrictEqual(upstream.slice(-15), [
+      assert.deepStrictEqual(upstream.slice(-16), [
         { migration_id: 52, name: "ProjectionThreadTitleState" },
         { migration_id: 53, name: "PullRequestFilesViewed" },
         { migration_id: 54, name: "ProjectionThreadsAutoSettleDisabledAt" },
@@ -54,6 +54,7 @@ layer("fork migration namespace for a repaired database", (it) => {
         { migration_id: 64, name: "CanonicalizeThreadPullRequestLinks" },
         { migration_id: 65, name: "CodexUsageNativeTurnIndex" },
         { migration_id: 66, name: "RepairClientSettlementTimestamps" },
+        { migration_id: 67, name: "WebhookDedupe" },
       ]);
       assert.deepStrictEqual(fork, [
         { migration_id: 1, name: "ProjectionQueuedMessages" },

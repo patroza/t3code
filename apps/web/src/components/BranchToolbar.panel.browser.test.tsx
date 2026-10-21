@@ -1,7 +1,7 @@
+import { act, render as renderScreen } from "../../test/render";
 import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
-import { act, type ComponentProps } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import { type ComponentProps } from "react";
+import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
 import "~/index.css";
@@ -32,49 +32,48 @@ vi.mock(import("../state/entities"), async (original) => ({
 
 import { BranchToolbar } from "./BranchToolbar";
 
-let root: Root;
-let container: HTMLDivElement;
-
-beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+async function setup() {
+  await using resources = new AsyncDisposableStack();
+  resources.defer(async () => {
+    vi.unstubAllGlobals();
+  });
+  const container = document.createElement("div");
   state.worktreePath = "/tmp/worktree";
   state.showContextMenu.mockReset().mockResolvedValue("copy-path");
   state.writeTextToClipboard.mockReset().mockResolvedValue(true);
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-});
 
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-  vi.unstubAllGlobals();
-});
+  const screen = resources.use(await renderScreen(<></>, { container }));
 
-function render(props: Partial<ComponentProps<typeof BranchToolbar>>) {
-  return act(async () =>
-    root.render(
-      <BranchToolbar
-        layout="panel"
-        panelSection="workspace"
-        environmentId={EnvironmentId.make("local")}
-        threadId={ThreadId.make("thread")}
-        projectId={ProjectId.make("project")}
-        worktreePath={state.worktreePath}
-        isServerThread
-        showGitControls
-        envMode="local"
-        envLocked={false}
-        startFromOrigin={false}
-        onStartFromOriginChange={vi.fn()}
-        onEnvModeChange={vi.fn()}
-        {...props}
-      />,
-    ),
-  );
+  function render(props: Partial<ComponentProps<typeof BranchToolbar>>) {
+    return act(async () =>
+      screen.rerender(
+        <BranchToolbar
+          layout="panel"
+          panelSection="workspace"
+          environmentId={EnvironmentId.make("local")}
+          threadId={ThreadId.make("thread")}
+          projectId={ProjectId.make("project")}
+          worktreePath={state.worktreePath}
+          isServerThread
+          showGitControls
+          envMode="local"
+          envLocked={false}
+          startFromOrigin={false}
+          onStartFromOriginChange={vi.fn()}
+          onEnvModeChange={vi.fn()}
+          {...props}
+        />,
+      ),
+    );
+  }
+  const lifetime = resources.move();
+  return { screen, container, render, [Symbol.asyncDispose]: () => lifetime.disposeAsync() };
 }
 
 it("keeps machine choices usable when the combined row's workspace is locked", async () => {
+  await using harness = await setup();
+  const { container, render } = harness;
+
   const onEnvironmentChange = vi.fn();
   await render({
     onEnvironmentChange,
@@ -105,6 +104,9 @@ it("keeps machine choices usable when the combined row's workspace is locked", a
 });
 
 it("shows a started thread's primary machine as a static label in the composer", async () => {
+  await using harness = await setup();
+  const { container, render } = harness;
+
   await render({
     layout: "composer",
     showGitControls: false,
@@ -128,6 +130,9 @@ it.each([
 ] as const)(
   "copies only an existing workspace path with mode %s and worktree %s",
   async (envMode, worktreePath, copiedPath) => {
+    await using harness = await setup();
+    const { container, render } = harness;
+
     state.worktreePath = worktreePath;
     await render({ effectiveEnvModeOverride: envMode });
     const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });

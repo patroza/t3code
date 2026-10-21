@@ -1,8 +1,8 @@
 import { RegistryContext } from "@effect/atom-react";
 import { Atom, AtomRegistry } from "effect/reactivity";
-import { act, StrictMode } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { StrictMode } from "react";
+import { act, render } from "../../test/render";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 vi.mock(import("../state/server"), async (original) => {
   const { Atom } = await import("effect/reactivity");
@@ -16,44 +16,35 @@ import { primaryServerWebVersionAtom } from "../state/server";
 import { WebUpdateBanner } from "./WebUpdateBanner";
 
 const versionAtom = primaryServerWebVersionAtom as Atom.Writable<string | null>;
-let registry: AtomRegistry.AtomRegistry;
-let root: Root;
-let container: HTMLDivElement;
-
-beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  registry = AtomRegistry.make();
-  container = document.body.appendChild(document.createElement("div"));
-  root = createRoot(container);
-});
-
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-  registry.dispose();
-  vi.unstubAllGlobals();
-});
-
-async function mount(version: string | null) {
+function setup(version: string | null) {
+  const registry = AtomRegistry.make();
   registry.set(versionAtom, version);
-  await act(async () =>
-    root.render(
-      <RegistryContext.Provider value={registry}>
-        <StrictMode>
-          <WebUpdateBanner />
-        </StrictMode>
-      </RegistryContext.Provider>,
-    ),
+  return {
+    registry,
+    reportVersion: (next: string | null) => act(() => registry.set(versionAtom, next)),
+    [Symbol.dispose]() {
+      registry.dispose();
+    },
+  };
+}
+
+function renderBanner(registry: AtomRegistry.AtomRegistry) {
+  return render(
+    <RegistryContext.Provider value={registry}>
+      <StrictMode>
+        <WebUpdateBanner />
+      </StrictMode>
+    </RegistryContext.Provider>,
   );
 }
 
-const reportVersion = (version: string | null) =>
-  act(async () => registry.set(versionAtom, version));
-const banner = () => container.querySelector('[role="status"]');
-
 describe("WebUpdateBanner version changes", () => {
   it("remembers the first server version and offers reload only after it changes", async () => {
-    await mount("v1");
+    using fixture = setup("v1");
+    const { reportVersion } = fixture;
+    await using screen = await renderBanner(fixture.registry);
+    const { container } = screen;
+    const banner = () => container.querySelector('[role="status"]');
     expect(banner()).toBeNull();
 
     await reportVersion("v2");
@@ -70,7 +61,11 @@ describe("WebUpdateBanner version changes", () => {
   });
 
   it("waits for the first known version when the tab starts without one", async () => {
-    await mount(null);
+    using fixture = setup(null);
+    const { reportVersion } = fixture;
+    await using screen = await renderBanner(fixture.registry);
+    const { container } = screen;
+    const banner = () => container.querySelector('[role="status"]');
     expect(banner()).toBeNull();
 
     await reportVersion("v1");

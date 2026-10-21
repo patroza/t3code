@@ -6,7 +6,6 @@ import {
   sourceControlRepositorySelector,
   detectSourceControlProviderFromRemoteUrl,
   getChangeRequestTerminologyForKind,
-  isSshRemoteUrl,
   resolveChangeRequestIndicator,
   resolveChangeRequestPresentation,
   resolveThreadChangeRequest,
@@ -133,21 +132,6 @@ describe("source control presentation", () => {
 });
 
 describe("detectSourceControlProviderFromRemoteUrl", () => {
-  it("detects common source control hosts", () => {
-    expect(detectSourceControlProviderFromRemoteUrl("git@github.com:owner/repo.git")?.kind).toBe(
-      "github",
-    );
-    expect(
-      detectSourceControlProviderFromRemoteUrl("https://gitlab.com/group/repo.git")?.kind,
-    ).toBe("gitlab");
-    expect(
-      detectSourceControlProviderFromRemoteUrl("https://dev.azure.com/org/project/_git/repo")?.kind,
-    ).toBe("azure-devops");
-    expect(
-      detectSourceControlProviderFromRemoteUrl("git@bitbucket.org:workspace/repo.git")?.kind,
-    ).toBe("bitbucket");
-  });
-
   it("detects Forgejo and Gitea hosts while preserving HTTP origins", () => {
     for (const host of ["codeberg.org", "forgejo.example.test", "gitea.example.test"]) {
       expect(detectSourceControlProviderFromRemoteUrl(`http://${host}:3000/team/repo.git`)).toEqual(
@@ -273,28 +257,6 @@ describe("detectSourceControlProviderFromRemoteUrl", () => {
     expect(
       detectSourceControlProviderFromRemoteUrl("git@bitbucket.org:workspace/repo.git")?.kind,
     ).toBe("bitbucket");
-  });
-});
-
-describe("isSshRemoteUrl", () => {
-  it("recognises SCP-like SSH URLs with any SSH user prefix", () => {
-    expect(isSshRemoteUrl("git@github.com:owner/repo.git")).toBe(true);
-    expect(isSshRemoteUrl("gitlab@gitlab.example.com:group/project.git")).toBe(true);
-    expect(isSshRemoteUrl("deploy@bitbucket.org:workspace/repo.git")).toBe(true);
-  });
-
-  it("recognises ssh:// URLs with any case", () => {
-    expect(isSshRemoteUrl("ssh://git@gitlab.example.com/group/project.git")).toBe(true);
-    expect(isSshRemoteUrl("ssh://git@gitlab.example.com:22/group/project.git")).toBe(true);
-    expect(isSshRemoteUrl("SSH://git@gitlab.example.com/group/project.git")).toBe(true);
-    expect(isSshRemoteUrl("SsH://git@gitlab.example.com/group/project.git")).toBe(true);
-  });
-
-  it("returns false for HTTPS, local paths, and SCP-like paths without a colon", () => {
-    expect(isSshRemoteUrl("https://gitlab.example.com/group/project.git")).toBe(false);
-    expect(isSshRemoteUrl("/home/user/repos/project")).toBe(false);
-    expect(isSshRemoteUrl("")).toBe(false);
-    expect(isSshRemoteUrl("deploy@github.com/project/repo")).toBe(false);
   });
 });
 

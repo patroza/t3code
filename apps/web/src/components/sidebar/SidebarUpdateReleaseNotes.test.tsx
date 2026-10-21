@@ -1,6 +1,6 @@
 import type { DesktopUpdateState } from "@t3tools/contracts";
 import { isValidElement, type MouseEvent, type ReactElement, type ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 const testState = vi.hoisted(() => ({
   addToast: vi.fn(),
@@ -70,16 +70,20 @@ function renderNotes(state: DesktopUpdateState, openExternal = vi.fn().mockResol
 }
 
 describe("SidebarUpdateReleaseNotes", () => {
-  beforeEach(() => {
+  function setup() {
     testState.addToast.mockReset();
     vi.stubEnv("T3CODE_DESKTOP_UPDATE_REPOSITORY", "pingdotgg/t3code");
-  });
 
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
+    return {
+      [Symbol.dispose]() {
+        vi.unstubAllEnvs();
+      },
+    };
+  }
 
   it("uses the configured repository for release links", () => {
+    using _environment = setup();
+
     vi.stubEnv("T3CODE_DESKTOP_UPDATE_REPOSITORY", "JustYannicc/t3code");
     const anchors = collectAnchors(
       renderNotes({
@@ -96,6 +100,8 @@ describe("SidebarUpdateReleaseNotes", () => {
   });
 
   it("links each preview to its exact release and labels hidden changes", () => {
+    using _environment = setup();
+
     const anchors = collectAnchors(
       renderNotes({
         ...baseState,
@@ -120,6 +126,8 @@ describe("SidebarUpdateReleaseNotes", () => {
   });
 
   it("links omitted releases to release history", () => {
+    using _environment = setup();
+
     const anchors = collectAnchors(
       renderNotes({
         ...baseState,
@@ -133,6 +141,8 @@ describe("SidebarUpdateReleaseNotes", () => {
   });
 
   it("shows plural history text for multiple omitted releases", () => {
+    using _environment = setup();
+
     const anchors = collectAnchors(
       renderNotes({
         ...baseState,
@@ -145,6 +155,8 @@ describe("SidebarUpdateReleaseNotes", () => {
   });
 
   it("reports a release link that fails to open", async () => {
+    using _environment = setup();
+
     const openExternal = vi.fn().mockResolvedValue(false);
     const [anchor] = collectAnchors(
       renderNotes(

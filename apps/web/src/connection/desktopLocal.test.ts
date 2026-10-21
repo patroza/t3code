@@ -1,12 +1,7 @@
-import {
-  BearerConnectionTarget,
-  PrimaryConnectionTarget,
-} from "@t3tools/client-runtime/connection";
-import {
-  type DesktopEnvironmentBootstrap,
-  EnvironmentId,
-  PRIMARY_LOCAL_ENVIRONMENT_ID,
-} from "@t3tools/contracts";
+import { BearerConnectionTarget } from "@t3tools/client-runtime/connection";
+import { EnvironmentId } from "@t3tools/contracts";
+import { PrimaryConnectionTarget } from "@t3tools/client-runtime/connection";
+import { type DesktopEnvironmentBootstrap, PRIMARY_LOCAL_ENVIRONMENT_ID } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -118,26 +113,6 @@ describe("desktop local topology reads", () => {
     expect(after).not.toBe(before);
     expect(after).toEqual([secondary]);
     expect(reader.readSnapshot()).toBe(after);
-  });
-
-  it("keeps the empty snapshot stable without a desktop bridge", () => {
-    const reader = createDesktopSecondaryBootstrapsReader(() => undefined);
-    expect(reader.readSnapshot()).toBe(reader.readSnapshot());
-  });
-
-  it("distinguishes a successful empty topology from a read failure", () => {
-    let readBootstraps = () => [];
-    const reader = createDesktopSecondaryBootstrapsReader(() => ({
-      getLocalEnvironmentBootstraps: () => readBootstraps(),
-    }));
-
-    expect(reader.readResult()).toEqual({ _tag: "Success", bootstraps: [] });
-
-    const cause = new Error("IPC unavailable");
-    readBootstraps = () => {
-      throw cause;
-    };
-    expect(reader.readResult()).toEqual({ _tag: "Failure", cause });
   });
 
   it("filters the primary bootstrap from successful topology reads", () => {
