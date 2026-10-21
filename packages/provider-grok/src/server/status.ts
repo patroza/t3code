@@ -41,7 +41,6 @@ import {
   type ProviderMaintenanceCapabilities,
 } from "@t3tools/provider-core/server/maintenanceResolver";
 import {
-  GROK_DEFAULT_MODEL_SLUG,
   GROK_SUPPORTED_RUNTIME_MODES,
   isValidGrokReasoningEffortToken,
   makeGrokAcpRuntime,

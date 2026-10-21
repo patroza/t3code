@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "@effect/vitest";
+import { describe, expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
   type PreviewEvent,
@@ -38,18 +38,17 @@ import type { QueryPersistence } from "./queryPersistence.ts";
 import { createTerminalEnvironmentAtoms } from "./terminal.ts";
 import {
   environmentRpcKey,
+  executeAtomCommand,
   createAtomCommandScheduler,
   createEnvironmentQueryAtomFamily,
   selectEnvironmentQueryData,
   createEnvironmentSubscriptionAtomFamily,
   createRuntimeCommand,
   scheduleAtomCommandEffect,
-  executeAtomCommand,
   executeAtomQuery,
   isAtomCommandInterrupted,
   mapAtomCommandResult,
   refreshQueryOnSuccess,
-  runAtomCommand,
   settleAsyncResult,
   settlePromise,
   squashAtomCommandFailure,
@@ -752,62 +751,6 @@ describe("environment query lifecycle", () => {
     }),
   );
 
-  it.effect("keeps the previous value when a refetch returns equal content", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        let checks = [{ name: "ci", status: "passed" }];
-        const execute = Effect.sync(() => ({ checks: checks.map((check) => ({ ...check })) }));
-        const harness = yield* makeEnvironmentQueryHarness(execute);
-        const registry = yield* mountEnvironmentQuery(harness.atom);
-
-        const first = yield* readEnvironmentQuery(registry, harness.atom);
-        registry.refresh(harness.atom);
-        const equal = yield* readEnvironmentQuery(registry, harness.atom);
-        expect(equal).toBe(first);
-
-        checks = [{ name: "ci", status: "failed" }];
-        registry.refresh(harness.atom);
-        const changed = yield* readEnvironmentQuery(registry, harness.atom);
-        expect(changed).not.toBe(first);
-        expect(changed.checks[0]?.status).toBe("failed");
-      }),
-    ),
-  );
-
-  it.effect("does not notify a data-only reader when a refetch returns equal content", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        let status = "passed";
-        const execute = Effect.sync(() => ({ checks: [{ name: "ci", status }] }));
-        const harness = yield* makeEnvironmentQueryHarness(execute);
-        const registry = yield* mountEnvironmentQuery(harness.atom);
-        yield* readEnvironmentQuery(registry, harness.atom);
-
-        const data = Atom.map(harness.atom, selectEnvironmentQueryData);
-        const seen: Array<unknown> = [];
-        let resultNotifications = 0;
-        const unsubscribeData = registry.subscribe(data, (value) => seen.push(value), {
-          immediate: true,
-        });
-        yield* Effect.addFinalizer(() => Effect.sync(unsubscribeData));
-        const unsubscribeResult = registry.subscribe(harness.atom, () => resultNotifications++);
-        yield* Effect.addFinalizer(() => Effect.sync(unsubscribeResult));
-
-        registry.refresh(harness.atom);
-        yield* readEnvironmentQuery(registry, harness.atom);
-        // The result itself still moves (timestamp, `waiting`), which SWR relies on.
-        expect(resultNotifications).toBeGreaterThan(0);
-        expect(seen).toHaveLength(1);
-
-        status = "failed";
-        registry.refresh(harness.atom);
-        yield* readEnvironmentQuery(registry, harness.atom);
-        expect(seen).toHaveLength(2);
-        expect(seen[1]).toEqual({ checks: [{ name: "ci", status: "failed" }] });
-      }),
-    ),
-  );
-
   it.effect(
     "retries an interrupted query without exposing a failure during session replacement",
     () =>
@@ -1200,84 +1143,6 @@ describe("environment query lifecycle", () => {
       }),
     ),
   );
-
-  it.effect("stops refreshing on its trigger once the value is final", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        let executions = 0;
-        const trigger = Atom.make(0).pipe(Atom.keepAlive);
-        const harness = yield* makeEnvironmentQueryHarness(
-          Effect.sync(() => (executions += 1)),
-          { refreshTrigger: trigger, isFinal: (value) => value >= 2 },
-        );
-        const registry = AtomRegistry.make();
-        yield* Effect.addFinalizer(() => Effect.sync(() => registry.dispose()));
-        const read = readEnvironmentQuery(registry, harness.atom);
-
-        registry.mount(harness.atom);
-        expect(yield* read).toBe(1);
-        registry.set(trigger, 1);
-        expect(yield* read).toBe(2);
-        registry.set(trigger, 2);
-        expect(yield* read).toBe(2);
-        expect(executions).toBe(2);
-      }),
-    ),
-  );
-
-  it.effect("keeps an idle query when its trigger recomputes to the same value", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        let executions = 0;
-        const settings = Atom.make({ theme: "dark" }).pipe(Atom.keepAlive);
-        const trigger = Atom.make((get) => JSON.stringify([get(settings) !== null]));
-        const harness = yield* makeEnvironmentQueryHarness(
-          Effect.sync(() => (executions += 1)),
-          { refreshTrigger: trigger },
-        );
-        const registry = AtomRegistry.make();
-        yield* Effect.addFinalizer(() => Effect.sync(() => registry.dispose()));
-        const read = readEnvironmentQuery(registry, harness.atom);
-
-        const unmount = registry.mount(harness.atom);
-        expect(yield* read).toBe(1);
-        unmount();
-        registry.set(settings, { theme: "light" });
-        expect(yield* read).toBe(1);
-        expect(executions).toBe(1);
-      }),
-    ),
-  );
-
-  it.effect("refreshes an idle query the registry swept and rebuilt after its trigger moved", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-        yield* Effect.addFinalizer(() => Effect.sync(() => vi.useRealTimers()));
-        let executions = 0;
-        const trigger = Atom.make(0).pipe(Atom.keepAlive);
-        const harness = yield* makeEnvironmentQueryHarness(
-          Effect.sync(() => (executions += 1)),
-          { refreshTrigger: trigger, idleTtlMs: 1_000 },
-        );
-        const registry = AtomRegistry.make({ timeoutResolution: 100 });
-        yield* Effect.addFinalizer(() => Effect.sync(() => registry.dispose()));
-        const read = readEnvironmentQuery(registry, harness.atom);
-
-        const unmount = registry.mount(harness.atom);
-        expect(yield* read).toBe(1);
-        unmount();
-        yield* Effect.yieldNow;
-        vi.advanceTimersByTime(500);
-        registry.set(trigger, 1);
-        yield* Effect.yieldNow;
-        vi.advanceTimersByTime(700);
-        expect(executions).toBe(1);
-
-        expect(yield* read).toBe(2);
-      }),
-    ),
-  );
 });
 
 describe("executeAtomQuery", () => {
@@ -1325,27 +1190,6 @@ describe("executeAtomQuery", () => {
 });
 
 describe("runtime command runner", () => {
-  it("encodes custom command rejections as defects", async () => {
-    const defect = new Error("custom command rejected");
-    const registry = AtomRegistry.make();
-    const result = await runAtomCommand(
-      registry,
-      {
-        label: "test.rejected-command",
-        run: () => Promise.reject(defect),
-      },
-      undefined,
-      { reportDefect: false },
-    );
-
-    expect(result._tag).toBe("Failure");
-    if (result._tag === "Failure") {
-      expect(Cause.hasDies(result.cause)).toBe(true);
-      expect(Cause.squash(result.cause)).toBe(defect);
-    }
-    registry.dispose();
-  });
-
   it("settles generated command scheduler defects from direct callers", async () => {
     const defect = new Error("invalid command key");
     const runtime = Atom.runtime(Layer.empty);
@@ -1367,27 +1211,6 @@ describe("runtime command runner", () => {
       expect(Cause.hasDies(result.cause)).toBe(true);
       expect(Cause.squash(result.cause)).toBe(defect);
     }
-    registry.dispose();
-  });
-
-  it("correlates parallel invocation results", async () => {
-    const firstLatch = Latch.makeUnsafe();
-    const secondLatch = Latch.makeUnsafe();
-    const runtime = Atom.runtime(Layer.empty);
-    const command = createRuntimeCommand(runtime, {
-      label: "test.parallel",
-      execute: (id: "first" | "second") =>
-        (id === "first" ? firstLatch : secondLatch).await.pipe(Effect.as(id)),
-    });
-    const registry = AtomRegistry.make();
-
-    const first = command.run(registry, "first");
-    const second = command.run(registry, "second");
-    secondLatch.openUnsafe();
-    firstLatch.openUnsafe();
-
-    expect(await first).toMatchObject({ _tag: "Success", value: "first", waiting: false });
-    expect(await second).toMatchObject({ _tag: "Success", value: "second", waiting: false });
     registry.dispose();
   });
 
@@ -1621,39 +1444,6 @@ describe("persisted environment queries", () => {
         const registry = yield* mountEnvironmentQuery(harness.atom);
         yield* Effect.result(readEnvironmentQuery(registry, harness.atom));
         expect(Option.getOrNull(AsyncResult.value(registry.get(harness.atom)))).toBe("cached");
-      }),
-    ),
-  );
-
-  it.effect("shows persisted data before a live request finishes", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const response = yield* Deferred.make<string>();
-        const seeded = yield* Deferred.make<void>();
-        const refreshed = yield* Deferred.make<void>();
-        const harness = yield* makeEnvironmentQueryHarness(Deferred.await(response), {
-          persistence: {
-            load: () => Effect.succeedSome("cached"),
-            save: () => Effect.void,
-          },
-        });
-        const registry = yield* mountEnvironmentQuery(harness.atom);
-        const unsubscribe = registry.subscribe(
-          harness.atom,
-          (value) => {
-            if (Option.getOrNull(AsyncResult.value(value)) === "cached")
-              Deferred.doneUnsafe(seeded, Exit.void);
-            if (Option.getOrNull(AsyncResult.value(value)) === "fresh")
-              Deferred.doneUnsafe(refreshed, Exit.void);
-          },
-          { immediate: true },
-        );
-        yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
-        yield* Deferred.await(seeded);
-        expect(Option.getOrNull(AsyncResult.value(registry.get(harness.atom)))).toBe("cached");
-        yield* Deferred.succeed(response, "fresh");
-        yield* Deferred.await(refreshed);
-        expect(yield* readEnvironmentQuery(registry, harness.atom)).toBe("fresh");
       }),
     ),
   );

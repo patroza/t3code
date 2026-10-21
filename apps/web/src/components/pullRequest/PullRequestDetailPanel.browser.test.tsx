@@ -1,3 +1,4 @@
+import { act, render as renderScreen } from "../../../test/render";
 import {
   EnvironmentId,
   GitCommandError,
@@ -10,9 +11,8 @@ import {
   type ThreadPullRequestLink,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
-import { act, type ComponentProps } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { type ComponentProps } from "react";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 import { DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { selectActiveRightPanelSurface, useRightPanelStore } from "~/rightPanelStore";
@@ -94,9 +94,9 @@ vi.mock(import("~/state/query"), async (original) => ({
   useEnvironmentQuery: ((query: unknown) => ({
     data:
       query === "detail"
-        ? (activityDetail ?? currentDetail)
+        ? (detailState.activity ?? detailState.current)
         : query === "activity"
-          ? activityDetail
+          ? detailState.activity
           : query === queries.diff
             ? diff
             : null,
@@ -124,7 +124,7 @@ vi.mock(import("./PullRequestSummaryTab"), async (original) => {
   return {
     ...actual,
     PullRequestSummaryTab: ((props: ComponentProps<typeof actual.PullRequestSummaryTab>) => {
-      if (activityDetail !== null) return <actual.PullRequestSummaryTab {...props} />;
+      if (detailState.activity !== null) return <actual.PullRequestSummaryTab {...props} />;
       const { onFixFinding, scrollerRef } = props;
       return (
         <div ref={scrollerRef} data-testid="summary-scroller" className="h-full overflow-y-auto">
@@ -217,8 +217,10 @@ const detail: PullRequestDetailView = {
   },
 };
 
-let currentDetail = detail;
-let activityDetail: PullRequestDetailView | null = null;
+const detailState = vi.hoisted(() => ({
+  current: null as unknown as PullRequestDetailView,
+  activity: null as PullRequestDetailView | null,
+}));
 
 // Enough lines to exercise the panel's title folding with the real virtualized Code tab.
 const diff = {
@@ -251,32 +253,13 @@ const shortcutContext = () => ({
   isDesktop: false,
 });
 
-const roots: Root[] = [];
+async function setup() {
+  await using resources = new AsyncDisposableStack();
+  resources.defer(() => vi.unstubAllGlobals());
 
-function render(props: Partial<ComponentProps<typeof PullRequestDetailPanel>> = {}) {
-  const container = document.createElement("div");
-  container.className = "flex h-[700px] w-[900px]";
-  document.body.append(container);
-  const root = createRoot(container);
-  roots.push(root);
-  return act(async () =>
-    root.render(
-      <PullRequestDetailPanel
-        environmentId={threadRef.environmentId}
-        reference={detail}
-        context="page"
-        shortcutsEnabled={false}
-        getShortcutContext={shortcutContext}
-        {...props}
-      />,
-    ),
-  );
-}
+  detailState.activity = null;
 
-beforeEach(() => {
-  activityDetail = null;
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  currentDetail = detail;
+  detailState.current = detail;
   useComposerDraftStore.setState({ draftsByThreadKey: {} });
   useRightPanelStore.setState({ byThreadKey: {} });
   usePullRequestReviewStore.setState({ drafts: {}, summaries: {} });
@@ -292,12 +275,27 @@ beforeEach(() => {
     value: { branch: "feature", worktreePath: "/workspace/pr" },
   });
   update.mockReset().mockResolvedValue({ _tag: "Success", value: undefined });
-});
-afterEach(async () => {
-  for (const root of roots.splice(0)) await act(async () => root.unmount());
-  document.body.replaceChildren();
-  vi.unstubAllGlobals();
-});
+
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px]";
+  const screen = resources.use(await renderScreen(<></>, { container }));
+  function render(props: Partial<ComponentProps<typeof PullRequestDetailPanel>> = {}) {
+    return act(async () =>
+      screen.rerender(
+        <PullRequestDetailPanel
+          environmentId={threadRef.environmentId}
+          reference={detail}
+          context="page"
+          shortcutsEnabled={false}
+          getShortcutContext={shortcutContext}
+          {...props}
+        />,
+      ),
+    );
+  }
+  const lifetime = resources.move();
+  return { screen, render, [Symbol.asyncDispose]: () => lifetime.disposeAsync() };
+}
 
 const surface = { projectId: detail.projectId, repository: detail.repository, number: 1 };
 const link = (number: number, source: ThreadPullRequestLink["source"]): ThreadPullRequestLink => ({
@@ -337,6 +335,9 @@ it.each([
   { isComposing: true, keyCode: 13 },
   { isComposing: false, keyCode: 229 },
 ])("does not save the PR title during IME composition (%j)", async ({ isComposing, keyCode }) => {
+  await using harness = await setup();
+  const { render } = harness;
+
   await render();
   await page.getByRole("button", { name: "Edit title" }).click();
   const titleInput = page.getByRole("textbox", { name: "Pull request title" });
@@ -391,10 +392,12 @@ describe.each([
   ["standalone PR page", null, undefined],
 ] as const)("%s", (_name, thread, target) => {
   const context = thread ? pullRequestPanelContext(thread, surface) : "page";
-  const renderPanel = () =>
-    render({ context, ...(target ? { composerDraftTarget: target, threadRef } : {}) });
 
   it(`${thread === stackThread ? "hides" : "offers"} the checkout`, async () => {
+    await using harness = await setup();
+    const { render } = harness;
+    const renderPanel = () =>
+      render({ context, ...(target ? { composerDraftTarget: target, threadRef } : {}) });
     await renderPanel();
     await expect.element(page.getByText("Test pull request").first()).toBeVisible();
     expect(page.getByRole("button", { name: "Check out" }).elements()).toHaveLength(
@@ -410,8 +413,12 @@ describe.each([
     "Fix check",
     "Add to agent",
   ])("%s writes to the correct composer", async (action) => {
+    await using harness = await setup();
+    const { render } = harness;
+    const renderPanel = () =>
+      render({ context, ...(target ? { composerDraftTarget: target, threadRef } : {}) });
     // Cover both a host without inline comments and an account that cannot write them.
-    currentDetail =
+    detailState.current =
       thread === stackThread
         ? {
             ...detail,
@@ -462,7 +469,10 @@ describe.each([
 });
 
 it("offers both selection actions and queues a permitted host review locally", async () => {
-  currentDetail = {
+  await using harness = await setup();
+  const { render } = harness;
+
+  detailState.current = {
     ...detail,
     capabilities: {
       ...detail.capabilities,
@@ -492,6 +502,9 @@ it("offers both selection actions and queues a permitted host review locally", a
 });
 
 it("cancels an agent-only selection and submits a fresh one with the keyboard without a host review", async () => {
+  await using harness = await setup();
+  const { render } = harness;
+
   await render({ composerDraftTarget: draftId, threadRef });
   await tab("Code").click();
   await page.getByRole("button", { name: "Expand all files", exact: true }).click();
@@ -518,6 +531,9 @@ it("cancels an agent-only selection and submits a fresh one with the keyboard wi
 });
 
 it("folds the title only for the active tab's own scroller", async () => {
+  await using harness = await setup();
+  const { render } = harness;
+
   await render();
   const title = page.getByRole("heading", { level: 1, name: "Test pull request" });
   await expect.element(title).toBeVisible();
@@ -563,19 +579,19 @@ it("folds the title only for the active tab's own scroller", async () => {
 });
 
 it("restores the selected PR tab when switching threads and remounting the right panel", async () => {
+  await using _harness = await setup();
+
   const otherThread = { ...threadRef, threadId: ThreadId.make("thread-2") };
   useRightPanelStore.getState().openPullRequest(threadRef, surface);
   useRightPanelStore.getState().openPullRequest(otherThread, surface);
   const codeTab = () => page.getByRole("button", { name: "Expand all files", exact: true });
   const container = document.createElement("div");
   container.className = "flex h-[700px] w-[900px]";
-  document.body.append(container);
-  const root = createRoot(container);
-  roots.push(root);
+  await using screen = await renderScreen(<></>, { container });
   const show = (ref: ScopedThreadRef) => {
     const selected = selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, ref);
     return act(async () => {
-      root.render(
+      screen.rerender(
         <RightPanelSurfaceContent
           surface={selected}
           activeSurfaceId={selected?.id ?? null}
@@ -640,7 +656,7 @@ it("restores the selected PR tab when switching threads and remounting the right
   await show(threadRef);
   await expect.element(codeTab()).toBeVisible();
 
-  await act(async () => root.render(null));
+  await act(async () => screen.rerender(null));
   useRightPanelStore.getState().openPullRequest(threadRef, { ...surface, url: detail.url });
   await show(threadRef);
   await expect.element(codeTab()).toBeVisible();
@@ -651,6 +667,9 @@ it("restores the selected PR tab when switching threads and remounting the right
 });
 
 it("stays collapsed at the bottom after native scroll clamping and reopens at the top", async () => {
+  await using harness = await setup();
+  const { render } = harness;
+
   await render();
   const title = page.getByRole("heading", { level: 1, name: "Test pull request" });
   await expect.element(title).toBeVisible();
@@ -688,6 +707,9 @@ it("stays collapsed at the bottom after native scroll clamping and reopens at th
 });
 
 it("shows the current checkout recovery detail on the first failure and on retry", async () => {
+  await using harness = await setup();
+  const { render } = harness;
+
   const first = new GitManagerError({
     cwd: "/workspace",
     operation: "preparePullRequestThread",
@@ -718,7 +740,10 @@ it("shows the current checkout recovery detail on the first failure and on retry
 });
 
 it("keeps discussion counts and Timeline expansion in sync with activity refreshes", async () => {
-  activityDetail = {
+  await using harness = await setup();
+  const { render } = harness;
+
+  detailState.activity = {
     ...detail,
     provider: SourceControlProviderKind.make("gitlab"),
     url: "https://gitlab.com/owner/repo/-/merge_requests/1",
@@ -752,7 +777,7 @@ it("keeps discussion counts and Timeline expansion in sync with activity refresh
       },
     ],
   };
-  await render({ reference: activityDetail });
+  await render({ reference: detailState.activity });
   await expect.element(page.getByText("Discussion finding", { exact: true })).toBeVisible();
   await expect.element(page.getByText("Discussion reply", { exact: true })).toBeVisible();
   expect
@@ -788,8 +813,8 @@ it("keeps discussion counts and Timeline expansion in sync with activity refresh
     await expect
       .element(page.getByRole("button", { name: "Expand all files", exact: true }))
       .toBeVisible();
-    const current = activityDetail!;
-    activityDetail = {
+    const current = detailState.activity!;
+    detailState.activity = {
       ...current,
       comments: current.reviewThreads.flatMap((thread) =>
         thread.comments.map((comment) => ({

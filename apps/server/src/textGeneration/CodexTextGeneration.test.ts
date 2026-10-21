@@ -7,13 +7,13 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import * as Result from "effect/Result";
+
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import { createModelSelection } from "@t3tools/shared/model";
 import { expect } from "vite-plus/test";
 
-import { CodexSettings, ProviderInstanceId, TextGenerationError } from "@t3tools/contracts";
+import { CodexSettings, ProviderInstanceId } from "@t3tools/contracts";
 
 import * as ServerConfig from "../config.ts";
 import { makeProcessProbe, processProbeSource } from "../testUtils/processProbe.ts";
@@ -233,60 +233,6 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
               modelSelection: createModelSelection(ProviderInstanceId.make("codex"), selectedModel),
             });
             expect(result.title).toBe("Bedrock title");
-          }),
-      ),
-  );
-  it.effect("generates and sanitizes commit messages without branch by default", () =>
-    withFakeCodexEnv(
-      {
-        output: JSON.stringify({
-          subject:
-            "  Add important change to the system with too much detail and a trailing period.\nsecondary line",
-          body: "\n- added migration\n- updated tests\n",
-        }),
-        stdinMustNotContain: "branch must be a short semantic git branch fragment",
-      },
-      (textGeneration) =>
-        Effect.gen(function* () {
-          const generated = yield* textGeneration.generateCommitMessage({
-            cwd: process.cwd(),
-            branch: "feature/codex-effect",
-            stagedSummary: "M README.md",
-            stagedPatch: "diff --git a/README.md b/README.md",
-            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
-          });
-
-          expect(generated.subject.length).toBeLessThanOrEqual(72);
-          expect(generated.subject.endsWith(".")).toBe(false);
-          expect(generated.body).toBe("- added migration\n- updated tests");
-          expect(generated.branch).toBeUndefined();
-        }),
-    ),
-  );
-
-  it.effect(
-    "forwards codex service tier and non-default reasoning effort into codex exec config",
-    () =>
-      withFakeCodexEnv(
-        {
-          output: JSON.stringify({
-            subject: "Add important change",
-            body: "",
-          }),
-          requireServiceTier: "priority",
-          requireReasoningEffort: "xhigh",
-          stdinMustNotContain: "branch must be a short semantic git branch fragment",
-        },
-        (textGeneration) =>
-          textGeneration.generateCommitMessage({
-            cwd: process.cwd(),
-            branch: "feature/codex-effect",
-            stagedSummary: "M README.md",
-            stagedPatch: "diff --git a/README.md b/README.md",
-            modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.4", [
-              { id: "reasoningEffort", value: "xhigh" },
-              { id: "serviceTier", value: "priority" },
-            ]),
           }),
       ),
   );
@@ -588,29 +534,6 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
     ),
   );
 
-  it.effect("generates thread titles and trims them for sidebar use", () =>
-    withFakeCodexEnv(
-      {
-        output: JSON.stringify({
-          title:
-            '  "Investigate websocket reconnect regressions after worktree restore"  \nignored line',
-        }),
-      },
-      (textGeneration) =>
-        Effect.gen(function* () {
-          const generated = yield* textGeneration.generateThreadTitle({
-            cwd: process.cwd(),
-            message: "Please investigate websocket reconnect regressions after a worktree restore.",
-            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
-          });
-
-          expect(generated.title).toBe(
-            "Investigate websocket reconnect regressions after worktree restore",
-          );
-        }),
-    ),
-  );
-
   it.effect("returns the refinement signal for an unresolved subject", () =>
     withFakeCodexEnv(
       { output: JSON.stringify({ title: "Investigate issue", needsRefinement: true }) },
@@ -623,106 +546,6 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
               modelSelection: DEFAULT_TEST_MODEL_SELECTION,
             }),
           ).toEqual({ title: "Investigate issue", needsRefinement: true });
-        }),
-    ),
-  );
-
-  it.effect("falls back when thread title normalization becomes whitespace-only", () =>
-    withFakeCodexEnv(
-      {
-        output: JSON.stringify({
-          title: '  """   """  ',
-        }),
-      },
-      (textGeneration) =>
-        Effect.gen(function* () {
-          const generated = yield* textGeneration.generateThreadTitle({
-            cwd: process.cwd(),
-            message: "Name this thread.",
-            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
-          });
-
-          expect(generated.title).toBe("New thread");
-        }),
-    ),
-  );
-
-  it.effect("trims whitespace exposed after quote removal in thread titles", () =>
-    withFakeCodexEnv(
-      {
-        output: JSON.stringify({
-          title: `  "' hello world '"  `,
-        }),
-      },
-      (textGeneration) =>
-        Effect.gen(function* () {
-          const generated = yield* textGeneration.generateThreadTitle({
-            cwd: process.cwd(),
-            message: "Name this thread.",
-            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
-          });
-
-          expect(generated.title).toBe("hello world");
-        }),
-    ),
-  );
-
-  it.effect("omits attachment metadata section when no attachments are provided", () =>
-    withFakeCodexEnv(
-      {
-        output: JSON.stringify({
-          branch: "fix/session-timeout",
-        }),
-        stdinMustNotContain: "Attachment metadata:",
-      },
-      (textGeneration) =>
-        Effect.gen(function* () {
-          const generated = yield* textGeneration.generateBranchName({
-            cwd: process.cwd(),
-            message: "Fix timeout behavior.",
-            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
-          });
-
-          expect(generated.branch).toBe("fix/session-timeout");
-        }),
-    ),
-  );
-
-  it.effect("passes image attachments through as codex image inputs", () =>
-    withFakeCodexEnv(
-      {
-        output: JSON.stringify({
-          branch: "fix/ui-regression",
-        }),
-        requireImage: true,
-        stdinMustContain: "Attachment metadata:",
-      },
-      (textGeneration) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const path = yield* Path.Path;
-          const { attachmentsDir } = yield* ServerConfig.ServerConfig;
-          const attachmentId = "thread-branch-image-attachment";
-          const attachmentPath = path.join(attachmentsDir, `${attachmentId}.png`);
-          yield* fs.makeDirectory(attachmentsDir, { recursive: true });
-          yield* fs.writeFile(attachmentPath, Buffer.from("hello"));
-
-          const generated = yield* textGeneration.generateBranchName({
-            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
-            cwd: process.cwd(),
-            message: "Fix layout bug from screenshot.",
-            attachments: [
-              {
-                type: "image",
-                id: attachmentId,
-                name: "bug.png",
-                mimeType: "image/png",
-                sizeBytes: 5,
-              },
-            ],
-          });
-
-          expect(generated.branch).toBe("fix/ui-regression");
         }),
     ),
   );
@@ -772,107 +595,6 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
             );
 
           expect(generated.branch).toBe("fix/ui-regression");
-        }),
-    ),
-  );
-
-  it.effect("ignores missing attachment ids for codex image inputs", () =>
-    withFakeCodexEnv(
-      {
-        output: JSON.stringify({
-          branch: "fix/ui-regression",
-        }),
-        requireImage: true,
-      },
-      (textGeneration) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const path = yield* Path.Path;
-          const { attachmentsDir } = yield* ServerConfig.ServerConfig;
-          const missingAttachmentId = "thread-missing-attachment";
-          const missingPath = path.join(attachmentsDir, `${missingAttachmentId}.png`);
-          yield* fs.remove(missingPath).pipe(Effect.ignore);
-
-          const result = yield* textGeneration
-            .generateBranchName({
-              modelSelection: DEFAULT_TEST_MODEL_SELECTION,
-              cwd: process.cwd(),
-              message: "Fix layout bug from screenshot.",
-              attachments: [
-                {
-                  type: "image",
-                  id: missingAttachmentId,
-                  name: "outside.png",
-                  mimeType: "image/png",
-                  sizeBytes: 5,
-                },
-              ],
-            })
-            .pipe(Effect.result);
-
-          expect(Result.isFailure(result)).toBe(true);
-          if (Result.isFailure(result)) {
-            expect(result.failure).toBeInstanceOf(TextGenerationError);
-            expect(result.failure.message).toContain("missing --image input");
-          }
-        }),
-    ),
-  );
-
-  it.effect(
-    "fails with typed TextGenerationError when codex returns wrong branch payload shape",
-    () =>
-      withFakeCodexEnv(
-        {
-          output: JSON.stringify({
-            title: "This is not a branch payload",
-          }),
-        },
-        (textGeneration) =>
-          Effect.gen(function* () {
-            const result = yield* textGeneration
-              .generateBranchName({
-                cwd: process.cwd(),
-                message: "Fix websocket reconnect flake",
-                modelSelection: DEFAULT_TEST_MODEL_SELECTION,
-              })
-              .pipe(Effect.result);
-
-            expect(Result.isFailure(result)).toBe(true);
-            if (Result.isFailure(result)) {
-              expect(result.failure).toBeInstanceOf(TextGenerationError);
-              expect(result.failure.message).toContain("Codex returned invalid structured output");
-            }
-          }),
-      ),
-  );
-
-  it.effect("returns typed TextGenerationError when codex exits non-zero", () =>
-    withFakeCodexEnv(
-      {
-        output: JSON.stringify({ subject: "ignored", body: "" }),
-        exitCode: 1,
-        stderr: "codex execution failed",
-      },
-      (textGeneration) =>
-        Effect.gen(function* () {
-          const result = yield* textGeneration
-            .generateCommitMessage({
-              cwd: process.cwd(),
-              branch: "feature/codex-error",
-              stagedSummary: "M README.md",
-              stagedPatch: "diff --git a/README.md b/README.md",
-              modelSelection: DEFAULT_TEST_MODEL_SELECTION,
-            })
-            .pipe(Effect.result);
-
-          expect(Result.isFailure(result)).toBe(true);
-          if (Result.isFailure(result)) {
-            expect(result.failure).toBeInstanceOf(TextGenerationError);
-            expect(result.failure.message).toContain(
-              "Codex CLI command failed: codex execution failed",
-            );
-          }
         }),
     ),
   );

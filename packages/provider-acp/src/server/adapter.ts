@@ -375,7 +375,7 @@ export interface AcpAdapterV2Flavor {
   readonly supportsImagePrompts?: boolean;
 }
 
-export function acpSupportsImagePrompts(input: {
+function acpSupportsImagePrompts(input: {
   readonly flavorSupportsImagePrompts?: boolean | undefined;
   readonly negotiatedImage?: boolean | undefined;
 }): boolean {
@@ -386,7 +386,7 @@ export function acpScopedNativeId(instanceId: ProviderInstanceId, nativeId: stri
   return `provider-instance:${encodeURIComponent(instanceId)}:${nativeId}`;
 }
 
-export function acpProviderItemNativeId(input: {
+function acpProviderItemNativeId(input: {
   readonly instanceId: ProviderInstanceId;
   readonly itemIdentityVersion: 2 | undefined;
   readonly nativeId: string;
@@ -807,7 +807,7 @@ function commandExitCode(value: unknown): number | undefined {
  * Mid-stream Grok Bash re-reports carry exit_code 0 while still in progress;
  * interrupted tools must not retain that stale success code.
  */
-export function acpProjectedCommandExitCode(
+function acpProjectedCommandExitCode(
   status: "pending" | "running" | "waiting" | "completed" | "failed" | "interrupted",
   rawOutput: unknown,
 ): number | undefined {
@@ -1222,7 +1222,7 @@ export function acpPostSettleContinuationOfferEvidence(
   return false;
 }
 
-export function acpPostSettleWakeShouldBuffer(
+function acpPostSettleWakeShouldBuffer(
   notification: EffectAcpSchema.SessionNotification,
   backgroundWorkRunning: boolean,
 ): boolean {
@@ -1239,7 +1239,7 @@ export function acpPostSettleWakeShouldBuffer(
  * nothing about this session's own pending wake frames, so it must not discard
  * them the way a real user turn does.
  */
-export function acpIsAppOwnedWakeTurn(message: {
+function acpIsAppOwnedWakeTurn(message: {
   readonly createdBy: string;
   readonly creationSource: string;
 }): boolean {
@@ -1253,14 +1253,14 @@ function acpIsProviderContinuationMessage(message: {
   return message.createdBy === "agent" && message.creationSource === "provider";
 }
 
-export function acpCarryoverTerminalShouldClearContinuation(input: {
+function acpCarryoverTerminalShouldClearContinuation(input: {
   readonly continuationOffered: boolean;
   readonly wakeBufferLength: number;
 }): boolean {
   return !input.continuationOffered && input.wakeBufferLength === 0;
 }
 
-export function acpTurnStartShouldPreserveContinuation(input: {
+function acpTurnStartShouldPreserveContinuation(input: {
   readonly continuationRequested: boolean;
   readonly isContinuationTurn: boolean;
   readonly wakeBufferLength: number;
@@ -1268,7 +1268,7 @@ export function acpTurnStartShouldPreserveContinuation(input: {
   return !input.isContinuationTurn && input.continuationRequested && input.wakeBufferLength > 0;
 }
 
-export function acpPostSettleMonitorPromptShouldSuppress(
+function acpPostSettleMonitorPromptShouldSuppress(
   mutation:
     | {
         readonly taskId: string;
@@ -1328,9 +1328,7 @@ function acpSubagentStatusIsTerminal(status: OrchestrationV2Subagent["status"]):
   );
 }
 
-export function acpSubagentStatusBlocksTurnSettlement(
-  status: OrchestrationV2Subagent["status"],
-): boolean {
+function acpSubagentStatusBlocksTurnSettlement(status: OrchestrationV2Subagent["status"]): boolean {
   return status === "running" || status === "pending";
 }
 

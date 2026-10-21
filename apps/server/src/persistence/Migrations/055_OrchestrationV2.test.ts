@@ -40,6 +40,7 @@ layer("055_OrchestrationV2", (it) => {
         [64, "CanonicalizeThreadPullRequestLinks"],
         [65, "CodexUsageNativeTurnIndex"],
         [66, "RepairClientSettlementTimestamps"],
+        [67, "WebhookDedupe"],
         [1, "ProjectionQueuedMessages"],
         [2, "SessionIdentityClaims"],
         [3, "ProjectionThreadSourceAttribution"],

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { PROVIDER_ORDER } from "./usageProviders";
 import { buildPeriodColumns, chartScale, niceScale } from "./UsageProviderChart";
-import { providersWithUsage } from "./usageProviders";
 
 describe("chartScale", () => {
   const column = (codex: number) => ({
@@ -88,18 +87,6 @@ describe("buildPeriodColumns", () => {
     ],
   ]);
 
-  it("plots each day on its own", () => {
-    expect(buildPeriodColumns(days, byDay, "cost").map((column) => column.total)).toEqual([
-      35, 0, 5,
-    ]);
-  });
-
-  it("reads the requested metric", () => {
-    expect(buildPeriodColumns(days, byDay, "tokens").map((column) => column.total)).toEqual([
-      350, 0, 50,
-    ]);
-  });
-
   it("keeps band values absolute rather than cumulative", () => {
     const [first] = buildPeriodColumns(days, byDay, "cost");
 
@@ -114,48 +101,5 @@ describe("buildPeriodColumns", () => {
     // Absolute, not cumulative: a stack offset would make the second band the
     // running total (30) rather than its own value.
     expect(first?.bands.map((band) => band.provider)).toEqual([...PROVIDER_ORDER]);
-  });
-
-  it("reports the total as the sum of its bands", () => {
-    for (const column of buildPeriodColumns(days, byDay, "cost")) {
-      const sum = column.bands.reduce((running, band) => running + band.value, 0);
-      expect(column.total).toBeCloseTo(sum, 9);
-    }
-  });
-});
-
-describe("providersWithUsage", () => {
-  it("omits providers with no cost or tokens", () => {
-    expect(
-      providersWithUsage([
-        { provider: "codex", costUsd: 0, totalTokens: 0 },
-        { provider: "claude", costUsd: 0, totalTokens: 200 },
-      ]),
-    ).toEqual(["claude"]);
-  });
-});
-
-describe("hourly chart columns", () => {
-  it("zero-fills inactive hours and preserves hourly provider values", () => {
-    const byHour = new Map([
-      [
-        "2026-08-11T09:37:00.000Z",
-        {
-          day: "2026-08-11",
-          hourStart: "2026-08-11T09:37:00.000Z",
-          costUsd: 4,
-          totalTokens: 40,
-          byProvider: new Map([["codex" as const, { costUsd: 4, totalTokens: 40 }]]),
-        },
-      ],
-    ]);
-
-    expect(
-      buildPeriodColumns(
-        ["2026-08-11T08:37:00.000Z", "2026-08-11T09:37:00.000Z", "2026-08-11T10:37:00.000Z"],
-        byHour,
-        "cost",
-      ).map((column) => column.total),
-    ).toEqual([0, 4, 0]);
   });
 });

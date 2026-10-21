@@ -1,5 +1,5 @@
 import { isValidElement, type ReactElement, type ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import type { DesktopUpdateState } from "@t3tools/contracts";
 
 const testState = vi.hoisted(() => ({
@@ -60,16 +60,20 @@ function downloadedState(overrides: Partial<DesktopUpdateState> = {}): DesktopUp
 }
 
 describe("showDesktopUpdateDownloadedToast", () => {
-  beforeEach(() => {
+  function setup() {
     testState.addToast.mockReset();
     vi.stubEnv("T3CODE_DESKTOP_UPDATE_REPOSITORY", "pingdotgg/t3code");
-  });
 
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
+    return {
+      [Symbol.dispose]() {
+        vi.unstubAllEnvs();
+      },
+    };
+  }
 
   it("opens release notes from the configured repository", async () => {
+    using _environment = setup();
+
     vi.stubEnv("T3CODE_DESKTOP_UPDATE_REPOSITORY", "JustYannicc/t3code");
     const openExternal = vi.fn().mockResolvedValue(true);
 
@@ -84,6 +88,8 @@ describe("showDesktopUpdateDownloadedToast", () => {
   });
 
   it("opens the downloaded version's release notes", async () => {
+    using _environment = setup();
+
     const openExternal = vi.fn().mockResolvedValue(true);
 
     showDesktopUpdateDownloadedToast({ openExternal }, downloadedState());
@@ -98,6 +104,8 @@ describe("showDesktopUpdateDownloadedToast", () => {
   });
 
   it("falls back to the version the download was started for", async () => {
+    using _environment = setup();
+
     const openExternal = vi.fn().mockResolvedValue(true);
 
     // The `update-downloaded` event can land after the download RPC resolves.
@@ -115,6 +123,8 @@ describe("showDesktopUpdateDownloadedToast", () => {
   });
 
   it("omits the link when the updater reports no version at all", () => {
+    using _environment = setup();
+
     showDesktopUpdateDownloadedToast(
       { openExternal: vi.fn() },
       downloadedState({ availableVersion: null, downloadedVersion: null }),
@@ -127,6 +137,8 @@ describe("showDesktopUpdateDownloadedToast", () => {
     ["returns false", vi.fn().mockResolvedValue(false)],
     ["rejects", vi.fn().mockRejectedValue(new Error("open failed"))],
   ])("shows an error when opening release notes %s", async (_description, openExternal) => {
+    using _environment = setup();
+
     showDesktopUpdateDownloadedToast({ openExternal }, downloadedState());
     findReleaseNotesLink(getDescription())?.props.onClick?.();
 

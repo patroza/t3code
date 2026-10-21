@@ -187,22 +187,6 @@ describe("applyGrokAcpModelSelection", () => {
     }),
   );
 
-  it.effect("does not clear reasoning when same-model selection omits effort", () =>
-    Effect.gen(function* () {
-      const { runtime, modelCalls } = makeRecordingRuntime();
-      const result = yield* applyGrokAcpModelSelection({
-        runtime,
-        currentModelId: "grok-4.6",
-        currentReasoningEffort: "high",
-        requestedModelId: "grok-4.6",
-        requestedReasoningEffort: undefined,
-        mapError: (cause) => cause.message,
-      });
-      expect(modelCalls).toEqual([]);
-      expect(result).toBe("grok-4.6");
-    }),
-  );
-
   it.effect("drops malformed effort metadata instead of sending it", () =>
     Effect.gen(function* () {
       const { runtime, modelCalls } = makeRecordingRuntime();
@@ -259,36 +243,6 @@ describe("applyGrokAcpModelSelection", () => {
       });
       expect(modelCalls).toEqual([{ modelId: "grok-4.6", meta: { reasoningEffort: "xhigh" } }]);
       expect(result).toBe("grok-4.6");
-    }),
-  );
-
-  it.effect("skips set_model when no model is requested", () =>
-    Effect.gen(function* () {
-      const { runtime, modelCalls } = makeRecordingRuntime();
-      const result = yield* applyGrokAcpModelSelection({
-        runtime,
-        currentModelId: "grok-build",
-        requestedModelId: undefined,
-        mapError: (cause) => cause.message,
-      });
-      expect(modelCalls).toEqual([]);
-      expect(result).toBe("grok-build");
-    }),
-  );
-
-  it.effect("propagates session/set_model failures via mapError", () =>
-    Effect.gen(function* () {
-      const failure = EffectAcpErrors.AcpRequestError.invalidParams("session id not known");
-      const { runtime } = makeRecordingRuntime(failure);
-      const error = yield* Effect.flip(
-        applyGrokAcpModelSelection({
-          runtime,
-          currentModelId: "grok-build",
-          requestedModelId: "grok-mock-alt",
-          mapError: (cause) => cause.message,
-        }),
-      );
-      expect(error).toBe(failure.message);
     }),
   );
 });

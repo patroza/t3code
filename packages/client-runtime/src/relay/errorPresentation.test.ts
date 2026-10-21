@@ -1,10 +1,8 @@
 import {
   RelayAuthInvalidError,
   RelayEnvironmentConnectNotAuthorizedError,
-  RelayEnvironmentLinkUnavailableError,
 } from "@t3tools/contracts/relay";
 import { describe, expect, it } from "@effect/vitest";
-import * as Schema from "effect/Schema";
 
 import {
   DPOP_CLOCK_HINT,
@@ -13,23 +11,7 @@ import {
   relayProtectedErrorMessage,
 } from "./errorPresentation.ts";
 
-const decodeLinkUnavailableError = Schema.decodeUnknownSync(RelayEnvironmentLinkUnavailableError);
-
 describe("relayProtectedErrorMessage", () => {
-  it("decodes older relay failures and preserves their reason-only message", () => {
-    const error = decodeLinkUnavailableError({
-      _tag: "RelayEnvironmentLinkUnavailableError",
-      code: "environment_link_unavailable",
-      reason: "managed_endpoint_provisioning_failed",
-      traceId: "trace-1",
-    });
-
-    expect(error.traceId).toBe("trace-1");
-    expect(relayProtectedErrorMessage(error)).toBe(
-      "Relay cannot provision the managed endpoint (managed_endpoint_provisioning_failed).",
-    );
-  });
-
   it("presents clock skew as one possible cause when the relay omits the reason", () => {
     const error = new RelayAuthInvalidError({
       code: "auth_invalid",

@@ -1,6 +1,6 @@
-import { act, type ComponentProps } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { act, render as renderScreen, fakeTimers } from "../../test/render";
+import { type ComponentProps } from "react";
+import { describe, expect, it, vi } from "vite-plus/test";
 import {
   compileResolvedKeybindingsConfig,
   DEFAULT_RESOLVED_KEYBINDINGS,
@@ -11,14 +11,15 @@ import { RightPanelTabs } from "./RightPanelTabs";
 vi.mock("~/hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "light" }) }));
 vi.mock("~/browser/browserDefaults", () => ({ useBrowserDefaults: () => ({ profiles: [] }) }));
 
-let root: Root;
-let container: HTMLDivElement;
-const addFiles = vi.fn();
-const noop = () => undefined;
+async function setup() {
+  await using resources = new AsyncDisposableStack();
+  resources.defer(async () => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+  const container = document.createElement("div");
 
-beforeEach(() => {
-  vi.useFakeTimers();
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  resources.use(fakeTimers());
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -32,92 +33,101 @@ beforeEach(() => {
     value: () => [],
   });
   vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
-  addFiles.mockClear();
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-});
 
-afterEach(async () => {
-  await act(() => root.unmount());
-  container.remove();
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-  vi.useRealTimers();
-});
+  const addFiles = vi.fn();
+  const screen = resources.use(await renderScreen(<></>, { container }));
 
-async function renderPanel(overrides: Partial<ComponentProps<typeof RightPanelTabs>> = {}) {
-  await act(() =>
-    root.render(
-      <RightPanelTabs
-        mode="inline"
-        open
-        keybindings={DEFAULT_RESOLVED_KEYBINDINGS}
-        getShortcutContext={() => ({
-          terminalFocus: false,
-          terminalOpen: false,
-          previewFocus: false,
-          previewOpen: false,
-          isWeb: true,
-          isDesktop: false,
-        })}
-        surfaces={[]}
-        environmentId={null}
-        activeSurfaceId={null}
-        pendingSurfaceIds={new Set()}
-        previewSessions={{}}
-        desktopByTabId={{}}
-        terminalLabelsById={new Map()}
-        onActivate={noop}
-        onCloseSurface={noop}
-        onCloseOtherSurfaces={noop}
-        onCloseSurfacesToRight={noop}
-        onCloseAllSurfaces={noop}
-        onCopyFilePath={noop}
-        onAddBrowser={noop}
-        onAddBrowserInProfile={noop}
-        onAddTerminal={noop}
-        onAddDiff={noop}
-        onAddFiles={addFiles}
-        onAddPullRequest={noop}
-        onAddPullRequests={noop}
-        onAddDevice={noop}
-        browserAvailable={false}
-        terminalAvailable={false}
-        diffAvailable={false}
-        filesAvailable
-        pullRequestAvailable={false}
-        pullRequestsAvailable={false}
-        deviceAvailable={false}
-        {...overrides}
-      >
-        content
-      </RightPanelTabs>,
-    ),
-  );
-  await flushFrame();
-}
-
-async function flushFrame() {
-  if (vi.isFakeTimers()) {
-    await act(() => vi.advanceTimersByTimeAsync(0));
-    await act(() => vi.advanceTimersToNextFrame());
-  } else {
-    await act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+  const noop = () => undefined;
+  async function renderPanel(overrides: Partial<ComponentProps<typeof RightPanelTabs>> = {}) {
+    await act(() =>
+      screen.rerender(
+        <RightPanelTabs
+          mode="inline"
+          open
+          keybindings={DEFAULT_RESOLVED_KEYBINDINGS}
+          getShortcutContext={() => ({
+            terminalFocus: false,
+            terminalOpen: false,
+            previewFocus: false,
+            previewOpen: false,
+            isWeb: true,
+            isDesktop: false,
+          })}
+          surfaces={[]}
+          environmentId={null}
+          activeSurfaceId={null}
+          pendingSurfaceIds={new Set()}
+          previewSessions={{}}
+          desktopByTabId={{}}
+          terminalLabelsById={new Map()}
+          onActivate={noop}
+          onCloseSurface={noop}
+          onCloseOtherSurfaces={noop}
+          onCloseSurfacesToRight={noop}
+          onCloseAllSurfaces={noop}
+          onCopyFilePath={noop}
+          onAddBrowser={noop}
+          onAddBrowserInProfile={noop}
+          onAddTerminal={noop}
+          onAddDiff={noop}
+          onAddFiles={addFiles}
+          onAddPullRequest={noop}
+          onAddPullRequests={noop}
+          onAddDevice={noop}
+          browserAvailable={false}
+          terminalAvailable={false}
+          diffAvailable={false}
+          filesAvailable
+          pullRequestAvailable={false}
+          pullRequestsAvailable={false}
+          deviceAvailable={false}
+          {...overrides}
+        >
+          content
+        </RightPanelTabs>,
+      ),
+    );
+    await flushFrame();
   }
-}
-
-async function press(key: string, options: KeyboardEventInit = {}) {
-  const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...options });
-  await act(() => (document.activeElement ?? document.body).dispatchEvent(event));
-  await flushFrame();
-  return event;
+  async function flushFrame() {
+    if (vi.isFakeTimers()) {
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      await act(() => vi.runOnlyPendingTimersAsync());
+    } else {
+      await act(async () => {});
+    }
+  }
+  async function press(key: string, options: KeyboardEventInit = {}) {
+    const event = new KeyboardEvent("keydown", {
+      key,
+      bubbles: true,
+      cancelable: true,
+      ...options,
+    });
+    await act(() => (document.activeElement ?? document.body).dispatchEvent(event));
+    await flushFrame();
+    return event;
+  }
+  const lifetime = resources.move();
+  return {
+    screen,
+    container,
+    noop,
+    renderPanel,
+    flushFrame,
+    press,
+    addFiles,
+    [Symbol.asyncDispose]: () => lifetime.disposeAsync(),
+  };
 }
 
 describe("right panel new-tab shortcut", () => {
   it.each(["MacIntel", "Win32", "Linux x86_64"])(
     "opens the menu on %s and chooses a tab",
     async (platform) => {
+      await using harness = await setup();
+      const { renderPanel, press, addFiles } = harness;
+
       vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
       await renderPanel();
       const event = await press(
@@ -145,6 +155,9 @@ describe("right panel new-tab shortcut", () => {
   );
 
   it("opens Files while a closed popup remains mounted", async () => {
+    await using harness = await setup();
+    const { container, renderPanel, press, addFiles } = harness;
+
     await renderPanel();
     const popup = document.createElement("div");
     popup.dataset.slot = "menu-popup";
@@ -156,6 +169,9 @@ describe("right panel new-tab shortcut", () => {
   });
 
   it("opens the add-surface menu while a closed popup remains mounted", async () => {
+    await using harness = await setup();
+    const { container, renderPanel, press } = harness;
+
     await renderPanel();
     const popup = document.createElement("div");
     popup.dataset.slot = "menu-popup";
@@ -167,6 +183,9 @@ describe("right panel new-tab shortcut", () => {
   });
 
   it("leaves the shortcut alone while the mounted panel is closed", async () => {
+    await using harness = await setup();
+    const { renderPanel, press } = harness;
+
     await renderPanel({ open: false });
     expect((await press("t", { metaKey: true })).defaultPrevented).toBe(false);
     expect(document.querySelector('[role="menu"]:not([data-closed])')).toBeNull();
@@ -175,6 +194,9 @@ describe("right panel new-tab shortcut", () => {
   it.each(["Win32", "Linux x86_64"])(
     "leaves Ctrl+T for the focused terminal on %s",
     async (platform) => {
+      await using harness = await setup();
+      const { container, renderPanel, press } = harness;
+
       vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
       await renderPanel({
         getShortcutContext: () => ({
@@ -199,6 +221,9 @@ describe("right panel new-tab shortcut", () => {
   );
 
   it("uses a custom binding from a text field and closes on Escape", async () => {
+    await using harness = await setup();
+    const { container, renderPanel, press } = harness;
+
     // Focus returns after Base UI's animation completion and unmount microtask.
     // Run that browser lifecycle instead of assuming a fixed number of fake frames.
     vi.useRealTimers();
@@ -222,6 +247,9 @@ describe("right panel new-tab shortcut", () => {
   });
 
   it("does not open over another popup or during text composition", async () => {
+    await using harness = await setup();
+    const { container, renderPanel, press, addFiles } = harness;
+
     await renderPanel();
     expect((await press("t", { metaKey: true, isComposing: true })).defaultPrevented).toBe(false);
     const dialog = document.createElement("div");
@@ -239,6 +267,9 @@ describe("right panel new-tab shortcut", () => {
   });
 
   it("blocks panel shortcuts until a mounted popup finishes closing", async () => {
+    await using harness = await setup();
+    const { container, renderPanel, press, addFiles } = harness;
+
     await renderPanel();
     const popover = document.createElement("div");
     popover.dataset.slot = "popover-popup";
@@ -268,6 +299,9 @@ describe("right panel new-tab shortcut", () => {
   });
 
   it("supports arrow keys with an existing tab in sheet mode and clears the menu on close", async () => {
+    await using harness = await setup();
+    const { renderPanel, press, addFiles } = harness;
+
     const panel = {
       mode: "sheet" as const,
       surfaces: [{ id: "files" as const, kind: "files" as const }],
@@ -290,6 +324,9 @@ describe("right panel new-tab shortcut", () => {
 
 describe("right panel tab middle click", () => {
   it("cancels middle-button defaults and closes once while preserving other buttons", async () => {
+    await using harness = await setup();
+    const { container, renderPanel } = harness;
+
     const onActivate = vi.fn();
     const onCloseSurface = vi.fn();
     const files = { id: "files" as const, kind: "files" as const };

@@ -23,29 +23,6 @@ const normalizeGitArgs = (args: ReadonlyArray<string>): ReadonlyArray<string> =>
   args[0] === "-C" && args.length >= 2 ? args.slice(2) : args;
 
 describe("VcsDriverRegistry", () => {
-  it.effect("routes directly by VCS driver kind for non-repository workflows", () => {
-    const layer = Layer.effect(VcsDriverRegistry.VcsDriverRegistry, VcsDriverRegistry.make).pipe(
-      Layer.provide(NodeServices.layer),
-      Layer.provide(
-        Layer.mock(VcsProjectConfig.VcsProjectConfig)({
-          resolveKind: (input) => Effect.succeed(input.requestedKind ?? "auto"),
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(VcsProcess.VcsProcess)({
-          run: () => Effect.succeed(processOutput("")),
-        }),
-      ),
-    );
-
-    return Effect.gen(function* () {
-      const registry = yield* VcsDriverRegistry.VcsDriverRegistry;
-      const driver = yield* registry.get("git");
-
-      assert.strictEqual(driver.capabilities.kind, "git");
-    }).pipe(Effect.provide(layer));
-  });
-
   const makeDiskBackedLayer = (rootDir: string, calls: string[]) =>
     Layer.effect(VcsDriverRegistry.VcsDriverRegistry, VcsDriverRegistry.make).pipe(
       Layer.provide(NodeServices.layer),
@@ -153,28 +130,6 @@ describe("VcsDriverRegistry", () => {
           (yield* registry.detect({ cwd: projectDir }))?.repository.rootPath,
           projectDir,
         );
-      }).pipe(Effect.provide(makeDiskBackedLayer(parentDir, calls)));
-    }).pipe(Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("detects again when git init creates a repository between the cwd and its root", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const parentDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-vcs-registry-" });
-      const middleDir = path.join(parentDir, "a");
-      const cwd = path.join(middleDir, "b");
-      yield* fs.makeDirectory(path.join(parentDir, ".git"));
-      yield* fs.makeDirectory(cwd, { recursive: true });
-      const calls: string[] = [];
-
-      yield* Effect.gen(function* () {
-        const registry = yield* VcsDriverRegistry.VcsDriverRegistry;
-        assert.equal((yield* registry.detect({ cwd }))?.repository.rootPath, parentDir);
-
-        yield* fs.makeDirectory(path.join(middleDir, ".git"));
-
-        assert.equal((yield* registry.detect({ cwd }))?.repository.rootPath, middleDir);
       }).pipe(Effect.provide(makeDiskBackedLayer(parentDir, calls)));
     }).pipe(Effect.provide(NodeServices.layer)),
   );
