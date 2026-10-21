@@ -188,6 +188,7 @@ function buildChannelInfoPinBody(input: {
     "/export [count]                 Whole chat (/omegent export)",
     "@Omegent …                      Same actions (fallback)",
     "  flags: --plan --local --base <b> --provider <id> --model <name>",
+    "  workspace: project's T3 setting (--local and --base override)",
     "         —model works too. Short names (opus-5.5).",
     "         claude- and codex- prefixes still work.",
     "         --steer (inject now) --queue (park; default mid-turn)",

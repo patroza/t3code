@@ -18,7 +18,12 @@ export interface DiscordBotConfig {
   readonly t3BearerToken: string | undefined;
   readonly t3DefaultInstanceId: string | undefined;
   readonly t3DefaultModel: string | undefined;
-  readonly t3DefaultBaseBranch: string;
+  /**
+   * Explicit worktree base, the same kind of override as a mention's `--base`.
+   * Discord leaves this unset. A Teams workspace may set it in gateway config.
+   * Absent means the project's T3 workspace settings choose the checkout.
+   */
+  readonly t3DefaultBaseBranch?: string | undefined;
   readonly t3DefaultRuntimeMode: RuntimeMode;
   readonly dataDir: string;
   readonly webUiBaseUrl: string | undefined;
@@ -109,9 +114,6 @@ export const DiscordBotConfig: Effect.Effect<DiscordBotConfig, Config.ConfigErro
     );
     const t3DefaultModel = yield* Config.String("T3_DEFAULT_MODEL").pipe(
       Config.withDefault(DEFAULT_BOT_MODEL),
-    );
-    const t3DefaultBaseBranch = yield* Config.String("T3_DEFAULT_BASE_BRANCH").pipe(
-      Config.withDefault("main"),
     );
     const t3DefaultRuntimeMode = yield* Config.schema(
       RuntimeModeConfig,
@@ -233,7 +235,6 @@ export const DiscordBotConfig: Effect.Effect<DiscordBotConfig, Config.ConfigErro
       t3BearerToken,
       t3DefaultInstanceId,
       t3DefaultModel,
-      t3DefaultBaseBranch,
       t3DefaultRuntimeMode,
       dataDir,
       webUiBaseUrl,
