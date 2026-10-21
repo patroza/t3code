@@ -226,9 +226,7 @@ import { ensureChannelInfoPin } from "./ChannelInfoPin.ts";
 import { makeDiscordThreadTurnCoordinator } from "./DiscordThreadTurnCoordinator.ts";
 import {
   DiscordQueuedPrompts,
-  formatSteernowEmptyQueueMessage,
   QUEUED_PROMPT_REACTION_EMOJI,
-  resolveSteernowMessageIds,
 } from "./DiscordQueuedPromptRegistry.ts";
 import { BridgeHub } from "./BridgeHub.ts";
 import { bridgeThreadToDiscord, getLiveDiscordBridge } from "./ResponseBridge.ts";
@@ -707,21 +705,6 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
         );
     },
   );
-
-  const clearQueuedBadge = (entry: {
-    readonly discordChannelId: string;
-    readonly discordMessageId: string;
-  }) =>
-    rest
-      .deleteMyMessageReaction(
-        entry.discordChannelId,
-        entry.discordMessageId,
-        QUEUED_PROMPT_REACTION_EMOJI,
-      )
-      .pipe(
-        (operation) => retryTransientDiscordOperation(operation, DISCORD_MESSAGE_RETRY_DELAYS_MS),
-        Effect.catch(() => Effect.void),
-      );
 
   // Mentions use the bot *user* id, not the application id.
   const me = yield* rest.getMyUser();
@@ -1416,7 +1399,7 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
         });
       }
       const turnAlreadyRunning = hasInterruptibleTurn(currentThread);
-      const followUpDelivery = resolveDiscordFollowUpDelivery(input.flags);
+      const followUpDelivery = resolveDiscordFollowUpDelivery(input.flags, input.topic);
       const liveBridge = yield* getLiveDiscordBridge(input.discordThreadId, existing.t3ThreadId);
       // Mid-turn follow-up on a live bridge: keep steering via startTurn, but do not
       // post a fresh Working.. tip or restart the bridge (that used to freeze old
@@ -1561,10 +1544,10 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
             }),
           ),
         );
-      // Server parks busy-thread follow-ups. Default Discord policy is **queue**
-      // (badge with 📥; delete user message to remove; /omegent steernow to flush).
-      // The bridge removes 📥 once that run leaves the queue and starts.
-      // `--steer` / `/omegent steer` inject immediately after startTurn.
+      // Server parks busy-thread follow-ups. Default Discord policy is **steer**
+      // (inject immediately after startTurn). `--queue`, `/omegent queue`, or the
+      // `omegent-queue` topic park instead (📥 until the turn ends; delete the
+      // message to cancel). The bridge removes 📥 once that run starts.
       const t3MessageId = MessageId.make(startedTurn.messageId);
       if (followUpDelivery === "steer" && turnAlreadyRunning) {
         const steered = yield* t3
@@ -1589,8 +1572,8 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
             ),
           );
         // If steer raced pending turn-start (or similar), keep the Discord-side
-        // registry + 📥 badge so /omegent steernow can flush without waiting on
-        // a lagging HTTP thread snapshot.
+        // registry + 📥 badge. The prompt stays parked until the turn ends, and
+        // deleting the message still cancels it.
         if (!steered) {
           const discordMessageId =
             typeof input.mentionMessage?.id === "string" ? input.mentionMessage.id : null;
@@ -3040,7 +3023,7 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
         content:
           content.length === 0
             ? "I saw your mention but message content is empty. Enable **Message Content Intent** for this bot in the Discord Developer Portal, then restart me."
-            : "Send a prompt after mentioning me (or attach a file). Optional flags: `--model` or `—model` `<short name>` (`opus-5.5`; `claude-` and `codex-` prefixes still work) `--provider` `--base` `--local` `--plan` `--steer` `--queue`. An unknown model stops immediately and links the pinned channel info. Mid-turn follow-ups **queue** by default (📥 until that message starts); delete your message to cancel, or `/omegent steernow` to inject the queue. Use `--steer` to inject immediately.",
+            : "Send a prompt after mentioning me (or attach a file). Optional flags: `--model` or `—model` `<short name>` (`opus-5.5`; `claude-` and `codex-` prefixes still work) `--provider` `--base` `--local` `--plan` `--steer` `--queue`. An unknown model stops immediately and links the pinned channel info. Mid-turn follow-ups **steer** into the active turn. Use `--queue` to park until it finishes (📥; delete your message to cancel). A channel topic `omegent-queue` parks every follow-up; `--steer` still injects.",
         message_reference: { message_id: event.id },
       });
       return;
@@ -4484,99 +4467,6 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
               Effect.succeed(
                 slashReply(
                   `today-recap failed: ${error instanceof Error ? error.message : String(error)}`,
-                  { ephemeral: true },
-                ),
-              ),
-            ),
-          ),
-
-          steernow: Effect.gen(function* () {
-            const interaction = yield* Ix.Interaction;
-            const channelId = interaction.channel_id;
-            if (channelId === undefined || channelId.length === 0) {
-              return slashReply("steernow only works inside a linked Discord thread.", {
-                ephemeral: true,
-              });
-            }
-            const channel = yield* rest.getChannel(channelId);
-            if (!isThreadChannel(channel.type)) {
-              return slashReply("steernow only works inside a linked Discord thread.", {
-                ephemeral: true,
-              });
-            }
-            const link = yield* links.getByDiscordThreadId(channelId);
-            if (link === null) {
-              return slashReply("This thread is not linked to an Omegent session.", {
-                ephemeral: true,
-              });
-            }
-
-            // Server snapshot is authoritative after restart; local registry covers
-            // HTTP lag / soft-failed fetchThreadDetail so just-queued 📥 items still flush.
-            const detail = yield* t3.fetchThreadDetail(link.t3ThreadId);
-            const resolved = resolveSteernowMessageIds({
-              serverQueued: (detail?.thread.runStatuses ?? [])
-                .filter((run) => run.status === "queued")
-                .map((run) => ({ messageId: MessageId.make(run.userMessageId) })),
-              localPending: queuedPrompts.listForThread(link.t3ThreadId),
-              detailLoaded: detail !== null,
-            });
-            if (resolved.messageIds.length === 0) {
-              return slashReply(
-                formatSteernowEmptyQueueMessage({
-                  snapshotMissing: resolved.snapshotMissing,
-                }),
-                { ephemeral: true },
-              );
-            }
-
-            if (resolved.source === "local") {
-              yield* Effect.logInfo("steernow using local queued-prompt registry fallback", {
-                t3ThreadId: link.t3ThreadId,
-                count: resolved.messageIds.length,
-                snapshotMissing: resolved.snapshotMissing,
-              });
-            }
-
-            let steered = 0;
-            const failures: string[] = [];
-            for (const messageId of resolved.messageIds) {
-              const result = yield* t3
-                .steerQueuedMessage({
-                  threadId: link.t3ThreadId,
-                  messageId,
-                })
-                .pipe(Effect.result);
-              if (Result.isSuccess(result)) {
-                steered += 1;
-                const pending = queuedPrompts.forgetT3Message(link.t3ThreadId, messageId);
-                if (pending !== null) {
-                  yield* clearQueuedBadge(pending);
-                }
-              } else {
-                failures.push(String(messageId));
-                yield* Effect.logWarning("steernow failed for queued message", {
-                  t3ThreadId: link.t3ThreadId,
-                  messageId,
-                  error: String(result.failure),
-                });
-              }
-            }
-
-            if (steered === 0) {
-              return slashReply(
-                `Could not steer the queue (${failures.length} failed). Try again when the turn is running, or use \`/agent steer prompt:…\` to inject a new mid-turn prompt.`,
-                { ephemeral: true },
-              );
-            }
-            const failNote =
-              failures.length > 0 ? ` (${failures.length} could not be steered yet)` : "";
-            return slashReply(`Steered ${steered} queued message(s)${failNote}.`);
-          }).pipe(
-            Effect.catch((error: unknown) =>
-              Effect.succeed(
-                slashReply(
-                  `steernow failed: ${error instanceof Error ? error.message : String(error)}`,
                   { ephemeral: true },
                 ),
               ),

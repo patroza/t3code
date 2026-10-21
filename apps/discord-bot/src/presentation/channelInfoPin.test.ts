@@ -90,8 +90,10 @@ describe("channel info pin helpers", () => {
     expect(rendered).toContain("/omegent export");
     expect(rendered).toContain("@Omegent …");
     expect(rendered).toContain("Same actions (fallback)");
-    expect(rendered).toContain("/omegent steernow");
-    expect(rendered).toContain("--steer (inject now) --queue (park; default mid-turn)");
+    expect(rendered).toContain("/omegent queue prompt:");
+    expect(rendered).toContain("--queue parks · --steer injects (steer is the default)");
+    expect(rendered).toContain("topic: omegent-queue             Park mid-turn follow-ups");
+    expect(rendered).not.toContain("steernow");
     expect(rendered).toContain("—model works too. Short names (opus-5.5).");
     expect(rendered).toContain("claude- and codex- prefixes still work.");
     expect(rendered).toContain("topic: omegent-fast-mode         New threads start in fast mode");
