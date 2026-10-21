@@ -24,7 +24,6 @@ describe("Omegent slash command definition", () => {
       "ask",
       "steer",
       "queue",
-      "steernow",
       "today-recap",
       "help",
       "stop",
