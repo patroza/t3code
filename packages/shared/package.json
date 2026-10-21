@@ -315,6 +315,10 @@
       "types": "./src/threadLinks.ts",
       "import": "./src/threadLinks.ts"
     },
+    "./webThreadUrl": {
+      "types": "./src/webThreadUrl.ts",
+      "import": "./src/webThreadUrl.ts"
+    },
     "./composerContextReferences": {
       "types": "./src/composerContextReferences.ts",
       "import": "./src/composerContextReferences.ts"

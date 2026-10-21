@@ -1,5 +1,6 @@
 // @effect-diagnostics anyUnknownInErrorContext:off missingEffectContext:off globalDate:off globalErrorInEffectFailure:off outdatedApi:off
 import type { ClientSourceHint, UploadChatAttachment } from "@t3tools/contracts";
+import { buildWebThreadUrl } from "@t3tools/shared/webThreadUrl";
 import { DiscordREST } from "dfx";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -323,10 +324,7 @@ export const startOrContinueLinkedTurn = Effect.fn("startOrContinueLinkedTurn")(
   });
   const threadId = turn.threadId;
 
-  const webLink =
-    config.webUiBaseUrl === undefined
-      ? null
-      : `${config.webUiBaseUrl.replace(/\/$/u, "")}/?thread=${threadId}`;
+  const webLink = buildWebThreadUrl(config.webUiBaseUrl, threadId);
 
   if (turn.isNew) {
     yield* rest.createMessage(input.discordThreadId, {

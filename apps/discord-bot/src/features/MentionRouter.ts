@@ -8,6 +8,7 @@ import {
   type UploadChatAttachment,
 } from "@t3tools/contracts";
 import { readJiraBareKeyProjects } from "@t3tools/shared/jiraBareKeyProjects";
+import { buildWebThreadUrl } from "@t3tools/shared/webThreadUrl";
 import { DISCORD_LINK_REQUEST_MARKER } from "@t3tools/shared/providerModelSelection";
 import { makeKeyedDrainableWorker } from "@t3tools/shared/KeyedDrainableWorker";
 import { Discord, DiscordConfig, DiscordREST, Ix } from "dfx";
@@ -490,8 +491,7 @@ function discordChannelUrl(guildId: string | null | undefined, channelId: string
 }
 
 function t3WebThreadUrl(webUiBaseUrl: string | undefined, threadId: string): string | null {
-  if (webUiBaseUrl === undefined) return null;
-  return `${webUiBaseUrl.replace(/\/$/u, "")}/?thread=${threadId}`;
+  return buildWebThreadUrl(webUiBaseUrl, threadId);
 }
 
 function jiraKeysFromMessages(

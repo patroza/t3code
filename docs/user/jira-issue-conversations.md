@@ -49,6 +49,9 @@ Mentions are recognized in:
 
 Bot-authored comments and mention-free comments are ignored.
 
+A reply includes the same thread link Discord posts, `[Open]({T3_WEB_UI_BASE_URL}/?thread={id})`,
+when that variable is set on the server. The link is left off when it is unset.
+
 **Edits:** `comment_updated` re-dispatches when the edited body still mentions the bot and has a
 prompt. Delivery ids include the comment `updated` timestamp (or a prompt fingerprint) so the same
 edit is not double-run, but a later edit starts a new turn. The agent prompt notes that the user
