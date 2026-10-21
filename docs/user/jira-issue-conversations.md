@@ -209,6 +209,63 @@ The review runs in a T3 thread. When the analysis is ready, it is posted as a co
 
 The agent does not comment on the issue itself. The bridge posts those comments.
 
+### Turn it on in Jira
+
+Comment mentions already arrive from Jira Automation as `comment_created` and `comment_updated`. A new bug does not. Add one rule. Leave the comment rules in place, and leave their `webhookEvent` set to `comment_created` or `comment_updated`.
+
+Do this after the server build that contains bug review is deployed. A delivery sent before that build is ignored and is not replayed.
+
+1. Open **Jira settings → System → Global automation** on `macs-holding.atlassian.net`. One global rule covers every configured space. Project automation would need the same rule once per space.
+2. Create a rule named **Omegent: bug created**.
+3. Scope it to the configured spaces only. Today that is **SA** and **CFG**. A space counts only when it is in `T3CODE_JIRA_PROJECT_MAP` and, if `T3CODE_JIRA_ALLOWED_PROJECTS` is set, in that list too. Add a space to the rule only when you add it there.
+4. Trigger: **Work item created** (Issue created). Do not use Work item updated, Comment created, or Assign. Those stay on their own rules.
+5. Condition: **Issue type equals Bug**. The type name must be Bug. A Story, Task, or another type is ignored. The server checks the same thing.
+6. Action: **Send web request**.
+   - Web request URL: the same URL as the comment rules, `https://omega.omegent.com/api/jira/webhook`
+   - HTTP method: **POST**
+   - Web request body: **Custom data**. Do not use Issue data (Automation format). That shape is not an issue-created webhook.
+   - Headers: copy them from a comment rule. The server accepts either `Authorization: Bearer <secret>` or `X-T3-Webhook-Secret: <secret>`. The value is `T3CODE_JIRA_WEBHOOK_SECRET`. Also send `Content-Type: application/json`. Do not put the secret in git, in this page, or in a screenshot of the audit log.
+   - Custom data: paste the template below. Every text field uses `.asJsonString`, which includes the JSON quotes and escapes newlines and quotes. A raw `{{issue.description}}` inside quotes breaks the body, and the server then drops the delivery as invalid JSON.
+7. Turn the rule **on**.
+
+```json
+{
+  "webhookEvent": "jira:issue_created",
+  "issue_event_type_name": "issue_created",
+  "user": {
+    "accountId": {{initiator.accountId.asJsonString}},
+    "displayName": {{initiator.displayName.asJsonString}}
+  },
+  "issue": {
+    "id": "{{issue.id}}",
+    "key": {{issue.key.asJsonString}},
+    "self": "https://macs-holding.atlassian.net/rest/api/3/issue/{{issue.id}}",
+    "fields": {
+      "summary": {{issue.summary.asJsonString}},
+      "description": {{#if(issue.description)}}{{issue.description.asJsonString}}{{else}}""{{/}},
+      "issuetype": { "name": {{issue.issueType.name.asJsonString}} },
+      "project": { "key": {{issue.project.key.asJsonString}} },
+      "reporter": {
+        "accountId": {{issue.reporter.accountId.asJsonString}},
+        "displayName": {{issue.reporter.displayName.asJsonString}}
+      }
+    }
+  }
+}
+```
+
+`self` has to be that REST issue address. The server turns it into the browse link. `webhookEvent` has to be `jira:issue_created` (or `issue_created`). A comment rule that also carries `issue_event_type_name: issue_created` stays a comment, as long as its own `webhookEvent` is still `comment_created` or `comment_updated`.
+
+Bugs filed by `T3CODE_JIRA_BOT_ACCOUNT_ID` are skipped, so the bot cannot review a bug it filed itself. A review comment does not create an issue, so it does not start this rule again. The same issue id is delivered once. Editing the bug later does not start another review.
+
+Check, in order:
+
+1. In the rule audit log, the web request returns **202**. **401** means the secret header does not match. **400** with invalid JSON means a smart value was not escaped. **404** means the Jira integration is disabled on the server.
+2. File a Bug in SA as a person, with a summary and a description that contain a quote and a line break. The debug log records `accepted_202` for `jira:issue_created`. The issue later gets the analysis comment, then the fix comment. Both mention the mapped team.
+3. File a Story in SA. The log records `ignored_202` with reason `not_bug:story`. No review starts.
+4. File a Bug in a project that is not in the map. The log records `project_denied_202`. No review starts.
+5. Mention the bot on an existing issue. That comment rule still runs, and the reply is still threaded under the mention.
+
 ## Security
 
 - Require a shared secret on every delivery (`Authorization: Bearer …` or `X-T3-Webhook-Secret`).
