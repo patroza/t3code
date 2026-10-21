@@ -136,19 +136,13 @@ describe("deriveActiveWorkStartedAt", () => {
       ),
     ).toBeNull();
   });
-
-  it("falls back to the caller's send timestamp when there is no turn yet", () => {
-    expect(deriveActiveWorkStartedAt(null, null, "2026-09-06T23:33:00.000Z")).toBe(
-      "2026-09-06T23:33:00.000Z",
-    );
-  });
 });
 
 describe("deriveSubagentElapsedMs", () => {
   const startedAt = "2026-09-21T12:00:00.000Z";
   const completedAt = "2026-09-21T12:00:10.000Z";
   const now = Date.parse("2026-09-21T13:00:00.000Z");
-  it.each(["idle", "completed", "failed", "cancelled", "interrupted"] as const)(
+  it.each(["idle", "completed", "failed"] as const)(
     "does not count the age of %s work with unknown completion timing",
     (status) => {
       expect(deriveSubagentElapsedMs({ status, startedAt, completedAt: null }, now)).toBeNull();

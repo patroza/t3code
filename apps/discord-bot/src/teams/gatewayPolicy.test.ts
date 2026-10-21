@@ -105,7 +105,7 @@ describe("shared Teams gateway", () => {
   beforeEach(() => {
     directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "teams-gateway-"));
     config = fixture(directory);
-    now = Date.now();
+    now = Date.parse("2026-10-21T12:00:00.000Z");
     sequence = 0;
     policy = new TeamsGatewayPolicy(
       () => config,
@@ -460,6 +460,7 @@ describe("shared Teams gateway", () => {
   it("a slow workspace cannot block another or cause fallback", async () => {
     const dispatcher = new TeamsGatewayDispatcher(policy);
     const seen: string[] = [];
+    const betaFinished = Promise.withResolvers<void>();
     let release = () => {};
     const blocked = new Promise<void>((resolve) => {
       release = resolve;
@@ -478,9 +479,10 @@ describe("shared Teams gateway", () => {
       }),
       async (decision) => {
         seen.push(decision.lease.binding.workspace);
+        betaFinished.resolve();
       },
     );
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await betaFinished.promise;
     expect(seen).toEqual(["beta"]);
     release();
     await dispatcher.drain();

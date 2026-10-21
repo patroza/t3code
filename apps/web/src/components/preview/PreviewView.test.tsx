@@ -7,7 +7,7 @@ import {
   FILL_PREVIEW_VIEWPORT,
   ThreadId,
 } from "@t3tools/contracts";
-import { act, createElement, Profiler } from "react";
+import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -293,67 +293,6 @@ const TEST_THREAD_REF = {
 const TEST_RUNTIME_TAB_ID = previewRuntimeTabId(TEST_THREAD_REF, null, "tab-1");
 
 // ReactDOM needs a host, but this unit suite intentionally has no DOM dependency.
-class TestNode {
-  parentNode: TestNode | null = null;
-  childNodes: TestNode[] = [];
-  readonly nodeName: string;
-  readonly tagName: string;
-  readonly namespaceURI = "http://www.w3.org/1999/xhtml";
-  readonly style = {};
-
-  constructor(
-    name: string,
-    readonly ownerDocument: TestNode | null = null,
-    readonly nodeType = 1,
-  ) {
-    this.nodeName = name.toUpperCase();
-    this.tagName = this.nodeName;
-  }
-
-  set textContent(_value: string) {
-    this.childNodes = [];
-  }
-
-  appendChild(child: TestNode) {
-    child.parentNode = this;
-    this.childNodes.push(child);
-    return child;
-  }
-
-  removeChild(child: TestNode) {
-    this.childNodes.splice(this.childNodes.indexOf(child), 1);
-    child.parentNode = null;
-    return child;
-  }
-
-  createElement(name: string) {
-    return new TestNode(name, this);
-  }
-
-  addEventListener() {}
-  removeEventListener() {}
-  setAttribute() {}
-}
-
-function installTestDom() {
-  const document = new TestNode("#document", null, 9);
-  const window = {
-    document,
-    HTMLIFrameElement: TestNode,
-    setInterval: globalThis.setInterval,
-    clearInterval: globalThis.clearInterval,
-    setTimeout: globalThis.setTimeout,
-    clearTimeout: globalThis.clearTimeout,
-    addEventListener() {},
-    removeEventListener() {},
-  };
-  vi.stubGlobal("document", document);
-  vi.stubGlobal("window", window);
-  vi.stubGlobal("HTMLIFrameElement", window.HTMLIFrameElement);
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  return document;
-}
-
 describe("PreviewView navigation", () => {
   beforeEach(() => {
     mocks.navigate.mockClear();
@@ -387,60 +326,6 @@ describe("PreviewView navigation", () => {
     mocks.recordingTabIds = new Set();
     mocks.recordingRuntimeTabId = null;
     mocks.recordVisitForThread.mockClear();
-  });
-
-  it("shows the cursor in a replacement browser while the old instance still records", async () => {
-    const document = installTestDom();
-    const { createRoot } = await import("react-dom/client");
-    const container = document.createElement("div");
-    const root = createRoot(container as unknown as Element);
-    const hasCursor = (node: TestNode): boolean =>
-      node.nodeName === "AGENT-CURSOR" || node.childNodes.some(hasCursor);
-    mocks.recordingTabIds.add(TEST_RUNTIME_TAB_ID);
-    mocks.recordingRuntimeTabId = TEST_RUNTIME_TAB_ID;
-    try {
-      await act(() => {
-        root.render(<PreviewView threadRef={TEST_THREAD_REF} tabId="tab-1" visible />);
-      });
-      expect(hasCursor(container)).toBe(false);
-      mocks.serverEpoch = "replacement-server";
-      await act(() => {
-        root.render(<PreviewView threadRef={TEST_THREAD_REF} tabId="tab-1" visible />);
-      });
-      expect(hasCursor(container)).toBe(true);
-      expect(mocks.recordingTabIds.has(TEST_RUNTIME_TAB_ID)).toBe(true);
-    } finally {
-      await act(() => root.unmount());
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("does not rerender while loading time passes", async () => {
-    vi.useFakeTimers();
-    mocks.loading = true;
-    const document = installTestDom();
-    const { createRoot } = await import("react-dom/client");
-    const root = createRoot(document.createElement("div") as unknown as Element);
-    const onRender = vi.fn();
-
-    try {
-      await act(() => {
-        root.render(
-          <Profiler id="preview" onRender={onRender}>
-            <PreviewView threadRef={TEST_THREAD_REF} tabId="tab-1" visible />
-          </Profiler>,
-        );
-      });
-      const initialRenderCount = onRender.mock.calls.length;
-
-      await act(() => vi.advanceTimersByTimeAsync(1_000));
-
-      expect(onRender).toHaveBeenCalledTimes(initialRenderCount);
-    } finally {
-      await act(() => root.unmount());
-      vi.useRealTimers();
-      vi.unstubAllGlobals();
-    }
   });
 
   // A typed localhost URL means "the dev server on the environment host", so it
@@ -646,94 +531,6 @@ describe("PreviewView navigation", () => {
 
     await vi.waitFor(() => expect(onSendAnnotation).toHaveBeenCalledWith(annotation, null));
     expect(mocks.addPreviewAnnotation).toHaveBeenCalledWith(TEST_THREAD_REF, annotation);
-  });
-
-  it("retains the annotation locally when its own environment loses access during capture", async () => {
-    const annotation = {
-      id: "annotation-revoked",
-      pageUrl: "https://example.com/dashboard",
-      pageTitle: "Dashboard",
-      comment: "Tighten this spacing",
-      elements: [],
-      regions: [],
-      strokes: [],
-      styleChanges: [],
-      screenshot: null,
-      createdAt: "2026-09-05T00:00:00.000Z",
-    };
-    const onSendAnnotation = vi.fn();
-    let submitPick: (() => void) | undefined;
-    mocks.pickElement.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          submitPick = () => resolve({ annotation, submission: "send" });
-        }),
-    );
-    const document = installTestDom();
-    const { createRoot } = await import("react-dom/client");
-    const root = createRoot(document.createElement("div") as unknown as Element);
-    const view = () => (
-      <PreviewView
-        threadRef={TEST_THREAD_REF}
-        tabId="tab-1"
-        visible
-        onSendAnnotation={onSendAnnotation}
-      />
-    );
-    try {
-      await act(async () => root.render(view()));
-      await act(async () => mocks.toggleAnnotation?.());
-      expect(submitPick).toBeDefined();
-      expect(mocks.setAnnotationSendEnabled).toHaveBeenLastCalledWith(TEST_RUNTIME_TAB_ID, true);
-
-      mocks.readEnvironmentScope.mockImplementation(
-        (environmentId?: unknown) => environmentId !== TEST_THREAD_REF.environmentId,
-      );
-      await act(async () => root.render(view()));
-      expect(mocks.setAnnotationSendEnabled).toHaveBeenLastCalledWith(TEST_RUNTIME_TAB_ID, false);
-      await act(async () => submitPick!());
-      expect(mocks.addPreviewAnnotation).toHaveBeenCalledWith(TEST_THREAD_REF, annotation);
-      expect(onSendAnnotation).not.toHaveBeenCalled();
-
-      mocks.readEnvironmentScope.mockReturnValue(true);
-      mocks.pickElement.mockResolvedValue({ annotation, submission: "send" });
-      await act(async () => root.render(view()));
-      await act(async () => mocks.toggleAnnotation?.());
-      expect(mocks.setAnnotationSendEnabled).toHaveBeenLastCalledWith(TEST_RUNTIME_TAB_ID, true);
-      expect(onSendAnnotation).toHaveBeenCalledWith(annotation, null);
-    } finally {
-      await act(async () => root.unmount());
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("does not reopen a cancelled picker after the permission update finishes", async () => {
-    let finishUpdate: (() => void) | undefined;
-    mocks.setAnnotationSendEnabled.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          finishUpdate = resolve;
-        }),
-    );
-    const document = installTestDom();
-    const { createRoot } = await import("react-dom/client");
-    const root = createRoot(document.createElement("div") as unknown as Element);
-    try {
-      await act(async () =>
-        root.render(<PreviewView threadRef={TEST_THREAD_REF} tabId="tab-1" visible />),
-      );
-      await act(async () => mocks.toggleAnnotation?.());
-      expect(finishUpdate).toBeDefined();
-      expect(mocks.pickElement).not.toHaveBeenCalled();
-      await act(async () => mocks.toggleAnnotation?.());
-      expect(mocks.cancelPickElement).toHaveBeenCalledWith(TEST_RUNTIME_TAB_ID);
-      await act(async () => finishUpdate!());
-      expect(mocks.pickElement).not.toHaveBeenCalled();
-      expect(mocks.addPreviewAnnotation).not.toHaveBeenCalled();
-    } finally {
-      await act(async () => root.unmount());
-      vi.unstubAllGlobals();
-    }
   });
 
   it("warns when main dropped the crop before handing over the pick", async () => {

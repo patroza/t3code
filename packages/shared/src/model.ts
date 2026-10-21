@@ -60,7 +60,7 @@ export function getProviderOptionStringSelectionValue(
   return typeof value === "string" ? value : undefined;
 }
 
-export function getProviderOptionBooleanSelectionValue(
+function getProviderOptionBooleanSelectionValue(
   selections: ReadonlyArray<ProviderOptionSelection> | null | undefined,
   id: string,
 ): boolean | undefined {

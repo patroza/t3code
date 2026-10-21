@@ -1,3 +1,4 @@
+import { act, render as renderScreen } from "../../test/render";
 import "~/index.css";
 
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
@@ -12,9 +13,7 @@ import {
 import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
 import * as DateTime from "effect/DateTime";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
-import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import { expect, it, vi } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
 
 vi.mock("../hooks/useThreadRouteTarget", () => ({
@@ -113,75 +112,87 @@ const patchAtoms = Atom.family((path: string) =>
     path === "e.txt" ? AsyncResult.initial() : AsyncResult.success(loadedPatch(path)),
   ),
 );
-let registry: AtomRegistry.AtomRegistry;
-let container: HTMLDivElement;
-let root: Root;
-
-beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+async function setup() {
+  await using resources = new AsyncDisposableStack();
+  resources.defer(async () => {
+    localStorage.clear();
+    vi.unstubAllGlobals();
+  });
+  const container = document.createElement("div");
   localStorage.setItem("t3code.diffFileTreeOpen", "true");
   useDiffPanelStore.setState({ byThreadKey: {}, branchBaseRefByThreadKey: {} });
-  registry = AtomRegistry.make();
-  container = document.createElement("div");
+  const registry = AtomRegistry.make();
   container.style.cssText = "width: 1000px; height: 300px";
-  document.body.append(container);
-  root = createRoot(container);
-});
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-  registry.dispose();
-  localStorage.clear();
-  vi.unstubAllGlobals();
-});
-async function render() {
-  await act(async () =>
-    root.render(
-      <RegistryContext.Provider value={registry}>
-        <DiffPanel
-          visible
-          mode="embedded"
-          composerDraftTarget={threadRef}
-          workspaceMutationId={null}
-        />
-      </RegistryContext.Provider>,
-    ),
-  );
-}
-const toggle = (path: string, expanded: boolean) =>
-  page.getByRole("button", { name: `${expanded ? "Collapse" : "Expand"} ${path}`, exact: true });
-const viewport = () => container.querySelector<HTMLElement>(".diff-render-surface")!;
-async function selectTurn(path?: string, turn = turns[0]!) {
-  await act(async () => useDiffPanelStore.getState().selectTurn(threadRef, turn.runId, path));
-}
-async function expectRevealed(path: string) {
-  await expect.element(toggle(path, true)).toBeInTheDocument();
-  await expect
-    .poll(() => {
-      const bounds = viewport().getBoundingClientRect();
-      const header = toggle(path, true).element().getBoundingClientRect();
-      return viewport().scrollTop > 0 && header.top >= bounds.top && header.bottom <= bounds.bottom;
-    })
-    .toBe(true);
-}
-async function scrollToStart() {
-  await act(async () => {
-    viewport().scrollTop = 0;
-    viewport().dispatchEvent(new Event("scroll"));
-    await new Promise(requestAnimationFrame);
-  });
-}
-async function selectTreeFile(path: string) {
-  const tree = container.querySelector("file-tree-container")!;
-  const row = tree.shadowRoot!.querySelector<HTMLElement>(`[data-item-path="${path}"]`)!;
-  await act(async () =>
-    row.dispatchEvent(
-      new MouseEvent("click", { bubbles: true, composed: true, button: 0, detail: 1 }),
-    ),
-  );
+
+  resources.defer(() => registry.dispose());
+  const screen = resources.use(await renderScreen(<></>, { container }));
+  async function render() {
+    await act(async () =>
+      screen.rerender(
+        <RegistryContext.Provider value={registry}>
+          <DiffPanel
+            visible
+            mode="embedded"
+            composerDraftTarget={threadRef}
+            workspaceMutationId={null}
+          />
+        </RegistryContext.Provider>,
+      ),
+    );
+  }
+  const toggle = (path: string, expanded: boolean) =>
+    page.getByRole("button", { name: `${expanded ? "Collapse" : "Expand"} ${path}`, exact: true });
+  const viewport = () => container.querySelector<HTMLElement>(".diff-render-surface")!;
+  async function selectTurn(path?: string, turn = turns[0]!) {
+    await act(async () => useDiffPanelStore.getState().selectTurn(threadRef, turn.runId, path));
+  }
+  async function expectRevealed(path: string) {
+    await expect.element(toggle(path, true)).toBeInTheDocument();
+    await expect
+      .poll(() => {
+        const bounds = viewport().getBoundingClientRect();
+        const header = toggle(path, true).element().getBoundingClientRect();
+        return (
+          viewport().scrollTop > 0 && header.top >= bounds.top && header.bottom <= bounds.bottom
+        );
+      })
+      .toBe(true);
+  }
+  async function scrollToStart() {
+    await act(async () => {
+      viewport().scrollTop = 0;
+      viewport().dispatchEvent(new Event("scroll"));
+    });
+  }
+  async function selectTreeFile(path: string) {
+    const tree = container.querySelector("file-tree-container")!;
+    const row = tree.shadowRoot!.querySelector<HTMLElement>(`[data-item-path="${path}"]`)!;
+    await act(async () =>
+      row.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, composed: true, button: 0, detail: 1 }),
+      ),
+    );
+  }
+  const lifetime = resources.move();
+  return {
+    screen,
+    container,
+    registry,
+    render,
+    toggle,
+    viewport,
+    selectTurn,
+    expectRevealed,
+    scrollToStart,
+    selectTreeFile,
+    [Symbol.asyncDispose]: () => lifetime.disposeAsync(),
+  };
 }
 
 it("reveals a delayed turn selection, preserves siblings, and repeats after scope changes", async () => {
+  await using harness = await setup();
+  const { registry, render, toggle, selectTurn, expectRevealed, scrollToStart } = harness;
+
   await selectTurn("e.txt");
   await render();
   await expect
@@ -213,6 +224,10 @@ it("reveals a delayed turn selection, preserves siblings, and repeats after scop
 });
 
 it("waits for a lazy Git patch while preserving sibling choices and expanded defaults", async () => {
+  await using harness = await setup();
+  const { registry, render, toggle, viewport, expectRevealed, scrollToStart, selectTreeFile } =
+    harness;
+
   registry.set(collapsedAtom, false);
   await render();
   await toggle("b.txt", true).click();

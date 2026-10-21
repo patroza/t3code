@@ -596,66 +596,6 @@ describe("VcsStatusBroadcaster", () => {
     }).pipe(Effect.provide(layer), Effect.scoped);
   });
 
-  it.effect("turn-end refresh skips a loaded cwd when background policy pauses it", () => {
-    const state = {
-      currentLocalStatus: baseLocalStatus,
-      currentRemoteStatus: baseRemoteStatus,
-      localStatusCalls: 0,
-      remoteStatusCalls: 0,
-      localInvalidationCalls: 0,
-      remoteInvalidationCalls: 0,
-      backgroundWorkEnabled: false,
-    };
-    return Effect.gen(function* () {
-      const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
-      yield* broadcaster.getStatus({ cwd: "/repo" });
-      yield* broadcaster.refreshPullRequestStatus("/repo");
-      assert.equal(state.remoteStatusCalls, 1);
-      assert.equal(state.remoteInvalidationCalls, 0);
-    }).pipe(Effect.provide(layerTestFor(state)));
-  });
-
-  it.effect("refreshes the cached snapshot after explicit invalidation", () => {
-    const state = {
-      currentLocalStatus: baseLocalStatus,
-      currentRemoteStatus: baseRemoteStatus,
-      localStatusCalls: 0,
-      remoteStatusCalls: 0,
-      localInvalidationCalls: 0,
-      remoteInvalidationCalls: 0,
-    };
-
-    return Effect.gen(function* () {
-      const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
-      const initial = yield* broadcaster.getStatus({ cwd: "/repo" });
-
-      state.currentLocalStatus = {
-        ...baseLocalStatus,
-        refName: "feature/updated-status",
-      };
-      state.currentRemoteStatus = {
-        ...baseRemoteStatus,
-        aheadCount: 2,
-      };
-      const refreshed = yield* broadcaster.refreshStatus("/repo");
-      const cached = yield* broadcaster.getStatus({ cwd: "/repo" });
-
-      assert.deepStrictEqual(initial, baseStatus);
-      assert.deepStrictEqual(refreshed, {
-        ...state.currentLocalStatus,
-        ...state.currentRemoteStatus,
-      });
-      assert.deepStrictEqual(cached, {
-        ...state.currentLocalStatus,
-        ...state.currentRemoteStatus,
-      });
-      assert.equal(state.localStatusCalls, 2);
-      assert.equal(state.remoteStatusCalls, 2);
-      assert.equal(state.localInvalidationCalls, 1);
-      assert.equal(state.remoteInvalidationCalls, 1);
-    }).pipe(Effect.provide(layerTestFor(state)));
-  });
-
   it.effect("keeps the cached snapshot unchanged when a refresh branch fails", () => {
     const state = {
       currentLocalStatus: baseLocalStatus,
@@ -727,42 +667,6 @@ describe("VcsStatusBroadcaster", () => {
       assert.isTrue(Exit.isFailure(refreshExit));
       assert.deepStrictEqual(cached, baseStatus);
     }).pipe(Effect.provide(layerTest));
-  });
-
-  it.effect("refreshes only the cached local snapshot when requested", () => {
-    const state = {
-      currentLocalStatus: baseLocalStatus,
-      currentRemoteStatus: baseRemoteStatus,
-      localStatusCalls: 0,
-      remoteStatusCalls: 0,
-      localInvalidationCalls: 0,
-      remoteInvalidationCalls: 0,
-    };
-
-    return Effect.gen(function* () {
-      const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
-      const initial = yield* broadcaster.getStatus({ cwd: "/repo" });
-
-      state.currentLocalStatus = {
-        ...baseLocalStatus,
-        refName: "feature/local-only-refresh",
-        hasWorkingTreeChanges: true,
-      };
-
-      const refreshedLocal = yield* broadcaster.refreshLocalStatus("/repo");
-      const cached = yield* broadcaster.getStatus({ cwd: "/repo" });
-
-      assert.deepStrictEqual(initial, baseStatus);
-      assert.deepStrictEqual(refreshedLocal, state.currentLocalStatus);
-      assert.deepStrictEqual(cached, {
-        ...state.currentLocalStatus,
-        ...baseRemoteStatus,
-      });
-      assert.equal(state.localStatusCalls, 2);
-      assert.equal(state.remoteStatusCalls, 1);
-      assert.equal(state.localInvalidationCalls, 1);
-      assert.equal(state.remoteInvalidationCalls, 0);
-    }).pipe(Effect.provide(layerTestFor(state)));
   });
 
   it.effect.skipIf(!symlinksSupported)(

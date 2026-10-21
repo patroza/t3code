@@ -8,6 +8,8 @@ import type * as Scope from "effect/Scope";
 import { ProjectAliasStore, makeProjectAliasStore } from "../projectAliases.ts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
+import * as SubscriptionRef from "effect/SubscriptionRef";
+import * as Stream from "effect/Stream";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -20,7 +22,7 @@ import {
   ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
 } from "@t3tools/contracts";
 import { DiscordBotConfig } from "../config.ts";
-import { ThreadLinkStore, makeThreadLinkStore } from "../store/ThreadLinkStore.ts";
+import { ThreadLinkStore, makeThreadLinkStore, type ThreadLink } from "../store/ThreadLinkStore.ts";
 import { ThreadWarmCacheStore, makeThreadWarmCacheStore } from "../store/ThreadWarmCacheStore.ts";
 import { T3Session, type T3SessionService } from "../t3/T3Session.ts";
 import {
@@ -179,7 +181,17 @@ describe("shared response runner", () => {
           (directory) =>
             Effect.sync(() => NodeFS.rmSync(directory, { recursive: true, force: true })),
         );
-        const links = yield* makeThreadLinkStore(directory);
+        const persistedLinks = yield* makeThreadLinkStore(directory);
+        const linkChanges = yield* SubscriptionRef.make<ThreadLink | null>(null);
+        const links = {
+          ...persistedLinks,
+          updateBridgeHints: (id, hints) =>
+            persistedLinks
+              .updateBridgeHints(id, hints)
+              .pipe(Effect.tap((link) => SubscriptionRef.set(linkChanges, link))),
+        } satisfies typeof persistedLinks;
+        const awaitLink = (predicate: (link: ThreadLink | null) => boolean) =>
+          SubscriptionRef.changes(linkChanges).pipe(Stream.filter(predicate), Stream.runHead);
         const warm = yield* makeThreadWarmCacheStore(directory);
         let running = fixture(false);
         if (failure === "workspace" || failure === "setup")
@@ -492,10 +504,7 @@ describe("shared response runner", () => {
                 latest = completed;
                 yield* onThread(latest);
                 yield* Deferred.await(final);
-                while (
-                  !(yield* links.getByDiscordThreadId("conversation"))?.deliveryReceipt?.completed
-                )
-                  yield* Effect.sleep("1 millis");
+                yield* awaitLink((link) => link?.deliveryReceipt?.completed === true);
                 latest = {
                   ...completed,
                   messages: [
@@ -563,10 +572,7 @@ describe("shared response runner", () => {
               yield* onThread(completed);
               if (failure === "same-run-follow-up") {
                 yield* Deferred.await(final);
-                while (
-                  !(yield* links.getByDiscordThreadId("conversation"))?.deliveryReceipt?.completed
-                )
-                  yield* Effect.sleep("1 millis");
+                yield* awaitLink((link) => link?.deliveryReceipt?.completed === true);
                 const firstReply = [...messages.values()].find((message) =>
                   message.content.includes("It’s 19:50 CEST."),
                 )!;
@@ -604,10 +610,7 @@ describe("shared response runner", () => {
               }
               if (failure === "late-final") {
                 yield* Deferred.await(final);
-                while (
-                  !(yield* links.getByDiscordThreadId("conversation"))?.deliveryReceipt?.completed
-                )
-                  yield* Effect.sleep("1 millis");
+                yield* awaitLink((link) => link?.deliveryReceipt?.completed === true);
                 latest = {
                   ...completed,
                   messages: completed.messages.map((message) =>
@@ -673,7 +676,7 @@ describe("shared response runner", () => {
           yield* Fiber.interrupt(fiber).pipe(Effect.timeout("2 seconds"));
           stopped = true;
           yield* Deferred.succeed(releaseWrite, undefined);
-          yield* Effect.sleep("5 millis");
+          expect(fiber.pollUnsafe()).toBeDefined();
           expect(writesAfterStop).toBe(0);
           return;
         }
@@ -695,19 +698,13 @@ describe("shared response runner", () => {
         );
         if (orderingCase) yield* Deferred.await(echoedAfter);
         const finalAssistantId = failure === "same-run-follow-up" ? "answer-2" : "answer";
-        yield* Effect.gen(function* () {
-          while (true) {
-            const link = yield* links.getByDiscordThreadId("conversation");
-            if (
-              link?.lastFinalizedAssistantId === finalAssistantId &&
-              link.deliveryReceipt?.completed &&
-              (failure !== "late-final" ||
-                link.deliveryReceipt.text.includes("Additional final details"))
-            )
-              break;
-            yield* Effect.sleep("1 millis");
-          }
-        }).pipe(Effect.timeout("5 seconds"));
+        yield* awaitLink(
+          (link) =>
+            link?.lastFinalizedAssistantId === finalAssistantId &&
+            link.deliveryReceipt?.completed === true &&
+            (failure !== "late-final" ||
+              link.deliveryReceipt.text.includes("Additional final details")),
+        );
         expect(messages.size).toBe(
           ["partial-final", "accepted-final", "upload"].includes(failure)
             ? 3
@@ -796,6 +793,5 @@ describe("shared response runner", () => {
         const stored = yield* links.getByDiscordThreadId("conversation");
         expect(stored?.lastFinalizedAssistantId).toBe(finalAssistantId);
       }).pipe(Effect.scoped),
-    15000,
   );
 });

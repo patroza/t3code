@@ -1,7 +1,6 @@
-import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
+import { act, render as renderScreen } from "../../../test/render";
 import { EnvironmentId, ProjectId } from "@t3tools/contracts";
-import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import { expect, it, vi } from "vite-plus/test";
 
 const mocks = vi.hoisted(() => ({
   importThreads: vi.fn(),
@@ -99,10 +98,11 @@ vi.mock("../ui/toast", () => ({
 
 import { WelcomeWizard } from "./WelcomeWizard";
 
-let root: Root;
-let container: HTMLDivElement;
+async function setup() {
+  await using resources = new AsyncDisposableStack();
+  resources.defer(async () => {});
+  const container = document.createElement("div");
 
-beforeEach(() => {
   vi.clearAllMocks();
   vi.stubGlobal(
     "ResizeObserver",
@@ -123,31 +123,30 @@ beforeEach(() => {
     _tag: "Success",
     value: { importedCount: 28, skippedCount: 1 },
   });
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-});
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-});
 
-async function click(label: string) {
-  const button = [...document.querySelectorAll("button")].find(
-    (element) => element.textContent?.trim() === label,
-  );
-  expect(button, `button ${label}`).toBeDefined();
-  await act(async () => button!.click());
+  const screen = resources.use(await renderScreen(<></>, { container }));
+
+  async function click(label: string) {
+    const button = [...document.querySelectorAll("button")].find(
+      (element) => element.textContent?.trim() === label,
+    );
+    expect(button, `button ${label}`).toBeDefined();
+    await act(async () => button!.click());
+  }
+  const lifetime = resources.move();
+  return { screen, container, click, [Symbol.asyncDispose]: () => lifetime.disposeAsync() };
 }
 
 it("enters the workspace after a partial import and warns after navigation finishes", async () => {
+  await using harness = await setup();
+  const { screen, click } = harness;
+
   let finishNavigation = () => {};
   const navigation = new Promise<void>((resolve) => {
     finishNavigation = resolve;
   });
   const onDone = vi.fn(() => navigation);
-  await act(async () => root.render(<WelcomeWizard localAvailable onDone={onDone} />));
+  await act(async () => screen.rerender(<WelcomeWizard localAvailable onDone={onDone} />));
   await click("Continue");
   await click("Continue");
   await click("Import 1 project");
@@ -177,12 +176,15 @@ it.each([
 ] as const)(
   "finishes setup with %i imported and %i skipped threads",
   async (importedCount, skippedCount, warning) => {
+    await using harness = await setup();
+    const { screen, click } = harness;
+
     mocks.importThreads.mockResolvedValue({
       _tag: "Success",
       value: { importedCount, skippedCount },
     });
     const onDone = vi.fn();
-    await act(async () => root.render(<WelcomeWizard localAvailable onDone={onDone} />));
+    await act(async () => screen.rerender(<WelcomeWizard localAvailable onDone={onDone} />));
     await click("Continue");
     await click("Continue");
     await click("Import 1 project");
@@ -203,9 +205,12 @@ it.each([
 );
 
 it("keeps setup open when saving completion fails and preserves the import warning on retry", async () => {
+  await using harness = await setup();
+  const { screen, click } = harness;
+
   mocks.complete.mockRejectedValueOnce(new Error("settings unavailable"));
   const onDone = vi.fn();
-  await act(async () => root.render(<WelcomeWizard localAvailable onDone={onDone} />));
+  await act(async () => screen.rerender(<WelcomeWizard localAvailable onDone={onDone} />));
   await click("Continue");
   await click("Continue");
   await click("Import 1 project");
@@ -225,8 +230,11 @@ it("keeps setup open when saving completion fails and preserves the import warni
 });
 
 it("requires explicit Close to complete local setup", async () => {
+  await using harness = await setup();
+  const { screen } = harness;
+
   const onDone = vi.fn();
-  await act(async () => root.render(<WelcomeWizard localAvailable onDone={onDone} />));
+  await act(async () => screen.rerender(<WelcomeWizard localAvailable onDone={onDone} />));
   await act(async () => {
     document.activeElement?.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),

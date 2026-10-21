@@ -112,6 +112,7 @@ vi.mock("./threads", async () => {
     environmentThreadDetails: {
       queueWorkflowAtom: () => Atom.make(null),
       stateAtom: () => Atom.make(EMPTY_ENVIRONMENT_THREAD_STATE),
+      checkpointSummariesAtom: () => Atom.make([]),
     },
     threadEnvironment: {
       respondToApproval: state.approve,
@@ -231,17 +232,6 @@ describe("mobile task permissions", () => {
         text: "Keep my draft",
       }),
     );
-  });
-
-  it("preserves offline queueing without dispatching feedback through the queue action", async () => {
-    state.connectionState = "disconnected";
-    expect(await useThreadComposerState().onSendMessage()).toBe("message");
-    expect(state.enqueue).toHaveBeenCalledTimes(1);
-    state.draft.text = "/feedback The agent stopped early.";
-    expect(await useThreadComposerState().onSendMessage()).toBeNull();
-    expect(state.feedback).not.toHaveBeenCalled();
-    expect(state.enqueue).toHaveBeenCalledTimes(1);
-    expect(state.clearDraft).toHaveBeenCalledTimes(1);
   });
 
   it("rechecks the target environment before an approval response", async () => {

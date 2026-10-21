@@ -28,7 +28,7 @@ describe("BridgeHub", () => {
     const runner: BridgeRunner = runnerWithControl((_input, ready) =>
       Effect.gen(function* () {
         yield* Deferred.succeed(ready, undefined);
-        yield* Effect.sleep("1 minute");
+        return yield* Effect.never;
       }),
     );
 
@@ -56,7 +56,7 @@ describe("BridgeHub", () => {
       Effect.gen(function* () {
         starts += 1;
         yield* Deferred.succeed(ready, undefined);
-        yield* Effect.sleep("1 minute");
+        return yield* Effect.never;
       }),
     );
 
@@ -88,7 +88,7 @@ describe("BridgeHub", () => {
             adopted += 1;
           });
         yield* Deferred.succeed(ready, undefined);
-        yield* Effect.sleep("1 minute");
+        return yield* Effect.never;
       });
 
     await Effect.runPromise(
@@ -115,7 +115,7 @@ describe("BridgeHub", () => {
       Effect.gen(function* () {
         seen.push(input.t3ThreadId);
         yield* Deferred.succeed(ready, undefined);
-        yield* Effect.sleep("1 minute");
+        return yield* Effect.never;
       }),
     );
 
@@ -136,7 +136,7 @@ describe("BridgeHub", () => {
     const runner: BridgeRunner = runnerWithControl((_input, ready) =>
       Effect.gen(function* () {
         yield* Deferred.succeed(ready, undefined);
-        yield* Effect.sleep("1 minute");
+        return yield* Effect.never;
       }),
     );
 
@@ -157,7 +157,7 @@ describe("BridgeHub", () => {
       Effect.gen(function* () {
         control.noteSentUserMessageIds = () => Effect.void;
         yield* Deferred.succeed(ready, undefined);
-        yield* Effect.sleep("1 minute");
+        return yield* Effect.never;
       });
 
     await Effect.runPromise(

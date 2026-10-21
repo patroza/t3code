@@ -238,7 +238,8 @@ hooks and the shim on `prepare`.
 - **Publish when the work is done — do not leave a finished PR in draft.** Catch up to latest
   `fork/dev` if needed, then `pnpm pr:ready`. That is the immediate next action, before handoff
   notes, so full CI can start. Draft is only for work-in-progress.
-- **After publish, monitor the PR to green.** Poll checks and comments newer than the last push.
+- **After publish, monitor the PR to green.** Call `watch_pull_request` and end your turn.
+  T3 Code wakes you on checks, comments, or conflicts. Do not poll or sleep.
   Verify each bot finding against the source, fix real ones, dismiss false positives with a written
   reason. Stay quiet when nothing is new. Stop when the bots are green on the latest commit.
 - **Mid-loop feedback only:** while drafting, focused proof is fine — `vp test run <files>` for tests
@@ -285,7 +286,7 @@ work:
   the T3 Code in-app browser or another available agent browser; use Android when it is the affected
   or viable platform. For authorized mobile verification, a missing or outdated native client is a
   build step, not a blocker. Run `node scripts/mobile-native-client.ts ensure <ios|android>
-<device-id>` on the simulator host before starting Metro. It checks the local Expo fingerprint and
+  <device-id>` on the simulator host before starting Metro. It checks the local Expo fingerprint and
   builds/installs when needed. See `test-t3-mobile` for the full workflow.
 - Subagents must not independently launch dev servers or repeat integrated client verification
   unless their delegated task explicitly requires it.
@@ -295,6 +296,7 @@ work:
 ## Dev Servers
 
 - `vp i` installs. Worktrees get this from the t3.json setup script; if module resolution looks broken, it probably did not run.
+- Setup runs in the background. While `.t3/setup-running` names a live PID, wait for it and do not run `vp i`. It ends with `.t3/setup-done` or `.t3/setup-failed` (with the error tail). With no marker at all, setup never ran here, so run `vp i` yourself.
 - In a linked git worktree, dev state defaults to that worktree's gitignored `.t3`. This deliberately outranks an ambient `T3CODE_HOME`, which could otherwise select the installed app's live `~/.t3/userdata` database. An explicit `--home-dir` still wins.
 - Start the web stack with `vp run dev`. Sharing over the tailnet is three steps: run `vp run dev --share` in the background, wait for the `pairingUrl:` line in its output, paste that full URL (token included) in your reply. Do not wire up `tailscale serve` by hand for this, and do not open the URL yourself.
 - The web app requires pairing. Hand over the pairing URL, not the bare origin. A URL without its token is useless to whoever you gave it to. If the token got consumed, mint a fresh one with `node apps/server/src/bin.ts pair` — note it carries standard scopes, while the startup URL carries admin scopes (needed for Settings → Connections management).
@@ -303,6 +305,7 @@ work:
 - Before handing off a `--share` URL, open its **origin only** (no path, no token) in a controlled browser and confirm the app loads — never the full pairing URL, whose one-time token the check would consume. A successful curl is insufficient because browsers reject some otherwise reachable ports.
 - To reuse web dev auth across worktrees, configure one fixed `T3CODE_DEV_AUTH_TOKEN` in the main checkout's gitignored `.env`. The `t3.json` setup links that file into worktrees. Never commit or publish the token or a startup URL. See [Reusable dev credential](docs/operations/development.md#reusable-dev-credential).
 - Stop what you started, by the PID you tracked. See _The three ways to hurt yourself_.
+- Need a second checkout? `git worktree add` it next to this worktree, not in `/tmp`. Remove it when done.
 
 ## Test data
 
@@ -320,6 +323,39 @@ An empty database is a bad test. Seed your worktree's `.t3` with a copy of real 
 - `packages/contracts`: Shared effect/Schema schemas and TypeScript contracts for provider events, WebSocket protocol, and model/session types. Keep this package schema-only — no runtime logic.
 - `packages/shared`: Shared runtime utilities consumed by both server and client applications. Uses explicit subpath exports (e.g. `@t3tools/shared/git`) — no barrel index.
 - `packages/client-runtime`: Shared runtime package for sharing client code across web and mobile.
+
+## Test discipline
+
+- Smallest proof that the change works. `vp test run <files>` for the tests you touched (`-t "<name>"` in big files), `vp lint <files>`, and `vp run typecheck` in the package you changed. Not `npx tsc`; it is 3x slower than tsc-rs.
+- Run `vp run knip:check` (about 35 s) when you add, remove, or rename exports, files, or dependencies.
+- Run `node -e` snippets from `apps/server` or the owning package. `effect` does not resolve from the repo root.
+- Test meaningful logic or observable behavior. Do not render components to static markup to assert props or attributes, or add tests that merely assert callback wiring or mirror the implementation.
+- Backend behavior changes ship with focused tests for that behavior.
+- The server is event-sourced, and side effects run after the command commits. In tests, drain the effect worker (`OrchestrationEffectWorkerV2.drain`) or await the specific persisted event or `Deferred` that marks the milestone. Never wait on sleeps or polling. A test that needs a timeout to pass is wrong. Concretely:
+  - `it.effect` runs on a `TestClock`; `Effect.sleep` only advances through `TestClock.adjust`. `it.live` is wall-clock and only for subprocess or network fixtures.
+  - No `yieldNow` or `sleep` polling loops. Await the `Deferred`, take from the `Queue`, or drain the worker.
+  - No per-test timeout argument or `retry`. The project timeout is the ceiling, and flaky tests are fixed, not retried.
+  - No `performance.now()` or `Date.now()` deltas. Assert on events and counts, not elapsed time.
+  - Browser tests assert through `expect.element` or `vi.waitFor`, never `requestAnimationFrame` or `transitionend`.
+  - `vi.mock` factories must not spread a real module that pulls in Shiki or the diff workers.
+  - `it.skip` and friends need a tracking issue on the line above: `// quarantine: #1234 <why>`.
+  - Lint enforces this: `t3code/no-test-timeout-or-unreasoned-skip`, `t3code/no-frame-waits-in-browser-tests`, `t3code/no-wall-clock-in-tests`, `t3code/no-real-time-wait-in-tests`, `t3code/no-polling-loop-in-tests`.
+- Web browser tests are `*.browser.test.tsx` or `*.browser.test.ts` and render with `await using screen = await render(...)` from `apps/web/test/render.tsx`. `t3code/require-disposable-render` errors on the old patterns.
+  - Acquire what the test drives after mounting (fake timers it advances, spies it sets up after mounting) after the render, so it disposes before the unmount. Anything the first render reads comes before it.
+  - A helper that renders and then waits or clicks puts the screen in an `AsyncDisposableStack` and `move()`s it out only on success, so a failed wait still unmounts.
+  - `rerender` needs a fresh element on every call.
+  - No lifecycle hooks and no module-level mutable state. Shared mock state that `vi.mock` factories read is reset by a `setup()` call at the top of the test.
+  - `router` is on by default. Pass `router: false` only with a one-line comment saying why.
+
+  ```tsx
+  it("saves on Enter", async () => {
+    const onSave = vi.fn();
+    using _now = vi.spyOn(Date, "now").mockReturnValue(0);
+    await using screen = await render(<TitleEditor onSave={onSave} />, { router: "/threads/1" });
+    await userEvent.type(screen.getByRole("textbox"), "Title{Enter}");
+    expect(onSave).toHaveBeenCalledWith("Title");
+  });
+  ```
 
 ## Reference Repos
 

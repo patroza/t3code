@@ -73,7 +73,7 @@ describe("Teams team installations", () => {
     return {
       id: "activity-" + sequence++,
       channelId: "msteams",
-      timestamp: new Date().toISOString(),
+      timestamp: "2026-10-21T12:00:00.000Z",
       serviceUrl: "https://smba.trafficmanager.net/emea/",
       from: { id: "human", aadObjectId: actorId },
       recipient: { id: "28:" + app },
@@ -92,6 +92,7 @@ describe("Teams team installations", () => {
       () => parseGatewayConfig(config),
       directory,
       (_, id) => mapped.has(id),
+      () => Date.parse("2026-10-21T12:00:00.000Z"),
     );
   });
   afterEach(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
@@ -249,16 +250,16 @@ describe("Teams team installations", () => {
       release = resolve;
     });
     let started = 0;
+    const firstStarted = Promise.withResolvers<void>();
     dispatcher.receive(activity("one"), async () => {
       started++;
+      firstStarted.resolve();
       await barrier;
     });
     dispatcher.receive(activity("two"), async () => {
       started++;
     });
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await firstStarted.promise;
     config.teamInstallations[0]!.allowedActorIds = [secondActor];
     release();
     await dispatcher.drain();

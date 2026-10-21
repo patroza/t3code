@@ -39,8 +39,8 @@ import { AndroidWorkspaceTabsProvider } from "./features/workspace/AndroidWorksp
 import {
   PullRequestRouteScreen,
   PullRequestFileRouteScreen,
-  PullRequestFilesRouteScreen,
 } from "./features/pull-requests/PullRequestRouteScreen";
+import { PullRequestFilesSheet } from "./features/pull-requests/PullRequestFiles";
 import { PullRequestReviewSheet } from "./features/pull-requests/PullRequestReviewSheet";
 import { PullRequestReviewersScreen } from "./features/pull-requests/PullRequestReviewersScreen";
 import {
@@ -71,6 +71,7 @@ import { GitConfirmSheet } from "./features/threads/git/GitConfirmSheet";
 import { GitOverviewSheet } from "./features/threads/git/GitOverviewSheet";
 import { ThreadPullRequestsSheet } from "./features/threads/ThreadPullRequestsSheet";
 import { ThreadAgentsSheet } from "./features/threads/ThreadAgentsSheet";
+import { ThreadBackgroundWorkSheet } from "./features/threads/ThreadBackgroundWorkSheet";
 import { ThreadQueueSheet } from "./features/threads/ThreadQueueControl";
 import { ThreadRouteScreen } from "./features/threads/ThreadRouteScreen";
 import { McpAppFullscreenScreen } from "./features/threads/McpAppFullscreenScreen";
@@ -558,6 +559,7 @@ const WORKSPACE_OVERLAY_ROUTES = new Set([
   "SettingsLegal",
   "SettingsSheet",
   "ThreadAgents",
+  "ThreadBackgroundWork",
   "ThreadPullRequests",
   "ThreadQueue",
   "ThreadReviewComment",
@@ -729,12 +731,13 @@ const RootStackConfig = createWorkspaceStackNavigator({
       options: DETAIL_HEADER_OPTIONS,
     }),
     PullRequestFiles: createNativeStackScreen({
-      screen: PullRequestFilesRouteScreen,
+      screen: PullRequestFilesSheet,
       options: {
+        ...(Platform.OS === "ios" ? SHEET_GLASS_HEADER_OPTIONS : undefined),
         ...FORM_SHEET_PRESENTATION_OPTIONS,
         sheetAllowedDetents: [0.6, 0.92],
         sheetGrabberVisible: true,
-        headerShown: false,
+        sheetCornerRadius: Platform.OS === "android" ? 28 : undefined,
       },
     }),
     PullRequestReviewers: createNativeStackScreen({
@@ -756,19 +759,18 @@ const RootStackConfig = createWorkspaceStackNavigator({
       options: {
         ...(Platform.OS === "android"
           ? { presentation: "fullScreenModal" as const }
-          : FORM_SHEET_PRESENTATION_OPTIONS),
+          : { ...SHEET_GLASS_HEADER_OPTIONS, ...FORM_SHEET_PRESENTATION_OPTIONS }),
         sheetAllowedDetents: Platform.OS === "android" ? undefined : [0.75, 0.92],
         sheetGrabberVisible: Platform.OS !== "android",
-        headerShown: false,
       },
     }),
     PullRequestReview: createNativeStackScreen({
       screen: PullRequestReviewSheet,
       options: {
+        ...(Platform.OS === "ios" ? SHEET_GLASS_HEADER_OPTIONS : undefined),
         ...FORM_SHEET_PRESENTATION_OPTIONS,
         sheetAllowedDetents: [0.75, 0.92],
         sheetGrabberVisible: true,
-        headerShown: false,
       },
     }),
     Thread: createNativeStackScreen({
@@ -869,6 +871,15 @@ const RootStackConfig = createWorkspaceStackNavigator({
         sheetGrabberVisible: true,
       },
     }),
+    ThreadBackgroundWork: createNativeStackScreen({
+      screen: ThreadBackgroundWorkSheet,
+      options: {
+        ...FORM_SHEET_PRESENTATION_OPTIONS,
+        headerShown: false,
+        sheetAllowedDetents: [0.5, 0.9],
+        sheetGrabberVisible: true,
+      },
+    }),
     ThreadAgents: createNativeStackScreen({
       screen: ThreadAgentsSheet,
       options: {
@@ -900,6 +911,7 @@ const RootStackConfig = createWorkspaceStackNavigator({
       screen: GitCommitSheet,
       linking: `${THREAD_LINKING_PREFIX}/git/commit`,
       options: {
+        ...(Platform.OS === "ios" ? SHEET_GLASS_HEADER_OPTIONS : undefined),
         ...FORM_SHEET_PRESENTATION_OPTIONS,
         sheetAllowedDetents: [0.8, 0.92],
         sheetGrabberVisible: true,

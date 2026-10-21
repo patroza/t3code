@@ -7,12 +7,12 @@ import {
   FILL_PREVIEW_VIEWPORT,
   ThreadId,
 } from "@t3tools/contracts";
-import { act, Profiler, type ComponentProps, type ReactNode } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { Profiler, type ComponentProps } from "react";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
 import "~/index.css";
+import { act, fakeTimers, render } from "../../../test/render";
 
 import type { PreviewableServer } from "./useDiscoveredLocalServers";
 
@@ -163,8 +163,8 @@ vi.mock(import("~/browser/previewRuntime"), async (original) => ({
 
 vi.mock(import("~/browser/browserViewportActions"), { spy: true });
 
-import { commitBrowserViewportChange } from "~/browser/browserViewportActions";
 import { useBrowserSurfaceStore } from "~/browser/browserSurfaceStore";
+import { commitBrowserViewportChange } from "~/browser/browserViewportActions";
 import { useComposerDraftStore } from "~/composerDraftStore";
 import { useBrowserPointerStore } from "~/browser/browserPointerStore";
 import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
@@ -176,13 +176,6 @@ const TEST_THREAD_REF = {
   threadId: ThreadId.make("thread-1"),
 } as const;
 const TEST_RUNTIME_TAB_ID = previewRuntimeTabId(TEST_THREAD_REF, null, "tab-1");
-
-const roots: Root[] = [];
-let root: Root;
-
-async function render(node: ReactNode) {
-  await act(async () => root.render(node));
-}
 
 function view(onSendAnnotation?: ComponentProps<typeof PreviewView>["onSendAnnotation"]) {
   return (
@@ -221,41 +214,39 @@ function hasCursor() {
   return document.querySelector("svg.lucide-mouse-pointer2") !== null;
 }
 
+// The mocked modules and stores are shared by the whole file, so every test starts by
+// resetting them.
+function setup() {
+  vi.clearAllMocks();
+  mocks.readEnvironmentScope.mockReset().mockReturnValue(true);
+  mocks.setAnnotationSendEnabled.mockReset().mockResolvedValue(undefined);
+  mocks.pickElement.mockReset();
+  mocks.pictureInPicture = false;
+  mocks.showEmptyState = false;
+  mocks.loading = false;
+  mocks.nativeServerTab = false;
+  mocks.serverEpoch = null;
+  mocks.servers = [];
+  mocks.recordingTabIds = new Set();
+  mocks.recordingRuntimeTabId = null;
+  useComposerDraftStore.setState({
+    addPreviewAnnotation: mocks.addPreviewAnnotation,
+    addImage: mocks.addImage,
+  });
+  usePreviewMiniPlayerStore.setState({ byThreadKey: {} });
+  useBrowserPointerStore.setState({ byTabId: {} });
+}
+
 describe("PreviewView", () => {
-  beforeEach(() => {
-    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-    vi.clearAllMocks();
-    mocks.readEnvironmentScope.mockReset().mockReturnValue(true);
-    mocks.setAnnotationSendEnabled.mockReset().mockResolvedValue(undefined);
-    mocks.pickElement.mockReset();
-    mocks.pictureInPicture = false;
-    mocks.showEmptyState = false;
-    mocks.loading = false;
-    mocks.nativeServerTab = false;
-    mocks.serverEpoch = null;
-    mocks.servers = [];
-    mocks.recordingTabIds = new Set();
-    mocks.recordingRuntimeTabId = null;
-    useComposerDraftStore.setState({
-      addPreviewAnnotation: mocks.addPreviewAnnotation,
-      addImage: mocks.addImage,
-    });
-    usePreviewMiniPlayerStore.setState({ byThreadKey: {} });
-    useBrowserPointerStore.setState({ byTabId: {} });
-    const container = document.createElement("div");
-    document.body.append(container);
-    root = createRoot(container);
-    roots.push(root);
-  });
-
-  afterEach(async () => {
-    for (const each of roots.splice(0)) await act(async () => each.unmount());
-    document.body.replaceChildren();
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-  });
-
   it("shows the cursor in a replacement browser while the old instance still records", async () => {
+    setup();
+    using _cleanup = {
+      [Symbol.dispose]() {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      },
+    };
+    await using screen = await render(null);
     mocks.recordingTabIds.add(TEST_RUNTIME_TAB_ID);
     mocks.recordingRuntimeTabId = TEST_RUNTIME_TAB_ID;
     const replacementTabId = previewRuntimeTabId(TEST_THREAD_REF, "replacement-server", "tab-1");
@@ -267,10 +258,10 @@ describe("PreviewView", () => {
         ]),
       ),
     });
-    await render(view());
+    await screen.rerender(view());
     expect(hasCursor()).toBe(false);
     mocks.serverEpoch = "replacement-server";
-    await render(view());
+    await screen.rerender(view());
     expect(hasCursor()).toBe(true);
     expect(mocks.recordingTabIds.has(TEST_RUNTIME_TAB_ID)).toBe(true);
   });
@@ -278,6 +269,14 @@ describe("PreviewView", () => {
   it.each([false, true])(
     "aligns the cursor and responsive viewport after host zoom changes (native server tab: %s)",
     async (nativeServerTab) => {
+      setup();
+      using _cleanup = {
+        [Symbol.dispose]() {
+          vi.useRealTimers();
+          vi.unstubAllGlobals();
+        },
+      };
+      await using screen = await render(null);
       mocks.nativeServerTab = nativeServerTab;
       let windowZoom = 1;
       vi.stubGlobal("desktopBridge", {
@@ -286,7 +285,7 @@ describe("PreviewView", () => {
       });
       const commit = vi.mocked(commitBrowserViewportChange).mockResolvedValueOnce(undefined);
       try {
-        await render(view());
+        await screen.rerender(view());
         await act(() => {
           const surfaces = useBrowserSurfaceStore.getState();
           const slot = document.querySelector<HTMLElement>("[data-browser-surface-slot]")!;
@@ -337,10 +336,18 @@ describe("PreviewView", () => {
   );
 
   it("does not rerender while loading time passes", async () => {
-    vi.useFakeTimers();
+    setup();
+    using _cleanup = {
+      [Symbol.dispose]() {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      },
+    };
+    await using screen = await render(null);
+    using _timers = fakeTimers();
     mocks.loading = true;
     const onRender = vi.fn();
-    await render(
+    await screen.rerender(
       <Profiler id="preview" onRender={onRender}>
         {view()}
       </Profiler>,
@@ -359,13 +366,21 @@ describe("PreviewView", () => {
   ])(
     "resolves the typed localhost URL %s through its environment while recording the entered address",
     async (submitted, expected) => {
+      setup();
+      using _cleanup = {
+        [Symbol.dispose]() {
+          vi.useRealTimers();
+          vi.unstubAllGlobals();
+        },
+      };
+      await using screen = await render(null);
       const entered = new URL(expected);
       const reachable = new URL(
         entered.pathname + entered.search + entered.hash,
         "https://reachable.example.test",
       ).toString();
       mocks.resolveNavigableUrl.mockResolvedValueOnce(reachable);
-      await render(view());
+      await screen.rerender(view());
       await submitAddress(submitted);
       await vi.waitFor(() =>
         expect(mocks.navigate).toHaveBeenCalledWith(TEST_RUNTIME_TAB_ID, reachable),
@@ -380,6 +395,14 @@ describe("PreviewView", () => {
   );
 
   it("maps an empty-state localhost server onto the WSL host", async () => {
+    setup();
+    using _cleanup = {
+      [Symbol.dispose]() {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      },
+    };
+    await using screen = await render(null);
     mocks.showEmptyState = true;
     mocks.servers = [
       {
@@ -393,7 +416,7 @@ describe("PreviewView", () => {
         source: "scanner",
       } as unknown as PreviewableServer,
     ];
-    await render(view());
+    await screen.rerender(view());
     await userEvent.click(page.getByRole("button", { name: /vite/ }));
 
     await vi.waitFor(() =>
@@ -416,7 +439,15 @@ describe("PreviewView", () => {
   });
 
   it("opens and closes a thread-scoped floating preview for the active tab", async () => {
-    await render(view());
+    setup();
+    using _cleanup = {
+      [Symbol.dispose]() {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      },
+    };
+    await using screen = await render(null);
+    await screen.rerender(view());
     await userEvent.click(page.getByRole("button", { name: "Float preview over chat" }));
     expect(usePreviewMiniPlayerStore.getState().byThreadKey).toMatchObject({
       "environment-1:thread-1": { source: { kind: "browser", tabId: "tab-1" } },
@@ -428,7 +459,15 @@ describe("PreviewView", () => {
   });
 
   it("keeps the native preview window as a secondary menu action", async () => {
-    await render(view());
+    setup();
+    using _cleanup = {
+      [Symbol.dispose]() {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      },
+    };
+    await using screen = await render(null);
+    await screen.rerender(view());
     await userEvent.click(page.getByRole("button", { name: "Preview menu" }));
     await userEvent.click(page.getByRole("menuitem", { name: "Open separate preview window" }));
     await vi.waitFor(() =>
@@ -437,7 +476,7 @@ describe("PreviewView", () => {
     await vi.waitFor(() => expect(document.querySelector('[role="menu"]')).toBeNull());
 
     mocks.pictureInPicture = true;
-    await render(view());
+    await screen.rerender(view());
     await userEvent.click(page.getByRole("button", { name: "Preview menu" }));
     await userEvent.click(page.getByRole("menuitem", { name: "Close separate preview window" }));
     await vi.waitFor(() =>
@@ -446,10 +485,18 @@ describe("PreviewView", () => {
   });
 
   it("forwards Cmd/Ctrl+Enter annotations to the composer send path", async () => {
+    setup();
+    using _cleanup = {
+      [Symbol.dispose]() {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      },
+    };
+    await using screen = await render(null);
     const picked = annotation("annotation-1");
     const onSendAnnotation = vi.fn();
     mocks.pickElement.mockResolvedValue({ annotation: picked, submission: "send" });
-    await render(view(onSendAnnotation));
+    await screen.rerender(view(onSendAnnotation));
     await userEvent.click(page.getByRole("button", { name: "Annotate preview" }));
 
     await vi.waitFor(() => expect(onSendAnnotation).toHaveBeenCalledWith(picked, null));
@@ -457,6 +504,7 @@ describe("PreviewView", () => {
   });
 
   it("retains the annotation locally when its own environment loses access during capture", async () => {
+    setup();
     const picked = annotation("annotation-revoked");
     const onSendAnnotation = vi.fn();
     let submitPick: (() => void) | undefined;
@@ -466,7 +514,7 @@ describe("PreviewView", () => {
           submitPick = () => resolve({ annotation: picked, submission: "send" });
         }),
     );
-    await render(view(onSendAnnotation));
+    await using screen = await render(view(onSendAnnotation));
     await userEvent.click(page.getByRole("button", { name: "Annotate preview" }));
     await vi.waitFor(() => expect(submitPick).toBeDefined());
     expect(mocks.setAnnotationSendEnabled).toHaveBeenLastCalledWith(TEST_RUNTIME_TAB_ID, true);
@@ -474,7 +522,7 @@ describe("PreviewView", () => {
     mocks.readEnvironmentScope.mockImplementation(
       (environmentId?: unknown) => environmentId !== TEST_THREAD_REF.environmentId,
     );
-    await render(view(onSendAnnotation));
+    await screen.rerender(view(onSendAnnotation));
     expect(mocks.setAnnotationSendEnabled).toHaveBeenLastCalledWith(TEST_RUNTIME_TAB_ID, false);
     await act(async () => submitPick!());
     await vi.waitFor(() =>
@@ -484,13 +532,14 @@ describe("PreviewView", () => {
 
     mocks.readEnvironmentScope.mockReturnValue(true);
     mocks.pickElement.mockResolvedValue({ annotation: picked, submission: "send" });
-    await render(view(onSendAnnotation));
+    await screen.rerender(view(onSendAnnotation));
     await userEvent.click(page.getByRole("button", { name: "Annotate preview" }));
     await vi.waitFor(() => expect(onSendAnnotation).toHaveBeenCalledWith(picked, null));
     expect(mocks.setAnnotationSendEnabled).toHaveBeenLastCalledWith(TEST_RUNTIME_TAB_ID, true);
   });
 
   it("does not reopen a cancelled picker after the permission update finishes", async () => {
+    setup();
     let finishUpdate: (() => void) | undefined;
     mocks.setAnnotationSendEnabled.mockImplementationOnce(
       () =>
@@ -498,33 +547,19 @@ describe("PreviewView", () => {
           finishUpdate = resolve;
         }),
     );
-    await render(view());
+    await using _screen = await render(view());
     await userEvent.click(page.getByRole("button", { name: "Annotate preview" }));
-    await vi.waitFor(() => expect(finishUpdate).toBeDefined());
+    expect(finishUpdate).toBeDefined();
     expect(mocks.pickElement).not.toHaveBeenCalled();
     await userEvent.click(page.getByRole("button", { name: "Cancel annotation" }));
     expect(mocks.cancelPickElement).toHaveBeenCalledWith(TEST_RUNTIME_TAB_ID);
-    await act(async () => finishUpdate!());
+    await act(() => finishUpdate!());
     expect(mocks.pickElement).not.toHaveBeenCalled();
     expect(mocks.addPreviewAnnotation).not.toHaveBeenCalled();
   });
 
-  it("warns when main dropped the crop before handing over the pick", async () => {
-    const picked = annotation("annotation-3");
-    const onSendAnnotation = vi.fn();
-    mocks.pickElement.mockResolvedValue({
-      annotation: picked,
-      submission: "send",
-      screenshotFailed: true,
-    });
-    await render(view(onSendAnnotation));
-    await userEvent.click(page.getByRole("button", { name: "Annotate preview" }));
-
-    await vi.waitFor(() => expect(onSendAnnotation).toHaveBeenCalledWith(picked, null));
-    expect(mocks.toast).toHaveBeenCalledOnce();
-  });
-
   it("still sends annotation text when the picked element's crop is malformed", async () => {
+    setup();
     const picked = annotation("annotation-2", {
       dataUrl: "data:image/png;base64,%%%",
       width: 10,
@@ -533,7 +568,7 @@ describe("PreviewView", () => {
     });
     const onSendAnnotation = vi.fn();
     mocks.pickElement.mockResolvedValue({ annotation: picked, submission: "send" });
-    await render(view(onSendAnnotation));
+    await using _screen = await render(view(onSendAnnotation));
     await userEvent.click(page.getByRole("button", { name: "Annotate preview" }));
 
     const sent = { ...picked, screenshot: null };

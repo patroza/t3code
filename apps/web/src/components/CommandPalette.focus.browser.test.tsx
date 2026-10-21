@@ -1,6 +1,6 @@
-import { act, useImperativeHandle, useRef } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { act, render as renderScreen, fakeTimers } from "../../test/render";
+import { useImperativeHandle, useRef } from "react";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
 import { CommandPalette } from "./CommandPalette";
 import { useComposerHandleContext } from "../composerHandleContext";
@@ -77,62 +77,66 @@ vi.mock("./settings/useAvailableSettingsSearchItems", () => ({
   useAvailableSettingsSearchItems: () => [],
 }));
 
-let root: Root;
-let container: HTMLDivElement;
-
-beforeEach(() => {
-  vi.useFakeTimers();
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-});
-
-afterEach(async () => {
-  await act(async () => {
-    root.unmount();
-    await vi.runOnlyPendingTimersAsync();
+async function setup() {
+  await using resources = new AsyncDisposableStack();
+  resources.defer(async () => {
+    vi.unstubAllGlobals();
   });
-  container.remove();
-  vi.unstubAllGlobals();
-  vi.useRealTimers();
-});
+  const container = document.createElement("div");
 
-async function flushFocus() {
-  await act(() => vi.advanceTimersByTimeAsync(0));
-  await act(() => vi.advanceTimersToNextFrame());
-}
+  resources.use(fakeTimers());
 
-async function dismissPalette() {
-  await act(() =>
-    document.activeElement?.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
-    ),
-  );
-  await flushFocus();
-  expect(document.querySelector("[data-command-palette]")).toBeNull();
-}
+  const screen = resources.use(await renderScreen(<></>, { container }));
 
-function Composer() {
-  const handle = useComposerHandleContext();
-  const input = useRef<HTMLTextAreaElement>(null);
-  useImperativeHandle(
-    handle,
-    () =>
-      ({
-        focusAtEnd: () => {
-          input.current?.focus();
-          input.current?.setSelectionRange(input.current.value.length, input.current.value.length);
-        },
-      }) as NonNullable<NonNullable<typeof handle>["current"]>,
-  );
-  return <textarea ref={input} aria-label="Composer" defaultValue="Draft prompt" />;
+  async function flushFocus() {
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    await act(() => vi.runOnlyPendingTimersAsync());
+  }
+  async function dismissPalette() {
+    await act(() =>
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      ),
+    );
+    await flushFocus();
+    expect(document.querySelector("[data-command-palette]")).toBeNull();
+  }
+  function Composer() {
+    const handle = useComposerHandleContext();
+    const input = useRef<HTMLTextAreaElement>(null);
+    useImperativeHandle(
+      handle,
+      () =>
+        ({
+          focusAtEnd: () => {
+            input.current?.focus();
+            input.current?.setSelectionRange(
+              input.current.value.length,
+              input.current.value.length,
+            );
+          },
+        }) as NonNullable<NonNullable<typeof handle>["current"]>,
+    );
+    return <textarea ref={input} aria-label="Composer" defaultValue="Draft prompt" />;
+  }
+  const lifetime = resources.move();
+  return {
+    screen,
+    container,
+    flushFocus,
+    dismissPalette,
+    Composer,
+    [Symbol.asyncDispose]: () => lifetime.disposeAsync(),
+  };
 }
 
 describe("command palette focus restoration", () => {
   it("returns to the previously focused Settings field when no composer is mounted", async () => {
+    await using harness = await setup();
+    const { screen, container, flushFocus, dismissPalette } = harness;
+
     await act(() =>
-      root.render(
+      screen.rerender(
         <CommandPalette>
           <input aria-label="Settings field" />
         </CommandPalette>,
@@ -148,8 +152,11 @@ describe("command palette focus restoration", () => {
   });
 
   it("focuses the replacement command input after leaving the file picker", async () => {
+    await using harness = await setup();
+    const { screen, container, flushFocus, dismissPalette } = harness;
+
     await act(() =>
-      root.render(
+      screen.rerender(
         <CommandPalette>
           <input aria-label="Settings field" />
         </CommandPalette>,
@@ -186,8 +193,11 @@ describe("command palette focus restoration", () => {
   });
 
   it("focuses the mounted composer at the end instead of the previous field", async () => {
+    await using harness = await setup();
+    const { screen, container, flushFocus, dismissPalette, Composer } = harness;
+
     await act(() =>
-      root.render(
+      screen.rerender(
         <CommandPalette>
           <input aria-label="Previous field" />
           <Composer />

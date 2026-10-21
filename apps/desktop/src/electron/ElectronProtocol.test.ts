@@ -1,11 +1,11 @@
-import { assert, describe, it } from "@effect/vitest";
+import * as TestClock from "effect/testing/TestClock";
 import * as Cause from "effect/Cause";
-import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import { assert, describe, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as TestClock from "effect/testing/TestClock";
 import { beforeEach, vi } from "vite-plus/test";
 
 const { handleMock, netFetchMock, unhandleMock } = vi.hoisted(() => ({
