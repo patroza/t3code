@@ -30,7 +30,7 @@ List open PRs into `fork/dev` whose head branch matches `sync/upstream-*`. Keep 
 
 1. `origin/fork/dev` is not an ancestor of that head: merge `origin/fork/dev` into the weld branch. Do not rebase a branch that already contains the upstream merge commit.
 2. `upstream/main` is not an ancestor of that head: merge `upstream/main` into the same branch. A ready PR pays the full ship gate on the push. Retitle the PR to the new upstream sha. Do not land the previous tip.
-3. Both are ancestors, the PR is ready, `mergeable` is `MERGEABLE`, the base is `fork/dev`, and every required Fork CI check on that head is green: land it and stop.
+3. Both are ancestors, the PR is ready, `mergeable` is `MERGEABLE`, the base is `fork/dev`, and every required Fork CI check on that head is green: land it, then verify deployment below.
 4. Both are ancestors but a check is still running: watch that head. Do not open another PR.
 5. A check failed: fix it on that branch.
 
@@ -84,7 +84,17 @@ Use that command, not the GitHub merge button. `AGENTS.md` records what a squash
 
 Do not push `origin/main`. This task does not move the mirror.
 
-Merging the PR does not deploy. Fork CI on the `fork/dev` push approves that merge SHA. Say the environment is deployed only when that SHA is the one that was released.
+## Verify deployment
+
+Continue monitoring after the merge. A green PR and a merged branch are not the deployment result.
+
+Follow Fork CI for the merged `fork/dev` SHA, then the configured automatic deployment through the private operations repository's runbook. Keep machine topology, service commands, and deployment implementation in that private repository.
+
+Verify the deployed revision and service health before calling the update complete. If a newer CI-approved revision supersedes the merge, confirm it contains the merge and verify that revision instead. Report the actual running revision; do not infer success from a queued release or a running service alone.
+
+A failed deployment is unfinished work: inspect the failure and repair or retry within the user's authorization, preserving the exact-CI-approved-SHA and frozen-lockfile safeguards. If credentials, permissions, or another external dependency prevent completion, report the concrete blocker and the last verified running revision.
+
+Keep watching until deployment is verified or a concrete blocker is handed back. Stop app-owned monitoring when handing the work back. Server deployment does not prove a mobile/TestFlight or desktop release; verify those artifacts separately when they are in scope.
 
 ## Leave the rest alone
 
