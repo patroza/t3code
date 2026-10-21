@@ -28,6 +28,7 @@ import {
   type ServerProvider,
   type ThreadId,
   type UploadChatAttachment,
+  type VcsListRefsResult,
   type VcsResolveBranchChangeRequestResult,
   type VcsStatusStreamEvent,
 } from "@t3tools/contracts";
@@ -240,8 +241,10 @@ export interface T3SessionService {
     readonly modelSelection: ModelSelection;
     readonly runtimeMode?: RuntimeMode;
     readonly interactionMode?: ProviderInteractionMode;
-    readonly baseBranch: string;
+    readonly baseBranch?: string;
     readonly local: boolean;
+    /** Fetch the base branch from its remote. Omitted on a main-checkout launch. */
+    readonly startFromOrigin?: boolean;
     /** User images from Discord (same shape as web composer uploads). */
     readonly attachments?: ReadonlyArray<UploadChatAttachment>;
     /**
@@ -343,6 +346,8 @@ export interface T3SessionService {
     onStatus: (event: VcsStatusStreamEvent) => Effect.Effect<void, unknown, unknown>,
   ) => Effect.Effect<void, T3SessionError, unknown>;
   readonly refreshVcsStatus: (cwd: string) => Effect.Effect<void, T3SessionError>;
+  /** Refs for the project checkout, in composer picker order. */
+  readonly listRefs: (cwd: string) => Effect.Effect<VcsListRefsResult, T3SessionError>;
   /**
    * Resolve a signed absolute HTTP URL for a chat attachment (image) stored on the T3 server.
    * Used so Discord can download and re-upload the file as a message attachment.
@@ -1058,6 +1063,13 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
         const runtimeMode = input.runtimeMode ?? botConfig.t3DefaultRuntimeMode;
         const worktreeBranch = newChatWorktreeBranch(input.sourceHint?.channel);
 
+        if (!input.local && (input.baseBranch === undefined || input.baseBranch.length === 0)) {
+          return yield* Effect.fail(
+            new T3SessionError(
+              `No base branch for ${input.project.workspaceRoot}. The repository has no default branch.`,
+            ),
+          );
+        }
         yield* claimBrowserHost(threadId);
         const attachments = yield* persistAttachments(threadId, messageId, input.attachments ?? []);
         yield* Effect.tryPromise({
@@ -1076,9 +1088,9 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
                   ? { type: "root" }
                   : {
                       type: "worktree",
-                      baseRef: input.baseBranch,
+                      baseRef: input.baseBranch!,
                       branch: worktreeBranch,
-                      startFromOrigin: true,
+                      startFromOrigin: input.startFromOrigin === true,
                     },
                 initialMessage: { messageId, text: input.prompt, attachments },
                 ...(input.sourceHint ? { sourceHint: input.sourceHint } : {}),
@@ -1275,6 +1287,22 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
               },
             ),
         }).pipe(Effect.asVoid),
+      listRefs: (cwd) =>
+        Effect.tryPromise({
+          try: () =>
+            runtime.runPromise(
+              requireSession().client[WS_METHODS.vcsListRefs]({
+                cwd,
+                // Same page size as the composer branch picker. Current and
+                // default refs are sorted to the front of that page.
+                limit: 100,
+              }),
+            ),
+          catch: (cause) =>
+            new T3SessionError(`Could not list branches for ${cwd}: ${messageFromCause(cause)}`, {
+              cause,
+            }),
+        }),
       respondToApproval: (threadId, requestId, decision) =>
         dispatch({
           type: "runtime-request.respond",

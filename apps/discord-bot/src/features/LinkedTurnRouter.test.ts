@@ -2,7 +2,13 @@
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import { ClientSourceHint, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  ClientSourceHint,
+  DEFAULT_SERVER_SETTINGS,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import { describe, expect } from "vite-plus/test";
@@ -25,6 +31,12 @@ describe("Teams linked turn attribution", () => {
       );
       const launchedModels: Array<
         Parameters<T3SessionService["startTurnWithWorktree"]>[0]["modelSelection"]
+      > = [];
+      const launchedWorkspaces: Array<
+        Pick<
+          Parameters<T3SessionService["startTurnWithWorktree"]>[0],
+          "local" | "baseBranch" | "startFromOrigin"
+        >
       > = [];
       const dispatched: Array<ClientSourceHint | undefined> = [];
       const selections: Array<Parameters<T3SessionService["resolveModelSelection"]>[0]> = [];
@@ -69,10 +81,23 @@ describe("Teams linked turn attribution", () => {
             })!;
           }),
         fetchThreadDetail: () => Effect.succeed({ thread: { projectId: liveProjectId } }),
+        serverConfig: () =>
+          Effect.succeed({
+            settings: DEFAULT_SERVER_SETTINGS,
+            newProjectsRoot: "/projects",
+          }),
+        shell: () => Effect.succeed({ threads: [] }),
         startTurnWithWorktree: (input: Parameters<T3SessionService["startTurnWithWorktree"]>[0]) =>
           Effect.sync(() => {
             dispatched.push(input.sourceHint);
             launchedModels.push(input.modelSelection);
+            launchedWorkspaces.push({
+              local: input.local,
+              ...(input.baseBranch === undefined ? {} : { baseBranch: input.baseBranch }),
+              ...(input.startFromOrigin === undefined
+                ? {}
+                : { startFromOrigin: input.startFromOrigin }),
+            });
             return { threadId, messageId: "message:first" };
           }),
         startTurn: (input: Parameters<T3SessionService["startTurn"]>[0]) =>
@@ -128,6 +153,10 @@ describe("Teams linked turn attribution", () => {
         expect(launchedModels).toEqual([
           { instanceId: "grok", model: "grok-4.7" },
           { instanceId: "grok", model: "grok-4.7" },
+        ]);
+        expect(launchedWorkspaces).toEqual([
+          { local: true, startFromOrigin: false },
+          { local: true, startFromOrigin: false },
         ]);
 
         expect((yield* dispatch("second-aad-id")).isNew).toBe(false);

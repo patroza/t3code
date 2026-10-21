@@ -69,7 +69,9 @@ const program = Effect.gen(function* () {
         publicWebUiBaseUrl: workspace.publicWebOrigin ?? workspace.webOrigin,
         projectAliasesPath: workspace.projectAliasesPath,
         identityMapPath: workspace.identityMapPath,
-        t3DefaultBaseBranch: workspace.defaultBaseBranch ?? defaults.t3DefaultBaseBranch,
+        ...(workspace.defaultBaseBranch?.trim()
+          ? { t3DefaultBaseBranch: workspace.defaultBaseBranch.trim() }
+          : {}),
         t3DefaultInstanceId: workspace.defaultInstanceId ?? defaults.t3DefaultInstanceId,
         t3DefaultModel: workspace.defaultModel ?? defaults.t3DefaultModel,
         teamsEnabled: false,
