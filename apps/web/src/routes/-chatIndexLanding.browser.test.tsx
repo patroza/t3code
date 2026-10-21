@@ -1,7 +1,7 @@
 import { ProjectId, EnvironmentId } from "@t3tools/contracts";
-import { act, createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { createElement } from "react";
+import { render } from "../../test/render";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
   pathname: "/",
@@ -55,62 +55,56 @@ vi.mock("~/components/ui/refresh-icon", () => ({ RefreshIcon: "span" }));
 
 import { Route } from "./_chat.index";
 
-let root: Root | undefined;
-
-beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+function setup() {
   state.pathname = "/";
   state.deepLink = false;
   state.projectPresent = true;
   state.snapshotProjectId = "project";
   state.startDraft.mockReset().mockResolvedValue({ threadId: "draft" });
-});
-afterEach(async () => {
-  if (root) await act(() => root!.unmount());
-  root = undefined;
-  vi.unstubAllGlobals();
-});
+}
 
 async function landOnIndex() {
   const component = Route.options.component!;
   if ("preload" in component && typeof component.preload === "function") {
     await component.preload();
   }
-  root = createRoot(document.createElement("div"));
-  await act(async () => {
-    root!.render(createElement(Route.options.component!));
-  });
+  return render(createElement(Route.options.component!), { router: false });
 }
 
 describe("index draft landing", () => {
   it("starts a draft in the selected project", async () => {
-    await landOnIndex();
+    setup();
+    await using _screen = await landOnIndex();
     expect(state.startDraft).toHaveBeenCalledWith(
       { environmentId: project.environmentId, projectId: project.id },
       { replace: true },
     );
   });
   it("leaves pending thread deep links to their coordinator", async () => {
+    setup();
     state.deepLink = true;
-    await landOnIndex();
+    await using _screen = await landOnIndex();
     expect(state.startDraft).not.toHaveBeenCalled();
   });
   it("does not replace a destination while the old index remains mounted", async () => {
+    setup();
     state.pathname = "/local/existing-thread";
-    await landOnIndex();
+    await using _screen = await landOnIndex();
     expect(state.startDraft).not.toHaveBeenCalled();
   });
   it("does not start a draft for a project removed since the render snapshot", async () => {
+    setup();
     state.projectPresent = false;
-    await landOnIndex();
+    await using _screen = await landOnIndex();
     expect(state.startDraft).not.toHaveBeenCalled();
   });
   it("tries the replacement project when the first project disappears during draft startup", async () => {
+    setup();
     state.startDraft.mockImplementationOnce(async () => {
       state.snapshotProjectId = "replacement";
       return null;
     });
-    await landOnIndex();
+    await using _screen = await landOnIndex();
     expect(state.startDraft).toHaveBeenCalledTimes(2);
     expect(state.startDraft).toHaveBeenLastCalledWith(
       { environmentId: project.environmentId, projectId: ProjectId.make("replacement") },

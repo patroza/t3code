@@ -374,6 +374,8 @@ const compilerTestProject = {
   extends: true,
   test: {
     name: "compiler",
+    // Compiling the full ChatView body is CPU work; use this project ceiling for compiler tests.
+    testTimeout: 30_000,
     sequence: { groupOrder: 2 },
     include: [...compilerTestFiles],
   },

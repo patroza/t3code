@@ -538,6 +538,26 @@ describe("PreviewView", () => {
     expect(mocks.setAnnotationSendEnabled).toHaveBeenLastCalledWith(TEST_RUNTIME_TAB_ID, true);
   });
 
+  it("does not reopen a cancelled picker after the permission update finishes", async () => {
+    setup();
+    let finishUpdate: (() => void) | undefined;
+    mocks.setAnnotationSendEnabled.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishUpdate = resolve;
+        }),
+    );
+    await using _screen = await render(view());
+    await userEvent.click(page.getByRole("button", { name: "Annotate preview" }));
+    expect(finishUpdate).toBeDefined();
+    expect(mocks.pickElement).not.toHaveBeenCalled();
+    await userEvent.click(page.getByRole("button", { name: "Cancel annotation" }));
+    expect(mocks.cancelPickElement).toHaveBeenCalledWith(TEST_RUNTIME_TAB_ID);
+    await act(() => finishUpdate!());
+    expect(mocks.pickElement).not.toHaveBeenCalled();
+    expect(mocks.addPreviewAnnotation).not.toHaveBeenCalled();
+  });
+
   it("still sends annotation text when the picked element's crop is malformed", async () => {
     setup();
     const picked = annotation("annotation-2", {
