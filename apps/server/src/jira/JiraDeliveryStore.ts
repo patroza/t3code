@@ -33,7 +33,7 @@ export const JiraDelivery = Schema.Struct({
   status: Schema.Literals(["received", "processing", "completed", "rejected"]),
   createdAt: Schema.String,
   updatedAt: Schema.String,
-  /** `bug-report` deliveries are not posted back onto the public Jira issue. */
+  /** `bug-report` posts the analysis and the fix as top-level comments on the issue. */
   kind: Schema.optional(Schema.Literals(["comment", "bug-report"])),
   discordThreadId: Schema.optional(Schema.NullOr(Schema.String)),
 });

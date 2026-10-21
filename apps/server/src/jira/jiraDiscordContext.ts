@@ -5,8 +5,6 @@
  */
 import * as NodeFSP from "node:fs/promises";
 
-import { topicLinksJiraProject } from "./JiraBugReport.ts";
-
 const DISCORD_API_BASE_URL = "https://discord.com/api/v10";
 const DISCORD_DEFAULT_ENV_FILE = "/run/secrets/discord-bot.env";
 
@@ -86,65 +84,4 @@ export async function postDiscordChannelMessage(input: {
     id: json.id ?? "",
     channelId: json.channel_id ?? input.channelId,
   };
-}
-
-export async function openDiscordThreadFromMessage(input: {
-  readonly token: string;
-  readonly channelId: string;
-  readonly messageId: string;
-  readonly name: string;
-}): Promise<string> {
-  const url = `${DISCORD_API_BASE_URL}/channels/${input.channelId}/messages/${input.messageId}/threads`;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bot ${input.token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      name: input.name.slice(0, 100),
-      auto_archive_duration: 1440,
-    }),
-  });
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Discord create thread failed (${response.status}): ${body}`);
-  }
-  const json = (await response.json()) as { id?: string };
-  const id = json.id?.trim() ?? "";
-  if (id.length === 0) throw new Error("Discord create thread returned no id");
-  return id;
-}
-
-type DiscordGuildChannel = {
-  readonly id?: string;
-  readonly type?: number;
-  readonly topic?: string | null;
-};
-
-/** Text and announcement channels whose topic links this Jira project. */
-export async function findDiscordAlertChannels(input: {
-  readonly token: string;
-  readonly guildId: string;
-  readonly projectKey: string;
-}): Promise<ReadonlyArray<string>> {
-  const url = `${DISCORD_API_BASE_URL}/guilds/${input.guildId}/channels`;
-  const response = await fetch(url, {
-    headers: { Authorization: `Bot ${input.token}` },
-  });
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Discord list channels failed (${response.status}): ${body}`);
-  }
-  const channels = (await response.json()) as ReadonlyArray<DiscordGuildChannel>;
-  const ids: string[] = [];
-  for (const channel of channels) {
-    const type = channel.type;
-    if (type !== 0 && type !== 5) continue;
-    const id = channel.id?.trim() ?? "";
-    if (id.length === 0) continue;
-    if (!topicLinksJiraProject(channel.topic, input.projectKey)) continue;
-    ids.push(id);
-  }
-  return ids;
 }

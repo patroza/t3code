@@ -150,7 +150,6 @@ webhook.
 | `T3CODE_JIRA_ACK_EMOJI_ID`       | no       | `1f440` | Read receipt on the trigger comment (`👀`); empty string disables |
 | `T3CODE_JIRA_BOT_ACCOUNT_ID`     | no       | —       | Alias for wiki/ADF `[~accountId:…]` mention matching              |
 | `T3CODE_JIRA_CONFLUENCE_PAGES`   | no       | empty   | Where a reply goes when it does not fit in a comment (see below)  |
-| `T3CODE_JIRA_ALERT_GUILD_ID`     | no       | —       | Discord guild scanned for `omegent-alert-link-<KEY>`              |
 
 \*When any required value is missing, the integration is **disabled** (webhook returns 404).
 
@@ -204,24 +203,18 @@ receipt. `1f44d` sends 👍 instead. A failed receipt does not block the turn.
 
 A Bug created in a configured Jira space is picked up on its own. The Jira webhook has to send Issue created, as well as the comment events it already sends. Configured spaces are the keys in `T3CODE_JIRA_PROJECT_MAP` (for example `SA` and `CFG`). When `T3CODE_JIRA_ALLOWED_PROJECTS` is set, the key has to be in that list too.
 
-The report is public input. It is not a prompt. Nothing in the summary or description is run, and the review is not posted back on the Jira issue.
+The report is public input. It is not a prompt. Nothing in the summary or description is run.
 
-Put `omegent-alert-link-SA` on the Discord channel topic for that space (several keys can share a channel). The same token in a Teams channel description names that channel; this posts in Discord. The channel still needs `omegent-link-<shortName>` when a person mentions the bot there.
+The review runs in a T3 thread. When the analysis is ready, it is posted as a comment on the Jira issue and mentions the mapped team (people who have a Jira account id). A proposed fix is posted the same way and mentions the team again. Those comments are top-level, because a new bug has no triggering comment, and they mention the team rather than the reporter. Nothing from this flow is posted to Discord. A review that stops before an analysis leaves a short note and does not mention the team.
 
-The bot opens a thread, studies the repository, and prepares a fix. It mentions the mapped Discord team when the analysis is ready, and again when a fix is proposed.
-
-```text
-omegent-link-macs-scanner omegent-alert-link-SA
-```
-
-When the links file names exactly one guild, `T3CODE_JIRA_ALERT_GUILD_ID` can stay empty.
+The agent does not comment on the issue itself. The bridge posts those comments.
 
 ## Security
 
 - Require a shared secret on every delivery (`Authorization: Bearer …` or `X-T3-Webhook-Secret`).
 - Cap body size at 1 MiB.
 - Comment turns accept `comment_created` and `comment_updated` only, and only with an explicit mention.
-- Bug turns accept `jira:issue_created` for issue type Bug in a configured space. The report text is data.
+- Bug turns accept `jira:issue_created` for issue type Bug in a configured space. The report text is data. The analysis and the proposed fix are commented on the issue.
 - Allowlist projects when configured.
 - Do not put secrets in prompts, delivery logs, or git.
 - Prefer the free Atlassian **service account** for REST replies (see

@@ -5,6 +5,7 @@ import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
 import { JiraAppConfig } from "./JiraAppConfig.ts";
+import type { JiraAdfMention } from "./JiraWebhookPayload.ts";
 import {
   appendAdfSection,
   confluenceBrowseUrl,
@@ -37,6 +38,12 @@ export class JiraAppClient extends Context.Service<
       /** @-mention this Jira user at the start of the reply (normal reply style). */
       readonly mentionAccountId?: string | null;
       readonly mentionDisplayName?: string | null;
+      /**
+       * @-mention these Jira users at the start of the comment.
+       * When set, replaces `mentionAccountId`. Bug reviews pass the mapped team
+       * and leave `parentCommentId` empty so the comment stays top-level.
+       */
+      readonly mentions?: ReadonlyArray<JiraAdfMention> | null;
     }) => Effect.Effect<{ readonly id: string; readonly parentId: string | null } | null, never>;
     /**
      * Best-effort reaction on a comment (👀). Jira Cloud support varies; returns the emoji id
@@ -174,18 +181,25 @@ export const make = Effect.gen(function* () {
     readonly fallbackParentCommentId?: string | null;
     readonly mentionAccountId?: string | null;
     readonly mentionDisplayName?: string | null;
+    readonly mentions?: ReadonlyArray<JiraAdfMention> | null;
   }) {
     if (!config.enabled) return null;
 
     const url = `${config.baseUrl}/rest/api/3/issue/${encodeURIComponent(input.issueKey)}/comment`;
+    const mentions =
+      input.mentions != null
+        ? input.mentions
+        : input.mentionAccountId
+          ? [
+              {
+                accountId: input.mentionAccountId,
+                displayName: input.mentionDisplayName,
+              },
+            ]
+          : [];
     const adfBody = markdownToAdf(input.body, {
       platform: "jira",
-      mention: input.mentionAccountId
-        ? {
-            accountId: input.mentionAccountId,
-            displayName: input.mentionDisplayName,
-          }
-        : null,
+      mentions,
     });
 
     /** Jira accepts parentId as string or number; prefer numeric when pure digits. */

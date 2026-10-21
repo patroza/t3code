@@ -46,15 +46,10 @@ import {
 } from "../workItems/ThreadWorkItemStore.ts";
 import { JiraAppClient } from "./JiraAppClient.ts";
 import {
-  bugOpener,
-  bugThreadTitle,
   buildJiraBugReportPrompt,
   collectBugMilestones,
-  discordAlertMessages,
   fallbackBugMilestones,
-  soleGuildId,
-  teamDiscordMentionIds,
-  teamDiscordMentionLine,
+  teamJiraMentions,
   type BugMilestones,
   type JiraBugReport,
 } from "./JiraBugReport.ts";
@@ -74,13 +69,15 @@ import { JiraDeliveryStore, type StoredJiraDelivery } from "./JiraDeliveryStore.
 import { resolveDiscordLinkForJiraIssue } from "./JiraThreadLookup.ts";
 import { classifyJiraActorTrust, type JiraActorTrustDecision } from "./jiraActorTrust.ts";
 import {
-  findDiscordAlertChannels,
   formatDiscordJiraContextNote,
-  openDiscordThreadFromMessage,
   postDiscordChannelMessage,
   resolveDiscordBotToken,
 } from "./jiraDiscordContext.ts";
-import { buildJiraTurnPrompt, type JiraIssueInvocation } from "./JiraWebhookPayload.ts";
+import {
+  buildJiraTurnPrompt,
+  type JiraAdfMention,
+  type JiraIssueInvocation,
+} from "./JiraWebhookPayload.ts";
 
 const NOT_LINKED_RESPONSE =
   "not yet linked. No T3 thread lists this issue, and auto-create could not pick a project (set T3CODE_JIRA_PROJECT_MAP for this Jira key, T3CODE_JIRA_DEFAULT_PROJECT_ID, or ensure exactly one T3 project exists).";
@@ -956,45 +953,54 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const postBugDiscord = Effect.fn("JiraIssueBridge.postBugDiscord")(function* (
-    discordThreadId: string | null | undefined,
-    token: string | null,
+  /**
+   * Top-level comment on the bug. There is no triggering comment to thread under.
+   * Team mentions are ADF nodes. A failed review passes an empty mention list.
+   */
+  const postBugJira = Effect.fn("JiraIssueBridge.postBugJira")(function* (
+    delivery: StoredJiraDelivery,
     text: string,
-    mentionLine: string,
-    mentionIds: ReadonlyArray<string>,
+    mentions: ReadonlyArray<JiraAdfMention>,
   ) {
-    if (token === null || discordThreadId === null || discordThreadId === undefined) {
-      return true;
-    }
-    const messages = discordAlertMessages({
-      text,
-      mentionLine,
+    const trimmed = text.trim();
+    if (trimmed.length === 0) return true;
+    const prepared = partitionJiraComment(trimmed);
+    const notice =
+      prepared.overflow === null ? null : yield* storeOverflow(delivery, prepared.overflow);
+    const inline = [prepared.inline, notice]
+      .filter((part): part is string => part !== null && part.trim().length > 0)
+      .join("\n\n");
+    const body = formatJiraComment(
+      appendJiraT3ThreadLink(
+        inline,
+        delivery.threadId === null
+          ? null
+          : {
+              hostedAppUrl,
+              environmentId,
+              threadId: delivery.threadId,
+            },
+      ),
+    );
+    if (body.length === 0) return true;
+    const posted = yield* jira.addIssueComment({
+      issueKey: delivery.issueKey,
+      body,
+      parentCommentId: null,
+      mentions,
     });
-    for (const content of messages) {
-      const mentionsThisChunk = mentionLine.length > 0 && content.includes(mentionLine);
-      const posted = yield* Effect.promise(() =>
-        postDiscordChannelMessage({
-          token,
-          channelId: discordThreadId,
-          content,
-          mentionUserIds: mentionsThisChunk ? mentionIds : [],
-        })
-          .then(() => ({ _tag: "ok" as const }))
-          .catch((cause: unknown) => ({ _tag: "err" as const, cause })),
-      );
-      if (posted._tag === "err") {
-        yield* Effect.logError("Failed to post Jira bug update to Discord", {
-          cause: posted.cause,
-        });
-        return false;
-      }
+    if (posted === null) {
+      yield* Effect.logError("Failed to post Jira bug update on the issue", {
+        issueKey: delivery.issueKey,
+      });
+      return false;
     }
     return true;
   });
 
   /**
-   * Watch a bug-report turn. The public Jira issue is not commented.
-   * Discord is mentioned when the analysis is ready, and again for a fix.
+   * Watch a bug-report turn. Analysis and fix are commented on the Jira issue.
+   * The mapped team is mentioned on each of those comments, and not on a failure.
    */
   const watchBugReport = Effect.fn("JiraIssueBridge.watchBugReport")(function* (
     delivery: StoredJiraDelivery,
@@ -1013,12 +1019,10 @@ const make = Effect.gen(function* () {
     let tracked: StoredJiraDelivery = delivery;
     let announced: BugMilestones = { analysis: null, fix: null };
     const people = yield* identity.listMapPeople();
-    const mentionLine = teamDiscordMentionLine(people);
-    const mentionIds = teamDiscordMentionIds(people);
-    const token = yield* Effect.promise(() => resolveDiscordBotToken());
+    const teamMentions = teamJiraMentions(people);
 
     const publish = (text: string, mentions: boolean) =>
-      postBugDiscord(tracked.discordThreadId, token, text, mentions ? mentionLine : "", mentionIds);
+      postBugJira(tracked, text, mentions ? teamMentions : []);
 
     while ((yield* Clock.currentTimeMillis) - startedAt < timeoutMs) {
       const snapshot = yield* projection
@@ -1190,84 +1194,15 @@ const make = Effect.gen(function* () {
       projectKey: report.projectKey,
     });
 
-    const token = yield* Effect.promise(() => resolveDiscordBotToken());
-    const linksPath = config.discordLinksPath;
-    const linksRaw =
-      linksPath === null || linksPath.length === 0
-        ? ""
-        : yield* fileSystem.readFileString(linksPath).pipe(Effect.orElseSucceed(() => ""));
-    const guildId = config.alertGuildId ?? soleGuildId(linksRaw);
-    let discordThreadId: string | null = null;
-    if (token === null || guildId === null) {
-      yield* Effect.logWarning("Jira bug has no Discord guild or bot token", {
-        issueKey: report.issueKey,
-        hasToken: token !== null,
-        guildId,
-      });
-    } else {
-      const channels = yield* Effect.promise(() =>
-        findDiscordAlertChannels({
-          token,
-          guildId,
-          projectKey: report.projectKey,
-        })
-          .then((channelIds) => ({ _tag: "ok" as const, channelIds }))
-          .catch((cause: unknown) => ({ _tag: "err" as const, cause })),
-      );
-      if (channels._tag === "err") {
-        yield* Effect.logError("Jira bug could not list Discord channels", {
-          issueKey: report.issueKey,
-          cause: channels.cause,
-        });
-      } else if (channels.channelIds.length !== 1) {
-        yield* Effect.logWarning("Jira bug needs exactly one omegent-alert-link channel", {
-          issueKey: report.issueKey,
-          projectKey: report.projectKey,
-          channelIds: channels.channelIds,
-        });
-      } else {
-        const channelId = channels.channelIds[0]!;
-        const opened = yield* Effect.promise(() =>
-          postDiscordChannelMessage({
-            token,
-            channelId,
-            content: bugOpener(report),
-          })
-            .then((message) =>
-              openDiscordThreadFromMessage({
-                token,
-                channelId,
-                messageId: message.id,
-                name: bugThreadTitle(report),
-              }),
-            )
-            .then((threadId) => ({ _tag: "ok" as const, threadId }))
-            .catch((cause: unknown) => ({ _tag: "err" as const, cause })),
-        );
-        if (opened._tag === "err") {
-          yield* Effect.logError("Jira bug could not open a Discord thread", {
-            issueKey: report.issueKey,
-            channelId,
-            cause: opened.cause,
-          });
-        } else {
-          discordThreadId = opened.threadId;
-        }
-      }
-    }
-
     const thread = yield* createThreadForIssue({
       issueKey: report.issueKey,
       issueSummary: report.summary,
       projectKey: report.projectKey,
     });
     if (thread === null) {
-      if (discordThreadId !== null && token !== null) {
-        yield* postBugDiscord(discordThreadId, token, "The review did not start.", "", []);
-      }
+      yield* postBugJira(initial, "The review did not start.", []);
       yield* deliveries.put({
         ...initial,
-        discordThreadId,
         status: "rejected",
         updatedAt: DateTime.formatIso(yield* DateTime.now),
       });
@@ -1289,7 +1224,6 @@ const make = Effect.gen(function* () {
       threadId: thread.id,
       previousTurnId: thread.latestTurn?.turnId ?? null,
       userMessageId: messageId,
-      discordThreadId,
       status: "processing",
       updatedAt: DateTime.formatIso(yield* DateTime.now),
     };
@@ -1331,6 +1265,7 @@ const make = Effect.gen(function* () {
         ),
       );
     if (!dispatched) {
+      yield* postBugJira(processing, "The review did not start.", []);
       yield* deliveries.put({
         ...processing,
         status: "rejected",

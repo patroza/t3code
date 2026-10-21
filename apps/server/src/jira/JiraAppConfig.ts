@@ -53,12 +53,6 @@ export interface EnabledJiraAppConfig {
    * The leaf page is titled with the issue key. Empty means attach a file instead.
    */
   readonly confluencePages: ReadonlyMap<string, JiraConfluencePageTarget>;
-  /**
-   * Guild whose channel topics are scanned for `omegent-alert-link-<KEY>`.
-   * From `T3CODE_JIRA_ALERT_GUILD_ID`. When empty, a links file that names
-   * exactly one guild is used.
-   */
-  readonly alertGuildId: string | null;
 }
 
 export interface DisabledJiraAppConfig {
@@ -109,7 +103,6 @@ const configEffect = Effect.gen(function* () {
     baseBranch: Config.String("T3CODE_JIRA_BASE_BRANCH").pipe(Config.withDefault("main")),
     ackEmojiId: optionalString("T3CODE_JIRA_ACK_EMOJI_ID"),
     confluencePages: Config.String("T3CODE_JIRA_CONFLUENCE_PAGES").pipe(Config.withDefault("")),
-    alertGuildId: optionalString("T3CODE_JIRA_ALERT_GUILD_ID"),
   });
 
   // Prefer T3CODE_* then fall back to shared MCP-style env names.
@@ -158,7 +151,6 @@ const configEffect = Effect.gen(function* () {
     baseBranch: values.baseBranch.trim() || "main",
     ackEmojiId,
     confluencePages: parseJiraConfluencePages(values.confluencePages),
-    alertGuildId: values.alertGuildId?.trim() || null,
   });
 });
 

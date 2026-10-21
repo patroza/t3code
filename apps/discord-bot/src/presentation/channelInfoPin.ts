@@ -193,7 +193,6 @@ function buildChannelInfoPinBody(input: {
     "         --steer (inject now) --queue (park; default mid-turn)",
     "  topic: omegent-fast-mode         New threads start in fast mode",
     "  topic: omegent-default-model-<name>  New threads use that model",
-    "  topic: omegent-alert-link-<KEY>  Jira bugs in that space open a thread",
     "  queued: 📥 until it starts · delete your message to cancel · /steernow to flush",
     "```",
     `Default provider/model: \`${defaultLine}\``,
