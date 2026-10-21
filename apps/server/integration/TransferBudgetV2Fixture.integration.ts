@@ -45,6 +45,7 @@ export function threadCreated(provider: ProviderDriverKind): OrchestrationV2Doma
       forkedFrom: null,
       createdBy: "user",
       creationSource: "web",
+      originSource: null,
       createdAt: now,
       updatedAt: now,
       archivedAt: null,
