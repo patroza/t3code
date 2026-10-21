@@ -159,6 +159,9 @@ on each selected environment, and reset returns to the environment's shared list
 Settings a repository can also declare in `t3.json`, such as the workspace for new threads,
 resolve in one order: a project override, then the environment setting, then `t3.json`, then the
 built-in default. Leave a setting on **Inherit** to let the next tier decide.
+Discord and Teams start a new conversation in that same workspace. A new worktree branches from
+the repository's default branch, and **Start from remote** fetches that branch's latest commit.
+A mention can override one turn with `--local` or `--base <branch>`.
 Browser access changes apply when an agent session next starts.
 
 New worktrees initialize git submodules recursively. If that step is slow because the repository
