@@ -19,8 +19,18 @@ const transportError = (cause: unknown) => new BotTransportError({ cause });
 
 /** Discord wire controls stay in the Discord adapter, outside the shared response runner. */
 export function discordMessageFields(fields: BotMessageFields) {
+  // Working tips also stream the answer. Only a finished message may ping,
+  // so a transient classification does not mention everyone twice.
+  const mentionEveryone =
+    (fields.actions === undefined || fields.actions.length === 0) &&
+    /@(?:everyone|here)\b/u.test(fields.content);
   return {
     content: fields.content,
+    // Discord drops @everyone unless the payload allows it. Only messages that
+    // actually write the mention opt in, so ordinary replies stay quiet.
+    ...(mentionEveryone
+      ? { allowed_mentions: { parse: ["users", "roles", "everyone"] as const } }
+      : {}),
     ...(fields.actions === undefined
       ? {}
       : {

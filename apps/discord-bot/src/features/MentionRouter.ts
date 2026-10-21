@@ -212,6 +212,12 @@ import {
 import { formatAlertCause } from "./Alerts.ts";
 import { formatUnknownDiscordModelMessage } from "../presentation/channelInfoPin.ts";
 import { topicDefaultModel, topicRequestsFastMode } from "../presentation/fastMode.ts";
+import {
+  isSentryMonitorPost,
+  SENTRY_MONITOR_PROMPT,
+  sentryMonitorThreadTitle,
+  topicRequestsMonitor,
+} from "../presentation/monitor.ts";
 import { ensureChannelInfoPin } from "./ChannelInfoPin.ts";
 import { makeDiscordThreadTurnCoordinator } from "./DiscordThreadTurnCoordinator.ts";
 import {
@@ -642,6 +648,8 @@ type BridgedTurnInput = {
     readonly channelId: string;
     readonly messageId: string;
   };
+  /** T3 thread title when it should not be the raw prompt. */
+  readonly titleSeed?: string;
   /**
    * The user pressed "start a new thread here anyway" after we pointed at an
    * existing conversation. Skip that offer and create a new T3 thread.
@@ -1757,7 +1765,7 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
     const { threadId, messageId } = yield* t3.startTurnWithWorktree({
       project: resolved.project,
       prompt: enrichedPrompt,
-      titleSeed: input.prompt,
+      titleSeed: input.titleSeed ?? input.prompt,
       modelSelection,
       interactionMode: input.flags.plan ? "plan" : "default",
       baseBranch: input.flags.base ?? botConfig.t3DefaultBaseBranch,
@@ -2539,6 +2547,108 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
       | undefined;
   };
 
+  /**
+   * `omegent-monitor` on the channel topic: a Sentry post opens a thread and
+   * starts an investigation. People, other bots, and posts inside threads are
+   * left alone. Returns true when this message was consumed.
+   */
+  const startSentryMonitor = Effect.fn("MentionRouter.startSentryMonitor")(function* (
+    event: GatewayMessageEvent,
+  ) {
+    const message = discordMessageFromEvent(event);
+    if (
+      !isSentryMonitorPost({
+        authorId: event.author?.id,
+        authorBot: event.author?.bot === true,
+        webhookId: event.webhook_id,
+        botUserId,
+        message,
+      })
+    ) {
+      return false;
+    }
+
+    const channel = yield* rest.getChannel(event.channel_id).pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("Sentry monitor could not read the channel", {
+          channelId: event.channel_id,
+          messageId: event.id,
+          error: String(error),
+        }).pipe(Effect.as(null)),
+      ),
+    );
+    if (channel === null || isThreadChannel(channel.type)) return false;
+
+    const topicLookup = yield* resolveProjectTopic(channel);
+    const topic = topicLookup.kind === "resolved" ? topicLookup.topic : null;
+    if (!topicRequestsMonitor(topic)) return false;
+
+    if (!handledMessageIds.claim(event.id)) return true;
+
+    yield* Effect.logInfo("Sentry monitor opening a thread", {
+      channelId: event.channel_id,
+      messageId: event.id,
+      guildId: event.guild_id ?? null,
+    });
+
+    const pendingReadyReaction = {
+      channelId: event.channel_id,
+      messageId: event.id,
+    };
+    yield* rest
+      .addMyMessageReaction(
+        pendingReadyReaction.channelId,
+        pendingReadyReaction.messageId,
+        THREAD_BOOTSTRAP_REACTION_EMOJI,
+      )
+      .pipe(
+        (operation) => retryTransientDiscordOperation(operation, DISCORD_MESSAGE_RETRY_DELAYS_MS),
+        Effect.catch((error) =>
+          Effect.logWarning("Failed to add Discord thread bootstrap reaction", {
+            discordMessageId: event.id,
+            error: String(error),
+          }),
+        ),
+      );
+
+    const parentUnavailable = topicLookup.kind === "parent-unavailable";
+    const title = sentryMonitorThreadTitle(message);
+    if (parentUnavailable || parseTopicShortName(topic) === null) {
+      const discordThread = yield* openOrReuseThread(event.channel_id, event.id, title).pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("Sentry monitor could not open a thread", {
+            messageId: event.id,
+            error: String(error),
+          }).pipe(Effect.as(null)),
+        ),
+      );
+      yield* rest.createMessage(discordThread?.id ?? event.channel_id, {
+        content: missingProjectBindingMessage({
+          inThread: discordThread !== null,
+          parentUnavailable,
+        }),
+        message_reference: { message_id: event.id },
+      });
+      yield* clearBootstrapReaction(pendingReadyReaction);
+      return true;
+    }
+
+    const discordThread = yield* openOrReuseThread(event.channel_id, event.id, title);
+    yield* startBridgedTurn({
+      discordThreadId: discordThread.id,
+      channelId: event.channel_id,
+      guildId: event.guild_id ?? "",
+      prompt: SENTRY_MONITOR_PROMPT,
+      flags: parseMentionFlags(""),
+      topic,
+      parentChannelId: event.channel_id,
+      mentionMessage: message,
+      pendingReadyReaction,
+      titleSeed: title,
+    }).pipe(Effect.catch((error) => reportError(discordThread.id, error)));
+    return true;
+  });
+
   const handleInboundMessage = Effect.fn("MentionRouter.handleInboundMessage")(function* (
     rawEvent: GatewayMessageEvent,
     source: "create" | "update",
@@ -2602,6 +2712,11 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
       mentionRoleIds,
       mentionsBotRole,
     });
+
+    if (source === "create") {
+      const monitored = yield* startSentryMonitor(event);
+      if (monitored) return;
+    }
 
     if (
       event.author?.bot === true ||

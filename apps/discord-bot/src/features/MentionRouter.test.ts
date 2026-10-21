@@ -53,6 +53,18 @@ describe("T3 connect-wait queue", () => {
   });
 });
 
+describe("sentry monitor topic", () => {
+  it("opens a thread for a Sentry post before bot messages are ignored", () => {
+    const monitorAt = mentionRouterSource.indexOf("const monitored = yield* startSentryMonitor");
+    const ignoreBotsAt = mentionRouterSource.indexOf("event.author?.bot === true ||");
+    expect(monitorAt).toBeGreaterThan(-1);
+    expect(ignoreBotsAt).toBeGreaterThan(monitorAt);
+    expect(mentionRouterSource).toContain("SENTRY_MONITOR_PROMPT");
+    expect(mentionRouterSource).toContain("topicRequestsMonitor");
+    expect(mentionRouterSource).toContain('if (source === "create")');
+  });
+});
+
 describe("unknown model replies", () => {
   it("keeps a bad --model out of the parent channel", () => {
     const channelReply = mentionRouterSource.indexOf(
