@@ -194,6 +194,7 @@ function buildChannelInfoPinBody(input: {
     "  topic: omegent-queue             Park mid-turn follow-ups in this channel",
     "  topic: omegent-fast-mode         New threads start in fast mode",
     "  topic: omegent-default-model-<name>  New threads use that model",
+    "  topic: omegent-monitor           Sentry issue opens one thread",
     "  queued: 📥 until the turn ends · delete your message to cancel",
     "```",
     `Default provider/model: \`${defaultLine}\``,

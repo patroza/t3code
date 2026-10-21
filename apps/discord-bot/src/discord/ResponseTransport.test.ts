@@ -33,6 +33,15 @@ describe("Discord transport compatibility", () => {
     );
     expect(discordMessageFields(idleFields("Done"))).toEqual(idleMessageFields("Done"));
   });
+
+  it("lets a finished transient reply ping @everyone and keeps Working quiet", () => {
+    expect(discordMessageFields(idleFields("severity: transient\n\n@everyone"))).toMatchObject({
+      allowed_mentions: { parse: ["users", "roles", "everyone"] },
+    });
+    expect(
+      discordMessageFields(workingFields("severity: transient\n\n@everyone", "thread")),
+    ).not.toHaveProperty("allowed_mentions");
+  });
 });
 
 describe("chat transport update failures", () => {

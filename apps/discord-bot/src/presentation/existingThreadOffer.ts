@@ -13,8 +13,37 @@ export const NEW_THREAD_OFFER_HOLD_MESSAGE =
 
 const OFFER_CONTENT_MARKER = "There's already a conversation for this:";
 
-export function startNewThreadAnywayCustomId(t3ThreadId: string): string {
-  return `${START_NEW_THREAD_ANYWAY_CUSTOM_ID_PREFIX}${t3ThreadId}`;
+export function startNewThreadAnywayCustomId(t3ThreadId: string, alertMessageId?: string): string {
+  const base = `${START_NEW_THREAD_ANYWAY_CUSTOM_ID_PREFIX}${t3ThreadId}`;
+  if (alertMessageId === undefined || alertMessageId.length === 0) return base;
+  return `${base}:${alertMessageId}`;
+}
+
+/** Sentry alert id stashed after the T3 thread id when the offer is not in a thread. */
+export function alertMessageIdFromNewThreadCustomId(customId: string): string | null {
+  if (!customId.startsWith(START_NEW_THREAD_ANYWAY_CUSTOM_ID_PREFIX)) return null;
+  const suffix = customId.slice(START_NEW_THREAD_ANYWAY_CUSTOM_ID_PREFIX.length);
+  const splitAt = suffix.indexOf(":");
+  if (splitAt < 0) return null;
+  const messageId = suffix.slice(splitAt + 1);
+  return /^\d{15,22}$/u.test(messageId) ? messageId : null;
+}
+
+export function referencedDiscordMessageId(message: unknown): string | null {
+  if (typeof message !== "object" || message === null || !("message_reference" in message)) {
+    return null;
+  }
+  const reference = message.message_reference;
+  if (typeof reference !== "object" || reference === null || !("message_id" in reference)) {
+    return null;
+  }
+  const id = reference.message_id;
+  return typeof id === "string" && /^\d{15,22}$/u.test(id) ? id : null;
+}
+
+/** Alert a channel-level Sentry offer should open a thread from. */
+export function alertMessageIdFromOffer(message: unknown, customId: string): string | null {
+  return alertMessageIdFromNewThreadCustomId(customId) ?? referencedDiscordMessageId(message);
 }
 
 /**
@@ -70,6 +99,8 @@ export function existingConversationOfferFields(input: {
   readonly discordThreadUrl: string | null;
   readonly webLink: string | null;
   readonly t3ThreadId: string;
+  /** Set when the offer is a channel reply, so the button can open that alert. */
+  readonly alertMessageId?: string;
 }) {
   return {
     content: existingConversationOfferContent(input),
@@ -77,7 +108,7 @@ export function existingConversationOfferFields(input: {
       [
         {
           type: 2 as const,
-          custom_id: startNewThreadAnywayCustomId(input.t3ThreadId),
+          custom_id: startNewThreadAnywayCustomId(input.t3ThreadId, input.alertMessageId),
           label: START_NEW_THREAD_ANYWAY_LABEL,
           style: Discord.ButtonStyleTypes.PRIMARY,
         },

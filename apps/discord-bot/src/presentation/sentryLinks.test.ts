@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   applySentryShortIdToIssueUrl,
+  canonicalSentryIssueGroupUrl,
   discordMessageLooksLikeSentry,
   extractSentryIssueUrls,
   extractSentryIssueUrlsFromDiscordMessage,
@@ -29,6 +30,18 @@ describe("normalizeSentryIssueUrl", () => {
   it("rejects non-sentry hosts", () => {
     expect(normalizeSentryIssueUrl("https://example.atlassian.net/browse/SCANNER-313")).toBeNull();
     expect(normalizeSentryIssueUrl("https://example.com/sentry.io/issues/1")).toBeNull();
+  });
+});
+
+describe("canonicalSentryIssueGroupUrl", () => {
+  it("collapses event paths and query strings onto the issue", () => {
+    expect(
+      canonicalSentryIssueGroupUrl(
+        `${SCANNER_SENTRY_URL}/events/abc123/?referrer=discord&alert_rule_id=1`,
+      ),
+    ).toBe(SCANNER_SENTRY_URL);
+    expect(canonicalSentryIssueGroupUrl(`${NUMERIC_SENTRY_URL}/`)).toBe(NUMERIC_SENTRY_URL);
+    expect(canonicalSentryIssueGroupUrl("https://example.com/issues/1")).toBeNull();
   });
 });
 
