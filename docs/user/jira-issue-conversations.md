@@ -30,11 +30,12 @@ bridge only owns **inbound webhooks** and **outbound response comments** for men
 
 ## User experience
 
-| Surface       | Webhook event     | Trigger                                        | Where T3 replies                                     |
-| ------------- | ----------------- | ---------------------------------------------- | ---------------------------------------------------- |
-| Issue comment | `comment_created` | Explicit configured mention + prompt           | Threaded **reply** under the mention (`parentId`)    |
-| Comment reply | `comment_created` | Mention in a comment with `parent` (when set)  | Threaded **reply** under the same thread root        |
-| Comment edit  | `comment_updated` | Edited comment still contains mention + prompt | Threaded **reply** under the edited comment’s thread |
+| Surface       | Webhook event                            | Trigger                                        | Where T3 replies                                     |
+| ------------- | ---------------------------------------- | ---------------------------------------------- | ---------------------------------------------------- |
+| Issue comment | `comment_created`                        | Explicit configured mention + prompt           | Threaded **reply** under the mention (`parentId`)    |
+| Comment reply | `comment_created`                        | Mention in a comment with `parent` (when set)  | Threaded **reply** under the same thread root        |
+| Comment edit  | `comment_updated`                        | Edited comment still contains mention + prompt | Threaded **reply** under the edited comment’s thread |
+| Assignment    | `issue_assigned` or `jira:issue_updated` | Assignee changes to the configured bot         | Top-level issue comment                              |
 
 A turn starts only when a non-bot author writes an explicit configured mention followed by a prompt:
 
@@ -48,6 +49,36 @@ Mentions are recognized in:
 2. Atlassian Document Format (ADF) `mention` nodes (`attrs.id` / `attrs.text`)
 
 Bot-authored comments and mention-free comments are ignored.
+
+**Assignment:** assigning the configured bot (display name or account id) starts a turn with no extra prompt. The agent reads the issue and proposes a fix or implementation, implementing it when the change is clear. The reply is a top-level comment that @-mentions the person who assigned the issue. Assigning someone else, clearing the assignee, or editing the issue while the bot is already assigned does not start a turn. The bot assigning itself is ignored.
+
+Automation can POST the same webhook with:
+
+```json
+{
+  "webhookEvent": "issue_assigned",
+  "user": {
+    "accountId": "{{initiator.accountId}}",
+    "displayName": "{{initiator.displayName}}"
+  },
+  "changelog": { "id": "{{changelog.id}}" },
+  "issue": {
+    "key": "{{issue.key}}",
+    "fields": {
+      "summary": "{{issue.summary}}",
+      "description": "{{issue.description}}",
+      "updated": "{{issue.updated}}",
+      "project": { "key": "{{issue.project.key}}" },
+      "assignee": {
+        "accountId": "{{issue.assignee.accountId}}",
+        "displayName": "{{issue.assignee.displayName}}"
+      }
+    }
+  }
+}
+```
+
+`changelog.id` dedupes retries. A later assignment uses a new changelog id and starts another turn. A native `jira:issue_updated` webhook is accepted when its changelog `assignee` item points at the bot.
 
 **Edits:** `comment_updated` re-dispatches when the edited body still mentions the bot and has a
 prompt. Delivery ids include the comment `updated` timestamp (or a prompt fingerprint) so the same
@@ -83,7 +114,7 @@ Fail closed when:
 ## Architecture
 
 ```text
-Jira Cloud comment_created | comment_updated webhook
+Jira Cloud comment_created | comment_updated | issue assignment webhook
         |
         v
 POST /api/jira/webhook
@@ -272,6 +303,7 @@ Check, in order:
 - Cap body size at 1 MiB.
 - Comment turns accept `comment_created` and `comment_updated` only, and only with an explicit mention.
 - Bug turns accept `jira:issue_created` for issue type Bug in a configured space. The report text is data. The analysis and the proposed fix are commented on the issue.
+- Assignment turns accept only assignments of the configured bot.
 - Allowlist projects when configured.
 - Do not put secrets in prompts, delivery logs, or git.
 - Prefer the free Atlassian **service account** for REST replies (see

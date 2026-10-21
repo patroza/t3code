@@ -19,7 +19,7 @@ export const JiraDelivery = Schema.Struct({
   projectKey: Schema.String,
   sourceCommentId: Schema.String,
   replyToCommentId: Schema.String,
-  commentSurface: Schema.Literals(["issue", "reply"]),
+  commentSurface: Schema.Literals(["issue", "reply", "assignment"]),
   responseCommentId: Schema.NullOr(Schema.String),
   /** Emoji id for ack reaction on the source comment (e.g. 1f440), when supported. */
   acknowledgmentEmojiId: Schema.optional(Schema.NullOr(Schema.String)),
@@ -44,7 +44,7 @@ export type StoredJiraDelivery = {
   readonly projectKey: string;
   readonly sourceCommentId: string;
   readonly replyToCommentId: string;
-  readonly commentSurface: "issue" | "reply";
+  readonly commentSurface: "issue" | "reply" | "assignment";
   readonly responseCommentId: string | null;
   readonly acknowledgmentEmojiId: string | null;
   readonly actorAccountId: string | null;

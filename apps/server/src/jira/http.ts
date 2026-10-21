@@ -15,6 +15,7 @@ import {
   isAcceptedJiraCommentEvent,
   jiraDeliveryIdFor,
   JiraCommentWebhook,
+  parseJiraAssignmentInvocation,
   parseJiraCommentInvocation,
   type JiraIssueInvocation,
 } from "./JiraWebhookPayload.ts";
@@ -30,6 +31,17 @@ type ParsedWebhook =
   | { readonly _tag: "invocation"; readonly invocation: JiraIssueInvocation };
 
 function parseWebhook(body: string, mention: string, botAccountId: string | null): ParsedWebhook {
+  let json: unknown;
+  try {
+    json = JSON.parse(body);
+  } catch {
+    json = null;
+  }
+  if (json !== null) {
+    const assignment = parseJiraAssignmentInvocation(json, mention, { botAccountId });
+    if (assignment._tag !== "not_assignment") return assignment;
+  }
+
   const payload = (() => {
     try {
       return decodeCommentWebhook(body);
