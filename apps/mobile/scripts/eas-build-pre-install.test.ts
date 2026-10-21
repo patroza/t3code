@@ -54,7 +54,9 @@ it.each([
         { cwd: root, encoding: "utf8" },
       );
       expect(result.status === 0).toBe(installSucceeds);
-      if (!installSucceeds) expect(result.stdout).toContain("ERR_PNPM_UNUSED_PATCH");
+      if (!installSucceeds) {
+        expect(result.stdout + result.stderr).toContain("ERR_PNPM_UNUSED_PATCH");
+      }
     } finally {
       NodeFS.rmSync(root, { recursive: true, force: true });
     }

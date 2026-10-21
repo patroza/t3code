@@ -85,6 +85,7 @@ export default defineConfig({
           name: "desktop",
           environment: "node",
           setupFiles: testSetupFiles,
+          globalSetup: ["./scripts/test-electron.global-setup.mjs"],
           include: [
             "src/**/*.test.ts",
             "scripts/**/*.test.{ts,mjs}",
@@ -104,6 +105,7 @@ export default defineConfig({
           name: "desktop-isolated-module-mocks",
           environment: "node",
           setupFiles: testSetupFiles,
+          globalSetup: ["./scripts/test-electron.global-setup.mjs"],
           include: [...isolatedDesktopTestFiles],
           isolate: true,
           fileParallelism: true,
