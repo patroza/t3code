@@ -255,7 +255,9 @@ const shortcutContext = () => ({
 
 async function setup() {
   await using resources = new AsyncDisposableStack();
-  resources.defer(() => vi.unstubAllGlobals());
+  resources.defer(() => {
+    vi.unstubAllGlobals();
+  });
 
   detailState.activity = null;
 
