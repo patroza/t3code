@@ -123,6 +123,33 @@ export function normalizeSentryIssueUrl(raw: string): string | null {
   }
 }
 
+/**
+ * One Sentry issue group. Event and replay suffixes collapse onto `/issues/<id>`
+ * so a later alert matches the thread that already has that issue.
+ */
+export function canonicalSentryIssueGroupUrl(url: string): string | null {
+  const normalized = normalizeSentryIssueUrl(url);
+  if (normalized === null) return null;
+  try {
+    const parsed = new URL(normalized);
+    const match = /\/issues\/([^/]+)/iu.exec(parsed.pathname);
+    const id = match?.[1];
+    if (id === undefined) return normalized;
+    const issuesAt = parsed.pathname.toLowerCase().indexOf("/issues/");
+    if (issuesAt < 0) return normalized;
+    let decoded = id;
+    try {
+      decoded = decodeURIComponent(id);
+    } catch {
+      decoded = id;
+    }
+    parsed.pathname = `${parsed.pathname.slice(0, issuesAt)}/issues/${decoded}`;
+    return parsed.toString();
+  } catch {
+    return normalized;
+  }
+}
+
 export function mergeSentryIssueUrls(
   existing: ReadonlyArray<string> | null | undefined,
   incoming: ReadonlyArray<string> | null | undefined,

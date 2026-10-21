@@ -6,8 +6,10 @@ import {
   isSentryMonitorPost,
   MONITOR_TOPIC_TAG,
   monitorSeverity,
+  selectExistingSentryMonitorLink,
   SENTRY_MONITOR_PROMPT,
   sentryMonitorThreadTitle,
+  sentryRepeatLinkContent,
   topicRequestsMonitor,
 } from "./monitor.ts";
 
@@ -83,6 +85,53 @@ describe("isSentryMonitorPost", () => {
         message: { author: { username: "Reminders", bot: true }, content: "standup" },
       }),
     ).toBe(false);
+  });
+});
+
+describe("selectExistingSentryMonitorLink", () => {
+  const scanner = "https://macs-scanner.sentry.io/issues/SCANNER-313";
+  const other = "https://macs-scanner.sentry.io/issues/SCANNER-314";
+  const link = (
+    patch: Partial<{
+      status: string;
+      sourceKind: "discord" | "teams";
+      sentryIssueUrls: ReadonlyArray<string>;
+      lastActivityAt: string;
+      createdAt: string;
+      id: string;
+    }>,
+  ) => ({
+    status: "active",
+    sourceKind: "discord" as const,
+    sentryIssueUrls: [scanner],
+    lastActivityAt: "2026-10-21T00:00:00.000Z",
+    createdAt: "2026-10-20T00:00:00.000Z",
+    id: "thread-a",
+    ...patch,
+  });
+
+  it("points a repeat alert at the latest active Discord thread for that issue", () => {
+    const older = link({ id: "older", lastActivityAt: "2026-10-20T00:00:00.000Z" });
+    const newer = link({ id: "newer", lastActivityAt: "2026-10-21T12:00:00.000Z" });
+    const eventUrl = `${scanner}/events/abc/?referrer=discord`;
+    expect(selectExistingSentryMonitorLink([older, newer], [eventUrl])?.id).toBe("newer");
+    expect(sentryRepeatLinkContent("https://discord.com/channels/g/thread")).toBe(
+      "[Open the existing thread](https://discord.com/channels/g/thread)",
+    );
+  });
+
+  it("ignores a different issue, a tombstone, a Teams link, and an alert with no issue", () => {
+    const home = link({ id: "home" });
+    expect(selectExistingSentryMonitorLink([home], [other])).toBeNull();
+    expect(selectExistingSentryMonitorLink([link({ status: "tombstone" })], [scanner])).toBeNull();
+    expect(selectExistingSentryMonitorLink([link({ sourceKind: "teams" })], [scanner])).toBeNull();
+    expect(selectExistingSentryMonitorLink([home], [])).toBeNull();
+    expect(
+      selectExistingSentryMonitorLink(
+        [link({ sentryIssueUrls: ["https://macs-scanner.sentry.io/issues/7506163172"] })],
+        [scanner],
+      ),
+    ).toBeNull();
   });
 });
 

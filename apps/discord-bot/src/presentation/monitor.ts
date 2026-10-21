@@ -1,9 +1,15 @@
 import { formatThreadTitle } from "./messages.ts";
-import { discordMessageLooksLikeSentry, type SentryDiscordMessageInput } from "./sentryLinks.ts";
+import {
+  canonicalSentryIssueGroupUrl,
+  discordMessageLooksLikeSentry,
+  mergeSentryIssueUrls,
+  type SentryDiscordMessageInput,
+} from "./sentryLinks.ts";
 
 /**
  * Channel-topic tag. A project channel whose topic contains this token turns
- * each Sentry post into a thread and an investigation.
+ * the first Sentry post for an issue into a thread and an investigation.
+ * A later post for that same issue only links the existing thread.
  */
 export const MONITOR_TOPIC_TAG = "omegent-monitor";
 
@@ -59,6 +65,58 @@ export function isSentryMonitorPost(input: {
 export function sentryMonitorThreadTitle(message: SentryDiscordMessageInput): string {
   const embedTitle = message.embeds?.find((embed) => (embed.title?.trim().length ?? 0) > 0)?.title;
   return formatThreadTitle(embedTitle ?? "", 100, "Sentry alert");
+}
+
+/** Channel reply for a Sentry issue that already has a thread. The button is separate. */
+export function sentryRepeatLinkContent(discordThreadUrl: string): string {
+  return `[Open the existing thread](${discordThreadUrl})`;
+}
+
+function sentryIssueGroupKeys(urls: ReadonlyArray<string>): ReadonlySet<string> {
+  const keys = new Set<string>();
+  for (const url of mergeSentryIssueUrls([], urls)) {
+    const key = canonicalSentryIssueGroupUrl(url);
+    if (key !== null) keys.add(key);
+  }
+  return keys;
+}
+
+/**
+ * Active Discord thread already investigating one of these Sentry issues.
+ * The most recently active link wins. Tombstones and Teams links do not count.
+ */
+export function selectExistingSentryMonitorLink<
+  T extends {
+    readonly status: string;
+    readonly sourceKind?: "discord" | "teams" | undefined;
+    readonly sentryIssueUrls?: ReadonlyArray<string> | undefined;
+    readonly lastActivityAt?: string | undefined;
+    readonly createdAt?: string | undefined;
+  },
+>(links: ReadonlyArray<T>, issueUrls: ReadonlyArray<string>): T | null {
+  const incoming = sentryIssueGroupKeys(issueUrls);
+  if (incoming.size === 0) return null;
+  let best: T | null = null;
+  let bestAt = "";
+  for (const link of links) {
+    if (link.status !== "active") continue;
+    if ((link.sourceKind ?? "discord") !== "discord") continue;
+    const stored = sentryIssueGroupKeys(link.sentryIssueUrls ?? []);
+    let matches = false;
+    for (const key of stored) {
+      if (incoming.has(key)) {
+        matches = true;
+        break;
+      }
+    }
+    if (!matches) continue;
+    const at = link.lastActivityAt ?? link.createdAt ?? "";
+    if (best === null || at > bestAt) {
+      best = link;
+      bestAt = at;
+    }
+  }
+  return best;
 }
 
 const SEVERITY_LINE = /^[ \t>*_-]*severity:[ \t>*_-]*(transient|bug)\b/imu;

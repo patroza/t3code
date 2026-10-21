@@ -127,6 +127,7 @@ import {
 } from "../presentation/sentryLinks.ts";
 import { formatOpenInOmegentLink, isThreadInfoPinContent } from "../presentation/threadInfoPin.ts";
 import {
+  alertMessageIdFromOffer,
   existingConversationOfferFields,
   messageOffersNewThread,
   NEW_THREAD_OFFER_HOLD_MESSAGE,
@@ -214,8 +215,10 @@ import { formatUnknownDiscordModelMessage } from "../presentation/channelInfoPin
 import { topicDefaultModel, topicRequestsFastMode } from "../presentation/fastMode.ts";
 import {
   isSentryMonitorPost,
+  selectExistingSentryMonitorLink,
   SENTRY_MONITOR_PROMPT,
   sentryMonitorThreadTitle,
+  sentryRepeatLinkContent,
   topicRequestsMonitor,
 } from "../presentation/monitor.ts";
 import { ensureChannelInfoPin } from "./ChannelInfoPin.ts";
@@ -655,6 +658,11 @@ type BridgedTurnInput = {
    * existing conversation. Skip that offer and create a new T3 thread.
    */
   readonly forceNewThread?: boolean;
+  /**
+   * Sentry monitor turn. The alert author is the Sentry bot, not a mapped
+   * person. The channel topic opted in, or a mapped person pressed the button.
+   */
+  readonly sentryMonitor?: boolean;
 };
 
 const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotConfig) {
@@ -1143,26 +1151,29 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
   ) {
     // Fail-closed identity gate: empty map or unmapped requester → no agent turn.
     // Applies to @mentions, slash /ask, and automatic thread-talk continues.
-    const access = classifyDiscordAgentAccess({
-      people: identityMap.list(),
-      discordId: input.mentionMessage?.author?.id ?? null,
-      discordUsername: input.mentionMessage?.author?.username ?? null,
-      discordDisplayName: input.mentionMessage?.author?.displayName ?? null,
-    });
-    if (!access.allowed) {
-      yield* Effect.logWarning("Rejected Discord agent turn from unmapped identity", {
-        discordThreadId: input.discordThreadId,
-        authorId: input.mentionMessage?.author?.id ?? null,
-        authorUsername: input.mentionMessage?.author?.username ?? null,
-        reason: access.reason,
+    // A Sentry monitor turn is started by the channel tag, not by the Sentry bot.
+    if (input.sentryMonitor !== true) {
+      const access = classifyDiscordAgentAccess({
+        people: identityMap.list(),
+        discordId: input.mentionMessage?.author?.id ?? null,
+        discordUsername: input.mentionMessage?.author?.username ?? null,
+        discordDisplayName: input.mentionMessage?.author?.displayName ?? null,
       });
-      yield* rest.createMessage(input.discordThreadId, {
-        content: access.userMessage,
-        ...(typeof input.mentionMessage?.id === "string"
-          ? { message_reference: { message_id: input.mentionMessage.id } }
-          : {}),
-      });
-      return;
+      if (!access.allowed) {
+        yield* Effect.logWarning("Rejected Discord agent turn from unmapped identity", {
+          discordThreadId: input.discordThreadId,
+          authorId: input.mentionMessage?.author?.id ?? null,
+          authorUsername: input.mentionMessage?.author?.username ?? null,
+          reason: access.reason,
+        });
+        yield* rest.createMessage(input.discordThreadId, {
+          content: access.userMessage,
+          ...(typeof input.mentionMessage?.id === "string"
+            ? { message_reference: { message_id: input.mentionMessage.id } }
+            : {}),
+        });
+        return;
+      }
     }
 
     // Boot/reconnect race: Discord is often READY before guest T3 has a shell.
@@ -2548,9 +2559,54 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
   };
 
   /**
-   * `omegent-monitor` on the channel topic: a Sentry post opens a thread and
-   * starts an investigation. People, other bots, and posts inside threads are
-   * left alone. Returns true when this message was consumed.
+   * Same Sentry issue group already has an active Discord thread. Reply on the
+   * alert with a link and the start-anyway button. No new thread and no turn.
+   */
+  const linkRepeatedSentryIssue = Effect.fn("MentionRouter.linkRepeatedSentryIssue")(function* (
+    event: GatewayMessageEvent,
+    message: DiscordMessageLike,
+  ) {
+    const issueUrls = extractSentryIssueUrlsFromDiscordMessage(message);
+    if (issueUrls.length === 0) return false;
+    const existingLink = selectExistingSentryMonitorLink(yield* links.list(), issueUrls);
+    if (existingLink === null) return false;
+    const shell = yield* t3.getThreadShell(existingLink.t3ThreadId);
+    if (shell === null) return false;
+    const discordThreadUrl = discordChannelUrl(existingLink.guildId, existingLink.discordThreadId);
+    yield* Effect.logInfo("Sentry monitor linking an existing thread", {
+      channelId: event.channel_id,
+      messageId: event.id,
+      discordThreadId: existingLink.discordThreadId,
+      t3ThreadId: existingLink.t3ThreadId,
+    });
+    yield* rest
+      .createMessage(event.channel_id, {
+        ...existingConversationOfferFields({
+          title: shell.title,
+          discordThreadUrl,
+          webLink: t3WebThreadUrl(botConfig.webUiBaseUrl, existingLink.t3ThreadId),
+          t3ThreadId: existingLink.t3ThreadId,
+          alertMessageId: event.id,
+        }),
+        content: sentryRepeatLinkContent(discordThreadUrl),
+        message_reference: { message_id: event.id },
+      })
+      .pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("Sentry monitor could not post the existing-thread link", {
+            messageId: event.id,
+            error: String(error),
+          }),
+        ),
+      );
+    return true;
+  });
+
+  /**
+   * `omegent-monitor` on the channel topic: the first Sentry post for an issue
+   * opens a thread and starts an investigation. A repeat of that issue links
+   * the existing thread. People, other bots, and posts inside threads are left
+   * alone. Returns true when this message was consumed.
    */
   const startSentryMonitor = Effect.fn("MentionRouter.startSentryMonitor")(function* (
     event: GatewayMessageEvent,
@@ -2584,6 +2640,8 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
     if (!topicRequestsMonitor(topic)) return false;
 
     if (!handledMessageIds.claim(event.id)) return true;
+
+    if (yield* linkRepeatedSentryIssue(event, message)) return true;
 
     yield* Effect.logInfo("Sentry monitor opening a thread", {
       channelId: event.channel_id,
@@ -2645,6 +2703,7 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
       mentionMessage: message,
       pendingReadyReaction,
       titleSeed: title,
+      sentryMonitor: true,
     }).pipe(Effect.catch((error) => reportError(discordThread.id, error)));
     return true;
   });
@@ -3765,8 +3824,90 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
   );
 
   /**
+   * The repeat offer sits on the Sentry alert in the channel. The button opens
+   * a thread from that alert and runs the same investigation as the first post.
+   */
+  const startRepeatedSentryInvestigation = Effect.fn(
+    "MentionRouter.startRepeatedSentryInvestigation",
+  )(function* (input: {
+    readonly channelId: string;
+    readonly guildId: string;
+    readonly alertMessageId: string;
+    readonly channel: {
+      readonly type?: number | undefined;
+      readonly parent_id?: string | null | undefined;
+      readonly topic?: string | null | undefined;
+    };
+    readonly offeredT3ThreadId: string;
+  }) {
+    const fetched = yield* rest.getMessage(input.channelId, input.alertMessageId).pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("Sentry repeat button could not load the alert", {
+          channelId: input.channelId,
+          messageId: input.alertMessageId,
+          error: String(error),
+        }).pipe(Effect.as(null)),
+      ),
+    );
+    if (fetched === null) return false;
+    const author = fetched.author;
+    const sentryMessage = discordMessageFromEvent({
+      id: input.alertMessageId,
+      content: fetched.content,
+      ...(author === null || author === undefined
+        ? {}
+        : {
+            author: {
+              ...(typeof author.id === "string" ? { id: author.id } : {}),
+              ...(typeof author.username === "string" ? { username: author.username } : {}),
+              ...(typeof author.global_name === "string" || author.global_name === null
+                ? { global_name: author.global_name }
+                : {}),
+              ...(author.bot === true ? { bot: true } : {}),
+            },
+          }),
+      embeds: fetched.embeds,
+      ...(typeof fetched.timestamp === "string" ? { timestamp: fetched.timestamp } : {}),
+    });
+    const topicLookup = yield* resolveProjectTopic(input.channel);
+    const topic = topicLookup.kind === "resolved" ? topicLookup.topic : null;
+    const parentUnavailable = topicLookup.kind === "parent-unavailable";
+    const title = sentryMonitorThreadTitle(sentryMessage);
+    const discordThread = yield* openOrReuseThread(input.channelId, input.alertMessageId, title);
+    yield* forkSlashBackground(
+      startBridgedTurn({
+        discordThreadId: discordThread.id,
+        channelId: input.channelId,
+        guildId: input.guildId,
+        prompt: SENTRY_MONITOR_PROMPT,
+        flags: parseMentionFlags(""),
+        topic,
+        ...(parentUnavailable ? { parentUnavailable: true } : {}),
+        parentChannelId: input.channelId,
+        mentionMessage: sentryMessage,
+        titleSeed: title,
+        forceNewThread: true,
+        sentryMonitor: true,
+      }).pipe(
+        Effect.tap(() =>
+          Effect.logInfo("Sentry repeat button started a thread", {
+            channelId: input.channelId,
+            alertMessageId: input.alertMessageId,
+            discordThreadId: discordThread.id,
+            offeredT3ThreadId: input.offeredT3ThreadId,
+          }),
+        ),
+        Effect.catch((error) => reportError(discordThread.id, error)),
+      ),
+    );
+    return true;
+  });
+
+  /**
    * Explicit opt-in after we pointed at an existing conversation instead of joining it.
    * Creates a new T3 thread in this Discord thread. The channel fast-mode tag applies.
+   * On a Sentry repeat offer the message is still in the channel, so the button
+   * opens the thread first.
    */
   const startNewThreadButton = Ix.messageComponent(
     Ix.idStartsWith(START_NEW_THREAD_ANYWAY_CUSTOM_ID_PREFIX),
@@ -3805,13 +3946,46 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
         return ephemeral(access.userMessage);
       }
 
+      const channel = yield* rest.getChannel(channelId);
+      if (!isThreadChannel(channel.type)) {
+        const alertMessageId = alertMessageIdFromOffer(interaction.message, data.custom_id);
+        if (alertMessageId === null) {
+          return ephemeral("That button only works inside a Discord thread.");
+        }
+        const startedTurn = yield* startRepeatedSentryInvestigation({
+          channelId,
+          guildId: interaction.guild_id ?? "",
+          alertMessageId,
+          channel,
+          offeredT3ThreadId,
+        });
+        if (!startedTurn) {
+          return ephemeral("I couldn't find the Sentry alert for this button.");
+        }
+        const offerContent =
+          typeof interaction.message === "object" &&
+          interaction.message !== null &&
+          "content" in interaction.message &&
+          typeof interaction.message.content === "string"
+            ? interaction.message.content
+            : "";
+        const started = offerContent.includes("Starting a new thread here.")
+          ? offerContent
+          : `${offerContent}\n\nStarting a new thread here.`.trim().slice(0, 2000);
+        return Ix.response({
+          type: Discord.InteractionCallbackTypes.UPDATE_MESSAGE,
+          data: {
+            ...idleMessageFields(started),
+          },
+        });
+      }
+
       const link = yield* links.getByDiscordThreadId(channelId);
       if (link !== null && link.status === "active") {
         return ephemeral("This Discord thread already has a T3 thread.");
       }
 
       const pending = (yield* Ref.get(offeredNewThreads)).get(channelId);
-      const channel = yield* rest.getChannel(channelId);
       const topicLookup = yield* resolveProjectTopic(channel);
       const parentUnavailable = topicLookup.kind === "parent-unavailable";
       const parentId =

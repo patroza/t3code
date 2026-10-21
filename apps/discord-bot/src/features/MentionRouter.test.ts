@@ -62,6 +62,19 @@ describe("sentry monitor topic", () => {
     expect(mentionRouterSource).toContain("SENTRY_MONITOR_PROMPT");
     expect(mentionRouterSource).toContain("topicRequestsMonitor");
     expect(mentionRouterSource).toContain('if (source === "create")');
+    expect(mentionRouterSource).toContain("selectExistingSentryMonitorLink");
+    expect(mentionRouterSource).toContain("sentryRepeatLinkContent");
+    expect(mentionRouterSource).toContain("input.sentryMonitor !== true");
+    const start = mentionRouterSource.indexOf("const startSentryMonitor =");
+    const inbound = mentionRouterSource.indexOf("const handleInboundMessage");
+    const monitorBody = mentionRouterSource.slice(start, inbound);
+    expect(monitorBody.indexOf("linkRepeatedSentryIssue")).toBeGreaterThan(-1);
+    expect(monitorBody.indexOf("linkRepeatedSentryIssue")).toBeLessThan(
+      monitorBody.indexOf("Sentry monitor opening a thread"),
+    );
+    expect(monitorBody).toContain("sentryMonitor: true");
+    expect(mentionRouterSource).toContain("Sentry repeat button started a thread");
+    expect(mentionRouterSource).toContain("if (!isThreadChannel(channel.type))");
   });
 });
 
