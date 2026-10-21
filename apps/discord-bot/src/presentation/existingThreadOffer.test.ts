@@ -2,6 +2,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   START_NEW_THREAD_ANYWAY_LABEL,
+  alertMessageIdFromNewThreadCustomId,
+  alertMessageIdFromOffer,
   existingConversationOfferContent,
   existingConversationOfferFields,
   messageOffersNewThread,
@@ -54,6 +56,25 @@ describe("existing conversation offer", () => {
     expect(button?.custom_id).toBe(startNewThreadAnywayCustomId("thread-123"));
     expect(button?.custom_id).toBe("t3_new_anyway:thread-123");
     expect(button?.style).toBe(1);
+    const alertId = "1562338297664114729";
+    const withAlert = existingConversationOfferFields({
+      title: "SA-516",
+      discordThreadUrl: null,
+      webLink: null,
+      t3ThreadId: "thread-123",
+      alertMessageId: alertId,
+    });
+    const alertButton = withAlert.components[0]?.components[0];
+    expect(alertButton?.custom_id).toBe(`t3_new_anyway:thread-123:${alertId}`);
+    expect(alertButton?.label).toBe("start a new thread here anyway");
+    expect(alertMessageIdFromNewThreadCustomId(alertButton?.custom_id ?? "")).toBe(alertId);
+    expect(alertMessageIdFromNewThreadCustomId("t3_new_anyway:thread-123")).toBeNull();
+    expect(
+      alertMessageIdFromOffer(
+        { message_reference: { message_id: alertId } },
+        "t3_new_anyway:thread-123",
+      ),
+    ).toBe(alertId);
   });
 
   it("recognizes the offer by its button or its text", () => {

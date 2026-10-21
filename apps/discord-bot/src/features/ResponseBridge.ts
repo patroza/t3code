@@ -71,6 +71,7 @@ import {
   type MarkdownImageRef,
 } from "../presentation/markdownImages.ts";
 import { rewriteMarkdownTablesForDiscord } from "../presentation/markdownTables.ts";
+import { applyMonitorEveryoneMention, monitorSeverity } from "../presentation/monitor.ts";
 import {
   activeTurnWakeNote,
   chunkDiscordContent,
@@ -3821,6 +3822,36 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
     );
   };
 
+  /** Parent channel topic for a thread, or this channel's topic. Null when unreadable. */
+  const readConversationTopic = Effect.gen(function* () {
+    const channelResult = yield* rest.getChannel(input.discordChannelId).pipe(Effect.result);
+    if (Result.isFailure(channelResult)) {
+      yield* Effect.logWarning("Monitor topic unreadable", {
+        discordChannelId: input.discordChannelId,
+        t3ThreadId: input.t3ThreadId,
+        cause: formatAlertCause(channelResult.failure, 200),
+      });
+      return null;
+    }
+    const channel = channelResult.success;
+    if (channel.type === 10 || channel.type === 11 || channel.type === 12) {
+      const parentId = channel.parent_id;
+      if (typeof parentId !== "string" || parentId.length === 0) return null;
+      const parentResult = yield* rest.getChannel(parentId).pipe(Effect.result);
+      if (Result.isFailure(parentResult)) {
+        yield* Effect.logWarning("Monitor topic unreadable; parent channel fetch failed", {
+          discordChannelId: input.discordChannelId,
+          parentId,
+          t3ThreadId: input.t3ThreadId,
+          cause: formatAlertCause(parentResult.failure, 200),
+        });
+        return null;
+      }
+      return parentResult.success.topic ?? null;
+    }
+    return channel.topic ?? null;
+  });
+
   /**
    * In-progress stream attachments are opt-in per channel.
    * The `omegent-ips` tag lives on the channel topic (legacy `t3-ips` still
@@ -4286,13 +4317,23 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
         text: finalText,
         githubUrlsByToken: finalInlineGitHubUrlsByToken,
       });
+      const monitorTopic =
+        rest.platform === "discord" && monitorSeverity(renderedFinalText) === "transient"
+          ? yield* readConversationTopic
+          : null;
+      const deliveredFinalText = applyMonitorEveryoneMention(renderedFinalText, monitorTopic);
+      if (deliveredFinalText !== renderedFinalText) {
+        yield* Effect.logInfo("Monitor alert is transient; mentioning everyone", {
+          t3ThreadId: input.t3ThreadId,
+        });
+      }
 
       // Avoid posting a lone "…" placeholder (what you saw in Discord when an image-only
       // turn failed to attach and had no remaining text). Prefer empty content + files,
       // or a short failure note if we expected images but loaded none.
       const baseFinalChunks: string[] =
-        renderedFinalText !== ""
-          ? chunkDiscordContent(renderedFinalText, DISCORD_LIMIT)
+        deliveredFinalText !== ""
+          ? chunkDiscordContent(deliveredFinalText, DISCORD_LIMIT)
           : files.length > 0
             ? [""]
             : pendingMarkdown.length > 0 ||
