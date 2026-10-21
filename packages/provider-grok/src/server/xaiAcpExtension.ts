@@ -282,8 +282,8 @@ export function isXAiMonitorTool(toolCall: AcpToolCallState): boolean {
  * A shell command Grok runs in the background (asked for, or moved there after
  * its auto-background timeout) acknowledges with
  * `{ type: "BackgroundTaskStarted", task_id }` and completes its tool call
- * while the process still runs. Like a monitor, it ends with `task_completed`
- * for that task id (`x.ai/task_completed`, or a session update on 1.0.50).
+ * while the process still runs. It ends with a task completion notification
+ * (`x.ai/task_completed`, a session update on 1.0.50), or completed TaskOutput.
  */
 export function xAiBackgroundShellTaskId(toolCall: AcpToolCallState): string | undefined {
   const rawOutput = unknownRecord(toolCall.data.rawOutput);
@@ -342,9 +342,11 @@ export function extractXAiBackgroundTaskCompletion(toolCall: AcpToolCallState): 
   const status = statusFromGetOutputTool(toolCall, text);
   const appendOutput = resultFromGetOutputTool(toolCall, text) ?? "";
   // Prefer the completed identity from the result/header over the request list
-  // (one call can poll multiple task_ids). Shell ids are `call-<uuid>-<n>`,
-  // which the subagent UUID parser must keep rejecting.
-  const resultTaskId = backgroundTaskIdFromGetOutputTool(toolCall, text);
+  // (one call can poll multiple task_ids). Structured command ids and the
+  // call-<uuid>-<n> text header must not be mistaken for subagent UUIDs.
+  const resultTaskId =
+    structuredTaskIdFromGetOutputTool(toolCall) ??
+    backgroundTaskIdFromGetOutputTool(toolCall, text);
   if (resultTaskId !== undefined) {
     return [{ taskId: resultTaskId, status, appendOutput }];
   }
@@ -366,8 +368,8 @@ export function extractXAiBackgroundTaskCompletion(toolCall: AcpToolCallState): 
 
 /**
  * A finished kill_command_or_subagent call is the genuine end signal for every
- * task id it names: the Grok CLI emits no `x.ai/task_completed` for a killed
- * task. A failed kill is not proof the target stopped, so leave the existing
+ * task id it names, even without a separate `x.ai/task_completed` notification.
+ * A failed kill is not proof the target stopped, so leave the existing
  * task state unchanged until a genuine terminal signal arrives.
  */
 export function extractXAiKilledBackgroundTasks(toolCall: AcpToolCallState): ReadonlyArray<{
@@ -377,9 +379,15 @@ export function extractXAiKilledBackgroundTasks(toolCall: AcpToolCallState): Rea
 }> {
   const title = titleKey(toolCall);
   const rawInput = unknownRecord(toolCall.data.rawInput);
+  const rawOutput = unknownRecord(toolCall.data.rawOutput);
   const variant = nonEmptyString(rawInput?.variant)?.toLowerCase();
-  if (!title.includes("kill_command_or_subagent") && variant !== "kill") return [];
+  const legacy = title.includes("kill_command_or_subagent") || variant === "kill";
+  if (!legacy && variant !== "killtask" && rawOutput?.type !== "KillTask") return [];
   if (toolCall.status !== "completed") return [];
+  // Grok nests the outcome under Result; only a missing, killed or already_exited one ends the task.
+  const outcome = rawOutput?.outcome ?? unknownRecord(rawOutput?.Result)?.outcome;
+  if (!legacy && outcome !== undefined && outcome !== "killed" && outcome !== "already_exited")
+    return [];
   const taskIds: string[] = [];
   const push = (value: unknown) => {
     const id = nonEmptyString(value);
@@ -786,17 +794,22 @@ function taskIdsFromGetOutputTool(
   return [...new Set(ids)];
 }
 
+function structuredTaskIdFromGetOutputTool(toolCall: AcpToolCallState): string | undefined {
+  const rawOutput = unknownRecord(toolCall.data.rawOutput);
+  const result = unknownRecord(rawOutput?.Result) ?? unknownRecord(rawOutput?.result);
+  return (
+    nonEmptyString(result?.task_id) ??
+    nonEmptyString(result?.taskId) ??
+    nonEmptyString(rawOutput?.task_id) ??
+    nonEmptyString(rawOutput?.taskId)
+  );
+}
+
 function resultTaskIdFromGetOutputTool(
   toolCall: AcpToolCallState,
   output: string | undefined,
 ): string | undefined {
-  const rawOutput = unknownRecord(toolCall.data.rawOutput);
-  const result = unknownRecord(rawOutput?.Result) ?? unknownRecord(rawOutput?.result);
-  const structured =
-    nonEmptyString(result?.task_id) ??
-    nonEmptyString(result?.taskId) ??
-    nonEmptyString(rawOutput?.task_id) ??
-    nonEmptyString(rawOutput?.taskId);
+  const structured = structuredTaskIdFromGetOutputTool(toolCall);
   if (structured !== undefined && new RegExp(`^${XAI_UUID_RE}$`, "i").test(structured)) {
     return structured;
   }
@@ -901,6 +914,13 @@ export function extractXAiAcpSubagentUpdate(
   const output = xAiToolOutputText(toolCall);
 
   if (isXAiGetSubagentOutputTool(toolCall, rawInput)) {
+    const structuredTaskId = structuredTaskIdFromGetOutputTool(toolCall);
+    if (
+      structuredTaskId !== undefined &&
+      !new RegExp(`^${XAI_UUID_RE}$`, "i").test(structuredTaskId)
+    ) {
+      return undefined;
+    }
     const taskIds = taskIdsFromGetOutputTool(toolCall, rawInput);
     const childSessionId =
       resultTaskIdFromGetOutputTool(toolCall, output) ??
