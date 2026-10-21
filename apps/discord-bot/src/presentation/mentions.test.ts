@@ -169,14 +169,32 @@ describe("parseMentionFlags", () => {
     expect(parseMentionFlags("--steer --queue prefer queue").followUpDelivery).toBe("queue");
     expect(parseMentionFlags("--queue --steer prefer steer").followUpDelivery).toBe("steer");
     expect(parseMentionFlags("plain follow-up").followUpDelivery).toBeUndefined();
+    expect(parseMentionFlags("--queue fix the race")).toMatchObject({
+      followUpDelivery: "queue",
+      prompt: "fix the race",
+    });
+    const plain = parseMentionFlags("queue fix the race");
+    expect(plain.followUpDelivery).toBeUndefined();
+    expect(plain.prompt).toBe("queue fix the race");
   });
 });
 
 describe("resolveDiscordFollowUpDelivery", () => {
-  it("defaults mid-turn Discord delivery to queue", () => {
-    expect(resolveDiscordFollowUpDelivery({})).toBe("queue");
+  it("defaults mid-turn Discord delivery to steer", () => {
+    expect(resolveDiscordFollowUpDelivery({})).toBe("steer");
     expect(resolveDiscordFollowUpDelivery({ followUpDelivery: "steer" })).toBe("steer");
     expect(resolveDiscordFollowUpDelivery({ followUpDelivery: "queue" })).toBe("queue");
+  });
+
+  it("parks when the channel topic asks to queue, unless the message overrides", () => {
+    expect(resolveDiscordFollowUpDelivery({}, "omegent-link-scanner omegent-queue")).toBe("queue");
+    expect(resolveDiscordFollowUpDelivery({ followUpDelivery: "steer" }, "omegent-queue")).toBe(
+      "steer",
+    );
+    expect(resolveDiscordFollowUpDelivery({ followUpDelivery: "queue" }, "omegent-fast-mode")).toBe(
+      "queue",
+    );
+    expect(resolveDiscordFollowUpDelivery({}, "omegent-fast-mode")).toBe("steer");
   });
 });
 

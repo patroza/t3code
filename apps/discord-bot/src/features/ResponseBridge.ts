@@ -396,7 +396,7 @@ export function isDiscordEchoedCommandContent(text: string): boolean {
  *
  * Casual-chat displacement does **not** hop Working. Hop only when an echoed
  * command sits newer than the tip ({@link isStreamTipDisplacedByEchoedCommand})
- * or a Discord `--steer` / idle turn posts a new Working ack.
+ * or a mid-turn steer / idle turn posts a new Working ack.
  */
 export function isStreamTipDisplacedByRecentMessages(input: {
   readonly recentMessagesNewestFirst: ReadonlyArray<DiscordChannelMessageForTipScan>;
@@ -493,8 +493,8 @@ export type WorkingTipDisplacementCause = "casual-chat" | "echoed-command";
  *
  * Casual thread chat and parked (queued) follow-ups leave the in-progress
  * message in place. An echoed cross-surface command (desktop/web/mobile/GitHub)
- * hops Working under that command. Discord `--steer` / idle turns post a new
- * Working ack instead ({@link shouldPostWorkingAckForContinue}).
+ * hops Working under that command. A mid-turn steer (the default) or an idle
+ * turn posts a new Working ack instead ({@link shouldPostWorkingAckForContinue}).
  *
  * Finalize always creates a new message, then deletes in-progress tips.
  */
@@ -2414,8 +2414,8 @@ export function planStreamTipFreezeOnDisplacement(input: {
  * Move a displaced Working tip: create the replacement first, then delete the old
  * message(s). Create-before-delete so Discord never sits without a Working bubble.
  *
- * Used when an echoed cross-surface command lands below Working. A Discord
- * `--steer` / idle Working ack uses {@link nextBridgeStateAfterAdoptWorkingAck}
+ * Used when an echoed cross-surface command lands below Working. A steer /
+ * idle Working ack uses {@link nextBridgeStateAfterAdoptWorkingAck}
  * instead. Finalize creates a new message and deletes in-progress tips separately.
  */
 export function nextStateAfterMovingWorkingTip(input: {
@@ -3595,7 +3595,7 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
         // Multi-step agents open a new assistant id per bubble while the turn runs.
         // Keep the same Discord tip(s) and edit them — never delete/recreate mid-turn
         // because humans chatted. Working hops below an echoed command, or relocates
-        // when a Discord `--steer` / idle turn posts a new Working ack.
+        // when a mid-turn steer / idle turn posts a new Working ack.
         // Working.. ack (if seeded) is already in discordMessageIds.
         // On a new delivery, only keep the newest tip slot (the Working ack) so we never
         // try to edit prior-turn message ids (Discord 10008 Unknown Message).

@@ -11,6 +11,12 @@ import type {
  */
 export const FAST_MODE_TOPIC_TAG = "omegent-fast-mode";
 
+/**
+ * Channel-topic tag. Mid-turn follow-ups in this channel park until the active
+ * turn finishes. Without the tag they steer into the active turn.
+ */
+export const QUEUE_TOPIC_TAG = "omegent-queue";
+
 /** `omegent-default-model-<name>`. The rest of the token is the model name. */
 export const DEFAULT_MODEL_TOPIC_PREFIX = "omegent-default-model-";
 
@@ -37,6 +43,12 @@ export interface FastModeCatalogProvider {
 export function topicRequestsFastMode(topic: string | null | undefined): boolean {
   if (topic === null || topic === undefined || topic.length === 0) return false;
   return topic.split(/\s+/u).some((token) => normalizeTopicToken(token) === FAST_MODE_TOPIC_TAG);
+}
+
+/** True when a channel topic includes `omegent-queue` as its own token. */
+export function topicRequestsQueue(topic: string | null | undefined): boolean {
+  if (topic === null || topic === undefined || topic.length === 0) return false;
+  return topic.split(/\s+/u).some((token) => normalizeTopicToken(token) === QUEUE_TOPIC_TAG);
 }
 
 /**

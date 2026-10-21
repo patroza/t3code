@@ -1,7 +1,12 @@
 import { ProviderInstanceId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { applyFastModeSelection, topicDefaultModel, topicRequestsFastMode } from "./fastMode.ts";
+import {
+  applyFastModeSelection,
+  topicDefaultModel,
+  topicRequestsFastMode,
+  topicRequestsQueue,
+} from "./fastMode.ts";
 
 const claude = ProviderInstanceId.make("claudeAgent");
 const codex = ProviderInstanceId.make("codex");
@@ -18,6 +23,20 @@ describe("topicRequestsFastMode", () => {
     expect(topicRequestsFastMode("omegent-link-fast-mode")).toBe(false);
     expect(topicRequestsFastMode(null)).toBe(false);
     expect(topicRequestsFastMode("")).toBe(false);
+  });
+});
+
+describe("topicRequestsQueue", () => {
+  it("matches the topic tag and ignores lookalikes", () => {
+    expect(topicRequestsQueue("omegent-link-scanner omegent-queue")).toBe(true);
+    expect(topicRequestsQueue("Alerts | OMEGENT-QUEUE")).toBe(true);
+    expect(topicRequestsQueue("see omegent-queue.")).toBe(true);
+    expect(topicRequestsQueue("omegent-link-scanner")).toBe(false);
+    expect(topicRequestsQueue("omegent-queue-extra")).toBe(false);
+    expect(topicRequestsQueue("omegent-link-queue")).toBe(false);
+    expect(topicRequestsQueue("omegent-fast-mode")).toBe(false);
+    expect(topicRequestsQueue(null)).toBe(false);
+    expect(topicRequestsQueue("")).toBe(false);
   });
 });
 

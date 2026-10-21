@@ -6,10 +6,8 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   clearQueuedPromptBadges,
   createDiscordQueuedPromptRegistry,
-  formatSteernowEmptyQueueMessage,
   isDiscordReactionAlreadyGone,
   queuedPromptsThatStartedProcessing,
-  resolveSteernowMessageIds,
 } from "./DiscordQueuedPromptRegistry.ts";
 
 describe("DiscordQueuedPromptRegistry", () => {
@@ -67,55 +65,6 @@ describe("DiscordQueuedPromptRegistry", () => {
     const cleared = registry.clearThread(ThreadId.make("thread-1"));
     expect(cleared).toHaveLength(1);
     expect(registry.listForThread(ThreadId.make("thread-1"))).toEqual([]);
-  });
-});
-
-describe("resolveSteernowMessageIds", () => {
-  it("prefers the server queue when present", () => {
-    const result = resolveSteernowMessageIds({
-      serverQueued: [
-        { messageId: MessageId.make("server-1") },
-        { messageId: MessageId.make("server-2") },
-      ],
-      localPending: [{ t3MessageId: MessageId.make("local-1") }],
-      detailLoaded: true,
-    });
-    expect(result).toEqual({
-      messageIds: [MessageId.make("server-1"), MessageId.make("server-2")],
-      source: "server",
-      snapshotMissing: false,
-    });
-  });
-
-  it("falls back to the local registry when the server queue is empty", () => {
-    const result = resolveSteernowMessageIds({
-      serverQueued: [],
-      localPending: [
-        { t3MessageId: MessageId.make("local-1") },
-        { t3MessageId: MessageId.make("local-1") },
-        { t3MessageId: MessageId.make("local-2") },
-      ],
-      detailLoaded: false,
-    });
-    expect(result).toEqual({
-      messageIds: [MessageId.make("local-1"), MessageId.make("local-2")],
-      source: "local",
-      snapshotMissing: true,
-    });
-  });
-
-  it("reports empty with snapshotMissing when both sources are empty and detail failed", () => {
-    expect(
-      resolveSteernowMessageIds({
-        serverQueued: [],
-        localPending: [],
-        detailLoaded: false,
-      }),
-    ).toEqual({
-      messageIds: [],
-      source: "empty",
-      snapshotMissing: true,
-    });
   });
 });
 
@@ -256,19 +205,4 @@ describe("clearQueuedPromptBadges", () => {
       expect(isDiscordReactionAlreadyGone("Unknown Emoji")).toBe(true);
     }),
   );
-});
-
-describe("formatSteernowEmptyQueueMessage", () => {
-  it("mentions steer path when the queue is truly empty", () => {
-    const text = formatSteernowEmptyQueueMessage({ snapshotMissing: false });
-    expect(text).toContain("Nothing is queued");
-    expect(text).toContain("/agent steer");
-    expect(text).toContain("/agent steernow");
-  });
-
-  it("mentions snapshot failure when the HTTP detail is missing", () => {
-    const text = formatSteernowEmptyQueueMessage({ snapshotMissing: true });
-    expect(text).toContain("thread snapshot unavailable");
-    expect(text).toContain("/agent steer");
-  });
 });

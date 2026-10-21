@@ -1,5 +1,6 @@
 import { parseProviderModelFlags } from "@t3tools/shared/providerModelSelection";
 
+import { topicRequestsQueue } from "./fastMode.ts";
 import { parseLinkThreadCommand, type LinkThreadCommand } from "./t3ThreadRef.ts";
 
 /** How a mid-turn Discord follow-up is delivered to the server queue. */
@@ -13,37 +14,39 @@ export interface ParsedMentionFlags {
   readonly plan: boolean;
   /**
    * Explicit mid-turn delivery override. When omitted, busy-thread follow-ups
-   * **queue** server-side (platform default) and are badged with 📥 until that
-   * run starts processing.
-   * `--steer` injects into the active turn immediately; `--queue` forces park.
+   * **steer** into the active turn. `--queue` or the `omegent-queue` channel
+   * topic parks the follow-up (📥 until that run starts). `--steer` injects
+   * now, including on a queue-tagged channel.
    */
   readonly followUpDelivery?: DiscordFollowUpDelivery;
   readonly prompt: string;
 }
 
 /**
- * Resolve mid-turn delivery. Default is **queue** (server-aligned); `--steer`
- * / `/omegent steer` force injection. Idle threads ignore this (startTurn
- * opens a normal turn).
+ * Resolve mid-turn delivery. Default is **steer**. An explicit flag wins, then
+ * the `omegent-queue` channel topic, then steer. Idle threads ignore this
+ * (`startTurn` opens a normal turn).
  */
 export function resolveDiscordFollowUpDelivery(
   flags: Pick<ParsedMentionFlags, "followUpDelivery">,
+  topic?: string | null,
 ): DiscordFollowUpDelivery {
-  return flags.followUpDelivery ?? "queue";
+  if (flags.followUpDelivery !== undefined) return flags.followUpDelivery;
+  if (topicRequestsQueue(topic)) return "queue";
+  return "steer";
 }
 
 /**
  * Whether a continue-mention should post/adopt a fresh `_Working.._` tip.
  *
- * Discord-originated relocate path (idle turn or `--steer`). Stream/heartbeat
- * also hop Working below an echoed desktop/web/mobile/GitHub command. Casual
- * thread chat must not hop the live tip.
+ * A steer (the default, or `--steer` / `/omegent steer`) and an idle continue
+ * post a new tip. Stream/heartbeat also hop Working below an echoed
+ * desktop/web/mobile/GitHub command. Casual thread chat must not hop the live tip.
  *
  * Parked mid-turn follow-ups must not post a new tip. Adopting a new Working
  * freezes the live tip and bumps the delivery epoch, so the in-flight answer is
  * never posted (queued follow-up final lands; prior final is stuck as frozen
- * progress). `--steer` / `/agent steer` still posts a new tip under the new
- * mention. `/agent steernow` injects the queue without a new tip.
+ * progress).
  */
 export function shouldPostWorkingAckForContinue(input: {
   readonly presentationMode?: "full" | "final-only" | undefined;
@@ -91,7 +94,8 @@ export function normalizeSmartFlagDashes(raw: string): string {
  *        --steer --queue
  * `—model` / `–model` are accepted as `--model` (same for the other flags).
  *
- * `--steer` / `--queue` last-wins when both appear.
+ * `--steer` / `--queue` last-wins when both appear. `@Omegent --queue <prompt>`
+ * parks; a bare `queue` word stays in the prompt.
  */
 export function parseMentionFlags(raw: string): ParsedMentionFlags {
   const providerModel = parseProviderModelFlags(normalizeSmartFlagDashes(raw));

@@ -83,13 +83,13 @@ export const OMEGENT_SLASH_COMMAND = {
         {
           type: Discord.ApplicationCommandOptionType.BOOLEAN,
           name: "steer",
-          description: "Mid-turn: inject this prompt now (default is queue)",
+          description: "Mid-turn: inject this prompt now (default)",
           required: false,
         },
         {
           type: Discord.ApplicationCommandOptionType.BOOLEAN,
           name: "queue",
-          description: "Mid-turn: park until the turn finishes (default)",
+          description: "Mid-turn: park until the turn finishes",
           required: false,
         },
       ],
@@ -97,7 +97,7 @@ export const OMEGENT_SLASH_COMMAND = {
     {
       type: Discord.ApplicationCommandOptionType.SUB_COMMAND,
       name: "steer",
-      description: "Continue work and inject mid-turn (steer into the active turn)",
+      description: "Continue work and inject mid-turn (also the default)",
       options: [
         {
           type: Discord.ApplicationCommandOptionType.STRING,
@@ -128,7 +128,7 @@ export const OMEGENT_SLASH_COMMAND = {
     {
       type: Discord.ApplicationCommandOptionType.SUB_COMMAND,
       name: "queue",
-      description: "Continue work and park mid-turn until the active turn finishes",
+      description: "Park this prompt until the active turn finishes",
       options: [
         {
           type: Discord.ApplicationCommandOptionType.STRING,
@@ -155,11 +155,6 @@ export const OMEGENT_SLASH_COMMAND = {
           required: false,
         },
       ],
-    },
-    {
-      type: Discord.ApplicationCommandOptionType.SUB_COMMAND,
-      name: "steernow",
-      description: "Inject every parked follow-up into the active turn (FIFO)",
     },
     {
       type: Discord.ApplicationCommandOptionType.SUB_COMMAND,
