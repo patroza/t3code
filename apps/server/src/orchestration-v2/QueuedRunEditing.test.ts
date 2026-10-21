@@ -276,6 +276,37 @@ it.layer(layer)("queued message editing", (it) => {
     }),
   );
 
+  it.effect("send now cannot release an active edit or its paused queue", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, active, queued, later, editId, begin } =
+        yield* createQueue("send-now-edit");
+      yield* orchestrator.dispatch({
+        type: "run.interrupt",
+        commandId: CommandId.make("send-now-edit:stop"),
+        threadId,
+        runId: active.id,
+        holdQueue: true,
+      });
+      yield* orchestrator.dispatch(begin);
+      const sent = yield* Effect.exit(
+        orchestrator.dispatch({
+          type: "queued-run.start",
+          commandId: CommandId.make("send-now-edit:start"),
+          threadId,
+          runId: queued.id,
+        }),
+      );
+      assert.isTrue(Exit.isFailure(sent));
+      const after = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(after.runs.find((run) => run.id === queued.id)?.queueEditId, editId);
+      for (const id of [queued.id, later.id]) {
+        const run = after.runs.find((run) => run.id === id);
+        assert.equal(run?.status, "queued");
+        assert.isTrue(run?.queueHeld);
+      }
+    }),
+  );
+
   it.effect("reopening an edit invalidates stale saves and cancels", () =>
     Effect.gen(function* () {
       const { orchestrator, threadId, queued, editId, begin, complete } =

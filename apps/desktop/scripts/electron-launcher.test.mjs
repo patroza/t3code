@@ -34,13 +34,16 @@ describe("Electron host runtime repair", () => {
       npm_config_arch: "x64",
       ELECTRON_OVERRIDE_DIST_PATH: NodePath.join(directory, "packaging-target"),
     };
+    let installs = 0;
     try {
       const executable = NodeVM.runInNewContext(
         `${source
           .replace(/^import\s[\s\S]*?;\n/gm, "")
           .replaceAll("import.meta.url", JSON.stringify(import.meta.url))
           .replace("export function ensureElectronRuntime", "function ensureElectronRuntime")}
-ensureElectronRuntime();`,
+const firstRuntime = ensureElectronRuntime();
+if (ensureElectronRuntime() !== firstRuntime) throw new Error("Runtime changed between projects");
+firstRuntime;`,
         {
           NodeFS,
           NodeOS: { platform: () => platform, arch: () => arch },
@@ -48,6 +51,7 @@ ensureElectronRuntime();`,
           NodeModule: { createRequire: () => ({ resolve: () => packagePath }) },
           NodeChildProcess: {
             spawnSync: (_command, args, options) => {
+              installs += 1;
               assert.equal(args[0], NodePath.join(directory, "install.js"));
               // Model Electron's installer: ambient target settings select the artifact and dist.
               const target =
@@ -66,6 +70,7 @@ ensureElectronRuntime();`,
           process: { env: environment, execPath: "node", argv: [] },
         },
       );
+      assert.equal(installs, 1, "both projects share one completed runtime installation");
       assert.equal(executable, NodePath.join(directory, "dist", binary));
       assert.equal(NodeFS.readFileSync(executable, "utf8"), `${platform}/${arch}`);
       assert.equal(NodeFS.readFileSync(NodePath.join(directory, "path.txt"), "utf8"), binary);

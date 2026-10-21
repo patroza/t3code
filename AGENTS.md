@@ -311,7 +311,8 @@ work:
 
 An empty database is a bad test. Seed your worktree's `.t3` with a copy of real data instead of pointing at live state:
 
-- Run `vp run migrate-dev-db` with your dev server stopped. It rebuilds `<worktree>/.t3/userdata/statev2.sqlite` from a read-only snapshot of `~/.t3/userdata/statev2.sqlite`, the developer's real data. It keeps recent projects and their stopped threads, and drops scheduled tasks, pending work, and auth sessions, so your dev server never runs the developer's agents. Raise `--projects` and `--threads-per-project` for more data.
+- The first `vp run dev` in a worktree does this for you when its database is missing. `--no-seed` or `T3CODE_DEV_SEED=0` skips it.
+- Run `vp run migrate-dev-db` with your dev server stopped to refresh. It rebuilds `<worktree>/.t3/userdata/statev2.sqlite` from a read-only snapshot of `~/.t3/userdata/statev2.sqlite`, the developer's real data. It keeps recent projects and their stopped threads, and drops scheduled tasks, pending work, and auth sessions, so your dev server never runs the developer's agents. Raise `--projects` and `--threads-per-project` for more data.
 - Refresh `statev2.sqlite`, not `state.sqlite`. The server copies the V1 `state.sqlite` only when `statev2.sqlite` is missing.
 - Bring `secrets` and `settings.json` only if the flow under test needs them.
 - Copy in, never symlink. Data flows one way: into your sandbox, never back out.
@@ -326,8 +327,9 @@ An empty database is a bad test. Seed your worktree's `.t3` with a copy of real 
 
 ## Test discipline
 
-- Smallest proof that the change works. `vp test run <files>` for the tests you touched (`-t "<name>"` in big files), `vp lint <files>`, and `vp run typecheck` in the package you changed. Not `npx tsc`; it is 3x slower than tsc-rs.
-- Run `vp run knip:check` (about 35 s) when you add, remove, or rename exports, files, or dependencies.
+- Before you push, run `vp run check:changed`. It runs CI's fast checks for changed files: format, lint, knip, typecheck of affected packages and dependents, and tests beside changes. CI still runs the full test suites.
+- While you iterate, run `vp test run <files>`. For big files, add `-t "<name>"`.
+- Do not use `npx tsc`. Use `vp run typecheck`; it uses tsc-rs, which is 3x faster.
 - Run `node -e` snippets from `apps/server` or the owning package. `effect` does not resolve from the repo root.
 - Test meaningful logic or observable behavior. Do not render components to static markup to assert props or attributes, or add tests that merely assert callback wiring or mirror the implementation.
 - Backend behavior changes ship with focused tests for that behavior.
@@ -410,7 +412,7 @@ Architecture and its constraints: `docs/internals/overview.md`. Glossary: `docs/
 - `packages/contracts` - Effect/Schema contracts plus small derived helpers. No heavy runtime logic.
 - `packages/shared` - shared runtime utils, subpath exports, no barrel.
 - `packages/client-runtime` - client code shared by web and mobile.
-- `.repos/` - vendored read-only references. Prefer their patterns over invented ones. Never edit or import from them. Sync with `vpr sync:repos` when bumping the matching dependency.
+- `.repos/` - vendored read-only references. Prefer their patterns over invented ones. Never edit or import from them. Sync with `vpr sync:repos` when bumping the matching dependency. If it is missing (sparse checkout), read a file with `git show origin/main:.repos/<path>`.
 
 ## Taste
 

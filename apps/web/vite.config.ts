@@ -62,6 +62,10 @@ const configuredHostedAppUrl = (() => {
 })();
 const sourcemapEnv = process.env.T3CODE_WEB_SOURCEMAP?.trim().toLowerCase();
 
+// `vp run dev --share --built` rebuilds on every change. The license manifest
+// is about 2 s of each build, and nothing in that mode reads it.
+const builtDev = process.env.T3CODE_BUILT_DEV === "1";
+
 const bundledDevEnv = process.env.T3CODE_BUNDLED_DEV?.trim().toLowerCase();
 const bundledDev = bundledDevEnv === "1" || bundledDevEnv === "true";
 
@@ -309,6 +313,7 @@ const unitTestProject = {
     isolate: false,
     fileParallelism: true,
     maxWorkers: 4,
+    sequence: { groupOrder: 1 },
     include: ["src/**/*.test.{ts,tsx}"],
     exclude: [...isolatedUnitTestFiles, ...compilerTestFiles, "src/**/*.browser.test.{ts,tsx}"],
     hookTimeout: 15_000,
@@ -327,6 +332,7 @@ const isolatedUnitTestProject = {
     isolate: true,
     fileParallelism: true,
     maxWorkers: 4,
+    sequence: { groupOrder: 1 },
     include: [...isolatedUnitTestFiles],
     hookTimeout: 15_000,
     testTimeout: 15_000,
@@ -349,7 +355,7 @@ const browserTestProject = {
   test: {
     name: "browser",
     maxWorkers: 4,
-    sequence: { groupOrder: 1 },
+    sequence: { groupOrder: 2 },
     include: ["src/**/*.browser.test.{ts,tsx}"],
     hookTimeout: 15_000,
     testTimeout: 15_000,
@@ -379,7 +385,7 @@ const compilerTestProject = {
     name: "compiler",
     // Compiling the full ChatView body is CPU work; use this project ceiling for compiler tests.
     testTimeout: 30_000,
-    sequence: { groupOrder: 2 },
+    sequence: { groupOrder: 3 },
     include: [...compilerTestFiles],
   },
 } satisfies TestProjectInlineConfiguration;
@@ -456,15 +462,17 @@ export default defineConfig(() => {
     assetsInclude: ["**/*.wasm"],
     plugins: [
       devCompressionPlugin(),
-      thirdPartyLicensesPlugin({
-        bundleName: "web",
-        configFile: new URL("../../third-party-licenses.config.json", import.meta.url),
-        packageManifests: [
-          { bundle: "web", path: new URL("./package.json", import.meta.url) },
-          { bundle: "server", path: new URL("../server/package.json", import.meta.url) },
-          { bundle: "desktop", path: new URL("../desktop/package.json", import.meta.url) },
-        ],
-      }),
+      builtDev
+        ? undefined
+        : thirdPartyLicensesPlugin({
+            bundleName: "web",
+            configFile: new URL("../../third-party-licenses.config.json", import.meta.url),
+            packageManifests: [
+              { bundle: "web", path: new URL("./package.json", import.meta.url) },
+              { bundle: "server", path: new URL("../server/package.json", import.meta.url) },
+              { bundle: "desktop", path: new URL("../desktop/package.json", import.meta.url) },
+            ],
+          }),
       tanstackRouter({ autoCodeSplitting: true }),
       react({ compiler: true }),
       tailwindPlugins(bundledDev),
