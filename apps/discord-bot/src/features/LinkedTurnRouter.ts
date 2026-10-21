@@ -17,6 +17,7 @@ import {
 import { ProjectAliasStore } from "../projectAliases.ts";
 import { ThreadLinkStore } from "../store/ThreadLinkStore.ts";
 import { T3Session } from "../t3/T3Session.ts";
+import { launchWorkspaceFields, resolveLaunchWorkspace } from "../t3/threadWorkspace.ts";
 import { discordSourceHint } from "../t3/sourceHint.ts";
 import { bridgeThreadToDiscord } from "./ResponseBridge.ts";
 
@@ -205,13 +206,17 @@ export const startOrContinueT3Turn = Effect.fn("startOrContinueT3Turn")(function
     discordThreadId: input.externalConversationId,
   });
   const sourceHint = linkedTurnSourceHint(input);
+  const workspace = yield* resolveLaunchWorkspace({
+    project: resolved.project,
+    explicitLocal: input.flags.local === true,
+    explicitBase: input.flags.base ?? config.t3DefaultBaseBranch,
+  });
   const { threadId, messageId } = yield* t3.startTurnWithWorktree({
     project: resolved.project,
     prompt: enrichedPrompt,
     modelSelection,
     interactionMode: input.flags.plan ? "plan" : "default",
-    baseBranch: input.flags.base ?? config.t3DefaultBaseBranch,
-    local: input.flags.local ?? false,
+    ...launchWorkspaceFields(workspace),
     ...(attachments.length > 0 ? { attachments } : {}),
     sourceHint,
   });

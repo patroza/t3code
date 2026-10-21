@@ -200,6 +200,7 @@ import {
 } from "../presentation/threadContext.ts";
 import { classifyDiscordAgentAccess, IdentityMapStore } from "../identityMap.ts";
 import { discordSourceHint } from "../t3/sourceHint.ts";
+import { launchWorkspaceFields, resolveLaunchWorkspace } from "../t3/threadWorkspace.ts";
 import { ProjectAliasStore } from "../projectAliases.ts";
 import { type ThreadLink, ThreadLinkStore } from "../store/ThreadLinkStore.ts";
 import { newMessageId } from "../t3/ids.ts";
@@ -1760,10 +1761,18 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
       discordThreadId: input.discordThreadId,
     });
 
-    yield* Effect.logInfo("Creating T3 thread with worktree bootstrap", {
+    const workspace = yield* resolveLaunchWorkspace({
+      project: resolved.project,
+      explicitLocal: input.flags.local,
+      explicitBase: input.flags.base ?? botConfig.t3DefaultBaseBranch,
+    });
+    yield* Effect.logInfo("Creating T3 thread", {
       shortName: resolved.shortName,
       workspaceRoot: resolved.project.workspaceRoot,
       model: `${modelSelection.instanceId}/${modelSelection.model}`,
+      local: workspace.local,
+      baseBranch: workspace.baseBranch,
+      startFromOrigin: workspace.startFromOrigin,
       hasStarterContext: starter !== null,
       starterAuthor: starter?.author?.username ?? null,
       hasReferencedMessage: input.referencedMessage != null,
@@ -1779,8 +1788,7 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
       titleSeed: input.titleSeed ?? input.prompt,
       modelSelection,
       interactionMode: input.flags.plan ? "plan" : "default",
-      baseBranch: input.flags.base ?? botConfig.t3DefaultBaseBranch,
-      local: input.flags.local,
+      ...launchWorkspaceFields(workspace),
       ...(attachments.length > 0 ? { attachments } : {}),
       sourceHint: discordSourceHint({
         authorId: input.mentionMessage?.author?.id,
@@ -1822,8 +1830,8 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
       incomingSentryIssueUrls: firstTurnSentryIssueUrls,
       incomingPrUrls: prUrlsFromMessages(...firstTurnWorkItemMessages),
       modelSelection,
-      baseBranchLabel: input.flags.base ?? botConfig.t3DefaultBaseBranch,
-      local: input.flags.local,
+      ...(workspace.baseBranch === null ? {} : { baseBranchLabel: workspace.baseBranch }),
+      local: workspace.local,
       skipChannelRepoLookup: true,
     }).pipe(
       Effect.tap(() =>
@@ -1899,8 +1907,8 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
       incomingSentryIssueUrls: firstTurnSentryIssueUrls,
       incomingPrUrls: prUrlsFromMessages(...firstTurnWorkItemMessages),
       modelSelection,
-      baseBranchLabel: input.flags.base ?? botConfig.t3DefaultBaseBranch,
-      local: input.flags.local,
+      ...(workspace.baseBranch === null ? {} : { baseBranchLabel: workspace.baseBranch }),
+      local: workspace.local,
     }).pipe(
       Effect.catch((error) =>
         Effect.logWarning("Failed to create thread info pin", {
@@ -2297,14 +2305,18 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
       ...(topicModel === null ? {} : { overrideModel: topicModel }),
       ...(topicRequestsFastMode(input.topic) ? { fastMode: true } : {}),
     });
+    const workspace = yield* resolveLaunchWorkspace({
+      project: resolved.project,
+      explicitLocal: false,
+      explicitBase: botConfig.t3DefaultBaseBranch,
+    });
     const { threadId } = yield* t3.startTurnWithWorktree({
       project: resolved.project,
       prompt,
       titleSeed: formatTodayRecapThreadTitle({ shortName: input.shortName, date }),
       modelSelection,
       interactionMode: "default",
-      baseBranch: botConfig.t3DefaultBaseBranch,
-      local: true,
+      ...launchWorkspaceFields(workspace),
       sourceHint: discordSourceHint({
         authorId: input.requester.author?.id,
         authorUsername: input.requester.author?.username,
