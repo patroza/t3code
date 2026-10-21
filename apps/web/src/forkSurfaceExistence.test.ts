@@ -74,8 +74,12 @@ describe("fork surface existence (anti stack-drop)", () => {
       "Expand settled shelf",
     );
     expect(sidebarV2).toMatch(/New thread|new thread/i);
-    expect(sidebarV2).toContain("sidebar-pinned-divider");
-    expect(sidebarV2).toContain("sidebar-${shelf}-shelf-toggle");
+    expect(readSrc("components/sidebar/SidebarListMarkers.tsx")).toContain(
+      "sidebar-pinned-divider",
+    );
+    expect(readSrc("components/sidebar/SidebarListMarkers.tsx")).toContain(
+      "sidebar-${shelf}-shelf-toggle",
+    );
     expect(sidebarV2).toContain('marker="snoozed-header"');
     expect(sidebarV2).toContain('marker="settled-header"');
     expect(sidebarV2).toContain("attemptPin");
@@ -145,9 +149,26 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(composer).toContain(
       "!readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)",
     );
-    expect(composer.match(/sendDisabledReason=\{sendDisabledReason\}/g)).toHaveLength(2);
-    expect(composer).toContain("sendDisabledReason={props.sendDisabledReason}");
+    expect(composer).toContain("sendDisabledReason={sendDisabledReason}");
+    const footer = readSrc("components/chat/ComposerFooterControls.tsx");
+    expect(footer).toContain("sendDisabledReason={props.sendDisabledReason}");
     expect(composer).not.toContain("sendDisabledReason={null}");
+  });
+
+  it("timeline extraction keeps sender identity and unread activity visible", () => {
+    const timeline = readSrc("components/chat/MessagesTimeline.tsx");
+    expect(timeline).toContain("messageViewer");
+    expect(timeline).toContain("messageSourceById");
+    const userRow = readSrc("components/chat/TimelineUserMessageRow.tsx");
+    expect(userRow).toContain('data-user-message-attribution="sender"');
+    expect(userRow).toContain("userMessageSenderCaption");
+    const follow = readSrc("components/chat/useTimelineFollow.ts");
+    expect(follow).toContain("hasUnreadTimelineActivity");
+    expect(follow).toContain("anchorMessageForNavigationStable");
+    expect(readSrc("components/ChatView.tsx")).toContain('"New activity. Scroll to end"');
+    expect(readSrc("components/chat/ChatComposer.tsx")).toContain(
+      "usageSnapshot={aiUsageSnapshot}",
+    );
   });
 
   it("model picker keeps provider usage dots and selection-box stats", () => {
@@ -173,7 +194,8 @@ describe("fork surface existence (anti stack-drop)", () => {
   });
 
   it("Sidebar V2 thread rows keep provider usage dots + stats", () => {
-    const sidebarV2 = readSrc("components/Sidebar.tsx");
+    const sidebarV2 = readSrc("components/sidebar/SidebarThreadRow.tsx");
+    expect(readSrc("components/Sidebar.tsx")).toContain("SortableThreadRow");
     expect(sidebarV2).toContain("useAiUsageSnapshot");
     expect(sidebarV2).toContain("resolveDriverUsage");
     expect(sidebarV2).toContain("usageDotFillClass");
@@ -271,7 +293,10 @@ describe("fork surface existence (anti stack-drop)", () => {
       "<SourceChannelGlyph channel={props.channel ?? lead.firstChannel} overlay",
     );
     const sidebarV1 = readSrc("components/LegacySidebar.tsx");
-    const sidebarV2 = readSrc("components/Sidebar.tsx");
+    const sidebarV2 = [
+      readSrc("components/Sidebar.tsx"),
+      readSrc("components/sidebar/SidebarThreadRow.tsx"),
+    ].join("\n");
     expect(sidebarV1).toContain("environmentId={thread.environmentId}");
     expect(sidebarV2).toContain("environmentId={thread.environmentId}");
     const root = readSrc("routes/__root.tsx");
@@ -301,7 +326,10 @@ describe("fork surface existence (anti stack-drop)", () => {
   });
 
   it("sidebar v2 uses budgeted list VCS status so PR markers and auto-settle stay fresh", () => {
-    const sidebar = readSrc("components/Sidebar.tsx");
+    const sidebar = [
+      readSrc("components/Sidebar.tsx"),
+      readSrc("components/sidebar/SidebarThreadRow.tsx"),
+    ].join("\n");
     expect(sidebar).toContain("vcsEnvironment.listStatus({");
     expect(sidebar).not.toContain("vcsEnvironment.status({");
   });
@@ -343,5 +371,16 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(toast).toContain("errorToastTitleTooltipText(toastType, toastTitle)");
     expect(toast).toContain('<TooltipPopup side="top" className={ERROR_DETAIL_TOOLTIP_CLASS}>');
     expect(toast).toContain("{titleTooltip}");
+  });
+  it("keeps MCP client identity and connection host metrics in the extracted settings rows", () => {
+    const connections = readSrc("components/settings/ConnectionsSettings.tsx");
+    const clients = readSrc("components/settings/AuthorizedClientsSettings.tsx");
+    const environments = readSrc("components/settings/SavedEnvironmentRows.tsx");
+    expect(connections).toContain("<PairingClientsList");
+    expect(connections).toContain("<SavedBackendListRow");
+    expect(clients).toContain("<McpClientIdentityControl");
+    expect(clients).toContain("data-mcp-client-identity={props.sessionId}");
+    expect(environments).toContain("<HostResourceStatus");
+    expect(environments).toContain("remote={!isLocalConnectionTarget(environment.entry.target)}");
   });
 });
