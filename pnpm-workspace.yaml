@@ -74,8 +74,8 @@ catalog:
   tldts: 7.4.2
   typescript: 7.0.2
   undici: 8.11.2
-  vite: npm:@voidzero-dev/vite-plus-core@1.0.0
-  vite-plus: 1.0.0
+  vite: npm:@voidzero-dev/vite-plus-core@1.3.0
+  vite-plus: 1.3.0
   ws: 8.22.0
   yaml: ^2.9.0
   # Markdown pipeline: the server counts find matches with the same parser the
@@ -376,10 +376,3 @@ peerDependencyRules:
 # pnpm keeps optional deps inside the virtual store, so hoist it to the root.
 publicHoistPattern:
   - "@cursor/sdk-*"
-
-supportedArchitectures:
-  cpu: [current, x64]
-  libc: [current, glibc]
-  os: [current, linux]
-
-# (workspace already includes apps/*)

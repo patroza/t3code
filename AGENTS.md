@@ -286,7 +286,7 @@ work:
   the T3 Code in-app browser or another available agent browser; use Android when it is the affected
   or viable platform. For authorized mobile verification, a missing or outdated native client is a
   build step, not a blocker. Run `node scripts/mobile-native-client.ts ensure <ios|android>
-<device-id>` on the simulator host before starting Metro. It checks the local Expo fingerprint and
+  <device-id>` on the simulator host before starting Metro. It checks the local Expo fingerprint and
   builds/installs when needed. See `test-t3-mobile` for the full workflow.
 - Subagents must not independently launch dev servers or repeat integrated client verification
   unless their delegated task explicitly requires it.
@@ -296,6 +296,7 @@ work:
 ## Dev Servers
 
 - `vp i` installs. Worktrees get this from the t3.json setup script; if module resolution looks broken, it probably did not run.
+- Setup runs in the background. While `.t3/setup-running` names a live PID, wait for it and do not run `vp i`. It ends with `.t3/setup-done` or `.t3/setup-failed` (with the error tail). With no marker at all, setup never ran here, so run `vp i` yourself.
 - In a linked git worktree, dev state defaults to that worktree's gitignored `.t3`. This deliberately outranks an ambient `T3CODE_HOME`, which could otherwise select the installed app's live `~/.t3/userdata` database. An explicit `--home-dir` still wins.
 - Start the web stack with `vp run dev`. Sharing over the tailnet is three steps: run `vp run dev --share` in the background, wait for the `pairingUrl:` line in its output, paste that full URL (token included) in your reply. Do not wire up `tailscale serve` by hand for this, and do not open the URL yourself.
 - The web app requires pairing. Hand over the pairing URL, not the bare origin. A URL without its token is useless to whoever you gave it to. If the token got consumed, mint a fresh one with `node apps/server/src/bin.ts pair` — note it carries standard scopes, while the startup URL carries admin scopes (needed for Settings → Connections management).

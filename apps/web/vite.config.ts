@@ -313,7 +313,10 @@ const unitTestProject = {
     exclude: [...isolatedUnitTestFiles, ...compilerTestFiles, "src/**/*.browser.test.{ts,tsx}"],
     hookTimeout: 15_000,
     testTimeout: 15_000,
-    setupFiles: ["../../packages/shared/src/testing/longTempDir.ts"],
+    setupFiles: [
+      "../../packages/shared/src/testing/longTempDir.ts",
+      "../../packages/shared/src/testing/providerEnv.ts",
+    ],
   },
 } satisfies TestProjectInlineConfiguration;
 
@@ -441,6 +444,15 @@ const allowedHosts = [".ts.net", ...configuredAllowedHosts];
 
 export default defineConfig(() => {
   return {
+    run: {
+      tasks: {
+        // tsc-rs rewrites the tsbuildinfo it reads, which keeps a task out of the cache.
+        typecheck: {
+          command: "tsc-rs --noEmit",
+          cache: { input: [{ auto: true }, "!*.tsbuildinfo"] },
+        },
+      },
+    },
     assetsInclude: ["**/*.wasm"],
     plugins: [
       devCompressionPlugin(),
