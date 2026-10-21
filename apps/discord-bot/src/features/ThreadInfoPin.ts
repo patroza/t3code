@@ -1,6 +1,7 @@
 // @effect-diagnostics globalFetch:off globalFetchInEffect:off unknownInEffectCatch:off anyUnknownInErrorContext:off outdatedApi:off
 import type { ProjectId, ThreadId } from "@t3tools/contracts";
 import { readJiraBareKeyProjects } from "@t3tools/shared/jiraBareKeyProjects";
+import { buildWebThreadUrl } from "@t3tools/shared/webThreadUrl";
 import { DiscordConfig, DiscordREST } from "dfx";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
@@ -133,8 +134,7 @@ async function discordApiVoid(input: {
 }
 
 function t3WebThreadUrl(webUiBaseUrl: string | undefined, threadId: string): string | null {
-  if (webUiBaseUrl === undefined) return null;
-  return `${webUiBaseUrl.replace(/\/$/u, "")}/?thread=${threadId}`;
+  return buildWebThreadUrl(webUiBaseUrl, threadId);
 }
 
 export function modelHistoryFromLink(

@@ -1,4 +1,6 @@
 // @effect-diagnostics globalPromise:off globalFetch:off nodeBuiltinImport:off preferSchemaOverJson:off globalDate:off
+import { buildWebThreadUrl } from "@t3tools/shared/webThreadUrl";
+
 import type { DiscordBotConfig } from "../config.ts";
 import * as NodeOS from "node:os";
 import * as NodeFS from "node:fs";
@@ -559,9 +561,7 @@ export function makeTeamsResponseTransport(input: {
         buildThreadInfoRenderInput({
           ...info,
           modelHistory: history,
-          webLink: info.config.webUiBaseUrl
-            ? `${info.config.webUiBaseUrl.replace(/\/$/u, "")}/?thread=${info.threadId}`
-            : null,
+          webLink: buildWebThreadUrl(info.config.webUiBaseUrl, info.threadId),
           jiraIssueKeys: jira,
           sentryIssueUrls: sentry,
           prUrls: prs,

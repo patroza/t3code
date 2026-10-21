@@ -12,6 +12,8 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeUtil from "node:util";
 
+import { buildWebThreadUrl } from "@t3tools/shared/webThreadUrl";
+
 import { gitCommandEnv } from "./githubLinks.ts";
 import { normalizePullRequestUrl } from "./prLinks.ts";
 
@@ -88,12 +90,7 @@ export function buildT3WebThreadUrl(
   webUiBaseUrl: string | undefined | null,
   threadId: string | undefined | null,
 ): string | null {
-  const base = webUiBaseUrl?.trim();
-  const id = threadId?.trim();
-  if (base === undefined || base.length === 0 || id === undefined || id.length === 0) {
-    return null;
-  }
-  return `${base.replace(/\/+$/u, "")}/?thread=${id}`;
+  return buildWebThreadUrl(webUiBaseUrl, threadId);
 }
 
 /**

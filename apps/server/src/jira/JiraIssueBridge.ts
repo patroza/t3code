@@ -1,16 +1,16 @@
 import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
-  type EnvironmentId,
   MessageId,
   ProjectId,
   ThreadId,
   type SourceRef,
   type TurnId,
 } from "@t3tools/contracts";
-import { buildAgentAwarenessDeepLink } from "@t3tools/shared/agentAwareness";
 import type { IdentityMapPerson } from "@t3tools/shared/identityMap";
+import { buildWebThreadUrl, formatWebThreadOpenLink } from "@t3tools/shared/webThreadUrl";
 import * as Clock from "effect/Clock";
+import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -20,8 +20,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Semaphore from "effect/Semaphore";
 
-import { hostedAppUrlConfig } from "../cloud/publicConfig.ts";
-import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import {
   discoverGitHubTargetTurnId,
@@ -141,26 +139,23 @@ export function formatJiraComment(body: string): string {
   return body.trim();
 }
 
+/**
+ * Same browser thread URL Discord and Teams post (`{T3_WEB_UI_BASE_URL}/?thread={id}`).
+ * Null when the server has no web UI base, so a reply never falls back to the
+ * hosted app route `https://app.t3.codes/threads/{environment}/{thread}`.
+ */
 export function buildJiraT3ThreadUrl(input: {
-  readonly hostedAppUrl: string;
-  readonly environmentId: string;
+  readonly webUiBaseUrl: string | null | undefined;
   readonly threadId: string;
-}): string {
-  return new URL(
-    buildAgentAwarenessDeepLink({
-      environmentId: input.environmentId as EnvironmentId,
-      threadId: input.threadId as ThreadId,
-    }),
-    input.hostedAppUrl,
-  ).toString();
+}): string | null {
+  return buildWebThreadUrl(input.webUiBaseUrl, input.threadId);
 }
 
 export function appendJiraT3ThreadLink(
   body: string,
   input:
     | {
-        readonly hostedAppUrl: string;
-        readonly environmentId: string;
+        readonly webUiBaseUrl: string | null | undefined;
         readonly threadId: string;
       }
     | null
@@ -169,8 +164,8 @@ export function appendJiraT3ThreadLink(
   const base = body.trimEnd();
   if (input === null || input === undefined) return base;
   const url = buildJiraT3ThreadUrl(input);
-  if (base.includes(url)) return base;
-  const footer = `T3 thread: ${url}`;
+  if (url === null || base.includes(url)) return base;
+  const footer = formatWebThreadOpenLink(url);
   if (base === "") return footer;
   return `${base}\n\n${footer}`;
 }
@@ -251,15 +246,16 @@ const make = Effect.gen(function* () {
         .getThreadProjection(id)
         .pipe(Effect.map((value) => Option.some(integrationThreadView(value)))),
   };
-  const serverEnvironment = yield* ServerEnvironment;
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
   const projectSetupScriptRunner = yield* ProjectSetupScriptRunner;
   const identity = yield* IdentityService.IdentityService;
   const fileSystem = yield* FileSystem.FileSystem;
   const crypto = yield* Crypto.Crypto;
   const createLock = yield* Semaphore.make(1);
-  const hostedAppUrl = yield* hostedAppUrlConfig;
-  const environmentId = yield* serverEnvironment.getEnvironmentId;
+  const webUiBaseUrl = yield* Config.String("T3_WEB_UI_BASE_URL").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  );
 
   const resolveActorTrust = Effect.fn("JiraIssueBridge.resolveActorTrust")(function* (
     invocation: JiraIssueInvocation,
@@ -336,8 +332,7 @@ const make = Effect.gen(function* () {
           delivery.threadId === null
             ? null
             : {
-                hostedAppUrl,
-                environmentId,
+                webUiBaseUrl,
                 threadId: delivery.threadId,
               },
         ),
@@ -976,8 +971,7 @@ const make = Effect.gen(function* () {
         delivery.threadId === null
           ? null
           : {
-              hostedAppUrl,
-              environmentId,
+              webUiBaseUrl,
               threadId: delivery.threadId,
             },
       ),

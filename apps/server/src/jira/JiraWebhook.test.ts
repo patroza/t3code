@@ -569,28 +569,40 @@ describe("Jira helpers", () => {
     expect(resolveT3ProjectIdForJiraKey(map, "OTHER", projects)).toBeNull();
   });
 
-  it("builds and appends a hosted T3 thread link for Jira replies", () => {
+  it("appends the same Open thread link Discord posts", () => {
     const url = buildJiraT3ThreadUrl({
-      hostedAppUrl: "https://nightly.app.t3.codes",
-      environmentId: "env-1",
+      webUiBaseUrl: "https://omega.example/",
       threadId: "thread-1",
     });
-    expect(url).toBe("https://nightly.app.t3.codes/threads/env-1/thread-1");
+    expect(url).toBe("https://omega.example/?thread=thread-1");
     expect(
       appendJiraT3ThreadLink("Ship it.", {
-        hostedAppUrl: "https://nightly.app.t3.codes",
-        environmentId: "env-1",
+        webUiBaseUrl: "https://omega.example/",
         threadId: "thread-1",
       }),
-    ).toBe("Ship it.\n\nT3 thread: https://nightly.app.t3.codes/threads/env-1/thread-1");
+    ).toBe("Ship it.\n\n[Open](https://omega.example/?thread=thread-1)");
+  });
+
+  it("omits the Jira thread link when the web UI base is unset", () => {
+    expect(
+      buildJiraT3ThreadUrl({
+        webUiBaseUrl: undefined,
+        threadId: "thread-1",
+      }),
+    ).toBeNull();
+    expect(
+      appendJiraT3ThreadLink("Ship it.", {
+        webUiBaseUrl: "  ",
+        threadId: "thread-1",
+      }),
+    ).toBe("Ship it.");
   });
 
   it("does not duplicate the Jira T3 thread link footer", () => {
-    const body = "Ship it.\n\nT3 thread: https://nightly.app.t3.codes/threads/env-1/thread-1";
+    const body = "Ship it.\n\n[Open](https://omega.example/?thread=thread-1)";
     expect(
       appendJiraT3ThreadLink(body, {
-        hostedAppUrl: "https://nightly.app.t3.codes",
-        environmentId: "env-1",
+        webUiBaseUrl: "https://omega.example",
         threadId: "thread-1",
       }),
     ).toBe(body);
