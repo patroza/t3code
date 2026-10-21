@@ -59,7 +59,10 @@ export async function postDiscordChannelMessage(input: {
   readonly token: string;
   readonly channelId: string;
   readonly content: string;
+  /** Only these users can be pinged. Empty means the post stays quiet. */
+  readonly mentionUserIds?: ReadonlyArray<string>;
 }): Promise<{ readonly id: string; readonly channelId: string }> {
+  const mentionUserIds = input.mentionUserIds ?? [];
   const url = `${DISCORD_API_BASE_URL}/channels/${input.channelId}/messages`;
   const response = await fetch(url, {
     method: "POST",
@@ -69,7 +72,7 @@ export async function postDiscordChannelMessage(input: {
     },
     body: JSON.stringify({
       content: input.content,
-      allowed_mentions: { parse: [] as string[] },
+      allowed_mentions: { parse: [] as string[], users: mentionUserIds },
     }),
   });
   if (!response.ok) {

@@ -81,7 +81,10 @@ type Line = {
 export function markdownToAdf(
   markdown: string,
   options?: {
+    /** One leading @-mention. Ignored when `mentions` is set. */
     readonly mention?: JiraAdfMention | null | undefined;
+    /** Leading @-mentions, in order. Duplicate and empty account ids are skipped. */
+    readonly mentions?: ReadonlyArray<JiraAdfMention> | null | undefined;
     /**
      * Jira comments set `codeBlock.attrs.wrap`. Confluence rejects that attribute,
      * so page sections omit it.
@@ -91,7 +94,13 @@ export function markdownToAdf(
 ): JiraAdfDoc {
   const platform = options?.platform ?? "jira";
   const content = renderBlocks(parseBlocks(markdown), platform);
-  return { type: "doc", version: 1, content: withMention(content, options?.mention) };
+  const mentions =
+    options?.mentions != null
+      ? options.mentions
+      : options?.mention != null
+        ? [options.mention]
+        : [];
+  return { type: "doc", version: 1, content: withMentions(content, mentions) };
 }
 
 /**
@@ -226,25 +235,42 @@ function renderTable(
   };
 }
 
-function withMention(
+function mentionNodes(mentions: ReadonlyArray<JiraAdfMention>): JiraAdfNode[] {
+  const nodes: JiraAdfNode[] = [];
+  const seen = new Set<string>();
+  for (const mention of mentions) {
+    const accountId = jiraMentionAccountId(mention.accountId?.trim() ?? "");
+    if (accountId.length === 0 || seen.has(accountId)) continue;
+    seen.add(accountId);
+    const display = mention.displayName?.trim().replace(/^@/u, "") || accountId;
+    nodes.push({
+      type: "mention",
+      attrs: { id: accountId, text: `@${display}`, accessLevel: "" },
+    });
+  }
+  return nodes;
+}
+
+function withMentions(
   content: ReadonlyArray<JiraAdfNode>,
-  mention: JiraAdfMention | null | undefined,
+  mentions: ReadonlyArray<JiraAdfMention>,
 ): JiraAdfNode[] {
-  const accountId = jiraMentionAccountId(mention?.accountId?.trim() ?? "");
-  if (accountId.length === 0) return content.length > 0 ? [...content] : [emptyParagraph()];
-  const display = mention?.displayName?.trim().replace(/^@/u, "") || accountId;
-  const node: JiraAdfNode = {
-    type: "mention",
-    attrs: { id: accountId, text: `@${display}`, accessLevel: "" },
-  };
+  const nodes = mentionNodes(mentions);
+  if (nodes.length === 0) return content.length > 0 ? [...content] : [emptyParagraph()];
   const first = content[0];
   if (first?.type === "paragraph") {
-    return [
-      { ...first, content: [node, { type: "text", text: " " }, ...(first.content ?? [])] },
-      ...content.slice(1),
-    ];
+    const leading: JiraAdfNode[] = [];
+    for (const node of nodes) {
+      leading.push(node, { type: "text", text: " " });
+    }
+    return [{ ...first, content: [...leading, ...(first.content ?? [])] }, ...content.slice(1)];
   }
-  return [{ type: "paragraph", content: [node] }, ...content];
+  const leading: JiraAdfNode[] = [];
+  for (const [index, node] of nodes.entries()) {
+    if (index > 0) leading.push({ type: "text", text: " " });
+    leading.push(node);
+  }
+  return [{ type: "paragraph", content: leading }, ...content];
 }
 
 function emptyParagraph(): JiraAdfNode {

@@ -79,6 +79,23 @@ describe("Jira markdown", () => {
     expect(JSON.stringify(doc)).not.toContain("```gherkin");
   });
 
+  it("mentions several Jira accounts at the start of the comment", () => {
+    const doc = markdownToAdf("Analysis is ready.", {
+      mentions: [
+        { accountId: "aaa", displayName: "Andrea" },
+        { accountId: "accountid:bbb", displayName: "@Patrick" },
+        { accountId: "aaa", displayName: "Duplicate" },
+      ],
+    });
+    expect(doc.content[0]?.content?.slice(0, 5)).toEqual([
+      { type: "mention", attrs: { id: "aaa", text: "@Andrea", accessLevel: "" } },
+      { type: "text", text: " " },
+      { type: "mention", attrs: { id: "bbb", text: "@Patrick", accessLevel: "" } },
+      { type: "text", text: " " },
+      { type: "text", text: "Analysis is ready." },
+    ]);
+  });
+
   it("renders the inline marks agents write", () => {
     const doc = markdownToAdf(
       [
