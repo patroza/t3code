@@ -17,6 +17,8 @@ import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Stream from "effect/Stream";
 import * as ResetCreditCoordinator from "../provider/resetCreditCoordinator.ts";
 import { FetchHttpClient } from "effect/http";
 import { describe } from "vite-plus/test";
@@ -136,19 +138,23 @@ let nextLiveShellMarker = 0;
 
 const waitForIdle = Effect.fn("GrokOrchestratorV2Live.waitForIdle")(function* (threadId: ThreadId) {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
-  for (let attempt = 0; attempt < 600; attempt += 1) {
-    const projection = yield* orchestrator.getThreadProjection(threadId);
-    if (
-      projection.runs.length > 0 &&
-      projection.runs.every(
-        (run) => !["queued", "starting", "running", "waiting"].includes(run.status),
-      )
-    ) {
-      return projection;
-    }
-    yield* Effect.sleep("500 millis");
-  }
-  return yield* Effect.die(new Error(`Timed out waiting for Grok thread ${threadId}.`));
+  return yield* orchestrator.streamStoredEventsFrom({ threadId }).pipe(
+    Stream.mapEffect(() => orchestrator.getThreadProjection(threadId)),
+    Stream.filter(
+      (projection) =>
+        projection.runs.length > 0 &&
+        projection.runs.every(
+          (run) => !["queued", "starting", "running", "waiting"].includes(run.status),
+        ),
+    ),
+    Stream.runHead,
+    Effect.flatMap(
+      Option.match({
+        onSome: Effect.succeed,
+        onNone: () => Effect.die(new Error(`Grok thread event stream ended: ${threadId}.`)),
+      }),
+    ),
+  );
 });
 
 describe.runIf(process.env.T3_GROK_LIVE_ORCHESTRATOR === "1")("Grok V2 live orchestrator", () => {

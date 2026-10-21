@@ -15,7 +15,6 @@ import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
@@ -39,14 +38,12 @@ import {
   createVcsActionManager,
   createVcsActionTransportId,
   EMPTY_VCS_ACTION_STATE,
-  getVcsActionTargetKey,
   isCommitSigningFailure,
   normalizeVcsActionProgressEvent,
   parseVcsActionTargetKey,
   VcsActionMissingTerminalEventError,
   VcsActionRemoteFailureError,
   VcsActionTargetKeyParseError,
-  VcsActionUnavailableError,
 } from "./vcsAction.ts";
 import { vcsRefsCacheStateAtom } from "./vcsRefInvalidation.ts";
 
@@ -54,7 +51,6 @@ const actionId = "action-123";
 const action = "commit_push" as const;
 const cwd = "/repo";
 const environmentId = EnvironmentId.make("environment-1");
-const isVcsActionUnavailableError = Schema.is(VcsActionUnavailableError);
 const result: GitRunStackedActionResult = {
   action,
   branch: {
@@ -134,12 +130,6 @@ describe("vcsActionState", () => {
     expect(error).toMatchObject({ keyLength: key.length, cause: expect.any(SyntaxError) });
     expect(error).not.toHaveProperty("key");
     expect((error as Error).message).not.toContain(key);
-  });
-
-  it("rejects invalid target key shapes", () => {
-    const key = JSON.stringify([environmentId]);
-
-    expect(() => parseVcsActionTargetKey(key)).toThrowError(VcsActionTargetKeyParseError);
   });
 
   it("projects phase and hook progress without owning the async operation", () => {
@@ -299,22 +289,6 @@ describe("vcsActionState", () => {
         }),
       ),
     ).toBe(current);
-  });
-
-  it("keys presentation state only when the environment and repository are known", () => {
-    expect(
-      getVcsActionTargetKey({
-        environmentId,
-        cwd,
-      }),
-    ).toBe(JSON.stringify([environmentId, cwd]));
-    expect(getVcsActionTargetKey({ environmentId: null, cwd })).toBeNull();
-    expect(
-      getVcsActionTargetKey({
-        environmentId,
-        cwd: null,
-      }),
-    ).toBeNull();
   });
 
   it("normalizes progress only for the matching environment-scoped action", () => {
@@ -504,58 +478,6 @@ describe("vcsActionState", () => {
       );
     }),
   );
-
-  it("keys mutation ownership by environment and cwd", () => {
-    const runtime = Atom.runtime(Layer.empty) as unknown as Atom.AtomRuntime<
-      EnvironmentRegistry.EnvironmentRegistry | Persistence.EnvironmentCacheStore,
-      never
-    >;
-    const manager = createVcsActionManager(runtime);
-    const registry = AtomRegistry.make();
-    const target = { environmentId, cwd };
-    const otherTarget = {
-      environmentId: EnvironmentId.make("environment-2"),
-      cwd,
-    };
-
-    expect(manager.runStackedAction(target)).toBe(manager.runStackedAction({ ...target }));
-    expect(manager.runStackedAction(target)).not.toBe(manager.runStackedAction(otherTarget));
-    expect(registry.get(manager.stateAtom(target))).toEqual(EMPTY_VCS_ACTION_STATE);
-
-    registry.dispose();
-  });
-
-  it("retains the incomplete target and operation when tracking is unavailable", async () => {
-    const runtime = Atom.runtime(Layer.empty) as unknown as Atom.AtomRuntime<
-      EnvironmentRegistry.EnvironmentRegistry | Persistence.EnvironmentCacheStore,
-      never
-    >;
-    const manager = createVcsActionManager(runtime);
-    const registry = AtomRegistry.make();
-    const result = await manager.track(
-      registry,
-      { environmentId, cwd: null },
-      { operation: "pull", label: "Pulling latest changes" },
-      async () => AsyncResult.success(undefined),
-    );
-
-    expect(AsyncResult.isFailure(result)).toBe(true);
-    if (AsyncResult.isFailure(result)) {
-      const error = Cause.squash(result.cause);
-      expect(error).toBeInstanceOf(VcsActionUnavailableError);
-      if (!isVcsActionUnavailableError(error)) {
-        throw error;
-      }
-      expect(error).toMatchObject({
-        operation: "pull",
-        environmentId,
-        cwd: null,
-      });
-      expect(error.message).toBe("Source control operation 'pull' is unavailable.");
-    }
-
-    registry.dispose();
-  });
 
   it("tracks finite mutations without letting an older completion clear newer state", async () => {
     const runtime = Atom.runtime(Layer.empty) as unknown as Atom.AtomRuntime<

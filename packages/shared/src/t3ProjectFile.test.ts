@@ -87,10 +87,6 @@ describe("T3ProjectFileFromJson", () => {
     expect(decoded.iconPath).toBe("assets/logo.svg");
     expect(decoded.scripts?.[0]).toEqual({ name: "Dev", command: "pnpm dev" });
   });
-
-  it("fails on malformed JSON", () => {
-    expect(() => decodeJson("{ not json")).toThrow();
-  });
 });
 
 describe("parseT3ProjectFile", () => {

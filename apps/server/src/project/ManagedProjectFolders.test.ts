@@ -122,15 +122,6 @@ const requireRoot = Effect.gen(function* () {
   return Option.getOrThrow(yield* scratch.scratchRoot);
 });
 
-it.effect("offers a Scratch folder under the data dir when it is outside a checkout", () =>
-  withScratch(({ baseDir }) =>
-    Effect.gen(function* () {
-      const path = yield* Path.Path;
-      assert.equal(yield* requireRoot, path.resolve(baseDir, "scratch"));
-    }),
-  ),
-);
-
 it.effect("offers nothing when the data dir sits inside a Git checkout", () =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;

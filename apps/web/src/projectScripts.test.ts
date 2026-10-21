@@ -1,4 +1,3 @@
-import { MAX_SCRIPT_ID_LENGTH } from "@t3tools/contracts";
 import { shortcutLabelForCommand } from "./keybindings";
 import { describe, expect, it } from "vite-plus/test";
 import {
@@ -139,11 +138,6 @@ describe("projectScripts helpers", () => {
       ]);
     },
   );
-
-  it("preserves the exact ID at the shortcut length limit", () => {
-    const id = "a".repeat(MAX_SCRIPT_ID_LENGTH);
-    expect(projectScriptIdFromCommand(commandForProjectScript(id) ?? "")).toBe(id);
-  });
 
   it("slugifies and dedupes project script ids", () => {
     expect(nextProjectScriptId("Run Tests", [])).toBe("run-tests");

@@ -11,12 +11,71 @@ import {
   makeDevelopmentEnvironmentScript,
   makeDevelopmentLauncherScript,
   resolveElectronBinaryPath,
-  resolveMacBundleInfoPlistStrings,
-  resolveMacCodeSignArguments,
-  resolveMacLauncherIconPaths,
   resolveMacLauncherPaths,
   writeDevelopmentLauncherScript,
 } from "./electron-launcher.mjs";
+
+describe("Electron host runtime repair", () => {
+  it.each([
+    ["linux", "x64", "electron"],
+    ["win32", "arm64", "electron.exe"],
+  ])("installs the %s/%s host runtime while packaging another target", (platform, arch, binary) => {
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-electron-host-"));
+    const packagePath = NodePath.join(directory, "package.json");
+    NodeFS.writeFileSync(packagePath, JSON.stringify({ version: "44.9.3" }));
+    const source = NodeFS.readFileSync(
+      new URL("./ensure-electron-runtime.mjs", import.meta.url),
+      "utf8",
+    );
+    const environment = {
+      ELECTRON_INSTALL_PLATFORM: "darwin",
+      ELECTRON_INSTALL_ARCH: "x64",
+      npm_config_platform: "darwin",
+      npm_config_arch: "x64",
+      ELECTRON_OVERRIDE_DIST_PATH: NodePath.join(directory, "packaging-target"),
+    };
+    try {
+      const executable = NodeVM.runInNewContext(
+        `${source
+          .replace(/^import\s[\s\S]*?;\n/gm, "")
+          .replaceAll("import.meta.url", JSON.stringify(import.meta.url))
+          .replace("export function ensureElectronRuntime", "function ensureElectronRuntime")}
+ensureElectronRuntime();`,
+        {
+          NodeFS,
+          NodeOS: { platform: () => platform, arch: () => arch },
+          NodePath,
+          NodeModule: { createRequire: () => ({ resolve: () => packagePath }) },
+          NodeChildProcess: {
+            spawnSync: (_command, args, options) => {
+              assert.equal(args[0], NodePath.join(directory, "install.js"));
+              // Model Electron's installer: ambient target settings select the artifact and dist.
+              const target =
+                options.env.ELECTRON_INSTALL_PLATFORM || options.env.npm_config_platform;
+              const targetArch = options.env.ELECTRON_INSTALL_ARCH || options.env.npm_config_arch;
+              const destination = options.env.ELECTRON_OVERRIDE_DIST_PATH;
+              const targetBinary = target === "win32" ? "electron.exe" : "electron";
+              NodeFS.mkdirSync(destination, { recursive: true });
+              NodeFS.writeFileSync(
+                NodePath.join(destination, targetBinary),
+                `${target}/${targetArch}`,
+              );
+              return { status: 0 };
+            },
+          },
+          process: { env: environment, execPath: "node", argv: [] },
+        },
+      );
+      assert.equal(executable, NodePath.join(directory, "dist", binary));
+      assert.equal(NodeFS.readFileSync(executable, "utf8"), `${platform}/${arch}`);
+      assert.equal(NodeFS.readFileSync(NodePath.join(directory, "path.txt"), "utf8"), binary);
+      assert.isFalse(NodeFS.existsSync(environment.ELECTRON_OVERRIDE_DIST_PATH));
+      assert.equal(environment.ELECTRON_INSTALL_PLATFORM, "darwin");
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("electron development launcher", () => {
   it("uses captured values only as fallbacks for a live runner environment", () => {
@@ -106,30 +165,6 @@ describe("electron development launcher", () => {
     assert.notInclude(script, "node_modules/electron");
   });
 
-  it("declares why the macOS app needs protected access", () => {
-    const values = resolveMacBundleInfoPlistStrings("T3 Code (Dev) Launcher");
-
-    assert.equal(
-      values.NSScreenCaptureUsageDescription,
-      "T3 Code captures the active window when you use the snapshot shortcut.",
-    );
-    assert.equal(
-      values.NSDocumentsFolderUsageDescription,
-      "T3 Code reads project files you open in the desktop app.",
-    );
-  });
-
-  it("ad-hoc signs the complete development app bundle", () => {
-    assert.deepEqual(resolveMacCodeSignArguments("/runtime/T3 Code (Dev).app"), [
-      "--force",
-      "--deep",
-      "--sign",
-      "-",
-      "--timestamp=none",
-      "/runtime/T3 Code (Dev).app",
-    ]);
-  });
-
   it("restores execute permissions on an unchanged launcher", () => {
     const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-launcher-"));
     const launcherPath = NodePath.join(directory, "launcher");
@@ -142,16 +177,6 @@ describe("electron development launcher", () => {
     } finally {
       NodeFS.rmSync(directory, { recursive: true, force: true });
     }
-  });
-
-  it("derives launcher icons from canonical development and production assets", () => {
-    const development = resolveMacLauncherIconPaths("/runtime", true);
-    const production = resolveMacLauncherIconPaths("/runtime", false);
-
-    assert.match(development.sourceIconPath, /assets[\\/]dev[\\/]blueprint-macos-1024\.png$/);
-    assert.equal(development.generatedIconPath, "/runtime/icon-dev.icns");
-    assert.match(production.sourceIconPath, /assets[\\/]prod[\\/]black-macos-1024\.png$/);
-    assert.equal(production.generatedIconPath, "/runtime/icon-prod.icns");
   });
 });
 

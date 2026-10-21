@@ -1,4 +1,13 @@
 import {
+  getDescriptorStringValue,
+  getPromptControlledTraits,
+  getTraitSelectChange,
+  replaceDescriptorCurrentValue,
+  selectableProviderOptionChoices,
+  REASONING_SELECT_DESCRIPTOR_IDS,
+  ULTRATHINK_PROMPT_PREFIX,
+} from "@t3tools/client-runtime/model-traits";
+import {
   type ModelSelection,
   type ProviderDriverKind,
   type ProviderInstanceId,
@@ -8,15 +17,12 @@ import {
   type ServerProviderModel,
 } from "@t3tools/contracts";
 import {
-  applyClaudePromptEffortPrefix,
   buildProviderOptionSelectionsFromDescriptors,
   getProviderOptionCurrentLabel,
   getProviderOptionCurrentValue,
   getProviderOptionDescriptors,
-  isClaudeUltrathinkPrompt,
   normalizeModelSlug,
 } from "@t3tools/shared/model";
-import { REASONING_EFFORT_OPTION_IDS } from "@t3tools/client-runtime/state/thread-execution";
 import { memo } from "react";
 import { UltrafastIcon } from "../Icons";
 import { BrainIcon, ZapIcon } from "lucide-react";
@@ -91,51 +97,12 @@ type TraitsPersistence =
       onModelOptionsChange: (nextOptions: ProviderOptions | undefined) => void;
     };
 
-const ULTRATHINK_PROMPT_PREFIX = "Ultrathink:\n";
-
-const REASONING_SELECT_DESCRIPTOR_IDS: ReadonlySet<string> = new Set([
-  ...REASONING_EFFORT_OPTION_IDS,
-  "thinking",
-]);
-
 function DefaultBadge() {
   return (
     <Badge variant="outline" size="sm" className="min-w-0">
       Default
     </Badge>
   );
-}
-
-function replaceDescriptorCurrentValue(
-  descriptors: ReadonlyArray<ProviderOptionDescriptor>,
-  descriptorId: string,
-  currentValue: string | boolean | undefined,
-): ReadonlyArray<ProviderOptionDescriptor> {
-  return descriptors.map((descriptor) =>
-    descriptor.id !== descriptorId
-      ? descriptor
-      : descriptor.type === "boolean"
-        ? {
-            ...descriptor,
-            ...(typeof currentValue === "boolean" ? { currentValue } : {}),
-          }
-        : {
-            ...descriptor,
-            ...(typeof currentValue === "string" ? { currentValue } : {}),
-          },
-  );
-}
-
-function getDescriptorStringValue(
-  descriptor: Extract<ProviderOptionDescriptor, { type: "select" }> | null,
-  selection?: ModelSelection | null,
-  reportedSelection?: ModelSelection | null,
-): string | null {
-  if (!descriptor) {
-    return null;
-  }
-  const value = getProviderOptionCurrentValue(descriptor, selection, reportedSelection);
-  return typeof value === "string" ? value : null;
 }
 
 function getSelectedTraits(
@@ -178,13 +145,11 @@ function getSelectedTraits(
   const thinkingDescriptor =
     booleanDescriptors.find((descriptor) => descriptor.id === "thinking") ?? null;
 
-  const ultrathinkPromptControlled =
-    allowPromptInjectedEffort &&
-    (primarySelectDescriptor?.promptInjectedValues?.length ?? 0) > 0 &&
-    isClaudeUltrathinkPrompt(prompt);
-
-  const ultrathinkInBodyText =
-    ultrathinkPromptControlled && isClaudeUltrathinkPrompt(prompt.replace(/^Ultrathink:\s*/i, ""));
+  const { ultrathinkPromptControlled, ultrathinkInBodyText } = getPromptControlledTraits(
+    descriptors,
+    prompt,
+    allowPromptInjectedEffort,
+  );
   const effort =
     (ultrathinkPromptControlled
       ? "ultrathink"
@@ -257,34 +222,6 @@ function getTraitsSectionVisibility(input: {
       showContextWindow ||
       showAgent ||
       (selected.modelIsUnavailable && selected.descriptors.length > 0),
-  };
-}
-
-function getTraitSelectChange(
-  selected: ReturnType<typeof getSelectedTraits>,
-  descriptor: Extract<ProviderOptionDescriptor, { type: "select" }>,
-  prompt: string,
-  value: string,
-) {
-  if (!value) return null;
-  if (descriptor.promptInjectedValues?.includes(value)) {
-    return {
-      prompt:
-        prompt.trim().length === 0
-          ? ULTRATHINK_PROMPT_PREFIX
-          : applyClaudePromptEffortPrefix(prompt, "ultrathink"),
-    };
-  }
-  const isPrimary = descriptor.id === selected.primarySelectDescriptor?.id;
-  if (isPrimary && selected.ultrathinkInBodyText) return null;
-  return {
-    prompt:
-      isPrimary && selected.ultrathinkPromptControlled
-        ? prompt.replace(/^Ultrathink:\s*/i, "")
-        : prompt,
-    modelOptions: buildProviderOptionSelectionsFromDescriptors(
-      replaceDescriptorCurrentValue(selected.descriptors, descriptor.id, value),
-    ),
   };
 }
 
@@ -497,7 +434,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
                 value={selectedValue}
                 onValueChange={(value) => handleSelectChange(descriptor, value)}
               >
-                {descriptor.options.map((option) => (
+                {selectableProviderOptionChoices(descriptor).map((option) => (
                   <MenuRadioItem
                     key={option.id}
                     value={option.id}

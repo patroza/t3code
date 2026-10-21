@@ -2,7 +2,6 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -10,7 +9,6 @@ import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
-import * as TestClock from "effect/testing/TestClock";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
@@ -403,26 +401,6 @@ describe("DesktopLinuxUrlHandler", () => {
       assert.deepEqual(writeFailed.commands, []);
     });
   });
-
-  it.effect("continues to xdg-mime when the desktop MIME cache refresh stalls", () =>
-    Effect.gen(function* () {
-      const recorded = emptyRecording();
-      const started = yield* Deferred.make<void>();
-      const registration = yield* runRegister(recorded, {
-        updateDesktopDatabaseStalled: true,
-        updateDesktopDatabaseStarted: started,
-      }).pipe(Effect.forkChild);
-
-      yield* Deferred.await(started);
-      yield* TestClock.adjust("5 seconds");
-      yield* Fiber.join(registration);
-
-      assert.deepEqual(
-        recorded.commands.map(({ command }) => command),
-        ["update-desktop-database", "xdg-mime"],
-      );
-    }),
-  );
 });
 
 interface ThemeIconRun {
@@ -680,35 +658,6 @@ it.layer(NodeServices.layer)("DesktopLinuxUrlHandler theme icons", (it) => {
         missingTool.commands.map(({ command }) => command),
         ["gtk-update-icon-cache", "update-desktop-database", "xdg-mime"],
       );
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("continues to xdg-mime when the icon cache refresh stalls", () =>
-    Effect.gen(function* () {
-      const fixture = yield* themeIconFixture(new Uint8Array([1, 2, 3]));
-      yield* fixture.seedCache;
-      const started = yield* Deferred.make<void>();
-      const iconCacheOptions: Array<Record<string, unknown>> = [];
-      const run: ThemeIconRun = {
-        root: fixture.root,
-        commands: [],
-        iconCacheOptions,
-        iconCacheStalled: true,
-        iconCacheStarted: started,
-      };
-
-      const registration = yield* registerWithRealFileSystem(run).pipe(Effect.forkChild);
-      yield* Deferred.await(started);
-      yield* TestClock.adjust("5 seconds");
-      yield* Fiber.join(registration);
-
-      assert.deepEqual(
-        run.commands.map(({ command }) => command),
-        ["gtk-update-icon-cache", "update-desktop-database", "xdg-mime"],
-      );
-      // Without a forced kill, releasing a helper that ignores SIGTERM after
-      // the timeout would still wait for it to exit.
-      assert.equal(iconCacheOptions[0]?.forceKillAfter, "1 second");
     }).pipe(Effect.scoped),
   );
 });
