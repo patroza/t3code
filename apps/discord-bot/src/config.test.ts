@@ -37,7 +37,6 @@ const baseConfig = {
   t3BearerToken: undefined,
   t3DefaultInstanceId: "codex",
   t3DefaultModel: "gpt-5.4",
-  t3DefaultBaseBranch: "main",
   t3DefaultRuntimeMode: "full-access" as const,
   dataDir: "~/.t3/discord-bot",
   webUiBaseUrl: undefined,
