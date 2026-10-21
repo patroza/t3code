@@ -85,7 +85,11 @@ export default defineConfig({
           name: "desktop",
           environment: "node",
           setupFiles: testSetupFiles,
-          include: ["src/**/*.test.ts", "../../native/kde-snap-shot/src/*.test.ts"],
+          include: [
+            "src/**/*.test.ts",
+            "scripts/**/*.test.{ts,mjs}",
+            "../../native/kde-snap-shot/src/*.test.ts",
+          ],
           exclude: [...isolatedDesktopTestFiles],
           isolate: false,
           fileParallelism: true,
