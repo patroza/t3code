@@ -313,6 +313,7 @@ const unitTestProject = {
     isolate: false,
     fileParallelism: true,
     maxWorkers: 4,
+    sequence: { groupOrder: 1 },
     include: ["src/**/*.test.{ts,tsx}"],
     exclude: [...isolatedUnitTestFiles, ...compilerTestFiles, "src/**/*.browser.test.{ts,tsx}"],
     hookTimeout: 15_000,
@@ -331,6 +332,7 @@ const isolatedUnitTestProject = {
     isolate: true,
     fileParallelism: true,
     maxWorkers: 4,
+    sequence: { groupOrder: 1 },
     include: [...isolatedUnitTestFiles],
     hookTimeout: 15_000,
     testTimeout: 15_000,
@@ -353,7 +355,7 @@ const browserTestProject = {
   test: {
     name: "browser",
     maxWorkers: 4,
-    sequence: { groupOrder: 1 },
+    sequence: { groupOrder: 2 },
     include: ["src/**/*.browser.test.{ts,tsx}"],
     hookTimeout: 15_000,
     testTimeout: 15_000,
@@ -383,7 +385,7 @@ const compilerTestProject = {
     name: "compiler",
     // Compiling the full ChatView body is CPU work; use this project ceiling for compiler tests.
     testTimeout: 30_000,
-    sequence: { groupOrder: 2 },
+    sequence: { groupOrder: 3 },
     include: [...compilerTestFiles],
   },
 } satisfies TestProjectInlineConfiguration;

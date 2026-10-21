@@ -222,7 +222,16 @@ export class DevRunnerHostNotProxiableError extends Schema.TaggedError<DevRunner
 export class DevRunnerBuiltNeedsShareError extends Schema.TaggedError<DevRunnerBuiltNeedsShareError>()(
   "DevRunnerBuiltNeedsShareError",
   {
-    mode: Schema.Literals(["dev", "dev:server", "dev:web", "dev:desktop"]),
+    mode: Schema.Literals([
+      "dev",
+      "dev:server",
+      "dev:web",
+      "dev:desktop",
+      "dev:mobile",
+      "dev:mobile:client",
+      "run:mobile:ios",
+      "run:mobile:android",
+    ]),
   },
 ) {
   override get message(): string {
