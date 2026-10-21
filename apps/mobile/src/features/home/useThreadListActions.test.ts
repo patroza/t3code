@@ -275,7 +275,7 @@ describe("archive worktree cleanup dialogs", () => {
       expect(state.requests).toEqual([]);
       state.dialogs[0]!.onConfirm();
     }
-    await archived;
+    expect(await archived).toBe(true);
 
     expect(state.requests).toEqual([
       expect.objectContaining({ action: "archive", environmentId: primaryEnvironmentId }),
