@@ -98,6 +98,9 @@ describe("channel info pin helpers", () => {
     expect(rendered).toContain("claude- and codex- prefixes still work.");
     expect(rendered).toContain("topic: omegent-fast-mode         New threads start in fast mode");
     expect(rendered).toContain("topic: omegent-default-model-<name>  New threads use that model");
+    expect(rendered).toContain(
+      "topic: omegent-link-github:org/repo  Link the channel to that repository",
+    );
     expect(rendered).toContain("topic: omegent-monitor           Sentry issue opens one thread");
     expect(rendered).not.toContain("omegent-alert-link");
     expect(rendered).toContain("delete your message to cancel");

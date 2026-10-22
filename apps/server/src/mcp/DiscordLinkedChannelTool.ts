@@ -1,5 +1,12 @@
 // @effect-diagnostics nodeBuiltinImport:off globalFetch:off globalFetchInEffect:off outdatedApi:off
 import { OrchestratorMcpFailure } from "@t3tools/contracts";
+import {
+  githubRepositoryRefsOf,
+  parseTopicProjectBinding,
+  parseTopicShortName,
+  topicProjectBindingLabel,
+  type GithubRepositoryRef,
+} from "@t3tools/shared/discordProjectTopic";
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
@@ -11,6 +18,7 @@ import * as Schema from "effect/Schema";
 
 import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
 import { ProjectStoreV2 } from "../orchestration-v2/ProjectStore.ts";
+import { RepositoryIdentityResolver } from "../project/RepositoryIdentityResolver.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 
@@ -366,67 +374,74 @@ function resolveDiscordPostDestination(
   return linkedThreadId ?? linkedChannelId;
 }
 
-/** Legacy `t3-ips` is the stream opt-in, not a project short name. */
-const LEGACY_RESERVED_TOPIC_TAG_NAMES = new Set(["ips"]);
+function isSupportedLinkedChannel(channel: DiscordGuildChannel): boolean {
+  return channel.type === 0 || channel.type === 5;
+}
 
-const TOPIC_SHORT_NAME_PATTERN = String.raw`[a-z0-9]+(?:-[a-z0-9]+)*`;
-
-function firstTopicShortName(topic: string, prefix: "omegent-link" | "t3"): string | null {
-  const pattern = new RegExp(String.raw`\b${prefix}-(${TOPIC_SHORT_NAME_PATTERN})\b`, "giu");
-  const reserved = prefix === "t3" ? LEGACY_RESERVED_TOPIC_TAG_NAMES : null;
-  for (const match of topic.matchAll(pattern)) {
-    const shortName = match[1]?.toLowerCase();
-    if (shortName === undefined || reserved?.has(shortName) === true) continue;
-    return shortName;
-  }
-  return null;
+interface LinkedChannelTarget {
+  readonly shortName: string | null;
+  readonly repositories: readonly GithubRepositoryRef[];
 }
 
 /**
- * Project short name from a Discord channel topic.
- * Prefers `omegent-link-<shortName>`. Falls back to a legacy `t3-<shortName>`.
- * `omegent-ips` is a feature tag, so it does not match the link prefix.
- * Legacy `t3-ips` is reserved the same way.
- * Keep in sync with `parseTopicShortName` in `apps/discord-bot/src/presentation/mentions.ts`.
+ * Rank 0 is a GitHub topic tag this project answers to.
+ * Rank 1 is the legacy alias short name. A channel that has a GitHub tag does
+ * not also match through a sibling short name.
  */
-function parseTopicShortName(topic: string | null | undefined): string | null {
-  if (!topic) return null;
-  return firstTopicShortName(topic, "omegent-link") ?? firstTopicShortName(topic, "t3");
-}
-
-function isSupportedLinkedChannel(channel: DiscordGuildChannel): boolean {
-  return channel.type === 0 || channel.type === 5;
+function linkedChannelRank(topic: string, target: LinkedChannelTarget): 0 | 1 | null {
+  const binding = parseTopicProjectBinding(topic);
+  if (binding === null) return null;
+  if (binding.kind === "github") {
+    const matches = target.repositories.some(
+      (repository) =>
+        repository.owner === binding.repository.owner &&
+        repository.repo === binding.repository.repo,
+    );
+    return matches ? 0 : null;
+  }
+  return target.shortName !== null && binding.shortName === target.shortName ? 1 : null;
 }
 
 function pickLinkedDiscordChannel(input: {
   readonly guilds: ReadonlyArray<DiscordGuildSummary>;
   readonly channelsByGuildId: ReadonlyMap<string, ReadonlyArray<DiscordGuildChannel>>;
-  readonly shortName: string;
+  readonly target: LinkedChannelTarget;
 }): {
   readonly match: LinkedDiscordChannel | null;
   readonly conflicts: ReadonlyArray<LinkedDiscordChannel>;
 } {
-  const matches: LinkedDiscordChannel[] = [];
+  const ranked: Array<{ readonly channel: LinkedDiscordChannel; readonly rank: 0 | 1 }> = [];
   for (const guild of input.guilds) {
     for (const channel of input.channelsByGuildId.get(guild.id) ?? []) {
       if (!isSupportedLinkedChannel(channel) || typeof channel.topic !== "string") continue;
-      const topicShortName = parseTopicShortName(channel.topic);
-      if (topicShortName !== input.shortName) continue;
-      matches.push({
-        guildId: guild.id,
-        guildName: guild.name,
-        channelId: channel.id,
-        channelName: channel.name ?? channel.id,
-        shortName: input.shortName,
-        topic: channel.topic,
+      const rank = linkedChannelRank(channel.topic, input.target);
+      if (rank === null) continue;
+      const binding = parseTopicProjectBinding(channel.topic);
+      if (binding === null) continue;
+      ranked.push({
+        rank,
+        channel: {
+          guildId: guild.id,
+          guildName: guild.name,
+          channelId: channel.id,
+          channelName: channel.name ?? channel.id,
+          shortName: topicProjectBindingLabel(binding),
+          topic: channel.topic,
+        },
       });
     }
   }
 
-  if (matches.length !== 1) {
-    return { match: null, conflicts: matches };
+  const best = ranked.reduce<0 | 1 | null>(
+    (lowest, entry) => (lowest === null || entry.rank < lowest ? entry.rank : lowest),
+    null,
+  );
+  if (best === null) return { match: null, conflicts: [] };
+  const winners = ranked.filter((entry) => entry.rank === best).map((entry) => entry.channel);
+  if (winners.length !== 1) {
+    return { match: null, conflicts: winners };
   }
-  return { match: matches[0]!, conflicts: [] };
+  return { match: winners[0]!, conflicts: [] };
 }
 
 async function discordGetJson<T>(token: string, path: string): Promise<T> {
@@ -445,12 +460,17 @@ async function discordGetJson<T>(token: string, path: string): Promise<T> {
 async function resolveLinkedChannel(input: {
   readonly token: string;
   readonly workspaceRoot: string;
+  readonly repositories: readonly GithubRepositoryRef[];
 }): Promise<LinkedDiscordChannel | null> {
   const aliasesPath = await resolveDiscordAliasesPath();
-  if (!aliasesPath) return null;
-  const aliases = loadDiscordProjectAliasesFromFileSync(aliasesPath);
-  const alias = findDiscordProjectAliasByWorkspaceRoot(aliases, input.workspaceRoot);
-  if (alias === null) return null;
+  const shortName =
+    aliasesPath === null
+      ? null
+      : (findDiscordProjectAliasByWorkspaceRoot(
+          loadDiscordProjectAliasesFromFileSync(aliasesPath),
+          input.workspaceRoot,
+        )?.shortName ?? null);
+  if (shortName === null && input.repositories.length === 0) return null;
 
   const guilds = await discordGetJson<ReadonlyArray<DiscordGuildSummary>>(
     input.token,
@@ -470,11 +490,12 @@ async function resolveLinkedChannel(input: {
   const picked = pickLinkedDiscordChannel({
     guilds,
     channelsByGuildId,
-    shortName: alias.shortName,
+    target: { shortName, repositories: input.repositories },
   });
   if (picked.conflicts.length > 1) {
+    const label = picked.conflicts[0]?.shortName ?? shortName ?? input.workspaceRoot;
     throw new Error(
-      `Multiple linked Discord channels found for '${alias.shortName}': ${picked.conflicts
+      `Multiple linked Discord channels found for '${label}': ${picked.conflicts
         .map((entry) => `${entry.guildName}/#${entry.channelName}`)
         .join(", ")}`,
     );
@@ -647,13 +668,14 @@ const discordPostFailure = (
 
 const DiscordPostTool = Tool.make("discord_post_to_linked_channel", {
   description:
-    "Post to the Discord thread linked to the active T3 thread, falling back to the repository channel linked via an `omegent-link-<shortName>` topic tag (legacy `t3-<shortName>` still matches). Supports file attachments, rich embeds, and polls.",
+    "Post to the Discord thread linked to the active T3 thread, falling back to the repository channel linked via an `omegent-link-github:<org>/<repo>` topic tag (`omegent-link-<shortName>` and legacy `t3-<shortName>` still match). Supports file attachments, rich embeds, and polls.",
   failure: OrchestratorMcpFailure,
   failureMode: "return",
   dependencies: [
     McpInvocationContext.McpInvocationContext,
     ThreadManagementService,
     ProjectStoreV2,
+    RepositoryIdentityResolver,
   ],
   parameters: Schema.Struct({
     content: Schema.optional(Schema.String).annotate({ description: "Plain message content." }),
@@ -750,10 +772,13 @@ const postToLinkedDiscordChannel = Effect.fn("DiscordLinkedChannelTool.post")(fu
     );
   }
 
+  const repositoryIdentities = yield* RepositoryIdentityResolver;
+  const identity = yield* repositoryIdentities.resolve(projectShell.value.workspaceRoot);
   const linkedChannel = yield* Effect.promise(() =>
     resolveLinkedChannel({
       token,
       workspaceRoot: projectShell.value.workspaceRoot,
+      repositories: githubRepositoryRefsOf(identity),
     }),
   );
   if (linkedChannel === null) {

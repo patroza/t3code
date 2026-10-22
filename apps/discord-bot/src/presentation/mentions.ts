@@ -182,33 +182,18 @@ export function parseMentionIntent(raw: string): ParsedMentionIntent {
   return { kind: "prompt", ...parsed };
 }
 
-/** Legacy `t3-ips` is the stream opt-in, not a project short name. */
-const LEGACY_RESERVED_TOPIC_TAG_NAMES = new Set(["ips"]);
+export {
+  parseTopicGithubRepository,
+  parseTopicProjectBinding,
+  parseTopicShortName,
+  selectProjectForGithubRepository,
+  topicHasProjectBinding,
+  topicProjectBindingLabel,
+} from "@t3tools/shared/discordProjectTopic";
 
-const TOPIC_SHORT_NAME_PATTERN = String.raw`[a-z0-9]+(?:-[a-z0-9]+)*`;
-
-function firstTopicShortName(topic: string, prefix: "omegent-link" | "t3"): string | null {
-  const pattern = new RegExp(String.raw`\b${prefix}-(${TOPIC_SHORT_NAME_PATTERN})\b`, "giu");
-  const reserved = prefix === "t3" ? LEGACY_RESERVED_TOPIC_TAG_NAMES : null;
-  for (const match of topic.matchAll(pattern)) {
-    const shortName = match[1]?.toLowerCase();
-    if (shortName === undefined || reserved?.has(shortName) === true) continue;
-    return shortName;
-  }
-  return null;
-}
-
-/**
- * Project short name from a Discord channel topic.
- * Prefers `omegent-link-<shortName>`. Falls back to a legacy `t3-<shortName>`.
- * `omegent-ips` is a feature tag, so it does not match the link prefix.
- * Legacy `t3-ips` is reserved the same way.
- * Keep in sync with `parseTopicShortName` in `DiscordLinkedChannelTool.ts`.
- */
-export function parseTopicShortName(topic: string | null | undefined): string | null {
-  if (topic === null || topic === undefined || topic.length === 0) return null;
-  return firstTopicShortName(topic, "omegent-link") ?? firstTopicShortName(topic, "t3");
-}
+/** Shown when a topic has neither a GitHub repository tag nor a legacy short name. */
+export const MISSING_PROJECT_TOPIC_TAG_ERROR =
+  "Channel topic has no omegent-link-github:<org>/<repo> or omegent-link-<shortName> tag.";
 
 /** Read Discord channel.topic when present (threads usually have none). */
 export function readChannelTopic(channel: unknown): string | null | undefined {
@@ -277,9 +262,8 @@ export function missingProjectBindingMessage(input: {
       ? "Couldn't read the parent channel topic (Discord API may be degraded). Please try again in a moment."
       : "Couldn't read the channel topic (Discord API may be degraded). Please try again in a moment.";
   }
-  return input.inThread
-    ? "This channel is not linked to a T3 project. Set the parent channel topic to include `omegent-link-<shortName>` (e.g. `omegent-link-example-project`)."
-    : "This channel is not linked to a T3 project. Set the channel topic to include `omegent-link-<shortName>` (e.g. `omegent-link-example-project`).";
+  const where = input.inThread ? "parent channel topic" : "channel topic";
+  return `This channel is not linked to a T3 project. Set the ${where} to include \`omegent-link-github:<org>/<repo>\` (for example \`omegent-link-github:acme/example-project\`). \`omegent-link-<shortName>\` still works.`;
 }
 
 /**

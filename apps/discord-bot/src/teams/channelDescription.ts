@@ -1,6 +1,6 @@
 // @effect-diagnostics globalFetch:off globalPromise:off globalDate:off preferSchemaOverJson:off
 import * as Schema from "effect/Schema";
-import { parseTopicShortName } from "../presentation/mentions.ts";
+import { parseTopicGithubRepository, parseTopicShortName } from "../presentation/mentions.ts";
 
 const Channel = Schema.Struct({ id: Schema.String, description: Schema.NullOr(Schema.String) });
 const Token = Schema.Struct({ access_token: Schema.String, expires_in: Schema.Number });
@@ -32,6 +32,13 @@ export function teamsDescriptionProject(description: string, policy: TeamsDescri
   if (policy.useChannelDescription !== true) return policy.projectShortName;
   validateTeamsDescriptionPolicy(policy);
   const tagged = parseTopicShortName(description);
+  // A GitHub tag must not select an arbitrary checkout or the default project.
+  // Teams stays on the approved short-name allowlist.
+  if (tagged === null && parseTopicGithubRepository(description) !== null) {
+    throw new Error(
+      "Teams descriptions still select a project with an approved omegent-link-<shortName> tag.",
+    );
+  }
   if (tagged === null && /\bomegent-link(?:-|\b)/iu.test(description)) {
     throw new Error("Teams description contains an invalid project link tag");
   }

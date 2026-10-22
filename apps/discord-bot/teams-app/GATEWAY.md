@@ -47,7 +47,9 @@ installed team. Enable `useChannelDescription` on an already authorized channel 
 set `descriptionProjectShortNames` to its approved project aliases (including its default).
 This feature is off by default; existing configurations do not make new Graph metadata requests.
 
-Descriptions use the same parsers as Discord channel topics:
+Descriptions use the same short-name parsers as Discord channel topics. Discord can also
+bind a channel with `omegent-link-github:<org>/<repo>`; Teams still selects a project only
+through an approved `omegent-link-<shortName>`.
 
 ```text
 omegent-link-example-project
