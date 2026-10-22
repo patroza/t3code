@@ -75,6 +75,8 @@ describe("sentry monitor topic", () => {
     expect(monitorBody).toContain("sentryMonitor: true");
     expect(mentionRouterSource).toContain("Sentry repeat button started a thread");
     expect(mentionRouterSource).toContain("if (!isThreadChannel(channel.type))");
+    expect(mentionRouterSource).toContain("makeInteractionBackground");
+    expect(mentionRouterSource).not.toContain("forkDetach({ startImmediately: true })");
   });
 });
 

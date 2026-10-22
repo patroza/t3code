@@ -10,6 +10,7 @@ import {
 import { readJiraBareKeyProjects } from "@t3tools/shared/jiraBareKeyProjects";
 import { DISCORD_LINK_REQUEST_MARKER } from "@t3tools/shared/providerModelSelection";
 import { makeKeyedDrainableWorker } from "@t3tools/shared/KeyedDrainableWorker";
+import { makeInteractionBackground } from "./interactionBackground.ts";
 import { Discord, DiscordConfig, DiscordREST, Ix } from "dfx";
 import { DiscordGateway, InteractionsRegistry } from "dfx/gateway";
 import * as Clock from "effect/Clock";
@@ -2019,13 +2020,14 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
     effect.pipe(Effect.provideService(BridgeHub, bridgeHub));
 
   /**
-   * Background work from slash handlers. Must use `startImmediately: true` — dfx wraps
-   * handlers in a short-lived Scope, and default forkDetach only schedules on the parent
-   * dispatcher (often lost when the interaction fiber exits before the task runs).
-   * Also re-provides BridgeHub (Ix fibers do not inherit the router layer context).
+   * Background work from interaction handlers. dfx wraps each handler in a
+   * scope that closes when the ack returns. Forking from that fiber inherits
+   * the scope, so the turn's HTTP is cancelled and no T3 thread starts.
+   * Captured once here, on the router fiber.
    */
+  const interactionBackground = yield* makeInteractionBackground();
   const forkSlashBackground = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    withBridgeHub(effect).pipe(Effect.forkDetach({ startImmediately: true }));
+    interactionBackground.fork(withBridgeHub(effect));
 
   /**
    * Link Discord to an existing T3 thread (no new T3 thread / no new turn).
