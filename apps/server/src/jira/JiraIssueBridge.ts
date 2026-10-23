@@ -95,7 +95,7 @@ const CREATE_FAILED_RESPONSE =
 const CONTEXT_UNAUTHORIZED_RESPONSE =
   "You're not currently authorized to run agent work from Jira. Please ask a team member who is authorized to take this forward.";
 const CONTEXT_NOTED_RESPONSE =
-  "Thanks — noted for the team. You're not currently authorized to run agent work from Jira, so this was filed as context only. An authorized teammate can pick it up.";
+  "Thanks, noted for the team. You're not currently authorized to run agent work from Jira, so this was filed as context only. An authorized teammate can pick it up.";
 const CONTEXT_FAILED_RESPONSE =
   "You're not currently authorized to run agent work from Jira, and I couldn't file this as context either. Please ping an authorized teammate.";
 

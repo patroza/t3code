@@ -3098,7 +3098,7 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
         content:
           content.length === 0
             ? "I saw your mention but message content is empty. Enable **Message Content Intent** for this bot in the Discord Developer Portal, then restart me."
-            : "Send a prompt after mentioning me (or attach a file). Optional flags: `--model` or `—model` `<short name>` (`opus-5.5`; `claude-` and `codex-` prefixes still work) `--provider` `--base` `--local` `--plan` `--steer` `--queue`. An unknown model stops immediately and links the pinned channel info. Mid-turn follow-ups **steer** into the active turn. Use `--queue` to park until it finishes (📥; delete your message to cancel). A channel topic `omegent-queue` parks every follow-up; `--steer` still injects.",
+            : "Send a prompt after mentioning me (or attach a file). Optional flags: `--model` `<short name>` (`opus-5.5`; `claude-` and `codex-` prefixes still work) `--provider` `--base` `--local` `--plan` `--steer` `--queue`. An unknown model stops immediately and links the pinned channel info. Mid-turn follow-ups **steer** into the active turn. Use `--queue` to park until it finishes (📥; delete your message to cancel). A channel topic `omegent-queue` parks every follow-up; `--steer` still injects.",
         message_reference: { message_id: event.id },
       });
       return;

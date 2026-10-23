@@ -1343,6 +1343,62 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
     }),
   );
 
+  it.effect("branch PR lookup notifies linked threads when draft status changes", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/draft-status"]);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "feature/draft-status"]);
+      const drafts = [false, true, true, false, false, true];
+      const pullRequest = {
+        number: 1,
+        title: "Draft status",
+        url: "https://github.com/pingdotgg/codething-mvp/pull/1",
+        baseRefName: "main",
+        headRefName: "feature/draft-status",
+        state: "OPEN",
+      };
+      const { manager } = yield* makeManager({
+        ghScenario: {
+          prListSequence: [
+            ...drafts.map((isDraft) => encodeCliJson([{ ...pullRequest, isDraft }])),
+            encodeCliJson([
+              {
+                ...pullRequest,
+                number: 2,
+                url: "https://github.com/pingdotgg/codething-mvp/pull/2",
+                state: "MERGED",
+              },
+            ]),
+          ],
+        },
+      });
+      const changes = yield* manager.subscribePullRequestStateChanges;
+      for (const isDraft of drafts) {
+        const pr = yield* manager.branchPullRequest(
+          { cwd: repoDir, branch: "feature/draft-status" },
+          { refresh: true },
+        );
+        expect(pr?.isDraft === true).toBe(isDraft);
+      }
+      // A different PR ends collection without waiting on a background stream consumer.
+      yield* manager.branchPullRequest(
+        { cwd: repoDir, branch: "feature/draft-status" },
+        { refresh: true },
+      );
+      const events = yield* Stream.runCollect(
+        changes.pipe(Stream.takeUntil((event) => event.number === 2, { excludeLast: true })),
+      );
+      expect(events).toEqual([
+        { host: "github.com", repository: "pingdotgg/codething-mvp", number: 1 },
+        { host: "github.com", repository: "pingdotgg/codething-mvp", number: 1 },
+        { host: "github.com", repository: "pingdotgg/codething-mvp", number: 1 },
+      ]);
+    }),
+  );
+
   it.effect("branch PR lookup uses a saved tracked branch without changing checkout", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
@@ -2052,6 +2108,11 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       "gitlab.example.com/group/subgroup/repository",
     ],
     ["https://bitbucket.org/team/repository/pull-requests/42", "bitbucket.org/team/repository"],
+    ["https://codeberg.org/team/repository/pulls/42", "codeberg.org/team/repository"],
+    [
+      "http://code.example:3000/forgejo/team/repository/pulls/42/files",
+      "code.example/forgejo/team/repository",
+    ],
     [
       "https://dev.azure.com/org/project/_git/repository/pullrequest/42",
       "dev.azure.com/org/project/_git/repository",
@@ -3046,6 +3107,42 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
           Effect.map((result) => result.stdout.trim()),
         ),
       ).toBe("Implement stacked git actions");
+    }),
+  );
+
+  it.effect("includes CLAUDE.md for Claude writers only when it differs from AGENTS.md", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      NodeFS.writeFileSync(NodePath.join(repoDir, "AGENTS.md"), "Use imperative subjects.\n");
+      NodeFS.copyFileSync(NodePath.join(repoDir, "AGENTS.md"), NodePath.join(repoDir, "CLAUDE.md"));
+      NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "hello\n");
+      const commitInstructions: Array<string | undefined> = [];
+
+      const { manager } = yield* makeManager({
+        serverSettings: {
+          textGenerationModelSelection: {
+            instanceId: ProviderInstanceId.make("claudeAgent"),
+            model: "claude-sonnet-4-5",
+          },
+        },
+        textGeneration: {
+          generateCommitMessage: (input) => {
+            commitInstructions.push(input.policy?.commitInstructions);
+            return Effect.succeed({ subject: "Update readme", body: "" });
+          },
+        },
+      });
+
+      yield* runStackedAction(manager, { cwd: repoDir, action: "commit" });
+
+      NodeFS.writeFileSync(NodePath.join(repoDir, "CLAUDE.md"), "Mention the Claude provider.\n");
+      NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "hello again\n");
+      yield* runStackedAction(manager, { cwd: repoDir, action: "commit" });
+
+      expect(commitInstructions[0]).toContain("Local AGENTS.md:\nUse imperative subjects.");
+      expect(commitInstructions[0]).not.toContain("Local CLAUDE.md:");
+      expect(commitInstructions[1]).toContain("Local CLAUDE.md:\nMention the Claude provider.");
     }),
   );
 

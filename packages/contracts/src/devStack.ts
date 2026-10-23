@@ -49,7 +49,7 @@ export const DevStackEntry = Schema.Struct({
   }),
   instance: Schema.String.annotate({
     description:
-      "What the repository shards stacks by — a company, a tenant, a variant. Opaque to T3; it only has to be unique within a worktree.",
+      "What the repository shards stacks by: a company, a tenant, a variant. Opaque to T3; it only has to be unique within a worktree.",
   }),
   processes: Schema.Array(DevStackProcess),
 }).annotate({

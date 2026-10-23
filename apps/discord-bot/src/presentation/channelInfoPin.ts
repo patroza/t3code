@@ -188,7 +188,7 @@ function buildChannelInfoPinBody(input: {
     "@Omegent …                      Same actions (fallback)",
     "  flags: --plan --local --base <b> --provider <id> --model <name>",
     "  workspace: project's T3 setting (--local and --base override)",
-    "         —model works too. Short names (opus-5.5).",
+    "         An em dash before model works too. Short names (opus-5.5).",
     "         claude- and codex- prefixes still work.",
     "         --queue parks · --steer injects (steer is the default)",
     "  topic: omegent-queue             Park mid-turn follow-ups in this channel",
@@ -245,7 +245,7 @@ export function renderChannelInfoPin(input: {
   });
   const withoutProviders = header.replace(
     "Supported provider/model configurations:\n```text\n(no configured providers expose models)\n```",
-    "Supported provider/model configurations: _(truncated — too many models for a Discord pin)_",
+    "Supported provider/model configurations: _(truncated: too many models for a Discord pin)_",
   );
 
   if (withoutProviders.length <= maxLength) return withoutProviders;

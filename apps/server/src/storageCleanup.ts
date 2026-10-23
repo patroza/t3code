@@ -46,9 +46,11 @@ import * as Settings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { isFilesystemRoot, managedWorktreesDirectories } from "./worktreesDirectory.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
+import { removeLinkedWorktree } from "./vcs/worktreeRemoval.ts";
 import { withWorkspaceLease } from "./workspace/workspaceLease.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
+import { isNetworkPath } from "@t3tools/shared/path";
 
 const decodeCleanupThread = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationV2AppThreadJson),
@@ -264,6 +266,11 @@ const make = Effect.gen(function* () {
       const nodeModules = path.join(root, "node_modules");
       const text = yield* fs.readFileString(path.join(nodeModules, ".modules.yaml"));
       const manifest = yield* decodePnpmModulesManifest(yield* Effect.try(() => parseYaml(text)));
+      // An agent can write this manifest, and statting a network path makes
+      // Windows sign in to its host with the user's NTLM credentials.
+      if (isNetworkPath(manifest.storeDir) || isNetworkPath(manifest.virtualStoreDir ?? "")) {
+        return null;
+      }
       const virtualStore = path.resolve(nodeModules, manifest.virtualStoreDir ?? ".pnpm");
       const [store, virtual] = yield* Effect.all([
         fs.stat(manifest.storeDir),
@@ -737,7 +744,7 @@ const make = Effect.gen(function* () {
           FROM orchestration_v2_projection_threads t
           JOIN projection_projects p ON p.project_id = t.project_id
           WHERE t.deleted_at IS NOT NULL
-        `;
+        `.pipe(NodeSqliteClient.readOnly);
     const deletedThreads = (yield* Effect.forEach(deletedRows, (row) =>
       decodeCleanupThread(row.payload_json).pipe(
         Effect.map((thread) => ({ ...thread, workspaceRoot: row.workspaceRoot })),
@@ -938,7 +945,7 @@ const make = Effect.gen(function* () {
             const pendingCleanup = yield* sql`
               SELECT 1 FROM orchestration_v2_effect_outbox
               WHERE thread_id = ${thread.id} AND status NOT IN ('succeeded', 'cancelled') LIMIT 1
-            `;
+            `.pipe(NodeSqliteClient.readOnly);
             if (pendingCleanup.length > 0) return "thread deletion is still pending";
           } else {
             const latestShells = yield* Effect.forEach(latest, (entry) =>
@@ -970,7 +977,7 @@ const make = Effect.gen(function* () {
           const sessionRows = yield* sql<{ payload_json: string }>`
             SELECT payload_json FROM orchestration_v2_projection_provider_sessions
             WHERE status != 'stopped'
-          `;
+          `.pipe(NodeSqliteClient.readOnly);
           const sessions = yield* Effect.forEach(sessionRows, (row) =>
             decodeCleanupSession(row.payload_json),
           );
@@ -1020,20 +1027,15 @@ const make = Effect.gen(function* () {
           const changes = yield* localChangesReason(worktreePath, settings);
           if (changes !== null) return keep(changes);
         }
-        yield* cleanupGit(
-          project.workspaceRoot,
-          [
-            "-c",
-            "status.showUntrackedFiles=normal",
-            "worktree",
-            "remove",
-            // Git requires force for submodules; recursive checks above cannot make removal atomic.
-            ...(submodules.force ? ["--force"] : []),
-            "--",
-            worktreePath,
-          ],
-          "git worktree remove",
-        );
+        yield* removeLinkedWorktree({
+          operation: "StorageCleanup.cleanupGit",
+          cwd: project.workspaceRoot,
+          worktreePath,
+          // Git requires force for submodules; recursive checks above cannot make removal atomic.
+          force: submodules.force,
+          execute: git.execute,
+          run: (args) => cleanupGit(project.workspaceRoot, [...args], "git worktree remove"),
+        });
         entries.push({ ...entry, outcome: "removed", reason: sentence(removalReason), bytes });
         yield* gitManager.invalidateStatus(project.workspaceRoot);
         // Preserve branch and path: ProviderTurnStartService recreates the checkout

@@ -288,7 +288,7 @@ function renderMessage(
   const when = formatTimestamp(message.timestamp);
   const reply = message.replyTo?.id ? byId.get(message.replyTo.id) : undefined;
   const replyNote = reply === undefined ? "" : ` (reply to ${reply.label})`;
-  const heading = when === null ? `${speaker}${replyNote}` : `${speaker} — ${when}${replyNote}`;
+  const heading = when === null ? `${speaker}${replyNote}` : `${speaker}, ${when}${replyNote}`;
   return `${heading}\n${composeBody(message, redact)}`;
 }
 

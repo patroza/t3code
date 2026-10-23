@@ -77,7 +77,7 @@ const PROVISION_FAILED_RESPONSE =
 const EMPTY_PROMPT_RESPONSE =
   "Provide a prompt after the mention. Conversation comments use the PR work thread; inline review reuses that discussion's session (first tag creates it). Override with `main-thread` or `sibling-thread`.";
 const IDENTITY_DENIED_RESPONSE =
-  "Not authorized to run agent turns from this GitHub account. When the T3 identity map is enabled, only mapped operators (`github.login` / `github.id`) can invoke the bot — repository write access alone is not enough (including on public repos).";
+  "Not authorized to run agent turns from this GitHub account. When the T3 identity map is enabled, only mapped operators (`github.login` / `github.id`) can invoke the bot. Repository write access alone is not enough (including on public repos).";
 const MAX_GITHUB_COMMENT_LENGTH = 65_536;
 
 const PERMISSION_RANK: Readonly<Record<GitHubRepositoryPermission, number>> = {
@@ -484,7 +484,7 @@ export function buildGitHubTurnPrompt(
     "<!--",
     "## GitHub pull request context",
     `Repository: ${invocation.repository}`,
-    `Pull request: #${invocation.pullRequestNumber} — ${invocation.pullRequestTitle}`,
+    `Pull request: #${invocation.pullRequestNumber}: ${invocation.pullRequestTitle}`,
     `PR URL: ${invocation.pullRequestUrl}`,
     `GitHub requester: ${invocation.actorLogin} (id ${invocation.actorId})`,
     `Comment: ${invocation.commentUrl} (id ${invocation.commentId})`,

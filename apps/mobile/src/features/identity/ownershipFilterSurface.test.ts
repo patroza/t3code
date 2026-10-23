@@ -8,7 +8,7 @@ function readSource(relativePath: string): string {
 
 describe("mobile ownership filter surface", () => {
   it("keeps ownership controls wired in both phone and sidebar thread lists", () => {
-    const homeHeader = readSource("../home/HomeHeader.tsx");
+    const homeHeader = readSource("../home/HomeHeader.android.tsx");
     const homeRoute = readSource("../home/HomeRouteScreen.tsx");
     const sidebar = readSource("../threads/ThreadNavigationSidebar.tsx");
     const preferences = readSource("../../persistence/mobile-preferences.ts");
@@ -16,8 +16,8 @@ describe("mobile ownership filter surface", () => {
     const workspaceToolbar = readSource("../workspace/WorkspaceToolbar.ios.tsx");
     const threadListFilters = readSource("../home/ThreadListFilters.tsx");
 
-    // The workspace root bypasses HomeHeader on iOS phones. The cog opens
-    // Settings; Mine/Theirs sits with the environment and project chips.
+    // iOS keeps Mine/Theirs beside the environment and project chips;
+    // Android keeps ownership in its native header menu.
     expect(workspaceToolbar).toContain('accessibilityLabel="Open settings"');
     expect(workspaceToolbar).toContain('icon="gearshape"');
     expect(workspaceToolbar).not.toContain("Thread filters and settings");

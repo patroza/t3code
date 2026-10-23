@@ -349,9 +349,24 @@ const browserTestApiPort = 61_000 + ((Hash.string(import.meta.dirname) >>> 0) % 
 
 const browserTestProject = {
   extends: true,
-  // Pre-bundled so a late first import does not trigger a mid-run reload. The
-  // dependency scan misses autocomplete because tests reach it only through lazy imports.
-  optimizeDeps: { include: ["vite-plus/test/browser", "@base-ui/react/autocomplete"] },
+  // Lazy views and mocked imports hide these from the initial dependency scan.
+  // Discovering them while a browser test runs reloads its page and closes its mock RPCs.
+  optimizeDeps: {
+    include: [
+      "vite-plus/test/browser",
+      "@base-ui/react/autocomplete",
+      "@base-ui/react/field",
+      "@base-ui/react/preview-card",
+      "@formkit/auto-animate",
+      "@pierre/diffs/worker",
+      "dompurify",
+      "hast-util-to-html",
+      "hast-util-to-jsx-runtime",
+      "katex",
+      "pele/lazy",
+      "react-markdown",
+    ],
+  },
   test: {
     name: "browser",
     maxWorkers: 4,
@@ -452,9 +467,9 @@ export default defineConfig(() => {
   return {
     run: {
       tasks: {
-        // tsc-rs rewrites the tsbuildinfo it reads, which keeps a task out of the cache.
+        // tsc (tsc-rs) rewrites the tsbuildinfo it reads, which keeps a task out of the cache.
         typecheck: {
-          command: "tsc-rs --noEmit",
+          command: "tsc --noEmit",
           cache: { input: [{ auto: true }, "!*.tsbuildinfo"] },
         },
       },

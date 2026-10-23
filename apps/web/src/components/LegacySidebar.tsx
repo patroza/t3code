@@ -235,7 +235,6 @@ import {
   archiveSelectedThreadEntries,
   buildMultiSelectThreadContextMenuItems,
   deleteSelectedThreadEntries,
-  filterSidebarV2VisibleThreads,
   getSidebarThreadIdsToPrewarm,
   resolveAdjacentThreadId,
   isContextMenuPointerDown,
@@ -345,6 +344,11 @@ import {
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
+import {
+  completeSidebarRouteReveal,
+  pendingSidebarRouteReveal,
+  type SidebarRouteReveal,
+} from "./sidebar/routeReveal";
 
 /**
  * Active sidebar rows report resolved PR state upward so hide-settled /
@@ -431,7 +435,7 @@ function formatProjectMemberActionLabel(
   }
 
   return member.environmentLabel
-    ? `${member.environmentLabel} — ${member.workspaceRoot}`
+    ? `${member.environmentLabel}: ${member.workspaceRoot}`
     : member.workspaceRoot;
 }
 
@@ -1469,7 +1473,6 @@ function useProjectThreads(
   return {
     sidebarThreads,
     sidebarThreadByKey,
-    projectThreads,
     memberProjectByScopedKey,
     memberThreadCountByPhysicalKey,
     projectStatus,
@@ -1497,20 +1500,26 @@ function useProjectThreadPanel(input: {
     (settings) => settings.sidebarThreadPreviewCount,
   );
   const activeThreadKey = activeRouteThreadKey ?? undefined;
-  const pinnedCollapsedThread =
-    !activeThreadKey || projectExpanded
-      ? null
-      : (visibleProjectThreads.find(
-          (thread) =>
-            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === activeThreadKey,
-        ) ?? null);
-  const hasOverflowingThreads = visibleProjectThreads.length > sidebarThreadPreviewCount;
+  const activeThread = activeThreadKey
+    ? (visibleProjectThreads.find(
+        (thread) =>
+          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === activeThreadKey,
+      ) ?? null)
+    : null;
+  const pinnedCollapsedThread = projectExpanded ? null : activeThread;
+  // The open thread stays listed past the preview cut, as it does in a
+  // collapsed project, so it alone does not overflow the preview.
+  const hasOverflowingThreads = visibleProjectThreads.some(
+    (thread, index) =>
+      index >= sidebarThreadPreviewCount &&
+      scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) !== activeThreadKey,
+  );
   const previewThreads =
     isThreadListExpanded || !hasOverflowingThreads
       ? visibleProjectThreads
       : visibleProjectThreads.slice(0, sidebarThreadPreviewCount);
   const visibleThreadKeys = new Set(
-    [...previewThreads, ...(pinnedCollapsedThread ? [pinnedCollapsedThread] : [])].map((thread) =>
+    [...previewThreads, ...(activeThread ? [activeThread] : [])].map((thread) =>
       scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
     ),
   );
@@ -1639,7 +1648,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const {
     sidebarThreads,
     sidebarThreadByKey,
-    projectThreads,
     memberProjectByScopedKey,
     memberThreadCountByPhysicalKey,
     projectStatus,
@@ -4176,10 +4184,9 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
   // and rules as Sidebar V2. Single-bucket pages omit headers; View menu can
   // disable headers without changing settle-time sort order.
   const settledRecencyLayout = (() => {
-    void nowMinute;
     const layout = groupSettledThreadsByRecencyForSidebarV2(
       renderedSettledEntries.map((entry) => entry.thread),
-      new Date(),
+      new Date(`${nowMinute}:00Z`),
     );
     if (!settledRecencyHeadersEnabled) {
       return { groups: layout.groups, showHeaders: false };
@@ -5152,14 +5159,10 @@ function useLegacySidebarProjects() {
   };
 }
 
-// Kept apart from useLegacySidebarProjects so a thread change re-sorts the
-// projects without rebuilding their snapshots, which every project row keys on.
-export default function LegacySidebar() {
+export default function LegacySidebar({ routeReveal }: { routeReveal: SidebarRouteReveal }) {
   const projects = useProjects();
   const sidebarThreads = useThreadShells();
-  const projectOrder = useUiStateStore((store) => store.projectOrder);
   const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
-  const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const projectsLength = projects.length;
 
   const reorderProjects = useUiStateStore((store) => store.reorderProjects);
@@ -5200,7 +5203,6 @@ export default function LegacySidebar() {
   const shortcutModifiers = useShortcutModifierState();
   const terminalFocused = useTerminalFocus();
   const { environments } = useEnvironments();
-  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const [storedListMode, setStoredListMode] = useLocalStorage(
     LIST_MODE_STORAGE_KEY,
     DEFAULT_WEB_LIST_MODE,
@@ -5668,6 +5670,26 @@ export default function LegacySidebar() {
   const visibleThreadJumpLabelByKey = showThreadJumpHints
     ? threadJumpLabelByKey
     : EMPTY_THREAD_JUMP_LABELS;
+  // History and the command palette can open a thread scrolled out of view,
+  // and a remount starts the list at the top, so each route change and each
+  // mount scroll to the open thread once. Its row can mount after the route
+  // does, once its environment's shells arrive, so the reveal waits for it.
+  const mountRevealOwed = useRef(true);
+  const routeRowRendered =
+    routeThreadKey !== null && visibleSidebarThreadKeys.includes(routeThreadKey);
+  const revealRouteRow = useStableCallback(() => {
+    const pendingKey = pendingSidebarRouteReveal(routeReveal, routeThreadKey);
+    if (pendingKey === null && (!mountRevealOwed.current || routeThreadKey === null)) return;
+    const activeRow = document.querySelector(
+      '[data-sidebar="content"] [data-thread-item] [data-active="true"]',
+    );
+    if (!activeRow) return;
+    completeSidebarRouteReveal(routeReveal);
+    mountRevealOwed.current = false;
+    activeRow.scrollIntoView({ block: "nearest" });
+  });
+  useEffect(revealRouteRow, [revealRouteRow, routeThreadKey, routeRowRendered]);
+
   const orderedSidebarThreadKeys = visibleSidebarThreadKeys;
   const prewarmedSidebarThreadKeys = (() =>
     isElectron ? getSidebarThreadIdsToPrewarm(visibleSidebarThreadKeys) : [])();

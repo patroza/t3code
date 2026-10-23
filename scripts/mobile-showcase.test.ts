@@ -62,6 +62,8 @@ it("configures every default device with an exact upload-ready store target", ()
     [
       ["iphone-6.9", "apple/iphone-6.9", 1320, 2868],
       ["iphone-6.5", "apple/iphone-6.5", 1284, 2778],
+      ["iphone-duo-closed", "apple/iphone-duo-closed", 1398, 2034],
+      ["iphone-duo-open", "apple/iphone-duo-open", 2853, 2007],
       ["ipad-13", "apple/ipad-13", 2064, 2752],
       ["pixel", "google-play/phone", 1080, 1920],
       ["android-tablet-7", "google-play/tablet-7", 1080, 1920],

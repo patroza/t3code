@@ -169,6 +169,9 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(readSrc("components/chat/ChatComposer.tsx")).toContain(
       "usageSnapshot={aiUsageSnapshot}",
     );
+    expect(readSrc("components/chat/ComposerControlsBar.tsx")).toContain(
+      "usageSnapshot={props.usageSnapshot}",
+    );
   });
 
   it("model picker keeps provider usage dots and selection-box stats", () => {
@@ -238,7 +241,12 @@ describe("fork surface existence (anti stack-drop)", () => {
   it("uses native queued runs and keeps steering and editing reachable", () => {
     const chat = readSrc("components/ChatView.tsx");
     expect(chat).toContain("<QueuedRunsControl");
-    expect(chat).toContain("onEditQueuedRun={beginEditingQueuedRunStable}");
+    expect(chat).toContain("onEditQueuedRun={queuedRunEdit.beginEdit}");
+    const queuedEdit = readSrc("components/chat/useQueuedRunEdit.ts");
+    expect(queuedEdit).toContain("threadEnvironment.beginQueuedRunEdit");
+    expect(queuedEdit).toContain("threadEnvironment.cancelQueuedRunEdit");
+    expect(queuedEdit).toContain("editId: editing.editId");
+    expect(queuedEdit).toContain("queuedRunEditOwnership(serverThreadState, editing)");
     expect(chat).toContain("queuedRunsControlRef.current?.steerNext");
     expect(chat).toContain("queuedRunsControlRef.current?.editLatest");
     expect(chat).not.toContain("QueuedMessageChips");

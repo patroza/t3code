@@ -353,7 +353,7 @@ function makeService(source: IdentityMapSource, store: ClaimStore): IdentityServ
           return yield* new IdentityError({
             code: "identity_claim_required",
             message:
-              "Choose who you are (identity claim) before operating on this environment. Map membership only — trusted-team ops.",
+              "Choose who you are (identity claim) before operating on this environment. Map membership only. Trusted-team operations.",
           });
         }
         if (

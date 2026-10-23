@@ -59,8 +59,8 @@ describe("getHostResourceMetrics", () => {
   it("reports unmeasured metrics as an em dash with no meter fill", () => {
     const [cpu, , load] = getHostResourceMetrics(snapshot({ cpuPercent: null, loadAverage: null }));
 
-    expect(cpu).toMatchObject({ value: "—", ratio: null, description: "CPU —" });
-    expect(load).toMatchObject({ value: "—", ratio: null, description: "Load unavailable" });
+    expect(cpu).toMatchObject({ value: "N/A", ratio: null, description: "CPU N/A" });
+    expect(load).toMatchObject({ value: "N/A", ratio: null, description: "Load unavailable" });
   });
 
   it("leaves load unmeasured when the host reports no core count", () => {
@@ -76,6 +76,6 @@ describe("formatHostResourceBytes", () => {
     expect(formatHostResourceBytes(512)).toBe("512 B");
     expect(formatHostResourceBytes(2048)).toBe("2 KiB");
     expect(formatHostResourceBytes(5 * 1024 ** 3)).toBe("5.0 GiB");
-    expect(formatHostResourceBytes(null)).toBe("—");
+    expect(formatHostResourceBytes(null)).toBe("N/A");
   });
 });
