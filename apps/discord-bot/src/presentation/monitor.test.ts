@@ -2,7 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { buildFirstTurnPrompt } from "./threadContext.ts";
 import {
-  applyMonitorEveryoneMention,
+  stripMonitorTransientMention,
   isSentryMonitorPost,
   MONITOR_TOPIC_TAG,
   monitorSeverity,
@@ -143,7 +143,8 @@ describe("sentry monitor prompt", () => {
     expect(sentryMonitorThreadTitle({ content: "" })).toBe("Sentry alert");
     expect(SENTRY_MONITOR_PROMPT).toContain("severity: bug");
     expect(SENTRY_MONITOR_PROMPT).toContain("severity: transient");
-    expect(SENTRY_MONITOR_PROMPT).toContain("@everyone");
+    expect(SENTRY_MONITOR_PROMPT).toContain("Do not mention @everyone.");
+    expect(SENTRY_MONITOR_PROMPT).not.toContain("and mention @everyone");
     expect(SENTRY_MONITOR_PROMPT).toContain("open a pull request");
   });
 
@@ -163,7 +164,8 @@ describe("sentry monitor prompt", () => {
     expect(prompt).toContain("Discord investigation bootstrap");
     expect(prompt).toContain("T3 did not become ready after a server restart");
     expect(prompt).toContain("severity: transient");
-    expect(prompt).toContain("mention @everyone");
+    expect(prompt).toContain("Do not mention @everyone.");
+    expect(prompt).not.toContain("and mention @everyone");
   });
 });
 
@@ -177,16 +179,19 @@ describe("monitor severity mention", () => {
     expect(monitorSeverity("this looks transient")).toBeNull();
   });
 
-  it("mentions everyone only for a transient alert on a monitor channel", () => {
+  it("drops channel pings from a transient alert on a monitor channel", () => {
     const transient = "severity: transient\n\nThe error stopped after the deploy.";
-    expect(applyMonitorEveryoneMention(transient, topic)).toBe(`${transient}\n\n@everyone`);
-    expect(applyMonitorEveryoneMention(`${transient}\n@everyone`, topic)).toBe(
-      `${transient}\n@everyone`,
+    expect(stripMonitorTransientMention(transient, topic)).toBe(transient);
+    expect(stripMonitorTransientMention(`${transient}\n\n@everyone`, topic)).toBe(transient);
+    expect(stripMonitorTransientMention(`${transient}\n@here`, topic)).toBe(transient);
+    expect(
+      stripMonitorTransientMention("severity: bug\n\nOpening a fix.\n\n@everyone", topic),
+    ).toBe("severity: bug\n\nOpening a fix.\n\n@everyone");
+    expect(stripMonitorTransientMention(`${transient}\n\n@everyone`, "omegent-link-scanner")).toBe(
+      `${transient}\n\n@everyone`,
     );
-    expect(applyMonitorEveryoneMention("severity: bug\n\nOpening a fix.", topic)).toBe(
-      "severity: bug\n\nOpening a fix.",
+    expect(stripMonitorTransientMention(`${transient}\n\n@everyone`, null)).toBe(
+      `${transient}\n\n@everyone`,
     );
-    expect(applyMonitorEveryoneMention(transient, "omegent-link-scanner")).toBe(transient);
-    expect(applyMonitorEveryoneMention(transient, null)).toBe(transient);
   });
 });

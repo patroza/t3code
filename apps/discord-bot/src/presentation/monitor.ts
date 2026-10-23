@@ -25,7 +25,7 @@ export const SENTRY_MONITOR_PROMPT = [
   "severity: transient",
   "",
   "bug: a defect to fix here. Investigate, prepare the fix, and open a pull request. Do not mention @everyone.",
-  "transient: noise, a blip, or already recovering. Do not change code. Explain why, and mention @everyone.",
+  "transient: noise, a blip, or already recovering. Do not change code. Explain why. Do not mention @everyone.",
 ].join("\n");
 
 function normalizeTopicToken(token: string): string {
@@ -128,18 +128,22 @@ export function monitorSeverity(text: string): "transient" | "bug" | null {
   return null;
 }
 
+const CHANNEL_PING = /[ \t]*@(?:everyone|here)\b/gu;
+
 /**
- * On a monitor channel, a transient classification must ping @everyone.
- * Other topics and bug classifications are left unchanged.
+ * A transient reply in a monitor channel must not ping the channel.
+ * Drop @everyone and @here from that reply. Bug replies and other channels
+ * stay as written.
  */
-export function applyMonitorEveryoneMention(
+export function stripMonitorTransientMention(
   text: string,
   topic: string | null | undefined,
 ): string {
   if (!topicRequestsMonitor(topic)) return text;
   if (monitorSeverity(text) !== "transient") return text;
-  if (/@everyone\b/u.test(text)) return text;
-  const trimmed = text.trimEnd();
-  if (trimmed.length === 0) return "@everyone";
-  return `${trimmed}\n\n@everyone`;
+  return text
+    .replace(CHANNEL_PING, "")
+    .replace(/[ \t]+\n/gu, "\n")
+    .replace(/\n{3,}/gu, "\n\n")
+    .trim();
 }
