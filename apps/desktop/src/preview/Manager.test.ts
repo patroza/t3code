@@ -215,7 +215,7 @@ const layerFileSystem = FileSystem.layerNoop({
     }),
 });
 
-const managerLayer = (platform: NodeJS.Platform = "darwin") =>
+const managerLayer = (platform: NodeJS.Platform = "darwin", webAuthnAvailable = true) =>
   PreviewManager.layer.pipe(
     Layer.provideMerge(
       Layer.succeed(DesktopRendererHistory.DesktopRendererHistory, {
@@ -229,6 +229,7 @@ const managerLayer = (platform: NodeJS.Platform = "darwin") =>
     Layer.provideMerge(
       Layer.mock(PreviewPasskeys.PreviewPasskeys)({
         bridgeEnabled: false,
+        webAuthnAvailable,
         installSessionHandlers: () => {},
         attachGuest: () => () => {},
       }),
@@ -245,11 +246,12 @@ const withManager = <A>(
     manager: PreviewManager.PreviewManager["Service"],
   ) => Effect.Effect<A, PreviewManager.PreviewManagerError, Scope.Scope>,
   platform: NodeJS.Platform = "darwin",
+  webAuthnAvailable = true,
 ) =>
   Effect.gen(function* () {
     const manager = yield* PreviewManager.PreviewManager;
     return yield* use(manager);
-  }).pipe(Effect.provide(managerLayer(platform)), Effect.scoped);
+  }).pipe(Effect.provide(managerLayer(platform, webAuthnAvailable)), Effect.scoped);
 
 interface TestCapturedPreviewImage {
   readonly toJPEG: () => Buffer;
@@ -417,6 +419,7 @@ const makeFaviconWebContents = (options?: {
   });
   const off = vi.fn();
   const debuggerOff = vi.fn();
+  const setWindowOpenHandler = vi.fn<Electron.WebContents["setWindowOpenHandler"]>();
   const webContents = {
     id: options?.id ?? 42,
     isDestroyed: () => destroyed,
@@ -443,7 +446,7 @@ const makeFaviconWebContents = (options?: {
     isFocused: vi.fn(() => true),
     focusedFrame: {} as object | null,
     setIgnoreMenuShortcuts: vi.fn(),
-    setWindowOpenHandler: vi.fn(),
+    setWindowOpenHandler,
     executeJavaScriptInIsolatedWorld,
     debugger: {
       isAttached: () => false,
@@ -461,6 +464,7 @@ const makeFaviconWebContents = (options?: {
     loadURL,
     off,
     reload,
+    setWindowOpenHandler,
     setDestroyed: (value: boolean) => {
       destroyed = value;
     },
@@ -543,6 +547,38 @@ const makeTestPictureInPictureWindow = (loadURL: () => Promise<void> = async () 
   };
   return { pictureInPictureWindow, send, webContentsListeners };
 };
+
+effectIt.effect.each([false, true])(
+  "keeps OAuth popup authentication aligned with native capability (%s)",
+  (available) =>
+    withManager(
+      (manager) =>
+        Effect.gen(function* () {
+          const preview = makeFaviconWebContents();
+          fromId.mockReturnValue(preview.webContents);
+          yield* manager.createTab("auth_popup");
+          yield* manager.registerWebview("auth_popup", 42);
+          const handler = preview.setWindowOpenHandler.mock.calls[0]![0];
+          const decision = handler({
+            url: "https://auth.test/oauth",
+            disposition: "new-window",
+          } as Electron.HandlerDetails);
+          expect(decision).toEqual({
+            action: "allow",
+            overrideBrowserWindowOptions: {
+              webPreferences: {
+                contextIsolation: true,
+                nodeIntegration: false,
+                sandbox: true,
+                ...(available ? {} : { disableBlinkFeatures: "WebAuth" }),
+              },
+            },
+          });
+        }),
+      "linux",
+      available,
+    ),
+);
 
 describe("PreviewManager", () => {
   beforeEach(() => {

@@ -66,6 +66,7 @@ import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts"
 import { MENU_ACTION_CHANNEL, PREVIEW_PICTURE_IN_PICTURE_FRAME_CHANNEL } from "../ipc/channels.ts";
 import * as DesktopBrowserHost from "./DesktopBrowserHost.ts";
 import * as PreviewPasskeys from "./Passkeys.ts";
+import { disableWebAuthn } from "./WebAuthnPolicy.ts";
 import * as BrowserSession from "./BrowserSession.ts";
 import {
   ANNOTATION_CAPTURED_CHANNEL,
@@ -1623,7 +1624,9 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.setWindowOpenHandler((details) => {
           const action = previewWindowOpenAction(details);
           if (action === "popup") {
-            return { action: "allow", overrideBrowserWindowOptions: POPUP_WINDOW_OPTIONS };
+            const webPreferences = { ...POPUP_WINDOW_OPTIONS.webPreferences };
+            if (!passkeys.webAuthnAvailable) disableWebAuthn(webPreferences);
+            return { action: "allow", overrideBrowserWindowOptions: { webPreferences } };
           }
           if (action === "deny") return { action: "deny" };
           if (action === "new-tab") {

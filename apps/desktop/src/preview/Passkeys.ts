@@ -12,6 +12,7 @@ import { PASSKEY_CREATE_CHANNEL, PASSKEY_GET_CHANNEL } from "./GuestProtocol.ts"
 import type { PasskeyBackend, PasskeyCeremonyContext } from "./PasskeyBackend.ts";
 import { macPasskeyBackend } from "./PasskeyBackendMac.ts";
 import type { PasskeyCeremonyResult } from "./PasskeyBridge.ts";
+import { denyWebAuthnRequests } from "./WebAuthnPolicy.ts";
 
 const PasskeyPackageMetadata = Schema.Struct({
   t3codeWebAuthn: Schema.optional(
@@ -41,6 +42,7 @@ export class PreviewPasskeys extends Context.Service<
   PreviewPasskeys,
   {
     readonly bridgeEnabled: boolean;
+    readonly webAuthnAvailable: boolean;
     /** Runs after app ready. */
     readonly configure: Effect.Effect<void>;
     readonly installSessionHandlers: (session: Session) => void;
@@ -136,19 +138,42 @@ const make = Effect.gen(function* () {
   const backend = metadata?.browserPasskeys === true ? backendFor(environment.platform) : undefined;
   const bridgeEnabled = backend !== undefined;
   const sessionsWithHandlers = new WeakSet<Session>();
+  let touchIdConfigured = false;
+  const webAuthnAvailable = () =>
+    bridgeEnabled || environment.platform === "win32" || touchIdConfigured;
 
   return PreviewPasskeys.of({
     bridgeEnabled,
+    get webAuthnAvailable() {
+      return webAuthnAvailable();
+    },
     configure: Effect.gen(function* () {
+      touchIdConfigured = false;
       if (keychainAccessGroup === undefined) return;
       yield* Effect.try({
         try: () => app.configureWebAuthn({ touchID: { keychainAccessGroup } }),
         catch: (cause) => new PreviewPasskeysConfigureError({ keychainAccessGroup, cause }),
-      }).pipe(Effect.catch((error) => Effect.logWarning(error.message, { cause: error.cause })));
+      }).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            touchIdConfigured = true;
+          }),
+        ),
+        Effect.catch((error) => Effect.logWarning(error.message, { cause: error.cause })),
+      );
     }).pipe(Effect.withSpan("desktop.previewPasskeys.configure")),
     installSessionHandlers: (session) => {
       if (sessionsWithHandlers.has(session)) return;
       sessionsWithHandlers.add(session);
+      if (!webAuthnAvailable()) {
+        session.webRequest.onHeadersReceived((details, callback) => {
+          callback(
+            details.resourceType === "mainFrame" || details.resourceType === "subFrame"
+              ? { responseHeaders: denyWebAuthnRequests(details.responseHeaders) }
+              : {},
+          );
+        });
+      }
       session.on("select-webauthn-account", (_event, details, callback) => {
         // The request stays pending until the callback runs, so it must run once.
         void chooseAccount(details).then(

@@ -212,6 +212,7 @@ const desktopWindowBoundsEquivalence = Schema.toEquivalence(
 
 function layerTest(input: {
   readonly window: Electron.BrowserWindow;
+  readonly webAuthnAvailable?: boolean;
   readonly createCount: Ref.Ref<number>;
   readonly mainWindow: Ref.Ref<Option.Option<Electron.BrowserWindow>>;
   readonly createdWindowOptions?: Electron.BrowserWindowConstructorOptions[];
@@ -327,6 +328,7 @@ function layerTest(input: {
         Layer.mock(PreviewPasskeys.PreviewPasskeys)({
           configure: Effect.void,
           bridgeEnabled: false,
+          webAuthnAvailable: input.webAuthnAvailable ?? true,
           installSessionHandlers: () => {},
           attachGuest: () => () => {},
         }),
@@ -441,6 +443,7 @@ const makeSplashScenario = (
           Layer.mock(PreviewPasskeys.PreviewPasskeys)({
             configure: Effect.void,
             bridgeEnabled: false,
+            webAuthnAvailable: true,
             installSessionHandlers: () => {},
             attachGuest: () => () => {},
           }),
@@ -510,6 +513,42 @@ describe("DesktopWindow", () => {
           yield* Ref.set(mainWindow, Option.none());
           yield* desktopWindow.dispatchMenuAction("new-thread");
           assert.equal(yield* Ref.get(createCount), 3);
+        }).pipe(Effect.provide(layer));
+      }),
+  );
+
+  it.effect.each([false, true])(
+    "advertises only available browser authenticators (%s)",
+    (available) =>
+      Effect.gen(function* () {
+        const fake = makeFakeBrowserWindow();
+        const createCount = yield* Ref.make(0);
+        const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+        const layer = layerTest({
+          window: fake.window,
+          createCount,
+          mainWindow,
+          webAuthnAvailable: available,
+          desktopSettings: {
+            ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
+            localEnvironmentEnabled: false,
+          },
+        });
+        yield* Effect.gen(function* () {
+          const desktop = yield* DesktopWindow.DesktopWindow;
+          yield* desktop.createMainIfBackendReady;
+          const preferences: Electron.WebPreferences = { disableBlinkFeatures: "ExistingFeature" };
+          const preventDefault = vi.fn();
+          fake.webContentsListeners.get("will-attach-webview")!({ preventDefault }, preferences, {
+            partition: "persist:t3code-preview-test",
+          });
+          assert.strictEqual(
+            preferences.disableBlinkFeatures,
+            available ? "ExistingFeature" : "ExistingFeature,WebAuth",
+          );
+          assert.isFalse(preferences.nodeIntegrationInSubFrames);
+          assert.isTrue(preferences.sandbox);
+          assert.strictEqual(preventDefault.mock.calls.length, 0);
         }).pipe(Effect.provide(layer));
       }),
   );
