@@ -94,7 +94,7 @@ describe("channel info pin helpers", () => {
     expect(rendered).toContain("--queue parks · --steer injects (steer is the default)");
     expect(rendered).toContain("topic: omegent-queue             Park mid-turn follow-ups");
     expect(rendered).not.toContain("steernow");
-    expect(rendered).toContain("—model works too. Short names (opus-5.5).");
+    expect(rendered).toContain("An em dash before model works too. Short names (opus-5.5).");
     expect(rendered).toContain("claude- and codex- prefixes still work.");
     expect(rendered).toContain("topic: omegent-fast-mode         New threads start in fast mode");
     expect(rendered).toContain("topic: omegent-default-model-<name>  New threads use that model");

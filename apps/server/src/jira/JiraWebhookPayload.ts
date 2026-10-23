@@ -409,7 +409,7 @@ function jiraPromptHeaderLines(invocation: JiraIssueInvocation): Array<string | 
   return [
     "<!--",
     "## Jira issue context",
-    `- Issue: ${invocation.issueKey}${invocation.issueSummary ? ` — ${invocation.issueSummary}` : ""}`,
+    `- Issue: ${invocation.issueKey}${invocation.issueSummary ? `: ${invocation.issueSummary}` : ""}`,
     `- Project: ${invocation.projectKey}`,
     `- Comment surface: ${invocation.commentSurface}`,
     `- Webhook event: ${invocation.webhookEvent}`,

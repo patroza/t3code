@@ -85,7 +85,7 @@ export function AiUsageStats(props: {
         <div className="text-3xs text-muted-foreground">{item.error ?? "usage unavailable"}</div>
       )}
       {item.stale ? (
-        <div className="text-3xs text-muted-foreground">stale — showing last known usage</div>
+        <div className="text-3xs text-muted-foreground">Stale. Showing last known usage</div>
       ) : null}
       {marker.fill === "critical" ? (
         <div className="text-3xs font-medium text-destructive">limit reached</div>

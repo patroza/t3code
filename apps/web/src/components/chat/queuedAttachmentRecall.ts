@@ -92,8 +92,8 @@ export const recallQueuedAttachments = async (
 export const formatMissingAttachmentsError = (missing: ReadonlyArray<string>): string | null => {
   if (missing.length === 0) return null;
   return missing.length === 1
-    ? `'${missing[0]}' could not be loaded, so the message is still queued. Try again — if it keeps failing, the image is no longer on the server and the message has to be sent or replaced as it is.`
-    : `${missing.length} attachments could not be loaded, so the message is still queued. Try again — if it keeps failing, the image is no longer on the server and the message has to be sent or replaced as it is.`;
+    ? `'${missing[0]}' could not be loaded, so the message is still queued. Try again. If it keeps failing, the image is no longer on the server and the message has to be sent or replaced as it is.`
+    : `${missing.length} attachments could not be loaded, so the message is still queued. Try again. If it keeps failing, the image is no longer on the server and the message has to be sent or replaced as it is.`;
 };
 
 /**

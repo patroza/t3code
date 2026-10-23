@@ -159,7 +159,7 @@ export function HostResourceStatus(props: {
             <span className="whitespace-nowrap">{data.hostname ?? props.environmentLabel}</span>
             <span className="text-muted-foreground">CPU</span>
             <span className="whitespace-nowrap">
-              {formatPercent(data.cpuPercent)} across {data.logicalCores ?? "—"} logical cores
+              {formatPercent(data.cpuPercent)} across {data.logicalCores ?? "N/A"} logical cores
             </span>
             <span className="text-muted-foreground">Memory</span>
             <span className="whitespace-nowrap">
@@ -169,7 +169,7 @@ export function HostResourceStatus(props: {
             <span className="whitespace-nowrap">
               {data.loadAverage
                 ? `${data.loadAverage.m1.toFixed(2)} / ${data.loadAverage.m5.toFixed(2)} / ${data.loadAverage.m15.toFixed(2)}`
-                : "—"}
+                : "N/A"}
             </span>
             <span className="text-muted-foreground">Updated</span>
             <span className="whitespace-nowrap">

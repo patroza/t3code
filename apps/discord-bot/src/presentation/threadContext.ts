@@ -507,7 +507,7 @@ ${referencedSection}
 ${starterText}
 
 hints: ${hintBits.length > 0 ? hintBits.join(" ") : "none"}
-hc_tpl: ${honeycombTpl ?? "(none — use team UI)"}
+hc_tpl: ${honeycombTpl ?? "(none; use team UI)"}
 `;
 }
 

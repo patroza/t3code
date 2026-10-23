@@ -300,7 +300,7 @@ export function formatWindowValue(window: AiUsageWindow): string {
       ? `$${window.used.toFixed(2)}`
       : `${window.used}${window.unit ? ` ${window.unit}` : ""}`;
   }
-  return "—";
+  return "N/A";
 }
 
 /** A short pace warning for a window, or `null` when it's on/behind pace. */

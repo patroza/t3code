@@ -584,7 +584,7 @@ function usageWindowValue(window: AiUsageWindow): string {
   if (typeof window.used === "number") {
     return window.unit === "$" ? `$${window.used.toFixed(2)}` : `${window.used}`;
   }
-  return "—";
+  return "N/A";
 }
 
 function modelFavoriteKey(instanceId: string, modelSlug: string): string {
@@ -1531,14 +1531,14 @@ function renderHostResources(snapshot: ServerHostResourceSnapshot | null): void 
   hostResourcesToggle.replaceChildren(
     ...getHostResourceMetrics(snapshot).map(hostResourceMetricElement),
   );
-  hostResourcesToggle.title = "Host resources — hover for details";
+  hostResourcesToggle.title = "Host resources, hover for details";
   hostResourcesToggle.setAttribute("aria-label", hostResourcesToggle.title);
   const loadAverage = snapshot.loadAverage;
   const rows: ReadonlyArray<readonly [string, string]> = [
     ["Host", snapshot.hostname ?? currentState?.environmentLabel ?? "Host"],
     [
       "CPU",
-      `${formatHostResourcePercent(snapshot.cpuPercent)} across ${snapshot.logicalCores ?? "—"} logical cores`,
+      `${formatHostResourcePercent(snapshot.cpuPercent)} across ${snapshot.logicalCores ?? "N/A"} logical cores`,
     ],
     [
       "Memory",
@@ -1548,7 +1548,7 @@ function renderHostResources(snapshot: ServerHostResourceSnapshot | null): void 
       "Load",
       loadAverage
         ? `${loadAverage.m1.toFixed(2)} / ${loadAverage.m5.toFixed(2)} / ${loadAverage.m15.toFixed(2)}`
-        : "—",
+        : "N/A",
     ],
     ["Updated", new Date(snapshot.checkedAt).toLocaleTimeString()],
   ];
@@ -1573,7 +1573,7 @@ function renderUsageDetails(state: ViewState): void {
   usageToggle.style.setProperty("--usage-secondary", "0deg");
   usageToggle.className = "";
   usageToggle.hidden = true;
-  usageLabel.textContent = "—";
+  usageLabel.textContent = "N/A";
   usageToggle.title = "Provider usage unavailable";
   usageToggle.setAttribute("aria-label", usageToggle.title);
   const candidate = selectedModelCandidate(state);
@@ -1581,7 +1581,7 @@ function renderUsageDetails(state: ViewState): void {
   const usage = usageForModel(state.aiUsage, candidate.driver, candidate.model);
   if (usage === null) return;
   usageToggle.hidden = false;
-  usageToggle.title = "Provider usage — hover for details; click to pin";
+  usageToggle.title = "Provider usage, hover for details; click to pin";
   usageToggle.setAttribute("aria-label", usageToggle.title);
   if (!usage.ok) {
     const unavailable = document.createElement("div");
@@ -1606,7 +1606,7 @@ function renderUsageDetails(state: ViewState): void {
   );
   usageToggle.classList.toggle("warning", worst !== null && worst >= 80 && worst < 100);
   usageToggle.classList.toggle("critical", worst !== null && worst >= 100);
-  usageLabel.textContent = worst === null ? "—" : `${Math.round(worst)}%`;
+  usageLabel.textContent = worst === null ? "N/A" : `${Math.round(worst)}%`;
   for (const window of usage.windows) {
     const row = document.createElement("div");
     row.className = "usage-window";

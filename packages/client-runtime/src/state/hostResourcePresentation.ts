@@ -25,11 +25,11 @@ export function getHostResourcePressure(
 }
 
 export function formatHostResourcePercent(value: number | null): string {
-  return value === null ? "—" : `${Math.round(value)}%`;
+  return value === null ? "N/A" : `${Math.round(value)}%`;
 }
 
 export function formatHostResourceBytes(value: number | null): string {
-  if (value === null) return "—";
+  if (value === null) return "N/A";
   const units = ["B", "KiB", "MiB", "GiB", "TiB"] as const;
   let scaled = value;
   let index = 0;
@@ -59,7 +59,7 @@ export function getHostResourceMetrics(
   snapshot: ServerHostResourceSnapshot,
 ): ReadonlyArray<HostResourceMetric> {
   const loadOne = snapshot.loadAverage?.m1 ?? null;
-  const loadValue = loadOne === null ? "—" : loadOne.toFixed(1);
+  const loadValue = loadOne === null ? "N/A" : loadOne.toFixed(1);
   return [
     {
       key: "cpu",

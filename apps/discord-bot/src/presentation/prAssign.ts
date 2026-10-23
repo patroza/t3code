@@ -185,7 +185,7 @@ export function formatAssignSlashReply(input: {
   if (errors.length > 0) {
     lines.push(
       `Failed ${errors.length} PR(s):`,
-      ...errors.map((r) => `• ${r.url}${r.detail !== undefined ? ` — ${r.detail}` : ""}`),
+      ...errors.map((r) => `• ${r.url}${r.detail !== undefined ? `: ${r.detail}` : ""}`),
     );
   }
   if (skipped.length > 0 && assigned.length === 0 && errors.length === 0) {

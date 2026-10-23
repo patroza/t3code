@@ -134,10 +134,10 @@ describe("renderThreadExport", () => {
     });
 
     expect(markdown).toContain("Participants: user-1, omegent");
-    expect(markdown).toContain("user-1 — 2026-10-12 09:01 UTC");
+    expect(markdown).toContain("user-1, 2026-10-12 09:01 UTC");
     expect(markdown).not.toContain("Joshua Dimaunahan");
     expect(markdown).toContain("attached .md got removed last week right?");
-    expect(markdown).toContain("omegent — 2026-10-12 09:02 UTC");
+    expect(markdown).toContain("omegent, 2026-10-12 09:02 UTC");
     expect(markdown).toContain("Yes. See user-1.");
     expect(markdown).not.toContain(JOSHUA_ID);
     expect(markdown).not.toContain("joshuadima");
@@ -164,7 +164,7 @@ describe("renderThreadExport", () => {
       ],
     });
 
-    expect(markdown).toContain("user-1 — ");
+    expect(markdown).toContain("user-1, ");
     expect(markdown).toContain("Participants: user-1, user-2");
     expect(markdown).toContain("ping user-2 and user-2 user-1");
     expect(markdown).toContain("ask user-2 about role role in channel :smile: user");
@@ -188,7 +188,7 @@ describe("renderThreadExport", () => {
     });
 
     expect(markdown).toContain("markdown is fine");
-    expect(markdown).toContain("user-1 — ");
+    expect(markdown).toContain("user-1, ");
     expect(markdown).not.toContain("Joshua");
   });
 
@@ -219,7 +219,7 @@ describe("renderThreadExport", () => {
     });
 
     expect(markdown).toContain(`[file: shot-user-1.png]\n[sticker: wave]`);
-    expect(markdown).toContain("omegent — 2026-10-12 09:01 UTC (reply to user-1)");
+    expect(markdown).toContain("omegent, 2026-10-12 09:01 UTC (reply to user-1)");
     expect(markdown).not.toContain("cdn.discord");
     expect(markdown).not.toContain(JOSHUA_ID);
   });
@@ -243,7 +243,7 @@ describe("renderThreadExport", () => {
       ],
     });
 
-    expect(markdown).toContain("bot-1 — ");
+    expect(markdown).toContain("bot-1, ");
     expect(markdown).not.toContain("Sentry");
     expect(markdown).toContain("Build failed");
     expect(markdown).toContain("see user-1");

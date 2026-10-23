@@ -38,7 +38,7 @@ export function HostResourceStatus(props: {
           ? isPending
             ? "Reading host resources…"
             : "Host resources unavailable"
-          : `C ${Math.round(data.cpuPercent ?? 0)}% · M ${Math.round(data.memoryUsedPercent ?? 0)}% · L ${data.loadAverage?.m1.toFixed(1) ?? "—"}`}
+          : `C ${Math.round(data.cpuPercent ?? 0)}% · M ${Math.round(data.memoryUsedPercent ?? 0)}% · L ${data.loadAverage?.m1.toFixed(1) ?? "n/a"}`}
       </Text>
       <Pressable
         accessibilityLabel={`Refresh host resources for ${props.environmentLabel}`}

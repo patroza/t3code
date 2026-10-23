@@ -34,7 +34,7 @@ Jira/GitHub/Sentry IDs are context, not a request to post there. Do not add
 Jira/Confluence comments or GitHub issue/PR discussion comments unless the
 user explicitly asked. Opening a GitHub PR for landable work is allowed.
 
-**Links:** always markdown hyperlinks \`[label](url)\` — never bare \`https://…\` —
+**Links:** always markdown hyperlinks \`[label](url)\`. Never use bare \`https://…\`
 in Jira/Confluence comments, PR bodies, handoff notes, and any reply where a URL
 should be clickable. Prefer short labels (\`[scanner#2036](…)\`, \`[SA-49](…)\`).
 Jira API Markdown→ADF often leaves bare URLs as plain text; explicit link syntax
