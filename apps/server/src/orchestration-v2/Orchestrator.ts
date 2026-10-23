@@ -3589,6 +3589,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                       failedChecks: existing.endedWatch.failedChecks,
                       passed: existing.endedWatch.passed,
                       passedChecks: existing.endedWatch.passedChecks,
+                      pendingChecks: existing.endedWatch.pendingChecks,
                       conflicting: existing.endedWatch.conflicting,
                     }),
                     ...(existing.endedWatch?.owedChecks !== undefined && {

@@ -154,6 +154,7 @@ describe("evaluatePullRequestWatch", () => {
     const passed = evaluatePullRequestWatch(watch(), running, noRemarks);
     assert.deepEqual(passed.changes, [{ kind: "checks-passed", count: 2, required: true }]);
     assert.deepEqual(passed.next.pendingChecks, ["Test Packages"]);
+    assert.deepEqual(passed.next.owedChecks, ["Test Packages"]);
 
     const done = detail({
       checks: [
@@ -167,6 +168,7 @@ describe("evaluatePullRequestWatch", () => {
       { kind: "checks-settled", checks: [check("Test Packages", "success")] },
     ]);
     assert.deepEqual(settled.next.pendingChecks, []);
+    assert.deepEqual(settled.next.owedChecks, []);
     assert.deepEqual(evaluatePullRequestWatch(settled.next, done, noRemarks).changes, []);
 
     // One that shows up already passed was never pending, so it is not news.

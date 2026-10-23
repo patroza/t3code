@@ -53,6 +53,7 @@ export function evaluatePullRequestWatch(
   let passed = headMoved ? false : watch.passed;
   let passedChecks = headMoved ? [] : watch.passedChecks;
   let pendingChecks = headMoved ? [] : watch.pendingChecks;
+  let owedChecks = headMoved ? [] : (watch.owedChecks ?? []);
   if (detail.checks.length > 0) {
     const previousFailedChecks = failedChecks;
     const failed = detail.checks.filter(isFailedCheck);
@@ -80,7 +81,9 @@ export function evaluatePullRequestWatch(
       detail.checks.filter((check) => check.status === "pending").map((check) => check.name),
     );
     const failedNames = new Set(failed.map((check) => check.name));
-    const settledNames = [...new Set([...pendingChecks, ...previousFailedChecks])].filter(
+    const settledNames = [
+      ...new Set([...pendingChecks, ...owedChecks, ...previousFailedChecks]),
+    ].filter(
       (name) =>
         seen.has(name) &&
         !stillPending.has(name) &&
@@ -98,6 +101,15 @@ export function evaluatePullRequestWatch(
       return check === undefined ? [] : [check];
     });
     if (settled.length > 0) changes.push({ kind: "checks-settled", checks: settled });
+    owedChecks = passedThisPass
+      ? required.length > 0
+        ? detail.checks
+            .filter((check) => check.required !== true && check.status === "pending")
+            .map((check) => check.name)
+        : []
+      : owedChecks.filter(
+          (name) => !settledNames.includes(name) && !required.some((check) => check.name === name),
+        );
     pendingChecks = [
       ...new Set([...stillPending, ...pendingChecks.filter((name) => !seen.has(name))]),
     ];
@@ -163,6 +175,7 @@ export function evaluatePullRequestWatch(
       conflicting,
       wakes,
       pendingChecks,
+      owedChecks,
       checksAwaitedSince,
     },
     exhausted: commentsOnly && wakes >= PULL_REQUEST_WATCH_WAKE_LIMIT,
