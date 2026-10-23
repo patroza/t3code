@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "prepare": "node scripts/clean-tsgo-backups.mjs && effect-tsgo patch && vp config --no-agent && node scripts/install-git-hooks.mjs",
+    "prepare": "node scripts/clean-tsgo-backups.mjs && vp config --no-agent && node scripts/install-git-hooks.mjs",
     "pr:ready": "node scripts/agent-pr-ready.mjs",
     "test:agent-gate": "vp test run scripts/agent-pre-push.test.mjs",
     "dev": "node scripts/dev-runner.ts dev",
@@ -56,17 +56,15 @@
   },
   "devDependencies": {
     "@coderabbitai/config": "1.1.0",
-    "@effect/tsgo": "catalog:",
     "@shadcn/lint": "0.1.5",
     "@types/node": "catalog:",
     "knip": "6.34.0",
     "lint-staged": "^16.4.0",
-    "tsc-rs": "0.7.0",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
   },
   "engines": {
-    "node": "^24.13.1"
+    "node": "26.12.1"
   },
   "packageManager": "pnpm@12.14.0"
 }

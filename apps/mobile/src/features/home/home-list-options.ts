@@ -284,6 +284,10 @@ export function hasCustomHomeListOptions(
   );
 }
 
+export function useHomeListMode() {
+  return useContext(HomeListOptionsContext)?.options.listMode ?? DEFAULT_HOME_LIST_MODE;
+}
+
 export function useHomeListOptions(availableEnvironmentIds: ReadonlySet<EnvironmentId>) {
   const shared = useContext(HomeListOptionsContext);
   const [localOptions, setLocalOptions] = useState<HomeListOptions>(defaultHomeListOptions);

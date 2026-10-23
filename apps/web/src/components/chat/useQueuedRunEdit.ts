@@ -1,10 +1,13 @@
+import { queuedRunEditOwnership } from "@t3tools/client-runtime/state/threads";
+import { useThreadState } from "../../state/entities";
+import type { ThreadStructure } from "@t3tools/client-runtime/state/shell";
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+  type CommandId,
   type ChatAttachment,
   type EnvironmentId,
   type MessageId,
   type OrchestrationMessageContext,
-  type OrchestrationV2ThreadProjection,
   type PreviewAnnotationPayload,
   type RunId,
   type ScopedThreadRef,
@@ -18,6 +21,7 @@ import { useAssetUrls } from "../../assets/assetUrls";
 import {
   DraftId,
   useComposerDraftStore,
+  composerDraftHasUserContent,
   type ComposerFileAttachment,
   type ComposerImageAttachment,
   type ComposerThreadTarget,
@@ -44,6 +48,8 @@ import { prepareQueuedEditAttachments, recoverQueuedMessageEdit } from "./queued
 import type { EditQueuedRunRequest } from "./QueuedRunsControl";
 
 interface EditingQueuedRun {
+  readonly editId: CommandId;
+  readonly sequence: number;
   readonly threadId: ThreadId;
   readonly runId: RunId;
   readonly messageId: MessageId;
@@ -131,6 +137,7 @@ async function submitQueuedRunEdit(input: {
       input: {
         threadId: editing.threadId,
         runId: editing.runId,
+        editId: editing.editId,
         text: editText.length === 0 ? ATTACHMENT_ONLY_BOOTSTRAP_PROMPT : editText,
         edit: {
           messageId: editing.messageId,
@@ -170,7 +177,7 @@ export function useQueuedRunEdit(input: {
   readonly threadDraftTarget: ComposerThreadTarget;
   // Null while the route has no thread yet; an edit needs one to target.
   readonly activeThreadId: ThreadId | null;
-  readonly serverProjection: OrchestrationV2ThreadProjection | null;
+  readonly serverProjection: ThreadStructure | null;
   readonly promptRef: { current: string };
   readonly composerRef: RefObject<ChatComposerHandle | null>;
 }) {
@@ -184,7 +191,10 @@ export function useQueuedRunEdit(input: {
     composerRef,
   } = input;
   const editQueuedRunCommand = useEditQueuedRunCommand();
+  const beginEditCommand = useAtomCommand(threadEnvironment.beginQueuedRunEdit);
+  const cancelEditCommand = useAtomCommand(threadEnvironment.cancelQueuedRunEdit);
   const [editing, setEditing] = useState<EditingQueuedRun | null>(null);
+  const serverThreadState = useThreadState(editing === null ? null : routeThreadRef);
   const saveInFlightRef = useRef(false);
   const [isSaving, setIsSaving] = useState(false);
   // Navigating to another thread ends the edit; its draft stays for later.
@@ -217,29 +227,66 @@ export function useQueuedRunEdit(input: {
       .getState()
       .clearComposerContent(queuedEditDraftTarget(routeThreadRef, runId));
 
-  const beginEdit = useStableCallback((request: EditQueuedRunRequest) => {
-    if (activeThreadId === null) return;
-    if (editing !== null && editing.runId !== request.runId) clearEditDraft(editing.runId);
-    const target = queuedEditDraftTarget(routeThreadRef, request.runId);
-    const store = useComposerDraftStore.getState();
-    store.clearComposerContent(target);
-    store.setPrompt(target, request.text);
-    setEditing({
-      threadId: activeThreadId,
-      runId: request.runId,
-      messageId: request.messageId,
-      originalText: request.text,
-      existingAttachments: request.attachments,
-      context: serverProjection?.messages.find((message) => message.id === request.messageId)
-        ?.context,
-    });
-    focusComposerSoon();
+  const beginEdit = useStableCallback(async (request: EditQueuedRunRequest) => {
+    if (activeThreadId === null || saveInFlightRef.current) return;
+    if (editing !== null) {
+      if (editing.runId !== request.runId) {
+        toastManager.add({ type: "info", title: "Save or cancel your current queued edit first." });
+      }
+      focusComposerSoon();
+      return;
+    }
+    saveInFlightRef.current = true;
+    try {
+      const result = await beginEditCommand({
+        environmentId,
+        input: {
+          threadId: activeThreadId,
+          runId: request.runId,
+          previousEditId:
+            serverProjection?.runs.find((run) => run.id === request.runId)?.queueEditId ?? null,
+        },
+      });
+      if (result._tag !== "Success") return;
+      const target = queuedEditDraftTarget(routeThreadRef, request.runId);
+      const store = useComposerDraftStore.getState();
+      if (!composerDraftHasUserContent(store.getComposerDraft(target)))
+        store.setPrompt(target, request.text);
+      setEditing({
+        ...result.value,
+        threadId: activeThreadId,
+        runId: request.runId,
+        messageId: request.messageId,
+        originalText: request.text,
+        existingAttachments: request.attachments,
+        context: serverProjection?.messages.find((message) => message.id === request.messageId)
+          ?.context,
+      });
+      focusComposerSoon();
+    } finally {
+      saveInFlightRef.current = false;
+    }
   });
-  const cancelEdit = useStableCallback(() => {
-    if (editing === null) return;
-    clearEditDraft(editing.runId);
-    setEditing(null);
-    focusComposerSoon();
+  const cancelEdit = useStableCallback(async () => {
+    if (editing === null || saveInFlightRef.current) return;
+    saveInFlightRef.current = true;
+    setIsSaving(true);
+    try {
+      const result =
+        queuedRunEditOwnership(serverThreadState, editing) === "lost"
+          ? null
+          : await cancelEditCommand({
+              environmentId,
+              input: { threadId: editing.threadId, runId: editing.runId, editId: editing.editId },
+            });
+      if (result !== null && result._tag !== "Success") return;
+      clearEditDraft(editing.runId);
+      setEditing(null);
+      focusComposerSoon();
+    } finally {
+      saveInFlightRef.current = false;
+      setIsSaving(false);
+    }
   });
   const removeEditingAttachment = useStableCallback((attachmentId: string) => {
     setEditing((current) =>
@@ -259,9 +306,8 @@ export function useQueuedRunEdit(input: {
   // draft when that draft is empty; otherwise it is dropped with a toast.
   useEffect(() => {
     if (editing === null || activeThreadId !== editing.threadId) return;
-    if (serverProjection === null) return;
-    const run = serverProjection.runs.find((candidate) => candidate.id === editing.runId);
-    if (run !== undefined && run.status === "queued") return;
+    if (serverProjection === null || isSaving || saveInFlightRef.current) return;
+    if (queuedRunEditOwnership(serverThreadState, editing) !== "lost") return;
     const recovery = recoverQueuedMessageEdit({
       editTarget: queuedEditDraftTarget(routeThreadRef, editing.runId),
       threadTarget: threadDraftTarget,
@@ -271,7 +317,7 @@ export function useQueuedRunEdit(input: {
       toastManager.add(
         stackedThreadToast({
           type: recovery === "kept" ? "info" : "warning",
-          title: "Queued message is no longer queued",
+          title: "Queued message edit ended",
           description:
             recovery === "kept"
               ? "Your unsaved edit was kept in the composer."
@@ -281,7 +327,15 @@ export function useQueuedRunEdit(input: {
     }
     // oxlint-disable-next-line react/set-state-in-effect -- Leaving edit mode follows the draft recovery and toast above, which must run once after commit.
     setEditing(null);
-  }, [activeThreadId, editing, routeThreadRef, serverProjection, threadDraftTarget]);
+  }, [
+    activeThreadId,
+    editing,
+    isSaving,
+    routeThreadRef,
+    serverProjection,
+    serverThreadState,
+    threadDraftTarget,
+  ]);
 
   /**
    * Saves the composer content into the queued message being edited. Reports

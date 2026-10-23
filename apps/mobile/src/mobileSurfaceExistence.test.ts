@@ -16,16 +16,14 @@ function readSrc(relativePath: string): string {
 
 describe("mobile surface existence (anti stack-drop)", () => {
   it("keeps the conversation feed inside an explicit flex host", () => {
-    const threadRoute = readSrc("features/threads/ThreadRouteScreen.tsx");
-
-    expect(threadRoute).toContain('testID="thread-conversation-surface"');
-    expect(threadRoute).toMatch(
-      /testID="thread-conversation-surface"[\s\S]*?style=\{\{\s*flex: 1\s*\}\}/,
-    );
-    // Inner host stays a real flex container so the composer overlay still
-    // anchors to the true bottom. Android uses a canvas class and rounded
-    // corners; iOS stays flex-1.
-    expect(threadRoute).toMatch(/<ThreadPane>[\s\S]*?<ThreadDetailScreen/);
+    const route = readSrc("features/threads/ThreadRouteScreen.tsx");
+    const host = readSrc("features/threads/ThreadScreenHost.tsx");
+    expect(route).toContain("<ThreadScreenHost>");
+    expect(route).toContain("<ThreadScreenBinding");
+    expect(host).toContain('testID="thread-conversation-surface"');
+    expect(host).toMatch(/testID="thread-conversation-surface"[\s\S]*?style=\{\{\s*flex: 1\s*\}\}/);
+    expect(host).toMatch(/<ThreadDetailScreen[\s\S]*?\{\.\.\.content.props\}/);
+    expect(host).toMatch(/testID="thread-conversation-surface"[\s\S]*?<ThreadScreenOutlet/);
   });
 
   it("renders settled threads as slim history rows in the v2 thread list", () => {
@@ -54,6 +52,13 @@ describe("mobile surface existence (anti stack-drop)", () => {
       "onOpenThreadPullRequests={handleOpenThreadPullRequests}",
     );
     expect(readSrc("Stack.tsx")).toContain("screen: ThreadPullRequestsSheet");
+  });
+
+  it("opens the fork's /new command in the persistent draft route", () => {
+    const composer = readSrc("features/threads/ThreadComposer.tsx");
+    expect(composer).toContain('parseStandaloneComposerSlashCommand(draftMessage) === "new"');
+    expect(composer).toMatch(/selectThreadRoute\(\{\s*draft: \{/);
+    expect(composer).not.toContain('"NewTaskSheet"');
   });
 
   it("keeps native queued-message editing and steering reachable", () => {
@@ -87,14 +92,15 @@ describe("mobile surface existence (anti stack-drop)", () => {
     expect(sidebar).toMatch(
       /<WorkspaceConnectionTitle[\s\S]*?\{HOME_LIST_MODE_TITLES\[options\.listMode\]\}/,
     );
-    // iOS Home owns its native title, so the swap has to live there too.
-    expect(homeHeader).toMatch(
-      /getConnectionAwareBrandHeaderOptions\(\{[\s\S]*?title: headerTitle/,
-    );
-    // HomeHeader owns the title; route-level options must not overwrite the list-mode swap.
-    expect(readSrc("features/home/HomeRouteScreen.tsx")).not.toContain(
-      "getConnectionAwareBrandHeaderOptions",
-    );
+    // The workspace now owns the iOS title and keeps the fork's selected list mode.
+    const workspace = readSrc("features/workspace/WorkspaceRootScreen.tsx");
+    expect(workspace).toContain("HOME_LIST_MODE_TITLES[listMode]");
+    expect(workspace).toMatch(/<WorkspaceConnectionTitle[\s\S]*?\{props.title\}/);
+    expect(homeHeader).toContain('accessibilityLabel="Thread list options"');
+    expect(homeHeader).toContain("HOME_LIST_MODES.map");
+    expect(homeHeader).toContain("HOME_THREAD_GROUPINGS.map");
+    expect(homeHeader).toContain("Hide settled");
+    expect(homeHeader).not.toContain("headerSearchBarOptions");
     // No surface may render the deleted in-list status pill again.
     expect(sidebar).not.toContain("WorkspaceConnectionStatus");
     expect(homeHeader).not.toContain("WorkspaceConnectionStatus");
