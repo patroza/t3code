@@ -237,7 +237,7 @@ export function useQueuedRunEdit(input: {
       return;
     }
     saveInFlightRef.current = true;
-    try {
+    await (async () => {
       const result = await beginEditCommand({
         environmentId,
         input: {
@@ -263,15 +263,15 @@ export function useQueuedRunEdit(input: {
           ?.context,
       });
       focusComposerSoon();
-    } finally {
+    })().finally(() => {
       saveInFlightRef.current = false;
-    }
+    });
   });
   const cancelEdit = useStableCallback(async () => {
     if (editing === null || saveInFlightRef.current) return;
     saveInFlightRef.current = true;
     setIsSaving(true);
-    try {
+    await (async () => {
       const result =
         queuedRunEditOwnership(serverThreadState, editing) === "lost"
           ? null
@@ -283,10 +283,10 @@ export function useQueuedRunEdit(input: {
       clearEditDraft(editing.runId);
       setEditing(null);
       focusComposerSoon();
-    } finally {
+    })().finally(() => {
       saveInFlightRef.current = false;
       setIsSaving(false);
-    }
+    });
   });
   const removeEditingAttachment = useStableCallback((attachmentId: string) => {
     setEditing((current) =>

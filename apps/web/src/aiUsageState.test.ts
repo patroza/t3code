@@ -359,7 +359,7 @@ describe("formatting", () => {
     expect(formatWindowValue({ id: "t", label: "Tokens", used: 1200, unit: "tok" })).toBe(
       "1200 tok",
     );
-    expect(formatWindowValue({ id: "x", label: "x" })).toBe("—");
+    expect(formatWindowValue({ id: "x", label: "x" })).toBe("N/A");
   });
 
   it("formats a runs-out pace note", () => {
