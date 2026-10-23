@@ -71,7 +71,7 @@ import {
   type MarkdownImageRef,
 } from "../presentation/markdownImages.ts";
 import { rewriteMarkdownTablesForDiscord } from "../presentation/markdownTables.ts";
-import { applyMonitorEveryoneMention, monitorSeverity } from "../presentation/monitor.ts";
+import { monitorSeverity, stripMonitorTransientMention } from "../presentation/monitor.ts";
 import {
   activeTurnWakeNote,
   chunkDiscordContent,
@@ -4321,9 +4321,9 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
         rest.platform === "discord" && monitorSeverity(renderedFinalText) === "transient"
           ? yield* readConversationTopic
           : null;
-      const deliveredFinalText = applyMonitorEveryoneMention(renderedFinalText, monitorTopic);
+      const deliveredFinalText = stripMonitorTransientMention(renderedFinalText, monitorTopic);
       if (deliveredFinalText !== renderedFinalText) {
-        yield* Effect.logInfo("Monitor alert is transient; mentioning everyone", {
+        yield* Effect.logInfo("Monitor alert is transient; leaving the channel unmentioned", {
           t3ThreadId: input.t3ThreadId,
         });
       }
