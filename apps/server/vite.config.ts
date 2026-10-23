@@ -173,6 +173,7 @@ export default mergeConfig(
               "src/terminal/Manager.test.ts",
               "src/vcs/GitVcsDriverCore.test.ts",
               "src/workspace/WorkspaceEntries.test.ts",
+              "src/workspace/WorkspaceFileSystem.test.ts",
               // Mocks `./ServerBrowserContexts`. Under isolate:false the real
               // pool is already bound, so launch asks the stub browser for an
               // executable and desktop CDP connects to ws://desktop.
@@ -230,6 +231,8 @@ export default mergeConfig(
               // Cached Manager imports otherwise bypass the wrapped module.
               "src/terminal/Manager.test.ts",
               "src/workspace/WorkspaceEntries.test.ts",
+              // Mocks realpath; earlier runtime imports otherwise keep the native binding.
+              "src/workspace/WorkspaceFileSystem.test.ts",
               // Mocks `./ServerBrowserContexts`. Under isolate:false the real
               // pool is already bound, so launch asks the stub browser for an
               // executable and desktop CDP connects to ws://desktop.
