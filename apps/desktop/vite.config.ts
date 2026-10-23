@@ -37,6 +37,7 @@ const isolatedDesktopTestFiles = [
   "src/preview/BrowserSession.test.ts",
   "src/preview/Manager.test.ts",
   "src/preview/Passkeys.test.ts",
+  "src/preview/WebAuthnPolicy.test.ts",
   "src/preview/BrowserImport/ChromiumKeys.test.ts",
   "src/preview/BrowserImport/ChromiumKeys.module.test.ts",
   // Window-capture tests mock electron/nativeImage/child_process. Under

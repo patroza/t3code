@@ -24,13 +24,13 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { PASSKEY_CREATE_CHANNEL, PASSKEY_GET_CHANNEL } from "./GuestProtocol.ts";
 import * as PreviewPasskeys from "./Passkeys.ts";
 
-const layerFor = (packageJson: object, isPackaged = true) =>
+const layerFor = (packageJson: object, isPackaged = true, platform: NodeJS.Platform = "darwin") =>
   PreviewPasskeys.layer.pipe(
     Layer.provide(
       Layer.succeed(
         DesktopEnvironment.DesktopEnvironment,
         DesktopEnvironment.DesktopEnvironment.of({
-          platform: "darwin",
+          platform,
           isPackaged,
           appRoot: "/app",
           path: { join: (...parts: ReadonlyArray<string>) => parts.join("/") },
@@ -87,6 +87,7 @@ const attestationObject = (authData: ReadonlyArray<number>) => {
 describe("PreviewPasskeys", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    electron.configureWebAuthn.mockReset();
     electron.fromWebContents.mockReturnValue({
       isDestroyed: () => false,
       getNativeWindowHandle: () => Buffer.from([1]),
@@ -307,11 +308,92 @@ describe("PreviewPasskeys", () => {
     }),
   );
 
+  it.effect("exposes only an available native or entitled browser authenticator", () =>
+    Effect.gen(function* () {
+      for (const platform of ["linux", "darwin", "win32"] as const) {
+        const passkeys = yield* PreviewPasskeys.PreviewPasskeys.pipe(
+          Effect.provide(layerFor({}, true, platform)),
+        );
+        assert.strictEqual(passkeys.webAuthnAvailable, platform === "win32");
+      }
+      const entitled = yield* PreviewPasskeys.PreviewPasskeys.pipe(Effect.provide(bridgeLayer));
+      assert.isTrue(entitled.webAuthnAvailable);
+      const touchId = yield* PreviewPasskeys.PreviewPasskeys.pipe(
+        Effect.provide(
+          layerFor({ t3codeWebAuthn: { touchIdKeychainAccessGroup: "TEAM.app.webauthn" } }),
+        ),
+      );
+      assert.isFalse(touchId.webAuthnAvailable);
+      yield* touchId.configure;
+      assert.isTrue(touchId.webAuthnAvailable);
+      electron.configureWebAuthn.mockImplementationOnce(() => {
+        throw new Error("Unavailable keychain group");
+      });
+      yield* touchId.configure;
+      assert.isFalse(touchId.webAuthnAvailable);
+    }),
+  );
+
+  it.effect("denies browser credential ceremonies only in unsupported sessions", () =>
+    Effect.gen(function* () {
+      const headersReceived = vi.fn();
+      const session = {
+        on: vi.fn(),
+        webRequest: { onHeadersReceived: headersReceived },
+      } as unknown as Electron.Session;
+      const passkeys = yield* PreviewPasskeys.PreviewPasskeys.pipe(
+        Effect.provide(layerFor({}, true, "linux")),
+      );
+      passkeys.installSessionHandlers(session);
+      passkeys.installSessionHandlers(session);
+      assert.strictEqual(headersReceived.mock.calls.length, 1);
+      const handler = headersReceived.mock.calls[0]![0] as Parameters<
+        Electron.WebRequest["onHeadersReceived"]
+      >[0];
+      const callback = vi.fn();
+      handler!(
+        {
+          id: 1,
+          url: "https://auth.test/",
+          method: "GET",
+          referrer: "",
+          timestamp: 0,
+          statusLine: "HTTP/1.1 200 OK",
+          statusCode: 200,
+          resourceType: "mainFrame",
+          responseHeaders: {
+            "permissions-policy": ["geolocation=(), publickey-credentials-get=*"],
+            "X-Test": ["kept"],
+          },
+        } as Electron.OnHeadersReceivedListenerDetails,
+        callback,
+      );
+      assert.deepStrictEqual(callback.mock.calls[0]![0], {
+        responseHeaders: {
+          "X-Test": ["kept"],
+          "Permissions-Policy": [
+            "geolocation=(), publickey-credentials-get=*",
+            "publickey-credentials-get=(), publickey-credentials-create=()",
+          ],
+        },
+      });
+      const native = yield* PreviewPasskeys.PreviewPasskeys.pipe(
+        Effect.provide(layerFor({}, true, "win32")),
+      );
+      native.installSessionHandlers({
+        on: vi.fn(),
+        webRequest: { onHeadersReceived: headersReceived },
+      } as unknown as Electron.Session);
+      assert.strictEqual(headersReceived.mock.calls.length, 1);
+    }),
+  );
+
   it.effect("asks which passkey to use only when a site has several", () =>
     Effect.gen(function* () {
       const passkeys = yield* PreviewPasskeys.PreviewPasskeys;
       const listeners: Array<(...args: ReadonlyArray<unknown>) => void> = [];
       const session = {
+        webRequest: { onHeadersReceived: vi.fn() },
         on: (_event: string, listener: (...args: ReadonlyArray<unknown>) => void) =>
           listeners.push(listener),
       } as unknown as Electron.Session;
