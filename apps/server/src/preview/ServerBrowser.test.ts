@@ -1,4 +1,5 @@
 import * as NodeEvents from "node:events";
+import * as NodeVM from "node:vm";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - Playwright download mocks perform real file operations outside the Effect runtime.
 import * as NodeFSP from "node:fs/promises";
 
@@ -6,6 +7,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { it } from "@effect/vitest";
 import {
+  type BrowserRecordingFrameRate,
   EnvironmentId,
   PreviewTabId,
   ProviderInstanceId,
@@ -47,6 +49,7 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
     }
     async contextFor(profileId: string, isolationKey?: string) {
       contextRequests.push({ profileId, isolated: isolationKey !== undefined });
+      contextRequested.resolve();
       if (contextFailure) throw contextFailure;
       await contextGate?.promise;
       const context = makeContext(this.onClose);
@@ -54,11 +57,12 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
       return context as unknown as BrowserContext;
     }
     async scratchPage() {
-      return makeContext().page as unknown as Page;
+      return makeEncoderPage() as unknown as Page;
     }
     async connectDesktopPage(endpoint: string) {
       const context = makeContext();
       desktopConnections.push({ endpoint, context });
+      desktopConnected.resolve();
       return { browser: { close: async () => {} }, page: context.page as unknown as Page };
     }
     async close() {
@@ -217,9 +221,58 @@ function makeContext(onClose?: (context: BrowserContext) => void) {
   return context;
 }
 
+// Runs the real encoder script against fake canvas and MediaRecorder globals.
+function makeEncoderPage() {
+  const canvas = {
+    width: 0,
+    height: 0,
+    getContext: () => ({ drawImage() {}, fillRect() {} }),
+    captureStream: (frameRate?: number) => ({ frameRate, getTracks: () => [] }),
+  };
+  class FakeMediaRecorder {
+    static isTypeSupported = (type: string) => type === "video/webm";
+    onstart: (() => void) | null = null;
+    constructor(stream: { frameRate?: number }, options: { videoBitsPerSecond: number }) {
+      encoderStreams.push({
+        frameRate: stream.frameRate,
+        bitsPerSecond: options.videoBitsPerSecond,
+      });
+    }
+    start() {
+      this.onstart?.();
+    }
+  }
+  const sandbox: Record<string, unknown> = {
+    document: { createElement: () => canvas },
+    Path2D: function Path2D() {},
+    MediaRecorder: FakeMediaRecorder,
+    createImageBitmap: async () => ({ width: 1280, height: 800, close() {} }),
+    atob,
+    Blob,
+    performance,
+  };
+  sandbox.window = sandbox;
+  const context = NodeVM.createContext(sandbox);
+  return {
+    ...makeContext().page,
+    evaluate: vi.fn(async (script: string | ((arg: unknown) => unknown), arg?: unknown) =>
+      typeof script === "string"
+        ? NodeVM.runInContext(script, context)
+        : NodeVM.runInContext(`(${script.toString()})`, context)(arg),
+    ),
+  };
+}
+
 const contexts: ReturnType<typeof makeContext>[] = [];
+const encoderStreams: Array<{ frameRate: number | undefined; bitsPerSecond: number }> = [];
 const contextRequests: Array<{ profileId: string; isolated: boolean }> = [];
 let contextGate: PromiseWithResolvers<void> | null = null;
+let contextRequested = Promise.withResolvers<void>();
+let desktopConnected = Promise.withResolvers<void>();
+let desktopReleased = Promise.withResolvers<void>();
+let detachSubscribed = Promise.withResolvers<void>();
+let attachSubscribed = Promise.withResolvers<void>();
+let desktopAttachmentReceived = Promise.withResolvers<void>();
 let pageCopy = "";
 let keyCopy = "";
 let focusedFrame: ReturnType<typeof makeFrame> | null = null;
@@ -274,6 +327,7 @@ const dependencies = Layer.mergeAll(
           const onDetach = (key: { threadId: string; tabId: string }) =>
             Queue.offerUnsafe(queue, key);
           desktopDetaches.on("detach", onDetach);
+          detachSubscribed.resolve();
           return onDetach;
         }),
         (onDetach) => Effect.sync(() => desktopDetaches.off("detach", onDetach)),
@@ -285,15 +339,19 @@ const dependencies = Layer.mergeAll(
           const onAttach = (key: { threadId: string; tabId: string }) =>
             Queue.offerUnsafe(queue, key);
           desktopDetaches.on("attach", onAttach);
+          attachSubscribed.resolve();
           return onAttach;
         }),
         (onAttach) => Effect.sync(() => desktopDetaches.off("attach", onAttach)),
       ),
-    ),
+    ).pipe(Stream.tap(() => Effect.sync(() => desktopAttachmentReceived.resolve()))),
     isAttached: (key) => Effect.sync(() => desktopRenders(key.tabId)),
     endpoint: (key) =>
       Effect.acquireRelease(Effect.succeed(`ws://desktop/${key.tabId}`), () =>
-        Effect.sync(() => releasedDesktopTabs.push(key.tabId)),
+        Effect.sync(() => {
+          releasedDesktopTabs.push(key.tabId);
+          desktopReleased.resolve();
+        }),
       ),
     pointer: () => Effect.void,
   }),
@@ -325,8 +383,15 @@ const viewerInput = (tabId: string, canOperate: boolean) => ({
 
 beforeEach(() => {
   contexts.length = 0;
+  encoderStreams.length = 0;
   contextRequests.length = 0;
   contextGate = null;
+  contextRequested = Promise.withResolvers<void>();
+  desktopConnected = Promise.withResolvers<void>();
+  desktopReleased = Promise.withResolvers<void>();
+  detachSubscribed = Promise.withResolvers<void>();
+  attachSubscribed = Promise.withResolvers<void>();
+  desktopAttachmentReceived = Promise.withResolvers<void>();
   contextFailure = null;
   initialNavigation = null;
   pageCopy = "";
@@ -421,6 +486,36 @@ it.live.each([
       yield* Fiber.join(correction);
     }),
   ).pipe(Effect.provide(layer)),
+);
+
+// The fake encoder decodes every frame at 1280x800, so 30 fps hits the bitrate floor.
+it.live.each([
+  { reports: [], frameRate: 30, bitsPerSecond: 2.5e6 },
+  { reports: [30], frameRate: 30, bitsPerSecond: 2.5e6 },
+  { reports: [60], frameRate: 60, bitsPerSecond: 1280 * 800 * 60 * 0.05 },
+  { reports: [60, undefined], frameRate: 60, bitsPerSecond: 1280 * 800 * 60 * 0.05 },
+  { reports: [60, 30], frameRate: 30, bitsPerSecond: 2.5e6 },
+] satisfies ReadonlyArray<{
+  reports: ReadonlyArray<BrowserRecordingFrameRate | undefined>;
+  frameRate: number;
+  bitsPerSecond: number;
+}>)(
+  "agent recordings encode at the last reported frame rate ($reports)",
+  ({ reports, frameRate, bitsPerSecond }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { browser, broker, tabId } = yield* ready;
+        for (const recordingFrameRate of reports) {
+          yield* browser.reportProfiles({
+            profiles: [],
+            defaultProfileId: "default",
+            ...(recordingFrameRate === undefined ? {} : { recordingFrameRate }),
+          });
+        }
+        yield* broker.invoke({ scope, tabId, operation: "recordingStart", input: {} });
+        expect(encoderStreams).toEqual([{ frameRate, bitsPerSecond }]);
+      }),
+    ).pipe(Effect.provide(layer)),
 );
 
 it.live("enforces provider ownership and explicit targets when a session has multiple tabs", () =>
@@ -1171,12 +1266,13 @@ it.live("a desktop page that comes back reconnects without waiting for a viewer"
       yield* Effect.yieldNow;
       desktopRendersNext = true;
       const opened = yield* manager.open({ threadId: scope.thread.threadId, runtime: "server" });
-      while (desktopConnections.length === 0) yield* Effect.yieldNow;
-      while (desktopDetaches.listenerCount("detach") === 0) yield* Effect.yieldNow;
+      yield* Effect.promise(() => desktopConnected.promise);
+      yield* Effect.promise(() => detachSubscribed.promise);
+      desktopConnected = Promise.withResolvers<void>();
       desktopDetaches.emit("detach", { threadId: scope.thread.threadId, tabId: opened.tabId });
-      while (releasedDesktopTabs.length === 0) yield* Effect.yieldNow;
+      yield* Effect.promise(() => desktopReleased.promise);
       desktopDetaches.emit("attach", { threadId: scope.thread.threadId, tabId: opened.tabId });
-      while (desktopConnections.length < 2) yield* Effect.yieldNow;
+      yield* Effect.promise(() => desktopConnected.promise);
       expect(desktopConnections).toHaveLength(2);
     }),
   ).pipe(Effect.provide(layer)),
@@ -1190,7 +1286,7 @@ it.live("a late desktop attachment replaces the fallback page and reconnects its
       const fallback = contexts[0]!.page;
       yield* Effect.promise(() => fallback.goto("https://example.com/login"));
       const viewer = yield* browser.attachViewer(viewerInput(tabId, false));
-      while (desktopDetaches.listenerCount("attach") === 0) yield* Effect.yieldNow;
+      yield* Effect.promise(() => attachSubscribed.promise);
       desktopTabs.add(tabId);
       desktopDetaches.emit("attach", { threadId: scope.thread.threadId, tabId });
       const ended = yield* Stream.fromQueue(viewer.output).pipe(
@@ -1198,7 +1294,7 @@ it.live("a late desktop attachment replaces the fallback page and reconnects its
         Stream.runHead,
       );
       expect(ended).toEqual(Option.some({ _tag: "reconnect" }));
-      while (desktopConnections.length === 0) yield* Effect.yieldNow;
+      yield* Effect.promise(() => desktopConnected.promise);
       const desktop = desktopConnections[0]!.context.page;
       yield* Effect.promise(() => desktop.goto("https://example.com/account"));
       const status = yield* broker.invoke<PreviewAutomationStatus>({
@@ -1225,13 +1321,13 @@ it.live("a desktop attachment during fallback creation waits and adopts the desk
       yield* Effect.yieldNow;
       contextGate = Promise.withResolvers<void>();
       const opened = yield* manager.open({ threadId: scope.thread.threadId, runtime: "server" });
-      while (contextRequests.length === 0 || desktopDetaches.listenerCount("attach") === 0)
-        yield* Effect.yieldNow;
+      yield* Effect.promise(() => contextRequested.promise);
+      yield* Effect.promise(() => attachSubscribed.promise);
       desktopTabs.add(opened.tabId);
       desktopDetaches.emit("attach", { threadId: scope.thread.threadId, tabId: opened.tabId });
-      yield* Effect.yieldNow;
+      yield* Effect.promise(() => desktopAttachmentReceived.promise);
       contextGate.resolve();
-      while (desktopConnections.length === 0) yield* Effect.yieldNow;
+      yield* Effect.promise(() => desktopConnected.promise);
       expect(contexts[0]!.page.isClosed()).toBe(true);
       expect(desktopConnections).toHaveLength(1);
       expect((yield* manager.list({ threadId: scope.thread.threadId })).sessions).toHaveLength(1);

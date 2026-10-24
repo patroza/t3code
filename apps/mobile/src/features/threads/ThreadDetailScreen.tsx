@@ -1,4 +1,5 @@
 import { useSidebarWorkspaceTabs } from "../workspace/useSystemWorkspaceTabBar";
+import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 import {
   isAtomCommandInterrupted,
   settlePromise,
@@ -118,6 +119,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useWorkspaceContentWidth } from "../layout/workspace-content-width";
 import { useNativeWorkspaceColumnsSupported } from "../../native/NativeWorkspaceColumns";
 import {
+  useDeviceType,
   useDuoBottomBarInset,
   useNativeColumnLayoutMetrics,
   useNativeLayoutMetrics,
@@ -471,6 +473,15 @@ function ThreadVisitWatermark(props: {
 
 export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetailScreenProps) {
   const usesNativeWorkspaceColumns = useNativeWorkspaceColumnsSupported();
+  const deviceType = useDeviceType();
+  const workspace = useWorkspaceTabs();
+  const sidebarSearchActive =
+    deviceType === "duo-unfolded" &&
+    workspace?.state.tabs[workspace.state.selectedTab].searchMode === "active";
+  // Keep the last input owner through keyboard dismissal, so closing sidebar
+  // search cannot briefly lift the composer into the keyboard's closing frame.
+  const [composerOwnsKeyboard, setComposerOwnsKeyboard] = useState(false);
+  if (sidebarSearchActive && composerOwnsKeyboard) setComposerOwnsKeyboard(false);
   const navigation = useNavigation();
   const { session: voiceInputSession } = useGlobalVoiceInput();
   const reportedModelSelection = useThreadReportedModelSelection(props.selectedThreadDetailRef);
@@ -530,6 +541,8 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
   const handleOwnedInputFocusChange = (focused: boolean) => {
     ownedInputFocusedRef.current = focused;
     if (focused) {
+      if (deviceType === "duo-folded" || deviceType === "duo-unfolded")
+        setComposerOwnsKeyboard(true);
       setKeyboardStateSuspect(false);
     }
   };
@@ -598,10 +611,13 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
     (Platform.OS === "ios" && Platform.isPad
       ? Math.max(bottomSafeArea, 12) - (hasSidebarTabBar ? 5 : 0)
       : undefined);
-  const composerBottomInset =
-    alignedBottomInset !== undefined
-      ? Math.max(0, alignedBottomInset - THREAD_COMPOSER_BOTTOM_GUTTER)
-      : Math.max(bottomSafeArea, 12);
+  // The Duo's floating sidebar pill ends three points below the composer's usual gutter.
+  const composerBottomInset = Math.max(
+    0,
+    (alignedBottomInset !== undefined
+      ? alignedBottomInset - THREAD_COMPOSER_BOTTOM_GUTTER
+      : Math.max(bottomSafeArea, 12)) - (hasSidebarTabBar ? 3 : 0),
+  );
   const composerKeyboardOffset = composerBottomInset;
   const contentPresentationKind = props.contentPresentation.kind;
   const realThreadSyncLabel = (() => {
@@ -1476,7 +1492,11 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
       {showContent ? (
         <KeyboardStickyView
           // Waiting for a visibility render misses the first keyboard frames.
-          enabled={Platform.OS === "ios" || !keyboardStateSuspect}
+          enabled={
+            Platform.OS === "ios"
+              ? deviceType !== "duo-unfolded" || (composerOwnsKeyboard && !sidebarSearchActive)
+              : !keyboardStateSuspect
+          }
           pointerEvents="box-none"
           style={{ position: "absolute", bottom: 0, left: 0, right: 0, top: 0 }}
           offset={{ closed: 0, opened: composerKeyboardOffset }}
@@ -1695,7 +1715,6 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
                     </View>
                   ) : (
                     <>
-                      {props.draftMode?.controls}
                       <ThreadComposer
                         isDraft={Boolean(props.draftMode)}
                         canOperateThread={props.canOperateThread}
@@ -1709,6 +1728,7 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
                             : "Ask the repo agent, or run a command…"
                         }
                         contentMaxWidth={contentMaxWidth}
+                        draftControls={props.draftMode?.controls}
                         connectionState={props.connectionStateLabel}
                         environmentLabel={props.environmentLabel}
                         selectedThread={props.selectedThread}

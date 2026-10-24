@@ -1,3 +1,4 @@
+import { AdaptiveWorkspaceContext, useAdaptiveWorkspaceLayout } from "./adaptive-workspace-context";
 import { createDeferredNavigation } from "./deferred-navigation";
 import { uuidv4 } from "../../lib/uuid";
 import type {
@@ -15,7 +16,6 @@ import {
   useNavigation,
 } from "@react-navigation/native";
 import {
-  createContext,
   use,
   useCallback,
   useDeferredValue,
@@ -44,10 +44,7 @@ import {
   type VerticalHinge,
   deriveWorkspacePaneLayout,
   isPrimarySidebarPinned,
-  type FileInspectorPaneLayout,
-  type Layout,
   type WorkspaceAuxiliaryPaneRole,
-  type WorkspacePaneLayout,
 } from "../../lib/layout";
 import {
   resolveThreadSelectionNavigationAction,
@@ -90,6 +87,7 @@ import {
   AndroidWorkspaceNavigation,
   ANDROID_WORKSPACE_RAIL_WIDTH,
 } from "../workspace/AndroidWorkspaceNavigation";
+import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 import { newTaskDestination } from "../threads/new-task-project-selection";
 import { usePendingTaskListActions } from "../home/usePendingTaskListActions";
 import { ThreadNavigationSidebar } from "../threads/ThreadNavigationSidebar";
@@ -110,65 +108,7 @@ import { useNativeLayoutMetrics } from "../../native/native-layout-metrics";
 import { AndroidHingeObserver } from "../../native/AndroidHingeObserver";
 import { WindowHingeContext } from "../../native/window-hinge-context";
 
-interface AdaptiveWorkspaceContextValue {
-  readonly layout: Layout;
-  readonly panes: WorkspacePaneLayout;
-  readonly fileInspector: FileInspectorPaneLayout;
-  readonly primarySidebarSearchQuery: string;
-  readonly startNewTask: () => void;
-  readonly deferThreadSelectionUntil: (operation: Promise<unknown>) => void;
-  readonly selectThread: (thread: EnvironmentThreadShell) => void;
-  readonly selectThreadRoute: (params: ReactNavigation.RootParamList["Thread"]) => void;
-  readonly activateAuxiliaryPaneRole: (role: WorkspaceAuxiliaryPaneRole) => () => void;
-  readonly registerWorkspaceInspector: (render: () => ReactNode) => () => void;
-  readonly setPrimarySidebarSearchQuery: (query: string) => void;
-  readonly showAuxiliaryPane: (role: WorkspaceAuxiliaryPaneRole) => void;
-  readonly toggleAuxiliaryPane: () => void;
-  readonly togglePrimarySidebar: () => void;
-  readonly setAuxiliaryPaneWidth: (width: number) => void;
-  /**
-   * Android split view while the thread composer has the soft keyboard: the
-   * sidebar and rail step aside and the thread header drops to one line.
-   */
-  readonly composerKeyboardActive: boolean;
-  /** The thread composer reports its focus so the layout can make room for typing. */
-  readonly setComposerEditing: (editing: boolean) => void;
-}
-
-const compactLayout = deriveLayout({ width: 0, height: 0 });
-const compactPanes = deriveWorkspacePaneLayout({
-  layout: compactLayout,
-  viewportWidth: 0,
-  primarySidebarPreferredVisible: true,
-  auxiliaryPanePreferredVisible: true,
-});
-const compactFileInspector = deriveFileInspectorPaneLayout({
-  layout: compactLayout,
-  viewportWidth: 0,
-});
-const AdaptiveWorkspaceContext = createContext<AdaptiveWorkspaceContextValue>({
-  layout: compactLayout,
-  panes: compactPanes,
-  fileInspector: compactFileInspector,
-  primarySidebarSearchQuery: "",
-  startNewTask: () => undefined,
-  deferThreadSelectionUntil: () => undefined,
-  selectThread: () => undefined,
-  selectThreadRoute: () => undefined,
-  activateAuxiliaryPaneRole: () => () => undefined,
-  registerWorkspaceInspector: () => () => undefined,
-  setPrimarySidebarSearchQuery: () => undefined,
-  showAuxiliaryPane: () => undefined,
-  toggleAuxiliaryPane: () => undefined,
-  togglePrimarySidebar: () => undefined,
-  setAuxiliaryPaneWidth: () => undefined,
-  composerKeyboardActive: false,
-  setComposerEditing: () => undefined,
-});
-
-export function useAdaptiveWorkspaceLayout(): AdaptiveWorkspaceContextValue {
-  return use(AdaptiveWorkspaceContext);
-}
+export { useAdaptiveWorkspaceLayout };
 
 export function useAdaptiveWorkspacePaneRole(role: WorkspaceAuxiliaryPaneRole) {
   const { activateAuxiliaryPaneRole } = useAdaptiveWorkspaceLayout();
@@ -342,9 +282,11 @@ function AdaptiveWorkspaceLayoutContent(
   const nativeMetrics = useNativeLayoutMetrics();
   const { width: viewportWidth, height } = nativeMetrics ?? windowDimensions;
   const pathname = props.pathname;
-  // Android's Settings tab is a full workspace page: the rail stays, the sidebar and
-  // auxiliary panes hide.
-  const workspacePage = Platform.OS === "android" && pathname.startsWith("/settings");
+  const workspace = useWorkspaceTabs();
+  // Settings and Usage occupy the workspace rather than a list/detail pair.
+  const workspacePage =
+    Platform.OS === "android" &&
+    (pathname.startsWith("/settings") || workspace?.state.selectedTab === "usage");
   const navigation = useNavigation();
   const activeRoleOwner = useRef<symbol | null>(null);
   const [primarySidebarPreferredVisible, setPrimarySidebarPreferredVisible] = useState(true);
@@ -365,9 +307,27 @@ function AdaptiveWorkspaceLayoutContent(
   // re-renders on any layout state change, and the inspector registration then loops: each
   // re-register re-renders its screen, which hands over a new inspector renderer.
   const baseLayout = useMemo(
-    () => deriveLayout({ width: viewportWidth, height, nativeMetrics }),
-    [height, viewportWidth, nativeMetrics],
+    () => deriveLayout({ width: viewportWidth, height, nativeMetrics, nativeWorkspace }),
+    [height, viewportWidth, nativeMetrics, nativeWorkspace],
   );
+  const [overlaySidebar, setOverlaySidebar] = useState({
+    active: baseLayout.primarySidebarOverlaysContent,
+    pathname,
+    visible: pathname === "/",
+  });
+  if (
+    overlaySidebar.active !== baseLayout.primarySidebarOverlaysContent ||
+    (overlaySidebar.active && overlaySidebar.pathname !== pathname)
+  ) {
+    setOverlaySidebar({
+      active: baseLayout.primarySidebarOverlaysContent,
+      pathname,
+      visible: pathname === "/",
+    });
+  }
+  const preferredSidebarVisible = baseLayout.primarySidebarOverlaysContent
+    ? overlaySidebar.visible
+    : primarySidebarPreferredVisible;
   const primarySidebarPinned = isPrimarySidebarPinned({
     pathname,
     nativeWorkspace,
@@ -385,7 +345,7 @@ function AdaptiveWorkspaceLayoutContent(
   );
   const showPrimarySidebar =
     !workspacePage &&
-    (primarySidebarPinned || (primarySidebarPreferredVisible && !composerKeyboardActive));
+    (primarySidebarPinned || (preferredSidebarVisible && !composerKeyboardActive));
   const shouldRenderNavigationRail = Platform.OS === "android" && baseLayout.usesSplitView;
   const navigationRailWidth =
     shouldRenderNavigationRail && (showPrimarySidebar || workspacePage)
@@ -417,7 +377,7 @@ function AdaptiveWorkspaceLayoutContent(
         viewportWidth: width,
         preferredWidth: fileInspectorPreferredWidth ?? undefined,
         reservedLeadingWidth:
-          shouldRenderPrimarySidebar && showPrimarySidebar
+          shouldRenderPrimarySidebar && showPrimarySidebar && !layout.primarySidebarOverlaysContent
             ? (layout.listPaneWidth ?? 0) + (layout.listPaneGap ?? 0)
             : 0,
       }),
@@ -501,6 +461,13 @@ function AdaptiveWorkspaceLayoutContent(
       setFocusedAuxiliaryPaneRole(null);
     };
   };
+  const setPrimarySidebarVisible = (visible: boolean) => {
+    if (layout.primarySidebarOverlaysContent) {
+      setOverlaySidebar((current) => ({ ...current, visible }));
+    } else {
+      setPrimarySidebarPreferredVisible(visible);
+    }
+  };
   const togglePrimarySidebar = () => {
     if (primarySidebarPinned) {
       return;
@@ -516,14 +483,14 @@ function AdaptiveWorkspaceLayoutContent(
       setPrimarySidebarPreferredVisible(true);
       return;
     }
-    setPrimarySidebarPreferredVisible((current) => !current);
+    setPrimarySidebarVisible(!preferredSidebarVisible);
   };
   const revealPrimarySidebar = () => {
     if (composerKeyboardActive) void KeyboardController.dismiss();
     if (panes.primarySidebarSuppressedByAuxiliary) {
       setFileInspectorPreferredVisible(false);
     }
-    setPrimarySidebarPreferredVisible(true);
+    setPrimarySidebarVisible(true);
   };
   const handleToggleSidebarCommand = () => {
     togglePrimarySidebar();
@@ -882,6 +849,7 @@ function AdaptiveWorkspaceLayoutContent(
     showAuxiliaryPane,
     toggleAuxiliaryPane,
     togglePrimarySidebar,
+    setPrimarySidebarVisible,
     setAuxiliaryPaneWidth,
     composerKeyboardActive,
     setComposerEditing,
