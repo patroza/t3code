@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Clock, Deferred, Effect, Fiber, Layer, Queue, Stream } from "effect";
+import { Clock, Deferred, Effect, Fiber, Layer, Queue, Scheduler, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import {
   ExchangeRepository,
@@ -63,11 +63,11 @@ type ProcessorTestContext = {
   /** How many times the processor asked the repository to resolve a thread id, the lookup a busy retry loop would repeat. */
   readonly findByThreadIdCalls: () => number;
   /**
-   * Waits until the shared call log holds at least `count` entries. The mocks are synchronous, so the log is how the background pass's progress can be observed from the test.
+   * Waits for the operation receipt that records the `count`th service call.
    */
   readonly awaitCalls: (count: number) => Effect.Effect<void>;
   /**
-   * Yields until neither the service-call log nor the repository's thread lookups have changed for `SETTLE_TICKS` consecutive turns. Use it before asserting that something did *not* happen: a single `yieldNow` can be outrun by a wrongly scheduled call, which would let the assertion pass vacuously.
+   * Drains already scheduled processor work before negative assertions. Parked dependency calls remain parked; this does not claim their passes have completed.
    */
   readonly settle: () => Effect.Effect<void>;
   /** Waits until the processor resolved threads at least `count` times. A recovered pass that keeps re-resolving a thread shows up here. */
@@ -75,7 +75,7 @@ type ProcessorTestContext = {
   /** Pushes a threadId to the `threadActivity` stream, waking up the processor. */
   readonly pingActivity: (threadId: ThreadId) => Effect.Effect<void>;
   /**
-   * Polls the repository until the exchange at `sourceUri` carries `tag`.
+   * Waits for a successful repository write with `tag`, or reads an already stored match.
    * A Deferred signalled from inside a mock fires before the processor persists the transition, so anything that asserts on stored state after a mock call must wait on the store itself.
    */
   readonly awaitStoredTag: (
@@ -171,20 +171,6 @@ const defaultAdapter: NTBSAdapter = {
 };
 
 /**
- * How many scheduler turns the harness waits below tolerate before failing with a diagnostic. A healthy wait resolves in a handful of turns; a stuck one names itself here instead of ending as the bare vitest timeout.
- */
-const AWAIT_SPINS = 10_000;
-
-/**
- * How many consecutive quiet scheduler turns `settle` requires before it trusts that nothing else is going on.
- *
- * Every mock here is synchronous, so anything a regression adds lands within a turn or two; a window this wide cannot be crossed by a call that is merely late, while a single yield can be.
- *
- * What it does *not* prove: that a pass finished. Work parked on a Deferred or a timer looks exactly as quiet, so an assertion made under `settle` still misses anything that would resume after that park. When the claim is that something completed, wait for an observable consequence of the next step instead (the exchange lock only lets a later pass run once the previous one released it).
- */
-const SETTLE_TICKS = 50;
-
-/**
  * The harness.
  *
  * The term "harness" comes from electrical engineering for describing hardware test benches: the wiring harness is the fixed rig that holds the device under test and connects it to instruments, so each experiment only varies the stimulus.
@@ -201,7 +187,40 @@ const withProcessor = <A, E>(
   test: (context: ProcessorTestContext) => Effect.Effect<A, E>,
 ) =>
   Effect.gen(function* () {
+    const scheduler = yield* Scheduler.Scheduler;
+    const dispatcher = scheduler.makeDispatcher();
+    const testScheduler: Scheduler.Scheduler = {
+      executionMode: scheduler.executionMode,
+      shouldYield: (fiber) => scheduler.shouldYield(fiber),
+      makeDispatcher: () => dispatcher,
+    };
     const calls: Call[] = [];
+    const callReceipts = new Map<number, Deferred.Deferred<void>>();
+    const lookupReceipts = new Map<number, Deferred.Deferred<void>>();
+    const storedReceipts = new Map<string, Deferred.Deferred<Exchange>>();
+    const acknowledgeCount = (receipts: Map<number, Deferred.Deferred<void>>, count: number) => {
+      for (const [expected, receipt] of receipts) {
+        if (expected <= count) {
+          Deferred.doneUnsafe(receipt, Effect.void);
+          receipts.delete(expected);
+        }
+      }
+    };
+    const awaitCount = (
+      receipts: Map<number, Deferred.Deferred<void>>,
+      count: number,
+      current: () => number,
+    ) =>
+      Effect.suspend(() => {
+        if (current() >= count) return Effect.void;
+        let receipt = receipts.get(count);
+        if (receipt === undefined) {
+          receipt = Deferred.makeUnsafe<void>();
+          receipts.set(count, receipt);
+        }
+        return Deferred.await(receipt);
+      });
+    const storedKey = (sourceUri: string, tag: Exchange["tag"]) => `${sourceUri}\0${tag}`;
     const activity = yield* Queue.unbounded<ThreadId>();
 
     /**
@@ -218,6 +237,7 @@ const withProcessor = <A, E>(
       (...args: Args) =>
         Effect.suspend(() => {
           calls.push({ service, method, args });
+          acknowledgeCount(callReceipts, calls.length);
           return fn(...args);
         });
 
@@ -243,9 +263,23 @@ const withProcessor = <A, E>(
 
         return {
           ...repository,
+          upsert: (exchange: Exchange) =>
+            repository.upsert(exchange).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  const key = storedKey(exchange.sourceUri, exchange.tag);
+                  const receipt = storedReceipts.get(key);
+                  if (receipt !== undefined) {
+                    Deferred.doneUnsafe(receipt, Effect.succeed(exchange));
+                    storedReceipts.delete(key);
+                  }
+                }),
+              ),
+            ),
           findByThreadId: (threadId: ThreadId) =>
             Effect.suspend(() => {
               findByThreadIdCalls += 1;
+              acknowledgeCount(lookupReceipts, findByThreadIdCalls);
               return repository.findByThreadId(threadId);
             }),
         };
@@ -278,95 +312,30 @@ const withProcessor = <A, E>(
         repository,
         calls,
         findByThreadIdCalls: () => findByThreadIdCalls,
-        awaitCalls: (count) => {
-          const arrived = () => calls.length >= count;
-
-          return Effect.gen(function* () {
-            let spins = 0;
-
-            while (!arrived()) {
-              if (spins === AWAIT_SPINS) {
-                return yield* Effect.die(
-                  new Error(
-                    `awaitCalls(${count}) spun ${spins} times with ${calls.length} recorded calls`,
-                  ),
-                );
-              }
-              spins += 1;
-              yield* Effect.yieldNow;
-            }
-          });
-        },
-        awaitThreadLookups: (count) => {
-          const arrived = () => findByThreadIdCalls >= count;
-
-          return Effect.gen(function* () {
-            let spins = 0;
-
-            while (!arrived()) {
-              if (spins === AWAIT_SPINS) {
-                return yield* Effect.die(
-                  new Error(
-                    `awaitThreadLookups(${count}) spun ${spins} times with ${findByThreadIdCalls} lookups`,
-                  ),
-                );
-              }
-              spins += 1;
-              yield* Effect.yieldNow;
-            }
-          });
-        },
-        settle: () =>
-          Effect.gen(function* () {
-            let lastCalls = calls.length;
-            let lastLookups = findByThreadIdCalls;
-            let quiet = 0;
-            let spins = 0;
-
-            while (quiet < SETTLE_TICKS) {
-              if (spins === AWAIT_SPINS) {
-                return yield* Effect.die(
-                  new Error(
-                    `settle() spun ${spins} times while the log kept changing (${calls.length} calls, ${findByThreadIdCalls} lookups)`,
-                  ),
-                );
-              }
-              spins += 1;
-              yield* Effect.yieldNow;
-
-              if (calls.length === lastCalls && findByThreadIdCalls === lastLookups) {
-                quiet += 1;
-              } else {
-                quiet = 0;
-                lastCalls = calls.length;
-                lastLookups = findByThreadIdCalls;
-              }
-            }
-          }),
+        awaitCalls: (count) => awaitCount(callReceipts, count, () => calls.length),
+        awaitThreadLookups: (count) => awaitCount(lookupReceipts, count, () => findByThreadIdCalls),
+        // The shared test dispatcher drains every runnable task, including work
+        // scheduled by those tasks. Unlike a fixed number of yields, it cannot
+        // return while a late immediate callback remains queued.
+        settle: () => Effect.yieldNow.pipe(Effect.andThen(Effect.sync(() => dispatcher.flush()))),
         pingActivity: (threadId) => Queue.offer(activity, threadId).pipe(Effect.asVoid),
         awaitStoredTag: (sourceUri, tag) =>
           Effect.gen(function* () {
-            let spins = 0;
-
-            while (true) {
-              const state = yield* repository.findBySourceUri(sourceUri);
-
-              if (state !== null && state.tag === tag) {
-                return state;
-              }
-              if (spins === AWAIT_SPINS) {
-                return yield* Effect.die(
-                  new Error(
-                    `awaitStoredTag(${sourceUri}, ${tag}) spun ${spins} times, last seen ${state?.tag ?? "no record"}`,
-                  ),
-                );
-              }
-              spins += 1;
-              yield* Effect.yieldNow;
+            const key = storedKey(sourceUri, tag);
+            let receipt = storedReceipts.get(key);
+            if (receipt === undefined) {
+              receipt = Deferred.makeUnsafe<Exchange>();
+              storedReceipts.set(key, receipt);
             }
+            const stored = yield* repository.findBySourceUri(sourceUri);
+            if (stored !== null && stored.tag === tag) {
+              storedReceipts.delete(key);
+              return stored;
+            }
+            return yield* Deferred.await(receipt);
           }),
       });
-    }).pipe(Effect.provide(layer));
+    }).pipe(Effect.provideService(Scheduler.Scheduler, testScheduler), Effect.provide(layer));
   });
 
 describe("NTBSProcessor", () => {
@@ -772,11 +741,12 @@ describe("NTBSProcessor", () => {
           planCoordinates: () => rejection,
         },
       },
-      ({ processor, repository, calls, awaitCalls }) =>
+      ({ processor, repository, calls, awaitCalls, awaitStoredTag }) =>
         Effect.gen(function* () {
           const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
           yield* processor.process(request, target);
           yield* awaitCalls(3);
+          yield* awaitStoredTag(request.sourceUri, "reply-posted");
 
           expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
             "T3Gateway.planCoordinates",
@@ -1752,11 +1722,12 @@ describe("NTBSProcessor", () => {
           getTurnStatus: () => Effect.succeed({ turn: "completed", reply }),
         },
       },
-      ({ processor, repository, calls, awaitCalls }) =>
+      ({ processor, repository, calls, awaitCalls, awaitStoredTag }) =>
         Effect.gen(function* () {
           const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
           yield* processor.process(request, target);
           yield* awaitCalls(6);
+          yield* awaitStoredTag(request.sourceUri, "reply-posted");
 
           expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
             "T3Gateway.planCoordinates",
@@ -1862,11 +1833,12 @@ describe("NTBSProcessor", () => {
           provisionThread: () => rejection,
         },
       },
-      ({ processor, repository, calls, awaitCalls }) =>
+      ({ processor, repository, calls, awaitCalls, awaitStoredTag }) =>
         Effect.gen(function* () {
           const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
           yield* processor.process(request, target);
           yield* awaitCalls(5);
+          yield* awaitStoredTag(request.sourceUri, "reply-posted");
 
           expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
             "T3Gateway.planCoordinates",
@@ -3214,7 +3186,7 @@ describe("NTBSProcessor", () => {
             }),
         },
       },
-      ({ processor, repository, pingActivity, findByThreadIdCalls, settle }) =>
+      ({ processor, repository, pingActivity, findByThreadIdCalls, awaitThreadLookups, settle }) =>
         Effect.gen(function* () {
           yield* repository.upsert(threadCreated);
 
@@ -3222,6 +3194,7 @@ describe("NTBSProcessor", () => {
           yield* Deferred.await(recoveryRead);
 
           yield* pingActivity(defaultThreadId);
+          yield* awaitThreadLookups(1);
           yield* settle();
 
           // Recovery is still reading: no further read can have happened, and the waiting pass must not be re-resolving the thread in a retry loop.
@@ -3245,6 +3218,7 @@ describe("NTBSProcessor", () => {
   it.effect("waits for an in-flight sweep pass before checking the same exchange", () => {
     const release = Deferred.makeUnsafe<void>();
     const checkedAgain = Deferred.makeUnsafe<void>();
+    const sweepStarted = Deferred.makeUnsafe<void>();
     let reads = 0;
 
     return withProcessor(
@@ -3255,6 +3229,7 @@ describe("NTBSProcessor", () => {
               reads += 1;
 
               if (reads === 2) {
+                yield* Deferred.succeed(sweepStarted, undefined);
                 yield* Deferred.await(release);
               } else if (reads === 3) {
                 yield* Deferred.succeed(checkedAgain, undefined);
@@ -3264,20 +3239,19 @@ describe("NTBSProcessor", () => {
             }),
         },
       },
-      ({ processor, repository, pingActivity, findByThreadIdCalls, settle }) =>
+      ({ processor, repository, pingActivity, findByThreadIdCalls, awaitThreadLookups, settle }) =>
         Effect.gen(function* () {
           yield* repository.upsert(threadCreated);
 
           const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
 
-          const sweepTookOver = () => reads >= 2;
-          // Read 1 is startup recovery. The sweeper's delay starts once that pass ends, so keep advancing until the sweep takes read 2 and parks there.
-          while (!sweepTookOver()) {
-            yield* TestClock.adjust("1 minute");
-            yield* Effect.yieldNow;
-          }
+          // Finish recovery and register its sweep delay before advancing time.
+          yield* settle();
+          yield* TestClock.adjust("1 minute");
+          yield* Deferred.await(sweepStarted);
 
           yield* pingActivity(defaultThreadId);
+          yield* awaitThreadLookups(1);
           yield* settle();
 
           // The sweep still owns the exchange: the ping waits without re-resolving the thread.
@@ -3303,6 +3277,7 @@ describe("NTBSProcessor", () => {
     const parked = Deferred.makeUnsafe<void>();
     const release = Deferred.makeUnsafe<void>();
     const otherThreadSweptAgain = Deferred.makeUnsafe<void>();
+    const otherThreadSwept = Deferred.makeUnsafe<void>();
     let threadStatusReads = 0;
     let provisions = 0;
     let otherThreadReads = 0;
@@ -3326,6 +3301,9 @@ describe("NTBSProcessor", () => {
             Effect.gen(function* () {
               otherThreadReads += 1;
 
+              if (otherThreadReads === 2) {
+                yield* Deferred.succeed(otherThreadSwept, undefined);
+              }
               if (otherThreadReads === 3) {
                 yield* Deferred.succeed(otherThreadSweptAgain, undefined);
               }
@@ -3341,7 +3319,7 @@ describe("NTBSProcessor", () => {
             }),
         },
       },
-      ({ processor, repository, pingActivity, findByThreadIdCalls }) =>
+      ({ processor, repository, pingActivity, findByThreadIdCalls, settle }) =>
         Effect.gen(function* () {
           yield* repository.upsert(planned);
           yield* repository.upsert(secondThreadCreated);
@@ -3353,12 +3331,9 @@ describe("NTBSProcessor", () => {
           yield* pingActivity(defaultThreadId);
           yield* Deferred.await(parked);
 
-          const otherThreadWasSwept = () => otherThreadReads >= 2;
-          // The sweep's delay starts once recovery ends; each adjustment polls the sweep on.
-          while (!otherThreadWasSwept()) {
-            yield* TestClock.adjust("1 minute");
-            yield* Effect.yieldNow;
-          }
+          yield* settle();
+          yield* TestClock.adjust("1 minute");
+          yield* Deferred.await(otherThreadSwept);
 
           // The other exchange was swept while the parked one was skipped, not waited on.
           expect(threadStatusReads).toBe(2);

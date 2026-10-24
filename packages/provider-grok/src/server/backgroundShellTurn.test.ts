@@ -37,7 +37,6 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/process";
 import type * as EffectAcpSchema from "effect-acp/compat";
 
@@ -304,20 +303,8 @@ const runScriptedTurn = (input: {
     yield* session.startTurn(
       makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now }),
     );
-    let finished = yield* Effect.sync(() => waiter.pollUnsafe());
-    for (let step = 0; finished === undefined && step < 30; step++) {
-      yield* Effect.yieldNow;
-      yield* TestClock.adjust("1 second");
-      finished = yield* Effect.sync(() => waiter.pollUnsafe());
-    }
-    const collected = yield* Ref.get(seen);
-    if (finished === undefined) {
-      yield* Fiber.interrupt(waiter);
-      return yield* Effect.die(
-        `${input.label} did not finish. held=${heldAfterSettle} shell=${shellStatuses(collected).join(",")} types=${collected.map((event) => event.type).join(",")}`,
-      );
-    }
     const terminal = yield* Fiber.join(waiter);
+    const collected = yield* Ref.get(seen);
     expect(terminal.status).toBe("completed");
     expect(shellStatuses(collected).at(-1)).toBe("failed");
     expect(heldAfterSettle).toBe(false);
