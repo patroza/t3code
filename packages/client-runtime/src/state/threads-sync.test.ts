@@ -1009,6 +1009,7 @@ describe("EnvironmentThreads", () => {
         const resumeCache: NonNullable<Parameters<typeof makeEnvironmentThreadState>[1]> = {
           snapshot: {
             state: {
+              sequence: CACHED_SNAPSHOT_SEQUENCE,
               data: Option.some(cached),
               status: "cached",
               error: Option.none(),
