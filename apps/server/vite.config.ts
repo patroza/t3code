@@ -153,6 +153,7 @@ export default mergeConfig(
             testTimeout: serverTestTimeout,
             include: ["integration/**/*.test.ts", "scripts/**/*.test.ts", "src/**/*.test.ts"],
             exclude: [
+              "src/usage/UsageService.test.ts",
               "src/persistence/OrchestrationEventStore.test.ts",
               "src/assets/AssetAccess.test.ts",
               "src/htmlRender/publicProxy.test.ts",
@@ -191,6 +192,9 @@ export default mergeConfig(
             hookTimeout: serverTestTimeout,
             testTimeout: serverTestTimeout,
             include: [
+              // Muse history discovery mocks the SDK initializer. Provider imports
+              // in another file otherwise retain the real binding and hide history.
+              "src/usage/UsageService.test.ts",
               // Mocks `node:fs/promises`.open so a path swap during open is
               // visible. Under isolate:false the real module is already bound
               // and the descriptor is not rejected.
