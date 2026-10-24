@@ -2,75 +2,74 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
+import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
-import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import * as Connectivity from "./connectivity.ts";
 import type { NetworkStatus } from "./model.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
+
+// Acknowledgements follow stream demand, so tests wait for actual consumption,
+// including reports that the connectivity service intentionally deduplicates.
+const makeEventStream = Effect.fnUntraced(function* <A>() {
+  const events = yield* Queue.unbounded<{
+    readonly value: A;
+    readonly delivered: Deferred.Deferred<void>;
+    readonly processed: Deferred.Deferred<void>;
+  }>();
+  const changes = Stream.fromQueue(events).pipe(
+    Stream.flatMap((event) =>
+      Stream.concat(
+        Stream.fromEffect(Deferred.succeed(event.delivered, undefined)).pipe(Stream.drain),
+        Stream.concat(
+          Stream.succeed(event.value),
+          Stream.fromEffect(Deferred.succeed(event.processed, undefined)).pipe(Stream.drain),
+        ),
+      ),
+    ),
+  );
+  const enqueue = Effect.fnUntraced(function* (value: A) {
+    const delivered = yield* Deferred.make<void>();
+    const processed = yield* Deferred.make<void>();
+    yield* Queue.offer(events, { value, delivered, processed });
+    return { delivered: Deferred.await(delivered), processed: Deferred.await(processed) };
+  });
+  return { changes, enqueue };
+});
 
 const makeHarness = Effect.fn("TestConnectivityHarness.make")(function* (options?: {
   readonly status?: Effect.Effect<NetworkStatus>;
   readonly initialStatus?: NetworkStatus;
 }) {
   const liveStatus = yield* Ref.make<NetworkStatus>(options?.initialStatus ?? "online");
-  const reported = yield* SubscriptionRef.make<{
-    readonly sequence: number;
-    readonly status: NetworkStatus;
-  }>({ sequence: 0, status: options?.initialStatus ?? "online" });
-  const wakeups = yield* SubscriptionRef.make(0);
+  const reported = yield* makeEventStream<NetworkStatus>();
+  const wakeups = yield* makeEventStream<"application-active">();
   const applied = yield* Ref.make<ReadonlyArray<NetworkStatus>>([]);
 
   const connectivity = Connectivity.Connectivity.of({
     status: options?.status ?? Ref.get(liveStatus),
-    changes: SubscriptionRef.changes(reported).pipe(
-      Stream.drop(1),
-      Stream.map((event) => event.status),
-    ),
+    changes: reported.changes,
   });
-
-  const wakeupService = ConnectionWakeups.ConnectionWakeups.of({
-    changes: SubscriptionRef.changes(wakeups).pipe(
-      Stream.drop(1),
-      Stream.map(() => "application-active" as const),
-    ),
+  const wakeupService = ConnectionWakeups.ConnectionWakeups.of({ changes: wakeups.changes });
+  const enqueueReport = Effect.fnUntraced(function* (status: NetworkStatus) {
+    yield* Ref.set(liveStatus, status);
+    return yield* reported.enqueue(status);
   });
+  const enqueueResume = wakeups.enqueue("application-active");
 
   return {
     connectivity,
     wakeups: wakeupService,
     applied,
     setLiveStatus: (status: NetworkStatus) => Ref.set(liveStatus, status),
-    // Emits a listener event, as a platform connectivity listener would.
+    enqueueReport,
+    enqueueResume,
+    // The stream acknowledges only after the consumer has handled the event.
     report: (status: NetworkStatus) =>
-      Ref.set(liveStatus, status).pipe(
-        Effect.andThen(
-          SubscriptionRef.update(reported, (event) => ({
-            sequence: event.sequence + 1,
-            status,
-          })),
-        ),
-      ),
-    resume: SubscriptionRef.update(wakeups, (count) => count + 1),
+      enqueueReport(status).pipe(Effect.flatMap((event) => event.processed)),
+    resume: enqueueResume.pipe(Effect.flatMap((event) => event.processed)),
     apply: (status: NetworkStatus) => Ref.update(applied, (statuses) => [...statuses, status]),
   };
-});
-
-// The forked listeners subscribe after `followNetworkStatus` returns, so repeat
-// the trigger until its effect is observed rather than racing the first one.
-const untilApplied = Effect.fn("TestConnectivityHarness.untilApplied")(function* (
-  trigger: Effect.Effect<unknown>,
-  applied: Ref.Ref<ReadonlyArray<NetworkStatus>>,
-  expected: number,
-) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    yield* trigger;
-    yield* Effect.yieldNow;
-    if ((yield* Ref.get(applied)).length >= expected) {
-      return yield* Ref.get(applied);
-    }
-  }
-  return yield* Effect.die(new Error("The expected network status was never applied."));
 });
 
 describe("followNetworkStatus", () => {
@@ -84,8 +83,8 @@ describe("followNetworkStatus", () => {
           apply: harness.apply,
         });
 
-        const applied = yield* untilApplied(harness.report("offline"), harness.applied, 1);
-        expect(applied).toEqual(["offline"]);
+        yield* harness.report("offline");
+        expect(yield* Ref.get(harness.applied)).toEqual(["offline"]);
       }),
     ),
   );
@@ -103,8 +102,8 @@ describe("followNetworkStatus", () => {
         // The device came back online while suspended and the listener never
         // reported the transition.
         yield* harness.setLiveStatus("online");
-        const applied = yield* untilApplied(harness.resume, harness.applied, 1);
-        expect(applied).toEqual(["online"]);
+        yield* harness.resume;
+        expect(yield* Ref.get(harness.applied)).toEqual(["online"]);
       }),
     ),
   );
@@ -130,11 +129,9 @@ describe("followNetworkStatus", () => {
 
         // Apply "online" first so the listener's later repeat of it is genuinely
         // redundant rather than a new status.
-        yield* untilApplied(harness.report("online"), harness.applied, 1);
-        yield* harness.resume.pipe(
-          Effect.andThen(Effect.yieldNow),
-          Effect.repeat({ until: () => Deferred.isDone(readStarted) }),
-        );
+        yield* harness.report("online");
+        const resumed = yield* harness.enqueueResume;
+        yield* Deferred.await(readStarted);
 
         // The repeat carries no new status, but it proves the listener spoke
         // after this read began, so the read is stale even though the status it
@@ -142,10 +139,8 @@ describe("followNetworkStatus", () => {
         // the platform reports "online" — the very failure this helper exists to
         // prevent.
         yield* harness.report("online");
-        yield* Effect.yieldNow;
         yield* Deferred.succeed(releaseRead, undefined);
-        yield* Effect.yieldNow;
-        yield* Effect.yieldNow;
+        yield* resumed.processed;
 
         expect(yield* Ref.get(harness.applied)).toEqual(["online"]);
       }),
@@ -162,16 +157,14 @@ describe("followNetworkStatus", () => {
           apply: harness.apply,
         });
 
-        yield* untilApplied(harness.report("offline"), harness.applied, 1);
+        yield* harness.report("offline");
         // Counting the repeat for staleness must not turn it into a redundant
         // consumer update.
         yield* harness.report("offline");
-        yield* Effect.yieldNow;
-        yield* Effect.yieldNow;
         expect(yield* Ref.get(harness.applied)).toEqual(["offline"]);
 
         // A genuine transition after the repeat still lands.
-        yield* untilApplied(harness.report("online"), harness.applied, 2);
+        yield* harness.report("online");
         expect(yield* Ref.get(harness.applied)).toEqual(["offline", "online"]);
       }),
     ),
@@ -181,12 +174,21 @@ describe("followNetworkStatus", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const firstRead = yield* Deferred.make<NetworkStatus>();
+        const readStarted = yield* Deferred.make<void>();
         const readCount = yield* Ref.make(0);
+        const activeReads = yield* Ref.make(0);
+        const maximumActiveReads = yield* Ref.make(0);
         const harness = yield* makeHarness({
           initialStatus: "unknown",
-          status: Ref.updateAndGet(readCount, (count) => count + 1).pipe(
-            Effect.andThen(Deferred.await(firstRead)),
-          ),
+          status: Effect.gen(function* () {
+            yield* Ref.update(readCount, (count) => count + 1);
+            const active = yield* Ref.updateAndGet(activeReads, (count) => count + 1);
+            yield* Ref.update(maximumActiveReads, (maximum) => Math.max(maximum, active));
+            yield* Deferred.succeed(readStarted, undefined);
+            const status = yield* Deferred.await(firstRead);
+            yield* Ref.update(activeReads, (count) => count - 1);
+            return status;
+          }),
         });
         yield* Connectivity.followNetworkStatus({
           connectivity: harness.connectivity,
@@ -194,23 +196,18 @@ describe("followNetworkStatus", () => {
           apply: harness.apply,
         });
 
-        yield* harness.resume.pipe(
-          Effect.andThen(Effect.yieldNow),
-          Effect.repeat({
-            until: () => Ref.get(readCount).pipe(Effect.map((count) => count >= 1)),
-          }),
-        );
-
-        // Resumes are consumed sequentially, so further resumes cannot start a
-        // read that races the one already in flight. Overlapping snapshots
-        // therefore cannot apply out of order.
-        yield* harness.resume;
-        yield* harness.resume;
-        yield* Effect.yieldNow;
+        const firstResume = yield* harness.enqueueResume;
+        yield* Deferred.await(readStarted);
+        const secondResume = yield* harness.enqueueResume;
+        const thirdResume = yield* harness.enqueueResume;
         expect(yield* Ref.get(readCount)).toBe(1);
 
         yield* Deferred.succeed(firstRead, "online");
-        yield* Effect.yieldNow;
+        yield* firstResume.processed;
+        yield* secondResume.processed;
+        yield* thirdResume.processed;
+        expect(yield* Ref.get(readCount)).toBe(3);
+        expect(yield* Ref.get(maximumActiveReads)).toBe(1);
         expect(yield* Ref.get(harness.applied)).toEqual(["online"]);
       }),
     ),
@@ -236,13 +233,11 @@ describe("followNetworkStatus", () => {
 
         // Resume, and hold the status read open so the listener can report a
         // newer transition while that read is still in flight.
-        yield* harness.resume.pipe(
-          Effect.andThen(Effect.yieldNow),
-          Effect.repeat({ until: () => Deferred.isDone(readStarted) }),
-        );
-        yield* untilApplied(harness.report("offline"), harness.applied, 1);
+        const resumed = yield* harness.enqueueResume;
+        yield* Deferred.await(readStarted);
+        yield* harness.report("offline");
         yield* Deferred.succeed(releaseRead, undefined);
-        yield* Effect.yieldNow;
+        yield* resumed.processed;
 
         // The stale "online" snapshot must not land on top of the newer event.
         expect(yield* Ref.get(harness.applied)).toEqual(["offline"]);
@@ -273,21 +268,15 @@ describe("followNetworkStatus", () => {
         });
 
         yield* harness.setLiveStatus("online");
-        yield* harness.resume.pipe(
-          Effect.andThen(Effect.yieldNow),
-          Effect.repeat({ until: () => Deferred.isDone(applyStarted) }),
-        );
+        const resumed = yield* harness.enqueueResume;
+        yield* Deferred.await(applyStarted);
 
         // The listener reports a newer transition mid-apply.
-        yield* harness.report("offline");
-        yield* Effect.yieldNow;
+        const reported = yield* harness.enqueueReport("offline");
+        yield* reported.delivered;
         yield* Deferred.succeed(releaseApply, undefined);
-        yield* Effect.yieldNow.pipe(
-          Effect.repeat({
-            until: () =>
-              Ref.get(harness.applied).pipe(Effect.map((statuses) => statuses.length >= 2)),
-          }),
-        );
+        yield* resumed.processed;
+        yield* reported.processed;
 
         // The reported change has to land last; applying it before the resumed
         // status finished would leave the stale "online" as the final word.
