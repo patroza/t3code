@@ -878,54 +878,58 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
     ),
   );
 
+  // Protocol loops and per-message sends share the caller's operation span.
   const clientProtocol = RpcClient.Protocol.of({
-    run: (_clientId, f) =>
-      Stream.fromQueue(clientQueue).pipe(
+    run: Effect.fnUntraced(function* (_clientId, f) {
+      return yield* Stream.fromQueue(clientQueue).pipe(
         Stream.runForEach((message) => f(message)),
         Effect.forever,
-      ),
-    send: (_clientId, request) =>
-      // ACP is plain JSON-RPC; Effect-RPC control frames are invalid on the agent's
-      // stdin and can wedge the session when a prompt is interrupted. Cancellation
-      // uses ACP's `session/cancel`, so only real `Request` messages go on the wire.
-      request._tag === "Request"
-        ? offerOutgoing(request).pipe(
-            Effect.mapError(
-              (error) =>
-                new RpcClientError.RpcClientError({
-                  reason: new RpcClientError.RpcClientDefect({
-                    message: "Failed to send ACP protocol message.",
-                    cause: error,
-                  }),
-                }),
-            ),
-          )
-        : Effect.void,
+      );
+    }),
+    send: Effect.fnUntraced(function* (_clientId, request) {
+      // ACP accepts JSON-RPC requests, not Effect-RPC control frames. Cancellation
+      // uses `session/cancel`, so control frames must never reach the agent's stdin.
+      if (request._tag !== "Request") return;
+      return yield* offerOutgoing(request).pipe(
+        Effect.mapError(
+          (error) =>
+            new RpcClientError.RpcClientError({
+              reason: new RpcClientError.RpcClientDefect({
+                message: "Failed to send ACP protocol message.",
+                cause: error,
+              }),
+            }),
+        ),
+      );
+    }),
     supportsAck: true,
     supportsTransferables: false,
     codecFor: parserFactory.codecFor,
   });
 
   const serverProtocol = RpcServer.Protocol.of({
-    run: (f) =>
-      Stream.fromQueue(serverQueue).pipe(
+    run: Effect.fnUntraced(function* (f) {
+      return yield* Stream.fromQueue(serverQueue).pipe(
         Stream.runForEach((message) => f(0, message)),
         Effect.forever,
-      ),
+      );
+    }),
     disconnects,
-    send: (_clientId, response) =>
-      offerOutgoing(response).pipe(
+    send: Effect.fnUntraced(function* (_clientId, response) {
+      return yield* offerOutgoing(response).pipe(
         Effect.tapError((error) =>
           response._tag === "Exit" && options.onOutgoingResponseFailure !== undefined
             ? options.onOutgoingResponseFailure(acpRequestIdentity(response.requestId), error)
             : Effect.void,
         ),
         Effect.orDie,
-      ),
-    end: (_clientId) =>
-      Ref.update(outgoingWriterState, (state) => ({ ...state, intentionalEnd: true })).pipe(
+      );
+    }),
+    end: Effect.fn("RpcServer.Protocol.end")(function (_clientId) {
+      return Ref.update(outgoingWriterState, (state) => ({ ...state, intentionalEnd: true })).pipe(
         Effect.andThen(Queue.end(outgoing)),
-      ),
+      );
+    }),
     clientIds: Effect.succeed(new Set([0])),
     initialMessage: Effect.succeedNone,
     supportsAck: true,

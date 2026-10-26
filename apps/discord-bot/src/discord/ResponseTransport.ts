@@ -73,46 +73,60 @@ export const layer = Layer.effect(
       contentLimit: 2000,
       fileLimit: 10,
       uploadLimitBytes: 10_000_000,
-      getMyUser: () => rest.getMyUser().pipe(Effect.mapError(transportError)),
-      getChannel: (id) => rest.getChannel(id).pipe(Effect.mapError(transportError)),
-      getMessage: (id, messageId) =>
+      getMyUser: Effect.fn("BotResponseTransport.getMyUser")(() =>
+        rest.getMyUser().pipe(Effect.mapError(transportError)),
+      ),
+      getChannel: Effect.fn("BotResponseTransport.getChannel")((id) =>
+        rest.getChannel(id).pipe(Effect.mapError(transportError)),
+      ),
+      getMessage: Effect.fn("BotResponseTransport.getMessage")((id, messageId) =>
         rest.getMessage(id, messageId).pipe(Effect.mapError(transportError)),
-      listMessages: (id, options) =>
+      ),
+      listMessages: Effect.fn("BotResponseTransport.listMessages")((id, options) =>
         rest.listMessages(id, options).pipe(Effect.mapError(transportError)),
-      createMessage: (id, fields) =>
+      ),
+      createMessage: Effect.fn("BotResponseTransport.createMessage")((id, fields) =>
         rest.createMessage(id, discordMessageFields(fields)).pipe(Effect.mapError(transportError)),
-      updateMessage: (id, messageId, fields) =>
+      ),
+      updateMessage: Effect.fn("BotResponseTransport.updateMessage")((id, messageId, fields) =>
         rest
           .updateMessage(id, messageId, discordMessageFields(fields))
           .pipe(Effect.mapError(messageUpdateError)),
-      deleteMessage: (id, messageId) =>
+      ),
+      deleteMessage: Effect.fn("BotResponseTransport.deleteMessage")((id, messageId) =>
         rest.deleteMessage(id, messageId).pipe(Effect.asVoid, Effect.mapError(messageUpdateError)),
-      updateChannel: (id, fields) =>
+      ),
+      updateChannel: Effect.fn("BotResponseTransport.updateChannel")((id, fields) =>
         rest.updateChannel(id, fields).pipe(Effect.mapError(transportError)),
-      createMessageWithFiles: (id, content, files) =>
-        Effect.tryPromise({
-          try: () =>
-            createMessageWithAttachments({
-              baseUrl: config.rest.baseUrl,
-              botToken: Redacted.value(config.token),
-              channelId: id,
-              content,
-              files,
-            }),
-          catch: (cause) =>
-            cause instanceof DiscordUploadError ? cause : new DiscordUploadError(String(cause)),
-        }),
-      upsertThreadInfo: ({ conversationId, threadId, config: botConfig, ...input }) =>
-        upsertThreadInfoPin({
-          ...input,
-          discordThreadId: conversationId,
-          t3ThreadId: threadId,
-          botConfig,
-        }).pipe(
-          Effect.mapError(transportError),
-          Effect.provideService(DiscordREST, rest),
-          Effect.provideService(DiscordConfig.DiscordConfig, config),
-        ),
+      ),
+      createMessageWithFiles: Effect.fn("BotResponseTransport.createMessageWithFiles")(
+        (id, content, files) =>
+          Effect.tryPromise({
+            try: () =>
+              createMessageWithAttachments({
+                baseUrl: config.rest.baseUrl,
+                botToken: Redacted.value(config.token),
+                channelId: id,
+                content,
+                files,
+              }),
+            catch: (cause) =>
+              cause instanceof DiscordUploadError ? cause : new DiscordUploadError(String(cause)),
+          }),
+      ),
+      upsertThreadInfo: Effect.fn("BotResponseTransport.upsertThreadInfo")(
+        ({ conversationId, threadId, config: botConfig, ...input }) =>
+          upsertThreadInfoPin({
+            ...input,
+            discordThreadId: conversationId,
+            t3ThreadId: threadId,
+            botConfig,
+          }).pipe(
+            Effect.mapError(transportError),
+            Effect.provideService(DiscordREST, rest),
+            Effect.provideService(DiscordConfig.DiscordConfig, config),
+          ),
+      ),
     });
   }),
 );

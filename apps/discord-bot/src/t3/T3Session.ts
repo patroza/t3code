@@ -965,16 +965,19 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
       setOnReconnected: (handler) => {
         onReconnected = handler;
       },
-      isConnected: () => Effect.sync(() => session !== null),
-      isReady: () => Effect.sync(() => session !== null && shell !== null),
+      isConnected: Effect.fn("T3Session.isConnected")(() => Effect.sync(() => session !== null)),
+      isReady: Effect.fn("T3Session.isReady")(() =>
+        Effect.sync(() => session !== null && shell !== null),
+      ),
       waitUntilReady,
-      shell: () =>
+      shell: Effect.fn("T3Session.shell")(() =>
         Effect.succeed(
           shell === null
             ? null
             : { ...shell, threads: shell.threads.map(integrationThreadShellView) },
         ),
-      serverConfig: () => Effect.succeed(serverConfig),
+      ),
+      serverConfig: Effect.fn("T3Session.serverConfig")(() => Effect.succeed(serverConfig)),
       listProjects,
       findProjectByWorkspaceRoot: Effect.fn("T3Session.findProjectByWorkspaceRoot")(
         function* (workspaceRoot) {
@@ -987,15 +990,16 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
           );
         },
       ),
-      getProjectShell: (projectId) =>
+      getProjectShell: Effect.fn("T3Session.getProjectShell")((projectId) =>
         Effect.sync(() => shell?.projects.find((project) => project.id === projectId) ?? null),
-      resolveModelSelection: ({
+      ),
+      resolveModelSelection: Effect.fn("T3Session.resolveModelSelection")(function* ({
         project,
         stickyModelSelection,
         overrideInstanceId,
         overrideModel,
         fastMode,
-      }) => {
+      }) {
         const selection = preferredModelSelection({
           config: botConfig,
           providers: providersForSelection(),
@@ -1005,7 +1009,7 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
           ...(overrideModel === undefined ? {} : { overrideModel }),
         });
         if (selection === null) {
-          return Effect.fail(
+          return yield* Effect.fail(
             overrideModel === undefined
               ? new T3SessionError(
                   "No enabled provider is ready. Please try again when provider discovery completes.",
@@ -1013,10 +1017,10 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
               : new UnknownDiscordModelError(overrideModel),
           );
         }
-        if (fastMode !== true) return Effect.succeed(selection);
+        if (fastMode !== true) return selection;
         const resolved = applyFastModeSelection(selection, providersForSelection());
         if (resolved === selection) {
-          return Effect.logWarning(
+          return yield* Effect.logWarning(
             "Channel topic requests fast mode, but this model has no fast option",
             {
               instanceId: selection.instanceId,
@@ -1024,14 +1028,15 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
             },
           ).pipe(Effect.as(selection));
         }
-        return Effect.succeed(resolved);
-      },
-      getThreadShell: (threadId) =>
+        return resolved;
+      }),
+      getThreadShell: Effect.fn("T3Session.getThreadShell")((threadId) =>
         Effect.sync(() => {
           const thread = shell?.threads.find((thread) => thread.id === threadId);
           return thread ? integrationThreadShellView(thread) : null;
         }),
-      fetchThreadDetail: (threadId) =>
+      ),
+      fetchThreadDetail: Effect.fn("T3Session.fetchThreadDetail")((threadId) =>
         fetchThreadProjectionHttp(threadId).pipe(
           Effect.map((snapshot) =>
             snapshot === null
@@ -1042,7 +1047,8 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
                 },
           ),
         ),
-      resolveBranchChangeRequest: (input) =>
+      ),
+      resolveBranchChangeRequest: Effect.fn("T3Session.resolveBranchChangeRequest")((input) =>
         Effect.tryPromise({
           try: () =>
             runtime.runPromise(
@@ -1054,6 +1060,7 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
               { cause },
             ),
         }),
+      ),
       startTurnWithWorktree: Effect.fn("T3Session.startTurnWithWorktree")(function* (input) {
         const threadId = newThreadId();
         const messageId = newMessageId();
@@ -1267,7 +1274,7 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
           ),
         );
       }),
-      refreshVcsStatus: (cwd) =>
+      refreshVcsStatus: Effect.fn("T3Session.refreshVcsStatus")((cwd) =>
         Effect.tryPromise({
           try: () =>
             runtime.runPromise(
@@ -1283,7 +1290,8 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
               },
             ),
         }).pipe(Effect.asVoid),
-      listRefs: (cwd) =>
+      ),
+      listRefs: Effect.fn("T3Session.listRefs")((cwd) =>
         Effect.tryPromise({
           try: () =>
             runtime.runPromise(
@@ -1299,7 +1307,8 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
               cause,
             }),
         }),
-      respondToApproval: (threadId, requestId, decision) =>
+      ),
+      respondToApproval: Effect.fn("T3Session.respondToApproval")((threadId, requestId, decision) =>
         dispatch({
           type: "runtime-request.respond",
           commandId: newCommandId(),
@@ -1307,14 +1316,17 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
           requestId: RuntimeRequestId.make(requestId),
           decision,
         }),
-      respondToUserInput: (threadId, requestId, answers) =>
-        dispatch({
-          type: "runtime-request.respond",
-          commandId: newCommandId(),
-          threadId,
-          requestId: RuntimeRequestId.make(requestId),
-          answers,
-        }),
+      ),
+      respondToUserInput: Effect.fn("T3Session.respondToUserInput")(
+        (threadId, requestId, answers) =>
+          dispatch({
+            type: "runtime-request.respond",
+            commandId: newCommandId(),
+            threadId,
+            requestId: RuntimeRequestId.make(requestId),
+            answers,
+          }),
+      ),
       interrupt: Effect.fn("T3Session.interrupt")(function* (threadId) {
         const snapshot = yield* fetchThreadProjectionHttp(threadId);
         const active = snapshot?.projection.runs.findLast((run) =>
@@ -1329,13 +1341,14 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
           holdQueue: true,
         });
       }),
-      compact: () =>
+      compact: Effect.fn("T3Session.compact")(() =>
         Effect.fail(
           new T3SessionError(
             "This server's orchestration runtime does not expose context compaction.",
           ),
         ),
-      createAttachmentUrl: (attachmentId) =>
+      ),
+      createAttachmentUrl: Effect.fn("T3Session.createAttachmentUrl")((attachmentId) =>
         Effect.tryPromise({
           try: async () => {
             const active = requireSession();
@@ -1358,7 +1371,8 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
                   { cause },
                 ),
         }),
-      createWorkspaceFileUrl: ({ threadId, path }) =>
+      ),
+      createWorkspaceFileUrl: Effect.fn("T3Session.createWorkspaceFileUrl")(({ threadId, path }) =>
         Effect.tryPromise({
           try: async () => {
             const active = requireSession();
@@ -1381,6 +1395,7 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
                   { cause },
                 ),
         }),
+      ),
     });
   });
 

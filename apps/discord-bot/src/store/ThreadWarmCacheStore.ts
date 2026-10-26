@@ -126,7 +126,7 @@ export const makeThreadWarmCacheStore = Effect.fn("ThreadWarmCacheStore.makeThre
     const pathFor = (threadId: string) => NodePath.join(cacheDir, safeThreadFileName(threadId));
 
     return ThreadWarmCacheStore.of({
-      load: (threadId) =>
+      load: Effect.fn("ThreadWarmCacheStore.load")((threadId) =>
         Effect.tryPromise({
           try: async () => {
             const raw = await NodeFSP.readFile(pathFor(String(threadId)), "utf8");
@@ -134,8 +134,9 @@ export const makeThreadWarmCacheStore = Effect.fn("ThreadWarmCacheStore.makeThre
           },
           catch: () => null as WarmThreadCacheEntry | null,
         }).pipe(Effect.orElseSucceed(() => null)),
+      ),
 
-      save: (input) =>
+      save: Effect.fn("ThreadWarmCacheStore.save")((input) =>
         writeLock.withPermit(
           Effect.gen(function* () {
             if (!Number.isFinite(input.snapshotSequence) || input.snapshotSequence < 0) {
@@ -155,8 +156,9 @@ export const makeThreadWarmCacheStore = Effect.fn("ThreadWarmCacheStore.makeThre
             yield* Effect.promise(() => atomicWriteFile(pathFor(String(input.threadId)), body));
           }).pipe(Effect.uninterruptible),
         ),
+      ),
 
-      remove: (threadId) =>
+      remove: Effect.fn("ThreadWarmCacheStore.remove")((threadId) =>
         writeLock.withPermit(
           Effect.tryPromise({
             try: () => NodeFSP.unlink(pathFor(String(threadId))),
@@ -168,6 +170,7 @@ export const makeThreadWarmCacheStore = Effect.fn("ThreadWarmCacheStore.makeThre
             Effect.uninterruptible,
           ),
         ),
+      ),
     });
   },
 );
