@@ -14,18 +14,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import type * as NTBS from "./exchange.ts";
-import {
-  Context,
-  Crypto,
-  Data,
-  DateTime,
-  Effect,
-  FileSystem,
-  Layer,
-  Option,
-  Result,
-  Stream,
-} from "effect";
+import { Context, Crypto, Data, Effect, FileSystem, Layer, Option, Stream } from "effect";
 import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
 import { ProjectStoreV2 } from "../orchestration-v2/ProjectStore.ts";
 
@@ -34,24 +23,8 @@ import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts
 import { DEFAULT_THREAD_TITLE } from "@t3tools/shared/threadTitle";
 import { ServerSettingsService } from "../serverSettings.ts";
 
-/*
-  NTBS architecture:
-
-  1. Adapter
-  Responsible for the communication with the external platform (Jira, Discord, Teams, etc).
-  - `acknowledge` confirms T3 is processing the user request
-  - `postReply` sends the reply to the platform
-  - `findPostedReplies` retries the replies sent to the platform (but maybe not recorded due to crash)
-  
-  2. ExchangeRepository
-  Responsible for saving `Exchange` data, entities that model the incoming message -> reply cycle and the relations to T3 data (threads, messages, turns).
-
-  3. T3 gateway
-  Models the interaction with T3's own api and VCS lifecycle: creating threads, worktrees, starting turns, etc.
-
-  4. NTBS Processor
-  The orchestrator between 1, 2, 3 and 4.
-*/
+// The gateway owns T3 and VCS provisioning; the adapter owns platform I/O.
+// The processor coordinates both against the durable exchange repository.
 
 /**
  * A classification, not a scheduling request: it states the step is safe to retry, not that anything will retry it.
@@ -63,15 +36,8 @@ export class RetryableError extends Data.TaggedError("RetryableError")<{
   method: string;
 }> {}
 
-/**
- * T3 will never accept this work.
- *
- * The mirror classification: retrying is pointless, so the exchange must progress to a terminal state instead of staying open.
- *
- * Actions (`planCoordinates`, `provisionThread`, `startTurn`) fail with `FatalError` when T3 rejects the work, and the processor converts that into a reply-pending failure.
- * Reads (`getThreadStatus`, `getTurnStatus`) never carry `FatalError`: an unrecoverable fact they observe goes into the context, and the decider drives the same terminal transition.
- * Both roads end at the same place: a failure reply to the user.
- */
+// Fatal action errors reject work permanently and become a failure reply.
+// Reads expose unrecoverable facts as context instead; their errors remain retryable.
 export class FatalError extends Data.TaggedError("FatalError")<{
   reason: string;
   cause: unknown;
@@ -152,17 +118,8 @@ export interface T3Gateway {
     state: NTBS.WorkPlanned,
   ) => Effect.Effect<void, RetryableError | FatalError>;
 
-  /** Reports turn progress, interpreting a finished turn into a `Reply`: the agent's verbatim response when it produced one, a synthesized failure or cancellation note otherwise.
-   *
-   * The question it answers isn't really "does this thread have a turn?" but "did **our** message start a turn?". This is an important distinction because user messages to the same thread in T3 can come from different sources and interfaces. We want to know about the turn that should start stemming from a user in the external platform with a specific userMessageId.
-   *
-   * This is the invariant that makes recovery safe.
-   *
-   * It's a pure read, errors are Retryable only. Every lookup failure means "ask again later", nothing it learns can reject the exchange.
-   *
-   * Unrecoverable edge cases like "turn completed but thread not found" map to "completed" turns whose reply is a failure.
-   *
-   */
+  // Resolve the turn started by this exchange userMessageId, not merely the latest turn on a shared thread.
+  // Reads remain retryable; terminal facts become reply context rather than fatal read errors.
   readonly getTurnStatus: (
     state: NTBS.ThreadCreated,
   ) => Effect.Effect<NTBS.ThreadCreatedContext, RetryableError>;
@@ -292,14 +249,8 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
           ),
         );
 
-      /*
-          Reads the local `refs/remotes/origin/*` namespace the fetch above just refreshed;
-          no network is involved.
-
-          A missing branch and a repository read failure both surface here as a failed
-          command, and nothing in the error tells them apart. Everything is retried instead:
-          the state's deadline ends the attempts, while a wrong rejection is permanent.
-        */
+      // Read the local origin refs refreshed by fetch, without another network request.
+      // Retry both missing-branch and read failures until the deadline because the command cannot distinguish them.
       return yield* gitWorkflowService
         .resolveRemoteTrackingCommit({
           cwd,
@@ -434,8 +385,6 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
       .randomUUIDv4()
       .pipe(orFail("retryable")("crypto.randomUUIDv4", "Failed creating a UUID v4"));
 
-    const getNow = DateTime.now.pipe(Effect.map(DateTime.formatIso));
-
     const projectScriptRunner = yield* ProjectSetupScriptRunner;
 
     const planCoordinates = Effect.fn("T3Gateway.planCoordinates")(function* (
@@ -563,7 +512,6 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
       state: NTBS.ThreadCreated,
     ): Effect.fn.Return<void, RetryableError | FatalError> {
       const commandId = CommandId.make(`ntbs:message:${state.t3.userMessageId}`);
-      const createdAt = yield* getNow;
 
       yield* orchestrationEngine
         .dispatch(
@@ -629,29 +577,11 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
     const provisionThread = Effect.fn("T3Gateway.provisionThread")(function* (
       state: NTBS.WorkPlanned,
     ): Effect.fn.Return<void, RetryableError | FatalError> {
-      /*
-       * In order we need to:
-       * 1. get the actual project details, where is the workspace root path located at?
-       * 2. Find an existing checkout for the planned branch, or ask Git to create one.
-       * 3. Dispatch T3 thread creation with the path Git returned.
-       * 4. Run the scripts for that project.
-       */
+      // Resolve the project, find or create the planned checkout, create the thread, then run setup.
 
-      /*
-        `provisionThread` is a resumable checklist, not a transaction.
-
-        Every attempt re-derives its *facts* from live project and Git state, then walks three steps, each one "check, then do", so a retry after any interruption skips whatever already happened.
-
-        **Worktree**. If the directory exists, reuse it. If only the branch survives from a crashed attempt, recreate the checkout from that branch instead of re-branching from the start commit. Otherwise create it fresh from the pinned commit.
-
-        **Thread**. Create it. If the dispatch fails but the thread turns out to exist, a stale observation raced us and the step is already done.
-
-        **Setup scripts**. Failure to launch setup is fatal; script completion is not tracked by T3.
-
-        On a retryable failure, cleanup nothing. The half-finished work is owned by the exchange record and is exactly what the next reconcile pass resumes from.
-
-        On a fatal failure, delete a thread created by this attempt before removing its worktree. If deletion fails, keep the worktree so the surviving thread still has a directory. A thread found during recovery and its worktree belong to an earlier attempt and are left intact. The branch ref is left behind.
-        */
+      // Provisioning resumes from live Git/thread facts: reuse surviving paths or branches before creating anything.
+      // Retryable failure leaves partial work for recovery. Fatal failure removes only this attempt's new thread/worktree,
+      // and keeps the worktree if thread deletion fails; recovered threads and branch refs remain intact.
       // We refetch because the project details we had from `planCoordinates` might have changed, the project might've been deleted, etc
       const project = yield* getProject(state.t3.projectId);
       const modelSelection =
@@ -685,7 +615,6 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
 
       yield* Effect.gen(function* () {
         const commandId = CommandId.make(yield* randomUUID);
-        const createdAt = yield* getNow;
 
         yield* orchestrationEngine
           .dispatch(

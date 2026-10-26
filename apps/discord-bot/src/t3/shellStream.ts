@@ -8,12 +8,8 @@ import {
 } from "@t3tools/client-runtime/state/shell";
 
 /**
- * Apply one V2 shell stream item the same way the web client does.
- *
- * Enrichment snapshots list only the workspace roots whose repository
- * identity just resolved, and they carry no threads. Replacing the held
- * shell with that frame drops every other registered project, so a later
- * mention fails with "No T3 project registered" for a project T3 still has.
+ * Apply V2 shell stream items like web. Enrichment snapshots contain only newly resolved roots, not threads;
+ * replacing the held shell with one drops other projects that later mentions still need.
  */
 export function applyIntegrationShellStreamItem(
   shell: OrchestrationV2ShellSnapshot | null,

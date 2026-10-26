@@ -20,14 +20,8 @@ export class ReplyRejected extends Data.TaggedError("ReplyRejected")<{
   readonly cause: UndeliverableCause;
 }> {}
 
-/**
- * Defines the platform-specific operations used by the shared NTBS processor.
- *
- * An adapter communicates with one originating platform. It posts
- * acknowledgements and replies, and can discover whether a particular pending
- * reply was already posted. It does not persist exchange state, create T3
- * threads, or interpret T3 events.
- */
+// Adapters acknowledge, post exact replies, and discover prior delivery on their platform.
+// They neither persist exchanges nor create T3 threads or interpret T3 events.
 export interface NTBSAdapter {
   /**
    * Posts a best-effort working acknowledgement for an exchange whose T3
@@ -36,14 +30,8 @@ export interface NTBSAdapter {
    */
   readonly acknowledge: (state: ThreadCreated) => Effect.Effect<void, AdapterError>;
 
-  /**
-   * Posts the exact reply stored in `state` to the destination identified by
-   * its `sourceUri`.
-   *
-   * Returns an adapter-encoded URI locating the posted reply. `ReplyRejected`
-   * means the platform definitively refused delivery; other failures remain
-   * retryable.
-   */
+  // Post the stored reply to its sourceUri and return an adapter-encoded reply URI.
+  // ReplyRejected is permanent platform refusal; other delivery failures remain retryable.
   readonly postReply: (state: ReplyPending) => Effect.Effect<string, AdapterError | ReplyRejected>;
 
   /**

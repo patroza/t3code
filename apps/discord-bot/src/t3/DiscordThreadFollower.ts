@@ -26,13 +26,8 @@ export const DISCORD_THREAD_SUBSCRIBE_RETRY_DELAY = "250 millis" as const;
 /** Cap reconnect backoff when the whole subscription dies (session drop, etc.). */
 export const DISCORD_THREAD_SUBSCRIBE_MAX_BACKOFF = "30 seconds" as const;
 
-/**
- * How to seed the follower after a transport death.
- *
- * - `resume-after` — we already applied a tip this process; only WS after lastSequence
- *   (do **not** re-deliver a stale in-memory warm tip — that re-finalized old Discord posts).
- * - `replay-warm` — first seed this process; paint durable warm tip once.
- * - `http-or-cold` — no warm tip; HTTP snapshot or wait for stream.
+/** After transport loss, resume after the cursor if this process already applied a tip; never replay stale warm state.
+ * On first seed, replay the durable warm tip once; without one, use HTTP snapshot or await the stream.
  */
 export type ThreadFollowerReconnectSeedPlan = "resume-after" | "replay-warm" | "http-or-cold";
 

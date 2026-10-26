@@ -22,26 +22,16 @@ const make = (service: Connectivity["Service"]) => Connectivity.of(service);
 export const layer = (service: Connectivity["Service"]) =>
   Layer.succeed(Connectivity, make(service));
 
-/**
- * Applies every reported connectivity change, plus a freshly read status each
- * time the application resumes.
- *
- * Platform listeners drop transitions while an app is suspended, so a consumer
- * that follows `changes` alone keeps a stale status until the next real
- * transition — which left mobile stranded on "offline" until it was restarted.
- * Reading the status is asynchronous, so a read that started before a newer
- * reported change is discarded instead of applied over it.
+/** Apply listener changes plus a fresh status on resume, because suspended apps can miss transitions.
+ * Every listener report (including repeats) invalidates an older async resume read so stale state cannot overwrite it.
  */
 export const followNetworkStatus = Effect.fnUntraced(function* (options: {
   readonly connectivity: Connectivity["Service"];
   readonly wakeups: ConnectionWakeups.ConnectionWakeups["Service"];
   readonly apply: (status: NetworkStatus) => Effect.Effect<void>;
 }) {
-  // Counts every report the listener delivers, including one that repeats the
-  // status already in effect. Such a repeat carries no new status, but it does
-  // prove the listener spoke more recently than a resume read still in flight,
-  // so it has to invalidate that read: otherwise a snapshot taken during a brief
-  // opposite state would land afterwards and overwrite the real status.
+  // Count repeats too: they prove the listener is newer than an in-flight resume read.
+  // Otherwise a stale snapshot can overwrite the status the platform just reported.
   const reportCount = yield* Ref.make(0);
   // Tracks what was last handed to `options.apply` purely to keep repeats from
   // reaching consumers. Deduplication is deliberately kept separate from the

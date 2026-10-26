@@ -1,14 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
-/**
- * Look up an existing T3 thread by shared work-item identity (Jira key / GitHub PR).
- *
- * Sources are server `thread-work-items.json` rows written by a Jira or GitHub
- * webhook. Discord mentions and pin backfill are not identity.
- *
- * Discord does not join that thread. It points at the conversation and can
- * start a new one only when asked. `resolveUniqueT3ThreadIdForWorkItems` still
- * skips a thread that already has an active Discord link, for callers that
- * must not attach a second Discord thread to it.
+/** Find T3 threads by Jira/GitHub work-item rows written by server webhooks, not mentions or pin backfill.
+ * Discord links to the existing conversation only when asked; skip threads already linked to Discord.
  */
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";

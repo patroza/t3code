@@ -13,7 +13,6 @@ import {
   RelayEnvironmentMintResponse,
   RelayEnvironmentMintResponseProofPayload,
   RelayCloudMintCredentialProofPayload,
-  RelayEnvironmentConnectNotAuthorizedReason,
   RelayEnvironmentEndpointFailure,
   type RelayEnvironmentConnectResponse,
   type RelayEnvironmentStatusResponse,

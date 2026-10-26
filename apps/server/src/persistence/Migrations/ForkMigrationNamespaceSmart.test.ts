@@ -6,7 +6,7 @@ import * as Migrator from "effect/sql/Migrator";
 
 import { forkMigrationTable } from "../ForkMigrations.ts";
 import { legacyMigrationBackupTable, upstreamMigrationTable } from "../MigrationBootstrap.ts";
-import { makeMigrationLoader, runMigrations } from "../Migrations.ts";
+import { makeMigrationLoader, migrationManifest, runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import ProjectionQueuedMessages from "./037_ProjectionQueuedMessages.ts";
 
@@ -71,25 +71,10 @@ layer("smart migration namespace repair", (it) => {
       const upstream = yield* sql<LedgerRow>`
         SELECT migration_id, name FROM ${sql(upstreamMigrationTable)} ORDER BY migration_id
       `;
-      assert.deepStrictEqual(upstream.slice(-17), [
-        { migration_id: 52, name: "ProjectionThreadTitleState" },
-        { migration_id: 53, name: "PullRequestFilesViewed" },
-        { migration_id: 54, name: "ProjectionThreadsAutoSettleDisabledAt" },
-        { migration_id: 55, name: "OrchestrationV2" },
-        { migration_id: 56, name: "RemoveRedundantProjectionIndexes" },
-        { migration_id: 57, name: "ScheduledTaskWebhooks" },
-        { migration_id: 58, name: "WebhookRelayDeliveries" },
-        { migration_id: 59, name: "McpAppModelContext" },
-        { migration_id: 60, name: "ThreadSnapshotWindowIndexes" },
-        { migration_id: 61, name: "PullRequestReviewGuides" },
-        { migration_id: 62, name: "ThreadFailureLookupIndex" },
-        { migration_id: 63, name: "DropUnusedV1Projections" },
-        { migration_id: 64, name: "CanonicalizeThreadPullRequestLinks" },
-        { migration_id: 65, name: "CodexUsageNativeTurnIndex" },
-        { migration_id: 66, name: "RepairClientSettlementTimestamps" },
-        { migration_id: 67, name: "WebhookDedupe" },
-        { migration_id: 68, name: "ShellStopRequestIndex" },
-      ]);
+      assert.deepStrictEqual(
+        upstream,
+        migrationManifest.map(([migration_id, name]) => ({ migration_id, name })),
+      );
       const fork = yield* sql<LedgerRow>`
         SELECT migration_id, name FROM ${sql(forkMigrationTable)} ORDER BY migration_id
       `;

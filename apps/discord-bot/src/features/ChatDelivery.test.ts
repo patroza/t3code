@@ -117,8 +117,7 @@ describe("assistantMessagesForDelivery", () => {
   });
 
   it("time-query race: new turnId in progress, new user not in snapshot yet → empty when prior was finalized", () => {
-    // Production: startTurn advanced latestTurn before the new user message appeared.
-    // afterLastUser would otherwise return a1 (PR #102 body) and re-stream it.
+    // startTurn advanced latestTurn before the user message appeared; afterLastUser would re-stream a1.
     const messages = [
       msg("u1", "user", "show me what you got", "t1"),
       msg("a1", "assistant", "PR #102 is already merged…", "t1"),

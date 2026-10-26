@@ -1,10 +1,5 @@
-/**
- * Pin list vs work-item link identity.
- *
- * The thread-info pin lists every Jira key seen in the Discord thread, including
- * keys the bot wrote itself (pin backfill). Those pin-only keys must not join or
- * import a T3 thread. Link identity is keys a person attached on a turn, plus a
- * one-time legacy snapshot of pin keys that are not bot-only in scanned history.
+/** Pin-only Jira keys, including bot-written backfill, must not identify a T3 link.
+ * Link identity comes from user-attached keys plus one legacy snapshot excluding bot-only keys.
  */
 
 import { mergeJiraIssueKeys, omitJiraIssueKeys } from "./jiraLinks.ts";

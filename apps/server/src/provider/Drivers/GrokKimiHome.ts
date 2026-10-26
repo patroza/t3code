@@ -1,13 +1,5 @@
-/**
- * Home-directory resolution for the Grok and Kimi CLIs.
- *
- * Neither CLI's T3 settings carry a `homePath` the way Claude's and Codex's
- * do, and neither honours an override env var, so both are read from their
- * fixed default location under the OS home — which is also what Grok records
- * as `grok_home` in its own session summaries.
- *
- * @module GrokKimiHome
- */
+// Grok and Kimi use fixed CLI directories under the OS home; neither exposes a home override.
+// Resolve from that home rather than a provider settings homePath.
 import * as NodeOS from "node:os";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 

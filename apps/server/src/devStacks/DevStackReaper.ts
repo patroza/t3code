@@ -18,23 +18,8 @@ import {
   type DevStackPolicy,
 } from "./DevStackPolicy.ts";
 
-/**
- * Stops dev stacks a repository registered under `$TMPDIR/dev-stacks` once
- * nothing has used them for the window that repository declared in `t3.json`.
- *
- * This is the level-triggered half of stack teardown. The `runOnWorktreeRemove`
- * and `runOnPrMerged` project scripts remain the early reap and are strictly
- * faster when they fire; they simply cannot be relied on, because both are
- * edge-triggered. `runOnPrMerged` in particular only fires when
- * VcsStatusBroadcaster observes a not-merged -> merged transition for a worktree
- * it happens to be polling, so an agent that finishes its work and a human who
- * merges an hour later produce no observer, no edge, and no teardown. Stacks have
- * survived for thirteen hours that way.
- *
- * Looking at state instead of events means a missed hook costs one idle window
- * rather than an unbounded number of hours, and it needs no cooperation from the
- * repository beyond registering the stack in the first place.
- */
+// Reap registered dev stacks after their repository-declared idle window.
+// State-based cleanup recovers missed worktree-remove or PR-merge hooks, which require observed edges.
 
 const SWEEP_INTERVAL = Duration.minutes(5);
 

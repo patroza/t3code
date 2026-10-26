@@ -2,7 +2,6 @@ import { AuthSessionId, IdentityError, IdentityUsername } from "@t3tools/contrac
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Layer from "effect/Layer";
 
 import * as IdentityService from "./IdentityService.ts";
 

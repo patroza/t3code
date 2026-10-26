@@ -1,17 +1,4 @@
-/**
- * Provider error-message normalization.
- *
- * z.ai (GLM coding plan, routed through the opencode driver) returns rate-limit
- * errors like:
- *
- *   "Usage limit reached for 5 hour. Your limit will reset at 2026-07-07 19:49:44"
- *
- * The reset timestamp is a bare wall-clock string in China time (UTC+8) with no
- * timezone marker, so it reads ~6-7h in the future for a European viewer. We
- * rewrite it to the viewer's local time. This is deliberately a display-layer
- * heuristic: it only fires on z.ai's exact "limit will reset at <ts>" wording,
- * where the UTC+8 assumption holds.
- */
+/** z.ai reset timestamps omit their UTC+8 zone; localize only its exact reset wording. */
 
 // z.ai emits reset times in China Standard Time (UTC+8, no DST).
 const ZAI_RESET_OFFSET_MINUTES = 8 * 60;

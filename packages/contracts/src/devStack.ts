@@ -1,19 +1,8 @@
 import * as Schema from "effect/Schema";
 
-/**
- * `dev-stack/1` — the on-disk format a repository uses to register long-running
- * dev servers it started outside T3's process tree, so T3 can supervise them.
- *
- * Entries live under `<registry>/stacks/<project>/<worktree>/<instance>.json`,
- * where the registry defaults to `$TMPDIR/dev-stacks`. T3 sweeps the whole
- * registry across every project, so an entry carries **facts only** — pids,
- * ports, and where each process runs. Anything that requires judgement (how long
- * idle is too long, what counts as a consumer, which role a consumer connects to)
- * is declared per repository under `devStacks` in `t3.json`, because it is a
- * property of the repository rather than of one running instance.
- *
- * Repositories write these entries themselves, from whatever starts the servers.
- * T3 only reads them.
+/** `dev-stack/1` registers repository-started dev servers outside T3's process tree for supervision.
+ * Entries contain process facts only; policy belongs to repository `devStacks` in `t3.json`.
+ * Repositories write entries under `$TMPDIR/dev-stacks`; T3 sweeps and reads them.
  */
 export const DEV_STACK_SCHEMA_VERSION = "dev-stack/1";
 

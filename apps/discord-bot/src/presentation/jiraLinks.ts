@@ -1,11 +1,5 @@
-/**
- * Extract and format Jira issue keys / browse links from Discord message text.
- *
- * Keys are stored in first-seen order. Duplicates are ignored (case-insensitive match
- * with canonical uppercase key form).
- *
- * Sentry short ids (`SCANNER-313`) match the Jira key shape. Tokens inside sentry.io
- * URLs, Sentry Discord embeds, or Sentry-bot messages are not treated as Jira.
+/** Extract Jira keys and browse links in first-seen order, deduplicating case-insensitively.
+ * Ignore Sentry IDs and keys inside Sentry URLs, embeds, or bot messages.
  */
 
 import {

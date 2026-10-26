@@ -23,13 +23,8 @@ export interface LaunchWorkspace {
 }
 
 /**
- * Where a new Discord or Teams thread starts.
- *
- * The workspace mode and the "start from remote" switch come from the project's
- * T3 settings: project override, then the environment, then `t3.json`, then the
- * built-in default. A worktree's base branch is the repository default branch,
- * then the checkout's current branch, the same order the composer uses.
- * `--local` and `--base` override that turn.
+ * Resolve workspace mode and remote-start preference from project, environment, `t3.json`, then defaults.
+ * The base branch is repository default then checkout branch; `--local` and `--base` override the turn.
  */
 export const resolveLaunchWorkspace = Effect.fn("resolveLaunchWorkspace")(function* (input: {
   readonly project: OrchestrationProjectShell;

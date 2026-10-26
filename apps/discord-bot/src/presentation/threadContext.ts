@@ -1,11 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
-/**
- * Build initial T3 prompts when the bot is first pulled into a Discord thread.
- * Combines the thread starter (e.g. Sentry alert embed) with the user @mention.
- *
- * Global product rules are injected by the T3 server on session start (and again
- * after compaction). This builder only emits **dynamic** Discord fields + a
- * pointer to the Discord-only overlay (`docs/agent-turn-rules.md`).
+/** Build initial prompts from the thread starter and user mention; the server injects global rules.
+ * This builder adds dynamic Discord fields and a pointer to the Discord-only rules overlay.
  */
 
 import * as NodePath from "node:path";

@@ -223,10 +223,7 @@ function assistantMessagesForTurn(
   return thread.messages.slice(lastUserIndex + 1).filter((message) => message.role === "assistant");
 }
 
-/**
- * Prefer the dispatched turn's assistants. Falling back to "after last user" re-posts a later
- * Discord/GH wake-up body when the original turn already finished (the PR #865 bug).
- */
+// Prefer assistants from the dispatched turn; after-last-user fallback can select an unrelated later wake.
 export function githubFinalAnswerText(
   thread: OrchestrationThread,
   turnId: string | null = null,
@@ -259,17 +256,8 @@ export function githubFinalAnswerWithStats(
   );
 }
 
-/**
- * Discover the turn id that belongs to a GitHub-dispatched delivery.
- *
- * Order matters for restore / legacy deliveries (no userMessageId):
- * 1. Already-persisted targetTurnId
- * 2. Assistants after the dispatched user message
- * 3. First assistant turn *after* previousTurnId in message order (the original turn),
- *    never the newest latestTurn alone — a later GH/Discord wake-up would steal the delivery
- *    and double-post the wake-up body (PR #865 duplicate comments).
- * 4. latestTurn only when it is the sole signal (no later history after previous yet)
- */
+// Recover targetTurnId from its persisted value, then the dispatched message, then the first turn after previousTurnId.
+// Only use latestTurn without later history, so a later wake cannot steal an older delivery.
 export function discoverGitHubTargetTurnId(
   thread: OrchestrationThread,
   options: {
@@ -925,11 +913,7 @@ export const make = Effect.gen(function* () {
         projectId: project.id,
         workspaceRoot: project.workspaceRoot,
       });
-      // preparePullRequestThread shells out to `gh` for PR metadata. Transient App
-      // installation-token 401s are retried inside the guest `gh-app-wrapper`
-      // (remint --no-cache after a short delay) so every gh caller benefits—not
-      // only this bridge. Follow-ups: resolve PR via GitHubAppClient, surface real
-      // provision errors on the PR comment, always pass `-R owner/repo`.
+      // PR metadata requests use the shared CLI wrapper, which retries transient installation-token authentication failures.
       const prepared = yield* gitWorkflow.preparePullRequestThread({
         cwd: project.workspaceRoot,
         reference: String(invocation.pullRequestNumber),
@@ -1046,14 +1030,8 @@ export const make = Effect.gen(function* () {
     },
   );
 
-  /**
-   * Resolve where the GitHub turn runs:
-   * - `main`: reuse store-linked or unique live PR/Discord work thread, or provision one
-   * - `sibling`: for inline review, reuse the T3 thread already bound to that GH discussion
-   *   (first mention creates it); create a new thread when forced or unbound
-   *
-   * Defaults: conversation → main; inline review → sibling (with discussion affinity).
-   */
+  // Main mode reuses the linked or unique live implementation thread; sibling mode reuses the review discussion.
+  // Provision only when no suitable thread exists or a fresh thread was explicitly requested.
   const resolveOrProvisionThread = Effect.fn("GitHubPrBridge.resolveOrProvisionThread")(function* (
     invocation: GitHubPrInvocation,
     requestedModelSelection: ModelSelection,
@@ -1196,7 +1174,7 @@ export const make = Effect.gen(function* () {
       const discoveredTurnId = discoverGitHubTargetTurnId(thread, resolveOptions);
       if (discoveredTurnId !== null && discoveredTurnId !== tracked.targetTurnId) {
         tracked = {
-          ...tracked,
+          ...delivery,
           targetTurnId: discoveredTurnId as TurnId,
           updatedAt: DateTime.formatIso(yield* DateTime.now),
         };

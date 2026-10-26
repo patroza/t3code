@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 
 import { EnvironmentAuthInvalidError } from "@t3tools/contracts";
 import { hashTelemetryId } from "@t3tools/shared/telemetryId";
+import { OMEGENT_T3_PRODUCT_FAMILY, OMEGENT_T3_PRODUCT_TOKEN } from "@t3tools/shared/productFamily";
 import {
   bootstrapRemoteBearerSession,
   exchangeRemoteDpopAccessToken,
@@ -254,7 +255,7 @@ describe("remote environment authorization", () => {
         { method: "GET", url: "https://remote.example.com/ws", accessToken: "ws-ticket" },
       ]);
       expect(url).toBe(
-        "wss://remote.example.com/ws?wsTicket=ws-ticket&dpop=proof-2&connectionMethod=relay",
+        `wss://remote.example.com/ws?wsTicket=ws-ticket&dpop=proof-2&connectionMethod=relay&productFamily=${OMEGENT_T3_PRODUCT_FAMILY}&productToken=${OMEGENT_T3_PRODUCT_TOKEN}`,
       );
     }),
   );

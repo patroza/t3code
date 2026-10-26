@@ -1,15 +1,6 @@
-/**
- * Session identity + message/thread source attribution.
- *
- * Closed-set people come from a server identity map file. Interactive clients
- * claim a map person on their auth session; free-form usernames are rejected.
- *
- * Trust note (v1): interactive claim is **map membership only** — any paired
- * session can claim any listed person. That is intentional for trusted-team
- * shared environments, not anti-impersonation. “Mine” is claim-based and
- * spoofable by peers with a session. Discord/Jira auto-claim binds via platform id.
- *
- * See docs/architecture/source-and-identity.md
+/** Session identity and attribution use server-map people; clients cannot claim free-form usernames.
+ * Interactive claims check map membership only, so peers in trusted environments can spoof Mine.
+ * Discord/Jira claims bind through platform IDs. See docs/architecture/source-and-identity.md.
  */
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";

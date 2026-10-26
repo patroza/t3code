@@ -38,14 +38,8 @@ const brotliCompress = NodeUtil.promisify(NodeZlib.brotliCompress);
 
 export type StaticContentEncoding = "br" | "gzip";
 
-/**
- * Whether a static file's name already encodes its content (a Vite hashed
- * asset under `assets/`). Such files are safe to cache forever and safe to key
- * by path/metadata, because the name changes whenever the bytes do. Every other
- * served file keeps a stable name across builds, so a hot asset swap that
- * preserves mtime and size could otherwise let the compression cache serve
- * stale bytes -- those must be keyed by content instead.
- */
+// Content-hashed Vite assets may use immutable path/metadata cache keys.
+// Stable filenames need content keys because hot swaps may preserve mtime and size.
 export function isContentHashedAsset(relativePath: string): boolean {
   const normalized = relativePath.replaceAll("\\", "/").replace(/^\/+/, "");
   return normalized.startsWith("assets/") && HASHED_ASSET_PATTERN.test(normalized);
@@ -55,13 +49,7 @@ export function resolveStaticCacheControl(relativePath: string): string {
   return isContentHashedAsset(relativePath) ? IMMUTABLE_CACHE_CONTROL : REVALIDATE_CACHE_CONTROL;
 }
 
-/**
- * Cache key derived from the bytes being served rather than from file
- * metadata. Used where the served content and the metadata could otherwise
- * disagree, which would let one request's compression be reused for
- * different content. Only worth it for small payloads, since it hashes the
- * whole buffer on every request.
- */
+// Hash small payloads when file metadata could identify different bytes, preventing stale compression reuse.
 export function contentCacheKey(data: Uint8Array): string {
   return NodeCrypto.createHash("sha1").update(data).digest("hex");
 }

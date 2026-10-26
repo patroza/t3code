@@ -23,25 +23,19 @@ function stripThreadQueryFromLocation(): void {
   window.history.replaceState(window.history.state, "", path);
 }
 
-/**
- * Consumes `/?thread={id}#message-{messageId}` deep links:
- * stashes intent immediately (before index auto-draft / welcome bootstrap can
- * wipe `?thread=`), then navigates to the thread route.
- *
- * Does not require the thread to already be in the shell list — falls back to
- * the primary environment id. The thread route owns missing/loading states.
- */
+/** Capture deep links before landing navigation clears them; missing threads use the primary environment. */
 export function OmegentDeepLinkCoordinator() {
   const navigate = useNavigate();
   const threadRefs = useThreadRefs();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const handledThreadIdRef = useRef<string | null>(null);
 
-  // Capture before paint so sibling landing effects cannot replace the URL first.
+  // oxlint-disable-next-line t3code/react-effect-budget -- Capture browser URL intent before sibling landing effects replace it.
   useLayoutEffect(() => {
     captureDeepLinkFromWindowLocation();
   }, []);
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- Route external URL intent when the environment catalog becomes available.
   useEffect(() => {
     const fromUrl = parseOmegentDeepLink(new URL(window.location.href));
     const pending = peekPendingDeepLink();

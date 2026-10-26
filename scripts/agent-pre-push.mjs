@@ -1,26 +1,6 @@
 #!/usr/bin/env node
 /**
- * Husky pre-push entry for coding agents only.
- *
- * Humans: no-op (exit 0) — self-responsible; not forced by the hook.
- *
- * Agents:
- *   - Draft PR or no open PR: changed-file `vp check` (fmt + lint of files
- *     changed against fork/dev) plus workspace `vpr typecheck`.
- *     Commits already pay lint-staged.
- *   - Ready-for-review PR (or unknown PR state): full ship gate (1–3).
- *   - Publish path is `pnpm pr:ready` (not raw `gh pr ready`) — catch up to
- *     fork/dev, run the full gate, then undraft.
- *     See scripts/agent-pr-ready.mjs + scripts/agent-gh.mjs.
- *
- * Ship gate mirrors the CI JS quality path:
- *   1. `vp check` — format + lint (changed files on draft; workspace on full)
- *   2. `vpr typecheck` — workspace TypeScript (draft and full)
- *   3. `vp run test` — unit tests (full / publish only)
- *
- * Detection: GROK_AGENT / T3_AGENT / AI_AGENT / Claude / Cursor / Codex env.
- * Humans only: SKIP_AGENT_PREPUSH=1 git push
- * Agents must never set that flag or use git push --no-verify.
+ * Agent pushes enforce changed or full validation by PR state; humans pass through unchanged.
  */
 import * as NodeChildProcess from "node:child_process";
 import * as NodePath from "node:path";
@@ -41,13 +21,7 @@ import {
 export { isCodingAgent };
 
 /**
- * The gate shells out to `vp` / `vpr`, which live in the repository's
- * `node_modules/.bin`. pnpm and husky both put that on PATH, so every historical
- * caller happened to work and the dependency stayed invisible — until the `gh`
- * shim started running the gate from a bare process, where `vpr typecheck` died
- * with "command not found". Make the gate supply its own PATH so it does not
- * depend on how it was invoked.
- *
+ * Supply node_modules/.bin on PATH so direct shim calls can run vp and vpr.
  * @param {string} root
  * @param {NodeJS.ProcessEnv} env
  * @returns {NodeJS.ProcessEnv}
@@ -77,16 +51,7 @@ const run = (label, args, opts = {}) => {
 };
 
 /**
- * Agent ship gate. Shared by pre-push and `pnpm pr:ready`.
- *
- * `scope: "changed"` — `vp check` on files changed against fork/dev, then
- *   workspace `vpr typecheck` (draft / no-PR).
- * `scope: "full"` (default) — workspace `vp check` + `vpr typecheck` + `vp run test`.
- *
- * Caches HEAD SHA under `.run/agent-ship-gate.json` so a full run is never
- * double-paid for the same commit. Changed-file runs are not cached as full.
- * Force: AGENT_SHIP_GATE_FORCE=1.
- *
+ * Cache full validation by HEAD; changed-file checks never count as a full gate. Force with AGENT_SHIP_GATE_FORCE.
  * @param {{ root?: string, scope?: "full" | "changed", force?: boolean, env?: NodeJS.ProcessEnv }} [opts]
  * @returns {Promise<{ status: "cached" | "ok", sha: string | null, scope: "full" | "changed" }>}
  */

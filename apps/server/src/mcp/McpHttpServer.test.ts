@@ -766,8 +766,8 @@ it.effect("registers annotated tools and preserves authenticated request context
       expect(clickTool?.tool.outputSchema).toMatchObject({
         type: "object",
         additionalProperties: true,
-        description: "The preview action completed successfully.",
       });
+      expect(clickTool?.tool.outputSchema).not.toHaveProperty("description");
 
       const navigateTool = server.tools.find(({ tool }) => tool.name === "preview_navigate");
       expect(navigateTool?.tool.annotations?.destructiveHint).toBe(false);

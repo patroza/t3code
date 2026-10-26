@@ -1,11 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off preferSchemaOverJson:off tryCatchInEffectGen:off
-/**
- * Legacy shortName → workspaceRoot map. The T3 server does not know about these aliases.
- *
- * A channel topic can name the repository directly with
- * `omegent-link-github:<org>/<repo>`. That resolves the T3 project from its
- * repository identity and does not read this file. The map stays so existing
- * `omegent-link-<shortName>` topics keep working.
+/** Legacy shortName-to-workspace map for existing `omegent-link-<shortName>` topics.
+ * New `omegent-link-github:<org>/<repo>` topics resolve by repository identity.
  */
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
@@ -121,15 +116,7 @@ function stripYamlScalar(value: string): string {
   return trimmed;
 }
 
-/**
- * Accept either:
- *   example-project: ~/projects/example-project
- * or:
- *   aliases:
- *     example-project:
- *       workspaceRoot: ~/projects/example-project
- * or array of { shortName, workspaceRoot }.
- */
+/** Accept a shortName-to-path map, an `aliases` map with `workspaceRoot`, or an array of entries. */
 export function parseProjectAliasesDocument(
   document: unknown,
   options?: { readonly resolveRelativeTo?: string },

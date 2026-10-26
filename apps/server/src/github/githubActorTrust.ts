@@ -1,12 +1,5 @@
-/**
- * GitHub actor trust relative to the closed-set identity map.
- *
- * Fail-closed: no configured map (or empty map) is treated like an unmapped
- * actor — no agent turns. When the map is on, the actor must resolve to a
- * mapped person (github id or login) — so public-repo write access or
- * outside collaborators cannot drive the host unless listed. Collaborator
- * permission floor is still enforced separately before this gate.
- */
+// Fail closed unless the GitHub actor resolves through the configured, nonempty identity map.
+// Repository collaborator permission is a separate prerequisite and never substitutes for map membership.
 import {
   findPersonByGithubId,
   findPersonByGithubLogin,

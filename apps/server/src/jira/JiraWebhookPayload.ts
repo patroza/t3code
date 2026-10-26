@@ -630,14 +630,8 @@ function assignmentPrompt(summary: string | null, description: unknown): string 
   return lines.join("\n");
 }
 
-/**
- * Assignment of the configured bot. Comment payloads return `not_assignment`
- * so the comment parser still owns them.
- *
- * `jira:issue_updated` counts only when the changelog assignee changes to the
- * bot. An explicit `issue_assigned` event may omit the changelog and match
- * `issue.fields.assignee` instead (Jira Automation custom data).
- */
+// Comment payloads remain owned by the comment parser.
+// Issue updates require an assignee changelog change to the bot; explicit assignment events may omit changelog.
 export function parseJiraAssignmentInvocation(
   payload: unknown,
   mention: string,
@@ -761,14 +755,8 @@ export type JiraAdfDocument = {
   readonly content: ReadonlyArray<AdfParagraph>;
 };
 
-/**
- * Normalize a Jira Cloud account id for an ADF **mention** node `attrs.id`.
- *
- * Live GET `/rest/api/3/issue/{key}/comment` returns bare Atlassian account ids
- * (e.g. `6331c32307a27ebeff15d19d` or `712020:uuid`) — **not** the wiki form
- * `accountid:…`. Official ADF docs: attrs.id = “Atlassian Account ID”.
- * Strip a leading `accountid:` if present so inbound wiki/Automation forms still work.
- */
+// ADF mention attrs.id is a bare Atlassian account ID, not the accountid: wiki form.
+// Strip that prefix from inbound wiki or automation values.
 export function jiraMentionAccountId(accountId: string): string {
   const trimmed = accountId.trim();
   if (trimmed.length === 0) return trimmed;

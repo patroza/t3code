@@ -188,12 +188,7 @@ export const useBrowserSurfaceStore = create<BrowserSurfaceStoreState>()((set) =
     set((state) => {
       const current = state.byTabId[tabId];
       if (current?.owner !== owner) return state;
-      // Delete the entry entirely instead of leaving a released tombstone
-      // ({ visible: false, owner: null }). Readers only consider `visible`
-      // entries, so removal is behavior-preserving, and it stops byTabId from
-      // accumulating one dead entry per preview tab ever opened. A later
-      // re-claim of the same tabId starts fresh, which is correct since release
-      // means the surface was torn down.
+      // Remove released surfaces so closed tabs do not accumulate in the store.
       const { [tabId]: _released, ...byTabId } = state.byTabId;
       return { byTabId };
     }),

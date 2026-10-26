@@ -1,12 +1,5 @@
-/**
- * Omegent T3 product handshake.
- *
- * Our fork servers require connecting clients to present this product family +
- * token on the WebSocket upgrade URL. Official / upstream T3 clients do not
- * send it, so the first RPC fails with a readable authorization error.
- *
- * This is intentionally a shared static token baked into fork builds — enough
- * to block accidental upstream clients, not a DRM scheme.
+/** Fork WebSocket clients present this product family and token; upstream clients get a readable first-RPC auth error.
+ * The shared static token blocks accidental upstream connections; it is not DRM.
  */
 
 export const OMEGENT_T3_PRODUCT_FAMILY = "omegent-t3" as const;

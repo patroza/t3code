@@ -1,10 +1,4 @@
-/**
- * Existence contracts for fork-only product surfaces that pure helper tests can
- * leave green after a partial stack conflict resolution (see #154).
- *
- * Prefer pure behavior tests next to each feature; keep this file as the last
- * line of defense for JSX chrome that is easy to drop while helpers remain.
- */
+/** Guard fork JSX surfaces that can disappear while their pure helper tests stay green. */
 // @effect-diagnostics nodeBuiltinImport:off - existence contract reads source text on disk.
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";

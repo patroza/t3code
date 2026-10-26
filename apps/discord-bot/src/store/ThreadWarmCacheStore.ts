@@ -4,13 +4,8 @@ import {
 } from "@t3tools/shared/integrationThreadView";
 // @effect-diagnostics globalErrorInEffectCatch:off globalErrorInEffectFailure:off preferSchemaOverJson:off tryCatchInEffectGen:off missingEffectError:off nodeBuiltinImport:off globalDate:off globalRandom:off globalDateInEffect:off
 /**
- * Durable native warm base for Discord bridge resume.
- *
- * Mirrors web/desktop EnvironmentCacheStore thread snapshots: keep the native V2
- * projection + snapshotSequence on disk so restart can
- * `subscribeThread({ afterSequence })` without re-downloading the full tip over HTTP.
- *
- * Storage: `$dataDir/thread-cache/<threadId>.json` (atomic write), same dataDir as links.json.
+ * Persist the native V2 projection and sequence so Discord resumes after restart without refetching the full HTTP tip.
+ * Cache files use atomic writes under `$dataDir/thread-cache`, beside `links.json`.
  */
 import { OrchestrationV2ThreadProjection, type ThreadId } from "@t3tools/contracts";
 import * as NodeFSP from "node:fs/promises";

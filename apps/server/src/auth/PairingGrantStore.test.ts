@@ -19,7 +19,6 @@ import {
 } from "@t3tools/shared/desktopBootstrapToken";
 
 import * as ServerConfig from "../config.ts";
-import * as AuthPairingLinks from "../persistence/AuthPairingLinks.ts";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as PairingGrantStore from "./PairingGrantStore.ts";

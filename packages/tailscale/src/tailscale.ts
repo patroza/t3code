@@ -308,14 +308,8 @@ export const readTailscaleStatus = readTailscaleCommandStdout({
   timeout: TAILSCALE_STATUS_TIMEOUT,
 }).pipe(Effect.flatMap(parseTailscaleStatus));
 
-/**
- * One `tailscale serve` HTTPS mapping, flattened from the `Web` section of
- * `tailscale serve status --json`.
- *
- * `servePort` is the port the tailnet dials and `localPort` the loopback port
- * behind it. They are frequently different — nothing forces serve mappings to
- * preserve the port number — which is why callers must read this instead of
- * assuming the local port is also reachable on the tailnet.
+/** One HTTPS mapping from `tailscale serve status --json`; tailnet `servePort` may differ from loopback `localPort`.
+ * Read the mapping instead of assuming the local port is reachable on the tailnet.
  */
 export interface TailscaleServeMapping {
   readonly magicDnsName: string;

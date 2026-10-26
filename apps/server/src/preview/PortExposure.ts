@@ -1,18 +1,5 @@
-/**
- * Resolves a local dev-server port to a URL the *connected client* can open.
- *
- * The preview surface used to do this on the client by swapping `localhost` for
- * the environment's hostname and keeping the port and scheme. That guess is
- * wrong whenever the port is not independently published on that hostname —
- * which is the normal case, because dev servers bind loopback. The browser then
- * showed ERR_CONNECTION_REFUSED, indistinguishable from a broken app.
- *
- * Only the server can answer this: it is the side that knows what is listening
- * locally and what the tailnet actually routes. So it looks up the real
- * `tailscale serve` mapping, creates one when the port has none, verifies the
- * result answers, and otherwise fails with a reason and a next action instead
- * of handing back a URL that cannot work.
- */
+// Resolve preview URLs on the server: only it knows local listeners and actual tailnet routes.
+// Reuse or publish a verified mapping; fail with a reason instead of guessing a host/port URL.
 import {
   PreviewPortUnreachableError,
   type PreviewPortResolution,
@@ -54,22 +41,12 @@ export class PreviewPortExposure extends Context.Service<
 const SERVE_PORT_FALLBACK_OFFSET = 40_000;
 
 const PROBE_TIMEOUT = Duration.seconds(2);
-// `tailscale serve` returns before the listener is accepting, and a fresh
-// MagicDNS cert can take a beat. Retrying until a deadline turns that race into
-// a slower success instead of a spurious "unreachable". The deadline bounds the
-// whole loop rather than an attempt count, so a slow attempt cannot multiply
-// out into a request the caller waits minutes on.
+// A new serve listener or MagicDNS certificate may not be ready when tailscale returns.
+// Retry against one overall deadline so slow attempts cannot multiply the caller wait.
 const PROBE_SCHEDULE = Schedule.spaced(Duration.millis(250));
 const PROBE_DEADLINE = Duration.seconds(5);
 
-/**
- * Route through `localhost` rather than `127.0.0.1`.
- *
- * Vite's default `--host localhost` binds `::1` only, so a mapping pinned to the
- * IPv4 loopback proxies to nothing and answers 502 — reachable, and useless.
- * The hostname lets tailscale pick whichever family the dev server actually
- * bound.
- */
+// Use localhost so tailscale reaches either IPv4 or IPv6; Vite may bind only ::1.
 const SERVE_TARGET_HOST = "localhost";
 
 const REMEDY_BY_REASON = {
@@ -228,15 +205,8 @@ export const make = Effect.gen(function* () {
       } satisfies PreviewPortResolution;
     }
 
-    // A dev server bound to a wildcard or interface address already answers on
-    // the environment's own address — WSL, a LAN, an SSH tunnel. Publishing a
-    // tailnet route for it would be redundant, so this is checked before any
-    // route is created. Verified rather than assumed: whether a listener is
-    // loopback-only is exactly what the old client-side guess got wrong.
-    //
-    // Skipped when a serve mapping already occupies that number for some other
-    // local port: the probe would find *that* app answering and hand back a URL
-    // to the wrong thing.
+    // Prefer a verified environment-address listener over creating a redundant tailnet route.
+    // Skip that probe if a serve mapping already uses the port, or it could identify the wrong app.
     const shadowedByOtherMapping =
       mappings?.some((mapping) => mapping.servePort === port && mapping.localPort !== port) ??
       false;

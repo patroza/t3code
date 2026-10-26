@@ -1,12 +1,5 @@
 /**
- * Persist the last HEAD SHA that passed the agent ship gate.
- * pre-push and `pnpm pr:ready` share this so the same commit is never double-paid.
- *
- * Path: `.run/agent-ship-gate.json` (under gitignored `.run/`).
- *
- * Checkpoints, cheapest first — each implies the ones before it:
- *   static   — `vp check` + `vpr typecheck` (what a draft / no-PR push pays)
- *   complete — plus `vp run test` (ready PR / publish)
+ * Cache HEAD validation in .run: static covers check/types; complete additionally covers tests.
  */
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
@@ -96,13 +89,7 @@ export const cachedStage = (headSha, cache) => {
 /**
  * @param {string} root
  * @param {string} sha
- * @param {{
- *   stage?: "static" | "complete"
- *   writeFileSync?: typeof NodeFS.writeFileSync
- *   mkdirSync?: typeof NodeFS.mkdirSync
- *   readFileSync?: typeof NodeFS.readFileSync
- *   now?: () => Date
- * }} [opts]
+ * @param {{ stage?: "static" | "complete"; writeFileSync?: typeof NodeFS.writeFileSync; mkdirSync?: typeof NodeFS.mkdirSync; readFileSync?: typeof NodeFS.readFileSync; now?: () => Date }} [opts]
  */
 export const writeShipGateCache = (root, sha, opts = {}) => {
   const writeFileSync = opts.writeFileSync ?? NodeFS.writeFileSync;

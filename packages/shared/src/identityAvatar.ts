@@ -65,13 +65,8 @@ function takeCodePoints(value: string, count: number): string {
   return points.join("");
 }
 
-/**
- * Initials from display name when present, otherwise username.
- * Uses code points so non-BMP / CJK handles do not split surrogates.
- * - "Patrick Roza" → "PR"
- * - "patroza" → "PA"
- * - "田中" → "田中"
- * - empty → "?"
+/** Initials from display name, else username; code points preserve CJK and non-BMP characters.
+ * Examples: Patrick Roza → PR, patroza → PA, 田中 → 田中, empty → ?.
  */
 export function identityInitials(input: {
   readonly username?: string | null | undefined;

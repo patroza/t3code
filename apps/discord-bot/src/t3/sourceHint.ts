@@ -1,11 +1,6 @@
 /**
- * Platform provenance for bot-dispatched messages.
- *
- * Mirrors `@t3tools/contracts` ClientSourceHint so the Discord overlay can
- * stamp actors without depending on the identity overlay at compile time.
- * When fork/identity is composed, the server resolves platformId via the map
- * into personId/username (e.g. patroza@discord). Without a hint, bot sessions
- * fall back to bare `{ channel: "bot" }` — no person chip in the sidebar.
+ * Mirrors ClientSourceHint so the Discord overlay can stamp actors without importing the identity overlay.
+ * The server maps platformId to a person; without a hint, bot sessions have no person chip.
  */
 export type DiscordClientSourceHint = {
   readonly channel: "discord";

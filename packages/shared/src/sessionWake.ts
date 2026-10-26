@@ -1,14 +1,5 @@
-/**
- * Shared wake-up / orphan-settle helpers.
- *
- * Problem: server restarts used to mark every session that *claimed* to be
- * `running`/`starting` as `interrupted` ("Wake Required"), including idle
- * zombies with no active turn. That resurrects old threads across all clients.
- *
- * Rules:
- * - Only settle as `interrupted` when real work was in flight.
- * - Only show Wake Required when the session is interrupted *and* the latest
- *   turn still looks unfinished (guards legacy false positives already stored).
+/** Settle sessions as interrupted only when work was in flight, avoiding idle restart zombies.
+ * Show Wake Required only when the interrupted session's latest turn is still unfinished.
  */
 
 export type OrphanSettleSessionStatus = "interrupted" | "ready" | "stopped";

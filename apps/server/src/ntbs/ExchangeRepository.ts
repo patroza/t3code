@@ -1,14 +1,5 @@
-/*
- * Defines the repository for durable NTBS exchanges.
- *
- * An exchange links an admitted external-platform request to its planned T3
- * work and tracks its progress through delivery of the eventual reply.
- *
- * The repository owns persistence, lookup, and recovery. Each stored exchange
- * is identified by its `sourceUri`, while the processor decides how to handle
- * duplicate requests. It does not communicate with T3 or the originating
- * platform.
- */
+// Store durable external-request/T3-work/reply associations keyed by sourceUri.
+// The processor owns deduplication policy; the repository owns persistence and recovery, not platform I/O.
 import { Array, Effect, Context, Data, HashMap, Ref, Layer, Result } from "effect";
 import {
   getThreadId,

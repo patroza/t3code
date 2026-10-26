@@ -1,12 +1,5 @@
-/**
- * Mid-turn steer timeline interleave helpers.
- *
- * Providers often reuse one assistant message row for an entire turn while
- * steer user messages arrive with a later `createdAt`. Pure chronological
- * sort then parks the whole assistant bubble above the steer; coarse reorders
- * park every steer above all turn work. These helpers split assistant text at
- * client-observed boundaries so steers can sit between pre- and post-steer
- * content without Orchestration V2.
+/** Split reused assistant rows at client-observed boundaries so mid-turn user steers appear between turn segments.
+ * Chronological sorting alone places the whole assistant bubble before the steer.
  */
 
 export type SteerTimelineBoundaryStore = Map<string, number>;

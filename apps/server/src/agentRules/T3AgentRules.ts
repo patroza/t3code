@@ -1,16 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
-/**
- * Product-wide agent rules (source of truth + helpers).
- *
- * Single delivery mechanism (all harnesses, all surfaces):
- * - Inject `## Agent rules` **file pointers** on the first provider turn of a session
- * - Clear the inject flag on context compaction, re-inject on the next turn
- *
- * Not project AGENTS.md. Not harness-home mutation. Bodies are never embedded;
- * agents open the rules file path.
- *
- * Discord overlay is surface-only (`agent-turn-rules.md` via Discord turn context).
- */
+// Inject agent-rule file pointers on the first session turn and again after compaction, never embed rule bodies.
+// Do not mutate project or harness-home rules; Discord supplies its surface overlay separately.
 
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";

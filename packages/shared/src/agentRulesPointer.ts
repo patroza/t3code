@@ -1,17 +1,5 @@
-/**
- * Shared shape for agent policy file pointers.
- *
- * Product policy is layered:
- * 1. Global rules file (all surfaces) — always first
- * 2. Optional client overlay (Discord, …) — additional `rules:` lines
- *
- * Injection shape (never paste rule bodies into the prompt):
- *
- * ```
- * ## Agent rules
- * rules: /absolute/path/to/t3-agent-rules.md
- * rules: /absolute/path/to/agent-turn-rules.md
- * ```
+/** Product policy pointers list global rules first, then optional client overlays.
+ * Pass `rules:` file paths to agents; never paste rule bodies into the prompt.
  */
 
 /** Canonical header for the unified rules block (global + overlays). */

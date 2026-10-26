@@ -1,11 +1,4 @@
-/**
- * Re-exports the shared pure logic so that existing web imports continue to
- * work without changes. The implementation lives in @t3tools/client-runtime so
- * it is available to web + mobile (and other clients).
- *
- * See packages/client-runtime/src/state/aiUsagePresentation.ts for the real
- * code and documentation.
- */
+/** Preserve web imports while sharing usage presentation with the other clients. */
 
 export {
   findUsageItem,

@@ -50,23 +50,14 @@ export const ThreadLink = Schema.Struct({
   status: ThreadLinkStatus,
   lastSeenTurnId: Schema.NullOr(Schema.String),
   lastFinalizedAssistantId: Schema.NullOr(Schema.String),
-  /**
-   * Last applied orchestration event/snapshot sequence for this linked T3 thread.
-   * Scalar marker only — we never persist pre-sync event history. Used with
-   * `lastDeliveredSequence` to resume `subscribeThread({ afterSequence })` without
-   * re-walking the whole event log. Advances when T3 state is observed (WS/HTTP), not
-   * when Discord I/O finishes. Partial bridge hint writes must not clear this.
-   * Optional in schema so older links.json rows still decode (default null).
+  /** Last T3 sequence observed over WS/HTTP; a scalar cursor, not event history.
+   * Resume with `lastDeliveredSequence` without replaying the log; partial hint writes must not clear it.
+   * Optional for old links.json rows (default null).
    */
   lastThreadSnapshotSequence: Schema.optional(Schema.NullOr(Schema.Number)),
-  /**
-   * Last orchestration sequence that was successfully applied to Discord
-   * (stream tip and/or finalize path finished without fatal process failure).
-   * Scalar marker only (not message/event history). Resume prefers this cursor
-   * (minus a small buffer) so already-synced sequences are not re-read.
-   * May lag `lastThreadSnapshotSequence` when Discord I/O is slow/hung or the
-   * process dies mid-delivery. Used for HTTP reconcile + rehydrate catch-up.
-   * Optional for older links.json rows (default null = unknown).
+  /** Last orchestration sequence successfully applied to Discord; resume uses this cursor minus a small buffer.
+   * It may lag the observed sequence when Discord I/O stalls or the process stops mid-delivery.
+   * Optional for old links.json rows (default null = unknown).
    */
   lastDeliveredSequence: Schema.optional(Schema.NullOr(Schema.Number)),
   threadTalkMode: Schema.optional(Schema.Literal("all-messages")),

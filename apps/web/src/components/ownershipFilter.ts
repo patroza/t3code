@@ -1,16 +1,4 @@
-/**
- * The Mine / Theirs ownership filter, shared across every thread surface.
- *
- * The selection is a single user-level preference — "whose work am I looking
- * at" — shared by the thread lists.
- *
- * The values are persisted as bare strings rather than JSON, which predates
- * `useLocalStorage`'s codec. Re-encoding them would silently reset every
- * existing selection back to the default, so this subscribes to the same
- * change channel `useLocalStorage` uses while keeping the raw format.
- *
- * @module ownershipFilter
- */
+/** Keep shared ownership preferences in their legacy bare-string storage format. */
 import {
   DEFAULT_OWNERSHIP_RELATION,
   isOwnershipRelation,

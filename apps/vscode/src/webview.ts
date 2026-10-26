@@ -1381,11 +1381,7 @@ function renderQueuedMessages(state: ViewState): void {
 }
 
 /**
- * Disabling a focused element blurs it, and the browser never gives that focus
- * back. Every `#run` on the extension side publishes `busy: true` and then
- * `busy: false` a moment later, so without this a background action silently
- * drops the caret mid-sentence and keystrokes go nowhere — a disabled textarea
- * looks identical to an enabled one.
+ * Do not disable a focused textarea for background busy updates: the browser does not restore its caret.
  */
 function syncPromptDisabled(busy: boolean): void {
   if (prompt.disabled === busy) return;

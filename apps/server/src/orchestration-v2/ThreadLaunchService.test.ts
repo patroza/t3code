@@ -2419,7 +2419,7 @@ it.effect("replays an accepted message.dispatch after the project disables the i
     });
 
     const retry = yield* ThreadMessageIntake.dispatchCommand(dispatchInput);
-    assert.deepEqual(retry, first);
+    assert.deepEqual(retry, { ...first, replayed: true });
 
     const fresh = yield* ThreadMessageIntake.dispatchCommand({
       ...dispatchInput,

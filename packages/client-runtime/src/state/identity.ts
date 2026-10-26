@@ -87,15 +87,8 @@ export function filterPeopleForTypeahead(
   });
 }
 
-/**
- * Sub-filter for Mine / Theirs. Always a *refinement* of the mode:
- * - `both` (default) — created or participated (widest for that mode)
- * - `created` — starter/origin role only
- * - `participated` — joined without being the starter
- *
- * For a given mode, `both` is always a superset of `created` and of
- * `participated`. Looking only at one field for Theirs used to invert that
- * (Created could show more than Created-or-participated).
+/** Refine Mine/Theirs by created, participated, or both; `both` is the superset of either role.
+ * The relationship applies within the selected mode, including Theirs.
  */
 export type OwnershipRelation = "created" | "participated" | "both";
 
@@ -105,20 +98,8 @@ export function isOwnershipRelation(value: unknown): value is OwnershipRelation 
   return value === "created" || value === "participated" || value === "both";
 }
 
-/**
- * Match a thread for Mine / Theirs ownership filters.
- *
- * **Mine** (relation `both`, default) includes:
- * - threads the claim person started or later joined
- * - threads with **no person attribution** (channel-only stamps, identity off,
- *   legacy) — treated as "ours" so filters stay useful offline of a map
- *
- * **Mine** + `created` / `participated` narrows to that role only (unattributed
- * threads are not included).
- *
- * **Theirs** is attributed threads the claim person is not on. Relation then
- * narrows by how *others* appear: origin set (`created`), non-starter
- * participants (`participated`), or either (`both`).
+/** Mine/both includes started, joined, and unattributed legacy threads; narrower Mine roles exclude unattributed rows.
+ * Theirs includes attributed threads without the claim person, refined by the other participants' roles.
  */
 export function threadMatchesMine(input: {
   readonly claimPersonId: string | null | undefined;

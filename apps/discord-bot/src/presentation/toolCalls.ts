@@ -50,16 +50,8 @@ export type ToolCountMessage = {
   readonly sequence?: number;
 };
 
-/**
- * Count distinct tool calls in the **latest in-progress work segment** for the active turn.
- *
- * - Strictly scopes to `latestTurnId` when known (does not pull older turns / null-turn noise).
- * - Collapses lifecycle updates by stable toolCallId (Set, not only consecutive).
- * - Only tools after the last **settled** (non-streaming) assistant message of that turn,
- *   so intermediate prose does not keep accumulating the whole turn’s historical tools.
- * - If there is no settled assistant yet, counts tools for the whole turn (first work batch).
- *
- * Discord only shows this count on Working — never individual tool rows.
+/** Count distinct tool calls in the latest active-turn work segment, collapsing updates by toolCallId.
+ * Start after its last settled assistant, or use the whole turn if none settled; Discord shows only the count on Working.
  */
 export function countTurnToolCalls(
   activities: ReadonlyArray<OrchestrationThreadActivity>,

@@ -1,11 +1,5 @@
-/**
- * Shared archive-time worktree cleanup flow.
- *
- * The server owns the safety decision (preview + conditional cleanup RPCs);
- * this module owns the client sequencing shared by web and mobile: act only
- * when the server reports a candidate, optionally confirm based on client
- * policy, archive before cleanup, and report cleanup problems without
- * failing the archive itself.
+/** Shared web/mobile sequencing for archive-time cleanup: act only on server candidates, confirm per client policy,
+ * archive before cleanup, and report cleanup failures without failing the archive.
  */
 import type { WorktreeCleanupStatus } from "@t3tools/contracts";
 

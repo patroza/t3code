@@ -173,18 +173,8 @@ function collectFromChunk(
   return out;
 }
 
-/**
- * Read grok's `updates.jsonl` — the session/update notification log, the same
- * stream T3 ingests live over ACP, and NOT `chat_history.jsonl`. chat_history is
- * grok's LLM context: grok compacts it, rewriting and discarding old turns, so
- * it is not a transcript and cannot be relied on to still hold what T3 missed.
- * `updates.jsonl` is append-only, survives compaction, and carries real emit
- * timestamps.
- *
- * Reads the whole log: blocking and unbounded — these files reach hundreds of MB,
- * so this is for offline tooling (the CLI) only. Anything on a request path must
- * use `readGrokDisplayMessagesTail`.
- */
+// Read append-only updates.jsonl, not compactable LLM-context chat_history.jsonl, for real transcript timestamps.
+// This unbounded synchronous reader is offline-only; request paths must use readGrokDisplayMessagesTail.
 export function readGrokDisplayMessages(updatesPath: string): ReadonlyArray<GrokDisplayMessage> {
   if (!NodeFS.existsSync(updatesPath)) {
     return [];
@@ -192,18 +182,8 @@ export function readGrokDisplayMessages(updatesPath: string): ReadonlyArray<Grok
   return collectFromChunk(NodeFS.readFileSync(updatesPath, "utf8"), 0);
 }
 
-/**
- * Read at most the last `maxBytes` of the log, without loading the rest.
- *
- * These logs are dominated by tool-call traffic and grow without bound (150MB
- * observed for ~140 messages), so reading one whole file cost ~570ms of blocked
- * event loop per call. The transcript tail we actually need sits at the end, so
- * read backwards from there.
- *
- * A window that starts mid-line would yield a truncated record, so the first
- * partial line is dropped — meaning a caller must tolerate the window missing
- * older messages (widen, or give up) rather than treat this as the full log.
- */
+// Read backwards within maxBytes because tool traffic makes full session logs too large for request paths.
+// Drop a partial first line; callers must widen or accept missing older messages.
 export async function readGrokDisplayMessagesTail(
   updatesPath: string,
   maxBytes: number,
@@ -439,15 +419,8 @@ export function resolveGrokChatHistoryPath(input: {
   );
 }
 
-/**
- * Append the resync as a single domain event.
- *
- * The event — not a direct projection write — is what makes the rebuild real:
- * the projector materializes it into `projection_thread_messages`, and clients
- * (which resume from `afterSequence` and never re-read the projection on their
- * own) receive it through the ordinary catch-up replay and splice their cached
- * transcript. Writing the projection directly would be invisible to them.
- */
+// Append resync through a domain event so projections and afterSequence clients both receive the repair.
+// A direct projection write would be invisible to client catch-up replay.
 function appendResyncEvent(
   dbPath: string,
   threadId: string,

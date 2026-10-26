@@ -1,11 +1,5 @@
-/**
- * Server-native associations between T3 threads and external work items
- * (Jira issue keys, GitHub PR URLs).
- *
- * Source of truth for inbound bridges (Jira mentions, future GitHub lookup aids).
- * Not limited to Discord — Discord may still mirror keys for pin UX, and its
- * links.json can be imported as a migration/fallback source.
- */
+// Server-owned thread/work-item associations are authoritative for inbound bridges.
+// Discord may mirror them for pins or supply legacy links as an import fallback.
 
 import type { ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";

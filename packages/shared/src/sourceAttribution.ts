@@ -1,11 +1,5 @@
-/**
- * Server-side SourceRef helpers and thread participant denormalization.
- *
- * Clients never invent personId/username — those come from session claim or
- * platform map resolution. Channel is derived from auth client device type
- * (or an explicit SourceChannel for integrations).
- *
- * See docs/architecture/source-and-identity.md
+/** Server helpers for SourceRef and thread participants; clients cannot invent personId/username.
+ * Identity comes from session claims or platform maps, and channel from client type or integration source.
  */
 import {
   IdentityUsername,

@@ -1,12 +1,7 @@
 import type { RepositoryIdentity } from "@t3tools/contracts";
 
-/**
- * Discord (and Teams) channel topics name a T3 project in two ways.
- *
- * `omegent-link-github:<org>/<repo>` is the link to keep. The T3 project is
- * the checkout whose repository identity is that GitHub repository.
- * `omegent-link-<shortName>` and legacy `t3-<shortName>` still resolve through
- * the bot's alias file so existing channels keep working.
+/** Prefer `omegent-link-github:<org>/<repo>` resolved by repository identity.
+ * Keep `omegent-link-<shortName>` and legacy `t3-<shortName>` aliases working for existing channels.
  */
 
 const LEGACY_RESERVED_TOPIC_TAG_NAMES = new Set(["ips"]);

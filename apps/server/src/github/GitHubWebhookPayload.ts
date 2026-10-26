@@ -134,18 +134,8 @@ export function extractMentionPrompt(body: string, mention: string): string | nu
   return prompt;
 }
 
-/**
- * Where the GitHub turn should run:
- * - `sibling`: PR-worktree session dedicated to a GH review discussion (or forced fresh)
- * - `main`: reuse the live PR / Discord implementation thread (full history)
- *
- * Surface defaults (when no flag is present):
- * - conversation (`issue`): `main`
- * - inline review (`review`): `sibling` (reuse the T3 thread already assigned to that
- *   GH review discussion when one exists; create only on first mention)
- *
- * Flags (stripped from the prompt): `main-thread`, `sibling-thread`, `--thread main|sibling|new`
- */
+// Conversation mentions default to the main implementation thread; inline reviews reuse a sibling discussion thread.
+// Explicit thread-mode flags override these defaults and are stripped from the provider prompt.
 export type GitHubThreadMode = "sibling" | "main";
 
 export function defaultGitHubThreadMode(surface: GitHubCommentSurface): GitHubThreadMode {

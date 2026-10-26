@@ -1,19 +1,5 @@
-/**
- * AiUsageMonitor - polls the local `ai-usage` daemon and fans snapshots out.
- *
- * A user-run daemon (`ai-usage serve`, default `http://127.0.0.1:8787`) exposes
- * a `/dms` endpoint with normalized coding-plan usage across providers. This
- * service polls it on an interval and broadcasts the latest snapshot to
- * subscribers so the web can mark providers near/over their limits.
- *
- * The daemon is optional: any fetch/parse failure yields `AI_USAGE_UNAVAILABLE`
- * (available: false, no items) rather than an error, so the feature degrades to
- * "no markers" when the daemon isn't running.
- *
- * Polling is reference-counted via scoped `retain`, mirroring PortScanner: a
- * single layer-scoped fiber polls forever, but each tick is a no-op when the
- * retain count is zero.
- */
+// Poll the optional ai-usage daemon and broadcast unavailable snapshots on fetch or parse failure.
+// Scoped retainers share one polling fiber; ticks do no work while nobody retains it.
 import {
   AI_USAGE_UNAVAILABLE,
   AiUsageProviderStatus,

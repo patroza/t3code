@@ -1,11 +1,5 @@
-/**
- * Where a Jira reply goes when it does not fit in a comment.
- *
- * Confluence pages live under an assigned space, for example
- * `SA:SA/scanner/omegent` → space SA, parents scanner then omegent, leaf SA-516.
- * The comment links to the heading of that response. Attachments are the fallback
- * when no space is assigned or the Confluence write is rejected.
- */
+// Publish oversized Jira replies under the assigned Confluence space and link the response heading.
+// Fall back to an issue attachment when no space is assigned or Confluence rejects the write.
 import type { JiraAdfDoc, JiraAdfNode } from "./JiraMarkdown.ts";
 
 export type JiraConfluencePageTarget = {

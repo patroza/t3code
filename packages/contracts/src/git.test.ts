@@ -6,12 +6,9 @@ import {
   VcsStatusInput,
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
-  GitRunStackedActionResult,
   GitRunStackedActionInput,
   GitActionProgressEvent,
   GitCommandError,
-  GitResolvePullRequestResult,
-  VcsStatusLocalResult,
 } from "./git.ts";
 
 const decodeCreateWorktreeInput = Schema.decodeUnknownSync(VcsCreateWorktreeInput);
@@ -23,11 +20,8 @@ const decodePreparePullRequestThreadResult = Schema.decodeUnknownSync(
   GitPreparePullRequestThreadResult,
 );
 const decodeRunStackedActionInput = Schema.decodeUnknownSync(GitRunStackedActionInput);
-const decodeRunStackedActionResult = Schema.decodeUnknownSync(GitRunStackedActionResult);
 const decodeActionProgressEvent = Schema.decodeUnknownSync(GitActionProgressEvent);
 const decodeGitCommandError = Schema.decodeUnknownSync(Schema.toCodecJson(GitCommandError));
-const decodeResolvePullRequestResult = Schema.decodeUnknownSync(GitResolvePullRequestResult);
-const decodeVcsStatusLocalResult = Schema.decodeUnknownSync(VcsStatusLocalResult);
 
 describe("VcsStatusInput", () => {
   it("accepts cwd-only input as full-mode compatible", () => {

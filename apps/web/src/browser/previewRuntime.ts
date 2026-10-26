@@ -14,12 +14,8 @@ import {
 } from "~/state/entities";
 
 /**
- * Where a tab the user opens should run. The desktop app draws its own
- * server's tabs natively when it owns the browser channel. A reused server's
- * tabs stream so the human and agent share its page. A remote
- * environment's tabs would stream, so the desktop opens them in its own
- * browser instead: no latency, and it reaches what this computer reaches. The
- * user can move a tab to the environment when only it can reach the page.
+ * Reused local servers stream shared tabs; remote tabs default to this desktop’s browser.
+ * Users can move tabs to the environment when only it can reach the page.
  */
 export function previewRuntimeFor(environmentId: EnvironmentId): PreviewRuntime | undefined {
   if (!readEnvironmentSupportsServerBrowser(environmentId)) return undefined;

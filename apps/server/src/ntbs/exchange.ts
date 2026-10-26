@@ -8,27 +8,8 @@ import type { ChatAttachment, MessageId, ProjectId, ThreadId, TurnId } from "@t3
 import { Duration } from "effect";
 
 export type Request = {
-  /**
-   * Adapter-encoded URI locating the originating platform message,
-   * e.g. `discord://<guildId>/<channelId>/<messageId>` or
-   * `jira://<cloudId>/issue/<issueKey>/comment/<commentId>`.
-   *
-   * Two contracts:
-   *
-   * Identity — the same platform request must carry the same string
-   * across redeliveries and restarts; distinct requests must carry
-   * distinct strings. This is the durable dedup key `findBySourceUri`
-   * looks up, the key the processor serializes concurrent deliveries
-   * on, and the natural unique key for the repository's stored records.
-   *
-   * Addressability — it must contain everything needed to reach the
-   * message through the platform API from a cold start, because
-   * recovery reposts with only the stored record. A Discord message
-   * ID alone fails this: replying requires the channel ID too.
-   *
-   * Only the adapter that wrote it may parse it; the processor treats
-   * it as an opaque string.
-   */
+  // Opaque adapter URI: stable and unique across redelivery, and sufficient to locate the originating message after restart.
+  // It is the durable dedup/serialization key; only its adapter may parse it.
   readonly sourceUri: string;
   /**
    * The captured source text sent as the first T3 user message.
@@ -210,14 +191,8 @@ export type ReplyPosted = ExchangeBase & {
   readonly replySourceUri: string;
 };
 
-/**
- * Terminal state.
- * A finished reply exists, but the platform definitively rejected delivery.
- * Stores the undelivered payload and the cause.
- * Common causes could be: the original discussion or message has been deleted
- * or locked (Jira/Github issue, Discord thread), the bot has been kicked, etc.
- * The tombstone keeps dedup intact and stops the processor from retrying forever.
- */
+// Undeliverable retains the rejected reply and cause as a terminal tombstone.
+// It preserves deduplication while preventing endless retry after permanent platform refusal.
 export type Undeliverable = ExchangeBase & {
   readonly tag: "undeliverable";
   readonly reply: Reply;
@@ -342,31 +317,9 @@ export const makeRequestAccepted = (
   tag: "request-accepted",
 });
 
-/*
-Decider/Policy pattern.
-
-The decider answers: given the stored state and the relevant live context, what should happen next?
-
-decider: (state, context) -> action
-
-The decider/policy pattern is important in the NTBS module because we have to frequently ask: "given this information I have about the exchange and this context (e.g. checking external platforms or t3 thread states) what should we do next?"
-
-A decision does not transition the exchange. The processor first executes the chosen effect; only after it succeeds does the processor construct the legal transition, passing along any result data the effect produced.
-The reconciliation flow is:
-
-1. load state                                  effect
-2. retrieve observations                       effect
-3. make decision                               pure
-4. execute decision                            effect
-5. construct the transition from its result    pure, then persist as an effect
-
-Each exchange state has a time limit for completing its work. The decider uses the current time to decide whether to keep trying or give up. If the observation confirms the work already succeeded, it records that success even after the time limit. If the observation is unknown, it waits for another attempt while time remains and gives up afterward.
-RequestAccepted only needs the current time to decide whether to plan or give up: planning creates no thread or turn, so there is no earlier result in T3 to check.
-
-A note on "unknown"s.
-
-`unknown` represents a failed observation where the failure is generally retryable and not fatal.
-*/
+// Decide from stored state and live context, execute the effect, then persist the legal transition.
+// Confirmed success wins even past the deadline; unknown observations wait until expiry.
+// RequestAccepted needs only time because planning has no earlier T3 result to observe.
 
 export type WorkPlannedContext =
   | { readonly thread: "missing" }
