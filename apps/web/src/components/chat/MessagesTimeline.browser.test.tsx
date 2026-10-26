@@ -6,6 +6,7 @@ import {
   IdentityUsername,
   MessageId,
   PersonId,
+  RunAttemptId,
   RunId,
   ScheduledTaskId,
   ThreadId,
@@ -19,7 +20,14 @@ import { AudioPreview } from "../files/AudioPreview";
 import { onTestFinished } from "vite-plus/test";
 import { stubGlobal } from "../../../test/render";
 import type { LegendListRef } from "@legendapp/list/react";
-import { createRef, Profiler, useState, type ComponentProps, type ReactElement } from "react";
+import {
+  createRef,
+  Profiler,
+  StrictMode,
+  useState,
+  type ComponentProps,
+  type ReactElement,
+} from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { userEvent } from "vite-plus/test/browser";
@@ -37,6 +45,8 @@ import { deriveTimelineEntriesFromVisibleTurnItems } from "../../session-logic";
 import { remarkThoughtPreview } from "./TimelineWorkEntryRow.logic";
 import { parseMarkdownWithMath } from "@t3tools/shared/markdownMath";
 import { collectThreadFindRanges } from "./threadFindHighlights";
+import { toastManager } from "../ui/toast";
+import type { CitedHistory } from "./citationProcedure";
 
 const environmentQuery = vi.hoisted(() => ({
   error: "Pull request not found",
@@ -173,10 +183,10 @@ function longText(tail = "deep hidden detail only after expand") {
   ).join("\n");
 }
 
-async function renderElement(element: ReactElement) {
+async function renderElement(element: ReactElement, options: { router?: false } = {}) {
   const container = document.createElement("div");
   container.style.cssText = "height: 1200px; width: 900px; display: flex; flex-direction: column;";
-  const screen = await render(element, { container });
+  const screen = await render(element, { container, ...options });
   const buttons = (name: string | RegExp) =>
     [...screen.container.querySelectorAll<HTMLElement>("button, [role=button]")].filter(
       (button) => {
@@ -1396,6 +1406,108 @@ describe("MessagesTimeline send anchor", () => {
       ).toBeGreaterThan(0);
     });
     expect(onAnchorReady).not.toHaveBeenCalled();
+  });
+});
+
+const CITATION_REQUEST = {
+  key: "activation-1",
+  citation: {
+    version: 1,
+    environmentId: ENVIRONMENT_ID,
+    threadId: ThreadId.make("thread-cited"),
+    messageId: MessageId.make("cited"),
+    text: "the cited answer",
+    start: 0,
+    end: 16,
+    prefix: "",
+    suffix: "",
+  },
+} satisfies NonNullable<TimelineProps["citationRequest"]>;
+
+describe("MessagesTimeline citations", () => {
+  it("lands a citation present at mount under StrictMode", async () => {
+    await using _screen = await renderElement(
+      <StrictMode>
+        <MessagesTimeline
+          {...baseProps()}
+          timelineEntries={[
+            message("A question", {}, "question"),
+            message("the cited answer", { role: "assistant" }, "cited"),
+          ]}
+          citationRequest={CITATION_REQUEST}
+          citationHistory={{ _tag: "found" }}
+        />
+      </StrictMode>,
+      // The test router mounts route content without StrictMode's effect replay.
+      { router: false },
+    );
+    // StrictMode replays effect cleanups on mount; the activation must survive them.
+    await vi.waitFor(() =>
+      expect(document.querySelector("[data-citation-highlighted]")?.textContent).toContain(
+        "the cited answer",
+      ),
+    );
+  });
+
+  it("opens the superseded attempt that folds the cited response", async () => {
+    const runId = RunId.make("run-steered");
+    const attempt = (id: string, ordinal: number, status: "superseded" | "running") => ({
+      id: RunAttemptId.make(id),
+      runId,
+      attemptOrdinal: ordinal,
+      rootNodeId: `node-${id}` as never,
+      status,
+      completedAt: null,
+    });
+    const superseded = attempt("attempt-1", 1, "superseded");
+    const active = attempt("attempt-2", 2, "running");
+    const inAttempt = (entry: Entry, entryAttempt: typeof superseded): Entry => ({
+      ...entry,
+      attempt: entryAttempt,
+    });
+    await using _screen = await renderTimeline(
+      [
+        inAttempt(message("Build it", { runId }, "question"), superseded),
+        inAttempt(message("the cited answer", { role: "assistant", runId }, "cited"), superseded),
+        inAttempt(message("Change direction", { runId }, "steer"), active),
+        inAttempt(message("Current response", { role: "assistant", runId }, "current"), active),
+      ],
+      {
+        latestRun: { runId, status: "running", startedAt: CREATED_AT, completedAt: null },
+        citationRequest: CITATION_REQUEST,
+        citationHistory: { _tag: "found" },
+      },
+    );
+    await vi.waitFor(() =>
+      expect(document.querySelector("[data-citation-highlighted]")?.textContent).toContain(
+        "the cited answer",
+      ),
+    );
+  });
+
+  it("waits for cited history to load before giving up on a response outside the window", async () => {
+    using toast = vi.spyOn(toastManager, "add");
+    const props = baseProps();
+    const citationRequest = CITATION_REQUEST;
+    const recent = message("A recent question", {}, "recent");
+    const timeline = (entries: Entry[], citationHistory: CitedHistory) => (
+      <MessagesTimeline
+        {...props}
+        timelineEntries={entries}
+        citationRequest={citationRequest}
+        citationHistory={citationHistory}
+      />
+    );
+    await using screen = await renderElement(timeline([recent], { _tag: "loading" }));
+    await expect.element(screen.getByText("A recent question")).toBeVisible();
+
+    await screen.rerender(
+      timeline([message("the cited answer", { role: "assistant" }, "cited"), recent], {
+        _tag: "found",
+      }),
+    );
+    await expect.element(screen.getByText("the cited answer")).toBeVisible();
+    expect(toast).not.toHaveBeenCalled();
   });
 });
 
