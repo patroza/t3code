@@ -760,18 +760,14 @@ export const make = Effect.gen(function* () {
   const getOrCreateBootstrapSecret = SynchronizedRef.modifyEffect(secretRef, (current) =>
     Option.match(current, {
       onSome: (secret) => Effect.succeed([secret, current] as const),
-      onNone: () =>
-        Effect.gen(function* () {
-          const credentialPath = NodePath.join(
-            environment.stateDir,
-            LOCAL_BOOTSTRAP_CREDENTIAL_FILE,
-          );
-          const persisted = readLocalBootstrapCredential(credentialPath);
-          if (persisted !== undefined) return [persisted, Option.some(persisted)] as const;
-          const token = Hex.encode(yield* crypto.randomBytes(32));
-          const installed = installLocalBootstrapCredential(credentialPath, token);
-          return [installed, Option.some(installed)] as const;
-        }),
+      onNone: Effect.fnUntraced(function* () {
+        const credentialPath = NodePath.join(environment.stateDir, LOCAL_BOOTSTRAP_CREDENTIAL_FILE);
+        const persisted = readLocalBootstrapCredential(credentialPath);
+        if (persisted !== undefined) return [persisted, Option.some(persisted)] as const;
+        const token = Hex.encode(yield* crypto.randomBytes(32));
+        const installed = installLocalBootstrapCredential(credentialPath, token);
+        return [installed, Option.some(installed)] as const;
+      }),
     }),
   );
 
