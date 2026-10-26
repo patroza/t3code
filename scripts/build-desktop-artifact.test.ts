@@ -708,7 +708,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       NodePath.join(import.meta.dirname, "..", "pnpm-workspace.yaml"),
       "utf8",
     );
-    const decoded = Schema.decodeUnknownSync(
+    const decoded = Schema.decodeSync(
       fromYaml(
         Schema.Struct({
           allowBuilds: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)),
