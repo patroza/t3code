@@ -25,10 +25,12 @@ import {
   Profiler,
   StrictMode,
   useState,
+  useRef,
   type ComponentProps,
   type ReactElement,
 } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
+import { flushSync } from "react-dom";
 
 import { userEvent } from "vite-plus/test/browser";
 import { serverEnvironment } from "../../state/server";
@@ -48,6 +50,7 @@ import { collectThreadFindRanges } from "./threadFindHighlights";
 import { toastManager } from "../ui/toast";
 import type { CitedHistory } from "./citationProcedure";
 import type { TimelineNavigation } from "./timelineViewport";
+import { useTimelineFollow } from "./useTimelineFollow";
 import { rememberTimelinePosition } from "./timelineScrollAnchoring";
 
 const environmentQuery = vi.hoisted(() => ({
@@ -842,6 +845,36 @@ describe("MessagesTimeline history and thread links", () => {
 
   it("opens a thread at its newest message after an empty pane and restores it on return", async () => {
     const props = baseProps();
+    function FollowedTimeline(props: TimelineProps) {
+      const composerRef = useRef(null);
+      const [anchor, setAnchor] = useState<{
+        threadKey: string | null;
+        messageId: MessageId | null;
+      }>({ threadKey: null, messageId: null });
+      const follow = useTimelineFollow({
+        legendListRef: props.listRef,
+        composerRef,
+        composerTimelineInset: 0,
+        routeThreadKey: props.routeThreadKey,
+        activeThreadKey: props.routeThreadKey,
+        isServerThread: false,
+        serverProjection: null,
+        threadStatus: "live",
+        activeActivityRun: null,
+        activeRunningTurnId: null,
+        timelineEntries: props.timelineEntries,
+        timelineAnchorMessageId: anchor.messageId,
+        setTimelineAnchor: setAnchor,
+      });
+      return (
+        <MessagesTimeline
+          {...props}
+          liveFollowEnabled={props.liveFollowEnabled && follow.timelineLiveFollowEnabled}
+          onViewportAttach={follow.attachTimelineViewport}
+          onIsAtEndChange={follow.onIsAtEndChangeStable}
+        />
+      );
+    }
     const entries = Array.from({ length: 12 }, (_, index) =>
       message(
         Array.from({ length: 60 }, (_, line) => `Paragraph ${index}.${line}`).join("\n\n"),
@@ -849,15 +882,18 @@ describe("MessagesTimeline history and thread links", () => {
         `message-${index}`,
       ),
     );
-    await using screen = await renderTimeline([], {
-      ...props,
-      routeThreadKey: `${props.routeThreadKey}-loading`,
-      hideEmptyPlaceholder: true,
-    });
+    await using screen = await renderElement(
+      <FollowedTimeline
+        {...props}
+        timelineEntries={[]}
+        routeThreadKey={`${props.routeThreadKey}-loading`}
+        hideEmptyPlaceholder
+      />,
+    );
 
     // Each row is much taller than LegendList's estimate.
     await act(async () =>
-      screen.rerender(<MessagesTimeline {...props} timelineEntries={entries} />),
+      screen.rerender(<FollowedTimeline {...props} timelineEntries={entries} />),
     );
     const viewport = props.listRef.current!.getScrollableNode();
     await vi.waitFor(() => {
@@ -871,7 +907,7 @@ describe("MessagesTimeline history and thread links", () => {
     const otherThreadKey = `${props.routeThreadKey}-other`;
     await act(async () =>
       screen.rerender(
-        <MessagesTimeline
+        <FollowedTimeline
           {...props}
           routeThreadKey={otherThreadKey}
           timelineEntries={entries}
@@ -894,7 +930,7 @@ describe("MessagesTimeline history and thread links", () => {
     });
 
     await act(async () =>
-      screen.rerender(<MessagesTimeline {...props} timelineEntries={entries} />),
+      screen.rerender(<FollowedTimeline {...props} timelineEntries={entries} />),
     );
     await vi.waitFor(() => {
       expect(screen.text()).toContain("Paragraph 11.59");
@@ -1330,8 +1366,12 @@ describe("MessagesTimeline scroll position", () => {
     function Thread() {
       const composer = useComposerFocusState();
       const [liveFollowEnabled, setLiveFollowEnabled] = useState(true);
+      // Production follow is an external store: its release commits before the native scroll.
       return (
-        <div className="contents" onWheelCapture={() => setLiveFollowEnabled(false)}>
+        <div
+          className="contents"
+          onWheelCapture={() => flushSync(() => setLiveFollowEnabled(false))}
+        >
           <button onClick={() => composer.setIsComposerScrollCollapsed(true)}>Collapse</button>
           <output>{composer.isComposerScrollCollapsed ? "collapsed" : "resting"}</output>
           <MessagesTimeline
