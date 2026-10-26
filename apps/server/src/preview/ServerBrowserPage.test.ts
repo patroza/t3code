@@ -390,7 +390,7 @@ describe("server browser drag", () => {
 });
 
 describe("server browser viewport capture", () => {
-  const options = { format: "png", scale: 1 } as const;
+  const options = { format: "png" } as const;
   const unavailable = () =>
     new Error(
       "cdpSession.send: Protocol error (Page.captureScreenshot): Unable to capture screenshot",
@@ -405,9 +405,7 @@ describe("server browser viewport capture", () => {
       },
     } as unknown as CDPSession;
 
-    expect(await ServerBrowserPage.captureViewport({} as Page, cdp, options)).toBe(
-      "captured-image",
-    );
+    expect(await ServerBrowserPage.captureViewport(cdp, options)).toBe("captured-image");
     expect(attempts).toBe(2);
   });
 
@@ -421,7 +419,7 @@ describe("server browser viewport capture", () => {
       },
     } as unknown as CDPSession;
 
-    await expect(ServerBrowserPage.captureViewport({} as Page, cdp, options)).rejects.toBe(error);
+    await expect(ServerBrowserPage.captureViewport(cdp, options)).rejects.toBe(error);
     expect(attempts).toBe(2);
   });
 
@@ -435,7 +433,7 @@ describe("server browser viewport capture", () => {
       },
     } as unknown as CDPSession;
 
-    await expect(ServerBrowserPage.captureViewport({} as Page, cdp, options)).rejects.toBe(error);
+    await expect(ServerBrowserPage.captureViewport(cdp, options)).rejects.toBe(error);
     expect(attempts).toBe(1);
   });
 });
@@ -476,7 +474,6 @@ it("captures the native display viewport after page script reassigns the globals
       width: 1280,
       height: 800,
       zoom: 1,
-      offset: { x: 0, y: 0 },
     });
     // Window bounds are ignored by headless Chromium on some hosts; a metrics override resizes
     // the page everywhere, and Playwright's viewportSize() stays stale as it would on desktop.

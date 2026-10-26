@@ -187,7 +187,7 @@ export const ensureChannelInfoPin = Effect.fn("ChannelInfoPin.ensureChannelInfoP
                 method: "DELETE",
               }),
             catch: (cause) => cause,
-          }).pipe(Effect.catch(() => Effect.void));
+          }).pipe(Effect.ignore);
         }
       }
     } else {
@@ -226,7 +226,7 @@ export const ensureChannelInfoPin = Effect.fn("ChannelInfoPin.ensureChannelInfoP
             method: "DELETE",
           }),
         catch: (cause) => cause,
-      }).pipe(Effect.catch(() => Effect.void));
+      }).pipe(Effect.ignore);
     }
 
     return {

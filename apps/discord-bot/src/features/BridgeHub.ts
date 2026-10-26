@@ -236,10 +236,7 @@ export const makeBridgeHub = Effect.fn("BridgeHub.makeBridgeHub")(function* (
         ) {
           yield* existing.control.adoptWorkingAckMessageId(input.workingAckMessageId);
         }
-        yield* Deferred.await(existing.ready).pipe(
-          Effect.timeout("15 seconds"),
-          Effect.catch(() => Effect.void),
-        );
+        yield* Deferred.await(existing.ready).pipe(Effect.timeout("15 seconds"), Effect.ignore);
         return;
       }
 

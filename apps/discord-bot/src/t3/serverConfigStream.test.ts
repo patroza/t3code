@@ -12,7 +12,7 @@ import * as Stream from "effect/Stream";
 import { describe, expect } from "vite-plus/test";
 import { followBotServerConfig } from "./serverConfigStream.ts";
 
-const config = Schema.decodeUnknownSync(ServerConfig)({
+const config = Schema.decodeSync(ServerConfig)({
   environment: {
     environmentId: "provider-catalog-test",
     label: "test",
@@ -42,7 +42,7 @@ const config = Schema.decodeUnknownSync(ServerConfig)({
   settings: Schema.encodeSync(ServerSettings)(DEFAULT_SERVER_SETTINGS),
 });
 
-const claude = Schema.decodeUnknownSync(ServerProvider)({
+const claude = Schema.decodeSync(ServerProvider)({
   instanceId: "claudeAgent",
   driver: "claudeAgent",
   enabled: true,

@@ -1391,7 +1391,7 @@ it.live("a desktop attachment during fallback creation waits and adopts the desk
   ).pipe(Effect.provide(layer)),
 );
 
-// Chromium sizes a capture by the clip, its scale, and the display ratio net of page zoom.
+// Native capture uses the current viewport; shrinking happens afterward in an isolated world.
 it.live.each([
   {
     name: "desktop at display ratio 1.5",
@@ -1399,7 +1399,6 @@ it.live.each([
     page: { ratio: 1.5, width: 1280, height: 800, zoom: 1 },
     scrollY: 0,
     size: { width: 1280, height: 800 },
-    clipY: 0,
   },
   {
     name: "desktop resized to a phone",
@@ -1407,7 +1406,6 @@ it.live.each([
     page: { ratio: 1, width: 390, height: 844, zoom: 1 },
     scrollY: 0,
     size: { width: 390, height: 844 },
-    clipY: undefined,
   },
   {
     name: "desktop zoom changes during a scrolled snapshot",
@@ -1415,7 +1413,6 @@ it.live.each([
     page: { ratio: 3, width: 640, height: 400, zoom: 2 },
     scrollY: 100,
     size: { width: 1280, height: 800 },
-    clipY: 200,
   },
   {
     name: "headless",
@@ -1423,9 +1420,8 @@ it.live.each([
     page: { ratio: 2, width: 1280, height: 800, zoom: 1 },
     scrollY: 0,
     size: { width: 640, height: 400 },
-    clipY: 0,
   },
-])("snapshot captures the page's own viewport: $name", ({ desktop, page, scrollY, size, clipY }) =>
+])("snapshot captures the page's own viewport: $name", ({ desktop, page, scrollY, size }) =>
   Effect.scoped(
     Effect.gen(function* () {
       desktopRendersNext = desktop;
@@ -1434,7 +1430,8 @@ it.live.each([
       const context = desktop ? desktopConnections[0]!.context : contexts[0]!;
       const display = desktop ? page.ratio / page.zoom : 1;
       let zoom = 1;
-      const clips: Array<{ y: number } | undefined> = [];
+      const captures: unknown[] = [];
+      const shrinks: Array<{ width: number; height: number; contextId: number }> = [];
       let metricsReads = 0;
       for (const session of context.sessions) {
         const send = session.send.getMockImplementation()!;
@@ -1457,21 +1454,32 @@ it.live.each([
             return { cssVisualViewport: { pageX: 0, pageY: scrollY, zoom } };
           }
           if (method === "Page.captureScreenshot") {
-            const clip = (
-              input as { clip?: { y: number; width: number; height: number; scale: number } }
-            )?.clip;
-            clips.push(clip);
+            captures.push(input);
             const header = Buffer.alloc(24);
             header.write("IHDR", 12);
-            header.writeUInt32BE(
-              Math.round((clip ? clip.width * clip.scale : page.width * page.zoom) * display),
-              16,
-            );
-            header.writeUInt32BE(
-              Math.round((clip ? clip.height * clip.scale : page.height * page.zoom) * display),
-              20,
-            );
+            header.writeUInt32BE(Math.round(page.width * page.zoom * display), 16);
+            header.writeUInt32BE(Math.round(page.height * page.zoom * display), 20);
             return { data: header.toString("base64") };
+          }
+          if (method === "Runtime.callFunctionOn") {
+            const resize = input as {
+              functionDeclaration: string;
+              executionContextId: number;
+              awaitPromise: boolean;
+              returnByValue: boolean;
+              arguments: [{ value: string }, { value: number }, { value: number }];
+            };
+            expect(resize.functionDeclaration).toContain("createImageBitmap");
+            expect(resize.awaitPromise).toBe(true);
+            expect(resize.returnByValue).toBe(true);
+            const width = resize.arguments[1].value;
+            const height = resize.arguments[2].value;
+            shrinks.push({ width, height, contextId: resize.executionContextId });
+            const header = Buffer.alloc(24);
+            header.write("IHDR", 12);
+            header.writeUInt32BE(width, 16);
+            header.writeUInt32BE(height, 20);
+            return { result: { value: header.toString("base64") } };
           }
           return send(method, input);
         });
@@ -1485,7 +1493,10 @@ it.live.each([
       const png = Buffer.from(result.screenshot.data, "base64");
       expect(result.screenshot).toMatchObject(size);
       expect({ width: png.readUInt32BE(16), height: png.readUInt32BE(20) }).toEqual(size);
-      expect(clips.map((clip) => clip?.y)).toEqual([clipY]);
+      expect(captures).toEqual([{ format: "png" }]);
+      expect(shrinks).toEqual(
+        desktop && page.width * page.zoom * display <= 1280 ? [] : [{ ...size, contextId: 7 }],
+      );
       if (!desktop) expect(metricsReads).toBe(0);
     }),
   ).pipe(Effect.provide(layer)),

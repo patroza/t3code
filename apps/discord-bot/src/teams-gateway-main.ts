@@ -41,6 +41,7 @@ import {
 const decodeAnswers = Schema.decodeUnknownEffect(Schema.fromJsonString(ProviderUserInputAnswers));
 
 const program = Effect.gen(function* () {
+  const gatewayContext = yield* Effect.context<never>();
   const configPath = process.env.TEAMS_GATEWAY_CONFIG;
   const secretPath = process.env.TEAMS_GATEWAY_BOT_SECRET_FILE;
   const stateDir = process.env.TEAMS_GATEWAY_STATE_DIR;
@@ -407,7 +408,7 @@ const program = Effect.gen(function* () {
         }
       });
     });
-    Effect.runSync(Effect.logInfo("Teams intake:", outcome));
+    Effect.runSyncWith(gatewayContext)(Effect.logInfo("Teams intake:", outcome));
     // Acknowledge immediately; T3 work and Teams delivery continue on the host queue.
   });
   app.on("install.remove", async ({ activity }) => {

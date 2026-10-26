@@ -542,7 +542,7 @@ export const ensureThreadInfoPin = Effect.fn("ThreadInfoPin.ensureThreadInfoPin"
             method: "DELETE",
           }),
         catch: (cause) => cause,
-      }).pipe(Effect.catch(() => Effect.void));
+      }).pipe(Effect.ignore);
     }
 
     return {
@@ -646,14 +646,7 @@ export const upsertThreadInfoPin = Effect.fn("ThreadInfoPin.upsertThreadInfoPin"
       incomingPrUrls: input.incomingPrUrls ?? [],
       webUiBaseUrl: input.botConfig.webUiBaseUrl,
       publicWebUiBaseUrl: input.botConfig.publicWebUiBaseUrl,
-    }).pipe(
-      Effect.catch((error) =>
-        Effect.logWarning("Discord PR attribution side-effect failed", {
-          discordThreadId: input.discordThreadId,
-          error: String(error),
-        }),
-      ),
-    );
+    });
 
     const nextModelLine =
       input.modelSelection === null || input.modelSelection === undefined
