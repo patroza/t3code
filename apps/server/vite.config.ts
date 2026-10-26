@@ -31,10 +31,7 @@ if (!TELEMETRY_CHANNELS.includes(telemetryChannel)) {
   );
 }
 
-// `build:exe` wraps the same bundle in a Node single-executable. tsdown's exe
-// step refuses multi-chunk output and counts the sourcemap as a chunk, and the
-// executable needs a host Node that supports `--build-sea` (25.7+), so this is
-// a separate mode rather than a second entry in the default build.
+// tsdown SEA needs one chunk (sourcemaps count) and Node >=25.7, so package separately.
 const packExecutable = process.env.T3CODE_PACK_EXE === "1";
 const SEA_TARGETS = {
   "darwin-arm64": { platform: "darwin", arch: "arm64" },
@@ -68,9 +65,11 @@ const packExecutableTargets = packExecutableTarget
 // The root config's `projects` route repo-root runs to package configs,
 // including this one. Inheriting them would make this config a container.
 const { projects: _rootTestProjects, ...baseTestConfig } = baseConfig.test ?? {};
+// Workspace cache configuration is invalid on a package config.
+const { run: _rootRunConfig, ...basePackageConfig } = baseConfig;
 
 export default mergeConfig(
-  { ...baseConfig, test: baseTestConfig },
+  { ...basePackageConfig, test: baseTestConfig },
   defineConfig({
     run: {
       tasks: {
@@ -82,8 +81,7 @@ export default mergeConfig(
       },
     },
     pack: {
-      // The executable embeds one entry; the history worker becomes a hidden
-      // subcommand there instead of a sibling script.
+      // SEA embeds one entry; expose the history worker as a hidden subcommand.
       entry: packExecutable ? ["src/bin.ts"] : ["src/bin.ts", "src/claude-history-worker.ts"],
       outDir: packExecutable ? "dist-exe" : "dist",
       sourcemap: !packExecutable,
@@ -98,17 +96,13 @@ export default mergeConfig(
               fileName: "t3",
               outDir: "dist-exe",
               ...(packExecutableTargets ? { targets: packExecutableTargets } : {}),
-              // Node's SEA docs: `import()` does not work when useCodeCache is
-              // true, and the server reaches several modules that way.
+              // Node SEA useCodeCache breaks import(), which the server needs.
               seaConfig: { useCodeCache: false },
             },
           }
         : {}),
       deps: {
-        // `neverBundle` forces the native packages out: returning false from
-        // `alwaysBundle` only means "no opinion", so a transitive dependency
-        // would still be bundled — which silently inlined native loaders such
-        // as node-gyp-build, losing native acceleration.
+        // alwaysBundle=false has no opinion; neverBundle must retain transitive native acceleration.
         alwaysBundle: shouldBundleCliDependency,
         neverBundle: (id: string) => isExternalCliDependency(id),
         onlyBundle: false,
@@ -138,12 +132,14 @@ export default mergeConfig(
       },
     },
     test: {
-      // The server suite exercises sqlite, git, temp worktrees, and orchestration
-      // runtimes heavily. Running files in parallel introduces load-sensitive flakes.
+      // Parallel sqlite/git/worktree/orchestration tests introduce load-sensitive flakes.
       fileParallelism: false,
       sequence: { sequencer: WeightedShardSequencer, groupOrder: 4 },
       // Appended to the root setup, which mergeConfig concatenates.
-      setupFiles: ["./src/testUtils/gitConfig.setup.ts"],
+      setupFiles: [
+        "./src/testUtils/gitConfig.setup.ts",
+        "./src/testUtils/managedServiceEnv.setup.ts",
+      ],
       projects: [
         {
           test: {

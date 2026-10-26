@@ -1,3 +1,4 @@
+import { HOME_LIST_MODE_TITLES } from "./homeListMode";
 import { uuidv4 } from "../../lib/uuid";
 import { ThreadUndoNotice } from "./ThreadUndoNotice";
 import { Toolbar } from "../../components/ui/Toolbar";
@@ -31,7 +32,8 @@ import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
-import { useNativeColumnLayoutMetrics } from "../../native/native-layout-metrics";
+import { getConnectionAwareBrandHeaderOptions } from "./WorkspaceConnectionTitle";
+import { useDeviceType, useNativeColumnLayoutMetrics } from "../../native/native-layout-metrics";
 import { WorkspaceEmptyDetail } from "../layout/WorkspaceEmptyDetail";
 import { AndroidScreenHeader } from "../../components/ui/AndroidScreenHeader";
 import { checkForAppUpdateOnLaunch, startAppUpdateForegroundRecheck } from "../updates/app-updates";
@@ -40,22 +42,25 @@ import { HomeScreen } from "./HomeScreen";
 import { HomeHeader } from "./HomeHeader";
 import { useHomeListOptions } from "./home-list-options";
 import { useAtomValueWhileVisible, useHomeRouteVisible } from "./home-route-visibility";
-import { useHomeThreadRouteSelection, useHomeThreadSelection } from "./home-thread-navigation";
 import { buildHomeProjectScopes } from "./homeThreadList";
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useThreadListActions } from "./useThreadListActions";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
+import { openSettings } from "../settings/settings-navigation";
+import { useSelectWorkspaceTab } from "../workspace/useSelectWorkspaceTab";
+import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 
 export function HomeRouteScreen() {
   const { width: windowWidth } = useWindowDimensions();
   const nativePrimaryColumn = use(NativePrimaryColumnContext);
   const columnMetrics = useNativeColumnLayoutMetrics();
+  const deviceType = useDeviceType();
   const headerWidth = nativePrimaryColumn ? (columnMetrics?.width ?? windowWidth) : windowWidth;
   const { layout, panes, primarySidebarSearchQuery, setPrimarySidebarSearchQuery, startNewTask } =
     useAdaptiveWorkspaceLayout();
+  const selectDetail = useSelectWorkspaceDetail();
   const projects = useProjects();
-  // Streaming turns rewrite thread shells many times a second. While a Thread
-  // covers Home, rebuilding this list is invisible work.
+  // Stop rebuilding the streaming thread list while Thread covers Home.
   const visible = useHomeRouteVisible();
   const threads = useAtomValueWhileVisible(
     environmentThreadShells.navigationThreadShellsAtom,
@@ -64,6 +69,7 @@ export function HomeRouteScreen() {
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const navigation = useNavigation();
+  const selectTab = useSelectWorkspaceTab();
   const workspace = useWorkspaceTabs();
   const [localSearchQuery, setLocalSearchQuery] = useState("");
   const searchQuery =
@@ -75,8 +81,18 @@ export function HomeRouteScreen() {
     else if (workspace) workspace.dispatch({ type: "query", query, tab: "threads" });
     else setLocalSearchQuery(query);
   };
-  const handleSelectThread = useHomeThreadSelection();
-  const selectThreadRoute = useHomeThreadRouteSelection();
+  const handleSelectThread = useCallback(
+    (thread: EnvironmentThreadShell) =>
+      selectDetail({
+        name: "Thread",
+        params: { environmentId: String(thread.environmentId), threadId: String(thread.id) },
+      }),
+    [selectDetail],
+  );
+  const selectThreadRoute = useCallback(
+    (params: ReactNavigation.RootParamList["Thread"]) => selectDetail({ name: "Thread", params }),
+    [selectDetail],
+  );
   const handleNewThreadOnBranch = useCallback(
     (thread: EnvironmentThreadShell) => {
       selectThreadRoute({
@@ -112,7 +128,8 @@ export function HomeRouteScreen() {
     unsettleThread,
   } = useThreadListActions();
   const pendingTasks = usePendingNewTasks();
-  const { openPendingTask, confirmDeletePendingTask } = usePendingTaskListActions();
+  const { openPendingTask, confirmDeletePendingTask } =
+    usePendingTaskListActions(selectThreadRoute);
   const environments = useMemo(() => {
     const connectionStateByEnvironmentId = new Map(
       workspaceEnvironments.map(
@@ -248,11 +265,7 @@ export function HomeRouteScreen() {
         <WorkspaceEmptyDetail
           onAddConnection={
             Platform.OS === "android" && !catalogState.hasConnections
-              ? () =>
-                  navigation.navigate("SettingsSheet", {
-                    screen: "SettingsContent",
-                    params: { screen: "SettingsEnvironmentNew" },
-                  })
+              ? () => openSettings(navigation, "SettingsEnvironmentNew")
               : undefined
           }
           onStartNewTask={
@@ -269,11 +282,17 @@ export function HomeRouteScreen() {
       onStartNewTask={startNewTask}
     >
       <>
-        {/* WorkspaceRootScreen owns the iOS title and connection status. */}
+        {/* Screen options merge shallowly; restore the header after split view. */}
         {workspace !== null && Platform.OS === "ios" ? null : (
           <NativeStackScreenOptions
             optionsVersion={headerWidth}
             options={{
+              ...getConnectionAwareBrandHeaderOptions({
+                title: HOME_LIST_MODE_TITLES[listOptions.listMode],
+                headerWidth,
+                trailingItemCount: nativePrimaryColumn && deviceType === "pad" ? 2 : 1,
+                onOpenEnvironments: () => openSettings(navigation, "SettingsEnvironments"),
+              }),
               headerShown: Platform.OS !== "android",
             }}
           />
@@ -297,18 +316,8 @@ export function HomeRouteScreen() {
           onOwnershipFilterChange={setOwnershipFilter}
           onOwnershipRelationChange={setOwnershipRelation}
           onHideSettledThreadsChange={setHideSettledThreads}
-          onOpenEnvironments={() =>
-            navigation.navigate("SettingsSheet", {
-              screen: "SettingsContent",
-              params: { screen: "SettingsEnvironments" },
-            })
-          }
-          onOpenSettings={() =>
-            navigation.navigate("SettingsSheet", {
-              screen: "SettingsContent",
-              params: { screen: "Settings" },
-            })
-          }
+          onOpenEnvironments={() => openSettings(navigation, "SettingsEnvironments")}
+          onOpenSettings={() => selectTab("settings")}
           onSearchQueryChange={setSearchQuery}
           onStartNewTask={startNewTask}
         />
@@ -318,12 +327,7 @@ export function HomeRouteScreen() {
           environments={environments}
           listMode={listOptions.listMode}
           threadGrouping={listOptions.threadGrouping}
-          onAddConnection={() =>
-            navigation.navigate("SettingsSheet", {
-              screen: "SettingsContent",
-              params: { screen: "SettingsEnvironmentNew" },
-            })
-          }
+          onAddConnection={() => openSettings(navigation, "SettingsEnvironmentNew")}
           onArchiveThread={archiveThread}
           onDeleteThread={confirmDeleteThread}
           onSettleThread={settleThread}
@@ -339,12 +343,7 @@ export function HomeRouteScreen() {
           onRenameThread={renameThread}
           onRegenerateThreadTitle={regenerateThreadTitle}
           onProjectChange={setSelectedProjectKey}
-          onOpenSettings={() =>
-            navigation.navigate("SettingsSheet", {
-              screen: "SettingsContent",
-              params: { screen: "Settings" },
-            })
-          }
+          onOpenSettings={() => selectTab("settings")}
           onSearchQueryChange={setSearchQuery}
           onSelectThread={(thread) => {
             // Settled threads are live shells: opening one is plain

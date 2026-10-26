@@ -1,5 +1,6 @@
+import { useAtomValue } from "@effect/atom-react";
 import type { DesktopEnvironmentBootstrap } from "@t3tools/contracts";
-import { useEffect, useState } from "react";
+import { Atom } from "effect/reactivity";
 
 import { hasDesktopBridge, readDesktopSecondaryBootstraps } from "./desktopLocal";
 
@@ -31,36 +32,17 @@ export function bootstrapsEqual(
   });
 }
 
-/**
- * Reactively track the desktop's secondary local backends (e.g. a parallel WSL
- * backend). The bridge exposes no change event, so we re-read on an interval;
- * failed reads retain the latest successful snapshot, while a successful empty
- * read clears it. Use this instead of polling the bridge ad hoc so every
- * renderer consumer reads the same topology.
- *
- * Each read allocates a fresh array, so the previous reference is kept when the
- * topology is unchanged — otherwise every tick would re-render consumers with
- * an equal-but-new value. Without a bridge no topology can ever appear, so the
- * poll is not started at all.
- */
-export function useDesktopLocalBootstraps(): ReadonlyArray<DesktopEnvironmentBootstrap> {
-  const [bootstraps, setBootstraps] = useState<ReadonlyArray<DesktopEnvironmentBootstrap>>(
-    readDesktopSecondaryBootstraps,
+/** Poll the bridge while subscribed; preserve equal snapshots and retain the last success on failure. */
+const desktopLocalBootstrapsAtom = Atom.make((get) => {
+  if (!hasDesktopBridge()) return [];
+  const interval = setInterval(
+    () => get.setSelf(readDesktopSecondaryBootstraps()),
+    DESKTOP_LOCAL_BOOTSTRAP_POLL_MS,
   );
+  get.addFinalizer(() => clearInterval(interval));
+  return readDesktopSecondaryBootstraps();
+}).pipe(Atom.withLabel("desktop-local-bootstraps"));
 
-  useEffect(() => {
-    if (!hasDesktopBridge()) {
-      return;
-    }
-
-    const read = () => {
-      const next = readDesktopSecondaryBootstraps();
-      setBootstraps((previous) => (bootstrapsEqual(previous, next) ? previous : next));
-    };
-    read();
-    const interval = setInterval(read, DESKTOP_LOCAL_BOOTSTRAP_POLL_MS);
-    return () => clearInterval(interval);
-  }, []);
-
-  return bootstraps;
+export function useDesktopLocalBootstraps(): ReadonlyArray<DesktopEnvironmentBootstrap> {
+  return useAtomValue(desktopLocalBootstrapsAtom);
 }

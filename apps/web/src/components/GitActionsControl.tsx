@@ -42,7 +42,6 @@ import {
   GlobeIcon,
 } from "lucide-react";
 import { Radio as RadioPrimitive } from "@base-ui/react/radio";
-import { GitHubIcon } from "~/components/Icons";
 import { RadioGroup } from "~/components/ui/radio-group";
 import { Spinner } from "~/components/ui/spinner";
 import { Toggle, ToggleGroup } from "~/components/ui/toggle-group";
@@ -50,6 +49,10 @@ import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import {
   buildGitActionProgressStages,
+  formatGitActionElapsed,
+  GIT_ACTION_SUCCESS_VISIBLE_MS,
+  resolveGitActionProgressPresentation,
+  type GitActionProgressPresentation,
   buildMenuItems,
   type GitActionIconName,
   type GitActionMenuItem,
@@ -108,7 +111,7 @@ import { serverEnvironment } from "~/state/server";
 import { sourceControlEnvironment } from "~/state/sourceControl";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { vcsEnvironment } from "~/state/vcs";
+import { vcsActionManager, vcsEnvironment } from "~/state/vcs";
 import { randomUUID } from "~/lib/utils";
 import { resolvePathLinkTarget } from "@t3tools/shared/fileLinks";
 import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
@@ -124,6 +127,7 @@ import { sourceControlClients } from "@t3tools/client-runtime/source-control-cli
 import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
 import { useOpenLink } from "~/browser/useOpenLink";
 import { useOpenPrLink } from "~/lib/openPullRequestLink";
+import { useClientSettings } from "~/hooks/useSettings";
 
 interface GitActionsControlProps {
   displayMode?: "toolbar" | "panel";
@@ -151,6 +155,13 @@ interface PendingDefaultBranchAction {
 }
 
 type GitActionToastId = ReturnType<typeof toastManager.add>;
+
+interface InlineGitActionSuccess {
+  readonly title: string;
+  readonly description: string | null;
+  readonly scopeKey: string;
+  readonly expiresAtMs: number;
+}
 
 interface ActiveGitActionProgress {
   toastId: GitActionToastId;
@@ -221,7 +232,7 @@ function getPublishProviderReadiness(input: {
   if (!discovered) {
     return {
       ready: false,
-      hint: "Provider status unavailable. Open Settings -> Source Control and rescan.",
+      hint: "Provider status unavailable. Open Settings -> Source control and rescan.",
     };
   }
   if (discovered.status !== "available") {
@@ -232,7 +243,7 @@ function getPublishProviderReadiness(input: {
       ready: false,
       hint:
         Option.getOrNull(discovered.auth.detail) ??
-        `${discovered.label} is not authenticated. Open Settings -> Source Control for setup guidance.`,
+        `${discovered.label} is not authenticated. Open Settings -> Source control for setup guidance.`,
     };
   }
   return { ready: true, hint: null };
@@ -361,6 +372,134 @@ function GitQuickActionIcon({
   if (quickAction.label === "Commit") return <GitCommitIcon className={className} />;
   if (quickAction.label === "Push") return <CloudUploadIcon className={className} />;
   return <InfoIcon className={className} />;
+}
+
+function GitActionElapsedTime({
+  startedAtMs,
+  className,
+}: {
+  startedAtMs: number | null;
+  className?: string;
+}) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (startedAtMs === null) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 1_000);
+    return () => window.clearInterval(intervalId);
+  }, [startedAtMs]);
+
+  const elapsed = formatGitActionElapsed(startedAtMs, nowMs);
+  if (!elapsed) {
+    return null;
+  }
+
+  return <p className={className}>{elapsed}</p>;
+}
+
+function GitActionProgressButtonContent({
+  progress,
+  isPanel,
+}: {
+  progress: GitActionProgressPresentation;
+  isPanel: boolean;
+}) {
+  const hasOutput = progress.output !== null;
+
+  return (
+    <div
+      aria-atomic="false"
+      aria-live="polite"
+      className={cn(
+        "grid min-w-0 flex-1 items-center",
+        isPanel
+          ? "grid-cols-[auto_minmax(0,1fr)] grid-rows-[1.5rem] gap-x-3"
+          : "grid-cols-[auto_minmax(0,1fr)_auto] grid-rows-[1.25rem] gap-x-2.5 sm:grid-rows-[1rem]",
+      )}
+      role="status"
+    >
+      <Spinner aria-hidden="true" className="row-start-1 -mx-0.5 shrink-0" />
+      <p
+        className={cn(
+          "row-start-1 min-w-0 truncate text-left",
+          isPanel && THREAD_DETAILS_PANEL_LABEL_CLASS,
+        )}
+      >
+        {progress.status}
+      </p>
+      {!isPanel ? (
+        <GitActionElapsedTime
+          startedAtMs={progress.startedAtMs}
+          className="row-start-1 text-2xs font-normal tabular-nums text-muted-foreground"
+        />
+      ) : null}
+      <div
+        className={cn(
+          "col-start-2 grid min-w-0 transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none",
+          !isPanel && "col-span-2",
+          hasOutput ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
+        )}
+      >
+        <div className="min-h-0 overflow-hidden">
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <p className="truncate pt-0.5 text-left text-2xs font-normal text-muted-foreground" />
+              }
+            >
+              {progress.output}
+            </TooltipTrigger>
+            <TooltipPopup side="bottom" className="max-w-96 break-words">
+              {progress.output}
+            </TooltipPopup>
+          </Tooltip>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GitActionSuccessButtonContent({ success }: { success: InlineGitActionSuccess }) {
+  const hasDescription = success.description !== null;
+
+  return (
+    <div
+      aria-live="polite"
+      className="grid min-w-0 flex-1 grid-cols-[auto_minmax(0,1fr)] grid-rows-[1.5rem] items-center gap-x-3"
+      role="status"
+    >
+      <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-success" />
+      <p className={cn("min-w-0 truncate text-left", THREAD_DETAILS_PANEL_LABEL_CLASS)}>
+        {success.title}
+      </p>
+      <div
+        className={cn(
+          "col-start-2 grid min-w-0 transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none",
+          hasDescription ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
+        )}
+      >
+        <div className="min-h-0 overflow-hidden">
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <p className="truncate pt-0.5 text-left text-2xs font-normal text-muted-foreground" />
+              }
+            >
+              {success.description}
+            </TooltipTrigger>
+            <TooltipPopup side="bottom" className="max-w-96 break-words">
+              {success.description}
+            </TooltipPopup>
+          </Tooltip>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 interface PublishRepositoryDialogProps {
@@ -585,7 +724,7 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
                         />
                         <TooltipPopup side="top" align="end">
                           {readiness.hint ??
-                            "Open Settings -> Source Control to configure this provider."}
+                            "Open Settings -> Source control to configure this provider."}
                         </TooltipPopup>
                       </Tooltip>
                     </div>
@@ -885,6 +1024,7 @@ export default function GitActionsControl({
     "thread branch metadata update",
   );
   const activeEnvironmentId = activeThreadRef?.environmentId ?? null;
+  const successScopeKey = `${activeEnvironmentId ?? ""}\u0000${gitCwd ?? ""}`;
   const canWriteSourceControl = useEnvironmentScope(
     activeEnvironmentId,
     AuthSourceControlWriteScope,
@@ -898,7 +1038,6 @@ export default function GitActionsControl({
   const threadToastData = activeThreadRef ? { threadRef: activeThreadRef } : undefined;
   const activeServerThreadShell = useQuietThreadShell(activeThreadRef);
   const openPrLink = useOpenPrLink(activeThreadRef ?? undefined);
-  const openLink = useOpenLink(activeThreadRef);
   const activeDraftThread = useComposerDraftStore((store) =>
     draftId
       ? store.getDraftSession(draftId)
@@ -919,11 +1058,13 @@ export default function GitActionsControl({
   const [excludedFiles, setExcludedFiles] = useState<ReadonlySet<string>>(new Set());
   const [isEditingFiles, setIsEditingFiles] = useState(false);
   const [isPublishDialogOpen, setIsPublishDialogOpen] = useState(false);
+  const [inlineSuccess, setInlineSuccess] = useState<InlineGitActionSuccess | null>(null);
   const [pendingDefaultBranchAction, setPendingDefaultBranchAction] =
     useState<PendingDefaultBranchAction | null>(null);
   const activeGitActionProgressRef = useRef<ActiveGitActionProgress | null>(null);
   const sourceControlScope = { environmentId: activeEnvironmentId, cwd: gitCwd };
-
+  const vcsActionState = useAtomValue(vcsActionManager.stateAtom(sourceControlScope));
+  const visibleInlineSuccess = inlineSuccess?.scopeKey === successScopeKey ? inlineSuccess : null;
   const updateActiveProgressToast = () => {
     const progress = activeGitActionProgressRef.current;
     if (!progress) {
@@ -1075,6 +1216,18 @@ export default function GitActionsControl({
     : quickAction.disabled
       ? (quickAction.hint ?? "This action is currently unavailable.")
       : null;
+  const gitActionProgress = resolveGitActionProgressPresentation(vcsActionState);
+  const redesign = useClientSettings((s) => s.redesignEnabled);
+  // A fresh draft or a thread with no turns hides commit, push, and diff rows until there is work.
+  const quietEmptyDraft =
+    redesign &&
+    isPanel &&
+    (draftId !== undefined || activeServerThreadShell?.latestRun === null) &&
+    gitActionProgress === null &&
+    !gitStatusError &&
+    quickAction.disabled &&
+    !changesTotals?.insertions &&
+    !changesTotals?.deletions;
   const pendingDefaultBranchActionCopy = pendingDefaultBranchAction
     ? resolveDefaultBranchActionDialogCopy({
         action: pendingDefaultBranchAction.action,
@@ -1083,9 +1236,7 @@ export default function GitActionsControl({
         terminology: changeRequestTerminology,
       })
     : null;
-  // Follows the live status so the button tracks the tree while the dialog is open. Until the
-  // status loads, keep the option enabled: the server stays the authority and rejects a stale
-  // request with its own error.
+  // Keep enabled until live status loads; the server rejects stale requests.
   const featureBranchUnavailableReason = pendingDefaultBranchAction
     ? resolveFeatureBranchUnavailableReason({
         branchName: pendingDefaultBranchAction.branchName,
@@ -1101,10 +1252,19 @@ export default function GitActionsControl({
       updateActiveProgressToast();
     }, 1000);
 
+    const successTimeout = inlineSuccess
+      ? window.setTimeout(
+          () => {
+            setInlineSuccess((current) => (current === inlineSuccess ? null : current));
+          },
+          Math.max(0, inlineSuccess.expiresAtMs - Date.now()),
+        )
+      : null;
     return () => {
       window.clearInterval(interval);
+      if (successTimeout !== null) window.clearTimeout(successTimeout);
     };
-  }, [updateActiveProgressToast]);
+  }, [updateActiveProgressToast, inlineSuccess]);
 
   useEffect(() => {
     if (gitCwd === null) {
@@ -1216,6 +1376,7 @@ export default function GitActionsControl({
       return;
     }
     onConfirmed?.();
+    setInlineSuccess(null);
 
     const progressStages = buildGitActionProgressStages({
       action,
@@ -1326,6 +1487,7 @@ export default function GitActionsControl({
       ...(disableCommitSigning ? { disableCommitSigning: true } : {}),
       ...(filePaths ? { filePaths } : {}),
       ...(activeServerThread ? { threadId: activeServerThread.id } : {}),
+      ...(activeDraftThread ? { projectId: activeDraftThread.projectId } : {}),
       onProgress: applyProgressEvent,
     });
 
@@ -1387,6 +1549,15 @@ export default function GitActionsControl({
 
     const actionResult = result.value;
     syncThreadBranchAfterGitAction(actionResult);
+    if (isPanel) {
+      setInlineSuccess({
+        title: actionResult.toast.title,
+        description: actionResult.toast.description ?? null,
+        scopeKey: successScopeKey,
+        // oxlint-disable-next-line react/purity -- This timestamp is captured after an awaited Git action, not during render.
+        expiresAtMs: Date.now() + GIT_ACTION_SUCCESS_VISIBLE_MS,
+      });
+    }
     const closeResultToast = () => {
       toastManager.close(resolvedProgressToastId);
     };
@@ -1491,6 +1662,7 @@ export default function GitActionsControl({
         data: threadToastData,
       });
       void (async () => {
+        setInlineSuccess(null);
         const result = await pullAction.run();
         if (result._tag === "Failure") {
           if (isAtomCommandInterrupted(result)) {
@@ -1511,6 +1683,17 @@ export default function GitActionsControl({
         }
 
         const pullResult = result.value;
+        if (isPanel) {
+          setInlineSuccess({
+            title: pullResult.status === "pulled" ? "Pulled" : "Already up to date",
+            description:
+              pullResult.status === "pulled"
+                ? `Updated ${pullResult.refName} from ${pullResult.upstreamRef ?? "upstream"}`
+                : `${pullResult.refName} is already synchronized.`,
+            scopeKey: successScopeKey,
+            expiresAtMs: Date.now() + GIT_ACTION_SUCCESS_VISIBLE_MS,
+          });
+        }
         toastManager.update(toastId, {
           type: "success",
           title: pullResult.status === "pulled" ? "Pulled" : "Already up to date",
@@ -1690,14 +1873,15 @@ export default function GitActionsControl({
           aria-label="View GitHub pull requests"
           onClick={openPullRequestList}
         >
-          <GitHubIcon />
+          <SourceControlIcon />
           <MenuItemLabel>View PRs</MenuItemLabel>
           <ExternalLinkIcon aria-hidden="true" className="ml-auto size-3.5 opacity-60" />
         </MenuItem>
       ) : null}
       {gitStatusForActions?.refName === null && (
         <p className="px-2 py-1.5 text-xs text-warning">
-          Detached HEAD: create and check out a branch to enable push and pull request actions.
+          Detached HEAD: create and check out a branch to enable push and{" "}
+          {changeRequestTerminology.singular} actions.
         </p>
       )}
       {gitStatusForActions &&
@@ -1775,14 +1959,39 @@ export default function GitActionsControl({
             {initAction.isPending ? "Initializing..." : "Initialize Git"}
           </span>
         </ThreadDetailsControl>
-      ) : compact ? null : (
+      ) : quietEmptyDraft || (compact && !gitActionProgress && !visibleInlineSuccess) ? null : (
         <ActionGroup
           role="group"
           aria-label="Git actions"
           {...(isPanel ? { ref: panelAnchorRef } : {})}
-          className={cn("shrink-0", isPanel && THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS)}
+          className={cn(
+            "shrink-0",
+            isPanel && THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS,
+            isPanel && gitActionProgress && "bg-black/[0.035] dark:bg-white/[0.055]",
+          )}
         >
-          {quickActionDisabledReason ? (
+          {gitActionProgress ? (
+            <ThreadDetailsControl
+              aria-label={
+                gitActionProgress.output
+                  ? `${gitActionProgress.status} ${gitActionProgress.output}`
+                  : gitActionProgress.status
+              }
+              part="primary"
+              panel={isPanel}
+              multiline
+              className={isPanel ? undefined : "max-w-72"}
+              disabled
+              size="xs"
+              variant={isPanel ? "ghost" : "outline"}
+            >
+              <GitActionProgressButtonContent isPanel={isPanel} progress={gitActionProgress} />
+            </ThreadDetailsControl>
+          ) : isPanel && visibleInlineSuccess ? (
+            <ThreadDetailsControl part="primary" multiline disabled size="xs" variant="ghost">
+              <GitActionSuccessButtonContent success={visibleInlineSuccess} />
+            </ThreadDetailsControl>
+          ) : quickActionDisabledReason ? (
             <Popover>
               <PopoverTrigger
                 openOnHover
@@ -1880,7 +2089,7 @@ export default function GitActionsControl({
         </ActionGroup>
       )}
 
-      {isPanel && isRepo ? (
+      {isPanel && isRepo && !quietEmptyDraft ? (
         <ThreadDetailsControl
           type="button"
           variant="ghost"
@@ -1891,11 +2100,21 @@ export default function GitActionsControl({
         >
           <FileDiffIcon className={THREAD_DETAILS_PANEL_ICON_CLASS} aria-hidden />
           <span className={cn("flex-1 text-left", THREAD_DETAILS_PANEL_LABEL_CLASS)}>Changes</span>
-          <span className="flex items-center gap-1 font-mono text-2xs tabular-nums">
-            <span className="text-diff-addition">
+          <span className="flex items-center gap-1.5 font-mono text-xs tabular-nums">
+            <span
+              className={
+                changesTotals?.insertions
+                  ? "text-diff-addition-foreground"
+                  : "text-muted-foreground"
+              }
+            >
               +{formatDiffCount(changesTotals?.insertions ?? 0)}
             </span>
-            <span className="text-diff-deletion">
+            <span
+              className={
+                changesTotals?.deletions ? "text-diff-deletion-foreground" : "text-muted-foreground"
+              }
+            >
               -{formatDiffCount(changesTotals?.deletions ?? 0)}
             </span>
           </span>

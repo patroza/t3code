@@ -17,20 +17,12 @@ export const PROVIDER_ORDER = [
   "muse",
 ] as const satisfies readonly UsageProviderKind[];
 
-/**
- * A provider added to `UsageProviderKind` but not to {@link PROVIDER_ORDER}
- * would still appear in the summary rows (those come from `merged.providers`)
- * while silently vanishing from the daily columns, chart bands, legends and
- * skeletons, all of which iterate this order. The `Record` maps below are
- * exhaustive by their own type; this makes the order exhaustive too, so the
- * omission is a compile error rather than a missing column nobody notices.
- */
+/** Every usage provider must have a chart position, or its summary would lack matching chart data. */
 type AssertNoUnorderedProvider<T extends never> = T;
 export type UsageProviderOrderIsExhaustive = AssertNoUnorderedProvider<
   Exclude<UsageProviderKind, (typeof PROVIDER_ORDER)[number]>
 >;
 
-/** The usage series a provider driver reports under, or null for drivers without one. */
 export function usageProviderKind(driver: string): UsageProviderKind | null {
   if (driver === "claudeAgent") return "claude";
   return PROVIDER_ORDER.find((kind) => kind === driver) ?? null;

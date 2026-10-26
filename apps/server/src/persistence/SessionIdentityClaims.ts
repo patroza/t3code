@@ -135,7 +135,7 @@ export const make = Effect.gen(function* () {
         ),
         Effect.flatMap((rowOption) =>
           Option.match(rowOption, {
-            onNone: () => Effect.succeed(Option.none()),
+            onNone: () => Effect.succeedNone,
             onSome: (row) =>
               decodeClaim(row).pipe(
                 Effect.mapError((cause) =>
@@ -145,7 +145,7 @@ export const make = Effect.gen(function* () {
                     { sessionId },
                   ),
                 ),
-                Effect.map((decoded) => Option.some(decoded)),
+                Effect.asSome,
               ),
           }),
         ),

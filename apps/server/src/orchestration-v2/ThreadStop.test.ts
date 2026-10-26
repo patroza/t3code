@@ -1177,7 +1177,6 @@ it.effect.each(["thread.stop", "run.interrupt"] as const)(
         creationSource: "server",
         restartContinuationOfRunId: source.id,
       });
-      // The held run resumed after the cancelled source ran, so it sorts after it.
       assert.deepEqual(yield* threadState(threadId), {
         runs: ["completed", "cancelled", "interrupted"],
         watched: [],
@@ -1416,6 +1415,25 @@ it.effect.each(["missing session", "completed", "failed", "cancelled"] as const)
         occurredAt: now,
         payload: childRoot,
       });
+      const childTurnId = ProviderTurnId.make("turn:native-stop-child");
+      yield* projections.apply({
+        id: EventId.make("event:native-child-stop:child-turn"),
+        type: "provider-turn.updated",
+        threadId: childRoot.threadId,
+        nodeId: childRoot.id,
+        occurredAt: now,
+        payload: {
+          id: childTurnId,
+          providerThreadId: ProviderThreadId.make("provider-thread:native-stop-child"),
+          nodeId: childRoot.id,
+          runAttemptId: null,
+          nativeTurnRef: null,
+          ordinal: 1,
+          status: "running",
+          startedAt: now,
+          completedAt: null,
+        },
+      });
       const providerThread = before.providerThreads.find(
         (thread) => thread.id === run.providerThreadId,
       )!;
@@ -1580,6 +1598,10 @@ it.effect.each(["missing session", "completed", "failed", "cancelled"] as const)
       );
       const child = yield* orchestrator.getThreadProjection(childRoot.threadId);
       assert.equal(child.nodes.find((node) => node.id === childRoot.id)?.status, confirmedStatus);
+      assert.equal(
+        child.providerTurns.find((turn) => turn.id === childTurnId)?.status,
+        confirmedStatus,
+      );
       assert.isNotNull(child.nodes.find((node) => node.id === childRoot.id)?.completedAt);
       assert.equal(settled.subagents.find((task) => task.id === sibling.id)?.status, "running");
       assert.deepEqual(yield* threadState(threadId), stateBefore);

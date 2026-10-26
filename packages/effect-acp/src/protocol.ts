@@ -526,11 +526,8 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
       );
   };
 
-  // A notification has no reply to fail, so one the schema rejects is logged
-  // and dropped. Ending the connection over it would kill a working session
-  // because one update, possibly from a newer spec, did not parse. An agent
-  // repeats a bad shape on every update, so each distinct failure is warned
-  // about once per connection.
+  // Drop undecodable notifications without ending working sessions; newer specs may add unknown shapes.
+  // Warn once per distinct failure per connection because agents repeat bad payloads.
   const dropUndecodableNotification = (method: string) => (cause: Schema.SchemaError) => {
     const error = AcpError.AcpProtocolParseError.fromSchemaError(
       "decode-notification-payload",
@@ -888,17 +885,9 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
         Effect.forever,
       ),
     send: (_clientId, request) =>
-      // Effect's RpcClient multiplexes real RPC requests with transport-level
-      // control frames: `Interrupt` (emitted when a request fiber is cancelled),
-      // `Ack` (chunk backpressure), and `Ping`/`Eof` (liveness). Those frames are
-      // an Effect-RPC transport concern with no meaning in ACP, whose wire is
-      // plain JSON-RPC. A spec-compliant agent (e.g. grok) cannot decode them and
-      // rejects the line with "Method not found", which wedges the session:
-      // interrupting an in-flight `session/prompt` (a turn Stop) would otherwise
-      // leak an `Interrupt` frame onto the agent's stdin and brick the thread.
-      // Agent-side cancellation is expressed via the `session/cancel`
-      // notification, so only real ACP messages (`Request`, including id:"" for
-      // notifications) belong on the wire; the control frames are dropped here.
+      // ACP is plain JSON-RPC; Effect-RPC control frames are invalid on the agent's
+      // stdin and can wedge the session when a prompt is interrupted. Cancellation
+      // uses ACP's `session/cancel`, so only real `Request` messages go on the wire.
       request._tag === "Request"
         ? offerOutgoing(request).pipe(
             Effect.mapError(

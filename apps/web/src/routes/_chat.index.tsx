@@ -33,14 +33,7 @@ function ChatIndexRouteView() {
   return <IndexDraftLanding />;
 }
 
-/**
- * Landing on the index route drops straight into a draft thread for the most
- * recently active project, so the first screen is a prompt instead of a dead
- * end. Falls back to an add-project hero when no project exists yet.
- *
- * While `?thread=` (or a pending deep-link store entry) is present, skip
- * auto-draft so OmegentDeepLinkCoordinator can open the real thread.
- */
+/** Start a draft for the recent project, except while a deep link is selecting its real thread. */
 
 function IndexDraftLanding() {
   const projects = useProjects();
@@ -48,8 +41,7 @@ function IndexDraftLanding() {
   const bootstrapped = useAllEnvironmentShellsBootstrapped();
   const handleNewThread = useNewThreadHandler();
   const router = useRouter();
-  // Read at effect time: this page stays mounted while a navigation away from
-  // "/" is still loading, but the router already points at the new location.
+  // Read at effect time; this page can stay mounted while the router is already navigating away.
   const isStillOnIndex = useEffectEvent(() => router.state.location.pathname === "/");
   const startedAttemptRef = useRef<number | null>(null);
   const [startState, setStartState] = useState({ failed: false, retryRequest: 0 });

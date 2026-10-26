@@ -57,7 +57,7 @@ describe("mobile surface existence (anti stack-drop)", () => {
   it("opens the fork's /new command in the persistent draft route", () => {
     const composer = readSrc("features/threads/ThreadComposer.tsx");
     expect(composer).toContain('parseStandaloneComposerSlashCommand(draftMessage) === "new"');
-    expect(composer).toMatch(/selectThreadRoute\(\{\s*draft: \{/);
+    expect(composer).toMatch(/selectDetail\(\{\s*name: "Thread",\s*params: \{\s*draft: \{/);
     expect(composer).not.toContain('"NewTaskSheet"');
   });
 
@@ -71,11 +71,7 @@ describe("mobile surface existence (anti stack-drop)", () => {
   });
 
   it("keeps list-mode titles under the connection-status title swap", () => {
-    // Upstream's connection-aware header hardcodes the brand lockup and the
-    // literal "Threads" (#5372). This fork's headers show a list-mode title
-    // (Threads / Projects), so every surface that adopts the swap has
-    // to pass its own title through — a plain adoption silently renames
-    // and Projects to "Threads", which is exactly what slipped through once.
+    // Every connection-aware header must preserve the selected list-mode title.
     const sidebar = NodeFS.readFileSync(
       NodePath.join(root, "features/threads/ThreadNavigationSidebar.tsx"),
       "utf8",
@@ -95,6 +91,9 @@ describe("mobile surface existence (anti stack-drop)", () => {
     // The workspace now owns the iOS title and keeps the fork's selected list mode.
     const workspace = readSrc("features/workspace/WorkspaceRootScreen.tsx");
     expect(workspace).toContain("HOME_LIST_MODE_TITLES[listMode]");
+    expect(readSrc("features/home/HomeRouteScreen.tsx")).toContain(
+      "title: HOME_LIST_MODE_TITLES[listOptions.listMode]",
+    );
     expect(workspace).toMatch(/<WorkspaceConnectionTitle[\s\S]*?\{props.title\}/);
     expect(homeHeader).toContain('accessibilityLabel="Thread list options"');
     expect(homeHeader).toContain("HOME_LIST_MODES.map");

@@ -124,8 +124,7 @@ export const make = Effect.gen(function* () {
     return yield* detectWithDriver("git", git, input.cwd);
   });
 
-  // Falls back to the cwd alone when the root is not above it, such as a cwd
-  // reached through a symlink.
+  // Symlinks can put cwd outside root; then inspect cwd alone.
   const foldersBelowRoot = (cwd: string, rootPath: string) => {
     const relative = path.relative(path.resolve(rootPath), path.resolve(cwd));
     if (relative.startsWith("..") || path.isAbsolute(relative)) return [cwd];

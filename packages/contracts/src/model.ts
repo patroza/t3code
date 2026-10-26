@@ -83,8 +83,6 @@ function coerceLegacyOptionsObjectToArray(
     } else if (typeof rawValue === "boolean") {
       entries.push({ id, value: rawValue });
     }
-    // Drop anything else (numbers, null, nested objects/arrays) to match the
-    // permissive normalization performed by migration 026.
   }
   return entries;
 }

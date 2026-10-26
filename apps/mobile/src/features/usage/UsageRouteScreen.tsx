@@ -28,19 +28,13 @@ import {
   formatUsd,
   makeWindow,
 } from "@t3tools/shared/usageFormat";
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { Platform, Pressable, RefreshControl, View } from "react-native";
-import Animated, {
-  FadeIn,
-  ReduceMotion,
-  useAnimatedStyle,
-  useSharedValue,
-  withDelay,
-  withTiming,
-} from "react-native-reanimated";
+import Animated, { FadeIn, ReduceMotion } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { SegmentedControl } from "../../components/ui/SegmentedControl";
+import { useReduceMotionEnabled } from "../../lib/appState";
 import { AppText as Text } from "../../components/ui/AppText";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { cn } from "../../lib/cn";
@@ -56,6 +50,7 @@ import { UsageLimitsSection } from "./UsageLimitsPooled";
 import { Menu } from "../../components/ui/Menu";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
+import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 import type { UsageChartMetric } from "./usageChartData";
 import { PROVIDER_LABEL, useProviderColors, useUsageMixColors } from "./usageProviders";
 
@@ -245,8 +240,31 @@ function UsageScreen(props: {
     <SettingsScreen title="Usage" trailing={environmentFilter} workspaceRoot={props.workspace}>
       {Platform.OS === "ios" ? (
         <NativeStackScreenOptions
-          optionsVersion={environmentFilter}
-          options={{ headerRight: () => environmentFilter }}
+          optionsVersion={JSON.stringify({ showEnvironmentFilter, filterIcon, environmentActions })}
+          options={{
+            // A native menu item, unlike a custom view, moves into the Duo's vertical bar.
+            unstable_headerRightItems: () =>
+              showEnvironmentFilter
+                ? [
+                    withNativeGlassHeaderItem({
+                      accessibilityLabel: "Filter usage environments",
+                      icon: { name: filterIcon, type: "sfSymbol" },
+                      label: "",
+                      type: "menu",
+                      menu: {
+                        title: "Environments",
+                        items: environmentActions.map((action) => ({
+                          type: "action" as const,
+                          label: action.title,
+                          description: action.subtitle,
+                          state: action.state === "on" ? ("on" as const) : undefined,
+                          onPress: () => selectEnvironment(action.id),
+                        })),
+                      },
+                    }),
+                  ]
+                : [],
+          }}
         />
       ) : null}
       <ScrollView
@@ -379,15 +397,14 @@ function UsageUpdating({
   readonly label: string | null;
   readonly children: ReactNode;
 }) {
-  const opacity = useSharedValue(1);
-  useLayoutEffect(() => {
-    opacity.set(
-      dimmed
-        ? withDelay(150, withTiming(0.5, { duration: 150, reduceMotion: ReduceMotion.System }))
-        : withTiming(1, { duration: 150, reduceMotion: ReduceMotion.System }),
-    );
-  }, [opacity, dimmed]);
-  const dimStyle = useAnimatedStyle(() => ({ opacity: opacity.get() }));
+  const reduceMotion = useReduceMotionEnabled();
+  // The delay keeps a quick refresh from flashing the content.
+  const dimStyle = {
+    opacity: dimmed ? 0.5 : 1,
+    transitionProperty: "opacity",
+    transitionDuration: reduceMotion ? 0 : 150,
+    transitionDelay: dimmed ? 150 : 0,
+  } as const;
 
   return (
     <View>
@@ -595,7 +612,7 @@ function ProviderSection(props: {
   const colors = useProviderColors();
   if (merged.providers.length === 0 && props.cursorAccessEnvironments.length === 0) return null;
 
-  // .sort() on a copy, not .toSorted(): Hermes doesn't ship the ES2023 method.
+  // Hermes lacks toSorted.
   const ordered = [...merged.providers].sort((a, b) =>
     metric === "cost" ? b.costUsd - a.costUsd : b.totalTokens - a.totalTokens,
   );
@@ -819,7 +836,7 @@ function ModelsSection(props: { readonly merged: MergedUsage; readonly metric: U
   const colors = useProviderColors();
   if (merged.models.length === 0) return null;
 
-  // .sort() on a copy, not .toSorted(): Hermes doesn't ship the ES2023 method.
+  // Hermes lacks toSorted.
   const ordered = [...merged.models].sort((a, b) =>
     metric === "cost"
       ? b.costUsd - a.costUsd || b.totalTokens - a.totalTokens

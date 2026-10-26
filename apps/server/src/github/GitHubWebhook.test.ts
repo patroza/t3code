@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Effect's Crypto has no createHmac or generateKeyPairSync.
 import * as NodeBuffer from "node:buffer";
 import * as NodeCrypto from "node:crypto";
+import { SourceControlProviderKind } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
 import { IntegrationThreadView } from "@t3tools/shared/integrationThreadView";
@@ -26,6 +27,8 @@ import {
   parseGitHubThreadMode,
 } from "./GitHubWebhookPayload.ts";
 import { createGitHubAppJwt, verifyGitHubWebhookSignature } from "./GitHubWebhookSecurity.ts";
+
+const decodeIntegrationThreadView = Schema.decodeUnknownSync(IntegrationThreadView);
 
 function webhook(body = "@t3-code investigate the failing check"): GitHubIssueCommentWebhook {
   return {
@@ -340,7 +343,7 @@ describe("GitHub PR webhook", () => {
             remoteName: "origin",
             remoteUrl: "git@github.com:example-org/example-repo.git",
           },
-          provider: "github",
+          provider: SourceControlProviderKind.make("github"),
           owner: "patroza",
           name: "example-repo",
         },
@@ -356,7 +359,7 @@ describe("GitHub PR webhook", () => {
             remoteName: "origin",
             remoteUrl: "git@github.com:patroza/t3code.git",
           },
-          provider: "github",
+          provider: SourceControlProviderKind.make("github"),
           owner: "patroza",
           name: "t3code",
         },
@@ -376,7 +379,7 @@ describe("GitHub PR webhook", () => {
         remoteName: "upstream",
         remoteUrl: "https://github.com/pingdotgg/t3code.git",
       },
-      provider: "github",
+      provider: SourceControlProviderKind.make("github"),
       owner: "pingdotgg",
       name: "t3code",
       remotes: [
@@ -384,7 +387,7 @@ describe("GitHub PR webhook", () => {
           remoteName: "origin",
           remoteUrl: "https://github.com/example-org/example-repo.git",
           canonicalKey: "github.com/example-org/example-repo",
-          provider: "github",
+          provider: SourceControlProviderKind.make("github"),
           owner: "patroza",
           name: "example-repo",
         },
@@ -392,7 +395,7 @@ describe("GitHub PR webhook", () => {
           remoteName: "upstream",
           remoteUrl: "https://github.com/pingdotgg/t3code.git",
           canonicalKey: "github.com/pingdotgg/t3code",
-          provider: "github",
+          provider: SourceControlProviderKind.make("github"),
           owner: "pingdotgg",
           name: "t3code",
         },
@@ -414,7 +417,7 @@ describe("GitHub PR webhook", () => {
             remoteName: "origin",
             remoteUrl: "git@gitlab.com:example-org/example-repo.git",
           },
-          provider: "gitlab",
+          provider: SourceControlProviderKind.make("gitlab"),
           owner: "patroza",
           name: "example-repo",
           remotes: [
@@ -422,7 +425,7 @@ describe("GitHub PR webhook", () => {
               remoteName: "origin",
               remoteUrl: "git@gitlab.com:example-org/example-repo.git",
               canonicalKey: "gitlab.com/example-org/example-repo",
-              provider: "gitlab",
+              provider: SourceControlProviderKind.make("gitlab"),
               owner: "patroza",
               name: "example-repo",
             },
@@ -534,7 +537,7 @@ function threadFixture(input: {
     readonly payload: unknown;
   }>;
 }) {
-  return Schema.decodeUnknownSync(IntegrationThreadView)({
+  return decodeIntegrationThreadView({
     id: "thread-1",
     projectId: "project-1",
     title: "PR #1",

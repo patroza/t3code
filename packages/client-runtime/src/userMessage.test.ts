@@ -144,6 +144,7 @@ describe("indexUserMessageSources", () => {
     expect(sources.has("assistant")).toBe(false);
   });
 });
+import { GuestMessageId } from "@t3tools/contracts";
 
 describe("resolveUserMessagePresentation", () => {
   const legacyText = "[Triggered by schedule task: Daily audit]\n\nCheck for crashes.\n";
@@ -160,6 +161,23 @@ describe("resolveUserMessagePresentation", () => {
         scheduledTaskId: undefined,
       });
     }
+  });
+
+  it("shows a guest's own words and name, not the attributed text the agent reads", () => {
+    expect(
+      resolveUserMessagePresentation({
+        role: "user",
+        createdBy: "user",
+        text: "Message from guest Sam, sent by the owner:\n\nWhy?",
+        context: {
+          guest: {
+            guestMessageId: GuestMessageId.make("guest-message:one"),
+            name: "Sam",
+            text: "Why?",
+          },
+        },
+      }),
+    ).toEqual({ text: "Why?", attribution: "guest", scheduledTaskId: undefined, guestName: "Sam" });
   });
 
   it("attributes older server-sent restart continuations to T3 Code, not another agent", () => {

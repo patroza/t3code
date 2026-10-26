@@ -343,6 +343,8 @@ export const DesktopCliCommandStateSchema = Schema.Struct({
   installedPath: Schema.NullOr(Schema.String),
   onPath: Schema.Boolean,
   shadowedBy: Schema.optionalKey(Schema.String),
+  /** The app's bundled `t3` launcher, which runs without Node or a PATH entry. */
+  launcherPath: Schema.NullOr(Schema.String),
 });
 export type DesktopCliCommandState = typeof DesktopCliCommandStateSchema.Type;
 
@@ -371,13 +373,10 @@ export const DesktopUpdateCheckResultSchema = Schema.Struct({
 export const PRIMARY_LOCAL_ENVIRONMENT_ID = "primary";
 
 export interface DesktopEnvironmentBootstrap {
-  // The web env runtime keys local environments off this so projects routed to
-  // a specific backend reopen against the same one.
+  // Stable backend identity used to reopen routed projects.
   id: string;
   label: string;
-  // Concrete WSL distro used by the current backend run. This stays separate
-  // from id because a default-tracking instance keeps the stable
-  // "wsl:default" IPC target while each run launches a specific distro.
+  // Actual distro for this run; id stays wsl:default when tracking the default.
   runningDistro?: string | null;
   httpBaseUrl: string | null;
   wsBaseUrl: string | null;
@@ -534,10 +533,7 @@ export const PickFolderOptionsSchema = Schema.Struct({
   targetEnvironmentId: Schema.optionalKey(Schema.String),
 });
 
-/**
- * Oversized files carry an empty text so the renderer can reject them by size
- * without the main process ever holding their contents.
- */
+/** Oversized files have empty text so the main process never loads their contents. */
 export interface PickedThemeFile {
   name: string;
   size: number;
@@ -569,8 +565,7 @@ export interface DesktopWslState {
   available: boolean;
   wslOnly: boolean;
   distros: readonly DesktopWslDistro[];
-  // Always null in wsl-only mode — that path shows a dialog and falls back to
-  // Windows instead.
+  // Always null in wsl-only mode, which falls back to Windows with a dialog.
   preflightError: string | null;
 }
 
@@ -619,14 +614,11 @@ export interface DesktopPreviewTabState {
   pictureInPicture: boolean;
   colorScheme: DesktopPreviewColorScheme;
   audioMuted: boolean;
-  /**
-   * Whether the guest is currently emitting audio. Observed from Chromium, and
-   * independent of {@link audioMuted}: a muted tab that is playing still reports
-   * `true`, which is what lets the tab strip distinguish "muted and making
-   * sound" from "muted and silent".
-   */
+  /** Chromium reports playback even when audioMuted is true. */
   audible: boolean;
   controller: "human" | "agent" | "none";
+  /** A screenshot or stream of the guest is pending, so the client keeps it painting while hidden. */
+  capturing: boolean;
   favicon?: DesktopPreviewFavicon;
   updatedAt: string;
 }
@@ -675,16 +667,9 @@ export interface DesktopPreviewRecordingInputEvent {
 
 export interface DesktopPreviewWebviewConfig {
   partition: string;
-  /**
-   * Encodes the security posture (sandboxed but contextIsolation off so the
-   * picker preload can read the page's React DevTools hook).
-   */
+  /** Sandboxed with contextIsolation off so the picker preload can read the React DevTools hook. */
   webPreferences: string;
-  /**
-   * Absolute `file://`-style URL to the picker preload bundle. Set to null
-   * when the bundle isn't present (older builds, broken install) — the
-   * renderer must then disable element-pick affordances.
-   */
+  /** Absolute file:// preload URL; null requires disabling element picking. */
   preloadUrl: string | null;
 }
 
@@ -967,12 +952,7 @@ export const DesktopPreviewTabInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
 });
 
-/**
- * Tab creation carries the client's configured browser defaults so the guest is
- * born already zoomed and color-scheme-emulated. Applying them after creation
- * instead would paint one frame at 100%/system first, which reads as a flash on
- * every tab open.
- */
+/** Apply zoom and color scheme at creation to avoid flashing browser defaults. */
 export const DesktopPreviewCreateTabInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   zoomFactor: Schema.optional(Schema.Number.check(Schema.isGreaterThan(0))),
@@ -1000,11 +980,7 @@ export const DesktopPreviewNavigateInputSchema = Schema.Struct({
 
 export const DesktopPreviewConfigInputSchema = Schema.Struct({
   environmentId: EnvironmentId,
-  /**
-   * Derivation stays in main: `will-attach-webview` only prefix-checks the
-   * partition string, so a renderer-supplied partition could attach to a
-   * session that never had the UA rewrite or permission handlers installed.
-   */
+  /** Main must derive the partition to ensure its session has UA rewrites and permission handlers. */
   profileId: Schema.optional(BrowserProfileId),
 });
 
@@ -1129,7 +1105,6 @@ export interface DesktopBridge {
   setWslDistro: (distro: string | null) => Promise<DesktopWslState>;
   setWslOnly: (enabled: boolean) => Promise<DesktopWslState>;
   pickFolder: (options?: PickFolderOptions) => Promise<string | null>;
-  /** Optional while older desktop shells can host a newer web client. */
   pickProjectFavicon?: (initialPath?: string) => Promise<string | null>;
   pickThemeFiles?: () => Promise<readonly PickedThemeFile[] | null>;
   setTheme: (theme: DesktopTheme) => Promise<void>;
@@ -1142,9 +1117,7 @@ export interface DesktopBridge {
   openExternal: (url: string) => Promise<boolean>;
   openSystemSettings?: (pane: SystemSettingsPane) => Promise<boolean>;
   checkSystemPermission?: (pane: SystemSettingsPane) => Promise<boolean>;
-  /**
-   * Optional: older desktop builds lack it; callers fall back to VS Code only.
-   */
+  /** Older builds lack this; fall back to VS Code only. */
   probeRemoteEditors?: () => Promise<readonly EditorId[]>;
   pasteAsText?: () => Promise<void>;
   onMenuAction: (listener: (action: string) => void) => () => void;
@@ -1212,12 +1185,7 @@ export interface DesktopPreviewBridge {
   }) => Promise<BrowserImportResult>;
   setAnnotationTheme: (theme: DesktopPreviewAnnotationTheme) => Promise<void>;
   setAnnotationSendEnabled: (tabId: string, enabled: boolean) => Promise<void>;
-  /**
-   * Activate the in-page element picker for the given tab. Resolves with
-   * the picked annotation and its attach/send intent, or `null` when the
-   * user cancels (Escape / nav). The promise rejects if the picker can't be
-   * activated (no webview, etc.).
-   */
+  /** Resolves with the annotation and attach/send intent, or null on cancellation. Rejects if activation fails. */
   pickElement: (tabId: string) => Promise<PreviewAnnotationSubmissionResult | null>;
   cancelPickElement: (tabId: string) => Promise<void>;
   captureScreenshot: (
@@ -1252,14 +1220,8 @@ export interface ConfirmDialogOptions {
 }
 
 /**
- * APIs bound to the local app shell, not to any particular backend environment.
- *
- * These capabilities describe the desktop/browser host that the user is
- * currently running: dialogs, editor/external-link opening, context menus, and
- * app-level settings/config access. They must not be used as a proxy for
- * "whatever environment the user is targeting", because in a multi-environment
- * world the local shell and a selected backend environment are distinct
- * concepts.
+ * Capabilities of the local shell, not the selected backend environment.
+ * Includes dialogs, link opening, context menus, and app-level settings/config.
  */
 
 export interface LocalApi {

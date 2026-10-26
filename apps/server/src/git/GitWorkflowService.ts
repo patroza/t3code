@@ -214,13 +214,8 @@ export const make = Effect.gen(function* () {
   const gitManager = yield* GitManager.GitManager;
   const lifecycleScriptRunner = yield* ProjectLifecycleScriptRunner.ProjectLifecycleScriptRunner;
 
-  /**
-   * Bare repositories have no checkout, but stay valid sources for ref, fetch,
-   * and `worktree add` plumbing — which is exactly what starting a thread needs,
-   * since the thread then runs in the worktree it just created. Such routes opt
-   * in with `allowBare: true`; everything that touches a checkout keeps the
-   * default and reports this reason instead of a blanket routing failure.
-   */
+  // Routes that only inspect refs, fetch, or create worktrees opt into allowBare.
+  // Checkout-dependent routes keep the default refusal because bare repositories have no files.
   const bareRepositoryDetail = (operation: string, cwd: string) =>
     `The ${operation} operation needs a working tree, but ${cwd} is a bare Git repository (no checkout of its own). Run it inside a worktree, or give the project a checkout.`;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -413,7 +408,7 @@ export const make = Effect.gen(function* () {
         Effect.map((result) => result.exitCode === 0),
       ),
     hasRefNamed: (input) =>
-      // No ref name holds a pattern character, and one here would widen the match.
+      // Pattern characters would widen the ref match.
       /[*?[\\]/.test(input.refName)
         ? Effect.succeed(false)
         : ensureGitCommand("GitWorkflowService.hasRefNamed", input.cwd, { allowBare: true }).pipe(

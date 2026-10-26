@@ -383,3 +383,15 @@ it.effect("asks for usage without the local transcript scan", () =>
     assert.deepEqual(usageOptions, { skipBehaviors: true });
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+it.effect("reports a deleted worktree's scan as finished, not pending", () =>
+  Effect.gen(function* () {
+    const snapshot = yield* probeClaudeWorkspaceSnapshot(
+      decodeClaudeSettings({}),
+      { skills: [], slashCommands: [] } as unknown as ServerProvider,
+      "/nonexistent/t3-deleted-worktree",
+      { HOME: "/nonexistent/t3-home" },
+    );
+    assert.strictEqual(snapshot.slashCommandsPending, false);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);

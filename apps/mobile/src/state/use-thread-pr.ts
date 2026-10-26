@@ -27,8 +27,7 @@ interface ThreadPrSnapshot {
   readonly presentation: ThreadPrPresentation;
 }
 
-// One bounded cache survives row virtualization without retaining one live
-// atom for every thread, branch, directory, or linked pull request ever seen.
+// Bound the cache across row virtualization instead of retaining live atoms for every past thread or PR.
 const threadPrSnapshotsAtom = Atom.make<ReadonlyMap<string, ThreadPrSnapshot>>(new Map()).pipe(
   Atom.keepAlive,
   Atom.withLabel("mobile:thread-pr-snapshots"),

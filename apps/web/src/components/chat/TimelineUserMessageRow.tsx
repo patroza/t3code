@@ -1,3 +1,5 @@
+import { InlineAudioPreview } from "../files/InlineAudioPreview";
+import { filePreviewKind } from "@t3tools/shared/filePreview";
 import { findRevealRef } from "./markdownFindContext";
 import { type MessageId, type ServerProviderSkill, ThreadId } from "@t3tools/contracts";
 import {
@@ -45,6 +47,7 @@ import {
   SNAP_SHOT_ATTACHMENT_FRAME_CLASS,
   SnapShotAttachmentDetails,
 } from "./SnapShotAttachmentDetails";
+import { GuestMessageName, guestBubbleClassName } from "./guestMessageStyle";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { promptLinkFor } from "../promptLinks/copyPromptLink";
 import { PierreEntryIcon } from "./PierreEntryIcon";
@@ -298,7 +301,12 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   const userImages = (messageWithPreviews.attachments ?? []).filter(isImageAttachment);
   const userFiles = (row.message.attachments ?? []).filter(isFileAttachment);
   const userVideos = userFiles.filter(isVideoAttachment);
-  const otherUserFiles = userFiles.filter((file) => !isVideoAttachment(file));
+  const userAudio = userFiles.filter(
+    (file) => file.downloadable !== false && filePreviewKind(file) === "audio",
+  );
+  const otherUserFiles = userFiles.filter(
+    (file) => !isVideoAttachment(file) && !userAudio.includes(file),
+  );
   const unknownAttachments = (row.message.attachments ?? []).filter(
     (attachment) => !isImageAttachment(attachment) && !isFileAttachment(attachment),
   );
@@ -312,7 +320,9 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       ? { environmentId: ctx.activeThreadEnvironmentId, threadId: senderThreadId }
       : null,
   );
-  const resolvedContext = resolveUserMessageContext(row.message);
+  const resolvedContext = resolveUserMessageContext(
+    userMessage.attribution === "guest" ? { ...row.message, text: userMessage.text } : row.message,
+  );
   const previewImages = userImages.filter((image) => image.name.startsWith("preview-annotation-"));
   const revertTurnCount = row.revertTurnCount;
   const chippedAttachmentIds = new Set(
@@ -386,6 +396,8 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   };
   const renderContextReference = (reference: ChatMarkdownContextReference) => {
     const record = asKnownContextRecord(resolvedContext.recordsById.get(reference.contextId));
+    if (record?.kind === "file" && userAudio.some((file) => file.id === record.attachmentId))
+      return null;
     const annotationImage =
       record?.kind === "preview-annotation"
         ? resolvePreviewAnnotationImage({
@@ -453,13 +465,20 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           )}
         </p>
       ) : null}
+      {/* The row's heading already names the guest for screen readers. */}
+      {userMessage.guestName !== undefined ? (
+        <div aria-hidden>
+          <GuestMessageName name={userMessage.guestName} />
+        </div>
+      ) : null}
       {row.message.inputIntent === "steer" ||
       row.message.inputIntent === "promoted_queued_to_steer" ? (
         <UserMessageIntentMarker intent={row.message.inputIntent} />
       ) : null}
       <div
         className={cn(
-          "relative min-w-0 max-w-[80%] rounded-2xl bg-message text-message-foreground",
+          "relative min-w-0 max-w-[80%] rounded-2xl text-message-foreground",
+          userMessage.attribution === "guest" ? guestBubbleClassName(false) : "bg-message",
           !folded && "p-3",
           folded && expanded && "w-full",
         )}
@@ -483,7 +502,9 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
               folded && !ctx.findActive && "max-h-96 overflow-auto",
             )}
           >
-            <MessageAuthorHeading>You</MessageAuthorHeading>
+            <MessageAuthorHeading>
+              {userMessage.guestName === undefined ? "You" : `${userMessage.guestName} (guest)`}
+            </MessageAuthorHeading>
             {(regularImages.length > 0 || userVideos.length > 0) && (
               <div className="mb-2 grid max-w-[210px] grid-cols-2 gap-2">
                 {regularImages.map((image) => (
@@ -513,6 +534,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                           src={image.previewUrl}
                           alt={image.name}
                           decoding="async"
+                          loading="lazy"
                           className="block size-full object-cover"
                         />
                       </button>
@@ -531,6 +553,25 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                 ))}
               </div>
             )}
+            {userAudio.length > 0 ? (
+              <div className="mb-2 flex max-w-full flex-col gap-1">
+                {userAudio.map((file) => (
+                  <InlineAudioPreview
+                    key={file.id}
+                    name={file.name}
+                    environmentId={ctx.activeThreadEnvironmentId}
+                    resource={{
+                      _tag: "attachment",
+                      attachmentId: file.id,
+                      fileName: file.name,
+                      mimeType: file.mimeType,
+                      disposition: "inline",
+                    }}
+                    onOpen={() => ctx.onFileOpen(file)}
+                  />
+                ))}
+              </div>
+            ) : null}
             {unchippedFiles.length > 0 || unknownAttachments.length > 0 ? (
               <div className="mb-2 flex flex-col gap-1">
                 {unchippedFiles.map((file) => {

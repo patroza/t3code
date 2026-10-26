@@ -80,8 +80,7 @@ export function shouldShowComposerContextStrip(input: {
   );
 }
 
-// Labels collapse to icons when the strip's content no longer fits. A small
-// hysteresis on the way back out keeps the boundary from flapping.
+// Hysteresis prevents labels and icons from flapping at the width boundary.
 const CONTEXT_STRIP_COMPACT_EXPAND_HYSTERESIS_PX = 16;
 
 export function resolveContextStripLabelsCompact(input: {
@@ -233,8 +232,7 @@ export function resolveBranchTriggerLabel(input: {
   if (!resolvedActiveBranch) {
     return "Select ref";
   }
-  // Reused base branch is checked out as-is (Tim #15); otherwise "From X" for
-  // new worktree branches, with optional origin/ prefix (upstream #4680).
+  // Reused base branches are checked out as-is; new worktree branches describe their source.
   if (effectiveEnvMode === "worktree" && !activeWorktreePath) {
     if (reuseBaseBranch) return resolvedActiveBranch;
     // Only the server can determine a local branch's configured remote.

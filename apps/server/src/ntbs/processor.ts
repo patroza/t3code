@@ -21,31 +21,9 @@ import { NTBSAdapter } from "./adapter.ts";
 import { T3Gateway } from "./t3gateway.ts";
 import { ExchangeRepository } from "./ExchangeRepository.ts";
 
-/*
-The processor is the executor and orchestrator of non-turn-based surfaces: it applies the business rules and connects T3 to the external platform. It does so through three services:
-
-- the adapter: communication with the external platform
-- the T3 gateway: communication and dispatching of T3 internals
-- the exchange repository: durable link between the two, stores the exchange state
-
-It exposes two public APIs:
-1. `process` records an incoming message as an exchange and wakes `run` to work on it.
-2. `run` subscribes to T3 activity and to recorded requests, and resumes the exchanges a previous run left unfinished.
-
-`run` also owns an internal sweeper: a periodic pass that re-drives every non-terminal exchange, the same thing startup recovery does but on an interval.
-Activity and recorded requests are fire-and-forget wakes: without the sweeper one missed wake-up would leave an exchange stuck until the next restart.
-Sweeping is cheap and safe because the cycle observes before acting: re-driving an exchange whose context has not moved just answers "wait" and stops.
-
-Both drive an exchange through the same cycle, repeated until it reaches a terminal state:
-
-load the stored state
--> read live context from the service that owns it
--> decide what to do given state and context
--> execute the decision
--> build the resulting state transition and persist it
-
-The cycle is replay safe: it observes before acting, so a crash or a redelivered message re-runs it without starting a second thread or posting a second reply.
-*/
+// process records responsibility durably; run resumes exchanges and posts replies later.
+// Per-source serialization and observing live context before acting make retries replay-safe.
+// A periodic sweep recovers missed fire-and-forget activity wakes and unfinished exchanges.
 
 export class NTBSProcessorError extends Data.TaggedError("NTBSProcessorError")<{
   reason: string;
@@ -109,16 +87,8 @@ const act = Effect.fn("NTBSProcessor.act")(function* <A, E, R>(
 });
 
 export interface NTBSProcessor {
-  /**
-   * Handles a request coming from an external platform.
-   *
-   * Does no filtering: the caller decides whether a request deserves T3 work, and everything passed here starts it.
-   *
-   * Returns once the request is recorded, not once it is answered: the record is where NTBS accepts responsibility, and `run` picks it up from there. The reply is posted later, when T3 reports the turn finished.
-   * Fails with a typed error only when the repository does. A failure after the record is the exchange's to keep: the record survives, and `run` retries it.
-   *
-   * Idempotent per `sourceUri`: a redelivery of an already-recorded request is a no-op, whatever state that exchange has reached. Concurrent deliveries of the same request are serialized, so only the first records it.
-   */
+  // Accept every caller-selected request durably, once per sourceUri, then wake run.
+  // Return after recording; later failures stay on the exchange for background retry.
   readonly process: (
     request: NTBS.Request,
     t3Target: NTBS.T3Target,
@@ -555,14 +525,9 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
       request: NTBS.Request,
       t3Target: NTBS.T3Target,
     ) {
-      /*
-        1. Check whether an Exchange exists for this source URI.
-        2. If there is already - we can return. We treat duplicate deliveries of requests with the same sourceUri as duplicates. No ops.
-        The read happens before the lock: otherwise a redelivery would park behind whatever background pass holds the lock for an exchange that is already recorded.
-        3. If there isn't, take the lock and check again: a concurrent delivery may have recorded it meanwhile, and only the first one may win.
-        4. Record the request as accepted and wake the background processor.
-        From the record on, a failure is the exchange's to keep, not the caller's: it is left for `run` to retry.
-      */
+      // Read before locking so redelivery never waits behind an already-recorded exchange.
+      // Recheck under the lock to admit only one concurrent delivery.
+      // After recording, failures belong to the exchange and run retries them.
 
       const existing = yield* repo
         .findBySourceUri(request.sourceUri)
@@ -624,13 +589,8 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
       ),
     );
 
-    /*
-      The sweeper: the same pass as startup recovery, repeated on an interval for the whole life of `run`.
-      Activity and recorded requests are fire-and-forget wakes; the sweeper checks exchanges even when none of them arrives.
-      Redundant sweeps are safe and cheap because the cycle observes before acting: an exchange whose context has not moved answers "wait" and stops.
-      The interval is a judgment call, low enough that a stranded exchange recovers within a tolerable wait for whoever asked, high enough that the periodic query stays negligible.
-      Delay first: `run` has just swept via startup recovery, so an immediate first pass would be pure noise.
-    */
+    // Delayed periodic recovery covers missed activity wakes without repeating startup recovery.
+    // Observe-before-act makes redundant passes safe; unchanged exchanges stop at wait.
     const sweepNonTerminalExchanges = resumeNonTerminalExchanges.pipe(
       Effect.delay(SWEEP_INTERVAL),
       Effect.forever,
@@ -681,10 +641,9 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
           (message: string, context: Record<string, unknown>) =>
           <A, R>(pass: Effect.Effect<A, NTBSProcessorError, R>) =>
             pass.pipe(
-              Effect.catchCause((cause) =>
-                Cause.hasInterrupts(cause)
-                  ? Effect.failCause(cause)
-                  : Effect.logWarning(message, { ...context, cause }),
+              Effect.catchCauseIf(
+                (cause) => !Cause.hasInterrupts(cause),
+                (cause) => Effect.logWarning(message, { ...context, cause }),
               ),
             );
 

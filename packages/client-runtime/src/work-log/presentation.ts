@@ -16,8 +16,8 @@ import {
 } from "@t3tools/shared/t3McpToolPresentation";
 import { classifyMarkdownImageSource } from "@t3tools/client-runtime/markdown-images";
 import { resolveMediaSource } from "@t3tools/client-runtime/media-source";
-import { parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
-import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
+import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
+import { isWorkspaceImagePreviewPath } from "@t3tools/shared/mediaPreview";
 import { formatTokens } from "@t3tools/shared/usageFormat";
 import { classifyToolActivity } from "@t3tools/shared/toolActivity";
 import { toolOutputIndicatesFailure } from "@t3tools/shared/toolOutput";
@@ -184,15 +184,18 @@ function resolveT3McpToolPresentation(
   const payload = asRecord(data);
   const input =
     asRecord(payload?.arguments) ?? asRecord(payload?.input) ?? asRecord(payload?.rawInput);
-  const urlTarget = typeof input?.url === "string" ? parseChangeRequestUrl(input.url) : null;
-  const number = urlTarget?.number ?? input?.number;
+  const urlTarget =
+    typeof input?.url === "string" ? sourceControlClients.parseChangeRequestUrl(input.url) : null;
+  const number = urlTarget?.link.number ?? input?.number;
+  const { shortLabel } = (urlTarget?.definition ?? sourceControlClients.get(undefined))
+    .changeRequest;
   const target =
     actionKind !== undefined &&
     actionKind !== "list-prs" &&
     typeof number === "number" &&
     Number.isSafeInteger(number) &&
     number > 0
-      ? `PR #${number}`
+      ? `${shortLabel} #${number}`
       : detail;
   return {
     displayName: `${verb} ${target}`,
@@ -229,10 +232,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
-}
-
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
 function workLogEntryIsToolLike(entry: WorkLogPresentationEntry): boolean {
@@ -487,6 +486,7 @@ function summaryActionPriority(action: ToolGroupAction | T3McpToolSummaryAction)
     case "thread-send":
     case "thread-interrupt":
     case "workflow-stop":
+    case "background-wait":
     case "schedule-create":
     case "schedule-update":
     case "schedule-delete":

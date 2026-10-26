@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { EnvironmentId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  makeProviderSettingsSchema,
+  SourceControlProviderKind,
+} from "@t3tools/contracts";
+import { UNKNOWN_SOURCE_CONTROL_CLIENT } from "@t3tools/client-runtime/source-control-clients";
+import * as Schema from "effect/Schema";
 
 import {
   filterAvailableSettingsSearchItems,
@@ -8,6 +14,8 @@ import {
   isSettingsSearchScopeAvailable,
   searchSettings,
   SETTINGS_SEARCH_ITEMS,
+  sourceControlHostSearchItems,
+  sourceControlHostSettingsSearchId,
   type SettingsSearchItem,
 } from "./settingsSearch";
 
@@ -53,10 +61,7 @@ describe("searchSettings", () => {
 
   it("matches normalized title substrings", () => {
     expect(searchSettings("  WORD   WRAP  ", ITEMS).map((item) => item.id)).toEqual(["word-wrap"]);
-    // "work" is not a substring of "word wrap". The full catalog matches the
-    // worktree settings (and not Word wrap). Upstream's
-    // project workspace setting left this catalog with #5923, which moved
-    // project settings onto contextual project routes.
+    // The full catalog matches worktree settings, not the unrelated "Word wrap" label.
     expect(
       searchSettings("work", [{ id: "word-wrap", title: "Word wrap", to: "/settings/appearance" }]),
     ).toEqual([]);
@@ -295,5 +300,48 @@ describe("auto-settlement search availability", () => {
         environmentIds: selected.map((entry) => entry.environmentId),
       }).isTargetAvailable,
     ).toBe(true);
+  });
+});
+
+describe("source control host search items", () => {
+  const definition = {
+    ...UNKNOWN_SOURCE_CONTROL_CLIENT,
+    kind: SourceControlProviderKind.make("example"),
+    label: "Example",
+    searchKeywords: ["sample"],
+    settings: makeProviderSettingsSchema({ apiToken: Schema.String }),
+  };
+
+  it("lists a host by its label, its keywords, and its settings fields", () => {
+    const items = sourceControlHostSearchItems([UNKNOWN_SOURCE_CONTROL_CLIENT, definition]);
+    expect(items.map((item) => item.title)).toEqual(["Example credentials"]);
+    expect(searchSettings("sample apitoken", items).map((item) => item.id)).toEqual([
+      sourceControlHostSettingsSearchId("example"),
+    ]);
+  });
+
+  it("lists a host with credentials by its accounts, token and CLI", () => {
+    const items = sourceControlHostSearchItems([
+      {
+        ...definition,
+        credentials: {
+          cliName: "ex",
+          cliLabel: "Example CLI",
+          loginCommand: "ex login",
+          tokenEnvVar: "EX_TOKEN",
+          tokenAccess: "access",
+          newTokenUrl: (host) => `https://${host}/tokens`,
+        },
+      },
+    ]);
+    expect(items.map((item) => item.title)).toEqual(["Example accounts and token"]);
+    expect(searchSettings("ex switch accounts", items)).toHaveLength(1);
+  });
+
+  it("finds the built-in hosts by their own words", () => {
+    expect(searchSettings("codeberg").map((item) => item.id)).toContain("source-control");
+    expect(searchSettings("ghes").map((item) => item.id)).toContain(
+      sourceControlHostSettingsSearchId("github"),
+    );
   });
 });

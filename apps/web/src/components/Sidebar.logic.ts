@@ -12,7 +12,12 @@ import {
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit/sortable";
-import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
+import {
+  threadSearchMatchKey,
+  threadSearchSubject,
+  type ThreadSearchShell,
+} from "@t3tools/client-runtime/state/thread-search";
+import { foldSearchQuery, rankSearchItems, scoreThreadSearch } from "@t3tools/shared/paletteSearch";
 import type { ContextMenuItem, EnvironmentId, ThreadId } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import type { AsyncResult } from "effect/reactivity";
@@ -105,6 +110,9 @@ export function resolveSidebarProjectBadgeColorIndex(
   }
   return hash % colorCount;
 }
+import { observeIntersection } from "../lib/observeIntersection";
+import { deadlineAfter, deadlineStore } from "@t3tools/client-runtime/clock";
+import { useDeadlinePassed } from "../hooks/useDeadline";
 
 export function shouldNavigateAfterThreadPark(input: {
   readonly threadKey: string;
@@ -137,12 +145,7 @@ export function resolveSidebarRowAccessibility(input: {
   };
 }
 
-// Visible sidebar rows are prewarmed into the thread-detail cache so opening a
-// nearby thread usually reuses an already-hot subscription. Each prewarmed
-// thread holds a live, fully hydrated detail subscription (all messages and
-// activities, growing as agents work) for as long as the row stays visible,
-// so this limit is a direct renderer-heap and server-load multiplier — keep
-// it small; cold opens still render instantly from the cached snapshot.
+// Each prewarm retains growing thread detail and a live subscription, multiplying heap and server load.
 export const SIDEBAR_THREAD_PREWARM_LIMIT = 3;
 // Settled-tail paging: recent history is the common lookup; the deep tail
 // stays behind an explicit Show more. Shared by SidebarV2, classic Recent
@@ -174,33 +177,79 @@ const SIDEBAR_ROW_SUBSCRIPTION_OVERSCAN_PX = 160;
 
 export function useSidebarRowSubscriptionLease(isActive: boolean): {
   readonly leaseLiveStatus: boolean;
-  readonly rowRef: React.Dispatch<React.SetStateAction<HTMLElement | null>>;
+  readonly rowRef: (row: HTMLElement | null) => (() => void) | undefined;
 } {
-  const [row, setRow] = React.useState<HTMLElement | null>(null);
   const [isNearViewport, setIsNearViewport] = React.useState(isActive);
-  // The active row stays leased after it deactivates until the observer reports.
   if (isActive && !isNearViewport) setIsNearViewport(true);
   const canObserve = typeof IntersectionObserver !== "undefined";
 
-  React.useEffect(() => {
-    if (isActive || row === null || !canObserve) return;
-
-    const scrollRoot = row.closest<HTMLElement>('[data-slot="scroll-area-viewport"]');
-    const observer = new IntersectionObserver(
-      ([entry]) => setIsNearViewport(entry?.isIntersecting === true),
-      {
-        root: scrollRoot,
-        rootMargin: `${SIDEBAR_ROW_SUBSCRIPTION_OVERSCAN_PX}px 0px`,
-      },
-    );
-    observer.observe(row);
-    return () => observer.disconnect();
-  }, [canObserve, isActive, row]);
-
   return {
     leaseLiveStatus: isActive || isNearViewport || !canObserve,
-    rowRef: setRow,
+    rowRef: (row) => {
+      if (row === null || isActive || !canObserve) return undefined;
+      // The overscan has to apply to the sidebar's own scroller; a viewport-rooted
+      // margin is still clipped by it.
+      return observeIntersection(row, (entry) => setIsNearViewport(entry.isIntersecting), {
+        root: row.closest('[data-slot="scroll-area-viewport"]'),
+        rootMargin: `${SIDEBAR_ROW_SUBSCRIPTION_OVERSCAN_PX}px 0px`,
+      });
+    },
   };
+}
+
+const fileDragClears = new Set<(active: false) => void>();
+function clearFileDrags() {
+  const clears = [...fileDragClears];
+  fileDragClears.clear();
+  for (const clear of clears) clear(false);
+}
+
+/**
+ * A file drag that ends outside every drop target (Escape, or a drop elsewhere)
+ * sends no dragleave to the row it last entered, so the window's dragend clears it.
+ */
+export function setFileDragActive(setActive: (active: boolean) => void, active: boolean) {
+  setActive(active);
+  if (typeof window === "undefined") return;
+  if (!active) {
+    if (fileDragClears.delete(setActive) && fileDragClears.size === 0) {
+      window.removeEventListener("dragend", clearFileDrags);
+    }
+    return;
+  }
+  if (fileDragClears.size === 0) window.addEventListener("dragend", clearFileDrags, { once: true });
+  fileDragClears.add(setActive);
+}
+
+/**
+ * A clock that advances exactly when a snooze wake time passes, so a woken
+ * thread leaves the shelf on time without a per-second clock.
+ */
+export function useSnoozeWakeClock(
+  threads: ReadonlyArray<{ readonly snoozedUntil?: string | null | undefined }>,
+): number {
+  const [clockMs, setClockMs] = React.useState(() => Date.now());
+  const wakeTimes: number[] = [];
+  let nextWakeAt: number | null = null;
+  for (const thread of threads) {
+    const wakeAt = thread.snoozedUntil == null ? Number.NaN : Date.parse(thread.snoozedUntil);
+    if (!(wakeAt > clockMs)) continue;
+    wakeTimes.push(wakeAt);
+    if (nextWakeAt === null || wakeAt < nextWakeAt) nextWakeAt = wakeAt;
+  }
+  const woke = useDeadlinePassed(nextWakeAt);
+  // Advancing to the latest wake that has passed skips every wake that elapsed
+  // meanwhile, e.g. across a laptop sleep. Stepping one wake at a time would
+  // re-render once per elapsed wake and hit React's limit.
+  if (woke && nextWakeAt !== null) {
+    let nextClockMs = nextWakeAt;
+    for (const wakeAt of wakeTimes) {
+      if (wakeAt > nextClockMs && deadlineStore(wakeAt).getSnapshot()) nextClockMs = wakeAt;
+    }
+    setClockMs(nextClockMs);
+    return nextClockMs;
+  }
+  return clockMs;
 }
 
 export function useRetainedValue<T>(key: string | null, value: T | null): T | null {
@@ -215,15 +264,11 @@ export function useRetainedValue<T>(key: string | null, value: T | null): T | nu
   return key !== null && retained?.key === key ? retained.value : null;
 }
 
-// Sidebar.motion handles ordinary section changes. Sortable transforms own
-// dragging; replaying their committed DOM order would animate the drop twice.
+// Sortable owns drag transforms; replaying committed order would animate drops twice.
 export const animateSidebarLayoutChanges: AnimateLayoutChanges = (args) =>
   args.isSorting ? defaultAnimateLayoutChanges(args) : false;
 
-// Snoozed rows can leave the shelf, but dropping into it is not supported
-// because snoozing requires a wake time. The Working shelf (beta) follows live
-// status, so its rows only drag out as chat context, never between sidebar
-// sections.
+// Snoozed rows cannot accept drops without a wake time. Working rows only drag out as chat context.
 
 export type SidebarSection = "pinned" | "active" | "working" | "snoozed" | "settled";
 
@@ -543,10 +588,7 @@ type LogicalSidebarProject = SidebarProject & {
 
 export type ThreadTraversalDirection = "previous" | "next";
 
-/**
- * Shared-worktree checks must exclude only successful deletions, never the
- * whole batch.
- */
+/** Exclude only successful deletions from shared-worktree checks. */
 export async function deleteSelectedThreadEntries<
   TEntry extends { readonly threadKey: string },
 >(input: {
@@ -801,6 +843,7 @@ export interface ThreadStatusPill {
     | "Failed"
     | "Pending Approval"
     | "Awaiting Input"
+    | "Guest Request"
     | "Waiting"
     | "Plan Ready";
   colorClass: string;
@@ -811,6 +854,7 @@ export interface ThreadStatusPill {
 const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
   "Pending Approval": 5,
   "Awaiting Input": 4,
+  "Guest Request": 3.75,
   Failed: 3.5,
   Working: 3,
   Connecting: 3,
@@ -825,6 +869,7 @@ type ThreadStatusInput = Pick<
   | "hasPendingApprovals"
   | "hasPendingUserInput"
   | "pendingSubagentRequest"
+  | "pendingGuestMessageCount"
   | "interactionMode"
   | "latestRun"
   | "runtime"
@@ -926,13 +971,24 @@ export function useThreadJumpHintVisibility(): {
   };
 }
 
+/**
+ * Thread jump hints appear once the jump modifier has been held for a moment,
+ * so a quick shortcut never flashes them, and hide as soon as it is released.
+ */
+export function useThreadJumpHintsVisible(shouldShow: boolean): boolean {
+  const [showAt, setShowAt] = React.useState<number | null>(null);
+  let nextShowAt = shouldShow ? showAt : null;
+  if (shouldShow && showAt === null) nextShowAt = deadlineAfter(THREAD_JUMP_HINT_SHOW_DELAY_MS);
+  if (nextShowAt !== showAt) setShowAt(nextShowAt);
+  return useDeadlinePassed(nextShowAt);
+}
+
 export function resolveThreadLastVisitedAt(
   serverLastVisitedAt: string | null | undefined,
   localLastVisitedAt: string | undefined,
 ): string | undefined {
-  // When the server tracks visits it is authoritative — including explicit
-  // rewinds from mark-unread, which a newer browser-local watermark must not
-  // mask. The local value only carries servers without visited tracking.
+  // Server visits override local watermarks, including mark-unread rewinds; use local values only on older
+  // servers.
   if (serverLastVisitedAt === undefined) return localLastVisitedAt;
   return serverLastVisitedAt ?? undefined;
 }
@@ -948,13 +1004,7 @@ export function hasUnseenCompletion(thread: ThreadStatusInput): boolean {
   return completedAt > lastVisitedAtMs;
 }
 
-/**
- * Shared settled classification for display surfaces (sidebar v1/v2),
- * so they always agree on what is settled. Threads on servers without the
- * settlement capability (old server, or descriptor not loaded yet) never
- * classify as settled: the user could neither un-settle nor pin them, so
- * auto-settling them would strand rows in a tail with no working affordances.
- */
+/** Display settlement only when the server supports the matching undo and pin affordances. */
 export function isThreadSettledForDisplay(
   thread: {
     readonly environmentId: string;
@@ -981,11 +1031,7 @@ export function isThreadSettledForDisplay(
   return supportsSettlement && thread.settledOverride === "settled";
 }
 
-/**
- * A failed latest run the person hasn't looked at since it ended. Unlike a
- * completion, a thread nobody has opened yet (an automation's, say) counts:
- * its failure still needs someone.
- */
+/** Unopened threads' failures still count as unseen, unlike completions. */
 function hasUnseenFailure(thread: ThreadStatusInput): boolean {
   if (thread.latestRun?.status !== "failed") return false;
   if (!thread.lastVisitedAt) return true;
@@ -1000,11 +1046,7 @@ export function shouldClearThreadSelectionOnMouseDown(target: HTMLElement | null
   return !target.closest(THREAD_SELECTION_SAFE_SELECTOR);
 }
 
-// A double-click dispatches two `click` events before `dblclick`: the first has
-// `detail === 1`, the second `detail === 2`. The second click must not run the
-// row's single-click navigation, otherwise double-click-to-rename would also
-// navigate. `MouseEvent.detail` is 0 for synthetic/keyboard activations, which
-// still count as a normal single activation.
+// Suppress trailing double-click navigation; keyboard and synthetic clicks use detail 0.
 export function isTrailingDoubleClick(detail: number): boolean {
   return detail > 1;
 }
@@ -1264,13 +1306,7 @@ export function getSidebarThreadIdsToPrewarm<TThreadId>(
   return visibleThreadIds.slice(0, Math.max(0, limit));
 }
 
-/**
- * Prewarming keeps a live thread-detail subscription per row, so the cache is
- * paid for in retained history, not just in requests. A coarse pointer reports
- * no hover, so nothing narrows those rows down to the one the reader is heading
- * for, and the devices behind it are the ones least able to hold ten threads of
- * history at once. Prewarm nothing there and let opening a thread fetch it.
- */
+/** Coarse-pointer devices do not prewarm: no hover narrows the retained history to one intended row. */
 export function resolveSidebarThreadPrewarmLimit(input: {
   readonly hasCoarsePointer: boolean;
 }): number {
@@ -1313,20 +1349,12 @@ export function isContextMenuPointerDown(input: {
   return input.isMac && input.button === 0 && input.ctrlKey;
 }
 
-// ── Sidebar v2 status model ─────────────────────────────────────────
-// Six visual states, three colors: color is reserved for "act now"
-// (approval), "in motion" (working), and "broken" (failed). Ready is the
-// unlabeled resting state — the agent stopped and is waiting on the user,
-// whether it finished, asked a question, or proposed a plan. Waiting
-// (runtime status "idle") is the agent stopped with background work that will
-// wake it (subagents, monitors): not the user's turn yet, so it renders grey
-// like working, not as a false Done. Commands it left running, such as a dev
-// server, do not hold the thread; it reads as ready.
-// Unread completion is tracked separately: it describes whether a ready
-// thread needs attention, not what the thread is currently doing.
+// Waiting background work is not a completion; commands left running alone do not hold the thread.
+// Unread completion and current runtime status are separate signals.
 export type SidebarThreadStatus =
   | "approval"
   | "input"
+  | "request"
   | "working"
   | "waiting"
   | "failed"
@@ -1340,7 +1368,14 @@ export function shouldRecedeSidebarThread(input: {
   isActive: boolean;
   isSelected: boolean;
 }): boolean {
-  if (input.isActive || input.isSelected || input.status === "input") return false;
+  if (
+    input.isActive ||
+    input.isSelected ||
+    input.status === "input" ||
+    input.status === "request"
+  ) {
+    return false;
+  }
   if (input.status === "working" || input.status === "waiting") return true;
   if (input.status === "ready" || input.status === "approval") {
     return !input.isUnread && !input.isWoke;
@@ -1353,6 +1388,7 @@ type SidebarThreadStatusInput = Pick<
   | "hasPendingApprovals"
   | "hasPendingUserInput"
   | "pendingSubagentRequest"
+  | "pendingGuestMessageCount"
   | "runtime"
   | "blockedOnThreadWait"
 >;
@@ -1363,6 +1399,10 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
   }
   if (thread.hasPendingUserInput || thread.pendingSubagentRequest === "user_input") {
     return "input";
+  }
+  // A guest is waiting on the owner; the agent's own requests come first.
+  if ((thread.pendingGuestMessageCount ?? 0) > 0) {
+    return "request";
   }
   if (thread.runtime?.status === "running" && thread.blockedOnThreadWait === true) {
     return "waiting";
@@ -1388,6 +1428,7 @@ export type SidebarV2TopStatusKind =
   | "failed"
   | "limited"
   | "input"
+  | "request"
   | "waiting"
   | "woke"
   | "working";
@@ -1406,8 +1447,8 @@ export function resolveSidebarV2TopStatus(input: {
   if (input.status === "approval") {
     return "approval";
   }
-  if (input.status === "input") {
-    return "input";
+  if (input.status === "input" || input.status === "request") {
+    return input.status;
   }
   if (input.status === "failed" || input.status === "limited") {
     return input.status;
@@ -1454,37 +1495,43 @@ export { sortPinnedThreadsByOrderKey as sortPinnedThreadsForSidebar } from "@t3t
 
 const EMPTY_CONTENT_MATCH_KEYS: ReadonlySet<string> = new Set<string>();
 
+/**
+ * Sidebar search results: title, branch, and pull request matches ranked as
+ * the command palette ranks them, then threads listed only because their
+ * messages match, in `contentMatchKeys` order.
+ */
 export function searchSidebarThreads<
-  T extends {
+  T extends ThreadSearchShell & {
     readonly environmentId: EnvironmentId;
     readonly id: ThreadId;
-    readonly title: string;
-  } & Parameters<typeof threadPullRequestSearchTerms>[0],
+  },
 >(
   threads: readonly T[],
   query: string,
   contentMatchKeys: ReadonlySet<string> = EMPTY_CONTENT_MATCH_KEYS,
-): T[] {
-  const normalizedQuery = query.trim().toLowerCase();
-  if (normalizedQuery.length === 0) return [];
-  const titleMatches: T[] = [];
-  const contentMatches: T[] = [];
-  for (const thread of threads) {
-    const matchesTitle = [thread.title, ...threadPullRequestSearchTerms(thread)].some((term) =>
-      term.toLowerCase().includes(normalizedQuery),
-    );
-    if (matchesTitle) {
-      titleMatches.push(thread);
-    } else if (
-      contentMatchKeys.size > 0 &&
-      contentMatchKeys.has(
-        threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
-      )
-    ) {
-      contentMatches.push(thread);
-    }
-  }
-  return [...titleMatches, ...contentMatches];
+  now = Date.now(),
+): { readonly titleMatches: T[]; readonly contentMatches: T[] } {
+  const normalizedQuery = foldSearchQuery(query);
+  if (normalizedQuery.length === 0) return { titleMatches: [], contentMatches: [] };
+  const titleMatches = rankSearchItems(threads, (thread, options) =>
+    scoreThreadSearch(normalizedQuery, threadSearchSubject(thread, null), now, {
+      ...options,
+      picks: false,
+    }),
+  ).map(({ item }) => item);
+  const listed = new Set(titleMatches);
+  // In the order the server ranked their messages, as the palette lists them.
+  const threadByKey = new Map(
+    threads.map((thread) => [
+      threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
+      thread,
+    ]),
+  );
+  const contentMatches = [...contentMatchKeys].flatMap((key) => {
+    const thread = threadByKey.get(key);
+    return thread && !listed.has(thread) ? [thread] : [];
+  });
+  return { titleMatches, contentMatches };
 }
 
 export function pullRequestMatchesSearchQuery(
@@ -1545,14 +1592,7 @@ export function sortSettledThreadsForSidebar<
   );
 }
 
-/**
- * Recency section layout for the V2 settled shelf. Callers must pass threads
- * already ordered by {@link sortSettledThreadsForSidebarV2} (or an equivalent
- * activity/settle-time order) so buckets preserve that order within each day.
- *
- * Headers are suppressed when every visible row lands in a single bucket
- * (same rule as classic Threads recency).
- */
+/** Preserve the supplied settle/activity ordering; omit headers when every visible row shares one bucket. */
 export function groupSettledThreadsByRecencyForSidebarV2<
   T extends SettledThreadTimestampInput & { readonly id: string },
 >(
@@ -1606,6 +1646,15 @@ export function resolveThreadStatusPill(input: {
       label: "Awaiting Input",
       colorClass: "text-indigo-600 dark:text-indigo-300/90",
       dotClass: "bg-indigo-500 dark:bg-indigo-300/90",
+      pulse: false,
+    };
+  }
+
+  if ((thread.pendingGuestMessageCount ?? 0) > 0) {
+    return {
+      label: "Guest Request",
+      colorClass: "text-guest-foreground",
+      dotClass: "bg-guest",
       pulse: false,
     };
   }
@@ -1756,8 +1805,7 @@ function sortProjectsByActivity<TProject extends SidebarProject>(
     return [...projects];
   }
 
-  // Each project's timestamp walks all of its threads, so compute it once
-  // per project instead of once per comparison.
+  // Project timestamps scan all threads; compute once per project instead of per comparison.
   return projects
     .map((project) => ({
       project,

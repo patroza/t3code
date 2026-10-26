@@ -5,7 +5,7 @@ import {
   DEFAULT_SIDEBAR_THREAD_SORT_ORDER,
 } from "@t3tools/contracts";
 import { AtomRegistry } from "effect/reactivity";
-import { act, createElement, useLayoutEffect } from "react";
+import { act, createElement, useLayoutEffect, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -48,7 +48,11 @@ describe("home list options across layout changes", () => {
 
   const registry = AtomRegistry.make();
 
-  async function showLayout(layout: "compact" | "sidebar", savedFilters?: ThreadListFilters) {
+  async function showLayout(
+    layout: "compact" | "sidebar",
+    savedFilters?: ThreadListFilters,
+    stored: Partial<ComponentProps<typeof HomeListOptionsProvider>> = {},
+  ) {
     await act(() => {
       root.render(
         createElement(
@@ -56,7 +60,7 @@ describe("home list options across layout changes", () => {
           { value: registry },
           createElement(
             HomeListOptionsProvider,
-            { projectGroupingMode: "repository", savedFilters },
+            { projectGroupingMode: "repository", savedFilters, ...stored },
             createElement(ThreadList, { key: layout }),
           ),
         ),
@@ -138,6 +142,55 @@ describe("home list options across layout changes", () => {
     await showLayout("compact");
     expect(latest.options.selectedEnvironmentIds).toEqual([]);
     expect(latest.options.selectedProjectKey).toBe("repository:one");
+  });
+
+  it("hydrates late device preferences before persisting and keeps subsequent edits", async () => {
+    const onStoreEnvironmentIds = vi.fn();
+    const onStoreThreadGrouping = vi.fn();
+    const onStoreOwnershipFilter = vi.fn();
+    const onStoreOwnershipRelation = vi.fn();
+    const callbacks = {
+      onStoreEnvironmentIds,
+      onStoreThreadGrouping,
+      onStoreOwnershipFilter,
+      onStoreOwnershipRelation,
+    };
+    await showLayout("compact", undefined, callbacks);
+    const stored = {
+      ...callbacks,
+      storedEnvironmentIds: [environmentId],
+      storedThreadGrouping: "recency" as const,
+      storedOwnershipFilter: "mine" as const,
+      storedOwnershipRelation: "participated" as const,
+    };
+    await showLayout("sidebar", undefined, stored);
+    expect(latest.options).toMatchObject({
+      selectedEnvironmentIds: [environmentId],
+      threadGrouping: "recency",
+      ownershipFilter: "mine",
+      ownershipRelation: "participated",
+    });
+    for (const callback of Object.values(callbacks)) expect(callback).not.toHaveBeenCalled();
+    await act(() => {
+      latest.toggleSelectedEnvironmentId(secondEnvironmentId);
+      latest.setThreadGrouping("project");
+      latest.setOwnershipFilter("theirs");
+      latest.setOwnershipRelation("created");
+    });
+    expect(onStoreEnvironmentIds).toHaveBeenCalledExactlyOnceWith([
+      environmentId,
+      secondEnvironmentId,
+    ]);
+    expect(onStoreThreadGrouping).toHaveBeenCalledExactlyOnceWith("project");
+    expect(onStoreOwnershipFilter).toHaveBeenCalledExactlyOnceWith("theirs");
+    expect(onStoreOwnershipRelation).toHaveBeenCalledExactlyOnceWith("created");
+    await showLayout("compact", undefined, stored);
+    expect(latest.options).toMatchObject({
+      selectedEnvironmentIds: [environmentId, secondEnvironmentId],
+      threadGrouping: "project",
+      ownershipFilter: "theirs",
+      ownershipRelation: "created",
+    });
   });
 
   it("restores saved filters on launch and saves only real changes", async () => {

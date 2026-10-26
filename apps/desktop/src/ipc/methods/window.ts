@@ -143,9 +143,7 @@ export const getLocalEnvironmentBootstraps = DesktopIpc.makeSyncIpcMethod({
           config.value.bootstrapDelivery === "fd3" &&
           bootstrap.desktopBrowserFd !== undefined &&
           bootstrap.desktopBrowserControlFd !== undefined,
-        // A backend launched with the desktop secret accepts whichever token the secret derives
-        // for the current window, so hand out that one rather than the token frozen into its
-        // launch config.
+        // Use the current window's derived token; the launch config's token may be stale.
         ...(bootstrap.desktopBootstrapSecret
           ? { bootstrapToken: yield* configuration.currentBootstrapToken }
           : bootstrap.desktopBootstrapToken
@@ -199,9 +197,7 @@ export const pickFolder = DesktopIpc.makeIpcMethod({
       targetId !== undefined &&
       targetId !== PRIMARY_LOCAL_ENVIRONMENT_ID &&
       targetId.startsWith(DesktopWslBackend.WSL_INSTANCE_ID_PREFIX);
-    // Fall back to the persisted wslDistro when the id is the
-    // "wsl:default" sentinel; the orchestrator uses the same fallback
-    // for the actual backend.
+    // Match the orchestrator's persisted distro fallback for wsl:default.
     const wslDistro = useWsl ? (wslDistroFromTarget ?? settings.wslDistro) : null;
     const defaultPath = useWsl
       ? Option.fromNullishOr(

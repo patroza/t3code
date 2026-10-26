@@ -155,6 +155,12 @@ export function EasDeviceHostsSettings(props: { environmentId: EnvironmentId | n
   );
 }
 
+type AccountCheck =
+  | { status: "idle" }
+  | { status: "checking" }
+  | { status: "signed-in"; account: DeviceEasAccount }
+  | { status: "failed"; error: string };
+
 function EasDeviceHostEditor(props: {
   environmentId: EnvironmentId;
   host: EasDeviceHostConfig;
@@ -171,13 +177,9 @@ function EasDeviceHostEditor(props: {
   const [token, setToken] = useState<
     { kind: "saved" } | { kind: "new"; value: string } | { kind: "cleared" }
   >(props.host.accessToken ? { kind: "saved" } : { kind: "cleared" });
-  const [account, setAccount] = useState<
-    | { status: "idle" }
-    | { status: "checking" }
-    | { status: "signed-in"; account: DeviceEasAccount }
-    | { status: "failed"; error: string }
-    // The editor checks the account as it opens.
-  >({ status: canCheck ? "checking" : "idle" });
+  const [account, setAccount] = useState<AccountCheck>(
+    canCheck ? { status: "checking" } : { status: "idle" },
+  );
   const next: EasDeviceHostConfig = {
     ...draft,
     label: draft.label.trim(),
@@ -229,8 +231,6 @@ function EasDeviceHostEditor(props: {
     void requestCheck();
   };
 
-  // Checking on open names the saved project and shows a rejected credential
-  // before anything is changed.
   const checkOnOpen = useEffectEvent(() => void requestCheck());
   useEffect(() => {
     checkOnOpen();
