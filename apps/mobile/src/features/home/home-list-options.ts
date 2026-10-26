@@ -198,7 +198,9 @@ export function HomeListOptionsProvider({
       savePreferences({ threadListFilters: saved.current });
     }
     if (hydrated.environments && storedEnvironmentIds !== undefined && onStoreEnvironmentIds) {
-      persisted.current.environments ??= environmentIdsKey(storedEnvironmentIds);
+      if (persisted.current.environments === undefined) {
+        persisted.current.environments = environmentIdsKey(storedEnvironmentIds);
+      }
       const key = environmentIdsKey(options.selectedEnvironmentIds);
       if (persisted.current.environments !== key) {
         persisted.current.environments = key;
@@ -206,21 +208,27 @@ export function HomeListOptionsProvider({
       }
     }
     if (hydrated.grouping && storedThreadGrouping !== undefined && onStoreThreadGrouping) {
-      persisted.current.grouping ??= storedThreadGrouping;
+      if (persisted.current.grouping === undefined) {
+        persisted.current.grouping = storedThreadGrouping;
+      }
       if (persisted.current.grouping !== options.threadGrouping) {
         persisted.current.grouping = options.threadGrouping;
         onStoreThreadGrouping(options.threadGrouping);
       }
     }
     if (hydrated.ownership && storedOwnershipFilter !== undefined && onStoreOwnershipFilter) {
-      persisted.current.ownership ??= storedOwnershipFilter;
+      if (persisted.current.ownership === undefined) {
+        persisted.current.ownership = storedOwnershipFilter;
+      }
       if (persisted.current.ownership !== options.ownershipFilter) {
         persisted.current.ownership = options.ownershipFilter;
         onStoreOwnershipFilter(options.ownershipFilter);
       }
     }
     if (hydrated.relation && storedOwnershipRelation !== undefined && onStoreOwnershipRelation) {
-      persisted.current.relation ??= storedOwnershipRelation;
+      if (persisted.current.relation === undefined) {
+        persisted.current.relation = storedOwnershipRelation;
+      }
       if (persisted.current.relation !== options.ownershipRelation) {
         persisted.current.relation = options.ownershipRelation;
         onStoreOwnershipRelation(options.ownershipRelation);

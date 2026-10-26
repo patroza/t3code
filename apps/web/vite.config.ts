@@ -90,6 +90,9 @@ const isolatedUnitTestFiles = [
   "src/components/settings/TelemetryExportSettings.test.tsx",
   // Direct hook harnesses replace React hooks and compiler caches, requiring fresh module binding.
   "src/hooks/useThreadActions.undo.test.ts",
+  // The undo notice and its announcement de-duplication are module-level state; this harness
+  // must start with fresh lifecycle state rather than inheriting another test file's notice.
+  "src/hooks/showThreadUndoNotice.test.ts",
   "src/components/settings/ProjectFaviconPickerDialog.test.tsx",
   "src/components/settings/ThemeEditorHost.test.tsx",
   "src/components/settings/AcpSessionManagementSection.test.tsx",

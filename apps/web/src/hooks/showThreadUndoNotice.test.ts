@@ -13,17 +13,27 @@ import * as ThreadUndo from "./threadUndo";
 
 vi.mock("../lib/announce", () => ({ announce: vi.fn(), cancelAnnouncement: vi.fn() }));
 
-beforeEach(() => vi.useFakeTimers());
+let claimKeys: Array<readonly [string, string]> = [];
+beforeEach(() => {
+  claimKeys = [];
+  vi.useFakeTimers();
+});
 afterEach(() => {
+  for (const [kind, threadKey] of claimKeys) ThreadUndo.invalidate(kind, threadKey);
   vi.runAllTimers();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
+function begin(kind: string, threadKey: string) {
+  claimKeys.push([kind, threadKey]);
+  return ThreadUndo.begin(kind, threadKey);
+}
+
 function setup() {
   const add = vi.spyOn(toastManager, "add").mockReturnValue("error-toast");
   const undo = vi.fn(async () => AsyncResult.success(undefined));
-  const claim = ThreadUndo.begin("pin", "env/thread");
+  const claim = begin("pin", "env/thread");
   const options = { action: "Unpinned" as const, failureTitle: "Restore failed", undo, claim };
   return { add, undo, claim, options };
 }
@@ -41,7 +51,7 @@ describe("thread undo notice", () => {
     const stale = notice();
     ThreadUndo.invalidate("pin", "env/thread");
     expect(useThreadUndoNotice.getState().notice).toBeNull();
-    showThreadUndoNotice({ ...options, claim: ThreadUndo.begin("pin", "env/thread") });
+    showThreadUndoNotice({ ...options, claim: begin("pin", "env/thread") });
     await stale.undo();
     expect(undo).not.toHaveBeenCalled();
     await notice().undo();
@@ -55,7 +65,7 @@ describe("thread undo notice", () => {
     expect(threadUndoClaimsShortcut()).toBe(true);
     releaseThreadUndoShortcut();
     expect(threadUndoClaimsShortcut()).toBe(false);
-    showThreadUndoNotice({ ...options, claim: ThreadUndo.begin("pin", "env/next") });
+    showThreadUndoNotice({ ...options, claim: begin("pin", "env/next") });
     expect(threadUndoClaimsShortcut()).toBe(true);
   });
 
@@ -64,7 +74,7 @@ describe("thread undo notice", () => {
     showThreadUndoNotice(options);
     await notice().undo();
     expect(threadUndoClaimsShortcut()).toBe(false);
-    showThreadUndoNotice({ ...options, claim: ThreadUndo.begin("pin", "env/expiring") });
+    showThreadUndoNotice({ ...options, claim: begin("pin", "env/expiring") });
     vi.advanceTimersByTime(5_000);
     expect(threadUndoClaimsShortcut()).toBe(false);
   });
@@ -80,7 +90,7 @@ describe("thread undo notice", () => {
     );
     ThreadUndo.invalidate("pin", "env/other");
     expect(announce).toHaveBeenCalledOnce();
-    showThreadUndoNotice({ ...options, claim: ThreadUndo.begin("pin", "env/second") });
+    showThreadUndoNotice({ ...options, claim: begin("pin", "env/second") });
     expect(announce).toHaveBeenLastCalledWith(
       expect.stringMatching(/^Unpinned 2 threads, /),
       "thread-undo-notice",
