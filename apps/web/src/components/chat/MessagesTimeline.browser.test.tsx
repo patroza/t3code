@@ -1318,7 +1318,10 @@ describe("MessagesTimeline scroll position", () => {
       const [liveFollowEnabled, setLiveFollowEnabled] = useState(true);
       // The chat view stops following the live edge when the reader scrolls.
       return (
-        <div className="contents" onWheelCapture={() => setLiveFollowEnabled(false)}>
+        <div
+          className="contents"
+          onWheelCapture={() => flushSync(() => setLiveFollowEnabled(false))}
+        >
           <MessagesTimeline
             {...props}
             timelineEntries={tallEntries}
