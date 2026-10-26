@@ -52,7 +52,7 @@ const noopDeepLinks = {
 } satisfies DesktopDeepLinks.DesktopDeepLinks["Service"];
 
 const noopElectronWindow = {
-  currentMainOrFirst: Effect.succeed(Option.none()),
+  currentMainOrFirst: Effect.succeedNone,
   reveal: () => Effect.void,
 } as unknown as ElectronWindow.ElectronWindow["Service"];
 
