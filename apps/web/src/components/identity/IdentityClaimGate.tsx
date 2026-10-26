@@ -10,7 +10,6 @@ import {
 } from "@t3tools/contracts";
 import { useEffect, useState } from "react";
 
-import { useActiveEnvironmentId } from "../../state/entities";
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import { identityEnvironment } from "../../state/identity";
 import { useEnvironmentQuery } from "../../state/query";
@@ -72,7 +71,6 @@ function clearForceClaimOpen(): void {
  * Gate every environment that requires a claim, not only primary/active.
  */
 export function IdentityClaimGate() {
-  const activeEnvironmentId = useActiveEnvironmentId();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const { environments } = useEnvironments();
   const force = useForceClaimState();
@@ -86,7 +84,6 @@ export function IdentityClaimGate() {
     };
     // Forced env first so settle/send errors open the right dialog.
     add(force.environmentId);
-    add(activeEnvironmentId);
     add(primaryEnvironmentId);
     for (const environment of environments) {
       add(environment.environmentId);
