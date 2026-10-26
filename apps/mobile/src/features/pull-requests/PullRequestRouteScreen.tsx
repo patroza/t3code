@@ -111,6 +111,7 @@ import {
 } from "./PullRequestPresentation";
 import { usePullRequestFilesSection } from "./PullRequestFiles";
 import { PullRequestDescription } from "./PullRequestDescription";
+import { PullRequestMediaVisibleContext } from "./PullRequestMedia";
 import { PullRequestMarkdownRepository } from "./PullRequestMarkdown";
 import {
   PullRequestStatusMenu,
@@ -400,7 +401,7 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
   const result = useEnvironmentQuery(detailAtom);
   const pullRefresh = usePullToRefresh(detailAtom);
   const { refresh: refreshDetail } = result;
-  useFocusEffect(() => refreshDetail());
+  useFocusEffect(refreshDetail);
   const pr = usePullRequestLiveChecks(params, result.data);
   const summary = params.initialSummary;
   const identity = pr ?? summary;
@@ -795,7 +796,9 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
                         listAnimationsReady && !item.key.endsWith(":body") ? PR_ROW_EXIT : undefined
                       }
                     >
-                      {item.content}
+                      <PullRequestMediaVisibleContext value={section === tab}>
+                        {item.content}
+                      </PullRequestMediaVisibleContext>
                     </Animated.View>
                   )}
                   recycleItems={false}
@@ -894,7 +897,7 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
     route.params.focus ? route.params.path : undefined,
   );
   const { refresh: refreshDetail } = detail;
-  useFocusEffect(() => refreshDetail());
+  useFocusEffect(refreshDetail);
   const { loadMore } = result;
   const parsed = filter.parsed;
   const reviewDraft = usePullRequestReviewDraft(route.params);
