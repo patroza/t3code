@@ -79,6 +79,8 @@ const buildSourcemap: boolean | "hidden" =
       : true;
 
 const isolatedUnitTestFiles = [
+  // The terminal attach harness replaces modules also imported by terminal/status components.
+  "src/state/terminalSessions.test.ts",
   // Retained action toasts use scoped server and runtime mocks.
   "src/components/GitActionsControl.lifecycle.test.ts",
   // Hook mocks must bind before imports, without a preceding file’s cached theme hook.

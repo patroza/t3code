@@ -324,11 +324,14 @@ describe("PreviewView", () => {
 
         await userEvent.click(page.getByRole("button", { name: "Preview menu" }));
         await userEvent.click(page.getByRole("menuitem", { name: "Show device toolbar" }));
-        expect(commit).toHaveBeenCalledExactlyOnceWith(TEST_RUNTIME_TAB_ID, {
-          _tag: "freeform",
-          width: 1250,
-          height: 938,
-        });
+        expect(commit).toHaveBeenCalledExactlyOnceWith(
+          { runtimeTabId: TEST_RUNTIME_TAB_ID, threadRef: TEST_THREAD_REF, tabId: "tab-1" },
+          {
+            _tag: "freeform",
+            width: 1250,
+            height: 938,
+          },
+        );
       } finally {
         commit.mockReset();
         await act(() => useBrowserSurfaceStore.setState({ activityByTabId: {}, byTabId: {} }));

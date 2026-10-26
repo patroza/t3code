@@ -30,6 +30,7 @@ vi.mock("react", async (original) => ({
   ...(await original<typeof import("react")>()),
   useCallback: (callback: unknown) => callback,
   useLayoutEffect: (effect: () => void) => effect(),
+  useInsertionEffect: (effect: () => void) => effect(),
   useMemo: (create: () => unknown) => create(),
   useState: (initial: () => unknown) => [initial(), () => {}],
   useRef: (value: unknown) => ({ current: value }),
