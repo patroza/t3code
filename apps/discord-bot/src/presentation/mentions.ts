@@ -36,17 +36,8 @@ export function resolveDiscordFollowUpDelivery(
   return "steer";
 }
 
-/**
- * Whether a continue-mention should post/adopt a fresh `_Working.._` tip.
- *
- * A steer (the default, or `--steer` / `/omegent steer`) and an idle continue
- * post a new tip. Stream/heartbeat also hop Working below an echoed
- * desktop/web/mobile/GitHub command. Casual thread chat must not hop the live tip.
- *
- * Parked mid-turn follow-ups must not post a new tip. Adopting a new Working
- * freezes the live tip and bumps the delivery epoch, so the in-flight answer is
- * never posted (queued follow-up final lands; prior final is stuck as frozen
- * progress).
+/** Steer (the default) and idle continue post a fresh Working tip; stream hops only after an echoed command.
+ * Casual chat and parked mid-turn follow-ups must not adopt a tip, which would freeze live progress.
  */
 export function shouldPostWorkingAckForContinue(input: {
   readonly presentationMode?: "full" | "final-only" | undefined;
@@ -88,14 +79,8 @@ export function normalizeSmartFlagDashes(raw: string): string {
   return raw.replaceAll(/(^|\s)[—–―](?=[A-Za-z])/gu, "$1--");
 }
 
-/**
- * Parse optional flags from a bot mention body (after stripping the mention).
- * Flags: --model <name> --provider <instanceId> --base <branch> --local --plan
- *        --steer --queue
- * `—model` / `–model` are accepted as `--model` (same for the other flags).
- *
- * `--steer` / `--queue` last-wins when both appear. `@Omegent --queue <prompt>`
- * parks; a bare `queue` word stays in the prompt.
+/** Parse model/provider/base/local/plan/steer/queue flags; en/em dashes normalize to `--`.
+ * Last `--steer`/`--queue` wins; a bare `queue` remains prompt text.
  */
 export function parseMentionFlags(raw: string): ParsedMentionFlags {
   const providerModel = parseProviderModelFlags(normalizeSmartFlagDashes(raw));

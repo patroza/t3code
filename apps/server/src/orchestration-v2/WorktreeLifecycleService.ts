@@ -1,13 +1,5 @@
-/**
- * WorktreeLifecycle - Server-authoritative worktree cleanup and restoration.
- *
- * Owns the archive-time cleanup decision (preview + conditional removal) and
- * the unarchive-time restoration of a missing worktree. All operations are
- * keyed by thread id so clients never make the final safety decision about
- * which path is removed or recreated.
- *
- * @module WorktreeLifecycle
- */
+// Keep archive cleanup and unarchive restoration authoritative on the server, keyed by thread ID.
+// Clients may preview the decision but never choose which path is removed or recreated.
 import type {
   ThreadId,
   WorktreeCleanupPreviewResult,
@@ -25,40 +17,20 @@ export interface WorktreeCleanupThreadInput {
  * WorktreeLifecycleShape - Service API for thread worktree lifecycle.
  */
 export interface WorktreeLifecycleShape {
-  /**
-   * Decide whether archiving this thread would orphan its worktree.
-   *
-   * Returns a candidate only when the thread is active, has both a branch
-   * and a worktree path (so removal stays restorable), and no other active
-   * nondeleted thread references the same normalized path. Clients use this
-   * only to decide whether to show the confirmation prompt.
-   */
+  // Offer cleanup only for an active thread with a branch, restorable worktree path, and no other live path references.
+  // Clients use the candidate only to decide whether confirmation is needed.
   readonly previewCleanup: (
     input: WorktreeCleanupThreadInput,
   ) => Effect.Effect<WorktreeCleanupPreviewResult, WorktreeLifecycleError>;
 
-  /**
-   * Force-remove the archived thread's worktree if it is still orphaned.
-   *
-   * Re-reads all nondeleted references under a per-path lock before
-   * removing, stops provider sessions and closes terminals that could still
-   * use the path, keeps the branch, and refreshes VCS status. Returns a
-   * structured status instead of failing when the worktree is retained or
-   * already missing.
-   */
+  // Under the per-path lock, recheck live references, stop users of the path, and remove only an orphaned worktree.
+  // Keep its branch and refresh VCS; retained or already-missing paths return structured status.
   readonly cleanupThreadWorktree: (
     input: WorktreeCleanupThreadInput,
   ) => Effect.Effect<WorktreeCleanupResult, WorktreeLifecycleError>;
 
-  /**
-   * Recreate a missing worktree before committing a thread unarchive.
-   *
-   * Runs `commitUnarchive` unchanged when no restoration is needed. When the
-   * recorded worktree path is missing, the worktree is recreated from the
-   * retained branch at the original path while holding the same per-path
-   * lock used by cleanup, and the commit is dispatched under that lock. If
-   * recreation fails the commit never runs, so the thread stays archived.
-   */
+  // Restore a missing worktree from its retained branch under the cleanup lock before committing unarchive.
+  // Failed restoration never dispatches the commit, so the thread stays archived.
   readonly restoreThreadWorktree: <A, E, R>(
     input: WorktreeCleanupThreadInput,
     commitUnarchive: Effect.Effect<A, E, R>,

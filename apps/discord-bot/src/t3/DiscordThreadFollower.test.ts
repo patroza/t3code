@@ -21,8 +21,7 @@ describe("planThreadFollowerReconnectSeed", () => {
   });
 
   it("resumes after disconnect without replaying warm tip (no old finals at tip)", () => {
-    // Production: SocketClose re-ran deliver(warmSeed) with a stale in-memory tip and
-    // re-finalized Done.PR #156 after newer Discord turns.
+    // SocketClose replayed a stale in-memory warm tip and finalized an old answer after newer turns.
     expect(
       planThreadFollowerReconnectSeed({ lastAppliedSequence: 104286, hasWarmSeed: true }),
     ).toBe("resume-after");

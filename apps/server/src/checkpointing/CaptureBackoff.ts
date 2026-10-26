@@ -1,19 +1,5 @@
-/**
- * Consecutive-failure backoff for workspace checkpoint capture.
- *
- * Capture runs a full-tree `git add -A` under a temporary index after every
- * completed turn. On a repository large enough to exceed the VCS process
- * timeout, that capture can never succeed, so the unguarded retry pegs a CPU
- * core for as long as any thread is in use and litters `.git/objects/pack`
- * with `tmp_pack_*` files from each killed process.
- *
- * After a few consecutive failures for a workspace, capture is skipped for a
- * growing cooldown instead of being retried every turn. Any success clears
- * the record, so a transient failure (a lock held by a concurrent git
- * command) costs nothing.
- *
- * @module CaptureBackoff
- */
+// Back off consecutive checkpoint capture failures per workspace to avoid repeating full-tree work that cannot finish.
+// Successful captures clear the cooldown, so transient failures do not penalize later turns.
 
 /** Failures tolerated before a workspace enters cooldown. */
 const FAILURE_THRESHOLD = 3;
@@ -28,14 +14,8 @@ const MAX_COOLDOWN_MS = 60 * 60_000;
  */
 const MAX_TRACKED_WORKSPACES = 256;
 
-/**
- * How long the first caller past an expired cooldown holds the retry to
- * itself. Threads sharing a workspace complete turns independently, so
- * without this they would all be released at once and launch the same
- * expensive capture together. Comfortably longer than the VCS process
- * timeout that kills a stuck capture, and it lapses on its own, so an
- * attempt that never reports back cannot wedge the workspace.
- */
+// Reserve one retry after cooldown so concurrent threads cannot all launch expensive capture at once.
+// The reservation exceeds the process timeout but expires if its caller never reports back.
 const ATTEMPT_RESERVATION_MS = 60_000;
 
 export interface CaptureBackoffDecision<E> {

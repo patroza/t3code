@@ -45,11 +45,6 @@ function makeLocalDate(
   return new Date(year, monthIndex, day, hours, minutes, seconds);
 }
 
-function makeDateFromEpochMs(ms: number): Date {
-  // @effect-diagnostics-next-line globalDate:off
-  return new Date(ms);
-}
-
 function makeNow(): Date {
   // @effect-diagnostics-next-line globalDate:off
   return new Date();

@@ -133,11 +133,7 @@ describe("followNetworkStatus", () => {
         const resumed = yield* harness.enqueueResume;
         yield* Deferred.await(readStarted);
 
-        // The repeat carries no new status, but it proves the listener spoke
-        // after this read began, so the read is stale even though the status it
-        // returns differs. Applying it would strand consumers on "offline" while
-        // the platform reports "online" — the very failure this helper exists to
-        // prevent.
+        // The repeat proves the listener is newer than this read; applying the stale result would overwrite online with offline.
         yield* harness.report("online");
         yield* Deferred.succeed(releaseRead, undefined);
         yield* resumed.processed;

@@ -4,18 +4,8 @@ import type { ComposerImageAttachment } from "../../composerDraftStore";
 import { randomUUID } from "../../lib/utils";
 
 /**
- * Rebuilding composer attachments when a queued message is edited.
- *
- * A queued message's attachments name bytes the server holds — `{id, name,
- * mimeType, sizeBytes}` and nothing more. The composer needs the bytes
- * themselves (`File` + an object URL), so recalling a queued message for
- * editing has to fetch each attachment back through its signed asset URL.
- *
- * Callers must do this *before* removing the queued message. The removal is
- * what makes the edit destructive: once the queued entry is gone, its
- * attachment files are pruned server-side and a failed fetch has no second
- * chance — so a caller that cannot restore everything must leave the message
- * queued rather than remove it.
+ * Fetch attachment bytes before removing a queued message, which prunes its server files.
+ * If any fetch fails, leave the message queued so the user can retry.
  */
 
 export interface RecallableQueuedAttachment {

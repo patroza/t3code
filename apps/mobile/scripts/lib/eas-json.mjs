@@ -1,19 +1,5 @@
 #!/usr/bin/env node
-// Tolerant reader for `eas ... --json` output.
-//
-// EAS CLI prints human-readable notices on stdout even in `--json` mode. The
-// one that broke every production deploy comes from
-// `eas fingerprint:generate --environment production` when that EAS
-// environment holds no plain-text/sensitive variables:
-//
-//   No environment variables with visibility "Plain text" and "Sensitive"
-//   found for the "production" environment on EAS.
-//   {"hash":"...","sources":[...]}
-//
-// A bare `JSON.parse(stdin)` dies on the notice ("Unexpected token 'N'"), so
-// pull the first well-formed JSON value out of the stream instead of trusting
-// the whole pipe.
-//
+// EAS --json may prepend notices; extract the first complete JSON value.
 // Usage: <eas command> --json | node scripts/lib/eas-json.mjs <mode>
 
 import * as NodeURL from "node:url";

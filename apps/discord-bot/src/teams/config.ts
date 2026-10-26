@@ -10,8 +10,10 @@ import {
 
 import { expandHomePath } from "../projectAliases.ts";
 
+const isTeamsFileDestination = Schema.is(TeamsFileDestination);
+
 function isFileDestination(value: unknown): value is TeamsFileDestination {
-  if (!Schema.is(TeamsFileDestination)(value)) return false;
+  if (!isTeamsFileDestination(value)) return false;
   try {
     validateTeamsFileDestination(value);
     return true;

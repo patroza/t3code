@@ -1,12 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off missingEffectContext:off anyUnknownInErrorContext:off
 /**
- * Guest-side ops alerts → a dedicated Discord channel.
- *
- * - Host: load, CPU%, memory, disk free
- * - Runaways: legacy stdio Sentry MCP proliferation / high RSS → alert only (never kill)
- * - T3: long-running turns (page at 0.25h × 2ⁿ age milestones); **real** session errors only
- *   (not orphan-restart recover text)
- * - App: postFatalAlert() / postBridgeAlert() for hard + bridge failures
+ * Guest ops alerts cover host resources, runaway processes (alert only), long turns, real session errors,
+ * and fatal/bridge failures. Long-turn alerts use 0.25h × 2ⁿ milestones; recovery text is not a session error.
  */
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
@@ -53,16 +48,8 @@ const DISK_FREE_MIN_GB = 2;
 const SENTRY_RSS_ALERT_MB = 512;
 const SENTRY_COUNT_ALERT = 2;
 /**
- * Default generic process rule for "unexpectedly hot" processes.
- * The sustained duration preserves the prior five-sample window semantics:
- * the first sample establishes the CPU-rate baseline, then four 60s intervals
- * must stay hot before alerting.
- *
- * This measures a *rate* (Δcpu / Δwall between ticks), not cumulative CPU time:
- * a long-lived-but-idle process (e.g. one that gathered 200s of CPU over hours
- * yet now moves a few seconds per 10 min) is not a problem and used to re-alert
- * forever. What we want to catch is a process actually pegging CPU or memory for
- * a sustained stretch.
+ * Require five hot samples (baseline plus four 60s intervals) before alerting.
+ * Measure CPU rate between ticks, not cumulative CPU time, so old idle processes stay quiet.
  */
 const DEFAULT_PROCESS_CPU_PERCENT = 50; // percent of a single core, averaged over the tick gap
 const DEFAULT_PROCESS_RSS_ALERT_MB = 768;

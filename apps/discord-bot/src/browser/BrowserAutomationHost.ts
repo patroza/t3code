@@ -44,11 +44,8 @@ export class BrowserOperationTimeoutError extends Error {
 const NON_JSON_RESULT_MESSAGE = "Browser result could not be returned because it is not JSON.";
 
 /**
- * RPC encodes `result` as JSON. Playwright can hand back Dates, NaN, or class
- * instances, and Effect rejects those while sending the response. That defect
- * used to kill the whole host and drop the thread onto another browser.
- * Round-trip through JSON first. Values that cannot be encoded fail this call
- * instead.
+ * RPC results must survive JSON encoding; Playwright can return Dates, NaN, or class instances.
+ * Round-trip before sending so invalid results fail this call instead of killing the host.
  */
 export function browserAutomationResult(value: unknown): unknown {
   if (value === undefined) return undefined;

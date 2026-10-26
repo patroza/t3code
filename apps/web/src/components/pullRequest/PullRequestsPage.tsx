@@ -1,3 +1,4 @@
+import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { applyPullRequestDraftFilterChange } from "@t3tools/client-runtime/pull-request-query";
 import { Spinner } from "~/components/ui/spinner";
 import type { PullRequestSpeedActionResult } from "~/components/pullRequest/PullRequestSpeedActions";
@@ -5,7 +6,7 @@ import { usePullRequestCloseBatch } from "~/components/pullRequest/usePullReques
 import { SidebarPointerSensor } from "~/components/Sidebar.pointer";
 import { resolveSidebarSweepKeys } from "~/components/Sidebar.logic";
 import { sortProjectsByGroupOrder } from "@t3tools/client-runtime/state/project-grouping";
-import { pullRequestHostOf, resolveEnvironmentMachineKind } from "@t3tools/contracts";
+import { resolveEnvironmentMachineKind } from "@t3tools/contracts";
 import type {
   EnvironmentId,
   ProjectId,
@@ -15,7 +16,6 @@ import type {
   PullRequestListInput,
   PullRequestListResult,
   PullRequestListState,
-  SourceControlProviderKind,
 } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
@@ -26,6 +26,7 @@ import {
   collectPullRequestListFacets,
   narrowPullRequestsToFilters,
   mergePullRequestDiffStats,
+  pullRequestDiffStatKey,
   pullRequestEntryKey,
   rankPullRequestMatches,
   readPullRequestListSnapshot,
@@ -88,7 +89,6 @@ import { useStableCallback } from "~/hooks/useStableCallback";
 import { useOpenPanelPullRequestUrl } from "~/hooks/useOpenPanelPullRequestUrl";
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { toastManager } from "../ui/toast";
-import { useEscapeToGoBack } from "~/hooks/useNavigateBack";
 import { usePanelAnimationSettings, usePanelPresence } from "~/panelAnimations";
 import {
   PULL_REQUESTS_PANEL_REF,
@@ -104,6 +104,7 @@ import {
   usePullRequestList,
   usePullRequestListStats,
   usePullRequestTurnRefreshes,
+  useSharedPullRequestSummary,
   type EnvironmentQueryTarget,
 } from "~/state/pullRequests";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -138,7 +139,6 @@ const EMPTY_PREVIEW_DESKTOP_STATE = {};
 const EMPTY_TERMINAL_LABELS = new Map<string, string>();
 const EMPTY_PENDING_SURFACES = new Set<string>();
 export function PullRequestsPage() {
-  useEscapeToGoBack();
   const search = useSearch({ from: "/_chat/pull-requests" });
   const sort = search.sort ?? "ready";
   const statsPolicy: PullRequestStatsPolicy =
@@ -195,6 +195,15 @@ export function PullRequestsPage() {
     (renderedPullRequestSurface?.environmentId as EnvironmentId | undefined) ??
     selectedProject?.environmentId ??
     null;
+  const panelSummary = useSharedPullRequestSummary(
+    panelEnvironmentId,
+    renderedPullRequestSurface === null
+      ? null
+      : {
+          ...renderedPullRequestSurface,
+          projectId: renderedPullRequestSurface.projectId as ProjectId,
+        },
+  );
   const updateSearch = (patch: {
     [Key in keyof PullRequestsSearch]?: PullRequestsSearch[Key] | undefined;
   }) =>
@@ -248,6 +257,7 @@ export function PullRequestsPage() {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const {
     sentQuery,
+    submitQuery,
     querySettled,
     typedParsed,
     sentParsed,
@@ -710,6 +720,22 @@ export function PullRequestsPage() {
 
   const visibleStatsKeys = useRef({ key: filterKey, values: new Set<string>() });
   const [statsByRow, setStatsByRow] = useState<PullRequestDiffStats>(() => new Map());
+  if (
+    panelEnvironmentId !== null &&
+    panelSummary?.additions !== undefined &&
+    panelSummary.deletions !== undefined
+  ) {
+    const stat = {
+      ...panelSummary,
+      environmentId: panelEnvironmentId,
+      additions: panelSummary.additions,
+      deletions: panelSummary.deletions,
+    };
+    const previous = statsByRow.get(pullRequestDiffStatKey(stat));
+    if (previous?.additions !== stat.additions || previous.deletions !== stat.deletions) {
+      setStatsByRow(mergePullRequestDiffStats(statsByRow, [stat]));
+    }
+  }
   const [statsTargetState, setStatsTargetState] = useState<{
     readonly key: string;
     readonly batches: ReadonlyArray<PullRequestStatsBatch>;
@@ -1014,9 +1040,9 @@ export function PullRequestsPage() {
           host:
             activePullRequestSurface.host ??
             (selectedProject?.repositoryIdentity
-              ? pullRequestHostOf(
+              ? sourceControlClients.changeRequestHost(
                   selectedProject.repositoryIdentity,
-                  selectedProject.repositoryIdentity.provider as SourceControlProviderKind,
+                  selectedProject.repositoryIdentity.provider,
                 )
               : undefined),
         }
@@ -1076,6 +1102,7 @@ export function PullRequestsPage() {
       value={search.q ?? ""}
       busy={typedQuery.length > 0 && (!querySettled || showingCarried)}
       onChange={(query) => updateListScope({ q: query || undefined })}
+      onSubmit={submitQuery}
     />
   );
   const panelToggleControls = (
@@ -1118,14 +1145,14 @@ export function PullRequestsPage() {
   const listBody = (
     <>
       {!capabilityKnown ? (
-        <PullRequestListGhost rows={7} />
+        <PullRequestListGhost rows={7} caption="Loading pull requests…" />
       ) : !pullRequestsSupported ? (
         <PullRequestsUnavailableState
           title="Pull requests unavailable"
           error="Update your T3 Code servers to browse pull requests."
         />
       ) : firstLoad ? (
-        <PullRequestListGhost rows={7} />
+        <PullRequestListGhost rows={7} caption="Loading pull requests…" />
       ) : listQuery.error && shownCount === 0 ? (
         <PullRequestsUnavailableState
           error={listQuery.error}
@@ -1371,15 +1398,22 @@ export function PullRequestsPage() {
     event.stopPropagation();
     if (event.repeat) return;
     const url = openPanelPullRequestUrl;
-    void writeTextToClipboard(url, "pull request link").then(
+    const { shortLabel, singular } = (
+      sourceControlClients.findByChangeRequestUrl(url) ?? sourceControlClients.get(undefined)
+    ).changeRequest;
+    void writeTextToClipboard(url, `${singular} link`).then(
       (didCopy) => {
         if (didCopy)
-          toastManager.add({ type: "success", title: "PR link copied", description: url });
+          toastManager.add({
+            type: "success",
+            title: `${shortLabel} link copied`,
+            description: url,
+          });
       },
       (error) => {
         toastManager.add({
           type: "error",
-          title: "Failed to copy PR link",
+          title: `Failed to copy ${shortLabel} link`,
           description: error instanceof Error ? error.message : "An error occurred.",
         });
       },

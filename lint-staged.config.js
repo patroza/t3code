@@ -1,10 +1,6 @@
 /** @type {import("lint-staged").Configuration} */
 export default {
-  // Keep in sync with vite.config.ts `staged`.
-  // Commit runs format + lint; the heavier typecheck + tests stay in the agent
-  // ship gate (pre-push on ready PRs / `pnpm pr:ready`).
-  // `--no-error-on-unmatched-pattern`: a commit whose staged files are all
-  // unformattable (e.g. only *.nix) must not fail pre-commit.
+  // Keep format/lint in sync with vite.config.ts; the ship gate owns types/tests. Unsupported formats are a no-op.
   "*": "vp fmt --no-error-on-unmatched-pattern",
   // Lint (with autofix) only the code files oxlint understands.
   // `.repos/**` is in oxlint/fmt ignorePatterns; a sync merge stages thousands of

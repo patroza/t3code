@@ -13,16 +13,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { resolveIdentityClaimCandidate } from "./identityClaimCandidate";
 
-/**
- * Claim gate for multi-env mobile (e.g. local + t3vm).
- *
- * - Only **connected** environments are probed (never while reconnecting —
- *   identity RPCs on a flapping link heat the device and leave a Modal that
- *   steals all touches).
- * - Secondary remotes are ordered before primary so t3vm (map on) wins over
- *   smart/desktop primary (map off).
- * - At most one Modal is shown.
- */
+/** Probe connected remotes before the primary environment, showing one claim modal at a time. */
 export function IdentityClaimGate() {
   const { environments } = useEnvironments();
   const candidates = useMemo(() => {
@@ -38,17 +29,12 @@ export function IdentityClaimGate() {
     return [...secondary, ...primary];
   }, [environments]);
 
-  const [activeIndex, setActiveIndex] = useState(0);
   const candidateKey = candidates.map((environment) => environment.environmentId).join("\0");
-
-  // A changed connection set starts a fresh probe. Reaching the end of an unchanged
-  // set stays exhausted instead of wrapping to zero and probing forever.
-  useEffect(() => {
-    setActiveIndex(0);
-  }, [candidateKey]);
-
+  const [selection, setSelection] = useState({ key: candidateKey, index: 0 });
+  if (selection.key !== candidateKey) setSelection({ key: candidateKey, index: 0 });
+  const activeIndex = selection.key === candidateKey ? selection.index : 0;
   const onSkip = useCallback(() => {
-    setActiveIndex((index) => index + 1);
+    setSelection((current) => ({ ...current, index: current.index + 1 }));
   }, []);
 
   const environment = resolveIdentityClaimCandidate(candidates, activeIndex);
@@ -72,6 +58,7 @@ function IdentityClaimGateBody(props: {
   readonly onSkip: () => void;
 }) {
   const environmentId = props.environment.environmentId;
+  const { onSkip } = props;
   const target = useMemo(() => ({ environmentId, input: {} as const }), [environmentId]);
   const snapshotQuery = useEnvironmentQuery(identityEnvironment.snapshot(target));
   const claimQuery = useEnvironmentQuery(identityEnvironment.sessionClaim(target));
@@ -86,7 +73,7 @@ function IdentityClaimGateBody(props: {
 
   const needsClaim = identityClaimRequired(snapshotQuery.data, claimQuery.data);
 
-  // Finished loading and this env does not need a claim → try next.
+  // oxlint-disable-next-line t3code/react-effect-budget -- Advance the parent candidate only after both remote identity queries settle.
   useEffect(() => {
     if (snapshotQuery.isPending || claimQuery.isPending) {
       return;
@@ -102,12 +89,12 @@ function IdentityClaimGateBody(props: {
         return;
       }
       didSkipRef.current = true;
-      props.onSkip();
+      onSkip();
     }
   }, [
     claimQuery.isPending,
     needsClaim,
-    props.onSkip,
+    onSkip,
     snapshotQuery.data,
     snapshotQuery.error,
     snapshotQuery.isPending,

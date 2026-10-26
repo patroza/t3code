@@ -1,15 +1,6 @@
 #!/usr/bin/env node
 /**
- * Agent (and human) publish path: require HEAD to contain latest fork/dev,
- * run the full ship gate, then mark the PR ready.
- *
- *   pnpm pr:ready
- *
- * This is the explicit path, not the only one: raw `gh pr ready` also runs the
- * gate, because the shim runs it before passing the command through. What this
- * adds is PR-state handling — a clear error when there is no open PR, and gate-
- * only behaviour when the PR is already ready. AGENT_PR_SHIP=1 below marks the
- * gate as already passed so the shim does not run it a second time.
+ * Publish only after latest fork/dev ancestry and the full gate; avoid paying the shim gate twice.
  */
 import * as NodeChildProcess from "node:child_process";
 import * as NodeProcess from "node:process";

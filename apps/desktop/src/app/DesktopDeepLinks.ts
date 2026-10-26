@@ -26,6 +26,8 @@ export const DESKTOP_PROJECT_DEEP_LINK_PATH = "/project";
 const MAX_DEEP_LINK_VALUE_LENGTH = 256;
 
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
+const decodeThreadId = Schema.decodeSync(ThreadId);
+const decodeConnectionCatalog = Schema.decodeSync(Schema.fromJsonString(ConnectionCatalogDocument));
 
 export type DesktopThreadDeepLink = {
   readonly connectionLabel: string;
@@ -114,7 +116,7 @@ export function parseDesktopThreadDeepLink(raw: string): Option.Option<DesktopTh
 
   let threadId: ThreadId;
   try {
-    threadId = Schema.decodeUnknownSync(ThreadId)(threadRaw);
+    threadId = decodeThreadId(threadRaw);
   } catch {
     return Option.none();
   }
@@ -212,9 +214,7 @@ export function resolveEnvironmentIdForConnectionLabel(
 ): DesktopConnectionLabelResolution {
   let document: ConnectionCatalogDocumentType;
   try {
-    document = Schema.decodeUnknownSync(Schema.fromJsonString(ConnectionCatalogDocument))(
-      catalogJson,
-    );
+    document = decodeConnectionCatalog(catalogJson);
   } catch (cause) {
     return { _tag: "invalidCatalog", cause };
   }

@@ -33,15 +33,7 @@ export function serverCandidates(
 }
 
 /**
- * Whether a stored bearer token may be sent to `targetServerUrl`.
- *
- * A token obtained by pairing is issued by, and only valid for, the server that
- * issued it. Offering it to the desktop or configured candidate would disclose
- * one server's credential to another, so a scoped token is pinned to its issuer.
- *
- * A null scope means the token predates endpoint pinning or was entered by hand
- * through "Set Server Bearer Token", where the user chose the destination
- * themselves. Those stay unpinned so existing setups keep working.
+ * Paired bearer tokens stay pinned to their issuer. Legacy or manually entered tokens have no endpoint pin.
  */
 export function bearerTokenAppliesTo(
   tokenEndpoint: string | null,

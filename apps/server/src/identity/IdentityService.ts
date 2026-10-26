@@ -1,21 +1,9 @@
 // @effect-diagnostics preferSchemaOverJson:off
 // @effect-diagnostics nodeBuiltinImport:off
 // @effect-diagnostics globalConsole:off
-/**
- * Closed-set identity map + per-session claims.
- *
- * Map: T3_IDENTITY_MAP_PATH only (explicit). Missing/empty at startup → feature
- * off. Once enabled the file is re-checked on a TTL, so staged edits apply
- * without a restart; a bad or empty re-read never disables an enabled map.
- * Claims: `layerPersisted` (server) stores them in SQLite via
- * SessionIdentityClaimRepository with the Ref as a read-through cache, so they
- * survive a restart. The residual-free `layer` (CLI / tests) is Ref-only.
- *
- * Layer residual is empty so it can sit on the server graph without polluting
- * CLI typecheck (SqlClient / ServerConfig leakage).
- *
- * v1 trust: interactive claim is map membership only (trusted-team ops).
- */
+// T3_IDENTITY_MAP_PATH enables map membership claims; bad reloads retain the last good map.
+// Server claims persist in SQLite; CLI/test claims stay in memory.
+// Interactive claims establish membership only, assuming trusted-team operation.
 import * as NodeFS from "node:fs";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -74,16 +62,8 @@ export class IdentityService extends Context.Service<
     readonly clearClaim: (
       sessionId: AuthSessionId,
     ) => Effect.Effect<{ cleared: boolean }, IdentityError>;
-    /**
-     * When the identity map is enabled, interactive sessions must have claimed
-     * a person before orchestration operate. Returns the claim, or null when
-     * the map is off / the session is an integration bot.
-     *
-     * Bot sessions (`clientDeviceType: "bot"`) skip the claim gate: Discord/Jira
-     * share one long-lived auth session across many human senders, so a single
-     * session claim cannot impersonate each actor. Per-turn SourceRef stamping
-     * from the platform map is a separate path (not session claim).
-     */
+    // Enabled maps require interactive sessions to claim a member before operating.
+    // Bot sessions bypass session claims: their per-turn SourceRef identifies each human sender.
     readonly requireOperateClaim: (
       sessionId: AuthSessionId,
       options?: {
@@ -195,20 +175,9 @@ function fingerprintFromEnv(): string | null {
   }
 }
 
-/**
- * File-backed map with a TTL re-check, so operators can edit the staged map and
- * have it apply without a server restart.
- *
- * Polls rather than watching: the map is delivered over virtiofs from the host,
- * where inotify propagation is not something to depend on.
- *
- * Two safety rules, both about not letting a bad read do damage:
- * - a reload that yields no people never disables an already-enabled map, since
- *   `enabled === false` turns the operate gate off entirely. Emptying the file
- *   is not the documented way to disable; removing T3_IDENTITY_MAP_PATH is.
- * - a failed reload keeps serving the last good snapshot, marked unhealthy, and
- *   retries on the next TTL (the fingerprint is left unadvanced).
- */
+// Poll the map on a TTL because virtiofs inotify propagation is unreliable.
+// Failed or empty reloads retain the enabled map and last good snapshot, marked unhealthy.
+// Only removing T3_IDENTITY_MAP_PATH at startup disables the gate.
 function makeFileSource(options?: { readonly ttlMs?: number }): IdentityMapSource {
   const ttlMs = options?.ttlMs ?? IDENTITY_MAP_RELOAD_TTL_MS;
 
@@ -360,12 +329,8 @@ function makeService(source: IdentityMapSource, store: ClaimStore): IdentityServ
           !snapshot.byPersonId.has(existing.personId) ||
           !snapshot.byUsername.has(existing.username)
         ) {
-          // Deliberately does not delete the persisted claim. Refusing operate is
-          // the gate; deleting is only cleanup, and it is not reversible. Now that
-          // the map reloads under the server, a half-written file can parse as a
-          // valid map with a subset of people — deleting off that would destroy
-          // good claims. Membership is re-checked on every operate anyway, so a
-          // stale row grants nothing.
+          // Retain persisted claims across partial map writes; every operation rechecks membership,
+          // so an absent member is refused without irreversibly deleting a valid claim.
           return yield* new IdentityError({
             code: "identity_unknown_person",
             message: "Your identity claim is no longer in the server map. Claim again.",
@@ -450,7 +415,7 @@ export const layerPersisted = Layer.effect(
         if (cached !== null) return cached;
         const row = yield* repository
           .getBySessionId(sessionId)
-          .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+          .pipe(Effect.orElseSucceed(() => Option.none()));
         if (Option.isNone(row)) return null;
         const record: ClaimRecord = {
           sessionId: row.value.sessionId,
@@ -464,11 +429,11 @@ export const layerPersisted = Layer.effect(
       }),
       put: Effect.fn("IdentityService.store.put")(function* (record) {
         yield* memory.put(record);
-        yield* repository.upsert(record).pipe(Effect.catch(() => Effect.void));
+        yield* repository.upsert(record).pipe(Effect.ignore);
       }),
       remove: Effect.fn("IdentityService.store.remove")(function* (sessionId) {
         const cleared = yield* memory.remove(sessionId);
-        yield* repository.deleteBySessionId(sessionId).pipe(Effect.catch(() => Effect.void));
+        yield* repository.deleteBySessionId(sessionId).pipe(Effect.ignore);
         return cleared;
       }),
     };

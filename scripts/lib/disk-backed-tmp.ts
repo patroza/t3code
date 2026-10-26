@@ -48,14 +48,7 @@ function tryMkdir(dir: string): boolean {
 }
 
 /**
- * Resolve a durable work root for heavy temporary trees.
- *
- * Order:
- * 1. `envVar` if set (e.g. T3_REBASE_WORK_ROOT)
- * 2. `$T3CODE_HOME/<subdir>` when T3CODE_HOME is set (t3vm: /var/lib/t3)
- * 3. `$HOME/.t3/<subdir>`
- * 4. `$TMPDIR` only if not tmpfs
- * 5. `os.tmpdir()` last resort
+ * Prefer the explicit env var, T3 home, user home, disk-backed TMPDIR, then os.tmpdir() for heavy trees.
  */
 export function diskBackedWorkRoot(options: {
   readonly subdir: string;

@@ -609,7 +609,6 @@ it("restores the selected PR tab when switching threads and remounting the right
           onCloseSurface={() => {}}
           terminal={{
             launchContext: null,
-            focusRequestId: 0,
             keybindings: [],
             onAddTerminalContext: () => {},
             onSplitTerminal: () => {},

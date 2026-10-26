@@ -1,5 +1,5 @@
+import { useStableCallback } from "./useStableCallback";
 import { terminalEnvironment } from "../state/terminal";
-import { useLayoutEffect, useRef } from "react";
 
 import {
   parseScopedThreadKey,
@@ -39,6 +39,7 @@ import { environmentSession, readEnvironmentScope } from "../state/session";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentServerConfigsAtom } from "../state/server";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
+import { orchestrationEnvironment } from "../state/orchestration";
 import { threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
 import { useNewThreadHandler } from "./useHandleNewThread";
@@ -164,13 +165,7 @@ export class ThreadPinningUnsupportedError extends Schema.TaggedError<ThreadPinn
   }
 }
 
-/**
- * Deletes threads one at a time, growing `deletedThreadKeys` only as
- * deletions actually land — never seeded with the whole batch: orphaned-
- * worktree detection must only discount threads that are really gone, or the
- * first delete would treat still-alive batch mates as deleted and remove a
- * worktree they still point at. Stops at, and returns, the first failure.
- */
+/** Discount only completed deletions during orphan-worktree checks; stop at the first failure. */
 export async function deleteThreadTargetsSequentially<
   TResult extends { readonly _tag: "Success" | "Failure" },
 >(
@@ -202,15 +197,7 @@ export function getWorktreeRemovalAction({
   return confirmWorktreeRemoval ? "confirm" : "remove";
 }
 
-/**
- * Prune per-thread client state that would otherwise accumulate forever.
- *
- * These stores keep a per-thread entry (preview atom, right-panel surfaces,
- * diff-panel selection) that is persisted to localStorage and was never cleaned
- * up on thread deletion/archival — a long-lived tab leaked one entry per thread
- * ever visited. The cleanup functions already existed but had no callers; this
- * wires them into the deletion/archival flow.
- */
+/** Remove persisted per-thread state on archive/delete so a long-lived client does not retain every visited thread. */
 function clearPerThreadClientState(ref: ScopedThreadRef): void {
   removePreviewThread(ref);
   useRightPanelStore.getState().removeThread(ref);
@@ -378,6 +365,10 @@ export function useThreadActions() {
   const loadSessionState = useAtomQueryRunner(environmentSession.sessionStateAtom, {
     reportFailure: false,
   });
+  const loadWorktreeThreadIds = useAtomQueryRunner(orchestrationEnvironment.worktreeThreadIds, {
+    reportFailure: false,
+    refresh: true,
+  });
   const refreshVcsStatus = useAtomCommand(vcsEnvironment.refreshStatus, {
     reportFailure: false,
   });
@@ -393,14 +384,7 @@ export function useThreadActions() {
   const markThreadVisited = useUiStateStore((state) => state.markThreadVisited);
   const router = useRouter();
   const handleNewThread = useNewThreadHandler();
-  // Keep a ref so archiveThread can call handleNewThread without appearing in
-  // its dependency array — handleNewThread is inherently unstable (depends on
-  // the projects list) and would otherwise cascade new references into every
-  // sidebar row via archiveThread → attemptArchiveThread.
-  const handleNewThreadRef = useRef(handleNewThread);
-  useLayoutEffect(() => {
-    handleNewThreadRef.current = handleNewThread;
-  }, [handleNewThread, handleNewThreadRef]);
+  const handleNewThreadLatest = useStableCallback(handleNewThread);
 
   const resolveThreadTarget = (target: ScopedThreadRef) => {
     const thread = readThreadShell(target);
@@ -561,7 +545,7 @@ export function useThreadActions() {
 
     if (shouldNavigateToDraft) {
       const navigationResult = await settlePromise(() =>
-        handleNewThreadRef.current(scopeProjectRef(thread.environmentId, thread.projectId)),
+        handleNewThreadLatest(scopeProjectRef(thread.environmentId, thread.projectId)),
       );
       if (navigationResult._tag === "Failure") {
         return navigationResult;
@@ -615,16 +599,32 @@ export function useThreadActions() {
       deletedIds && deletedIds.size > 0
         ? threads.filter((entry) => entry.id === threadRef.threadId || !deletedIds.has(entry.id))
         : threads;
-    const orphanedWorktreePath = getOrphanedWorktreePathForThread(
-      survivingThreads,
-      threadRef.threadId,
-    );
-    const displayWorktreePath = orphanedWorktreePath
-      ? formatWorktreePathForDisplay(orphanedWorktreePath)
-      : null;
     const environmentConfig = appAtomRegistry
       .get(environmentServerConfigsAtom)
       .get(threadRef.environmentId);
+    let orphanedWorktreePath = getOrphanedWorktreePathForThread(
+      survivingThreads,
+      threadRef.threadId,
+    );
+    // A shell that leaves idle subagent children out cannot prove nobody else uses the worktree,
+    // so the server's list decides. A failed read keeps the worktree.
+    if (orphanedWorktreePath !== null && environmentConfig?.shellThreadFamilies === true) {
+      const occupants = await loadWorktreeThreadIds({
+        environmentId: threadRef.environmentId,
+        input: { worktreePath: orphanedWorktreePath },
+      });
+      if (
+        occupants._tag !== "Success" ||
+        occupants.value.threadIds.some(
+          (threadId) => threadId !== threadRef.threadId && deletedIds?.has(threadId) !== true,
+        )
+      ) {
+        orphanedWorktreePath = null;
+      }
+    }
+    const displayWorktreePath = orphanedWorktreePath
+      ? formatWorktreePathForDisplay(orphanedWorktreePath)
+      : null;
     const localApi = readLocalApi();
     const scratchEligible =
       orphanedWorktreePath !== null &&
@@ -783,8 +783,7 @@ export function useThreadActions() {
             : message,
         }),
       );
-      // The thread was deleted. Cleanup has its own toast; returning its
-      // failure would make callers incorrectly report a thread deletion error.
+      // Cleanup has its own toast; reporting its failure would falsely imply deletion failed.
     }
     return deleteResult;
   };
@@ -801,8 +800,7 @@ export function useThreadActions() {
       );
     }
     ThreadUndo.invalidate("settle", scopedThreadKey(target));
-    // reason "user" pins the thread active: auto-settle (PR merged /
-    // inactivity) stays suppressed until real activity clears the pin.
+    // reason "user" pins active until real activity, suppressing auto-settle.
     return unsettleThreadMutation({
       environmentId: target.environmentId,
       input: { threadId: target.threadId, reason: "user" },
@@ -837,8 +835,7 @@ export function useThreadActions() {
         ),
       );
     }
-    // orderKey rides only to servers that decode it; pre-reorder servers get the bare pin they
-    // understand and the thread stays keyless.
+    // Older servers cannot decode orderKey, so send only the pin to them.
     const orderKey = readEnvironmentSupportsPinReorder(target.environmentId)
       ? (opts.orderKey ?? topOfPinnedRunOrderKey())
       : undefined;
@@ -916,9 +913,9 @@ export function useThreadActions() {
         ),
       );
     }
-    const wokeAt = resolved
-      ? threadWokeAt(resolved.thread, { now: new Date().toISOString() })
-      : null;
+    // oxlint-disable-next-line react/purity -- runs in an event handler (oxc#27309)
+    const nowIso = new Date().toISOString();
+    const wokeAt = resolved ? threadWokeAt(resolved.thread, { now: nowIso }) : null;
     const undoPlan = ThreadUndo.planThreadUndo("settle", resolved?.thread);
     // An older unpin/snooze Undo would re-pin or re-snooze, and the server
     // treats either as a promotion that un-settles; settling supersedes them.
@@ -1029,6 +1026,7 @@ export function useThreadActions() {
       );
     }
     const resolved = resolveThreadTarget(target);
+    // oxlint-disable-next-line react/purity -- runs in an event handler (oxc#27309)
     if (resolved && !canSnooze(resolved.thread, { now: new Date().toISOString() })) {
       return AsyncResult.failure(
         Cause.fail(

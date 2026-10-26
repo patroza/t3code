@@ -1,16 +1,6 @@
 #!/usr/bin/env node
 /**
- * Agent-facing `gh` policy shim.
- *
- * Installed at `.tools/bin/gh` by `scripts/install-git-hooks.mjs`.
- *
- * When coding-agent env markers are set and the command would publish a PR
- * (`gh pr ready`, the ready_for_review APIs), the ship gate runs first and the
- * command then proceeds. Only a failing gate stops it — publishing is gated, not
- * forbidden. `pnpm pr:ready` remains the explicit path and is unchanged; it sets
- * AGENT_PR_SHIP=1 so the gate runs once, not twice.
- *
- * Humans / non-agents: transparent pass-through to the next `gh` on PATH.
+ * Agent gh shim: require the ship gate before publication, with transparent pass-through for humans.
  */
 import * as NodeChildProcess from "node:child_process";
 import * as NodePath from "node:path";

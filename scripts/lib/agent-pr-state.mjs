@@ -1,19 +1,5 @@
 /**
- * Resolve whether the current branch's open PR should enforce the agent ship gate.
- *
- * Modes:
- *   none    — no open PR (or closed/merged): changed-file check + typecheck
- *   draft   — open draft PR: changed-file check + typecheck
- *   ready   — open non-draft PR: full ship gate on every agent push
- *   unknown — gh missing / failed: fail closed (run the full gate)
- *
- * This fork lives under `patroza/t3code` but `gh` defaults to the upstream
- * parent (`pingdotgg/t3code`). A bare `gh pr view` therefore never finds the
- * fork's PRs, which would silently disable the gate. `.envrc` sets `GH_REPO`
- * to fix that for interactive shells, but the pre-push hook must not depend on
- * direnv being loaded — so resolve the PR against the fork repo explicitly:
- * `T3CODE_FORK_REPOSITORY` when set, else the `origin` remote, passed as
- * `gh pr list --head <branch> --repo` (an explicit `--repo` overrides GH_REPO).
+ * Resolve PR state against the explicit fork; ready or unknown state requires the full gate.
  */
 import * as NodeChildProcess from "node:child_process";
 import * as NodeProcess from "node:process";
@@ -37,11 +23,7 @@ export const classifyPrPayload = (pr) => {
 export const shouldRunShipGateOnPush = (mode) => mode === "ready" || mode === "unknown";
 
 /**
- * How much of the gate a push pays for.
- *
- * Draft / no-PR: format + lint of files changed against fork/dev, plus typecheck.
- * Ready / unknown: full workspace check + typecheck + unit tests.
- *
+ * Draft/no-PR pushes check changed files and types; ready/unknown state runs the full gate.
  * @param {"none" | "draft" | "ready" | "unknown"} mode
  * @returns {"full" | "changed"}
  */
@@ -74,16 +56,7 @@ export const parseRepoSlug = (url) => {
 };
 
 /**
- * @param {{
- *   cwd?: string
- *   env?: NodeJS.ProcessEnv
- *   branch?: string
- *   repoSlug?: string | null
- *   runGh?: (args: string[], opts: { cwd: string, env: NodeJS.ProcessEnv }) =>
- *     { status: number | null, stdout: string, stderr: string, error?: NodeJS.ErrnoException }
- *   runGit?: (args: string[], opts: { cwd: string }) =>
- *     { status: number | null, stdout: string, error?: NodeJS.ErrnoException }
- * }} [opts]
+ * @param {{ cwd?: string; env?: NodeJS.ProcessEnv; branch?: string; repoSlug?: string | null; runGh?: (args: string[], opts: { cwd: string, env: NodeJS.ProcessEnv }) => { status: number | null, stdout: string, stderr: string, error?: NodeJS.ErrnoException }; runGit?: (args: string[], opts: { cwd: string }) => { status: number | null, stdout: string, error?: NodeJS.ErrnoException } }} [opts]
  * @returns {{ mode: "none" | "draft" | "ready" | "unknown", pr: { number?: number, url?: string, isDraft?: boolean, state?: string } | null, detail?: string }}
  */
 export const resolveOpenPrState = (opts = {}) => {

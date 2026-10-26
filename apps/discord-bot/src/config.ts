@@ -266,22 +266,9 @@ export const DiscordBotConfig: Effect.Effect<DiscordBotConfig, Config.ConfigErro
   },
 );
 
-/**
- * Discord bot model selection (conservative defaults):
- * 1. Explicit mention overrides (`--provider` / `--model`, including `—model`)
- *    - Short names (`opus-5.5`) and prefixed names (`claude-opus-5.5`) both
- *      resolve to the catalog slug. Prefixes are compatibility only.
- *    - Model-only (`--model` without `--provider`) picks the best cataloged
- *      native provider for that model (e.g. gpt-5.6 → codex, not sticky Grok)
- *    - Sticky/current provider still wins when it catalogs the requested model
- *    - An explicit model that matches nothing returns null. Callers must report
- *      the error. Do not start the turn on the default model.
- * 2. Bot env defaults (default: codex + gpt-5.4, same as T3 web)
- * 3. Project defaultModelSelection if that provider is available
- * 4. First enabled installed provider
- *
- * Note: Grok Build previously hit provider turn-start decode failures for large
- * Discord bootstrap prompts; prefer Codex unless the operator pins Grok/Composer.
+/** Explicit mention wins; aliases normalize, model-only picks a cataloging provider, and unknown models error.
+ * Then use environment defaults, available project defaults, and the first enabled provider; sticky wins if it catalogs.
+ * Default to Codex because Grok previously failed to decode large Discord bootstrap prompts.
  */
 export function preferredModelSelection(input: {
   readonly config: DiscordBotConfig;

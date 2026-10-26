@@ -148,14 +148,7 @@ const answer = (text: string, coordinates: WorkCoordinates = defaultWorkCoordina
     turnId: TurnId.make(`turn-${coordinates.threadId}`),
   }) as const;
 
-/**
- * Happy-path defaults:
- * - fresh request flowing to a started turn
- * - nothing settled yet
- * - replies deliverable
- *
- * Each test overrides only the methods its scenario changes.
- */
+// Defaults model a fresh request, an unsettled turn, and deliverable replies; tests override only relevant methods.
 const defaultT3Gateway: Omit<T3Gateway, "threadActivity"> = {
   planCoordinates: () => Effect.succeed(defaultWorkCoordinates),
   getThreadStatus: () => Effect.succeed({ thread: "missing" }),
@@ -170,18 +163,6 @@ const defaultAdapter: NTBSAdapter = {
   findPostedReply: () => Effect.succeed(null),
 };
 
-/**
- * The harness.
- *
- * The term "harness" comes from electrical engineering for describing hardware test benches: the wiring harness is the fixed rig that holds the device under test and connects it to instruments, so each experiment only varies the stimulus.
- *
- * In software it means the same thing: the _fixed_ part of the test setup such as system assembly, instrumentation, probes, as opposed to fixtures (the data) and tests (the scenarios).
- *
- * `withProcessor` is our harness.
- *
- * <A, E> generics allow for our test callback to pass through its types.
- * We never specify A and E manually, and we rarely care, but if we ever have to chain the result of withProcessor or do anything with its returned value they are useful to avoid spreading `any`s.
- */
 const withProcessor = <A, E>(
   servicesInput: ServiceInput,
   test: (context: ProcessorTestContext) => Effect.Effect<A, E>,
@@ -2186,15 +2167,8 @@ describe("NTBSProcessor", () => {
     ),
   );
 
-  /*
-    A hung status read must not hold the exchange lock forever or start the action it was checking for.
-    After the observe timeout the failed check becomes unknown, the decider waits, and the next pass
-    can take the lock. Provisioning, a turn, and a second reply post stay unstarted.
-    The timeout must not crash `run` either: the run fiber is the only thing that consumes thread
-    activity, so after it we ping and require the exchange to be driven on to its reply. A run that
-    died with the timeout would release the lock all the same and pass the earlier assertions, but
-    it would never see the ping.
-  */
+  // Observe timeout must release the exchange lock without starting unchecked work.
+  // A later activity ping must still reach the run fiber, proving timeout did not silently stop the worker.
   const settledReply = answer("Reply after the timeout");
   const hungReplyPending = toReplyPending(threadCreated, answer("Hung reply lookup"), now);
 
@@ -2329,13 +2303,8 @@ describe("NTBSProcessor", () => {
     },
   );
 
-  /*
-    A failed status check is only "wait" while the state still has time left. Once it is expired
-    the failure must move the exchange to its terminal outcome instead: a failure reply posted for
-    WorkPlanned and ThreadCreated, Undeliverable for ReplyPending. Whether the check fails at once
-    or hangs, the outcome is the same; a failing or hung check must not strand the exchange past
-    its deadline.
-  */
+  // Failed or hung observations wait only until the state deadline.
+  // After expiry, produce a failure reply or mark pending delivery undeliverable rather than stranding the exchange.
   const neverCheckedReplyPending = toReplyPending(
     threadCreated,
     answer("A reply that was never checked"),
@@ -2568,13 +2537,8 @@ describe("NTBSProcessor", () => {
       ),
   );
 
-  /*
-    Planning has its own timeout, shorter than the state's deadline. A plan that hangs is
-    abandoned at that timeout: nothing transitions, no coordinates are invented, and the record
-    stays RequestAccepted for a later pass. That pass either plans for real if the deadline has
-    not passed, or expires the record once it has.
-    The pass failure itself belongs to the background processor and is logged, not returned.
-  */
+  // Planning timeout leaves RequestAccepted unchanged and invents no coordinates.
+  // Background retry may plan later or expire the record; the failed pass is logged rather than returned.
   it.effect.each([
     {
       outcome: "re-plans and finishes",
@@ -2675,14 +2639,8 @@ describe("NTBSProcessor", () => {
     },
   );
 
-  /*
-    Provisioning has its own timeout too. A hung provision is abandoned at that timeout and the
-    exchange stays WorkPlanned, with no second provision attempted; the next pass observes before
-    acting. A thread the timed-out provision had in fact already created (the dispatch committed,
-    the call just never returned) is then discovered and recorded rather than provisioned again.
-    The worktree itself is untouched here: compensation lives inside the gateway, and only the
-    gateway's own test can see it.
-  */
+  // Provision timeout leaves WorkPlanned for observe-before-act recovery.
+  // Discover an already-created thread instead of provisioning twice; gateway tests own worktree compensation.
   it.effect(
     "leaves WorkPlanned after a provisioning timeout and later discovers a created thread",
     () => {

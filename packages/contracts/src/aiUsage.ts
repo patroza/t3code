@@ -1,19 +1,5 @@
-/**
- * AI usage - Schemas for the local `ai-usage` daemon feed.
- *
- * A user-run daemon (`ai-usage serve`) exposes normalized coding-plan usage
- * across providers (codex, claude, cursor, zai, opencode, grok) on a small HTTP API.
- * The server polls its `/dms` endpoint on an interval and fans the latest
- * snapshot to subscribers so the web can mark providers that are near or over
- * their plan limits and help pick the best available AI for a new thread.
- *
- * The daemon is optional and machine-local: when it is unreachable the server
- * still emits a snapshot with `available: false` and no items, so the UI simply
- * shows no markers rather than erroring.
- *
- * Schemas are intentionally tolerant (nullable / optional fields) because the
- * feed shape can drift across daemon versions; unknown keys are ignored.
- *
+/** Schemas for the optional local `ai-usage` daemon feed, polled by the server for client usage markers.
+ * If unavailable, it emits no items; nullable/optional fields tolerate feed-version drift.
  * @module AiUsage
  */
 import { Schema } from "effect";
@@ -33,14 +19,8 @@ export const AiUsagePace = Schema.Struct({
 });
 export type AiUsagePace = typeof AiUsagePace.Type;
 
-/**
- * One rolling usage window for a provider (e.g. the 5-hour or weekly limit).
- * `percent` is the primary signal; `used`/`unit` carry raw values for
- * dollar/token/request based windows that have no percentage.
- *
- * `informational` marks a window the daemon does not consider a real gate on
- * using the provider right now (e.g. a legacy pay-as-you-go pool); clients must
- * not escalate it into a "can't use this" signal.
+/** One rolling provider usage window; `percent` is primary, while `used`/`unit` preserve raw values.
+ * `informational` windows do not gate access and must not appear as an unavailable signal.
  */
 export const AiUsageWindow = Schema.Struct({
   id: Schema.String,

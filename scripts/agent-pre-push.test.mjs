@@ -372,11 +372,7 @@ it("ship-gate cache: static does not demote complete", () => {
   assert.equal(isShipGateShaCached(sha, cache), true);
 });
 
-// A host that fronts `gh` with the GitHub App wrapper also exports
-// T3_GITHUB_REAL_GH so children that reorder PATH keep minting config. That
-// variable names the *unauthenticated* binary the wrapper execs after minting,
-// so preferring it makes every shimmed `gh` call fail with "gh auth login" —
-// which is exactly how server-side PR lookups lost their badges.
+// The raw gh binary bypasses App installation-token minting; the shim must prefer the wrapper.
 it("findRealGh prefers the App-aware gh on PATH over the raw T3_GITHUB_REAL_GH binary", () => {
   const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "agent-gh-real-"));
   const wrapperDir = NodePath.join(root, "wrapper");

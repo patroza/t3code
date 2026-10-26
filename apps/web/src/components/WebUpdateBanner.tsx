@@ -13,14 +13,7 @@ export function isWebUpdateAvailable(boot: string | null, latest: string | null)
   return boot !== null && latest !== null && boot !== latest;
 }
 
-/**
- * Unobtrusive "a new version is available" affordance. The server broadcasts its
- * served web-bundle version over the lifecycle stream; the first value this tab
- * sees is the version it booted with, so any later, different value means the
- * assets were hot-swapped on the server. We never reload automatically -- the
- * user reloads when convenient. (vitePreloadRecovery still auto-reloads on a
- * genuinely missing chunk, so nothing breaks if the user ignores this.)
- */
+/** Notify on served bundle changes; reload only at the user’s request. */
 export function WebUpdateBanner() {
   const latest = useAtomValue(primaryServerWebVersionAtom);
   const [bootVersion, setBootVersion] = useState(latest);

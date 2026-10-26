@@ -1,13 +1,5 @@
-/**
- * ProjectLifecycleScriptRunner - runs blocking project lifecycle scripts
- * (worktree remove / PR merged) via a real process, waiting for exit before
- * the caller continues (e.g. `git worktree remove`).
- *
- * Unlike setup scripts (fire-and-forget in a terminal), teardown must finish
- * and succeed before filesystem teardown proceeds.
- *
- * @module ProjectLifecycleScriptRunner
- */
+// Teardown scripts must exit successfully before removing worktree files.
+// Unlike fire-and-forget setup scripts, callers await their completion.
 import { type ProjectScript, ProjectId } from "@t3tools/contracts";
 import {
   prMergedProjectScript,

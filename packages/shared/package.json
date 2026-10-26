@@ -7,10 +7,6 @@
       "types": "./src/changedFileKind.ts",
       "import": "./src/changedFileKind.ts"
     },
-    "./githubMarkdownLinks": {
-      "types": "./src/githubMarkdownLinks.ts",
-      "import": "./src/githubMarkdownLinks.ts"
-    },
     "./authScopeOptions": {
       "types": "./src/authScopeOptions.ts",
       "import": "./src/authScopeOptions.ts"
@@ -82,6 +78,10 @@
     "./logging": {
       "types": "./src/logging.ts",
       "import": "./src/logging.ts"
+    },
+    "./releaseResource": {
+      "types": "./src/releaseResource.ts",
+      "import": "./src/releaseResource.ts"
     },
     "./observability": {
       "types": "./src/observability.ts",
@@ -283,17 +283,13 @@
       "types": "./src/threadTranscript.ts",
       "import": "./src/threadTranscript.ts"
     },
-    "./threadReference": {
-      "types": "./src/threadReference.ts",
-      "import": "./src/threadReference.ts"
+    "./paletteSearch": {
+      "types": "./src/paletteSearch.ts",
+      "import": "./src/paletteSearch.ts"
     },
     "./threadPullRequests": {
       "types": "./src/threadPullRequests.ts",
       "import": "./src/threadPullRequests.ts"
-    },
-    "./changeRequestUrl": {
-      "types": "./src/changeRequestUrl.ts",
-      "import": "./src/changeRequestUrl.ts"
     },
     "./composerTrigger": {
       "types": "./src/composerTrigger.ts",
@@ -358,6 +354,10 @@
     "./previewViewport": {
       "types": "./src/previewViewport.ts",
       "import": "./src/previewViewport.ts"
+    },
+    "./mediaPreview": {
+      "types": "./src/mediaPreview.ts",
+      "import": "./src/mediaPreview.ts"
     },
     "./filePreview": {
       "types": "./src/filePreview.ts",
@@ -462,6 +462,10 @@
     "./orchestrationV2BoundedSnapshot": {
       "types": "./src/orchestrationV2BoundedSnapshot.ts",
       "import": "./src/orchestrationV2BoundedSnapshot.ts"
+    },
+    "./orchestrationV2DedupedBodies": {
+      "types": "./src/orchestrationV2DedupedBodies.ts",
+      "import": "./src/orchestrationV2DedupedBodies.ts"
     },
     "./orchestrationV2Timeline": {
       "types": "./src/orchestrationV2Timeline.ts",

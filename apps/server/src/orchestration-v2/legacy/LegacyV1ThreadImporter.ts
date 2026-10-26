@@ -2,7 +2,7 @@ import { SourceRef, ThreadParticipantSummary } from "@t3tools/contracts";
 import {
   threadPullRequestKeysEqual,
   threadPullRequestsOf,
-} from "@t3tools/shared/threadPullRequests";
+} from "../../sourceControl/threadPullRequests.ts";
 import {
   ChatAttachment,
   OrchestrationMessageContext,
@@ -128,6 +128,9 @@ export class LegacyV1ThreadImporter extends Context.Service<
   LegacyV1ThreadImporterShape
 >()("t3/orchestration-v2/legacy/LegacyV1ThreadImporter") {}
 
+const decodeSourceRef = Schema.decodeUnknownSync(SourceRef);
+const decodeParticipantSummaries = Schema.decodeUnknownSync(Schema.Array(ThreadParticipantSummary));
+
 const decodeModelSelection = Schema.decodeUnknownOption(ModelSelection);
 const decodeAttachments = Schema.decodeUnknownOption(Schema.Array(ChatAttachment));
 const decodePullRequests = Schema.decodeUnknownOption(Schema.Array(ThreadPullRequestLink));
@@ -219,11 +222,11 @@ function importedThread(row: LegacyThreadRow): OrchestrationV2AppThread {
       : pullRequests;
   return {
     ...(row.origin_source_json
-      ? { originSource: Schema.decodeUnknownSync(SourceRef)(parseJson(row.origin_source_json)) }
+      ? { originSource: decodeSourceRef(parseJson(row.origin_source_json)) }
       : {}),
     ...(row.participant_summaries_json
       ? {
-          participantSummaries: Schema.decodeUnknownSync(Schema.Array(ThreadParticipantSummary))(
+          participantSummaries: decodeParticipantSummaries(
             parseJson(row.participant_summaries_json),
           ),
         }
@@ -275,9 +278,7 @@ function messageEvents(row: LegacyMessageRow): ReadonlyArray<OrchestrationV2Doma
   const attachments = attachmentsFor(row);
   const context = contextFor(row);
   const message: OrchestrationV2ConversationMessage = {
-    ...(row.source_json
-      ? { source: Schema.decodeUnknownSync(SourceRef)(parseJson(row.source_json)) }
-      : {}),
+    ...(row.source_json ? { source: decodeSourceRef(parseJson(row.source_json)) } : {}),
     createdBy: row.role === "user" ? "user" : "agent",
     creationSource: "server",
     id: messageId,
@@ -819,10 +820,7 @@ const make = Effect.gen(function* () {
     ),
   );
 
-  // `transcript_imported_at` is never reset to NULL, so a positive answer
-  // stays valid for the process lifetime; ensureTranscript runs on most
-  // thread reads and command dispatches, so skipping the lock + lookup here
-  // keeps that path off the database entirely after first confirmation.
+  // transcript_imported_at never resets; cache confirmed imports for the process lifetime to skip repeated locks and reads.
   const confirmedTranscriptThreadIds = new Set<ThreadId>();
 
   const ensureTranscriptBase = (threadId: ThreadId) =>
@@ -843,8 +841,7 @@ const make = Effect.gen(function* () {
           return { importedThreadCount: 0, importedMessageCount: 0 };
         }
         const messages = yield* listMessages(threadId);
-        // The thread's V1 events are still in the table here. Without the hint
-        // SQLite walks them through the stream index and reads past each payload.
+        // Hint the index to skip V1 events without scanning their payloads.
         const existingRows = yield* sql<{ readonly event_id: string }>`
           SELECT event_id
           FROM orchestration_events INDEXED BY idx_orchestration_events_agent_stream_sequence

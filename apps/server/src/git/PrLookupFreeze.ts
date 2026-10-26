@@ -4,17 +4,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 
-/**
- * Durable-settle freeze for PR hosting lookups (gh/glab/…).
- *
- * VCS remote status is keyed by worktree cwd, not thread id. Projection maps
- * `thread.settled` / `thread.unsettled` onto worktree paths with a refcount so a
- * shared path only freezes while every interested thread remains settled.
- *
- * Terminal PR freeze (merged/closed last-known) lives in GitManager and does not
- * need this service — it stops re-hitting the provider even when no settle event
- * was written (client-only effective settle on merge).
- */
+// Freeze hosting lookups by worktree path only while all interested threads remain durably settled.
+// GitManager separately freezes terminal PR states without requiring settle events.
 export class PrLookupFreeze extends Context.Service<
   PrLookupFreeze,
   {

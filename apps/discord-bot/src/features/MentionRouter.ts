@@ -61,12 +61,12 @@ export function retryTransientDiscordOperation<A, E, R>(
   attempt = 0,
 ): Effect.Effect<A, E, R> {
   return handle.pipe(
-    Effect.catch((error) =>
-      isTransientDiscordDispatchError(error) && attempt < retryDelaysMs.length
-        ? Effect.sleep(`${retryDelaysMs[attempt] ?? 0} millis`).pipe(
-            Effect.andThen(retryTransientDiscordOperation(handle, retryDelaysMs, attempt + 1)),
-          )
-        : Effect.fail(error),
+    Effect.catchIf(
+      (error) => isTransientDiscordDispatchError(error) && attempt < retryDelaysMs.length,
+      () =>
+        Effect.sleep(`${retryDelaysMs[attempt] ?? 0} millis`).pipe(
+          Effect.andThen(retryTransientDiscordOperation(handle, retryDelaysMs, attempt + 1)),
+        ),
     ),
   );
 }
@@ -118,7 +118,6 @@ import {
   normalizeWorkspacePath,
   resolveDiscordFollowUpDelivery,
   shouldPostWorkingAckForContinue,
-  type ProjectTopicLookup,
 } from "../presentation/mentions.ts";
 import {
   extractJiraIssueKeysFromDiscordMessage,
@@ -262,13 +261,8 @@ export function shouldShowThreadBootstrapReaction(input: {
   );
 }
 
-/**
- * Deleting a Discord thread emits MESSAGE_UPDATE on the parent starter message.
- * The starter id is the thread id, and the text still mentions the bot. After a
- * restart the in-memory handled set is empty, so that update used to open the
- * thread again and start a new T3 turn. Parent-channel updates are not new
- * prompts. MESSAGE_CREATE is.
- */
+// Parent starter-message updates are not prompts, even when they still mention the bot.
+// Deleting a thread emits such an update with the thread ID; only MESSAGE_CREATE may start new work.
 export function shouldIgnoreParentChannelMessageUpdate(input: {
   readonly source: "create" | "update";
   readonly inThread: boolean;
@@ -575,15 +569,8 @@ export function isIncompleteDiscordLink(link: {
   return link.infoDiscordMessageId === undefined || link.infoDiscordMessageId.length === 0;
 }
 
-/**
- * `@Omegent` in Discord is ambiguous: it can resolve to the bot USER (`<@id>`) or to the
- * app's managed ROLE (`<@&id>`), which render near-identically in the picker. Only the
- * user form populates `mentions`, so a role ping used to be silently ignored.
- *
- * We match ONLY the app's own managed role -- the one Discord auto-creates, identified by
- * `tags.bot_id === botUserId`. Matching any role the bot merely belongs to would make it
- * respond to every `@engineers` message, which is much worse than the original bug.
- */
+// Match user mentions and only the app-managed role identified by tags.bot_id.
+// Arbitrary roles the bot belongs to must not trigger work.
 function botManagedRoleIdFrom(
   roles: ReadonlyArray<{
     readonly id?: string;
@@ -1149,7 +1136,7 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
       )
       .pipe(
         (operation) => retryTransientDiscordOperation(operation, DISCORD_MESSAGE_RETRY_DELAYS_MS),
-        Effect.catch(() => Effect.void),
+        Effect.ignore,
       );
   };
 
@@ -1605,11 +1592,8 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
                 messageId,
                 pendingDiscordUserMessageId,
               ]);
-              // Always feed the real (and optimistic) user message id into the live
-              // bridge. We seed a placeholder before startTurn so the bridge is ready
-              // immediately; if T3 returns a different id (or we only updated the
-              // durable store), the bridge would treat this Discord turn as external
-              // input, mirror it back, and freeze the Working tip under that post.
+              // Feed real and optimistic user-message IDs to the live bridge before starting the turn.
+              // Otherwise it can misclassify the turn as external input and echo it above the Working tip.
               const bridge =
                 liveBridge ??
                 (yield* getLiveDiscordBridge(input.discordThreadId, existing.t3ThreadId));
@@ -1723,11 +1707,8 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
       return existing.t3ThreadId;
     }
 
-    // New Discord thread / first link. Explicit --model wins. Otherwise
-    // `omegent-default-model-<name>` on the channel topic is the default.
-    // `omegent-fast-mode` starts that thread in fast mode, including when the
-    // user pressed "start a new thread here anyway". Continues above keep the
-    // stored selection unless the message passes --model/--provider.
+    // For a new link, explicit --model overrides the channel topic default; fast-mode topic tags still apply.
+    // Continuations retain the saved selection unless the message passes --model/--provider.
     const topicModel = input.flags.model === undefined ? topicDefaultModel(input.topic) : null;
     if (topicModel !== null) {
       const unknownModel = yield* unknownModelMessage({
@@ -2029,13 +2010,6 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
   const forkSlashBackground = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     interactionBackground.fork(withBridgeHub(effect));
 
-  /**
-   * Link Discord to an existing T3 thread (no new T3 thread / no new turn).
-   * Only from a project channel, or from a Discord thread that is not yet linked.
-   * - If a Discord bridge already exists for that T3 thread, point at it.
-   * - Else create a Discord thread from the mention (channel) or use the current
-   *   unlinked Discord thread, then persist the link and ensure a bridge.
-   */
   const replyFields = (replyToMessageId: string | null | undefined) =>
     replyToMessageId === null || replyToMessageId === undefined
       ? {}
@@ -3281,7 +3255,7 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
           mode: "rehydrate",
           preferred: true,
           lastActivityAt: existing.lastActivityAt,
-        }).pipe(Effect.catch((error) => reportError(event.channel_id, error)));
+        });
 
         const live = yield* bridgeHub.getLive(event.channel_id, existing.t3ThreadId);
         if (live === null) {
@@ -3477,7 +3451,7 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
           .pipe(
             (operation) =>
               retryTransientDiscordOperation(operation, DISCORD_MESSAGE_RETRY_DELAYS_MS),
-            Effect.catch(() => Effect.void),
+            Effect.ignore,
           );
       }
       yield* rest.createMessage(event.channel_id, {

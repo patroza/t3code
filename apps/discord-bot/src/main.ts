@@ -110,11 +110,8 @@ const program = Effect.gen(function* () {
 
   const t3 = yield* T3Session;
 
-  // Capture ambient services so T3 auto-reconnect can rehydrate Discord bridges.
-  // Register before connectUntilReady so a drop immediately after first success
-  // still rehydrates. provideContext erases R at runtime; cast so Effect.runPromise
-  // accepts the program. (setOnReconnected is a Promise callback outside the Effect
-  // runtime, so runPromise is intentional.)
+  // Capture services for reconnect rehydration, registering before connectUntilReady to catch early drops.
+  // The Promise callback runs outside Effect, so restore the context and use runPromise intentionally.
   const services = yield* Effect.context();
   t3.setOnReconnected(() =>
     // @effect-diagnostics-next-line runEffectInsideEffect:off

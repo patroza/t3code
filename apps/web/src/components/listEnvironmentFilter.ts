@@ -61,18 +61,7 @@ export function isWebListMode(value: unknown): value is WebListMode {
   return value === "threads";
 }
 
-/**
- * How the Threads list is organized. Shared by classic sidebar and Sidebar V2
- * (`LIST_THREAD_GROUPING_STORAGE_KEY`) so Recent / project / none stay aligned
- * across the beta toggle.
- *
- * - `recency`: activity order + day buckets on the active list
- * - `project`: classic nests by project; V2 exposes Default and keeps upstream order
- * - `none`: activity order, flat (no day headers)
- *
- * Full compatibility contract: docs/sidebar-v2.md. Custom user groups are
- * intentionally out of scope for the first cut.
- */
+/** Shared persisted grouping: recency buckets, legacy project ordering, or a flat list. */
 export type WebThreadGrouping = "recency" | "project" | "none";
 
 export const WEB_THREAD_GROUPINGS = [

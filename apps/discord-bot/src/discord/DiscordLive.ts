@@ -18,12 +18,8 @@ export const BOT_GATEWAY_INTENTS = Intents.fromList([
 ]);
 
 /**
- * Wrap DiscordREST so every createMessage / updateMessage sets SuppressEmbeds.
- * Link previews are suppressed; file attachments are unaffected (separate multipart fields).
- *
- * Uses getUnsafe because Layer.build's output type is opaque to Context.get's
- * "service must be in Services" constraint, even though DiscordIxLive always
- * provides DiscordREST.
+ * Suppress link embeds for every Discord message create/update; multipart attachments remain intact.
+ * `getUnsafe` is needed because Layer.build hides the service type, though DiscordIxLive provides it.
  */
 const wrapDiscordRestSuppressEmbeds = <A, E, R>(layer: Layer.Layer<A, E, R>) =>
   Layer.effectContext(

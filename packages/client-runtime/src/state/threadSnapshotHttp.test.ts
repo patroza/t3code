@@ -47,10 +47,7 @@ describe("thread snapshot HTTP loads", () => {
       );
       yield* Effect.yieldNow;
 
-      // The previous six-second bound gave up here and let the subscription
-      // embed the snapshot in the socket instead — the same bytes, queued ahead
-      // of the heartbeat on the link least able to carry them (#2761). A load
-      // this slow has to stay on HTTP.
+      // A socket fallback queues the same snapshot ahead of heartbeats; slow links must keep the load on HTTP.
       yield* TestClock.adjust(Duration.millis(6_000));
       expect(errorFiber.pollUnsafe()).toBeUndefined();
 

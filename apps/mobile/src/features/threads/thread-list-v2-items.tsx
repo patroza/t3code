@@ -92,6 +92,12 @@ const STATUS_LABEL_BY_STATUS: Partial<Record<ThreadListV2Status, StatusLabel>> =
     className: "text-adaptive-indigo-600-300",
     iconTintClassName: "accent-adaptive-indigo-600-300",
   },
+  request: {
+    label: "Request",
+    icon: "person.crop.circle",
+    className: "text-adaptive-fuchsia-600-300",
+    iconTintClassName: "accent-adaptive-fuchsia-600-300",
+  },
   working: {
     label: "Working",
     icon: "circle.dashed",
@@ -286,12 +292,25 @@ export const ThreadListV2SettledShelfHeader = memo(function ThreadListV2SettledS
 export const ThreadListV2ShowMoreRow = memo(function ThreadListV2ShowMoreRow(props: {
   readonly pane?: "screen" | "sidebar";
   readonly hiddenCount: number;
+  /** Older settled threads are loading, or their last read failed. */
+  readonly state?: "loading" | "failed";
   readonly onPress: () => void;
 }) {
+  const label =
+    props.state === "loading"
+      ? "Loading"
+      : props.state === "failed"
+        ? "Could not load older threads. Retry"
+        : `Show more (${props.hiddenCount} settled hidden)`;
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`Show ${Math.min(props.hiddenCount, THREAD_LIST_V2_SETTLED_PAGE_COUNT)} more settled threads`}
+      accessibilityLabel={
+        props.state === undefined
+          ? `Show ${Math.min(props.hiddenCount, THREAD_LIST_V2_SETTLED_PAGE_COUNT)} more settled threads`
+          : label
+      }
+      disabled={props.state === "loading"}
       onPress={props.onPress}
       className="mx-4 mt-2 items-center rounded-lg border border-dashed border-border py-2.5"
       style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
@@ -303,7 +322,7 @@ export const ThreadListV2ShowMoreRow = memo(function ThreadListV2ShowMoreRow(pro
             : "text-xs font-t3-medium text-foreground-muted"
         }
       >
-        Show more ({props.hiddenCount} settled hidden)
+        {label}
       </Text>
     </Pressable>
   );
@@ -613,6 +632,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const pinnedRow = props.pinned === true;
   const dormant = useSwipeRowDormant(props.activationKey);
 
+  const selectThread = () => onSelectThread(thread);
   const { providerDrivers, providerIconUrl } = useMemo(() => {
     const provider = props.providers?.find(
       (candidate) =>
@@ -674,10 +694,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   );
   const handleSettle = useCallback(() => onSettleThread(thread), [onSettleThread, thread]);
   const [customSnoozeOpen, setCustomSnoozeOpen] = useState(false);
-  // A recycled cell reassigns this mounted row to a different thread without
-  // remounting it, and the render closure stops running while list equality
-  // says the item is unchanged — so any row-local UI state must be dismissed
-  // when the identity under it changes.
+  // Recycling changes identity without remounting; clear local UI directly because equality may skip the render closure.
   const rowIdentity = `${thread.environmentId}:${thread.id}`;
   const [boundIdentity, setBoundIdentity] = useState(rowIdentity);
   if (boundIdentity !== rowIdentity) {
@@ -701,10 +718,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const handleArchive = useCallback(() => onArchiveThread(thread), [onArchiveThread, thread]);
 
   const canUnsettle = variant === "slim";
-  // The React Compiler caches render results on props and state, so a clock read
-  // in render would stay frozen until `thread` changes: the gate could never
-  // expire and its timer would re-fire every 50ms. The gate's clock is state.
+  // Keep time in state; cached render-time reads freeze the gate and trigger 50ms expiry loops.
   const [snoozeGateClock, setSnoozeGateClock] = useState(() => ({ thread, now: Date.now() }));
+  // oxlint-disable-next-line react/purity -- Reseeds the snooze gate clock only in the render-phase adjustment that runs when the thread changes.
   if (snoozeGateClock.thread !== thread) setSnoozeGateClock({ thread, now: Date.now() });
   const snoozeGateNow = new Date(snoozeGateClock.now).toISOString();
   const snoozeGateExpiryMs = props.snoozeSupported
@@ -726,7 +742,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     snoozed: snoozedRow,
   });
   const snoozePresets = useMemo(
+    // oxlint-disable-next-line react/purity -- The memo recomputes on the snoozePresetMinute tick, so preset times refresh every minute.
     () => (swipeActions.secondary === "snooze" ? resolveSnoozePresets(new Date()) : ([] as const)),
+    // oxlint-disable-next-line react/memo-dependencies -- The minute tick refreshes relative snooze times while the row remains mounted.
     [props.snoozePresetMinute, swipeActions.secondary],
   );
   const snoozePresetActions = useMemo<MenuAction[]>(
@@ -773,7 +791,6 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       props.reorderSupported,
       props.pinningSupported,
       thread.pinnedAt,
-      variant,
     ],
   );
   const autoSettleMenuItems = useMemo<MenuAction[]>(
@@ -1200,8 +1217,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             accessibilityRole="button"
             accessibilityLabel={prBadgeLabel ?? undefined}
             onPress={handleOpenPullRequests}
-            // Without a long-press handler a hold that opens the row's iOS
-            // context menu would also open the pull request on release.
+            // Handle long-press so opening the iOS row menu cannot also open the PR on release.
             onLongPress={() => undefined}
             style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
           >
@@ -1235,11 +1251,16 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         ) : null}
         {providerInstance ? (
           <View className="flex-row items-center">
-            {providerDrivers.slice(0, -1).map((driver, index) => (
-              <View key={`${driver}:${index}`} className="-mr-1 opacity-30">
-                <ProviderIcon provider={driver} size={12} />
-              </View>
-            ))}
+            {providerDrivers.slice(0, -1).map(
+              (driver, index) => (
+                /* oxlint-disable react/no-array-index-key -- Provider history can repeat a driver; these decorative icons have no local state. */ <View
+                  key={`${driver}:${index}`}
+                  className="-mr-1 opacity-30"
+                >
+                  <ProviderIcon provider={driver} size={12} />
+                </View>
+              ) /* oxlint-enable react/no-array-index-key */,
+            )}
             <ProviderInstanceIcon
               iconUrl={providerIconUrl}
               provider={providerInstance.driverKind}
@@ -1284,7 +1305,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         }}
         onPress={() => {
           close();
-          onSelectThread(thread);
+          selectThread();
         }}
         style={rowAppearance.cardStyle}
       >
@@ -1316,7 +1337,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         }}
         onPress={() => {
           close();
-          onSelectThread(thread);
+          selectThread();
         }}
         style={rowAppearance.style}
       >

@@ -1,18 +1,5 @@
-/**
- * Markdown → Atlassian Document Format for Jira Cloud comments.
- *
- * The bridge used to drop the reply in as paragraph text, so `[label](url)` and
- * ``` fences showed up as source. This covers the Markdown agents actually write:
- * headings, emphasis, links, lists, tables, quotes, and fenced code.
- *
- * A bare GitHub pull or issue URL, or a Jira browse URL, is a real link whose
- * visible text is a short label (`scanner#2458`, `SA-510`). The raw address
- * wraps in Jira and, on some write paths, is not a link at all.
- *
- * A comment that will not fit in Jira's body limit is split on a block boundary.
- * The caller stores the overflow (Confluence section or issue attachment) and
- * leaves a link in the comment.
- */
+// Convert supported Markdown to ADF and render issue/PR links with short visible labels.
+// Split oversized replies at block boundaries; callers store overflow and link it from the comment.
 import { jiraMentionAccountId, type JiraAdfMention } from "./JiraWebhookPayload.ts";
 
 /** Serialized ADF budget. Jira rejects comment bodies past 32,767 characters. */

@@ -1,13 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
-/**
- * Agents embed local filesystem images in several wire formats:
- *   ![alt](/var/lib/t3/.codex/generated_images/.../file.png)
- *   ![alt](attachment:/var/lib/...)
- *   <img src="/var/lib/t3/.codex/generated_images/..." alt="..." />
- *   [file.png](</var/lib/t3/.codex/generated_images/.../file.png>)
- *   ![alt](images/1.jpg)  — Grok ImageGen session-relative path
- *
- * Discord cannot render host paths — they must become real multipart file attachments.
+/** Convert agent-local image paths (Markdown, HTML, attachment, or session-relative) to multipart files.
+ * Discord cannot render host paths directly.
  */
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";

@@ -5,26 +5,14 @@ import type {
   ProviderDriverKind,
 } from "@t3tools/contracts";
 
-/**
- * Shared, pure logic for surfacing the local `ai-usage` daemon feed on
- * provider icons and in the model picker. Time is passed in so everything here
- * is unit-testable.
- *
- * This module is intentionally free of React / atom runtime so it can be used
- * from web, mobile, and other clients.
+/** Pure cross-client logic for showing the local `ai-usage` feed on provider icons and the model picker.
+ * Time is an input so web, mobile, and other clients can test it without React or atoms.
  */
 
 export type UsageFill = "none" | "warn" | "critical";
 
-/**
- * A provider marker carries two independent signals:
- *   - `fill`: how used-up the provider is *right now* — driven by the most
- *     immediate window (the 5-hour cap) plus a hard "any window at 100%" block.
- *     This is the dot's colour.
- *   - `outlookAtRisk`: a softer, longer-horizon concern — a weekly/monthly
- *     window filling up or the daemon's pace projection saying you'll overshoot
- *     before it resets. This is a ring around the dot so a slow weekly burn
- *     never masquerades as "can't use it now".
+/** `fill` marks immediate limits (5-hour window or any hard 100% cap); `outlookAtRisk` marks weekly/monthly risk.
+ * The UI uses a dot for fill and a ring for outlook so long-term burn is not shown as immediate unavailability.
  */
 export interface UsageMarker {
   readonly fill: UsageFill;
@@ -53,13 +41,8 @@ const SPEND_POOL_LABEL =
 /** A window the provider has switched off, e.g. "Extra usage (off)". */
 const DISABLED_LABEL = /\(off\)/i;
 
-/**
- * True when a window actually gates using the provider right now. Everything
- * else — daemon-flagged `informational` pools, extra-usage/credit buffers, and
- * windows the account has switched off — is reported as context only and must
- * never drive the marker. Without this, a 100%-drained "Extra usage (off)"
- * pool would paint Claude red while the 5-hour and weekly windows are wide
- * open.
+/** Only windows that gate provider access affect the marker; informational, disabled, and credit pools are context.
+ * A drained "Extra usage (off)" pool must not mark Claude unavailable while real limits remain open.
  */
 export function isEnforcedUsageWindow(window: AiUsageWindow): boolean {
   if (window.informational === true) return false;
@@ -155,14 +138,8 @@ function windowPaceAtRisk(window: AiUsageWindow): boolean {
   return window.pace?.lasts_to_reset === false && (window.pace?.delta_percent ?? 0) > 0;
 }
 
-/**
- * The two-channel marker for a provider. `fill` reflects current usage on the
- * immediate window (red at any hard 100% cap, orange at the warn threshold);
- * `outlookAtRisk` reflects a longer-horizon window filling up or a pace
- * overshoot, and is surfaced as a ring rather than escalating the fill.
- *
- * Only enforced windows count — a drained or disabled extra-usage/credit pool
- * is not a limit and must not colour the marker.
+/** `fill` reflects immediate usage (red at any hard cap, orange at warning); `outlookAtRisk` is a longer-horizon ring.
+ * Only enforced windows count; drained or disabled extra-usage/credit pools must not colour the marker.
  */
 export function usageMarkerForItem(item: AiUsageProviderStatus): UsageMarker {
   if (!item.ok) return { fill: "none", outlookAtRisk: false };

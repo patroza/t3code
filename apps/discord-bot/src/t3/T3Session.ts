@@ -282,16 +282,9 @@ export interface T3SessionService {
     readonly messageId: MessageId;
   }) => Effect.Effect<void, T3SessionError>;
   /**
-   * Subscribe to thread events until disconnect/interrupt.
-   * Runs `onThread` in the caller fiber context (must not be forked onto a bare T3 runtime).
-   *
-   * @param options.afterSequence - when set, only events after this sequence are streamed
-   *   (no embedded snapshot unless warmSeed is missing). Prefer warm seed or HTTP tip first.
-   * @param options.onSequence - durable marker callback after each applied snapshot/event.
-   * @param options.warmSeed - durable trimmed tip (web/desktop-style cache). When set with a
-   *   finite sequence, skips HTTP full-tip fetch and resumes via afterSequence from that base.
-   * @param options.projectThread - optional projection before onThread / retained apply base
-   *   (e.g. drop Discord-finalized history beyond a small buffer).
+   * Subscribe until disconnect/interruption and run callbacks in the caller's Effect context.
+   * `afterSequence` resumes after a durable cursor; `warmSeed` can avoid fetching the full HTTP tip.
+   * `onSequence` persists applied progress, and `projectThread` filters before callback/application.
    */
   readonly subscribeThread: (
     threadId: ThreadId,
@@ -1220,15 +1213,8 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
           runId: queued.id,
         });
       }),
-      /**
-       * Subscribe to thread events and run `onThread` in the **caller's** Effect context.
-       *
-       * Must NOT use `runtime.runFork` — that runs on the T3 ManagedRuntime without
-       * DiscordREST, so every Discord post fails silently ("nothing happens").
-       * Run the stream with `yield*` so the Discord bridge fiber provides services.
-       *
-       * Client-aligned via {@link followOrchestrationThread} (same apply/reload/retry
-       * semantics as EnvironmentThreadState; no core package edits).
+      /** Run subscription callbacks in the caller's Effect context; `runtime.runFork` lacks DiscordREST.
+       * `followOrchestrationThread` keeps the apply/reload/retry behavior aligned with web clients.
        */
       subscribeThread: Effect.fn("T3Session.subscribeThread")(
         function* (threadId, onThread, options) {

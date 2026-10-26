@@ -51,16 +51,8 @@ export function isComposerCursorOnLastLine(text: string, cursor: number): boolea
   return !text.slice(bounded).includes("\n");
 }
 
-/**
- * What ArrowUp/ArrowDown should do in the composer.
- *
- * Matches common chat UIs (Copilot / Claude / Codex-style):
- * 1. Move the caret inside the multi-line input first (top / bottom lines).
- * 2. On the first line, move to the document start before history.
- * 3. On the last line, move to the document end before history (when browsing).
- * 4. Only once the caret is already at that edge does history run.
- *
- * Non-collapsed selections never intercept (leave native behavior).
+/** Arrow keys move the caret within the multiline input, then to its edge, before browsing history.
+ * Non-collapsed selections keep native behavior.
  */
 export type ComposerInputHistoryKeyAction =
   | { readonly action: "none" }

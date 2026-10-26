@@ -14,8 +14,7 @@ const SPLIT_SIDEBAR_DEFAULT_MAX_WIDTH = 380;
 
 export const AUXILIARY_PANE_MIN_CONTENT_WIDTH = 960;
 export const CHAT_CONTENT_MAX_WIDTH = 960;
-// Android reading width for the thread feed, composer, and full-width thread list.
-// Phones are narrower; foldables in portrait and the keyboard-open split view are not.
+// Limit Android reading width for wide foldables and keyboard-open split views.
 export const ANDROID_READING_MAX_WIDTH = 640;
 // min-h-8 uses the 14px rem configured in metro.config.js.
 export const THREAD_WORK_ROW_MIN_HEIGHT = 28;
@@ -31,8 +30,7 @@ export function deriveThreadWorkLogSizing(input: {
       THREAD_WORK_ROW_MIN_HEIGHT,
       Math.ceil(lineHeight * input.fontScale),
     ),
-    // Native text can exceed its authored line height with accessibility scaling.
-    // Leave those rows measured instead of promising LegendList an exact size.
+    // Accessibility scaling can exceed authored line heights; leave those rows measured.
     fixedRowHeight:
       input.fontScale <= 1 && lineHeight <= THREAD_WORK_ROW_MIN_HEIGHT
         ? THREAD_WORK_ROW_MIN_HEIGHT
@@ -175,17 +173,23 @@ export function alignListPaneToHinge(input: {
  * collapse it there. Compact layouts stay pinned so a reveal request (such as
  * focusing search) cannot flip the saved preference for a later split view.
  */
+/** Home's list, or the Settings list in its place, with no detail selected. */
+export function isWorkspaceListPath(pathname: string): boolean {
+  return pathname === "/" || pathname === "/settings";
+}
+
 export function isPrimarySidebarPinned(input: {
   readonly pathname: string;
   readonly nativeWorkspace: boolean;
   readonly usesSplitView: boolean;
 }): boolean {
-  return input.pathname === "/" && !(input.nativeWorkspace && input.usesSplitView);
+  return isWorkspaceListPath(input.pathname) && !(input.nativeWorkspace && input.usesSplitView);
 }
 
 export function deriveWorkspacePaneLayout(input: {
   readonly layout: Layout;
   readonly viewportWidth: number;
+  readonly nativeWorkspace?: boolean;
   readonly primarySidebarPreferredVisible: boolean;
   readonly auxiliaryPanePreferredVisible: boolean;
   readonly auxiliaryPaneRole?: WorkspaceAuxiliaryPaneRole;
@@ -209,6 +213,7 @@ export function deriveWorkspacePaneLayout(input: {
     });
     const auxiliaryPaneVisible = fileInspector.supported && input.auxiliaryPanePreferredVisible;
     const primarySidebarSuppressedByAuxiliary =
+      !input.nativeWorkspace &&
       preferredPrimarySidebarVisible &&
       !input.layout.primarySidebarOverlaysContent &&
       auxiliaryPaneVisible &&

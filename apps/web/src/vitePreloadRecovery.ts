@@ -1,12 +1,4 @@
-/**
- * Recover from Vite version skew: after a deploy, an open tab still points at
- * old hashed lazy chunks. Dynamic import then fails with
- * "Failed to fetch dynamically imported module". Vite emits `vite:preloadError`
- * for this; reloading picks up the new index + chunk map.
- *
- * Cooldown avoids a tight reload loop when the failure is not skew (offline,
- * auth wall, etc.).
- */
+/** Recover stale Vite chunks after deploy, with a cooldown against offline/auth reload loops. */
 
 export const VITE_PRELOAD_RELOAD_STORAGE_KEY = "t3:vite-preload-reload-at";
 export const VITE_PRELOAD_RELOAD_COOLDOWN_MS = 10_000;

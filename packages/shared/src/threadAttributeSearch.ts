@@ -1,10 +1,5 @@
-/**
- * Search terms and match helpers for thread attributes beyond title/branch:
- * identity handles (`@user`, `user@channel`, `@channel`), PR numbers (`#123`),
- * and Jira keys (`SA-123`).
- *
- * Pure string helpers for web/mobile command palette and list filters.
- * See docs/architecture/source-and-identity.md
+/** Pure search helpers for thread identity handles, PR numbers, and Jira keys across web/mobile lists.
+ * See docs/architecture/source-and-identity.md.
  */
 
 export type ThreadAttributeSourceLike = {
@@ -178,7 +173,6 @@ export function threadAttributeSearchMatches(terms: ReadonlyArray<string>, query
   if (normalizedQuery.length === 0) return true;
   if (terms.length === 0) return false;
 
-  // Direct term substring (covers @user, user@channel, #123, sa-123, title words).
   for (const term of terms) {
     if (term.includes(normalizedQuery) || normalizedQuery.includes(term)) {
       // Prefer: query is a prefix/substring of a term (user typed partial handle).

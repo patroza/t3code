@@ -1,9 +1,5 @@
 /**
- * Agent policy for `gh`: recognise the invocations that publish a pull request
- * (undraft / ready-for-review side channels) so the shim can run the ship gate
- * before letting them through. Publishing is gated, never refused — only a
- * failing gate stops it. `pnpm pr:ready` sets AGENT_PR_SHIP=1 so its own undraft
- * call does not re-run the gate it just passed.
+ * Gate agent PR publication; AGENT_PR_SHIP marks the gate already passed by pr:ready.
  */
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
@@ -57,15 +53,7 @@ export const stripGhGlobalFlags = (argv) => {
 };
 
 /**
- * Does this `gh` invocation publish a pull request, and therefore have to pass
- * the ship gate first?
- *
- * Publishing is not refused — it is gated. The shim runs the same gate
- * `pnpm pr:ready` runs and then lets the command through; only a failing gate
- * stops it. Refusing outright just moved the work to a command the agent had to
- * remember, and left repositories without a `pr:ready` equivalent with no route
- * at all.
- *
+ * Identify PR publication commands so the shim can require the ship gate.
  * @param {string[]} argv  args after the gh binary name
  * @param {NodeJS.ProcessEnv} [env]
  * @returns {{ required: boolean, reason?: string }}
@@ -112,13 +100,7 @@ export const findRealGh = (opts = {}) => {
     return env["AGENT_GH_REAL"];
   }
 
-  // NOT T3_GITHUB_REAL_GH here: that names the *unauthenticated* binary the
-  // GitHub App wrapper execs after it mints an installation token, and hosts
-  // export it precisely so a child that reorders PATH keeps minting config.
-  // Delegating straight to it skips minting, so every `gh` call the shim
-  // fronts fails with "gh auth login" — which is how server-side PR lookups
-  // silently lost their badges. Prefer whatever PATH resolves (the App-aware
-  // `gh`), and fall back to the raw binary only when nothing else exists.
+  // Prefer the App-aware gh on PATH: T3_GITHUB_REAL_GH bypasses installation-token minting.
 
   const selfPath = opts.selfPath
     ? NodePath.resolve(opts.selfPath)

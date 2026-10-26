@@ -1,15 +1,8 @@
 import { type IntegrationThreadShellView as OrchestrationThreadShell } from "@t3tools/shared/integrationThreadView";
 // @effect-diagnostics anyUnknownInErrorContext:off missingEffectContext:off missingEffectError:off
 /**
- * Boot / T3-reconnect rehydrate of Discord↔T3 bridges.
- *
- * Restore set (design decision 1 + catch-up):
- * - shell thread running / starting / pending approval / pending user-input
- * - OR session interrupted (Wake Required — convert Working tips + ❗ title)
- * - OR durable `streamDiscordMessageIds` non-empty (need finalize/cleanup after offline completion)
- * - OR dual-cursor lag (`lastDeliveredSequence` behind `lastThreadSnapshotSequence`)
- *
- * Cap 50 by lastActivityAt desc. Concurrent ensure 4.
+ * Rehydrate bridges with active/pending shells, interrupted sessions, pending Discord cleanup, or cursor lag.
+ * Scan newest activity first (cap 50) and run at most four ensure operations concurrently.
  */
 import type { ThreadId } from "@t3tools/contracts";
 import { sessionNeedsWakeUp } from "@t3tools/shared/sessionWake";

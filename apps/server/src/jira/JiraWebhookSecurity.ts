@@ -1,14 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Effect's Crypto has no createHmac or timingSafeEqual.
 import * as NodeCrypto from "node:crypto";
 
-/**
- * Verify inbound Jira webhook auth.
- *
- * Jira Cloud classic webhooks do not always sign the body. We accept either:
- * - `Authorization: Bearer <secret>`
- * - `X-T3-Webhook-Secret: <secret>`
- * - Optional `X-Hub-Signature-256: sha256=<hex>` when the proxy signs the raw body
- */
+// Authenticate Jira webhooks with a bearer secret or X-T3-Webhook-Secret.
+// A signing proxy may instead provide X-Hub-Signature-256 over the raw body.
 export function verifyJiraWebhookSecret(input: {
   readonly secret: string;
   readonly authorizationHeader: string | undefined;

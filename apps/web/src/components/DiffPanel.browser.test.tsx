@@ -42,9 +42,12 @@ vi.mock("../hooks/useSettings", () => ({
     diffFilesCollapsed: useAtomValue(collapsedAtom),
   }),
   updateClientSettings: vi.fn(),
+  subscribeClientSettings: () => () => {},
 }));
 vi.mock("../hooks/useTheme", () => ({
   useRenderedAppearance: () => "dark",
+  getRenderedAppearance: () => "dark",
+  subscribeRenderedAppearance: () => () => {},
   useTheme: () => ({ resolvedTheme: "dark" }),
 }));
 vi.mock("../editorPreferences", () => ({ useOpenInPreferredEditor: () => vi.fn() }));

@@ -42,6 +42,8 @@ import { readLocalApi } from "~/localApi";
 import { threadEnvironment } from "../../state/threads";
 
 import { observeResponsiveBreakpointFade, usePanelAnimationSettings } from "../../panelAnimations";
+import { canShareWithGuestAtom } from "./guestShareAvailability";
+import { useAtomValue } from "@effect/atom-react";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { ProjectFavicon } from "../ProjectFavicon";
@@ -62,6 +64,7 @@ import { HostResourceStatus } from "../HostResourceStatus";
 import { isLocalConnectionTarget } from "~/connection/desktopLocal";
 import { textDirection } from "~/textDirection";
 import { useClientSettings } from "../../hooks/useSettings";
+import { GuestShareIndicator } from "./GuestShareControls";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -105,10 +108,7 @@ export function resolveRenameCommit(input: {
   return { action: "commit", title: trimmed };
 }
 
-// How long a click on the thread title waits before opening the action menu, so
-// a double-click-to-rename can cancel it first. Only the native desktop menu
-// needs this: it swallows input while open, so the wait must cover the OS
-// double-click interval.
+// Delay the input-swallowing native menu through the double-click rename interval.
 const TITLE_MENU_OPEN_DELAY_MS = 500;
 // Matches the @3xl/header-actions container breakpoint owned by this header.
 const HEADER_ACTIONS_EXPANDED_BREAKPOINT_REM = 48;
@@ -229,6 +229,7 @@ export const ChatHeader = memo(function ChatHeader({
     activeThreadEnvironmentId,
     AuthOrchestrationOperateScope,
   );
+  const canShareWithGuest = useAtomValue(canShareWithGuestAtom(activeThreadEnvironmentId));
   const updateThreadMetadata = useOrchestrationCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
@@ -252,6 +253,7 @@ export const ChatHeader = memo(function ChatHeader({
       ? renaming.title
       : null;
   const isRenamingTitle = renamingTitle !== null;
+  // oxlint-disable-next-line t3code/react-effect-budget -- Breadcrumb overflow tracks DOM geometry through ResizeObserver.
   useEffect(() => {
     const list = breadcrumbContainerRef.current?.querySelector("ol");
     if (!list || !parentThreadLink) return;
@@ -332,6 +334,7 @@ export const ChatHeader = memo(function ChatHeader({
     threadRef: isServerThread ? activeThreadRef : null,
     projectCwd: activeProjectCwd,
     onStartRename: startRename,
+    canShareWithGuest,
   });
   const titleButtonRef = useRef<HTMLButtonElement | null>(null);
   const titleMenuTimerRef = useRef<number | null>(null);
@@ -340,6 +343,7 @@ export const ChatHeader = memo(function ChatHeader({
     clearTimeout(titleMenuTimerRef.current);
     titleMenuTimerRef.current = null;
   };
+  // oxlint-disable-next-line t3code/react-effect-budget -- A pending native timer must be cancelled when the thread changes or unmounts.
   useEffect(
     () => () => {
       if (titleMenuTimerRef.current === null) return;
@@ -665,6 +669,7 @@ export const ChatHeader = memo(function ChatHeader({
           </MenuPopup>
         </Menu>
       </div>
+      {isServerThread ? <GuestShareIndicator threadRef={activeThreadRef} /> : null}
     </div>
   );
 });

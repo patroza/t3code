@@ -89,14 +89,8 @@ function grokCostTicksToUsd(ticks: unknown): number | null {
   return ticks / GROK_COST_USD_TICKS_PER_DOLLAR;
 }
 
-/**
- * Parses one line of a Claude Code transcript.
- *
- * T3 Code writes one record per assistant *content block*, and every one of
- * those records repeats the same complete `usage` object for the parent
- * message. Summing them overcounts by roughly 2.4x on a real workload, so the
- * caller must drop repeats by `dedupeKey` and keep the first.
- */
+// Each Claude content block repeats its parent message usage.
+// Drop repeated dedupeKey records and keep the first instead of summing every block.
 export function parseClaudeLine(line: string): UsageRecord | null {
   let parsed: unknown;
   try {
@@ -155,14 +149,8 @@ export function parseClaudeRecord(parsed: unknown): UsageRecord | null {
   };
 }
 
-/**
- * Rolling state for a single Codex rollout file.
- *
- * Codex `token_count` events carry no model or service tier, so both are
- * carried forward: the model from the most recent `turn_context`, the tier from
- * the most recent `thread_settings_applied`. Sessions that switch either
- * mid-run attribute correctly from the switch onward.
- */
+// Carry model from the latest turn_context and tier from thread_settings_applied.
+// Codex token_count events omit them, so changes apply only from their context update onward.
 export interface CodexScanState {
   model: string;
   speed: UsageSpeed;
@@ -186,13 +174,8 @@ export function initialCodexScanState(): CodexScanState {
   };
 }
 
-/**
- * A forked or subagent rollout opens with the parent's full history copied in,
- * every line re-stamped to the fork instant. Those copies are written in one
- * synchronous burst (observed gaps 0-40ms), while the child's first genuine
- * usage event only lands after a real model turn (observed 5s+). One second of
- * separation splits the two cleanly; `ccusage` uses the same threshold.
- */
+// Fork rollouts copy parent usage in a synchronous burst at the fork timestamp.
+// A one-second separation excludes those copies while retaining genuine later model turns.
 const FORK_COPY_MAX_GAP_MS = 1000;
 
 /** Whether a `session_meta` payload marks the rollout as a fork or subagent. */
@@ -207,14 +190,7 @@ function isForkedSessionMeta(payload: Record<string, unknown>): boolean {
   return typeof (spawn as Record<string, unknown>)["parent_thread_id"] === "string";
 }
 
-/**
- * Feeds one line of a Codex rollout into `state`, returning a record when the
- * line was a usage event.
- *
- * Deltas come from `last_token_usage`. Summing those across a session
- * reconciles with the session's final `total_token_usage`, provided
- * consecutive duplicate events are dropped, which this does.
- */
+// Sum last_token_usage deltas, dropping consecutive duplicates, to reconcile with final total_token_usage.
 export function parseCodexLine(line: string, state: CodexScanState): UsageRecord | null {
   let parsed: unknown;
   try {
@@ -382,15 +358,8 @@ function grokTotalsToUsage(totals: GrokUsageTotals): UsageTokenTotals {
   };
 }
 
-/**
- * Parses one line of a Grok Build `updates.jsonl` session log.
- *
- * Usage lands on `turn_completed` session updates. Per-model breakdowns live
- * under `usage.modelUsage`; when present each model becomes its own record.
- *
- * Returns every record for the line (0 or more). Callers stream line-by-line
- * and flatten.
- */
+// Grok turn_completed updates carry usage; emit one record per modelUsage entry when available.
+// Callers stream lines and flatten the zero-or-more records returned.
 export function parseGrokLine(line: string): readonly UsageRecord[] {
   let parsed: unknown;
   try {
@@ -469,14 +438,8 @@ export function parseGrokRecord(parsed: unknown): readonly UsageRecord[] {
     ];
   }
 
-  // Cost allocation:
-  // 1. Emitted models with their own costUsdTicks keep those values.
-  // 2. Remaining aggregate cost (top-level minus those per-model ticks,
-  //    clamped at 0) is pro-rated across emitted models that lack ticks,
-  //    by token share among the unticked models only.
-  // 3. When no model has per-model ticks, remaining equals the full
-  //    aggregate and every emitted model gets a token-share slice.
-  // Zero-token rows are never emitted and never count toward used ticks.
+  // Keep explicit per-model cost ticks; allocate only remaining aggregate cost among unticked models by token share.
+  // Clamp remaining cost at zero, and exclude zero-token rows from both output and used ticks.
   const topLevelCostUsd = grokCostTicksToUsd(topLevel.costUsdTicks);
   let usedTickedCostUsd = 0;
   let untickedTokenDenominator = 0;
@@ -516,16 +479,8 @@ export function parseGrokRecord(parsed: unknown): readonly UsageRecord[] {
   return results;
 }
 
-/**
- * The model recorded for Kimi turns.
- *
- * Kimi's wire log names no model on any record, and the CLI's configured model
- * at scan time says nothing about what served a turn weeks ago. Rather than
- * attribute — and therefore price — turns against a guess, they are recorded
- * under a sentinel that `usagePricing` treats as unpriceable, so Kimi shows
- * real token counts and an honest "unpriced" share instead of a fabricated
- * cost.
- */
+// Kimi logs omit the served model, and current CLI configuration cannot identify historical turns.
+// Use an unpriceable sentinel so real token counts remain visible without inventing historical costs.
 export const KIMI_UNKNOWN_MODEL = "kimi";
 
 /** Rolling state for a single Kimi `wire.jsonl`. */
@@ -537,15 +492,8 @@ export function initialKimiScanState(sessionId: string): KimiScanState {
   return { sessionId };
 }
 
-/**
- * Feeds one line of a Kimi wire log into `state`, returning a record when the
- * line was a status update carrying token usage.
- *
- * Each `StatusUpdate` reports the counts for one served response — the input
- * side re-states the whole context because that is what the request billed —
- * so these sum across turns. `message_id` de-duplicates the repeats Kimi emits
- * when a status is refreshed without a new round trip.
- */
+// Each Kimi StatusUpdate is one served response, including its billed input context.
+// Sum responses and deduplicate message_id repeats emitted by status refreshes.
 export function parseKimiLine(line: string, state: KimiScanState): UsageRecord | null {
   let parsed: unknown;
   try {

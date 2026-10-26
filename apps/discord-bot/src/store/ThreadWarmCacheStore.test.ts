@@ -15,6 +15,7 @@ import {
 import { OrchestrationV2ThreadProjection } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { v2Projection } from "../t3/nativeThreadTestFixtures.ts";
+const encodeProjection = Schema.encodeSync(Schema.toCodecJson(OrchestrationV2ThreadProjection));
 const sampleProjection = {
   ...v2Projection,
   thread: { ...v2Projection.thread, id: "thread-1" as never },
@@ -28,9 +29,7 @@ describe("parseWarmThreadCacheDocument / canResumeFromWarmThreadCache", () => {
       snapshotSequence: 42,
       lastFinalizedAssistantId: "a1",
       updatedAt: "2026-07-21T00:00:00.000Z",
-      projection: Schema.encodeSync(Schema.toCodecJson(OrchestrationV2ThreadProjection))(
-        sampleProjection,
-      ),
+      projection: encodeProjection(sampleProjection),
     });
     expect(entry?.snapshotSequence).toBe(42);
     expect(entry?.projection.thread.title).toBe(sampleProjection.thread.title);

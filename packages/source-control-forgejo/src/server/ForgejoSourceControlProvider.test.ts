@@ -434,11 +434,23 @@ it.effect.each([
       merged_at: null,
       labels: [],
     };
+    const requests: string[] = [];
     return Effect.gen(function* () {
       const provider = yield* ForgejoPullRequestProvider.make;
       const readSummary = provider.getChangeRequestSummary;
       if (readSummary === undefined) return yield* Effect.die("summary read missing");
+      const readPreview = provider.getChangeRequestPreview;
+      if (readPreview === undefined) return yield* Effect.die("preview read missing");
       const input = { cwd: "/repo", repository: "maria/project", host: "forgejo.test", number: 42 };
+      const preview = yield* readPreview(input);
+      assert.deepStrictEqual(requests, ["repos/maria/project/pulls/42"]);
+      assert.strictEqual(preview.isDraft, isDraft);
+      assert.strictEqual(preview.title, title);
+      assert.strictEqual(preview.state, "open");
+      assert.strictEqual(preview.number, 42);
+      assert.strictEqual(preview.url, pr.html_url);
+      assert.deepStrictEqual(preview.author, { login: "maria", name: null, avatarUrl: null });
+      assert.strictEqual(preview.createdAt, "2026-09-16T00:00:00.000Z");
       const list = yield* provider.listChangeRequests({
         ...input,
         state: "open",
@@ -458,6 +470,7 @@ it.effect.each([
       Effect.provide(
         Layer.mock(ForgejoCli.ForgejoCli)({
           api: (input) => {
+            requests.push(input.path);
             const [path, query] = input.path.split("?");
             let response: unknown;
             switch (path) {
@@ -597,7 +610,7 @@ it.effect("gives Forgejo identities the browser URL of the login that serves the
       canonicalKey: "forge.test/team/repo",
       locator: { source: "git-remote" as const, remoteName: "origin", remoteUrl },
       rootPath: "/repo",
-      ...(provider === undefined ? {} : { provider }),
+      ...(provider === undefined ? {} : { provider: SourceControlProviderKind.make(provider) }),
     });
     const served = (baseUrl: string) => () =>
       Effect.succeed({
@@ -637,6 +650,74 @@ it.effect("gives Forgejo identities the browser URL of the login that serves the
     assert.strictEqual(
       yield* refine!({ identity: unserved, resolveContext: () => Effect.succeed(null) }),
       unserved,
+    );
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        Layer.succeed(FileSystem.FileSystem, FileSystem.makeNoop({})),
+        TestSourceControlHost.layer(),
+        Layer.mock(ForgejoCli.ForgejoCli)({}),
+      ),
+    ),
+  ),
+);
+
+it.effect("names the web server behind an SSH alias from the login that serves it", () =>
+  Effect.gen(function* () {
+    const provider = yield* ForgejoSourceControlProvider.make;
+    const resolveWebHost = provider.resolveRemoteWebHost!;
+    const asked: Array<string | undefined> = [];
+    const context = (remoteUrl: string) => ({
+      provider: {
+        kind: SourceControlProviderKind.make("forgejo"),
+        name: "Forgejo",
+        baseUrl: "https://ssh.forge.test",
+      },
+      remoteName: "origin",
+      remoteUrl,
+      requestedHost: "forge.test:3000",
+    });
+    const served = (input: {
+      readonly context: { readonly requestedHost?: string; readonly provider: { kind: string } };
+    }) =>
+      Effect.sync(() => {
+        asked.push(input.context.requestedHost);
+        assert.strictEqual(input.context.provider.kind, "unknown");
+        return {
+          provider: {
+            kind: SourceControlProviderKind.make("forgejo"),
+            name: "Forgejo / Gitea",
+            baseUrl: "http://forge.test:3000/git",
+          },
+          remoteName: "origin",
+          remoteUrl: "",
+        };
+      });
+
+    assert.strictEqual(
+      yield* resolveWebHost({
+        cwd: "/repo",
+        context: context("git@ssh.forge.test:team/repo.git"),
+        resolveContext: served,
+      }),
+      "forge.test:3000",
+    );
+    assert.deepStrictEqual(asked, ["forge.test:3000"]);
+    assert.strictEqual(
+      yield* resolveWebHost({
+        cwd: "/repo",
+        context: context("https://forge.test:3000/team/repo.git"),
+        resolveContext: () => Effect.die("an HTTP remote names its own web host"),
+      }),
+      null,
+    );
+    assert.strictEqual(
+      yield* resolveWebHost({
+        cwd: "/repo",
+        context: context("git@ssh.forge.test:team/repo.git"),
+        resolveContext: () => Effect.succeed(null),
+      }),
+      null,
     );
   }).pipe(
     Effect.provide(

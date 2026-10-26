@@ -49,8 +49,7 @@ const resolveEnvironmentPortTarget = (
   const protocol = target.protocol ?? "http";
   const path = target.path?.startsWith("/") ? target.path : `/${target.path ?? ""}`;
   const normalizedEnvironmentHost = environmentUrl.hostname.replace(/^\[|\]$/g, "");
-  // Local loopback environments should advertise `localhost` so Chromium
-  // dual-stack lookup can reach a Vite server bound only to ::1 or 127.0.0.1.
+  // localhost lets Chromium reach loopback servers bound to either IPv4 or IPv6.
   const resolvedHost = isLocalLoopbackHost(normalizedEnvironmentHost)
     ? "localhost"
     : normalizedEnvironmentHost.includes(":")
@@ -94,12 +93,7 @@ export function resolveBrowserNavigationTarget(
   return resolveEnvironmentPortTarget(environmentId, target, readEnvironmentUrl(environmentId));
 }
 
-/**
- * The desktop app draws tabs on the machine that runs its primary backend and
- * any desktop-local backend (WSL). Its connection URL can still be a LAN
- * address (WSL NAT mode binds the distro IP), but a dev server bound to
- * loopback only answers on `localhost` there.
- */
+// Desktop renders primary and WSL tabs locally; loopback servers require localhost even for LAN backends.
 const reachesEnvironmentLoopback = (target: ConnectionTarget): boolean =>
   isElectron &&
   (target._tag === "PrimaryConnectionTarget" || isDesktopLocalConnectionTarget(target));
@@ -128,17 +122,7 @@ export function resolveDiscoveredServerUrl(environmentId: EnvironmentId, rawUrl:
   }
 }
 
-/**
- * Resolution for anything that is about to be *opened*.
- *
- * A port on the environment host is reachable from this client only if
- * something publishes it there, and only the environment knows what that is —
- * whether a tailnet route already exists, on which port, over which scheme. So
- * this asks, rather than rewriting the hostname and hoping the port answers on
- * the other side. When the environment cannot make it reachable it says why,
- * and that surfaces as a real error instead of a browser error page that reads
- * like the app is broken.
- */
+/** Ask the environment to publish remote ports; hostname substitution cannot infer its route or scheme. */
 export async function resolveNavigableUrl(
   environmentId: EnvironmentId,
   target: BrowserNavigationTarget,

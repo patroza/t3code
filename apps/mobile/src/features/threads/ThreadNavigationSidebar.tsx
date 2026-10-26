@@ -10,7 +10,6 @@ import { ThreadUndoNotice } from "../home/ThreadUndoNotice";
 import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
 import { resolveScratchProjectScopeKey } from "@t3tools/client-runtime/state/project-grouping";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
-import { computeThreadMoveAvailability } from "./threadOrder";
 import type {
   EnvironmentProject,
   EnvironmentThreadShell,
@@ -19,10 +18,7 @@ import {
   claimPersonIdForEnvironment,
   threadMatchesMine,
 } from "@t3tools/client-runtime/state/identity";
-import {
-  threadSearchMatchKey,
-  type EnvironmentThreadSearchMatch,
-} from "@t3tools/client-runtime/state/thread-search";
+import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { AnimatedLegendList } from "@legendapp/list/reanimated";
 import { THREAD_SIDEBAR_ROW_LAYOUT } from "./threadListAnimations";
 import type { MenuAction } from "@react-native-menu/menu";
@@ -51,10 +47,12 @@ import { useQueuedThreadKeys } from "../../state/use-thread-outbox";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
+import { useThreadListV2 } from "./useThreadListV2";
 import { useThreadJumpShortcuts } from "../keyboard/threadKeyboardShortcuts";
+import { requestThreadMessageJump } from "./threadMessageJump";
+import { useThreadListSearchMatches } from "./useThreadListSearchMatches";
 import { DEFAULT_OWNERSHIP_FILTER, useHomeListOptions } from "../home/home-list-options";
 import { buildHomeListFilterMenu } from "../home/home-list-filter-menu";
-import { matchesEnvironmentFilter } from "../home/homeEnvironmentFilter";
 import {
   HOME_LIST_MODE_LABELS,
   HOME_LIST_MODE_TITLES,
@@ -88,20 +86,23 @@ import {
 import { useThreadRowProviderInstanceResolver } from "./thread-provider-instance";
 import type { ThreadPrPresentation } from "../../state/thread-pr-presentation";
 import {
-  buildThreadListV2Items,
-  getThreadListV2OrderedSection,
-  buildThreadListV2ListItems,
   isThreadListV2ListItem,
   threadListV2ListItemsAreEqual,
-  threadListInboxReturns,
   THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
   THREAD_LIST_V2_SETTLED_PAGE_COUNT,
   type ThreadListV2ListItem,
 } from "./threadListV2";
+import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
+import { NativeScrollView } from "../../native/NativeScrollViewMarker";
 
 type SidebarListItem =
   | ThreadListV2ListItem
-  | { readonly type: "v2-show-more"; readonly key: string; readonly hiddenCount: number };
+  | {
+      readonly type: "v2-show-more";
+      readonly key: string;
+      readonly hiddenCount: number;
+      readonly state?: "loading" | "failed";
+    };
 
 const SIDEBAR_STICKY_HEADER_HEIGHT = 106;
 
@@ -180,7 +181,10 @@ function ThreadNavigationSidebarPane(
   const pendingTasks = usePendingNewTasks();
   const activeNewTask = useActiveNewTask();
   const queuedThreadKeys = useQueuedThreadKeys();
-  const { confirmDeletePendingTask } = usePendingTaskListActions();
+  const selectDetail = useSelectWorkspaceDetail();
+  const { confirmDeletePendingTask } = usePendingTaskListActions((params) =>
+    selectDetail({ name: "Thread", params }),
+  );
   const environments = Object.values(savedConnectionsById)
     .map((connection) => ({
       environmentId: connection.environmentId,
@@ -213,19 +217,6 @@ function ThreadNavigationSidebarPane(
     const selected = new Set(options.selectedEnvironmentIds);
     return connectedIds.filter((environmentId) => selected.has(environmentId));
   })();
-  const threadSearch = useThreadSearch(searchEnvironmentIds, props.searchQuery);
-  // These maps reach LegendList's extraData, which re-renders every row whenever it changes
-  // identity. The compiler leaves them unmemoized because they stay live across later hook calls.
-  const threadSearchMatchByKey = (() => {
-    const matches = new Map<string, EnvironmentThreadSearchMatch>();
-    for (const match of threadSearch.matches) {
-      if (match.source === "user" || match.source === "assistant") {
-        matches.set(threadSearchMatchKey(match), match);
-      }
-    }
-    return matches;
-  })();
-  const matchedThreadKeys = (() => new Set(threadSearch.matches.map(threadSearchMatchKey)))();
   const hideSettledOnRecent = AsyncResult.isSuccess(preferencesResult)
     ? resolveHideSettledOnRecent(preferencesResult.value)
     : true;
@@ -277,33 +268,40 @@ function ThreadNavigationSidebarPane(
     ))();
   const selectedProjectScope =
     projectScopes.find((scope) => scope.key === resolvedProjectKey) ?? null;
-  const selectedProjectKey = selectedProjectScope?.key ?? null;
+  const threadSearch = useThreadSearch(
+    searchEnvironmentIds,
+    props.searchQuery,
+    selectedProjectScope === null
+      ? {}
+      : { projectIds: selectedProjectScope.projectRefs.map((ref) => ref.projectId) },
+  );
   const selectedProjectRefs =
     selectedProjectScope === null
       ? null
       : new Set(
-          selectedProjectScope.projectRefs.map((projectRef) =>
-            scopedProjectKey(projectRef.environmentId, projectRef.projectId),
+          selectedProjectScope.projectRefs.map((ref) =>
+            scopedProjectKey(ref.environmentId, ref.projectId),
           ),
         );
-  const scopedThreads = (() =>
-    threads.filter(
-      (thread) =>
-        (selectedProjectRefs === null ||
-          selectedProjectRefs.has(scopedProjectKey(thread.environmentId, thread.projectId))) &&
-        threadMatchesMine({
-          claimPersonId: claimPersonIdForEnvironment(
-            claimPersonIdByEnvironment,
-            thread.environmentId,
-          ),
-          originPersonId: thread.originSource?.personId ?? null,
-          participantPersonIds: (thread.participantSummaries ?? []).map(
-            (participant) => participant.personId,
-          ),
-          mode: options.ownershipFilter,
-          relation: options.ownershipRelation,
-        }),
-    ))();
+  const scopedThreads = threads.filter(
+    (thread) =>
+      (selectedProjectRefs === null ||
+        selectedProjectRefs.has(scopedProjectKey(thread.environmentId, thread.projectId))) &&
+      threadMatchesMine({
+        claimPersonId: claimPersonIdForEnvironment(
+          claimPersonIdByEnvironment,
+          thread.environmentId,
+        ),
+        originPersonId: thread.originSource?.personId ?? null,
+        participantPersonIds: (thread.participantSummaries ?? []).map(
+          (participant) => participant.personId,
+        ),
+        mode: options.ownershipFilter,
+        relation: options.ownershipRelation,
+      }),
+  );
+  const threadSearchMatchByKey = useThreadListSearchMatches(scopedThreads, threadSearch);
+  const selectedProjectKey = selectedProjectScope?.key ?? null;
   const projectByKey = (() => {
     const map = new Map<string, EnvironmentProject>();
     for (const project of projects) {
@@ -333,13 +331,12 @@ function ThreadNavigationSidebarPane(
     toggleSnoozedShelf,
     toggleWorkingShelf,
   } = useThreadListV2ShelfPreferences();
-  // The list's clock is state: the compiler caches anything computed from it on
-  // its other inputs, so a render-time `new Date()` would stop moving. The minute
-  // interval and the snooze-wake timer below both advance it.
+  // Keep time in state; the compiler would cache a render-time new Date().
   const [now, setNow] = useState(() => new Date().toISOString());
   const nowMinute = now.slice(0, 16);
   const [snoozeWakeTick, bumpSnoozeWakeTick] = useState(0);
   useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- Refreshes the minute clock when the minute interval starts.
     setNow(new Date().toISOString());
     const id = setInterval(() => setNow(new Date().toISOString()), 60_000);
     return () => clearInterval(id);
@@ -358,70 +355,35 @@ function ThreadNavigationSidebarPane(
   } = listEnvironments;
   const resolveProviderInstance = useThreadRowProviderInstanceResolver(providersByEnvironmentId);
   const pendingOrder = usePendingThreadOrder(nowMinute, snoozeWakeTick);
-  // Up/down menu availability for every card, computed once per section per
-  // rebuild (see computeThreadMoveAvailability): per-thread planner calls made
-  // list construction quadratic, and this list rebuilds on every minute tick.
-  const threadMoveAvailability = (() => {
-    const sectionAvailability = (section: "pinned" | "active") =>
-      computeThreadMoveAvailability({
-        allThreads: threads,
-        section,
-        pendingOrder,
-        reorderableEnvironmentIds:
-          section === "pinned" ? pinReorderEnvironmentIds : activeReorderEnvironmentIds,
-        ordered: getThreadListV2OrderedSection({
-          threads,
-          section,
-          pendingOrder,
-          now,
-          settlementEnvironmentIds,
-          snoozeEnvironmentIds,
-          queuedThreadKeys,
-        }),
-      });
-    return new Map([
-      ...sectionAvailability("pinned"),
-      ...(workingShelfEnabled ? [] : sectionAvailability("active")),
-    ]);
-  })();
-  const threadListV2Layout = (() => {
-    if (options.listMode !== "threads") {
-      return {
-        items: [],
-        hiddenSettledCount: 0,
-        workingCount: 0,
-        workingShelfHeaderIndex: null,
-        snoozedCount: 0,
-        snoozedShelfHeaderIndex: null,
-        settledCount: 0,
-        settledShelfHeaderIndex: null,
-        nextSnoozeWakeAt: null,
-      };
-    }
-    // Always partition settled into the slim tail (web V2 / classic Recent
-    // shelf). Hide-settled must not erase that history on mobile.
-    threadListInboxReturns.observe(workingShelfEnabled ? threads : null);
-    return buildThreadListV2Items({
-      pendingOrder,
-      threads: scopedThreads.filter((thread) => thread.archivedAt === null),
-      selectedEnvironmentIds: options.selectedEnvironmentIds,
-      projectRefs: selectedProjectScope === null ? null : selectedProjectScope.projectRefs,
-      orderByRecency: options.threadGrouping === "recency",
-      searchQuery: props.searchQuery,
-      matchedThreadKeys,
-      settlementEnvironmentIds,
-      snoozeEnvironmentIds,
-      queuedThreadKeys,
-      settledLimit: settledVisibleCount,
-      now,
-      workingShelfEnabled,
-      workingShelfExpanded,
-      inboxReturnAt: threadListInboxReturns.returnedAt,
-      snoozedShelfExpanded,
-      settledShelfExpanded,
-      selectedThreadKey: props.selectedThreadKey ?? null,
-    });
-  })();
+  const {
+    layout: threadListV2Layout,
+    items: threadListV2Items,
+    contentOnlyThreadKeys,
+    olderSettledShelf,
+  } = useThreadListV2({
+    threads: options.listMode === "threads" ? scopedThreads : [],
+    pendingTasks: options.listMode === "threads" ? pendingTasks : [],
+    environmentId: null,
+    selectedEnvironmentIds: options.selectedEnvironmentIds,
+    orderByRecency: options.threadGrouping === "recency",
+    projectRefs: selectedProjectScope === null ? null : selectedProjectScope.projectRefs,
+    searchQuery: props.searchQuery,
+    searchMatches: threadSearchMatchByKey,
+    settlementEnvironmentIds,
+    snoozeEnvironmentIds,
+    pinReorderEnvironmentIds,
+    activeReorderEnvironmentIds,
+    queuedThreadKeys,
+    settledLimit: settledVisibleCount,
+    now,
+    pendingOrder,
+    shelfPreferencesLoaded,
+    workingShelfEnabled,
+    workingShelfExpanded,
+    snoozedShelfExpanded,
+    settledShelfExpanded,
+    selectedThreadKey: props.selectedThreadKey ?? null,
+  });
   const nextSnoozeWakeAt = threadListV2Layout.nextSnoozeWakeAt;
   useEffect(() => {
     if (nextSnoozeWakeAt === null) return;
@@ -433,56 +395,24 @@ function ThreadNavigationSidebarPane(
       bumpSnoozeWakeTick((tick) => tick + 1);
     }, delayMs);
     return () => clearTimeout(id);
-    // snoozeWakeTick must re-arm the timer even when nextSnoozeWakeAt is
-    // unchanged: after a clamped fire (wake beyond the 32-bit setTimeout
-    // range) the boundary string is identical and the chain would die.
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- snoozeWakeTick re-arms clamped timers even when the wake date exceeds 32-bit setTimeout and stays unchanged.
   }, [nextSnoozeWakeAt, snoozeWakeTick]);
-  const listItems = (() => {
-    if (options.listMode !== "threads") return [];
-    // Queued offline tasks are not thread shells, so the v2 item builder
-    // never sees them; the shared splice puts them below the active block
-    // (mirrors the compact Home v2 list) where they stay visible and
-    // deletable while their environment is offline. Same environment scope
-    // and search filter as the list.
-    const v2SearchQuery = props.searchQuery.trim().toLocaleLowerCase();
-    const v2PendingTasks = pendingTasks.filter(
-      (pendingTask) =>
-        matchesEnvironmentFilter(pendingTask.environmentId, options.selectedEnvironmentIds) &&
-        (selectedProjectRefs === null ||
-          selectedProjectRefs.has(
-            scopedProjectKey(pendingTask.environmentId, pendingTask.projectId),
-          )) &&
-        (v2SearchQuery.length === 0 ||
-          pendingTask.title.toLocaleLowerCase().includes(v2SearchQuery)),
-    );
-    const items: SidebarListItem[] = buildThreadListV2ListItems({
-      items: threadListV2Layout.items,
-      pendingTasks: v2PendingTasks,
-      workingCount: threadListV2Layout.workingCount,
-      workingShelfExpanded,
-      workingShelfHeaderIndex: threadListV2Layout.workingShelfHeaderIndex,
-      snoozedCount: threadListV2Layout.snoozedCount,
-      snoozedShelfExpanded,
-      snoozedShelfHeaderIndex: threadListV2Layout.snoozedShelfHeaderIndex,
-      settledCount: threadListV2Layout.settledCount,
-      settledShelfExpanded,
-      settledShelfHeaderIndex: threadListV2Layout.settledShelfHeaderIndex,
-      snoozeLabelNow: `${nowMinute}:00.000Z`,
-      groupByRecency: options.threadGrouping === "recency",
-      snoozeEnvironmentIds,
-      queuedThreadKeys,
-      moveAvailability: threadMoveAvailability,
-      shelfPreferencesLoading: !shelfPreferencesLoaded,
-    });
-    if (settledShelfExpanded && threadListV2Layout.hiddenSettledCount > 0) {
-      items.push({
-        type: "v2-show-more",
-        key: "v2-show-more",
-        hiddenCount: threadListV2Layout.hiddenSettledCount,
-      });
-    }
-    return items;
-  })();
+  const listItems: readonly SidebarListItem[] =
+    settledShelfExpanded && threadListV2Layout.hiddenSettledCount > 0
+      ? [
+          ...threadListV2Items,
+          {
+            type: "v2-show-more",
+            key: "v2-show-more",
+            hiddenCount: threadListV2Layout.hiddenSettledCount,
+            ...(olderSettledShelf.loading
+              ? { state: "loading" as const }
+              : olderSettledShelf.failed
+                ? { state: "failed" as const }
+                : {}),
+          },
+        ]
+      : threadListV2Items;
   const listMenuActions = ((): MenuAction[] => [
     {
       id: "list-mode",
@@ -604,9 +534,6 @@ function ThreadNavigationSidebarPane(
 
   const [measuredHeaderHeight, setMeasuredHeaderHeight] = useState<number | null>(null);
   const { height, paddingTop, paddingBottom } = useToolbarLayout();
-  // The sticky header (title row, search field, optional connection status)
-  // is measured so the list inset always matches its real height — no
-  // hardcoded per-variant constants.
   const stickyHeaderHeight =
     measuredHeaderHeight ??
     (Platform.OS === "android"
@@ -628,10 +555,18 @@ function ThreadNavigationSidebarPane(
       openSwipeableRef.current = null;
     }
   };
-  // These close the open row too, so they cannot be pass-throughs. The compiler would
-  // recache a closure over `props` whenever any prop changed.
+  // Destructure callback props; capturing all props would invalidate these row-closing handlers on unrelated changes.
   const { onSelectThread, onOpenThreadPullRequests } = props;
+  // A row listed for a message match opens the thread at that message, by
+  // tap or by shortcut.
   const handleSelectThread = (thread: EnvironmentThreadShell) => {
+    const key = threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id });
+    const messageId = contentOnlyThreadKeys.has(key)
+      ? threadSearchMatchByKey.get(key)?.messageId
+      : undefined;
+    if (messageId) {
+      requestThreadMessageJump(scopedThreadKey(thread.environmentId, thread.id), messageId);
+    }
     onSelectThread(thread);
     openSwipeableRef.current?.close();
   };
@@ -650,11 +585,7 @@ function ThreadNavigationSidebarPane(
     onScroll: onFabScroll,
     onScrollBeginDrag: handleScrollBeginDrag,
   });
-  // The sticky header's project shells and search maps feed row props, so
-  // they have to bust the recycler's memoization — otherwise a row keeps the
-  // blank favicon and fallback title it was first rendered with. The minute
-  // clock deliberately stays out: its per-row text lives on the items, so a
-  // tick only re-renders rows whose displayed text actually moved.
+  // Recycle equality needs project/search data for titles and favicons; keep the minute clock on items to limit updates.
   const listExtraData = {
     activeNewTask,
     selectedThreadKey: props.selectedThreadKey ?? "",
@@ -671,7 +602,7 @@ function ThreadNavigationSidebarPane(
       return threadListV2ListItemsAreEqual(previous, item);
     }
     if (previous.type === "v2-show-more" && item.type === "v2-show-more") {
-      return previous.hiddenCount === item.hiddenCount;
+      return previous.hiddenCount === item.hiddenCount && previous.state === item.state;
     }
     if (previous.type === "v2-recency-header" && item.type === "v2-recency-header") {
       return previous.key === item.key && previous.label === item.label;
@@ -758,13 +689,20 @@ function ThreadNavigationSidebarPane(
                 : null
             }
             environmentMachine={machineByEnvironmentId.get(thread.environmentId)}
-            searchMatch={threadSearchMatchByKey.get(
-              threadSearchMatchKey({
-                environmentId: thread.environmentId,
-                threadId: thread.id,
-              }),
-            )}
-            searchQuery={props.searchQuery}
+            searchMatch={
+              // Only rows listed for their messages show one and open at it.
+              contentOnlyThreadKeys.has(
+                threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
+              )
+                ? threadSearchMatchByKey.get(
+                    threadSearchMatchKey({
+                      environmentId: thread.environmentId,
+                      threadId: thread.id,
+                    }),
+                  )
+                : undefined
+            }
+            searchQuery={threadSearch.query}
             pane="sidebar"
             selected={
               !activeNewTask &&
@@ -844,7 +782,11 @@ function ThreadNavigationSidebarPane(
           <ThreadListV2ShowMoreRow
             pane="sidebar"
             hiddenCount={item.hiddenCount}
-            onPress={showMoreSettled}
+            {...(item.state === undefined ? {} : { state: item.state })}
+            onPress={() => {
+              olderSettledShelf.retry();
+              showMoreSettled();
+            }}
           />
         );
     }
@@ -974,6 +916,7 @@ function ThreadNavigationSidebarPane(
           <SwipeableScrollGateProvider enabled={swipeEnabled}>
             <GestureDetector gesture={sidebarScrollGesture}>
               <AnimatedLegendList
+                renderScrollComponent={Platform.OS === "ios" ? NativeScrollView : undefined}
                 itemLayoutAnimation={THREAD_SIDEBAR_ROW_LAYOUT}
                 data={listItems}
                 drawDistance={500}
@@ -1042,6 +985,7 @@ function ThreadNavigationSidebarPane(
         ) : (
           <SwipeableScrollGateProvider enabled={swipeEnabled}>
             <GestureDetector gesture={sidebarScrollGesture}>
+              {/* oxlint-disable-next-line t3code/require-registered-list-scroll -- Only the non-native workspace layout (Android and the fallback) renders this sidebar, which has no native header to register with. */}
               <AnimatedLegendList
                 itemLayoutAnimation={THREAD_SIDEBAR_ROW_LAYOUT}
                 data={listItems}

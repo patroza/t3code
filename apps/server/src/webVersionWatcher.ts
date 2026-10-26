@@ -26,16 +26,8 @@ const readWebVersion = Effect.fn("readWebVersion")(function* (staticDir: string)
   return data === null ? null : NodeCrypto.createHash("sha1").update(data).digest("hex");
 });
 
-/**
- * Broadcasts a `webVersionChanged` lifecycle event whenever the served
- * index.html changes on disk, so connected clients learn that the web bundle
- * was hot-swapped underneath them and can offer a reload. The current version
- * is published once at startup to seed the lifecycle snapshot, so a client
- * that connects later learns the version it is actually running. No-op when
- * there is no packaged bundle to serve.
- *
- * Intended to be run with `Effect.forkScoped`; the poll loop never returns.
- */
+// Publish the current packaged web version at startup and whenever index.html changes.
+// Clients use it to detect hot swaps; no packaged bundle means no events. Run in a scoped fiber.
 export const runWebVersionWatcher = Effect.fn("runWebVersionWatcher")(function* (
   lifecycleEvents: ServerLifecycleEvents["Service"],
 ) {

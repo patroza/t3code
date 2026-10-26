@@ -29,8 +29,6 @@ vi.mock("@clerk/electron", () => ({
 vi.mock("@clerk/electron/storage", () => ({
   storage: storageMock,
 }));
-
-import * as Option from "effect/Option";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as ElectronApp from "../electron/ElectronApp.ts";
@@ -54,7 +52,7 @@ const noopDeepLinks = {
 } satisfies DesktopDeepLinks.DesktopDeepLinks["Service"];
 
 const noopElectronWindow = {
-  currentMainOrFirst: Effect.succeed(Option.none()),
+  currentMainOrFirst: Effect.succeedNone,
   reveal: () => Effect.void,
 } as unknown as ElectronWindow.ElectronWindow["Service"];
 
@@ -534,7 +532,7 @@ it.effect(
         }),
     } as unknown as ElectronApp.ElectronApp["Service"];
     const electronWindow = {
-      currentMainOrFirst: Effect.succeed(Option.some(window)),
+      currentMainOrFirst: Effect.succeedSome(window),
       reveal: () => Effect.sync(() => revealed.resolve()),
     } as unknown as ElectronWindow.ElectronWindow["Service"];
     return Effect.gen(function* () {

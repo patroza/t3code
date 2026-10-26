@@ -4,19 +4,8 @@ import type { DraftComposerImageAttachment } from "./composerImages";
 import { uuidv4 } from "./uuid";
 
 /**
- * Rebuilding composer attachments when a server-queued message is edited.
- *
- * Server-queued attachments carry only `{id, name, mimeType, sizeBytes}`; the
- * bytes live on the server. Composer drafts need the bytes inline as a data
- * URL, so editing has to read each attachment back through its signed asset
- * URL first. Locally-queued (outbox) messages already hold their data URLs and
- * skip all of this.
- *
- * Callers must do this *before* removing the queued message. The removal is
- * what makes the edit destructive: once the queued entry is gone, its
- * attachment files are pruned server-side and a failed fetch has no second
- * chance — so a caller that cannot restore everything must leave the message
- * queued rather than remove it.
+ * Restore attachment bytes through signed asset URLs before removing a queued message.
+ * Removing it prunes the server files, so a failed restoration must leave the message queued.
  */
 
 export interface RecallableQueuedAttachment {

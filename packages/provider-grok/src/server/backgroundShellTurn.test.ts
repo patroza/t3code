@@ -99,7 +99,7 @@ function makeScriptedRuntime(
           }),
         getEvents: () => Stream.empty,
         getConfigOptions: Effect.succeed([]),
-        getModeState: Effect.succeed(undefined),
+        getModeState: Effect.void,
         drainEvents: Effect.void,
         cancel: Effect.void,
         setSessionModel: () => Effect.succeed({}),

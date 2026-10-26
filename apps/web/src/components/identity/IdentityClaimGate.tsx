@@ -44,6 +44,7 @@ function useForceClaimState(): {
     open: forceClaimOpen,
     environmentId: forceClaimEnvironmentId,
   });
+  // oxlint-disable-next-line t3code/react-effect-budget -- Subscribe to imperative claim requests and release the listener on unmount.
   useEffect(() => {
     const listener = () =>
       setState({ open: forceClaimOpen, environmentId: forceClaimEnvironmentId });

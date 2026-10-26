@@ -102,7 +102,7 @@ function relayAccountId(clerkToken: string): Option.Option<string> {
   }
 }
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = Effect.fn("RelayEnvironmentDiscovery.make")(function* () {
   const relay = yield* ManagedRelay.ManagedRelayClient;
   const session = yield* ClientCapabilities.CloudSession;
@@ -223,11 +223,8 @@ export const make = Effect.fn("RelayEnvironmentDiscovery.make")(function* () {
         error: Option.none(),
       });
 
-      // Signed out is the idle state, not a failure: the proactive refresh on
-      // credentials-changed also runs on sign-out and must settle back to a
-      // clean empty list. Only the session-level "no credentials" error is
-      // benign — relay-side auth failures (expired/invalid tokens) happen
-      // after this point and must surface as errors.
+      // Sign-out triggers credentials-changed refreshes and must settle to an empty list.
+      // Only session-level missing credentials are benign; relay-side auth failures must surface.
       const tokenResult = yield* Effect.result(session.clerkToken);
       if (tokenResult._tag === "Failure") {
         const failure = tokenResult.failure;
@@ -310,11 +307,7 @@ export const make = Effect.fn("RelayEnvironmentDiscovery.make")(function* () {
     ),
   );
 
-  // Follow resumes too: a transition dropped while the app was suspended would
-  // otherwise leave `offline` set, so the environment list stayed stale until
-  // another network event or a manual refresh. `followNetworkStatus` only
-  // reports actual changes, so a resume that reads the current status does not
-  // trigger a refresh.
+  // Resume rechecks connectivity after suspension; only changed status triggers a refresh.
   yield* Connectivity.followNetworkStatus({
     connectivity,
     wakeups,

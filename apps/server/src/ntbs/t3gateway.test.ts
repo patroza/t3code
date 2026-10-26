@@ -24,7 +24,7 @@ const timestamp = DateTime.makeUnsafe(now);
 const threadId = ThreadId.make("ntbs-thread");
 const projectId = ProjectId.make("ntbs-project");
 const messageId = MessageId.make("ntbs-message");
-const modelSelection = Schema.decodeUnknownSync(ModelSelection)({
+const modelSelection = Schema.decodeSync(ModelSelection)({
   instanceId: "codex",
   model: "gpt-5.4",
 });

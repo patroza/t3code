@@ -36,7 +36,6 @@ import {
   integrationThreadView,
   integrationThreadShellView,
   type IntegrationThreadView as OrchestrationThread,
-  type IntegrationThreadShellView as OrchestrationThreadShell,
 } from "@t3tools/shared/integrationThreadView";
 import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
 import { getAutoBootstrapThreadModelSelection } from "../serverRuntimeStartup.ts";
@@ -189,16 +188,6 @@ export function buildJiraAutoCreateBranchName(issueKey: string, shortId: string)
   return suffix.length > 0 ? `${key}-t3-${suffix}` : `${key}-t3`;
 }
 
-function isThreadBusy(thread: OrchestrationThread): boolean {
-  const latest = thread.latestTurn;
-  if (latest?.state === "running") return true;
-  const session = thread.session;
-  if (session === null) return false;
-  return (
-    session.activeTurnId !== null && (session.status === "running" || session.status === "starting")
-  );
-}
-
 export class JiraIssueBridge extends Context.Service<
   JiraIssueBridge,
   {
@@ -273,17 +262,8 @@ const make = Effect.gen(function* () {
     }) satisfies JiraActorTrustDecision;
   });
 
-  /**
-   * Post a bridge response as an **inline threaded reply** under the user's mention.
-   *
-   * Parent candidates (JiraAppClient resolves each to the **thread root** via GET —
-   * Jira rejects nesting under a child comment with 400):
-   * 1. `sourceCommentId` — the triggering mention (reply next to the user)
-   * 2. `replyToCommentId` — webhook parent / root when present and different
-   *
-   * Never intentionally posts a bare top-level comment first; flat fallback is only
-   * if every resolved parentId is rejected (see JiraAppClient).
-   */
+  // Resolve the triggering comment, then webhook parent, to a thread root before replying.
+  // Try flat fallback only after every resolved parent is rejected, never as the first attempt.
   const storeOverflow = Effect.fn("JiraIssueBridge.storeOverflow")(function* (
     delivery: StoredJiraDelivery,
     overflow: string,
@@ -502,7 +482,6 @@ const make = Effect.gen(function* () {
         }
 
         const threadId = ThreadId.make(yield* crypto.randomUUIDv4());
-        const createdAt = DateTime.formatIso(yield* DateTime.now);
         const title =
           invocation.issueSummary?.trim() || `${invocation.issueKey} · Jira` || invocation.issueKey;
         const modelSelection =
@@ -637,7 +616,7 @@ const make = Effect.gen(function* () {
       const discoveredTurnId = discoverGitHubTargetTurnId(thread, resolveOptions);
       if (discoveredTurnId !== null && discoveredTurnId !== tracked.targetTurnId) {
         tracked = {
-          ...tracked,
+          ...delivery,
           targetTurnId: discoveredTurnId as TurnId,
           updatedAt: DateTime.formatIso(yield* DateTime.now),
         };

@@ -273,14 +273,7 @@ function parsePerson(raw: unknown, indexLabel: string): PersonIdentity {
   };
 }
 
-/**
- * Parse identity map document (JSON object).
- *
- * Accepted shapes:
- * - `{ "people": [ { name, discord, github, jira }, ... ] }`
- * - `{ "people": { "<discordId>": { name, githubLogin, ... }, ... } }`
- * - `{ "<discordId>": { name, githubLogin, ... }, ... }` (top-level map, no people key)
- */
+/** Parse JSON identity maps with a `people` array, a `people` ID map, or a top-level ID map. */
 export function parseIdentityMapDocument(document: unknown): ReadonlyArray<PersonIdentity> {
   if (document === null || document === undefined) return [];
   if (!isRecord(document)) {
@@ -323,20 +316,7 @@ export function parseIdentityMapDocument(document: unknown): ReadonlyArray<Perso
   });
 }
 
-/**
- * Minimal YAML → JSON-ish object for the identity map shapes we document.
- * Prefer JSON for complex nesting; this covers the flat keyed form used in ops.
- *
- * Supports:
- * ```yaml
- * people:
- *   "123":
- *     name: Alice
- *     githubLogin: alice
- *     githubId: "99"
- * ```
- * and top-level keyed people without a `people:` wrapper.
- */
+/** Parse the flat keyed YAML identity-map form used in ops, with or without a `people:` wrapper. */
 export function parseSimpleIdentityYaml(raw: string): unknown {
   const lines = raw.split(/\r?\n/);
   const root: Record<string, Record<string, string>> = {};
@@ -654,12 +634,8 @@ export const makeIdentityMapStore = (
 };
 
 /**
- * File-backed identity map with a short TTL cache so operators can edit
- * identity-map.yaml without restarting the Discord bot.
- *
- * - Eager-loads once at construction (throws on first failure).
- * - Re-reads the file at most every `ttlMs` (default 60s) on access.
- * - On later load failures, keeps the last good snapshot and waits another TTL.
+ * Cache the file-backed identity map so operators can edit it without restarting the bot.
+ * Initial load failures throw; later failures keep the last good snapshot until the next TTL (60s by default).
  */
 export function makeRefreshingIdentityMapStore(input: {
   readonly filePath: string;

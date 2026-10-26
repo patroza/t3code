@@ -79,8 +79,7 @@ export function resolveShowcaseAndroidAbi(
 
 const config: ShowcaseConfig = {
   outputDirectory: "artifacts/app-store/screenshots",
-  // Dedicated port so the harness cannot attach to a normal mobile dev server
-  // (or a second worktree) and capture the wrong bundle.
+  // A dedicated port prevents captures from attaching to another dev server's bundle.
   metroPort: 8199,
   settleDelayMs: 2_500,
   devices: [
@@ -146,8 +145,7 @@ const config: ShowcaseConfig = {
       appearance: "dark",
       theme: DEFAULT_SHOWCASE_THEME,
       orientation: "landscape",
-      // The lock screen does not follow the app's self-rotation, so a
-      // headless landscape capture of it would come out sideways.
+      // Lock screens ignore app rotation; headless landscape captures would be sideways.
       scenes: ["thread", "terminal", "review", "threads", "environments"],
       storeAsset: {
         store: "apple",

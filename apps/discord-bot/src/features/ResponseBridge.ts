@@ -136,13 +136,8 @@ interface BridgeState {
   /** Full assistant text last applied to the in-progress Discord stream. */
   readonly lastAssistantText: string;
   readonly lastProgressLabel: string | null;
-  /**
-   * Messages that carry the current turn's in-progress stream (ordered tip slots).
-   * Discord posts the final separately and deletes these slots. Teams reuses them:
-   * the client keeps a deleted message on screen, so replacing Working.. is the
-   * only way the thread ends as one reply.
-   * May include the pre-bridge Working.. ack (seeded at start).
-   */
+  // Ordered in-progress slots may include the pre-bridge Working ack.
+  // Discord posts a separate final and deletes the slots; Teams replaces them because deleted replies remain visible.
   readonly discordMessageIds: ReadonlyArray<string>;
   /**
    * Extra stream message ids that were abandoned (e.g. tip ownership lost and replaced).
@@ -387,18 +382,8 @@ export function isDiscordEchoedCommandContent(text: string): boolean {
   return text.trim().startsWith("💭 from **");
 }
 
-/**
- * Whether a human (or other non-bot-owned) *content* message sits newer than the Working tip.
- *
- * Walks `recentMessagesNewestFirst` until the live tip. Bot side posts after the tip
- * (Tasks, stream chunks, finals, external-input echoes) and Discord system messages
- * (title renames, pins) are skipped. A human *between* Working and a later Tasks
- * post **is** displaced, even when Tasks is the channel tip.
- *
- * Casual-chat displacement does **not** hop Working. Hop only when an echoed
- * command sits newer than the tip ({@link isStreamTipDisplacedByEchoedCommand})
- * or a mid-turn steer / idle turn posts a new Working ack.
- */
+// Ignore bot side posts and system messages when locating humans newer than the live tip.
+// Casual chat never moves Working; only echoed commands or a new steer/idle ack relocate it.
 export function isStreamTipDisplacedByRecentMessages(input: {
   readonly recentMessagesNewestFirst: ReadonlyArray<DiscordChannelMessageForTipScan>;
   readonly streamTipId: string | null;
@@ -488,17 +473,9 @@ export function isStreamTipDisplacedByEchoedCommand(input: {
 
 export type WorkingTipDisplacementCause = "casual-chat" | "echoed-command";
 
-/**
- * Whether stream/heartbeat should delete `_Working.._` and re-post it below a
- * later channel message.
- *
- * Casual thread chat and parked (queued) follow-ups leave the in-progress
- * message in place. An echoed cross-surface command (desktop/web/mobile/GitHub)
- * hops Working under that command. A mid-turn steer (the default) or an idle
- * turn posts a new Working ack instead ({@link shouldPostWorkingAckForContinue}).
- *
- * Finalize always creates a new message, then deletes in-progress tips.
- */
+// Only echoed cross-surface commands hop Working beneath a later message.
+// Casual chat and queued follow-ups leave it in place; steer/idle sends post a new ack.
+// Finalization posts a new message and then deletes tips.
 export function shouldHopWorkingTipOnDisplacement(cause: WorkingTipDisplacementCause): boolean {
   return cause === "echoed-command";
 }
@@ -530,18 +507,8 @@ export function shouldReopenFinalizedDelivery(input: {
   );
 }
 
-/**
- * Dual-cursor lag: orchestration has advanced past what Discord successfully applied.
- *
- * - `lastThreadSnapshotSequence` advances when T3 state is observed (performant resume).
- * - `lastDeliveredSequence` advances only after `processThreadSnapshot` succeeds.
- *
- * When delivery is behind, keep HTTP-reconciling / rehydrating even if tips look clean
- * (crash between sequence persist and Discord I/O, hung REST, worker death mid-queue).
- *
- * Storage/memory contract: both cursors are O(1) scalars on the link row. We never
- * persist or keep an event log of pre-sync history — only these markers + tip ids.
- */
+// Observed sequence advances on T3 reads; delivered sequence advances only after successful Discord I/O.
+// Keep reconciling while delivery lags, even if tips look clean. Persist only scalar cursors and tip IDs.
 export function isDeliveryBehindOrchestration(input: {
   readonly lastDeliveredSequence: number | null | undefined;
   readonly lastThreadSnapshotSequence: number | null | undefined;
@@ -572,17 +539,8 @@ function finiteSequenceOrNull(value: number | null | undefined): number | null {
   return value;
 }
 
-/**
- * Choose `subscribeThread({ afterSequence })` so we do **not** re-walk the WS event
- * log before what Discord has already synced (minus a small buffer).
- *
- * Preference order:
- * 1. `lastDeliveredSequence` — safe high-water for "already applied to Discord"
- * 2. else `lastThreadSnapshotSequence` — legacy / first-write before delivery cursor exists
- *
- * Returns null for cold subscribe (no durable cursor yet). Never returns a cursor that
- * requires loading stored pre-sync event history — only a number for the server filter.
- */
+// Resume from the delivered high-water cursor minus a buffer, falling back to the observed legacy cursor.
+// Without either durable cursor, subscribe cold; never load old event history just to choose the cursor.
 export function resolveSubscribeAfterSequence(input: {
   readonly lastDeliveredSequence: number | null | undefined;
   readonly lastThreadSnapshotSequence: number | null | undefined;
@@ -659,19 +617,8 @@ export function resolveThreadSubscribeSeed(input: {
   return { kind: "cold" };
 }
 
-/**
- * Whether the bridge should poll T3 over HTTP for a fresh snapshot.
- *
- * WS event delivery can stall (no thread updates for long stretches while the agent
- * still works). Open Working.. tips / in-progress turns must not rely on WS alone.
- *
- * Also keeps polling after a Discord-originated user turn until we finalize at least
- * once for that bridge session — covers turns that never posted a Working tip and
- * never received WS assistant events (T3 UI still advances).
- *
- * Dual-cursor lag (`deliveryLagging`) recovers cases where orchestration advanced but
- * Discord I/O never completed for that sequence.
- */
+// Poll while tips or turns remain open because WebSocket updates can stall.
+// Keep polling Discord-originated turns until one final delivery, and whenever delivery lags orchestration.
 export function bridgeNeedsHttpReconcile(input: {
   readonly openStreamTipCount: number;
   readonly seededWorkingAckPending: boolean;
@@ -738,14 +685,8 @@ export function shouldRetryDeliveryFailure(input: {
   return input.failureCount >= 1 && input.failureCount <= max;
 }
 
-/**
- * On bridge fiber stop (restart, reconnect dropAll, channel re-ensure), keep open
- * stream tips on Discord when a turn is still running so rehydrate can resume them.
- *
- * This is the correct mid-turn resume strategy — **not** repainting the previous
- * turn's final answer under a new Working tip. New interactive turns orphan-clean
- * prior tip ids via {@link seedStreamMessageIds} / {@link nextBridgeStateAfterAdoptWorkingAck}.
- */
+// Retain open tips during a running turn so rehydration edits the existing messages.
+// New interactive turns clean up old tips rather than repainting a prior final under a new Working ack.
 export function shouldPreserveStreamTipsOnBridgeStop(input: {
   readonly turnInProgress: boolean;
   readonly openStreamTipCount: number;
@@ -771,14 +712,8 @@ export function streamTipBodyForHeartbeat(input: {
   return activeStreamTipText(streamDisplayText(input.lastAssistantText), input.streamBreakPrefix);
 }
 
-/**
- * Hold a fresh Working ack without painting snapshot assistant body.
- *
- * Only while the *current* turn has no assistant bubbles yet. Blanket holding for
- * the whole `seededWorkingAckPending` lifetime blocked legitimate new-turn stream
- * writes (pending never cleared) or, when pending was cleared elsewhere, still
- * allowed prior-turn bodies through once latestTurn lagged.
- */
+// Hold a fresh ack only until the current turn has assistant bubbles.
+// Do not hold for the entire seeded-pending lifetime or fall back to a previous turn body.
 export function shouldHoldFreshWorkingAck(input: {
   readonly mode: "interactive" | "rehydrate";
   readonly seededWorkingAckPending: boolean;
@@ -842,16 +777,8 @@ export function startsNewStreamDelivery(input: {
   );
 }
 
-/**
- * When a new user turn / Working ack starts, any substantial stream tip body
- * that was never finalized must be posted as a durable final **before** the
- * tip is cleared. Queue-drain races finish the prior answer into the tip and
- * immediately open the next Working epoch — without this, the final only
- * lived as an editable tip and is deleted when the new epoch starts.
- *
- * Mirrors the server/web queue-drain final orphan problem (turnId restamp /
- * fold rehome): Discord's presentation boundary is the Working tip lifecycle.
- */
+// Freeze substantial unfinalized tip text as a durable final before opening a new Working epoch.
+// Queue-drain races can finish the prior answer into a tip immediately before that tip is cleared.
 export function shouldFinalizeStreamBeforeNewDelivery(input: {
   readonly startsNewDelivery: boolean;
   readonly lastAssistantText: string;
@@ -878,15 +805,8 @@ export function shouldFinalizeStreamBeforeNewDelivery(input: {
   return true;
 }
 
-/**
- * Pure state patch when a Discord Working.. ack is adopted for a new user turn
- * (or mid-turn steer) on a reused bridge. Clears prior stream body and points the
- * live tip at the new Working ack only.
- *
- * `orphanTipsToDelete` is misnamed historically: callers **freeze** those tips
- * (strip Working.. + Stop) and leave them as channel history above the human message;
- * only empty Working-only orphans are deleted.
- */
+// Adopting a new-turn or steer ack clears the old stream body and selects the new tip.
+// orphanTipsToDelete are frozen as history; only empty Working-only orphans are actually deleted.
 export function nextBridgeStateAfterAdoptWorkingAck(input: {
   readonly priorDiscordMessageIds: ReadonlyArray<string>;
   readonly priorStaleStreamMessageIds: ReadonlyArray<string>;
@@ -1075,17 +995,8 @@ export function isSessionWakeRequired(
   });
 }
 
-/**
- * Discord "in progress" is turn-scoped, not message-scoped.
- *
- * Codex/ACP often emits several assistant bubbles per turn (between tools). Each
- * bubble ends with `message.streaming === false` while `latestTurn.state` is still
- * `running`. Treating that as finalize posts stream-history.md mid-turn and
- * creates new Discord messages instead of editing the tip.
- *
- * Only leave stream mode when the turn itself is no longer running.
- * Interrupted sessions that need wake-up are never treated as live streaming.
- */
+// Stream until the turn ends, not until an individual assistant bubble stops streaming.
+// Interrupted sessions requiring wake-up are not live streams.
 function isTurnInProgress(thread: OrchestrationThread): boolean {
   if (isSessionWakeRequired(thread)) return false;
   // Authoritative: turn still running (multi-step agents keep this while tools run).
@@ -1173,21 +1084,9 @@ export function firstSnapshotBridgeAction(input: {
   return "interactive-resume";
 }
 
-/**
- * Where a user-role T3 message came from, inferred from prompt envelopes.
- *
- * OrchestrationMessage has no first-class `source` field yet, so surfaces are classified
- * from known ingress builders (Discord bot, GitHub PR bridge, agent harness). Plain text
- * defaults to `t3-client` (web / desktop / mobile / API).
- *
- * Cross-surface policy: a surface should only *echo* messages from other surfaces.
- * Discord bot echoes `github` + `t3-client`, never `discord` or `internal`.
- *
- * **Discord Tasks are not an ingress surface.** They are a first-class side-channel
- * projected from `turn.plan.updated` activities via {@link presentTasks} /
- * {@link formatTasksForDiscord} / `taskDiscordMessageId` — never from user-message echo.
- * Tasks posts must stay bot-owned (do not freeze Working tips) and keep updating mid-turn.
- */
+// Echo human input from other surfaces, never Discord-originated or internal prompts.
+// When ingress metadata is absent, classify known prompt envelopes and default plain text to t3-client.
+// Tasks remain a bot-owned plan side channel, not user-message echoes.
 export type UserMessageIngressSurface = "discord" | "teams" | "github" | "t3-client" | "internal";
 
 /** Surfaces Discord may post as External User Input (whitelist). */
@@ -1308,20 +1207,8 @@ export function shouldSuppressExternalUserEcho(text: string): boolean {
   return !DISCORD_EXTERNAL_ECHO_SURFACES.has(classifyUserMessageIngress(text));
 }
 
-/**
- * Orchestrator v2 stores a wake as the user message the agent reads, and
- * records the user-visible fact on `notification` (or `delegatedCompletion`,
- * which the turn item rewrites into a notification). That prompt is not
- * someone typing in another client.
- *
- * Provider-buffered continuations and subagent child prompts are
- * `createdBy: agent` + `creationSource: provider` even on a snapshot that
- * predates the notification field. MCP sends, including attachment captions,
- * are `createdBy: agent` + `creationSource: mcp` and are not someone typing on
- * another surface. A person typing in the provider CLI is `createdBy: user`,
- * so that still echoes. Pull-request watches stay `createdBy: agent` +
- * `creationSource: server` and still echo unless they carry a notification.
- */
+// Notifications and provider/MCP agent prompts are internal, not cross-surface human input.
+// Provider CLI user input still echoes; server PR-watch prompts echo unless marked as notifications.
 function isOrchestrationWakeUserMessage(input: {
   readonly createdBy?: string | null | undefined;
   readonly creationSource?: string | null | undefined;
@@ -1757,15 +1644,8 @@ export function shouldApplyDiscordThreadPrBadge(
   return discordThreadTitleBadgeRank(next) >= discordThreadTitleBadgeRank(current);
 }
 
-/**
- * Silence: never thrash-rename `⏳ Title` → `▫️ ⏳ Title` mid-turn.
- *
- * Busy is painted first (before VCS confirms no PR). Adding only the no-PR ▫️
- * badge while still busy is a second channel-name system message with no user
- * value — settle can compose ▫️ and clear ⏳ in one rename.
- *
- * Real PR upgrades (🔀 / ❌ / ✔️ / ✖️) still apply mid-turn.
- */
+// While busy, defer adding only a no-PR badge until settling to avoid an extra channel rename.
+// Real PR-state upgrades still apply mid-turn.
 export function shouldDeferInitializedPrWhileBusy(input: {
   readonly currentPr: DiscordThreadPrBadgeState;
   readonly nextPr: DiscordThreadPrBadgeState;
@@ -1825,16 +1705,8 @@ export function shouldApplyDiscordThreadTitleBadge(
   return shouldApplyDiscordThreadPrBadge(current, next);
 }
 
-/**
- * Desired Discord title after a prior plain-title settle.
- *
- * Composes optional PR + activity badges (client-style dual indicators).
- * Returns null when the settled title already matches, or when applying would
- * demote a stronger PR badge without a usable PR replacement.
- *
- * `canApplyNoPrBadge` must be true before painting ▫️ from a null PR — unknown
- * remote status is not evidence of "no PR".
- */
+// Do not demote stronger PR evidence when the remote is unknown.
+// Paint the no-PR badge only when canApplyNoPrBadge confirms that null means no PR.
 export function resolveSettledDiscordThreadTitleUpgrade(input: {
   readonly thread: Pick<OrchestrationThread, "branch" | "worktreePath" | "messages" | "title"> & {
     readonly session?: OrchestrationThread["session"];
@@ -1932,15 +1804,8 @@ export function resolveTemporaryDiscordThreadTitleBadge(input: {
   return resolveDiscordThreadActivityBadgeState(input);
 }
 
-/**
- * Desired-state plan for Discord thread renames.
- *
- * Title apply must be durable and coalesced:
- * - Never apply a previously captured thread snapshot (VCS races re-painted ⏳
- *   after settle when the callback held a stale "running" thread).
- * - On REST failure / rate-limit / interrupt, keep `pending` so a later tick retries.
- * - Only clear pending when Discord already shows that exact name.
- */
+// Re-read live state before renaming; never apply a captured snapshot after waiting for the lock.
+// Keep pending on REST failure or interruption; clear it only once Discord shows the desired name.
 export function planDiscordThreadTitleApply(input: {
   readonly mirroredThreadTitle: string | null;
   readonly pendingDesiredThreadTitle: string | null;
@@ -2068,17 +1933,9 @@ export function formatEchoedUserMessage(message: SourceAwareOrchestrationMessage
   return `${sourceLabel}\n${body}${attachmentNote}`;
 }
 
-/**
- * Assistant messages that belong to the active/latest turn.
- *
- * Prefer `turnId` matching so a mid-turn steer (extra user message) does not
- * orphan pre-steer assistant progress when computing the Discord stream tip or
- * final answer. Fall back to "after last user message" when turn ids are missing.
- *
- * Critical: if we have a turn id and *no* assistants for that turn yet, return
- * empty — do **not** fall back to the previous turn's bubbles. That regression
- * re-posted the prior final answer on the next Discord Working tip / finalize.
- */
+// Prefer turnId matching so mid-turn steers retain earlier assistant progress.
+// With a known turn ID and no matching bubbles, return empty instead of reusing the previous answer.
+// Only missing turn IDs fall back to messages after the latest user input.
 export function assistantMessagesThisTurn(
   thread: OrchestrationThread,
 ): ReadonlyArray<OrchestrationThread["messages"][number]> {
@@ -2117,16 +1974,8 @@ export function shouldSkipAlreadyDeliveredAssistant(input: {
   return input.lastFinalizedAssistantId === input.assistantId;
 }
 
-/**
- * Seed Discord stream tip slots when a bridge starts/restarts.
- *
- * - **Mid-turn / rehydrate:** prior stream message ids stay **active** so we keep
- *   editing the same tip history.
- * - **Fresh Working ack (new user turn):** do **not** re-seed prior tip ids. Those
- *   messages still hold the previous turn's body; attaching them next to a blank
- *   Working.. then partially rewriting only the first chunk leaves old bubbles
- *   visible ("old tip + new answer"). Discard them so the new turn starts clean.
- */
+// Rehydration keeps existing tip IDs active for continued edits.
+// A new Working ack starts clean; reusing old tip slots would display prior-turn text beside the new answer.
 export function seedStreamMessageIds(input: {
   readonly workingAckMessageId?: string | null | undefined;
   readonly persistedStreamMessageIds: ReadonlyArray<string>;
@@ -2165,18 +2014,8 @@ export function seedStreamMessageIds(input: {
   };
 }
 
-/**
- * User-visible final Discord answer (not the live tip).
- *
- * Multi-step agents emit many short interim bubbles ("I'm checking…") then a long
- * Findings answer. Joining them all into the "final" post looks like the in-progress
- * stream was never cleaned up. Prefer the last bubble when it's substantial; otherwise
- * the longest bubble of the turn.
- *
- * Important: a later medium-length delivery (draft PR summary, approach notes) must
- * not lose to an earlier longer Findings bubble — that buried PR links in
- * stream-history.md only (see the related Discord discussion).
- */
+// Prefer a substantial last bubble, otherwise the longest bubble, rather than joining interim progress.
+// Do not discard a later medium-length delivery merely because an earlier Findings answer was longer.
 export function finalAnswerText(thread: OrchestrationThread): string {
   const texts = assistantMessagesThisTurn(thread)
     .map((message) => message.text.trimEnd())
@@ -2369,14 +2208,8 @@ export function activeStreamTipText(fullDisplayText: string, breakPrefix: string
   return fullDisplayText;
 }
 
-/**
- * When a human (or other foreign) message displaces the Working tip, freeze only what
- * Discord already showed and set the break prefix to that already-shown text.
- *
- * Bug this prevents: setting breakPrefix to the *incoming* full body (which had never
- * been painted) made post-break tipDisplayText empty — Discord kept a bare Working..
- * above the user and never showed the assistant stream after mid-turn mentions.
- */
+// When displaced, freeze only text already shown and use it as the break prefix.
+// Including unseen incoming text would hide the next stream update behind an empty Working tip.
 export function planStreamTipFreezeOnDisplacement(input: {
   /** Cumulative assistant text already applied to the tip before this write. */
   readonly previousFullDisplayText: string;
@@ -2411,14 +2244,8 @@ export function planStreamTipFreezeOnDisplacement(input: {
   };
 }
 
-/**
- * Move a displaced Working tip: create the replacement first, then delete the old
- * message(s). Create-before-delete so Discord never sits without a Working bubble.
- *
- * Used when an echoed cross-surface command lands below Working. A steer /
- * idle Working ack uses {@link nextBridgeStateAfterAdoptWorkingAck}
- * instead. Finalize creates a new message and deletes in-progress tips separately.
- */
+// Create a replacement tip before deleting a displaced one so Working never disappears between calls.
+// Echoed commands use this path; new steer/idle acks and finalization have separate lifecycles.
 export function nextStateAfterMovingWorkingTip(input: {
   readonly priorDiscordMessageIds: ReadonlyArray<string>;
   readonly priorStaleStreamMessageIds: ReadonlyArray<string>;
@@ -2862,10 +2689,9 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
     for (const id of unique) {
       yield* rest.deleteMessage(input.discordChannelId, id).pipe(
         Effect.tap(() => Effect.logInfo("Deleted stream message", { id })),
-        Effect.catch((error) =>
-          error instanceof BotTransportError && error.reason === "message-not-found"
-            ? Effect.void
-            : Effect.fail(error),
+        Effect.catchIf(
+          (error) => error instanceof BotTransportError && error.reason === "message-not-found",
+          () => Effect.void,
         ),
         Effect.asVoid,
       );
@@ -3342,14 +3168,8 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
     };
   };
 
-  /**
-   * Create a Discord message. Binary files use native multipart FormData + fetch
-   * (HTTP/1.1). dfx `withFiles` goes through Effect/Undici HTTP2 and dies with
-   * NGHTTP2_PROTOCOL_ERROR on ~1MB payloads — never updateMessage with files.
-   *
-   * Empty contentLength is expected for image-only replies after markdown embeds
-   * are stripped; Discord allows content="" when files are present.
-   */
+  // Send binary files with native multipart fetch: the HTTP/2 client fails on larger payloads.
+  // Never update messages with files. Image-only replies may have empty text after stripping embeds.
   const createMessageWithFiles = Effect.fn("ResponseBridge.createMessageWithFiles")(function* (
     content: string,
     files: ReadonlyArray<DiscordUploadFile>,
@@ -3593,13 +3413,9 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
           state = afterPriorFinalize;
         }
 
-        // Multi-step agents open a new assistant id per bubble while the turn runs.
-        // Keep the same Discord tip(s) and edit them — never delete/recreate mid-turn
-        // because humans chatted. Working hops below an echoed command, or relocates
-        // when a mid-turn steer / idle turn posts a new Working ack.
-        // Working.. ack (if seeded) is already in discordMessageIds.
-        // On a new delivery, only keep the newest tip slot (the Working ack) so we never
-        // try to edit prior-turn message ids (Discord 10008 Unknown Message).
+        // Keep editing the same tips across assistant bubbles; casual chat must not recreate them.
+        // Echoed commands or a new steer/idle ack may relocate Working.
+        // For a new delivery, retain only the latest ack slot, never prior-turn message IDs.
         const tipSlots = activeStreamTipIdsForDelivery({
           startsNewDelivery,
           discordMessageIds: state.discordMessageIds,
@@ -4045,15 +3861,8 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
     },
   );
 
-  /**
-   * Final delivery for a completed assistant turn:
-   * 1. Post Discord markdown content (chunked if needed; links stay clickable)
-   * 2. Always append · [Open](…#message-…) on the stats footer
-   * 3. Attach stream-history.md when the channel topic contains `omegent-ips`
-   *    (or legacy `t3-ips`) and the stream has intermediate progress, plus
-   *    chat/local images
-   * 4. Delete the in-progress stream messages so only the final answer remains visible
-   */
+  // Post final markdown with the Open deep link; attach optional progress history and chat/local images.
+  // Then delete in-progress tips so only the final remains visible.
   const finalizeAssistantMessage = Effect.fn("ResponseBridge.finalizeAssistantMessage")(
     function* (args: {
       readonly turnId: string | null;
@@ -4292,11 +4101,8 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
         uploadBatches.flatMap((batch) => batch.map((file) => file.name)),
       );
 
-      // Final channel text: strip image embeds but keep readable local file references.
-      // Never leave Working.. or the stream placeholder.
-      // Keep Discord markdown as-is (links stay clickable). GFM pipe tables → bullets
-      // (Discord does not render tables; ASCII grids were tried and removed).
-      // Stats footer always gets · [Open](deep link) when the web UI base is configured.
+      // Strip image embeds and Working placeholders while retaining readable local-file references and markdown links.
+      // Convert GFM tables to bullets and add the configured Open deep link to the stats footer.
       const finalText = renderTables(
         rewriteMarkdownLocalFileLinksForDiscord({
           text: stripWorkingIndicator(stripMarkdownImages(text)),
@@ -4452,15 +4258,13 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
               ? adopted?.[0] !== undefined
                 ? { id: adopted[0] }
                 : yield* rest.createMessage(input.discordChannelId, fields)
-              : yield* rest
-                  .updateMessage(input.discordChannelId, existingId, fields)
-                  .pipe(
-                    Effect.catch((error) =>
-                      error instanceof BotTransportError && error.reason === "message-not-found"
-                        ? rest.createMessage(input.discordChannelId, fields)
-                        : Effect.fail(error),
-                    ),
-                  );
+              : yield* rest.updateMessage(input.discordChannelId, existingId, fields).pipe(
+                  Effect.catchIf(
+                    (error) =>
+                      error instanceof BotTransportError && error.reason === "message-not-found",
+                    () => rest.createMessage(input.discordChannelId, fields),
+                  ),
+                );
           ids.push(written.id);
           nextReceipt = Object.assign({}, nextReceipt, {
             messageIds: [...ids, ...nextReceipt.messageIds.slice(index + 1)],
@@ -4637,14 +4441,8 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
     }));
   }, Effect.asVoid);
 
-  /**
-   * Apply a Discord thread title only after a successful rename.
-   * Never mark `attemptedThreadTitle` / `mirroredThreadTitle` before the REST call —
-   * a rate-limit / network failure used to poison retries so busy/wake badges never
-   * appeared. Failed applies keep `pendingDesiredThreadTitle` for heartbeat retry.
-   *
-   * Must run under `titleSyncLock`.
-   */
+  // Under titleSyncLock, mark a title applied only after a successful REST rename.
+  // Failed renames retain pendingDesiredThreadTitle for heartbeat retry.
   const applyDiscordThreadTitle = Effect.fn("ResponseBridge.applyDiscordThreadTitle")(function* (
     desiredTitle: string,
     reason: string,
@@ -4697,20 +4495,8 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
     }));
   });
 
-  /**
-   * Idempotent, desired-state title badge sync.
-   *
-   * Dual optional columns (like T3 client): `| PR | activity | Title`.
-   * Activity (busy / wake-required) is independent of sticky PR evidence.
-   * Unknown remote never paints ▫️.
-   *
-   * **Always re-reads `latestThreadRef` under the lock** — never apply a caller-
-   * captured thread snapshot for activity. VCS callbacks used to re-paint ⏳ after
-   * settle when they held a stale "running" thread across the lock queue.
-   *
-   * Callers must publish the latest orchestration thread to `latestThreadRef`
-   * (via `ensureVcsStatusSubscription` / snapshot path) *before* invoking this.
-   */
+  // Under the lock, re-read latestThreadRef; callers must publish fresh state before requesting title sync.
+  // Activity badges are independent of sticky PR evidence, and unknown remotes never imply no PR.
   const syncDiscordThreadTitle = () =>
     titleSyncLock
       .withPermit(
@@ -5096,11 +4882,8 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
       }
 
       yield* stopVcsStatusSubscription;
-      // Server-side VcsStatusBroadcaster already runs one remote poller per cwd when
-      // clients subscribe. Do NOT also force-refresh every 30s from the bot — that
-      // doubled GitHub/gh fan-out across every Discord bridge and starved the server.
-      // Capture this bridge's scope explicitly: callbacks may execute without an ambient
-      // Scope, and a stopped/replaced bridge must await every background writer.
+      // Use the server remote poller; extra bot refreshes multiply VCS fan-out.
+      // Capture this bridge scope explicitly so replacement waits for every background writer.
       const fiber = yield* t3
         .subscribeVcsStatus(cwd, (event) =>
           Effect.gen(function* () {
@@ -5512,17 +5295,8 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
     }).pipe(Effect.forkDetach);
   });
 
-  /**
-   * Apply one thread snapshot to Discord (stream tip / finalize / tasks / title).
-   * Must not run concurrently for the same bridge — callers serialize via deliveryLock.
-   *
-   * User echoes are interleaved with answers in conversation order. Assistant
-   * stream/finalize runs before title/pin/side work.
-   * Mid-turn thread renames used to run first (with optional GH PR lookups) and hold
-   * this queue so intermediate tip edits coalesced away — Discord stayed on
-   * `_Working.._` until the final, while the channel name still updated. Finals
-   * still landed; live progress did not.
-   */
+  // Serialize snapshots under deliveryLock and interleave user echoes in conversation order.
+  // Apply assistant streaming/finalization before title, pin, and side work so slow metadata cannot hide progress.
   const processThreadSnapshot = Effect.fn("ResponseBridge.processThreadSnapshot")(function* (
     thread: OrchestrationThread,
   ) {
@@ -5620,11 +5394,8 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
     } else if (assistant !== undefined) {
       const prior = yield* Ref.get(stateRef);
 
-      // Structural delivery: assistants allowed for Discord this snapshot (epoch FSM).
-      // lastFinalizedAssistantId excludes prior-turn bodies even while the new turn
-      // is already in progress (snapshot race before the new user message lands).
-      // Re-read durable cursor each snapshot so reconnect/catch-up cannot ignore a
-      // finalize written by a prior epoch or after a delivery-state reset.
+      // Exclude prior-turn bodies while the new user message is still pending.
+      // Read the durable cursor each snapshot so reconnect/reset retains finalized delivery.
       const durableLinkNow = yield* links
         .getByDiscordThreadId(input.discordChannelId)
         .pipe(Effect.catchCause(() => Effect.succeed(null)));
@@ -5958,17 +5729,8 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
     );
   }, Effect.asVoid);
 
-  /**
-   * Coalescing delivery queue.
-   *
-   * Previously every WS event awaited full Discord I/O inside Stream.runForEach.
-   * A slow/hung createMessage blocked the subscription fiber, so later assistant
-   * bubbles never reached Discord while the T3 client still advanced.
-   *
-   * Now: WS only publishes the latest snapshot + bumps a generation. A single
-   * worker holds deliveryLock, always applies the newest snapshot, and loops if
-   * more arrivals happened during Discord work.
-   */
+  // Keep subscription reads independent of Discord I/O: publish the latest snapshot and generation.
+  // One deliveryLock worker coalesces arrivals and repeats when newer snapshots arrive during delivery.
   const deliveryGenerationRef = yield* Ref.make(0);
   const deliveryProcessedRef = yield* Ref.make(0);
   const deliveryFailureCountRef = yield* Ref.make(0);
@@ -6351,11 +6113,8 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
     });
   }, Effect.asVoid);
 
-  // Client-aligned follow (DiscordThreadFollower) + durable warm tip:
-  // prefer warm base + afterSequence (web/desktop EnvironmentCacheStore pattern);
-  // HTTP full tip only when warm is missing. Dual-cursor afterSequence prefers
-  // delivery high-water. Follower owns reload-required + durable resubscribe.
-  // ResponseBridge only projects OrchestrationThread → Discord (coalesce queue).
+  // Prefer the durable warm tip and delivery high-water cursor; use HTTP only without a warm tip.
+  // The follower owns reload/resubscribe; this bridge only projects snapshots through the delivery queue.
   const warmForSubscribe = yield* warmCache
     .load(input.t3ThreadId)
     .pipe(Effect.catchCause(() => Effect.succeed(null)));

@@ -1,6 +1,6 @@
 import { useActiveNewTask } from "../../state/active-new-task";
 import { Toolbar } from "../../components/ui/Toolbar";
-import { useFocusEffect, useIsFocused, useNavigation } from "@react-navigation/native";
+import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import { use, useCallback, useEffect, useRef } from "react";
 import { Platform } from "react-native";
 import { isDuoDevice } from "../../lib/device-type";
@@ -16,15 +16,22 @@ import {
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
+import { useSelectWorkspaceTab } from "./useSelectWorkspaceTab";
 import { useWorkspaceTabs } from "./WorkspaceTabsContext";
 import { useCompactWorkspaceTabs, useSidebarWorkspaceTabs } from "./useSystemWorkspaceTabBar";
 import { WorkspaceTabToolbarButtons } from "./WorkspaceSectionToolbar";
+
+const SEARCH_LABELS = {
+  threads: "Search threads",
+  pullRequests: "Search pull requests",
+  settings: "Search settings",
+} as const;
 
 export function WorkspaceToolbar(props: {
   readonly onNewTask: () => void;
   readonly sidebar?: boolean;
 }) {
-  const navigation = useNavigation();
+  const selectTab = useSelectWorkspaceTab();
   const workspace = useWorkspaceTabs()!;
   const activeNewTask = useActiveNewTask();
   const deviceType = useDeviceType();
@@ -36,15 +43,23 @@ export function WorkspaceToolbar(props: {
   const nativeToolbarCompose =
     Platform.OS === "ios" &&
     deviceType === "duo-folded" &&
+    !workspace.settingsOpen &&
     workspace.state.selectedTab === "threads" &&
     activeNewTask === null;
-  const { isTabActive } = workspace;
   const tabActive = use(NativeWorkspaceTabActivityContext)?.active ?? true;
   const focused = useIsFocused();
   const { panes, togglePrimarySidebar } = useAdaptiveWorkspaceLayout();
   const searchRef = useRef<SearchBarCommands>(null);
-  const tab = workspace.state.tabs[workspace.state.selectedTab];
-  const selectedTab = workspace.state.selectedTab;
+  // The Settings list takes the selected tab's place, so search follows it.
+  const selectedTab = workspace.settingsOpen ? "settings" : workspace.state.selectedTab;
+  const tab = workspace.state.tabs[selectedTab];
+  const searchLabel = SEARCH_LABELS[selectedTab === "usage" ? "threads" : selectedTab];
+  const { isTabActive: isListTabActive } = workspace;
+  const isTabActive = useCallback(
+    // A retained tab slot stays mounted while another is shown.
+    (tab: typeof selectedTab) => (tab === "settings" ? tabActive : isListTabActive(tab)),
+    [tabActive, isListTabActive],
+  );
   const foldedSearch = deviceType === "duo-folded";
   const primaryColumn = use(NativePrimaryColumnContext);
   // UIKit hosts integrated search outside the sidebar's sliding content.
@@ -62,11 +77,11 @@ export function WorkspaceToolbar(props: {
     if (props.sidebar && !panes.primarySidebarVisible) togglePrimarySidebar();
   }, [workspace, selectedTab, props.sidebar, panes.primarySidebarVisible, togglePrimarySidebar]);
   const focusSearch = useCallback(() => {
-    if (!workspace.isTabActive(selectedTab)) return false;
+    if (!isTabActive(selectedTab)) return false;
     if (duoSearch || !NATIVE_LIQUID_GLASS_SUPPORTED) enterSearch();
     searchRef.current?.focus();
     return true;
-  }, [workspace, selectedTab, enterSearch, duoSearch]);
+  }, [isTabActive, selectedTab, enterSearch, duoSearch]);
   const cancelSearch = useCallback(() => {
     workspace.recordScrollOffset(selectedTab, tab.searchEntryOffset);
     workspace.dispatch({ type: "cancel", tab: selectedTab });
@@ -89,20 +104,14 @@ export function WorkspaceToolbar(props: {
       tab.searchMode !== "resting"
     ) {
       searchRef.current?.setText(tab.query);
-      if (duoSearch) {
+      // Integrated search collapses to its button when its screen reappears,
+      // which would hide the query that still filters the list.
+      if (NATIVE_LIQUID_GLASS_SUPPORTED) {
         searchRef.current?.setActive(true);
         if (tab.searchMode === "active") searchRef.current?.focus();
       }
     }
-  }, [
-    searchHostVisible,
-    duoSearch,
-    isTabActive,
-    selectedTab,
-    tab.searchMode,
-    tab.query,
-    searchVisible,
-  ]);
+  }, [searchHostVisible, isTabActive, selectedTab, tab.searchMode, tab.query, searchVisible]);
   useFocusEffect(
     useCallback(() => {
       const frame = requestAnimationFrame(restoreSearch);
@@ -113,6 +122,7 @@ export function WorkspaceToolbar(props: {
     if (!tabActive) return;
     const frame = requestAnimationFrame(restoreSearch);
     return () => cancelAnimationFrame(frame);
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Moving the search bar to the bottom toolbar restores its focus and query.
   }, [restoreSearch, tabActive, bottomSearch]);
   const composeButton = nativeToolbarCompose ? (
     <Toolbar.Button
@@ -126,13 +136,7 @@ export function WorkspaceToolbar(props: {
   const searchButton = foldedSearch ? (
     <Toolbar.Button
       identifier="workspace-search"
-      accessibilityLabel={
-        searchVisible
-          ? "Close search"
-          : selectedTab === "pullRequests"
-            ? "Search pull requests"
-            : "Search threads"
-      }
+      accessibilityLabel={searchVisible ? "Close search" : searchLabel}
       icon={searchVisible ? "xmark" : "magnifyingglass"}
       onPress={searchVisible ? () => searchRef.current?.cancelSearch() : focusSearch}
       separateBackground
@@ -144,8 +148,13 @@ export function WorkspaceToolbar(props: {
         optionsVersion={[selectedTab, tab.searchMode]}
         listeners={{ transitionEnd: restoreSearch }}
         options={{
+          // Without Liquid Glass, Settings keeps its search field out instead of a search button,
+          // which would take the header's trailing items from the scope filter.
           headerSearchBarOptions:
-            (NATIVE_LIQUID_GLASS_SUPPORTED || tab.searchMode !== "resting") && searchVisible
+            (NATIVE_LIQUID_GLASS_SUPPORTED ||
+              tab.searchMode !== "resting" ||
+              workspace.settingsOpen) &&
+            searchVisible
               ? {
                   ref: searchRef,
                   autoFocus: tab.searchMode === "active",
@@ -162,8 +171,7 @@ export function WorkspaceToolbar(props: {
                     NATIVE_LIQUID_GLASS_SUPPORTED &&
                     deviceType !== "phone" &&
                     sidebarTabs !== "picker",
-                  placeholder:
-                    selectedTab === "pullRequests" ? "Search pull requests" : "Search threads",
+                  placeholder: searchLabel,
                   cancelButtonHidden: foldedSearch,
                   onFocus: searchFocused,
                   onBlur: () => workspace.dispatch({ type: "expand", tab: selectedTab }),
@@ -179,42 +187,38 @@ export function WorkspaceToolbar(props: {
               : undefined,
         }}
       />
-      {/* UIKit lays trailing items out from the edge inward. */}
-      <Toolbar placement="right">
-        <Toolbar.Button
-          accessibilityLabel="Open settings"
-          icon="gearshape"
-          onPress={() =>
-            navigation.navigate("SettingsSheet", {
-              screen: "SettingsContent",
-              params: { screen: "Settings" },
-            })
-          }
-        />
-        {searchButton}
-        {nativeToolbarCompose && foldedSearch ? <Toolbar.Spacer width={8} /> : null}
-        {composeButton}
-        {selectedTab !== "threads" ||
-        isDuoDevice(deviceType) ||
-        deviceType === "pad" ||
-        sidebarTabs === "picker" ||
-        compactTabs ? null : (
+      {/* UIKit lays trailing items out from the edge inward. A trailing toolbar replaces the
+          header's own items, so an empty one would hide the Settings scope filter. */}
+      {workspace.settingsOpen && !foldedSearch ? null : (
+        <Toolbar placement="right">
           <Toolbar.Button
-            accessibilityLabel="New chat"
-            icon="square.and.pencil"
-            onPress={props.onNewTask}
+            accessibilityLabel="Open settings"
+            icon="gearshape"
+            onPress={() => selectTab("settings")}
           />
-        )}
-        {NATIVE_LIQUID_GLASS_SUPPORTED ? null : (
-          <Toolbar.Button
-            accessibilityLabel={
-              selectedTab === "pullRequests" ? "Search pull requests" : "Search threads"
-            }
-            icon="magnifyingglass"
-            onPress={focusSearch}
-          />
-        )}
-      </Toolbar>
+          {searchButton}
+          {nativeToolbarCompose && foldedSearch ? <Toolbar.Spacer width={8} /> : null}
+          {composeButton}
+          {selectedTab !== "threads" ||
+          isDuoDevice(deviceType) ||
+          deviceType === "pad" ||
+          sidebarTabs === "picker" ||
+          compactTabs ? null : (
+            <Toolbar.Button
+              accessibilityLabel="New chat"
+              icon="square.and.pencil"
+              onPress={props.onNewTask}
+            />
+          )}
+          {NATIVE_LIQUID_GLASS_SUPPORTED ? null : (
+            <Toolbar.Button
+              accessibilityLabel={searchLabel}
+              icon="magnifyingglass"
+              onPress={focusSearch}
+            />
+          )}
+        </Toolbar>
+      )}
       <Toolbar placement="bottom">
         {sidebarTabs === "toolbar" ? <WorkspaceTabToolbarButtons /> : null}
         {bottomSearch && searchVisible ? <Toolbar.SearchBarSlot /> : null}

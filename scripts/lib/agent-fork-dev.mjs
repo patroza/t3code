@@ -19,10 +19,7 @@ const defaultRunGit = (args, opts) => {
 };
 
 /**
- * @param {{
- *   cwd?: string
- *   runGit?: (args: string[], opts: { cwd: string }) => { status: number | null, stdout: string }
- * }} [opts]
+ * @param {{ cwd?: string; runGit?: (args: string[], opts: { cwd: string }) => { status: number | null, stdout: string } }} [opts]
  * @returns {string | null}
  */
 export const resolveForkDevRef = (opts = {}) => {
@@ -36,13 +33,8 @@ export const resolveForkDevRef = (opts = {}) => {
 };
 
 /**
- * Files changed on HEAD relative to the merge-base with fork/dev.
- * Falls back to the files in HEAD itself when fork/dev is missing.
- *
- * @param {{
- *   cwd?: string
- *   runGit?: (args: string[], opts: { cwd: string }) => { status: number | null, stdout: string }
- * }} [opts]
+ * List files changed since the fork/dev merge base, falling back to HEAD when that ref is absent.
+ * @param {{ cwd?: string; runGit?: (args: string[], opts: { cwd: string }) => { status: number | null, stdout: string } }} [opts]
  * @returns {string[]}
  */
 export const listChangedFilesAgainstForkDev = (opts = {}) => {
@@ -74,10 +66,7 @@ export const listChangedFilesAgainstForkDev = (opts = {}) => {
 };
 
 /**
- * Vendored reference trees are ignored by `vp check` / oxlint. Passing thousands
- * of them as argv (typical of an upstream Effect/Alchemy ref sync) overflows
- * `spawnSync({ shell: true })` with E2BIG and fails the changed-file ship gate.
- *
+ * Exclude vendored references from lint argv to avoid E2BIG; the linter ignores them anyway.
  * @param {string} file
  * @returns {boolean}
  */
@@ -96,11 +85,7 @@ export const filesForChangedShipCheck = (opts = {}) =>
   listChangedFilesAgainstForkDev(opts).filter((file) => !isIgnoredVendorPath(file));
 
 /**
- * @param {{
- *   cwd?: string
- *   runGit?: (args: string[], opts: { cwd: string }) => { status: number | null, stdout: string }
- *   fetch?: boolean
- * }} [opts]
+ * @param {{ cwd?: string; runGit?: (args: string[], opts: { cwd: string }) => { status: number | null, stdout: string }; fetch?: boolean }} [opts]
  * @returns {{ ok: true, ref: string } | { ok: false, detail: string }}
  */
 export const assertUpToDateWithForkDev = (opts = {}) => {

@@ -29,14 +29,8 @@ import { v2PullRequestThread } from "../orchestration-v2/testkit/pullRequestFixt
 import { makeRequestAccepted, toWorkPlanned } from "./exchange.ts";
 import * as ServerSettings from "../serverSettings.ts";
 
-/**
- * Every mocked dependency records into one shared, ordered log.
- *
- * One array rather than one per service: only a single sequence can answer questions that span
- * services — that the project is loaded before git runs, or that a rejection stopped the gateway
- * before it minted anything. Per-service views are derivable from this; the ordering is not
- * recoverable from them.
- */
+// A shared ordered log proves cross-service ordering and absence of work after rejection;
+// separate per-service call lists cannot recover that ordering.
 type Call = { service: string; method: string; input: unknown };
 
 const createCallLog = () => {
@@ -230,10 +224,10 @@ const createGitWorkflowServiceMock = (
         commitSha: input?.resolvedRemoteSha ?? "sha123",
         remoteRefName: "remoteRefName",
       }).pipe(
-        Effect.flatMap((val) =>
-          input?.failBranchResolution
-            ? createGitCommandError(input.failBranchResolution === "non-zero-exit" ? 1 : undefined)
-            : Effect.succeed(val),
+        Effect.filterOrElse(
+          () => !input?.failBranchResolution,
+          () =>
+            createGitCommandError(input?.failBranchResolution === "non-zero-exit" ? 1 : undefined),
         ),
       ),
   });
@@ -366,28 +360,8 @@ const createT3Gateway = (input?: {
 const now = 1_700_000_000_000;
 describe("T3Gateway", () => {
   describe("planCoordinates", () => {
-    /*
-      Recap. This will, in order:
-      - fetch the project details for projectId
-        - if it cannot load the project due to errors, it will fail with a recoverable error
-        - it if can:
-          - if the project exists: it will return it
-          - if it does not: it will fail with a T3Rejected error, one that cannot be retried
-      - it checks if the git remote exists
-        - if it cannot load: retryable fail
-        - if it can but it does not exist: T3Rejected, it cannot be retried
-      - it tries to fetch it
-        - this cannot be rejected, it can only return a retryable error.
-          It would make no sense to error, as remote exists step before confirmed it exists.
-      - last step: try to get the commit sha for the remote branch with that name
-
-      Now that we have the git and project references:
-      - generate a threadId
-      - generate a userMessageId
-      - generate a branch name for the temporary git worktree
-      - return the coordinates
-
-    */
+    // Planning resolves project and remote state before minting thread/worktree coordinates.
+    // Missing projects or remotes are terminal refusals; failed lookups remain retryable.
     describe("successful planning", () => {
       it.effect("pins the selected branch to the commit fetched from origin", () => {
         /*

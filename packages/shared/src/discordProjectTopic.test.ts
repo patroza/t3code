@@ -1,3 +1,4 @@
+import { SourceControlProviderKind } from "@t3tools/contracts";
 import type { RepositoryIdentity } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -71,7 +72,7 @@ describe("selectProjectForGithubRepository", () => {
     title: "Scanner",
     repositoryIdentity: identity({
       canonicalKey: "github.com/macs-holding/scanner",
-      provider: "github",
+      provider: SourceControlProviderKind.make("github"),
       owner: "macs-holding",
       name: "scanner",
     }),
@@ -80,7 +81,7 @@ describe("selectProjectForGithubRepository", () => {
     title: "T3 fork",
     repositoryIdentity: identity({
       canonicalKey: "github.com/pingdotgg/t3code",
-      provider: "github",
+      provider: SourceControlProviderKind.make("github"),
       owner: "pingdotgg",
       name: "t3code",
       origin: { canonicalKey: "github.com/patroza/t3code", displayName: "patroza/t3code" },
@@ -89,7 +90,7 @@ describe("selectProjectForGithubRepository", () => {
           remoteName: "upstream",
           remoteUrl: "https://github.com/pingdotgg/t3code.git",
           canonicalKey: "github.com/pingdotgg/t3code",
-          provider: "github",
+          provider: SourceControlProviderKind.make("github"),
           owner: "pingdotgg",
           name: "t3code",
         },
@@ -97,7 +98,7 @@ describe("selectProjectForGithubRepository", () => {
           remoteName: "origin",
           remoteUrl: "https://github.com/patroza/t3code.git",
           canonicalKey: "github.com/patroza/t3code",
-          provider: "github",
+          provider: SourceControlProviderKind.make("github"),
           owner: "patroza",
           name: "t3code",
         },
@@ -121,7 +122,7 @@ describe("selectProjectForGithubRepository", () => {
     const gitlab = {
       repositoryIdentity: identity({
         canonicalKey: "gitlab.com/macs-holding/scanner",
-        provider: "gitlab",
+        provider: SourceControlProviderKind.make("gitlab"),
         owner: "macs-holding",
         name: "scanner",
       }),

@@ -155,107 +155,100 @@ export function HomeListOptionsProvider({
   const environmentId =
     options.selectedEnvironmentIds.length === 1 ? options.selectedEnvironmentIds[0]! : null;
   const projectKey = options.selectedProjectKey;
+  const [hydrated, setHydrated] = useState({
+    environments: false,
+    grouping: false,
+    ownership: false,
+    relation: false,
+  });
+  const hydrateEnvironments = !hydrated.environments && storedEnvironmentIds !== undefined;
+  const hydrateGrouping = !hydrated.grouping && storedThreadGrouping !== undefined;
+  const hydrateOwnership = !hydrated.ownership && storedOwnershipFilter !== undefined;
+  const hydrateRelation = !hydrated.relation && storedOwnershipRelation !== undefined;
+  if (hydrateEnvironments || hydrateGrouping || hydrateOwnership || hydrateRelation) {
+    setHydrated({
+      environments: hydrated.environments || hydrateEnvironments,
+      grouping: hydrated.grouping || hydrateGrouping,
+      ownership: hydrated.ownership || hydrateOwnership,
+      relation: hydrated.relation || hydrateRelation,
+    });
+    setOptions((current) => ({
+      ...current,
+      ...(hydrateEnvironments && storedEnvironmentIds.length > 0
+        ? { selectedEnvironmentIds: storedEnvironmentIds }
+        : {}),
+      ...(hydrateGrouping ? { threadGrouping: storedThreadGrouping } : {}),
+      ...(hydrateOwnership ? { ownershipFilter: storedOwnershipFilter } : {}),
+      ...(hydrateRelation ? { ownershipRelation: storedOwnershipRelation } : {}),
+    }));
+  }
+  const persisted = useRef<{
+    environments?: string;
+    grouping?: HomeThreadGrouping;
+    ownership?: OwnershipFilter;
+    relation?: OwnershipRelation;
+  }>({});
+  // Synchronize the rendered options to device persistence after hydration, never a stale default.
   useEffect(() => {
     if (
-      (saved.current?.environmentId ?? null) === environmentId &&
-      (saved.current?.projectKey ?? null) === projectKey
-    )
-      return;
-    saved.current = { environmentId, projectKey };
-    savePreferences({ threadListFilters: saved.current });
-  }, [environmentId, projectKey, savePreferences]);
-  const envFilterHydratedRef = useRef(false);
-  const lastPersistedEnvKeyRef = useRef<string | null>(null);
-  const threadGroupingHydratedRef = useRef(false);
-  const lastPersistedThreadGroupingRef = useRef<HomeThreadGrouping | null>(null);
-  const ownershipFilterHydratedRef = useRef(false);
-  const lastPersistedOwnershipFilterRef = useRef<OwnershipFilter | null>(null);
-  const ownershipRelationHydratedRef = useRef(false);
-  const lastPersistedOwnershipRelationRef = useRef<OwnershipRelation | null>(null);
-
-  useEffect(() => {
-    if (envFilterHydratedRef.current) return;
-    if (storedEnvironmentIds === undefined) return;
-    if (storedEnvironmentIds.length > 0) {
-      setOptions((current) => ({
-        ...current,
-        selectedEnvironmentIds: storedEnvironmentIds,
-      }));
-      lastPersistedEnvKeyRef.current = environmentIdsKey(storedEnvironmentIds);
-    } else {
-      lastPersistedEnvKeyRef.current = "";
+      (saved.current?.environmentId ?? null) !== environmentId ||
+      (saved.current?.projectKey ?? null) !== projectKey
+    ) {
+      saved.current = { environmentId, projectKey };
+      savePreferences({ threadListFilters: saved.current });
     }
-    envFilterHydratedRef.current = true;
-  }, [storedEnvironmentIds]);
-
-  useEffect(() => {
-    if (!envFilterHydratedRef.current) return;
-    if (!onStoreEnvironmentIds) return;
-    const key = environmentIdsKey(options.selectedEnvironmentIds);
-    if (lastPersistedEnvKeyRef.current === key) return;
-    lastPersistedEnvKeyRef.current = key;
-    onStoreEnvironmentIds(options.selectedEnvironmentIds);
-  }, [onStoreEnvironmentIds, options.selectedEnvironmentIds]);
-
-  useEffect(() => {
-    if (threadGroupingHydratedRef.current) return;
-    if (storedThreadGrouping === undefined) return;
-    setOptions((current) =>
-      current.threadGrouping === storedThreadGrouping
-        ? current
-        : { ...current, threadGrouping: storedThreadGrouping },
-    );
-    lastPersistedThreadGroupingRef.current = storedThreadGrouping;
-    threadGroupingHydratedRef.current = true;
-  }, [storedThreadGrouping]);
-
-  useEffect(() => {
-    if (!threadGroupingHydratedRef.current) return;
-    if (!onStoreThreadGrouping) return;
-    if (lastPersistedThreadGroupingRef.current === options.threadGrouping) return;
-    lastPersistedThreadGroupingRef.current = options.threadGrouping;
-    onStoreThreadGrouping(options.threadGrouping);
-  }, [onStoreThreadGrouping, options.threadGrouping]);
-
-  useEffect(() => {
-    if (ownershipFilterHydratedRef.current) return;
-    if (storedOwnershipFilter === undefined) return;
-    setOptions((current) =>
-      current.ownershipFilter === storedOwnershipFilter
-        ? current
-        : { ...current, ownershipFilter: storedOwnershipFilter },
-    );
-    lastPersistedOwnershipFilterRef.current = storedOwnershipFilter;
-    ownershipFilterHydratedRef.current = true;
-  }, [storedOwnershipFilter]);
-
-  useEffect(() => {
-    if (!ownershipFilterHydratedRef.current) return;
-    if (!onStoreOwnershipFilter) return;
-    if (lastPersistedOwnershipFilterRef.current === options.ownershipFilter) return;
-    lastPersistedOwnershipFilterRef.current = options.ownershipFilter;
-    onStoreOwnershipFilter(options.ownershipFilter);
-  }, [onStoreOwnershipFilter, options.ownershipFilter]);
-
-  useEffect(() => {
-    if (ownershipRelationHydratedRef.current) return;
-    if (storedOwnershipRelation === undefined) return;
-    setOptions((current) =>
-      current.ownershipRelation === storedOwnershipRelation
-        ? current
-        : { ...current, ownershipRelation: storedOwnershipRelation },
-    );
-    lastPersistedOwnershipRelationRef.current = storedOwnershipRelation;
-    ownershipRelationHydratedRef.current = true;
-  }, [storedOwnershipRelation]);
-
-  useEffect(() => {
-    if (!ownershipRelationHydratedRef.current) return;
-    if (!onStoreOwnershipRelation) return;
-    if (lastPersistedOwnershipRelationRef.current === options.ownershipRelation) return;
-    lastPersistedOwnershipRelationRef.current = options.ownershipRelation;
-    onStoreOwnershipRelation(options.ownershipRelation);
-  }, [onStoreOwnershipRelation, options.ownershipRelation]);
+    if (hydrated.environments && storedEnvironmentIds !== undefined && onStoreEnvironmentIds) {
+      if (persisted.current.environments === undefined) {
+        persisted.current.environments = environmentIdsKey(storedEnvironmentIds);
+      }
+      const key = environmentIdsKey(options.selectedEnvironmentIds);
+      if (persisted.current.environments !== key) {
+        persisted.current.environments = key;
+        onStoreEnvironmentIds(options.selectedEnvironmentIds);
+      }
+    }
+    if (hydrated.grouping && storedThreadGrouping !== undefined && onStoreThreadGrouping) {
+      if (persisted.current.grouping === undefined) {
+        persisted.current.grouping = storedThreadGrouping;
+      }
+      if (persisted.current.grouping !== options.threadGrouping) {
+        persisted.current.grouping = options.threadGrouping;
+        onStoreThreadGrouping(options.threadGrouping);
+      }
+    }
+    if (hydrated.ownership && storedOwnershipFilter !== undefined && onStoreOwnershipFilter) {
+      if (persisted.current.ownership === undefined) {
+        persisted.current.ownership = storedOwnershipFilter;
+      }
+      if (persisted.current.ownership !== options.ownershipFilter) {
+        persisted.current.ownership = options.ownershipFilter;
+        onStoreOwnershipFilter(options.ownershipFilter);
+      }
+    }
+    if (hydrated.relation && storedOwnershipRelation !== undefined && onStoreOwnershipRelation) {
+      if (persisted.current.relation === undefined) {
+        persisted.current.relation = storedOwnershipRelation;
+      }
+      if (persisted.current.relation !== options.ownershipRelation) {
+        persisted.current.relation = options.ownershipRelation;
+        onStoreOwnershipRelation(options.ownershipRelation);
+      }
+    }
+  }, [
+    environmentId,
+    projectKey,
+    savePreferences,
+    hydrated,
+    storedEnvironmentIds,
+    onStoreEnvironmentIds,
+    storedThreadGrouping,
+    onStoreThreadGrouping,
+    storedOwnershipFilter,
+    onStoreOwnershipFilter,
+    storedOwnershipRelation,
+    onStoreOwnershipRelation,
+    options,
+  ]);
 
   const value = useMemo(
     () => ({ options, setOptions, projectGroupingMode }),

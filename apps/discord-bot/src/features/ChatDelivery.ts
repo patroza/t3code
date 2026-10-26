@@ -1,18 +1,8 @@
 /**
- * Shared chat assistant delivery state machine.
- *
- * Band-aid flags (seededWorkingAckPending, finalizedTurnId, lastAssistantText) grew into
- * conflicting rules. This module is the single source of truth for *whether* a chat adapter may
- * stream, finalize, or heartbeat — keyed by a monotonic **epoch** that advances on each
- * new user Working ack (and only then).
- *
- * Phases per epoch:
- *   awaiting  → Working tip exists, no assistant body for this epoch yet
- *   streaming → tip may show current-turn progress
- *   finalized → final message posted; **no** further stream/heartbeat until epoch bumps
- *               (unless a later assistant / grown text reopens — see settle grace)
- *
- * Effect integration stays in ResponseBridge; this file is pure and fully unit-tested.
+ * Pure delivery state machine for whether a chat adapter streams, finalizes, or heartbeats.
+ * Each new user Working ack advances the epoch through awaiting, streaming, and finalized phases.
+ * Finalized epochs stay quiet until later assistant content or same-message growth reopens them.
+ * Effect integration stays in ResponseBridge.
  */
 
 export type DeliveryPhase = "idle" | "awaiting" | "streaming" | "finalized";
@@ -107,29 +97,9 @@ export function beginDeliveryEpoch(
 }
 
 /**
- * Drop assistants at or before the last Discord-finalized bubble.
- *
- * Race this prevents: new epoch + turnInProgress, but the snapshot still only has
- * prior-turn assistants (new user not in messages yet, or forTurn empty → afterLastUser
- * falls back to them). Without this filter we re-stream/re-finalize the previous answer
- * (e.g. "what's the time" re-posting PR #102).
- *
- * Multi-bubble prior turns: we only persist the last finalized id, so filtering by
- * message order (not just exact id match) drops the whole prior answer set.
- *
- * Same-id growth: if the finalized bubble's text grew past lastFinalizedText, keep it
- * so a premature status finalize can be replaced by the real answer on the same id.
- *
- * Cursor outside retained window: when `lastFinalizedAssistantId` is set but not present
- * in the message list, we **cannot** order the watermark vs the retained tip.
- * Treating the whole tip as already delivered (drop-all) deadlocks live threads whose
- * durable cursor points at an older bubble that rolled out of the tip — Discord stays
- * on `_Working.._` forever (`deliveryAssistants: 0`, `awaiting-first-assistant`).
- *
- * Missing cursor therefore only gates the exact finalized id (growth reopen); all other
- * assistant ids are kept. Reconnect re-post of old finals is handled by the thread
- * follower (`resume-after` skips warm re-seed) and by turnId / after-last-user selection
- * in `assistantMessagesForDelivery`.
+ * Drop the finalized bubble and earlier assistants, except same-id text growth that replaces a premature finalize.
+ * If the watermark is outside the retained tip, only gate its exact id; dropping the whole tip can deadlock delivery.
+ * The follower's `resume-after` mode and turn selection handle old-final replay after reconnect.
  */
 export function excludeFinalizedAssistants<
   T extends { readonly id: string; readonly text?: string },
@@ -187,21 +157,9 @@ export function isGrownFinalizedText(
 }
 
 /**
- * Assistants that may appear on Discord for this snapshot.
- *
- * Structural rules (in order):
- * 1. Prefer turnId match when the turn is still running (mid-turn steer keeps pre-steer).
- * 2. If a newer **user** message sits after every turnId-matched assistant and the turn
- *    is **not** running, treat that as the next Discord turn starting with a stale
- *    latestTurn — return only assistants after that user (usually empty).
- * 3. If turnId is set but no assistants match and the turn is **running**, return empty
- *    (never after-last-user prior bodies — that re-streams the previous final under
- *    `_Working.._` when a comment recovers the bridge before the new user lands).
- * 4. If turnId is set, no assistants match, and the turn is **settled**, prefer
- *    after-last-user for catch-up finalize (filter via lastFinalized).
- * 5. Fall back to after-last-user only when messages lack turn ids entirely.
- * 6. Always drop assistants at/before `lastFinalizedAssistantId` in message order
- *    (unless same-id text grew past lastFinalizedText).
+ * Prefer current-turn assistants; never fall back to prior-turn bodies while a turn is running.
+ * For settled snapshots, use after-last-user for catch-up (also when messages lack turn IDs); if a newer user follows
+ * matched assistants, start after that user. Always apply the finalized-message watermark, reopening same-id growth.
  */
 export function assistantMessagesForDelivery(input: {
   readonly messages: ReadonlyArray<{
@@ -260,11 +218,7 @@ export function assistantMessagesForDelivery(input: {
         selected = forTurn;
       }
     } else if (turnInProgress) {
-      // New turn has no assistants yet. Never fall back to prior-turn afterLastUser
-      // bodies — that re-streams the previous final under _Working.._ + Stop when a
-      // comment recovers the bridge before the new user message is in the snapshot
-      // (or before lastFinalizedAssistantId is known). Hold empty until this turn
-      // produces its own assistant content.
+      // Hold empty until this turn has assistant content; falling back would re-stream a prior final under Working.
       selected = [];
     } else {
       // Settled catch-up: after-last-user only (usually the previous answer for finalize).
@@ -293,17 +247,8 @@ export function liveTurnIds(
   return runStatuses.filter((run) => LIVE_TURN_STATUSES.has(run.status)).map((run) => run.id);
 }
 
-/**
- * Prior-turn assistant Discord still owes a final for.
- *
- * Queue drain can advance `latestTurn` to the parked follow-up before Discord
- * posted the previous T3 answer (or after a premature short-status finalize).
- * {@link assistantMessagesForDelivery} hides that body on purpose (must not
- * stream it under the next Working tip). Callers catch-up-finalize it as its
- * own Discord final even when the next turn already has assistants.
- *
- * A turn that is still live is not owed a final. Its latest bubble stays on
- * the one editable progress message.
+/** A prior turn may still owe Discord a final after queue drain advances `latestTurn`.
+ * Catch up that answer separately; a live turn keeps its latest bubble on the editable progress message.
  */
 export function unfinalizedPriorAssistantForCatchUp(input: {
   readonly messages: ReadonlyArray<{
@@ -404,16 +349,9 @@ export function deliveryTextFromAssistants(
 }
 
 /**
- * Decide what Discord may do for this thread snapshot.
- *
- * Hard invariants:
- * - Never stream/finalize assistants at/before lastFinalizedAssistantId — even while
- *   turnInProgress (unless same-id text grew past lastFinalizedText).
- * - Heartbeat after finalize is always noop.
- * - `finalized` epoch reopens when a **new** assistant appears after lastFinalized, or
- *   the finalized bubble's text grew into a real answer.
- * - Settle grace: first idle snapshot with content streams/holds; second idle snapshot
- *   finalizes (avoids locking on multi-step status lines).
+ * Decide whether Discord streams, finalizes, or heartbeats for this snapshot.
+ * Never redeliver finalized assistants or heartbeat after finalize; new content or same-id growth reopens the epoch.
+ * The first idle snapshot gets settle grace; the second finalizes short status lines that stopped growing.
  */
 export function decideAssistantDelivery(input: {
   readonly state: DeliveryEpochState;
@@ -556,12 +494,8 @@ export function decideAssistantDelivery(input: {
     return { state, intent: { _tag: "noop", reason: "missing-assistant-id" } };
   }
 
-  // Settle grace: first idle snapshot with *short* content keeps streaming the tip body
-  // and arms settleReady (status lines like "Checking PR…" often grow into a real answer).
-  // Substantial settled answers finalize immediately — otherwise recovery/rehydrate streams
-  // the full previous final under `_Working.._` + Stop for one+ snapshots (or forever if a
-  // new turn starts before the second idle tick).
-  // Skip grace entirely on rehydrate/catch-up (`skipSettleGrace`) when no second snapshot.
+  // Give short idle status lines one snapshot to grow; finalize substantial answers immediately.
+  // Skip grace during catch-up when no second snapshot will arrive, avoiding stale-final replay under Working.
   const SETTLE_GRACE_MAX_CHARS = 250;
   if (
     !state.settleReady &&
