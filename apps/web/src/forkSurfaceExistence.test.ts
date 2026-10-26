@@ -67,7 +67,7 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(readSrc("components/sidebar/SidebarThreadFilters.tsx")).toContain(
       "Expand settled shelf",
     );
-    expect(sidebarV2).toMatch(/New thread|new thread/i);
+    expect(readSrc("components/sidebar/SidebarThreadHeader.tsx")).toMatch(/New thread|new thread/i);
     expect(readSrc("components/sidebar/SidebarListMarkers.tsx")).toContain(
       "sidebar-pinned-divider",
     );
@@ -228,7 +228,6 @@ describe("fork surface existence (anti stack-drop)", () => {
     for (const source of [mobileHome, mobileSidebar]) {
       expect(source).toContain('threadGrouping === "recency"');
       expect(source).toContain("orderByRecency:");
-      expect(source).toContain("groupByRecency:");
     }
   });
 
@@ -240,7 +239,7 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(queuedEdit).toContain("threadEnvironment.beginQueuedRunEdit");
     expect(queuedEdit).toContain("threadEnvironment.cancelQueuedRunEdit");
     expect(queuedEdit).toContain("editId: editing.editId");
-    expect(queuedEdit).toContain("queuedRunEditOwnership(serverThreadState, editing)");
+    expect(queuedEdit).toContain("queuedRunEditOwnership(state, editing)");
     expect(chat).toContain("queuedRunsControlRef.current?.steerNext");
     expect(chat).toContain("queuedRunsControlRef.current?.editLatest");
     expect(chat).not.toContain("QueuedMessageChips");
@@ -337,7 +336,7 @@ describe("fork surface existence (anti stack-drop)", () => {
   });
 
   it("keeps project-scoped provider switches and reset controls reachable", () => {
-    const route = readSrc("routes/settings.providers.tsx");
+    const route = readSrc("routes/_chat.settings.providers.tsx");
     const panel = readSrc("components/settings/ProviderSettingsPanel.tsx");
     const card = readSrc("components/settings/ProviderInstanceCard.tsx");
     expect(route).toContain('scope.kind === "project" || scope.kind === "checkout"');

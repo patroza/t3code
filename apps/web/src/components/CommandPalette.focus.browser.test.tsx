@@ -1,6 +1,7 @@
 import { act, render as renderScreen, fakeTimers } from "../../test/render";
 import { useImperativeHandle, useRef } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
+import { DEFAULT_CLIENT_SETTINGS, type ClientSettings } from "@t3tools/contracts/settings";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
 import { CommandPalette } from "./CommandPalette";
 import { useComposerHandleContext } from "../composerHandleContext";
@@ -29,14 +30,20 @@ vi.mock("../hooks/useCustomThemes", () => ({ useCustomThemes: () => [] }));
 vi.mock("../hooks/useEnvironmentTheme", () => ({ useEnvironmentThemeDefinitions: () => [] }));
 vi.mock("../hooks/useSettings", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../hooks/useSettings")>()),
-  useClientSettings: () => ({}),
+  useClientSettings: (select?: (settings: ClientSettings) => unknown) =>
+    select ? select(DEFAULT_CLIENT_SETTINGS) : DEFAULT_CLIENT_SETTINGS,
 }));
 vi.mock("../hooks/useScratchProject", () => ({
   useScratchProject: () => ({ scratchEnvironmentId: () => null }),
 }));
 vi.mock("../hooks/useNewProject", () => ({ useNewProject: () => vi.fn() }));
 vi.mock("../hooks/useHandleNewThread", () => ({
-  useHandleNewThread: () => ({}),
+  useHandleNewThread: () => ({
+    activeDraftThread: null,
+    activeThread: null,
+    defaultProjectRef: null,
+    handleNewThread: vi.fn(),
+  }),
   useNewThreadHandler: () => vi.fn(),
 }));
 vi.mock("../lib/archivedThreadsState", async (importOriginal) => {
@@ -63,7 +70,11 @@ vi.mock("../state/entities", async (importOriginal) => ({
 }));
 vi.mock("../state/queries", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/queries")>()),
-  useThreadSearch: () => ({ matches: [] }),
+  useThreadSearch: (_environmentIds: ReadonlyArray<unknown>, query: string) => ({
+    matches: [],
+    query,
+    isPending: false,
+  }),
 }));
 vi.mock("../state/session", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/session")>()),

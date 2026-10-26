@@ -230,7 +230,7 @@ describe("useQueuedRunEdit", () => {
     expect(promptOf(THREAD_A)).toBe("");
   });
 
-  it("leaves a newer edit alone when a save from before navigation finishes", async () => {
+  it("leaves another thread's edit alone when a save from before navigation finishes", async () => {
     const { hook } = setup();
     let finishSave: (result: { readonly _tag: "Success" }) => void = () => {};
     mocks.editQueuedRun.mockReturnValue(
@@ -248,6 +248,16 @@ describe("useQueuedRunEdit", () => {
     await screen.rerender(<AppAtomRegistryProvider>{null}</AppAtomRegistryProvider>);
     await screen.rerender(view(THREAD_A, "queued", hook));
     expect(requireHook(hook).isSaving).toBe(true);
+    await act(() =>
+      requireHook(hook).beginEdit({
+        runId: RUN,
+        messageId: MessageId.make("message-1"),
+        text: "original",
+        attachments: [],
+      }),
+    );
+    expect(mocks.beginQueuedRunEdit).toHaveBeenCalledOnce();
+    await screen.rerender(view(THREAD_B, "queued", hook));
     await beginChangedEdit(hook);
     await act(() =>
       useComposerDraftStore.getState().setPrompt(requireHook(hook).draftTarget, "newer"),

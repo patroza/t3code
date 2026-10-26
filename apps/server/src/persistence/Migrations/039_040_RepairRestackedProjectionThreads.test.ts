@@ -86,7 +86,7 @@ layer("b18 desktop migration namespace repair", (it) => {
         readonly migration_id: number;
         readonly name: string;
       }>`SELECT migration_id, name FROM ${sql(upstreamMigrationTable)} ORDER BY migration_id`;
-      assert.deepStrictEqual(upstreamMigrations.slice(-17), [
+      assert.deepStrictEqual(upstreamMigrations.slice(-18), [
         { migration_id: 52, name: "ProjectionThreadTitleState" },
         { migration_id: 53, name: "PullRequestFilesViewed" },
         { migration_id: 54, name: "ProjectionThreadsAutoSettleDisabledAt" },
@@ -104,6 +104,7 @@ layer("b18 desktop migration namespace repair", (it) => {
         { migration_id: 66, name: "RepairClientSettlementTimestamps" },
         { migration_id: 67, name: "WebhookDedupe" },
         { migration_id: 68, name: "ShellStopRequestIndex" },
+        { migration_id: 69, name: "ThreadMessageSearch" },
       ]);
 
       const forkMigrations = yield* sql<{

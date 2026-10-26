@@ -176,6 +176,18 @@ function useEditQueuedRunCommand() {
   return useAtomCommand(threadEnvironment.editQueuedRun, { reportFailure: false });
 }
 
+async function withEditAcquisition(
+  pending: { current: boolean },
+  acquire: () => Promise<void>,
+): Promise<void> {
+  pending.current = true;
+  try {
+    await acquire();
+  } finally {
+    pending.current = false;
+  }
+}
+
 /** Edits preserve the thread draft; attachment removals stay local until save. */
 export function useQueuedRunEdit(input: {
   readonly environmentId: EnvironmentId;
@@ -238,8 +250,7 @@ export function useQueuedRunEdit(input: {
       focusComposerSoon();
       return;
     }
-    acquisitionInFlightRef.current = true;
-    try {
+    await withEditAcquisition(acquisitionInFlightRef, async () => {
       const result = await beginEditCommand({
         environmentId,
         input: {
@@ -306,14 +317,11 @@ export function useQueuedRunEdit(input: {
         },
       });
       focusComposerSoon();
-    } finally {
-      acquisitionInFlightRef.current = false;
-    }
+    });
   });
   const cancelEdit = useStableCallback(async () => {
     if (editing === null || acquisitionInFlightRef.current || isSaving) return;
-    acquisitionInFlightRef.current = true;
-    try {
+    await withEditAcquisition(acquisitionInFlightRef, async () => {
       const state = appAtomRegistry.get(environmentThreadDetails.stateAtom(routeThreadRef));
       const result =
         queuedRunEditOwnership(state, editing) === "lost"
@@ -326,9 +334,7 @@ export function useQueuedRunEdit(input: {
       clearEditDraft(editing.runId);
       queuedRunEdits.end(editKey);
       focusComposerSoon();
-    } finally {
-      acquisitionInFlightRef.current = false;
-    }
+    });
   });
   const removeEditingAttachment = useStableCallback((attachmentId: string) => {
     queuedRunEdits.update(editKey, (current) => ({

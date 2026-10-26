@@ -32,6 +32,8 @@ describe("shouldDisableCollapsedComposerSubmitAction", () => {
 });
 vi.mock("~/hooks/useSettings", () => ({
   useEnvironmentIdentificationMode: () => stageArtworkState.mode,
+  useClientSettings: (select: (settings: { redesignEnabled: boolean }) => unknown) =>
+    select({ redesignEnabled: false }),
 }));
 vi.mock("../SidebarStageBackdrop", () => ({
   StageBackdropButtonArt: ({ variant }: { variant: string }) => `stage-${variant}`,

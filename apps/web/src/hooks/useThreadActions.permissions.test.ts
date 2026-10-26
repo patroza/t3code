@@ -41,6 +41,7 @@ vi.mock("react", () => ({
   useCallback: (callback: unknown) => callback,
   useLayoutEffect: (effect: () => void) => effect(),
   useMemo: (factory: () => unknown) => factory(),
+  useState: (initial: () => unknown) => [initial(), () => {}],
   useRef: (current: unknown) => ({ current }),
 }));
 vi.mock("@tanstack/react-router", () => ({
