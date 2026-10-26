@@ -31,10 +31,12 @@ const wrapDiscordRestSuppressEmbeds = <A, E, R>(layer: Layer.Layer<A, E, R>) =>
         DiscordREST,
         DiscordREST.of({
           ...rest,
-          createMessage: (channelId, options) =>
+          createMessage: Effect.fn("DiscordREST.createMessage")((channelId, options) =>
             rest.createMessage(channelId, withSuppressEmbeds(options)),
-          updateMessage: (channelId, messageId, options) =>
+          ),
+          updateMessage: Effect.fn("DiscordREST.updateMessage")((channelId, messageId, options) =>
             rest.updateMessage(channelId, messageId, withSuppressEmbeds(options)),
+          ),
         }),
       ) as Context.Context<A>;
     }),

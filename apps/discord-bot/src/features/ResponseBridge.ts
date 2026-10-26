@@ -2574,7 +2574,7 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
       sentDiscordUserMessageIds: uniqueMessageIds([...current.sentDiscordUserMessageIds, ...ids]),
     })).pipe(Effect.asVoid);
 
-  controlSlot.adoptWorkingAckMessageId = (messageId) =>
+  controlSlot.adoptWorkingAckMessageId = Effect.fn("adoptWorkingAckMessageId")((messageId) =>
     Effect.gen(function* () {
       if (messageId.trim() === "") return;
       // Mid-turn / new user turn on a reused bridge: switch to the new Working tip.
@@ -2658,7 +2658,8 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
         workingAckMessageId: messageId,
         frozenPriorTips: orphanTips.length,
       });
-    }).pipe(Effect.asVoid);
+    }).pipe(Effect.asVoid),
+  );
 
   yield* Effect.logInfo("Bridge restored persisted Discord state", {
     discordChannelId: input.discordChannelId,
@@ -4773,7 +4774,7 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
         Effect.asVoid,
       );
 
-  controlSlot.refreshThreadIndicators = () =>
+  controlSlot.refreshThreadIndicators = Effect.fn("refreshThreadIndicators")(() =>
     Effect.gen(function* () {
       let thread = yield* Ref.get(latestThreadRef);
       if (thread === null) {
@@ -4850,7 +4851,8 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
           error: error instanceof Error ? error.message : String(error),
         }),
       ),
-    );
+    ),
+  );
 
   const stopVcsStatusSubscription = Effect.gen(function* () {
     const subscription = yield* Ref.get(vcsStatusSubscriptionRef);

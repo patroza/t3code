@@ -340,8 +340,10 @@ export const makeBridgeHub = Effect.fn("BridgeHub.makeBridgeHub")(function* (
       }
     }),
     listActive: listActiveInternal,
-    activeCount: () => Ref.get(bridges).pipe(Effect.map((map) => map.size)),
-    touch: (discordChannelId, at) =>
+    activeCount: Effect.fn("BridgeHub.activeCount")(() =>
+      Ref.get(bridges).pipe(Effect.map((map) => map.size)),
+    ),
+    touch: Effect.fn("BridgeHub.touch")((discordChannelId, at) =>
       Ref.update(bridges, (map) => {
         const current = map.get(discordChannelId);
         if (current === undefined) return map;
@@ -352,7 +354,8 @@ export const makeBridgeHub = Effect.fn("BridgeHub.makeBridgeHub")(function* (
         });
         return copy;
       }),
-    getLive: (discordChannelId, t3ThreadId) =>
+    ),
+    getLive: Effect.fn("BridgeHub.getLive")((discordChannelId, t3ThreadId) =>
       Ref.get(bridges).pipe(
         Effect.map((map) => {
           const entry = map.get(discordChannelId);
@@ -366,6 +369,7 @@ export const makeBridgeHub = Effect.fn("BridgeHub.makeBridgeHub")(function* (
           } satisfies LiveDiscordBridge;
         }),
       ),
+    ),
   });
 });
 

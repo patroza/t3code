@@ -300,12 +300,15 @@ export const make = Effect.gen(function* () {
   };
 
   return ThreadWorkItemStore.of({
-    getByThreadId: (threadId) =>
+    getByThreadId: Effect.fn("ThreadWorkItemStore.getByThreadId")((threadId) =>
       Ref.get(state).pipe(Effect.map((records) => records.get(threadId) ?? null)),
+    ),
 
-    list: () => Ref.get(state).pipe(Effect.map((records) => [...records.values()])),
+    list: Effect.fn("ThreadWorkItemStore.list")(() =>
+      Ref.get(state).pipe(Effect.map((records) => [...records.values()])),
+    ),
 
-    appendForThread: (input) =>
+    appendForThread: Effect.fn("ThreadWorkItemStore.appendForThread")((input) =>
       lock.withPermit(
         Effect.gen(function* () {
           const now = DateTime.formatIso(yield* DateTime.now);
@@ -340,8 +343,9 @@ export const make = Effect.gen(function* () {
           return next.get(input.threadId)!;
         }),
       ),
+    ),
 
-    resolveJiraIssue: (issueKey) =>
+    resolveJiraIssue: Effect.fn("ThreadWorkItemStore.resolveJiraIssue")((issueKey) =>
       Ref.get(state).pipe(
         Effect.map((records) => {
           const normalized = normalizeJiraIssueKey(issueKey);
@@ -354,8 +358,9 @@ export const make = Effect.gen(function* () {
           );
         }),
       ),
+    ),
 
-    resolveGitHubPullRequest: (prRef) =>
+    resolveGitHubPullRequest: Effect.fn("ThreadWorkItemStore.resolveGitHubPullRequest")((prRef) =>
       Ref.get(state).pipe(
         Effect.map((records) => {
           const normalized = normalizeGitHubPullRequestRef(prRef);
@@ -368,8 +373,9 @@ export const make = Effect.gen(function* () {
           );
         }),
       ),
+    ),
 
-    importDiscordLinksJson: (linksJson) =>
+    importDiscordLinksJson: Effect.fn("ThreadWorkItemStore.importDiscordLinksJson")((linksJson) =>
       lock.withPermit(
         Effect.gen(function* () {
           const links = parseDiscordLinksOrNull(linksJson);
@@ -412,6 +418,7 @@ export const make = Effect.gen(function* () {
           };
         }),
       ),
+    ),
   });
 });
 

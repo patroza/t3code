@@ -65,10 +65,12 @@ export const layer = (dataDirRaw: string, fileName = "teams-seen.json") =>
         );
 
       return TeamsSeenStore.of({
-        hasSeen: (channelKey, messageId) =>
+        hasSeen: Effect.fn("TeamsSeenStore.hasSeen")((channelKey, messageId) =>
           Ref.get(state).pipe(Effect.map((map) => (map.get(channelKey) ?? []).includes(messageId))),
-        listSeenIds: (channelKey) =>
+        ),
+        listSeenIds: Effect.fn("TeamsSeenStore.listSeenIds")((channelKey) =>
           Ref.get(state).pipe(Effect.map((map) => [...(map.get(channelKey) ?? [])])),
+        ),
         markSeen: Effect.fn("TeamsSeenStore.markSeen")(function* (channelKey, messageId) {
           const next = yield* Ref.updateAndGet(state, (current) => {
             const copy = new Map(current);

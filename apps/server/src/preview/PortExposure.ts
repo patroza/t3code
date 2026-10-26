@@ -279,10 +279,11 @@ export const make = Effect.gen(function* () {
   );
 
   return PreviewPortExposure.of({
-    resolve: (request) =>
+    resolve: Effect.fn("PreviewPortExposure.resolve")((request) =>
       resolve(request).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       ),
+    ),
   });
 });
 

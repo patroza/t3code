@@ -213,7 +213,7 @@ export const make = Effect.gen(function* () {
   }
 
   return WebhookDebugLog.of({
-    append: (input) =>
+    append: Effect.fn("WebhookDebugLog.append")((input) =>
       lock
         .withPermit(
           Effect.gen(function* () {
@@ -242,6 +242,7 @@ export const make = Effect.gen(function* () {
             }),
           ),
         ),
+    ),
   });
 });
 

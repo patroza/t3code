@@ -258,8 +258,12 @@ export const make = Effect.gen(function* () {
   });
 
   return ProjectLifecycleScriptRunner.of({
-    runWorktreeRemove: (input) => runLifecycle(input, "worktree-remove"),
-    runPrMerged: (input) => runLifecycle(input, "pr-merged"),
+    runWorktreeRemove: Effect.fn("ProjectLifecycleScriptRunner.runWorktreeRemove")((input) =>
+      runLifecycle(input, "worktree-remove"),
+    ),
+    runPrMerged: Effect.fn("ProjectLifecycleScriptRunner.runPrMerged")((input) =>
+      runLifecycle(input, "pr-merged"),
+    ),
   });
 });
 

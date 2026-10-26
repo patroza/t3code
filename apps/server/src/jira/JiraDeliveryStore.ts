@@ -117,9 +117,10 @@ export const make = Effect.gen(function* () {
   };
 
   return JiraDeliveryStore.of({
-    get: (deliveryId) =>
+    get: Effect.fn("JiraDeliveryStore.get")((deliveryId) =>
       Ref.get(state).pipe(Effect.map((deliveries) => deliveries.get(deliveryId) ?? null)),
-    claim: (delivery) =>
+    ),
+    claim: Effect.fn("JiraDeliveryStore.claim")((delivery) =>
       lock.withPermit(
         Effect.gen(function* () {
           const claimed = yield* Ref.modify(state, (deliveries) => {
@@ -132,7 +133,8 @@ export const make = Effect.gen(function* () {
           return claimed;
         }),
       ),
-    put: (delivery) =>
+    ),
+    put: Effect.fn("JiraDeliveryStore.put")((delivery) =>
       lock.withPermit(
         Effect.gen(function* () {
           const next = yield* Ref.updateAndGet(state, (deliveries) => {
@@ -143,12 +145,14 @@ export const make = Effect.gen(function* () {
           yield* persist(next);
         }),
       ),
-    listProcessing: () =>
+    ),
+    listProcessing: Effect.fn("JiraDeliveryStore.listProcessing")(() =>
       Ref.get(state).pipe(
         Effect.map((deliveries) =>
           [...deliveries.values()].filter((delivery) => delivery.status === "processing"),
         ),
       ),
+    ),
   });
 });
 

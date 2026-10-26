@@ -682,10 +682,11 @@ export const makeThreadLinkStore = Effect.fn("ThreadLinkStore.makeThreadLinkStor
     );
 
   return ThreadLinkStore.of({
-    getByDiscordThreadId: (discordThreadId) =>
+    getByDiscordThreadId: Effect.fn("ThreadLinkStore.getByDiscordThreadId")((discordThreadId) =>
       Ref.get(state).pipe(Effect.map((map) => map.get(discordThreadId) ?? null)),
+    ),
 
-    getByT3ThreadId: (t3ThreadId) =>
+    getByT3ThreadId: Effect.fn("ThreadLinkStore.getByT3ThreadId")((t3ThreadId) =>
       Ref.get(state).pipe(
         Effect.map((map) => {
           for (const link of map.values()) {
@@ -694,22 +695,25 @@ export const makeThreadLinkStore = Effect.fn("ThreadLinkStore.makeThreadLinkStor
           return null;
         }),
       ),
+    ),
 
-    getBySourceThread: (sourceKind, sourceThreadId) =>
-      Ref.get(state).pipe(
-        Effect.map((map) => {
-          for (const link of map.values()) {
-            const linkSourceKind = link.sourceKind ?? "discord";
-            const linkSourceThreadId = link.sourceThreadId ?? link.discordThreadId;
-            if (linkSourceKind === sourceKind && linkSourceThreadId === sourceThreadId) {
-              return link;
+    getBySourceThread: Effect.fn("ThreadLinkStore.getBySourceThread")(
+      (sourceKind, sourceThreadId) =>
+        Ref.get(state).pipe(
+          Effect.map((map) => {
+            for (const link of map.values()) {
+              const linkSourceKind = link.sourceKind ?? "discord";
+              const linkSourceThreadId = link.sourceThreadId ?? link.discordThreadId;
+              if (linkSourceKind === sourceKind && linkSourceThreadId === sourceThreadId) {
+                return link;
+              }
             }
-          }
-          return null;
-        }),
-      ),
+            return null;
+          }),
+        ),
+    ),
 
-    put: (link) =>
+    put: Effect.fn("ThreadLinkStore.put")((link) =>
       writeLock.withPermit(
         Effect.gen(function* () {
           const normalized = normalizeThreadLinkInput(link);
@@ -812,125 +816,143 @@ export const makeThreadLinkStore = Effect.fn("ThreadLinkStore.makeThreadLinkStor
           yield* persist(next);
         }).pipe(Effect.uninterruptible),
       ),
+    ),
 
-    touch: (discordThreadId, at) => {
+    touch: Effect.fn("ThreadLinkStore.touch")((discordThreadId, at) => {
       const when = at ?? nowIso();
       return updateLink(discordThreadId, (current) => ({
         ...current,
         lastActivityAt: when,
         updatedAt: when,
       }));
-    },
+    }),
 
-    tombstone: (discordThreadId) => {
+    tombstone: Effect.fn("ThreadLinkStore.tombstone")((discordThreadId) => {
       const when = nowIso();
       return updateLink(discordThreadId, (current) => ({
         ...current,
         status: "tombstone",
         updatedAt: when,
       }));
-    },
+    }),
 
-    updateBridgeHints: (discordThreadId, partial) => {
-      const when = nowIso();
-      return updateLink(discordThreadId, (current) => ({
-        ...current,
-        updatedAt: when,
-        lastActivityAt: when,
-        ...(partial.lastSeenTurnId !== undefined ? { lastSeenTurnId: partial.lastSeenTurnId } : {}),
-        ...(partial.lastFinalizedAssistantId !== undefined
-          ? { lastFinalizedAssistantId: partial.lastFinalizedAssistantId }
-          : {}),
-        ...(partial.lastThreadSnapshotSequence !== undefined
-          ? { lastThreadSnapshotSequence: partial.lastThreadSnapshotSequence }
-          : {}),
-        ...(partial.lastDeliveredSequence !== undefined
-          ? { lastDeliveredSequence: partial.lastDeliveredSequence }
-          : {}),
-        ...(partial.deliveryReceipt !== undefined
-          ? { deliveryReceipt: partial.deliveryReceipt }
-          : {}),
-        ...(partial.streamDiscordMessageIds !== undefined
-          ? {
-              streamDiscordMessageIds:
-                partial.streamDiscordMessageIds.length > 0
-                  ? [...new Set(partial.streamDiscordMessageIds.filter((id) => id.trim() !== ""))]
-                  : undefined,
-            }
-          : {}),
-        ...(partial.backgroundDigestMessageId !== undefined
-          ? partial.backgroundDigestMessageId == null || partial.backgroundDigestMessageId === ""
-            ? { backgroundDigestMessageId: undefined, backgroundDigestText: undefined }
-            : {
-                backgroundDigestMessageId: partial.backgroundDigestMessageId,
-                backgroundDigestText: partial.backgroundDigestText ?? undefined,
+    updateBridgeHints: Effect.fn("ThreadLinkStore.updateBridgeHints")(
+      (discordThreadId, partial) => {
+        const when = nowIso();
+        return updateLink(discordThreadId, (current) => ({
+          ...current,
+          updatedAt: when,
+          lastActivityAt: when,
+          ...(partial.lastSeenTurnId !== undefined
+            ? { lastSeenTurnId: partial.lastSeenTurnId }
+            : {}),
+          ...(partial.lastFinalizedAssistantId !== undefined
+            ? { lastFinalizedAssistantId: partial.lastFinalizedAssistantId }
+            : {}),
+          ...(partial.lastThreadSnapshotSequence !== undefined
+            ? { lastThreadSnapshotSequence: partial.lastThreadSnapshotSequence }
+            : {}),
+          ...(partial.lastDeliveredSequence !== undefined
+            ? { lastDeliveredSequence: partial.lastDeliveredSequence }
+            : {}),
+          ...(partial.deliveryReceipt !== undefined
+            ? { deliveryReceipt: partial.deliveryReceipt }
+            : {}),
+          ...(partial.streamDiscordMessageIds !== undefined
+            ? {
+                streamDiscordMessageIds:
+                  partial.streamDiscordMessageIds.length > 0
+                    ? [...new Set(partial.streamDiscordMessageIds.filter((id) => id.trim() !== ""))]
+                    : undefined,
               }
-          : {}),
-      }));
-    },
+            : {}),
+          ...(partial.backgroundDigestMessageId !== undefined
+            ? partial.backgroundDigestMessageId == null || partial.backgroundDigestMessageId === ""
+              ? { backgroundDigestMessageId: undefined, backgroundDigestText: undefined }
+              : {
+                  backgroundDigestMessageId: partial.backgroundDigestMessageId,
+                  backgroundDigestText: partial.backgroundDigestText ?? undefined,
+                }
+            : {}),
+        }));
+      },
+    ),
 
-    setThreadTalkMode: (discordThreadId, mode) =>
+    setThreadTalkMode: Effect.fn("ThreadLinkStore.setThreadTalkMode")((discordThreadId, mode) =>
       updateLink(discordThreadId, (existing) => ({
         ...existing,
         threadTalkMode: mode ?? undefined,
         updatedAt: nowIso(),
       })).pipe(Effect.asVoid),
+    ),
 
-    setTaskDiscordMessageId: (discordThreadId, taskDiscordMessageId) =>
-      updateLink(discordThreadId, (existing) => ({
-        ...existing,
-        taskDiscordMessageId: taskDiscordMessageId ?? undefined,
-        updatedAt: nowIso(),
-      })).pipe(Effect.asVoid),
-
-    setStreamDiscordMessageIds: (discordThreadId, streamDiscordMessageIds) => {
-      const normalizedIds = [...new Set(streamDiscordMessageIds.filter((id) => id.trim() !== ""))];
-      return updateLink(discordThreadId, (existing) => ({
-        ...existing,
-        streamDiscordMessageIds: normalizedIds.length > 0 ? normalizedIds : undefined,
-        updatedAt: nowIso(),
-        lastActivityAt: nowIso(),
-      })).pipe(Effect.asVoid);
-    },
-
-    setSentDiscordUserMessageIds: (discordThreadId, sentDiscordUserMessageIds) => {
-      const normalizedIds = [
-        ...new Set(sentDiscordUserMessageIds.filter((id) => id.trim() !== "")),
-      ];
-      return updateLink(discordThreadId, (existing) => ({
-        ...existing,
-        sentDiscordUserMessageIds: normalizedIds.length > 0 ? normalizedIds : undefined,
-        updatedAt: nowIso(),
-      })).pipe(Effect.asVoid);
-    },
-
-    appendJiraIssueKeys: (discordThreadId, jiraIssueKeys) =>
-      updateLink(discordThreadId, (existing) => {
-        const merged = mergeJiraKeysOrdered(existing.jiraIssueKeys, jiraIssueKeys);
-        if (
-          merged.length === (existing.jiraIssueKeys?.length ?? 0) &&
-          merged.every((key, index) => key === existing.jiraIssueKeys?.[index])
-        ) {
-          return existing;
-        }
-        return {
+    setTaskDiscordMessageId: Effect.fn("ThreadLinkStore.setTaskDiscordMessageId")(
+      (discordThreadId, taskDiscordMessageId) =>
+        updateLink(discordThreadId, (existing) => ({
           ...existing,
-          jiraIssueKeys: merged.length > 0 ? merged : undefined,
+          taskDiscordMessageId: taskDiscordMessageId ?? undefined,
           updatedAt: nowIso(),
-        };
-      }),
+        })).pipe(Effect.asVoid),
+    ),
 
-    setJiraIssueKeys: (discordThreadId, jiraIssueKeys) =>
-      updateLink(discordThreadId, (existing) => {
-        const merged = mergeJiraKeysOrdered([], jiraIssueKeys);
-        return {
+    setStreamDiscordMessageIds: Effect.fn("ThreadLinkStore.setStreamDiscordMessageIds")(
+      (discordThreadId, streamDiscordMessageIds) => {
+        const normalizedIds = [
+          ...new Set(streamDiscordMessageIds.filter((id) => id.trim() !== "")),
+        ];
+        return updateLink(discordThreadId, (existing) => ({
           ...existing,
-          jiraIssueKeys: merged.length > 0 ? merged : undefined,
+          streamDiscordMessageIds: normalizedIds.length > 0 ? normalizedIds : undefined,
           updatedAt: nowIso(),
-        };
-      }),
+          lastActivityAt: nowIso(),
+        })).pipe(Effect.asVoid);
+      },
+    ),
 
-    setJiraKeyRoles: (discordThreadId, roles) =>
+    setSentDiscordUserMessageIds: Effect.fn("ThreadLinkStore.setSentDiscordUserMessageIds")(
+      (discordThreadId, sentDiscordUserMessageIds) => {
+        const normalizedIds = [
+          ...new Set(sentDiscordUserMessageIds.filter((id) => id.trim() !== "")),
+        ];
+        return updateLink(discordThreadId, (existing) => ({
+          ...existing,
+          sentDiscordUserMessageIds: normalizedIds.length > 0 ? normalizedIds : undefined,
+          updatedAt: nowIso(),
+        })).pipe(Effect.asVoid);
+      },
+    ),
+
+    appendJiraIssueKeys: Effect.fn("ThreadLinkStore.appendJiraIssueKeys")(
+      (discordThreadId, jiraIssueKeys) =>
+        updateLink(discordThreadId, (existing) => {
+          const merged = mergeJiraKeysOrdered(existing.jiraIssueKeys, jiraIssueKeys);
+          if (
+            merged.length === (existing.jiraIssueKeys?.length ?? 0) &&
+            merged.every((key, index) => key === existing.jiraIssueKeys?.[index])
+          ) {
+            return existing;
+          }
+          return {
+            ...existing,
+            jiraIssueKeys: merged.length > 0 ? merged : undefined,
+            updatedAt: nowIso(),
+          };
+        }),
+    ),
+
+    setJiraIssueKeys: Effect.fn("ThreadLinkStore.setJiraIssueKeys")(
+      (discordThreadId, jiraIssueKeys) =>
+        updateLink(discordThreadId, (existing) => {
+          const merged = mergeJiraKeysOrdered([], jiraIssueKeys);
+          return {
+            ...existing,
+            jiraIssueKeys: merged.length > 0 ? merged : undefined,
+            updatedAt: nowIso(),
+          };
+        }),
+    ),
+
+    setJiraKeyRoles: Effect.fn("ThreadLinkStore.setJiraKeyRoles")((discordThreadId, roles) =>
       updateLink(discordThreadId, (existing) => {
         const pin = mergeJiraKeysOrdered([], roles.jiraIssueKeys);
         const merged = mergePromotedLinkedKeys({
@@ -949,51 +971,58 @@ export const makeThreadLinkStore = Effect.fn("ThreadLinkStore.makeThreadLinkStor
           updatedAt: nowIso(),
         };
       }),
+    ),
 
-    promoteJiraIssueKeysToLinked: (discordThreadId, jiraIssueKeys) =>
-      updateLink(discordThreadId, (existing) => {
-        const incoming = mergeJiraKeysOrdered([], jiraIssueKeys);
-        if (incoming.length === 0) return existing;
-        const incomingSet = new Set(incoming);
-        const linked = mergeJiraKeysOrdered(existing.linkedJiraIssueKeys, incoming);
-        const backfill = mergeJiraKeysOrdered([], existing.backfillJiraIssueKeys).filter(
-          (key) => !incomingSet.has(key),
-        );
-        return {
-          ...existing,
-          linkedJiraIssueKeys: linked.length > 0 ? linked : undefined,
-          backfillJiraIssueKeys: backfill.length > 0 ? backfill : undefined,
-          updatedAt: nowIso(),
-        };
-      }),
+    promoteJiraIssueKeysToLinked: Effect.fn("ThreadLinkStore.promoteJiraIssueKeysToLinked")(
+      (discordThreadId, jiraIssueKeys) =>
+        updateLink(discordThreadId, (existing) => {
+          const incoming = mergeJiraKeysOrdered([], jiraIssueKeys);
+          if (incoming.length === 0) return existing;
+          const incomingSet = new Set(incoming);
+          const linked = mergeJiraKeysOrdered(existing.linkedJiraIssueKeys, incoming);
+          const backfill = mergeJiraKeysOrdered([], existing.backfillJiraIssueKeys).filter(
+            (key) => !incomingSet.has(key),
+          );
+          return {
+            ...existing,
+            linkedJiraIssueKeys: linked.length > 0 ? linked : undefined,
+            backfillJiraIssueKeys: backfill.length > 0 ? backfill : undefined,
+            updatedAt: nowIso(),
+          };
+        }),
+    ),
 
-    appendSentryIssueUrls: (discordThreadId, sentryIssueUrls) =>
-      updateLink(discordThreadId, (existing) => {
-        const merged = mergeSentryIssueUrls(existing.sentryIssueUrls, sentryIssueUrls);
-        if (
-          merged.length === (existing.sentryIssueUrls?.length ?? 0) &&
-          merged.every((url, index) => url === existing.sentryIssueUrls?.[index])
-        ) {
-          return existing;
-        }
-        return {
-          ...existing,
-          sentryIssueUrls: merged.length > 0 ? merged : undefined,
-          updatedAt: nowIso(),
-        };
-      }),
+    appendSentryIssueUrls: Effect.fn("ThreadLinkStore.appendSentryIssueUrls")(
+      (discordThreadId, sentryIssueUrls) =>
+        updateLink(discordThreadId, (existing) => {
+          const merged = mergeSentryIssueUrls(existing.sentryIssueUrls, sentryIssueUrls);
+          if (
+            merged.length === (existing.sentryIssueUrls?.length ?? 0) &&
+            merged.every((url, index) => url === existing.sentryIssueUrls?.[index])
+          ) {
+            return existing;
+          }
+          return {
+            ...existing,
+            sentryIssueUrls: merged.length > 0 ? merged : undefined,
+            updatedAt: nowIso(),
+          };
+        }),
+    ),
 
-    setSentryIssueUrls: (discordThreadId, sentryIssueUrls) =>
-      updateLink(discordThreadId, (existing) => {
-        const merged = mergeSentryIssueUrls([], sentryIssueUrls);
-        return {
-          ...existing,
-          sentryIssueUrls: merged.length > 0 ? merged : undefined,
-          updatedAt: nowIso(),
-        };
-      }),
+    setSentryIssueUrls: Effect.fn("ThreadLinkStore.setSentryIssueUrls")(
+      (discordThreadId, sentryIssueUrls) =>
+        updateLink(discordThreadId, (existing) => {
+          const merged = mergeSentryIssueUrls([], sentryIssueUrls);
+          return {
+            ...existing,
+            sentryIssueUrls: merged.length > 0 ? merged : undefined,
+            updatedAt: nowIso(),
+          };
+        }),
+    ),
 
-    appendPrUrls: (discordThreadId, prUrls) =>
+    appendPrUrls: Effect.fn("ThreadLinkStore.appendPrUrls")((discordThreadId, prUrls) =>
       updateLink(discordThreadId, (existing) => {
         const merged = mergePrUrlsOrdered(existing.prUrls, prUrls);
         if (
@@ -1008,8 +1037,9 @@ export const makeThreadLinkStore = Effect.fn("ThreadLinkStore.makeThreadLinkStor
           updatedAt: nowIso(),
         };
       }),
+    ),
 
-    setPrUrls: (discordThreadId, prUrls) =>
+    setPrUrls: Effect.fn("ThreadLinkStore.setPrUrls")((discordThreadId, prUrls) =>
       updateLink(discordThreadId, (existing) => {
         const merged = mergePrUrlsOrdered([], prUrls);
         return {
@@ -1018,15 +1048,18 @@ export const makeThreadLinkStore = Effect.fn("ThreadLinkStore.makeThreadLinkStor
           updatedAt: nowIso(),
         };
       }),
+    ),
 
-    setInfoDiscordMessageId: (discordThreadId, infoDiscordMessageId) =>
-      updateLink(discordThreadId, (existing) => ({
-        ...existing,
-        infoDiscordMessageId: infoDiscordMessageId ?? undefined,
-        updatedAt: nowIso(),
-      })).pipe(Effect.asVoid),
+    setInfoDiscordMessageId: Effect.fn("ThreadLinkStore.setInfoDiscordMessageId")(
+      (discordThreadId, infoDiscordMessageId) =>
+        updateLink(discordThreadId, (existing) => ({
+          ...existing,
+          infoDiscordMessageId: infoDiscordMessageId ?? undefined,
+          updatedAt: nowIso(),
+        })).pipe(Effect.asVoid),
+    ),
 
-    setModelHistory: (discordThreadId, history) =>
+    setModelHistory: Effect.fn("ThreadLinkStore.setModelHistory")((discordThreadId, history) =>
       updateLink(discordThreadId, (existing) => ({
         ...existing,
         initialModelLine:
@@ -1043,8 +1076,11 @@ export const makeThreadLinkStore = Effect.fn("ThreadLinkStore.makeThreadLinkStor
             : (history.modelSinceAt ?? undefined),
         updatedAt: nowIso(),
       })),
+    ),
 
-    list: () => Ref.get(state).pipe(Effect.map((map) => [...map.values()])),
+    list: Effect.fn("ThreadLinkStore.list")(() =>
+      Ref.get(state).pipe(Effect.map((map) => [...map.values()])),
+    ),
   });
 });
 

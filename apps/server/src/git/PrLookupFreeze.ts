@@ -50,8 +50,12 @@ export const make = Effect.gen(function* () {
   });
 
   return PrLookupFreeze.of({
-    noteWorktreeSettled: (worktreePath) => adjust(worktreePath, 1),
-    noteWorktreeUnsettled: (worktreePath) => adjust(worktreePath, -1),
+    noteWorktreeSettled: Effect.fn("PrLookupFreeze.noteWorktreeSettled")((worktreePath) =>
+      adjust(worktreePath, 1),
+    ),
+    noteWorktreeUnsettled: Effect.fn("PrLookupFreeze.noteWorktreeUnsettled")((worktreePath) =>
+      adjust(worktreePath, -1),
+    ),
     isWorktreeSettledFrozen: Effect.fn("PrLookupFreeze.isWorktreeSettledFrozen")(function* (cwd) {
       const key = yield* normalizeWorktreeKey(cwd);
       const counts = yield* Ref.get(settledRefCountByCwd);
