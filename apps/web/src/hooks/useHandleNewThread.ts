@@ -50,6 +50,7 @@ interface NewThreadWorkspaceOptions {
   worktreePath?: string | null;
   envMode?: DraftThreadEnvMode;
   startFromOrigin?: boolean;
+  reuseBaseBranch?: boolean;
 }
 
 function pickExplicitWorkspaceOptions(options: NewThreadWorkspaceOptions | undefined) {
@@ -58,6 +59,7 @@ function pickExplicitWorkspaceOptions(options: NewThreadWorkspaceOptions | undef
     ...(options?.worktreePath !== undefined ? { worktreePath: options.worktreePath } : {}),
     ...(options?.envMode !== undefined ? { envMode: options.envMode } : {}),
     ...(options?.startFromOrigin !== undefined ? { startFromOrigin: options.startFromOrigin } : {}),
+    ...(options?.reuseBaseBranch !== undefined ? { reuseBaseBranch: options.reuseBaseBranch } : {}),
   };
 }
 
@@ -80,7 +82,10 @@ export function createNewThreadHandler(router: AnyRouter) {
       worktreePath?: string | null;
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
+      reuseBaseBranch?: boolean;
       replace?: boolean;
+      logicalProjectKey?: string;
+      environmentSelection?: "manual";
     },
   ): Promise<{ draftId: DraftId; threadId: ThreadId } | null> => {
     const projects = readProjects();
@@ -118,6 +123,11 @@ export function createNewThreadHandler(router: AnyRouter) {
       ? (carrySourceComposer?.modelSelectionByProvider[composerActiveProvider] ?? null)
       : null;
     const carryModelSelection = composerModelSelection ?? carrySourceShell?.modelSelection ?? null;
+    const carryRuntimeMode =
+      carrySourceComposer?.runtimeMode ??
+      carrySourceShell?.runtimeMode ??
+      carrySourceDraft?.runtimeMode ??
+      null;
     const carryInteractionMode =
       carrySourceComposer?.interactionMode ??
       carrySourceShell?.interactionMode ??
@@ -178,13 +188,20 @@ export function createNewThreadHandler(router: AnyRouter) {
           ) > 0,
       });
     };
-    const logicalProjectKey = project
-      ? deriveLogicalProjectKeyFromSettings(project, projectGroupingSettings)
-      : scopedProjectKey(projectRef);
+    const logicalProjectKey =
+      options?.logicalProjectKey ??
+      (project
+        ? deriveLogicalProjectKeyFromSettings(project, projectGroupingSettings)
+        : scopedProjectKey(projectRef));
+    const environmentContext =
+      options?.environmentSelection === "manual"
+        ? { environmentSelection: "manual" as const, loadBalancedEnvironmentId: null }
+        : {};
     const hasBranchOption = options?.branch !== undefined;
     const hasWorktreePathOption = options?.worktreePath !== undefined;
     const hasEnvModeOption = options?.envMode !== undefined;
     const hasStartFromOriginOption = options?.startFromOrigin !== undefined;
+    const hasReuseBaseBranchOption = options?.reuseBaseBranch !== undefined;
     const storedDraftThread = getDraftSessionByLogicalProjectKey(logicalProjectKey);
     const storedDraftThreadRef = storedDraftThread
       ? scopeThreadRef(storedDraftThread.environmentId, storedDraftThread.threadId)
@@ -215,7 +232,13 @@ export function createNewThreadHandler(router: AnyRouter) {
           currentRouteTarget?.kind === "draft" &&
           currentRouteTarget.draftId === emptyStoredDraftThread.draftId;
         const hasExplicitWorkspaceOption =
-          hasBranchOption || hasWorktreePathOption || hasEnvModeOption || hasStartFromOriginOption;
+          hasBranchOption ||
+          hasWorktreePathOption ||
+          hasEnvModeOption ||
+          hasStartFromOriginOption ||
+          hasReuseBaseBranchOption;
+        // Explicit workspace options win; otherwise revive closed drafts with current defaults.
+        // An already-open draft keeps the branch the user picked. Model selection has a separate rule.
         let workspaceContext: NewThreadWorkspaceOptions | null = null;
         if (hasExplicitWorkspaceOption) {
           workspaceContext = pickExplicitWorkspaceOptions(options);
@@ -248,6 +271,7 @@ export function createNewThreadHandler(router: AnyRouter) {
               envMode: defaultEnvMode,
               newWorktreesStartFromOrigin: projectSettings.settings.newWorktreesStartFromOrigin,
             }),
+            reuseBaseBranch: false,
           };
         }
         if (workspaceContext) {
@@ -255,6 +279,7 @@ export function createNewThreadHandler(router: AnyRouter) {
             ...workspaceContext,
             ...(!isDraftAlreadyOpen ? { runtimeMode: defaultRuntimeMode } : {}),
             ...(carryInteractionMode ? { interactionMode: carryInteractionMode } : {}),
+            ...environmentContext,
           });
         }
         const storedDraft = getComposerDraft(emptyStoredDraftThread.draftId);
@@ -280,6 +305,7 @@ export function createNewThreadHandler(router: AnyRouter) {
             ...workspaceContext,
             ...(!isDraftAlreadyOpen ? { runtimeMode: defaultRuntimeMode } : {}),
             ...(carryInteractionMode ? { interactionMode: carryInteractionMode } : {}),
+            ...environmentContext,
           },
         );
         const opened = {
@@ -313,7 +339,8 @@ export function createNewThreadHandler(router: AnyRouter) {
         hasBranchOption ||
         hasWorktreePathOption ||
         hasEnvModeOption ||
-        hasStartFromOriginOption
+        hasStartFromOriginOption ||
+        hasReuseBaseBranchOption
       ) {
         setDraftThreadContext(currentRouteTarget.draftId, pickExplicitWorkspaceOptions(options));
       }
@@ -323,6 +350,7 @@ export function createNewThreadHandler(router: AnyRouter) {
         runtimeMode: latestActiveDraftThread.runtimeMode,
         interactionMode: latestActiveDraftThread.interactionMode,
         ...pickExplicitWorkspaceOptions(options),
+        ...environmentContext,
       });
       return Promise.resolve({
         draftId: currentRouteTarget.draftId,
@@ -351,6 +379,7 @@ export function createNewThreadHandler(router: AnyRouter) {
           runtimeMode: racedDraft.runtimeMode,
           interactionMode: racedDraft.interactionMode,
           ...pickExplicitWorkspaceOptions(options),
+          ...environmentContext,
         });
         await router.navigate({
           to: "/draft/$draftId",
@@ -371,8 +400,10 @@ export function createNewThreadHandler(router: AnyRouter) {
             envMode: initialEnvMode,
             newWorktreesStartFromOrigin: projectSettings.settings.newWorktreesStartFromOrigin,
           }),
-        runtimeMode: defaultRuntimeMode,
+        reuseBaseBranch: options?.reuseBaseBranch ?? false,
+        runtimeMode: carryRuntimeMode ?? defaultRuntimeMode,
         ...(carryInteractionMode ? { interactionMode: carryInteractionMode } : {}),
+        ...environmentContext,
       });
       applyStickyState(draftId);
       const modelSelectionOverride = resolveModelSelectionOverride(draftId);

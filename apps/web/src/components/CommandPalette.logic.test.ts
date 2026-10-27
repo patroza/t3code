@@ -1,5 +1,13 @@
+import { buildBrowseGroups } from "./CommandPalette.logic";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  IdentityUsername,
+  PersonId,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 import type { Thread } from "../types";
 import { makeThreadFixture } from "../test-fixtures";
 import {
@@ -215,6 +223,53 @@ describe("buildThreadActionItems", () => {
       "thread:environment-local:thread-title-match",
       "thread:environment-local:thread-context-match",
     ]);
+  });
+
+  it("matches identity handles, PR numbers, and Jira keys in thread search", () => {
+    const threadItems = buildThreadActionItems({
+      threads: [
+        makeThread({
+          id: ThreadId.make("thread-attributed"),
+          title: "Harden claim gate SA-49",
+          branch: "pr/9001-claim-gate",
+          originSource: {
+            channel: "desktop",
+            personId: PersonId.make("patroza"),
+            username: IdentityUsername.make("patroza"),
+            location: { issueKey: "SA-49", number: 9001, kind: "pr" },
+          },
+          participantSummaries: [
+            {
+              personId: PersonId.make("patroza"),
+              username: IdentityUsername.make("patroza"),
+              firstChannel: "desktop",
+              firstParticipatedAt: "2026-03-20T00:00:00.000Z",
+            },
+          ],
+        }),
+        makeThread({
+          id: ThreadId.make("thread-other"),
+          title: "Unrelated cleanup",
+        }),
+      ],
+      projectByKey: new Map([[`${LOCAL_ENVIRONMENT_ID}:${PROJECT_ID}`, { title: "Project" }]]),
+      icon: null,
+      runThread: async (_thread) => undefined,
+    });
+
+    for (const query of ["@patroza", "patroza@desktop", "@desktop", "#9001", "SA-49"]) {
+      const groups = filterCommandPaletteGroups({
+        activeGroups: [],
+        query,
+        isInSubmenu: false,
+        projectSearchItems: [],
+        threadSearchItems: threadItems,
+      });
+      expect(
+        groups[0]?.items.map((item) => item.value),
+        query,
+      ).toEqual([`thread:${LOCAL_ENVIRONMENT_ID}:thread-attributed`]);
+    }
   });
 
   it("searches submenu options from the root and from a submenu with no match", () => {
@@ -664,6 +719,73 @@ describe("buildThreadActionItems", () => {
     ]);
   });
 
+  it("prefers renderDescription when provided", () => {
+    const [item] = buildThreadActionItems({
+      threads: [makeThread({ branch: "feat/search", worktreePath: "/tmp/wt" })],
+      projectByKey: new Map([[`${LOCAL_ENVIRONMENT_ID}:${PROJECT_ID}`, { title: "T3 Code" }]]),
+      icon: null,
+      renderDescription: (thread, { projectTitle }) =>
+        `${projectTitle}:${thread.branch}:${thread.worktreePath ? "wt" : "local"}`,
+      runThread: async (_thread) => undefined,
+    });
+
+    expect(item?.description).toBe("T3 Code:feat/search:wt");
+  });
+
+  it("filters archived threads out of thread search items", () => {
+    const items = buildThreadActionItems({
+      threads: [
+        makeThread({
+          id: ThreadId.make("thread-active"),
+          title: "Active thread",
+          createdAt: "2026-03-02T00:00:00.000Z",
+          updatedAt: "2026-03-19T00:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("thread-archived"),
+          title: "Archived thread",
+          archivedAt: "2026-03-20T00:00:00.000Z",
+          updatedAt: "2026-03-20T00:00:00.000Z",
+        }),
+      ],
+      projectByKey: new Map([[`${LOCAL_ENVIRONMENT_ID}:${PROJECT_ID}`, { title: "Project" }]]),
+      icon: null,
+      runThread: async (_thread) => undefined,
+    });
+
+    expect(items.map((item) => item.value)).toEqual([
+      `thread:${LOCAL_ENVIRONMENT_ID}:thread-active`,
+    ]);
+  });
+
+  it("keeps archived threads when includeArchived is set", () => {
+    const items = buildThreadActionItems({
+      threads: [
+        makeThread({
+          id: ThreadId.make("thread-active"),
+          title: "Active thread",
+          createdAt: "2026-03-02T00:00:00.000Z",
+          updatedAt: "2026-03-19T00:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("thread-archived"),
+          title: "Archived thread",
+          archivedAt: "2026-03-20T00:00:00.000Z",
+          updatedAt: "2026-03-20T00:00:00.000Z",
+        }),
+      ],
+      projectByKey: new Map([[`${LOCAL_ENVIRONMENT_ID}:${PROJECT_ID}`, { title: "Project" }]]),
+      icon: null,
+      includeArchived: true,
+      runThread: async (_thread) => undefined,
+    });
+
+    expect(items.map((item) => item.value)).toEqual([
+      `thread:${LOCAL_ENVIRONMENT_ID}:thread-active`,
+      `thread:${LOCAL_ENVIRONMENT_ID}:thread-archived`,
+    ]);
+  });
+
   it("hides subagent threads but keeps forks", () => {
     const parentId = ThreadId.make("parent");
     const items = buildThreadActionItems({
@@ -773,6 +895,44 @@ describe("buildThreadActionItems", () => {
       "thread:environment-local:word-fresh",
       "thread:environment-local:prefix-stale",
     ]);
+  });
+});
+
+describe("buildBrowseGroups", () => {
+  it("waits for asynchronous browse navigation actions", async () => {
+    let finishNavigation: (() => void) | undefined;
+    const browseTo = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishNavigation = resolve;
+        }),
+    );
+    const groups = buildBrowseGroups({
+      browseEntries: [{ name: "Downloads", fullPath: "/Users/test/Downloads" }],
+      browseQuery: "~/",
+      canBrowseUp: false,
+      upIcon: null,
+      directoryIcon: null,
+      browseUp: vi.fn(),
+      browseTo,
+    });
+    const item = groups[0]?.items[0];
+    if (!item || item.kind !== "action") {
+      throw new Error("Expected a browse action");
+    }
+
+    let actionSettled = false;
+    const action = item.run().then(() => {
+      actionSettled = true;
+    });
+    await Promise.resolve();
+
+    expect(browseTo).toHaveBeenCalledWith("Downloads");
+    expect(actionSettled).toBe(false);
+
+    finishNavigation?.();
+    await action;
+    expect(actionSettled).toBe(true);
   });
 });
 

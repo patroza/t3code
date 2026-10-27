@@ -2,17 +2,39 @@ import { useAtomValue } from "@effect/atom-react";
 import type { DesktopEnvironmentBootstrap } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
 
-import { readDesktopSecondaryBootstraps } from "./desktopLocal";
+import { hasDesktopBridge, readDesktopSecondaryBootstraps } from "./desktopLocal";
 
 const DESKTOP_LOCAL_BOOTSTRAP_POLL_MS = 2_000;
 
 /**
- * The bridge exposes no change event, so this re-reads on an interval while
- * anything reads it; failed reads retain the latest successful snapshot, while
- * a successful empty read clears it. The reader returns the same array while
- * nothing changed, so an unchanged poll notifies no one.
+ * Compare every field the bridge reports: a field omitted here would leave the
+ * hook holding a stale topology, since an unequal read that compares equal is
+ * never published.
  */
+export function bootstrapsEqual(
+  left: ReadonlyArray<DesktopEnvironmentBootstrap>,
+  right: ReadonlyArray<DesktopEnvironmentBootstrap>,
+): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  return left.every((entry, index) => {
+    const other = right[index];
+    return (
+      other !== undefined &&
+      entry.id === other.id &&
+      entry.label === other.label &&
+      entry.runningDistro === other.runningDistro &&
+      entry.httpBaseUrl === other.httpBaseUrl &&
+      entry.wsBaseUrl === other.wsBaseUrl &&
+      entry.bootstrapToken === other.bootstrapToken
+    );
+  });
+}
+
+/** Poll the bridge while subscribed; preserve equal snapshots and retain the last success on failure. */
 const desktopLocalBootstrapsAtom = Atom.make((get) => {
+  if (!hasDesktopBridge()) return [];
   const interval = setInterval(
     () => get.setSelf(readDesktopSecondaryBootstraps()),
     DESKTOP_LOCAL_BOOTSTRAP_POLL_MS,

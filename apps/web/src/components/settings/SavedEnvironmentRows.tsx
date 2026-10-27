@@ -21,7 +21,6 @@ import {
   environmentMcpUrl,
 } from "@t3tools/client-runtime/connection";
 import * as Option from "effect/Option";
-
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { cn } from "../../lib/utils";
 import { SettingsRow } from "./settingsLayout";
@@ -66,6 +65,8 @@ import {
   ServerUpdateProgress,
 } from "../ServerUpdateAction";
 import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
+import { HostResourceStatus } from "../HostResourceStatus";
+import { isLocalConnectionTarget } from "../../connection/desktopLocal";
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
 
 type SavedBackendListRowProps = {
@@ -322,6 +323,14 @@ export function SavedBackendListRow({
               <ServerUpdateProgress state={serverUpdateState} />
             </div>
           ) : null}
+          <HostResourceStatus
+            environmentId={environmentId}
+            environmentLabel={environment.label}
+            connected={isConnected}
+            showRefresh
+            unavailableLabel
+            remote={!isLocalConnectionTarget(environment.entry.target)}
+          />
         </>
       }
       detail={

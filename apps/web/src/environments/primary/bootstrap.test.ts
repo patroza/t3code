@@ -99,6 +99,37 @@ describe("environmentBootstrap", () => {
     });
   });
 
+  it("uses the current origin as the descriptor base for local dev environments", async () => {
+    installTestBrowser("http://localhost:5735/");
+    await installDescriptorApi();
+
+    await expect(resolveInitialPrimaryEnvironmentDescriptor()).resolves.toEqual(BASE_ENVIRONMENT);
+    expect(resolvePrimaryEnvironmentHttpUrl("/.well-known/t3/environment")).toBe(
+      "http://localhost:5735/.well-known/t3/environment",
+    );
+  });
+
+  it.each([true, false])(
+    "carries native browser ownership %s from the desktop bootstrap",
+    (nativeServerBrowser) => {
+      vi.stubGlobal("window", {
+        location: new URL("http://127.0.0.1:3774/"),
+        desktopBridge: {
+          getLocalEnvironmentBootstraps: () => [
+            {
+              id: "primary",
+              label: "Local",
+              httpBaseUrl: "http://127.0.0.1:3774/",
+              wsBaseUrl: "ws://127.0.0.1:3774/",
+              nativeServerBrowser,
+            },
+          ],
+        },
+      });
+      expect(readPrimaryEnvironmentTarget()?.target.nativeServerBrowser).toBe(nativeServerBrowser);
+    },
+  );
+
   it("uses the vite proxy for desktop-managed loopback descriptor requests during local dev", async () => {
     vi.stubEnv("VITE_DEV_SERVER_URL", "http://127.0.0.1:5733");
     vi.stubGlobal("window", {

@@ -1,5 +1,4 @@
 import {
-  buildTraitsTriggerDisplay,
   getDescriptorStringValue,
   getTraitSelectChange,
   replaceDescriptorCurrentValue,
@@ -19,12 +18,15 @@ import {
 import {
   buildProviderOptionSelectionsFromDescriptors,
   getProviderOptionCurrentLabel,
+  getProviderOptionCurrentValue,
   getProviderOptionDescriptors,
   isClaudeUltrathinkPrompt,
   normalizeModelSlug,
 } from "@t3tools/shared/model";
 import { memo } from "react";
-import { BrainIcon, GaugeIcon } from "lucide-react";
+import { UltrafastIcon } from "../Icons";
+import { BrainIcon, ZapIcon } from "lucide-react";
+import { GaugeIcon } from "lucide-react";
 import {
   Menu,
   MenuGroup,
@@ -75,7 +77,7 @@ function savedOptionLabel(id: string): string {
   );
 }
 
-function buildUnavailableModelOptionDescriptors(
+export function buildUnavailableModelOptionDescriptors(
   selections: ProviderOptions | null | undefined,
 ): ReadonlyArray<ProviderOptionDescriptor> {
   return (selections ?? []).map((selection) =>
@@ -506,6 +508,72 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   );
 });
 
+/**
+ * Fast mode uses one bolt; Codex Ultrafast uses two. Keep a text label when
+ * speed is the only trait so the trigger remains readable.
+ */
+export function buildTraitsTriggerDisplay(input: {
+  provider: ProviderDriverKind;
+  descriptors: ReadonlyArray<ProviderOptionDescriptor>;
+  primarySelectDescriptorId: string | null;
+  ultrathinkPromptControlled: boolean;
+  modelSelection?: ModelSelection | null;
+  reportedModelSelection?: ModelSelection | null | undefined;
+}): { label: string; speedIcon: "fast" | "ultrafast" | null } {
+  let fastModeFallbackLabel: string | null = null;
+  let speedIcon: "fast" | "ultrafast" | null = null;
+  const labels: Array<string> = [];
+  for (const descriptor of input.descriptors) {
+    if (descriptor.id === "fastMode" && descriptor.type === "boolean") {
+      speedIcon = descriptor.currentValue === true ? "fast" : null;
+      fastModeFallbackLabel = speedIcon ? "Fast" : "Normal";
+      continue;
+    }
+    if (
+      input.provider === "codex" &&
+      descriptor.id === "serviceTier" &&
+      descriptor.type === "select"
+    ) {
+      const currentValue = getProviderOptionCurrentValue(descriptor);
+      const fastTier = descriptor.options.find(({ label }) => label === "Fast");
+      const ultrafastTier = descriptor.options.find(({ label }) => label === "Ultrafast");
+      if (
+        ((fastTier || ultrafastTier) && currentValue === "default") ||
+        (fastTier && currentValue === fastTier.id) ||
+        (ultrafastTier && currentValue === ultrafastTier.id)
+      ) {
+        speedIcon =
+          ultrafastTier && currentValue === ultrafastTier.id
+            ? "ultrafast"
+            : fastTier && currentValue === fastTier.id
+              ? "fast"
+              : null;
+        fastModeFallbackLabel =
+          descriptor.options.find(({ id }) => id === currentValue)?.label ?? "Normal";
+        continue;
+      }
+    }
+    const label =
+      input.ultrathinkPromptControlled && descriptor.id === input.primarySelectDescriptorId
+        ? "Ultrathink"
+        : descriptor.type === "boolean"
+          ? `${descriptor.label} ${descriptor.currentValue === true ? "On" : "Off"}`
+          : getProviderOptionCurrentLabel(
+              descriptor,
+              input.modelSelection,
+              input.reportedModelSelection,
+            );
+    if (typeof label === "string" && label.length > 0) {
+      labels.push(label);
+    }
+  }
+
+  if (labels.length === 0 && fastModeFallbackLabel !== null) {
+    return { label: fastModeFallbackLabel, speedIcon: null };
+  }
+  return { label: labels.join(" · "), speedIcon };
+}
+
 export const TraitsPicker = memo(function TraitsPicker({
   provider,
   instanceId,
@@ -555,7 +623,7 @@ export const TraitsPicker = memo(function TraitsPicker({
     return null;
   }
 
-  const { label: triggerLabel } = buildTraitsTriggerDisplay({
+  const { label: triggerLabel, speedIcon } = buildTraitsTriggerDisplay({
     provider,
     descriptors,
     primarySelectDescriptorId: primarySelectDescriptor?.id ?? null,
@@ -563,6 +631,19 @@ export const TraitsPicker = memo(function TraitsPicker({
     modelSelection: instanceId && model ? { instanceId, model, options: modelOptions ?? [] } : null,
     reportedModelSelection,
   });
+  const speedLabel = speedIcon === "ultrafast" ? "Ultrafast mode on" : "Fast mode on";
+  const accessibleLabel = speedIcon ? `${triggerLabel}, ${speedLabel}` : triggerLabel;
+  const fastModeIcon = speedIcon ? (
+    <>
+      <ComposerControlIcon
+        icon={speedIcon === "ultrafast" ? UltrafastIcon : ZapIcon}
+        size={size}
+        className={size === "xs" ? "text-current" : "text-foreground/80 opacity-100"}
+      />
+      <span className="sr-only">{speedLabel}</span>
+    </>
+  ) : null;
+
   const isCodexStyle = provider === "codex";
 
   return (
@@ -579,7 +660,7 @@ export const TraitsPicker = memo(function TraitsPicker({
               render={
                 <ComposerControl
                   disabled={disabled}
-                  aria-label={triggerLabel}
+                  aria-label={accessibleLabel}
                   data-composer-shortcut={isComposerOwned ? "composer.effort" : undefined}
                   size={size}
                   className={cn(
@@ -600,8 +681,16 @@ export const TraitsPicker = memo(function TraitsPicker({
                 size === "xs" ? "gap-1" : "gap-1.5",
               )}
             >
-              <ComposerControlIcon icon={BrainIcon} size={size} className="redesign:hidden" />
-              <ComposerControlIcon icon={GaugeIcon} size={size} className="hidden redesign:block" />
+              {fastModeIcon ?? (
+                <>
+                  <ComposerControlIcon icon={BrainIcon} size={size} className="redesign:hidden" />
+                  <ComposerControlIcon
+                    icon={GaugeIcon}
+                    size={size}
+                    className="hidden redesign:block"
+                  />
+                </>
+              )}
               <span data-composer-control-label className="min-w-0 truncate">
                 {triggerLabel}
               </span>
@@ -609,14 +698,22 @@ export const TraitsPicker = memo(function TraitsPicker({
             </span>
           ) : (
             <>
-              <ComposerControlIcon icon={BrainIcon} size={size} className="redesign:hidden" />
-              <ComposerControlIcon icon={GaugeIcon} size={size} className="hidden redesign:block" />
+              {fastModeIcon ?? (
+                <>
+                  <ComposerControlIcon icon={BrainIcon} size={size} className="redesign:hidden" />
+                  <ComposerControlIcon
+                    icon={GaugeIcon}
+                    size={size}
+                    className="hidden redesign:block"
+                  />
+                </>
+              )}
               <span data-composer-control-label>{triggerLabel}</span>
               <ComposerControlChevron size={size} />
             </>
           )}
         </TooltipTrigger>
-        <TooltipPopup side="top">{triggerLabel}</TooltipPopup>
+        <TooltipPopup side="top">{accessibleLabel}</TooltipPopup>
       </Tooltip>
       <MenuPopup align="start" {...(isComposerOwned ? composerFloatingLayerProps : {})}>
         <TraitsMenuContent

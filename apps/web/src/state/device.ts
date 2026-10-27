@@ -4,16 +4,8 @@ import {
   type DeviceHubAccess,
   resolveDeviceHubAccess,
 } from "@t3tools/client-runtime/state/deviceHubAccess";
-import {
-  createEnvironmentRpcQueryAtomFamily,
-  runAtomCommand,
-} from "@t3tools/client-runtime/state/runtime";
-import {
-  type DeviceDetail,
-  type DeviceServiceState,
-  type EnvironmentId,
-  WS_METHODS,
-} from "@t3tools/contracts";
+import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
+import { type DeviceDetail, type DeviceServiceState, type EnvironmentId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
@@ -160,14 +152,3 @@ export const deviceHostProbeAtom = Atom.family((environmentId: EnvironmentId) =>
 export const NO_DEVICE_PROBE_ATOM = Atom.make(AsyncResult.initial<void, never>()).pipe(
   Atom.withLabel("device-host-probe:none"),
 );
-
-/**
- * The Expo account an EAS host editor shows as it opens, for the saved
- * credential. Each open checks again; edits and manual checks use the command.
- */
-export const deviceEasAccountCheck = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
-  label: "environment-data:device:eas-account-check",
-  tag: WS_METHODS.deviceEasAccount,
-  staleTimeMs: 0,
-  idleTtlMs: 0,
-});

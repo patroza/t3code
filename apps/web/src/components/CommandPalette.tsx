@@ -1,3 +1,9 @@
+"use client";
+
+import { useStableCallback } from "../hooks/useStableCallback";
+import { useEnvironmentProviders } from "../state/environments";
+import { presentThreadShell } from "@t3tools/client-runtime/state/shell";
+
 import { threadPullRequestLinkMode } from "@t3tools/client-runtime/thread-pull-request-compatibility";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 
@@ -51,6 +57,7 @@ import {
 } from "@t3tools/contracts";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import {
+  ArchiveIcon,
   ArrowLeftIcon,
   ChartNoAxesColumnIcon,
   CheckIcon,
@@ -94,7 +101,9 @@ import {
   promptLinkRepositoryOf,
 } from "./promptLinks/copyPromptLink";
 import { useClientSettings } from "../hooks/useSettings";
-import { useStableCallback } from "../hooks/useStableCallback";
+import { PULL_REQUESTS_PANEL_REF, useRightPanelStore } from "../rightPanelStore";
+import { useThreadActions } from "../hooks/useThreadActions";
+import { useArchivedThreadSnapshots } from "../lib/archivedThreadsState";
 import { readLocalApi } from "../localApi";
 import { desktopLocalBackendId } from "../connection/desktopLocal";
 import { filesystemEnvironment, useFilesystemReadAccess } from "../state/filesystem";
@@ -108,19 +117,16 @@ import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useScratchProject } from "../hooks/useScratchProject";
 import { useNewProject } from "../hooks/useNewProject";
-import { isScratchProject } from "@t3tools/client-runtime/state/projects";
-import {
-  useEnvironmentProviders,
-  useEnvironments,
-  usePrimaryEnvironmentId,
-} from "../state/environments";
+import { getBrowseDirectoryPath, isScratchProject } from "@t3tools/client-runtime/state/projects";
+import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { useProjects, useServerConfigs, useThreadShells, waitForProject } from "../state/entities";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
   appendBrowsePathSegment,
+  canNavigateUp,
   ensureBrowseDirectoryPath,
   findProjectByPath,
-  getBrowseDirectoryPath,
+  getBrowseParentPath,
   hasTrailingPathSeparator,
   inferProjectTitleFromPath,
   isExplicitRelativeProjectPath,
@@ -132,7 +138,6 @@ import {
   useCommandPaletteMount,
   useCommandPaletteStore,
 } from "../commandPaletteStore";
-import { PULL_REQUESTS_PANEL_REF, useRightPanelStore } from "../rightPanelStore";
 import { getLatestThreadForProject, sortThreads } from "../lib/threadSort";
 import {
   cn,
@@ -155,11 +160,11 @@ import {
   buildBrowseGroups,
   buildRootGroups,
   buildLinkedThreadActionItems,
+  buildThreadActionItems,
   buildCommandPaletteRows,
   enumerateCommandPaletteItems,
   findHighlightedCommandPaletteItem,
   type CommandPaletteActionItem,
-  type CommandPaletteOpenIntent,
   type CommandPaletteProject,
   type CommandPaletteReturnContext,
   type CommandPaletteSubmenuItem,
@@ -171,6 +176,7 @@ import {
   getCommandPaletteMode,
   ITEM_ICON_CLASS,
   RECENT_THREAD_LIMIT,
+  type CommandPaletteOpenIntent,
   createCommandPaletteSearchState,
   type CommandPaletteGroup,
   resolveAddProjectEntry,
@@ -272,6 +278,8 @@ export function CommandPalette({ children }: { children: ReactNode }) {
       <CommandDialog
         open={state.open}
         onOpenChange={(open, eventDetails) => {
+          // The overlays render an "Esc Back" affordance, so escape returns to
+          // command mode instead of dismissing the whole dialog.
           if (!open && eventDetails.reason === "escape-key" && state.mode !== "command") {
             eventDetails.cancel();
             dispatchCommandPalette({ _tag: "BackToCommand" });
@@ -379,6 +387,7 @@ function OpenCommandPaletteDialog(props: {
   });
   const { query, views: viewStack } = searchState;
   const setQuery = (query: string) => dispatchSearch({ type: "query", query });
+  const [includeArchived, setIncludeArchived] = useState(false);
   const deferredQuery = useDeferredValue(query);
   const isActionsOnly = deferredQuery.startsWith(">");
   const [highlightedItemValue, setHighlightedItemValue] = useState<string | null>(null);
@@ -399,7 +408,6 @@ function OpenCommandPaletteDialog(props: {
   });
   const loadBrowsePath = useAtomQueryRunner(filesystemEnvironment.browse, {
     reportFailure: false,
-    reportDefect: false,
   });
   const cloneRepository = useAtomCommand(sourceControlEnvironment.cloneRepository, {
     reportFailure: false,
@@ -620,6 +628,38 @@ function OpenCommandPaletteDialog(props: {
 
   const { projectCwdById, projectByKey, projectTitleById } = useProjectLookups();
 
+  // Archived threads live in a separate snapshot query and never reach the main
+  // store. When the user opts in, pull them and merge them into the searchable
+  // thread items so search can surface archived threads too.
+  const { unarchiveThread } = useThreadActions();
+  const archiveEnvironmentIds = (() => [
+    ...new Set(projects.map((project) => project.environmentId)),
+  ])();
+  const { snapshots: archivedSnapshots } = useArchivedThreadSnapshots(
+    includeArchived ? archiveEnvironmentIds : [],
+  );
+  const archivedThreads = (() =>
+    archivedSnapshots.flatMap(({ environmentId, snapshot }) =>
+      snapshot.threads.map((thread) => ({
+        ...presentThreadShell(environmentId, thread),
+        environmentId,
+      })),
+    ))();
+  // Include archived-snapshot project titles too — a project whose threads are
+  // all archived may not appear in the main `projects` list.
+  const archivedProjectByKey = (() => {
+    const map = new Map(projectByKey);
+    for (const { environmentId, snapshot } of archivedSnapshots) {
+      for (const project of snapshot.projects) {
+        const key = `${environmentId}:${project.id}`;
+        if (!map.has(key)) {
+          map.set(key, { ...project, environmentId });
+        }
+      }
+    }
+    return map;
+  })();
+
   const activeThreadKey = activeThread
     ? scopedThreadKey(scopeThreadRef(activeThread.environmentId, activeThread.id))
     : null;
@@ -654,7 +694,7 @@ function OpenCommandPaletteDialog(props: {
       ? filesystemEnvironment.browse({
           environmentId: browseEnvironmentId,
           input: {
-            partialPath: browsePath.directoryPath,
+            partialPath: browseDirectoryPath,
             ...(currentProjectCwdForBrowse ? { cwd: currentProjectCwdForBrowse } : {}),
           },
         })
@@ -667,7 +707,9 @@ function OpenCommandPaletteDialog(props: {
       ? (browseAccess.error ?? "This connection cannot browse host folders.")
       : null;
   const browseEntries = browseResult?.entries ?? EMPTY_BROWSE_ENTRIES;
-  const { visibleEntries: visibleBrowseEntries, exactEntry: exactBrowseEntry } =
+  const { visibleEntries: visibleBrowseEntries, exactEntry: exactBrowseEntry } = (() =>
+    // With the clone folder pinned, the query's last segment names the folder
+    // to create, so filtering by it would hide every sibling to browse into.
     pinnedCloneDirectoryName
       ? filterPinnedBrowseEntries({
           browseEntries,
@@ -675,7 +717,7 @@ function OpenCommandPaletteDialog(props: {
           pinnedDirectoryName: pinnedCloneDirectoryName,
           caseSensitive: !isWindowsPlatform(browseEnvironmentPlatform),
         })
-      : filterFilesystemBrowseEntries(browseEntries, browsePath.filterQuery);
+      : filterFilesystemBrowseEntries(browseEntries, browsePath.filterQuery))();
 
   const prefetchBrowsePath = async (
     partialPath: string,
@@ -815,6 +857,33 @@ function OpenCommandPaletteDialog(props: {
     )
     .slice(0, RECENT_THREAD_LIMIT);
 
+  // Archived threads, surfaced only when the "Archived" toggle is on. Selecting
+  // one unarchives it (reinstating it into the main list) before navigating.
+  const archivedThreadItems = (() =>
+    includeArchived
+      ? buildThreadActionItems({
+          threads: archivedThreads,
+          includeArchived: true,
+          ...(activeThread ? { activeThread } : {}),
+          projectByKey: archivedProjectByKey,
+          icon: <MessageSquareIcon className={ITEM_ICON_CLASS} />,
+          renderTrailingContent: () => (
+            <span className="inline-flex items-center gap-1 rounded-sm bg-muted px-1.5 py-0.5 font-medium text-xs text-muted-foreground uppercase tracking-wide">
+              <ArchiveIcon className="size-3" />
+              Archived
+            </span>
+          ),
+          runThread: async (thread) => {
+            await unarchiveThread(scopeThreadRef(thread.environmentId, thread.id));
+            await navigate({
+              to: "/$environmentId/$threadId",
+              params: buildThreadRouteParams(scopeThreadRef(thread.environmentId, thread.id)),
+            });
+          },
+        })
+      : [])();
+  const threadSearchItems = (() => [...allThreadItems, ...archivedThreadItems])();
+
   const pushPaletteView = useStableCallback((view: CommandPaletteView): void => {
     browseNavigation.invalidate();
     dispatchSearch({ type: "push", view });
@@ -823,7 +892,6 @@ function OpenCommandPaletteDialog(props: {
   });
 
   function popView(): void {
-    browseNavigation.invalidate();
     setAddProjectCloneFlow(null);
     setNewProjectFlow(null);
     if (viewStack.length <= 1) {
@@ -853,7 +921,6 @@ function OpenCommandPaletteDialog(props: {
       groups: [],
       initialQuery,
     };
-
     await browseNavigation.run(
       () =>
         initialBrowsePath.length > 0
@@ -1612,7 +1679,7 @@ function OpenCommandPaletteDialog(props: {
               });
             },
           })
-        : allThreadItems,
+        : threadSearchItems,
     threadMessageItems: isLinkedThreadSearch ? [] : threadMessageItems,
     now: searchNow,
   });
@@ -1997,9 +2064,11 @@ function OpenCommandPaletteDialog(props: {
   }
 
   const browseTo = async (name: string): Promise<void> => {
+    // Stepping into a folder while the clone folder is pinned keeps the pin on
+    // the end of the path, unless the chosen folder already is that folder.
     const nextQuery = pinnedCloneDirectoryName
       ? getCloneDestinationBrowsePath({
-          browseDirectoryPath: browsePath.directoryPath,
+          browseDirectoryPath,
           selectedDirectoryName: name,
           cloneDirectoryName: pinnedCloneDirectoryName,
           caseSensitive: !isWindowsPlatform(browseEnvironmentPlatform),
@@ -2016,7 +2085,13 @@ function OpenCommandPaletteDialog(props: {
   };
 
   const browseUp = async (): Promise<void> => {
-    const parentPath = browsePath.parentPath;
+    // With the clone folder pinned, the query's last segment is the folder to
+    // create rather than a folder being browsed, so going up has to start from
+    // the directory actually being listed — taking the parent of the query
+    // would only strip the pin and re-append it, leaving the path unchanged.
+    const parentPath = pinnedCloneDirectoryName
+      ? getBrowseParentPath(browseDirectoryPath)
+      : getBrowseParentPath(query);
     if (parentPath === null) {
       return;
     }
@@ -2036,7 +2111,8 @@ function OpenCommandPaletteDialog(props: {
     ? (browseResult?.parentPath ?? query.trim())
     : (exactBrowseEntry?.fullPath ?? query.trim());
 
-  const canBrowseUp = !relativePathNeedsActiveProject && browsePath.canBrowseUp;
+  const canBrowseUp =
+    isBrowsing && !relativePathNeedsActiveProject && canNavigateUp(browseDirectoryPath);
 
   const browseGroups = buildBrowseGroups({
     browseEntries: visibleBrowseEntries,
@@ -2579,6 +2655,35 @@ function OpenCommandPaletteDialog(props: {
           }
         }}
       />
+    ) : !isSubmenu ? (
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant={includeArchived ? "default" : "outline"}
+              size="xs"
+              tabIndex={-1}
+              className="absolute inset-e-2.5 top-1/2 -translate-y-1/2"
+              aria-label="Include archived threads"
+              aria-pressed={includeArchived}
+              onMouseDown={(event) => {
+                event.preventDefault();
+              }}
+              onClick={() => {
+                setIncludeArchived((previous) => !previous);
+              }}
+            />
+          }
+        >
+          <ArchiveIcon className="size-3.5" />
+          <span>Archived</span>
+        </TooltipTrigger>
+        <TooltipPopup side="top">
+          {includeArchived
+            ? "Hide archived threads from search"
+            : "Include archived threads in search"}
+        </TooltipPopup>
+      </Tooltip>
     ) : null;
 
   const footerActionLabel =

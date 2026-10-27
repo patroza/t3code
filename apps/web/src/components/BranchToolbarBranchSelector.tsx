@@ -87,6 +87,8 @@ interface BranchToolbarBranchSelectorProps {
   onActiveThreadBranchOverrideChange?: (refName: string | null) => void;
   startFromOrigin: boolean;
   onStartFromOriginChange: (startFromOrigin: boolean) => void;
+  reuseBaseBranch?: boolean;
+  onReuseBaseBranchChange?: (reuseBaseBranch: boolean) => void;
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
 }
@@ -109,6 +111,8 @@ export function BranchToolbarBranchSelector({
   onActiveThreadBranchOverrideChange,
   startFromOrigin,
   onStartFromOriginChange,
+  reuseBaseBranch = false,
+  onReuseBaseBranchChange,
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
 }: BranchToolbarBranchSelectorProps) {
@@ -664,6 +668,11 @@ export function BranchToolbarBranchSelector({
           : item === createBranchItemValue
             ? "create-branch"
             : "branch"
+      }
+      reuseBaseControl={
+        isSelectingWorktreeBase && onReuseBaseBranchChange
+          ? { checked: reuseBaseBranch, onCheckedChange: onReuseBaseBranchChange }
+          : undefined
       }
       originControl={
         isSelectingWorktreeBase

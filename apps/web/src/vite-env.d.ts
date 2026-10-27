@@ -25,5 +25,6 @@ interface ImportMeta {
 declare global {
   interface Window {
     desktopBridge?: DesktopBridge;
+    nativeApi?: import("@t3tools/contracts").LocalApi;
   }
 }

@@ -1,3 +1,7 @@
+import type {
+  MessageSenderSource,
+  MessageSenderViewer,
+} from "@t3tools/client-runtime/user-message";
 import { AudioPreviewUnmountContext } from "../files/AudioPreview";
 import { ThreadFindTimelineContext } from "./ThreadFindProvider";
 import { MarkdownFindContext } from "./markdownFindContext";
@@ -236,6 +240,12 @@ interface MessagesTimelineProps {
   announceTurnStatus?: boolean;
   onOpenTurnDiff?: (runId: RunId, filePath?: string) => void;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
+  /** This client's claim and source channel. Same person and channel stays unlabeled. */
+  messageViewer?: MessageSenderViewer | undefined;
+  /** Thread origin, used when an agent message has no sender of its own. */
+  originSource?: MessageSenderSource | null | undefined;
+  /** Conversation-message senders, for history whose turn item has no source. */
+  messageSourceById?: ReadonlyMap<string, MessageSenderSource> | undefined;
   renderHtmlRender?: TimelineRowSharedState["renderHtmlRender"];
   turnItemSource?: TimelineRowSharedState["turnItemSource"];
   parentThreadLink?: {
@@ -343,6 +353,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
   announceTurnStatus = true,
   onOpenTurnDiff,
   onOpenThread,
+  messageViewer,
+  originSource,
+  messageSourceById,
   renderHtmlRender,
   turnItemSource,
   parentThreadLink = null,
@@ -1007,7 +1020,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     };
   };
 
-  const sharedState: TimelineRowSharedState = {
+  const sharedState = (() => ({
     citationRequest: readyCitationRequest,
     listRef,
     timestampFormat,
@@ -1031,6 +1044,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
     openPullRequest,
     onOpenTurnDiff,
     onOpenThread,
+    messageViewer,
+    originSource,
+    messageSourceById,
     renderHtmlRender,
     turnItemSource,
     workflowOpening,
@@ -1046,7 +1062,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     onWorktreeSetupWorkLocally: onWorktreeSetupWorkLocally ?? null,
     onOpenWorktreeSetupTerminal: onOpenWorktreeSetupTerminal ?? null,
     workGroupViewState,
-  };
+  }))() as TimelineRowSharedState;
   const compactionAwaitingRow =
     isCompacting &&
     !rows.some(

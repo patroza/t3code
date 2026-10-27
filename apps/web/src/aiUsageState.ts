@@ -1,0 +1,25 @@
+/** Preserve web imports while sharing usage presentation with the other clients. */
+
+export {
+  findUsageItem,
+  formatPaceNote,
+  formatResetsIn,
+  formatWindowValue,
+  hasUsageMarker,
+  isEnforcedUsageWindow,
+  mapDriverToUsageProvider,
+  resolveDriverUsage,
+  resolveDriverUsages,
+  type DriverUsage,
+  type UsageFill,
+  type UsageMarker,
+  USAGE_OUTLOOK_PERCENT,
+  USAGE_WARN_PERCENT,
+  usageDotFillClass,
+  usageDotRingColor,
+  usageMarkerForItem,
+  usageProviderLabel,
+  usageProvidersForDriver,
+  usageRank,
+  worstUsagePercent,
+} from "@t3tools/client-runtime/state/aiUsagePresentation";

@@ -1,7 +1,66 @@
+import { BearerConnectionTarget } from "@t3tools/client-runtime/connection";
+import { EnvironmentId } from "@t3tools/contracts";
+import { PrimaryConnectionTarget } from "@t3tools/client-runtime/connection";
 import { type DesktopEnvironmentBootstrap, PRIMARY_LOCAL_ENVIRONMENT_ID } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { createDesktopSecondaryBootstrapsReader } from "./desktopLocal";
+import {
+  createDesktopSecondaryBootstrapsReader,
+  desktopLocalBackendId,
+  desktopLocalConnectionId,
+  isDesktopLocalConnectionTarget,
+  isLocalConnectionTarget,
+  isWslConnectionTarget,
+} from "./desktopLocal";
+
+describe("desktop local connection identity", () => {
+  it("preserves the desktop backend instance id", () => {
+    const target = new BearerConnectionTarget({
+      connectionId: desktopLocalConnectionId("wsl:Ubuntu"),
+      environmentId: EnvironmentId.make("environment-wsl"),
+      label: "WSL (Ubuntu)",
+    });
+
+    expect(isDesktopLocalConnectionTarget(target)).toBe(true);
+    expect(isLocalConnectionTarget(target)).toBe(true);
+    expect(desktopLocalBackendId(target)).toBe("wsl:Ubuntu");
+    expect(isWslConnectionTarget(target)).toBe(true);
+  });
+
+  it("does not infer WSL for another desktop-local backend", () => {
+    const target = new BearerConnectionTarget({
+      connectionId: desktopLocalConnectionId("native-linux"),
+      environmentId: EnvironmentId.make("environment-native-linux"),
+      label: "Linux",
+    });
+
+    expect(isDesktopLocalConnectionTarget(target)).toBe(true);
+    expect(isWslConnectionTarget(target)).toBe(false);
+  });
+
+  it("does not classify the primary environment as desktop-local", () => {
+    const target = new PrimaryConnectionTarget({
+      environmentId: EnvironmentId.make("environment-primary"),
+      httpBaseUrl: "http://127.0.0.1:3773",
+      label: "This device",
+      wsBaseUrl: "ws://127.0.0.1:3773",
+    });
+
+    expect(isDesktopLocalConnectionTarget(target)).toBe(false);
+    expect(isLocalConnectionTarget(target)).toBe(true);
+    expect(desktopLocalBackendId(target)).toBeNull();
+  });
+
+  it("does not classify a saved bearer connection as local", () => {
+    const target = new BearerConnectionTarget({
+      connectionId: "saved:smart",
+      environmentId: EnvironmentId.make("environment-smart"),
+      label: "Smart",
+    });
+
+    expect(isLocalConnectionTarget(target)).toBe(false);
+  });
+});
 
 describe("desktop local topology reads", () => {
   it("reuses snapshots when polling returns fresh objects for the same topology", () => {
@@ -76,6 +135,16 @@ describe("desktop local topology reads", () => {
     }));
 
     expect(reader.readResult()).toEqual({ _tag: "Success", bootstraps: [secondary] });
+  });
+
+  it("reports whether a bridge backs the reader at all", () => {
+    let bridge: { getLocalEnvironmentBootstraps: () => [] } | undefined = undefined;
+    const reader = createDesktopSecondaryBootstrapsReader(() => bridge);
+
+    expect(reader.hasBridge()).toBe(false);
+
+    bridge = { getLocalEnvironmentBootstraps: () => [] };
+    expect(reader.hasBridge()).toBe(true);
   });
 
   it("retains the last successful snapshot only until another read succeeds", () => {

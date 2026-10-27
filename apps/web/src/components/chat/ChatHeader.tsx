@@ -1,6 +1,10 @@
 import {
   AuthOrchestrationOperateScope,
+  type EditorId,
   type EnvironmentId,
+  type ProjectScript,
+  type ProviderDriverKind,
+  type ResolvedKeybindingsConfig,
   type ThreadId,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
@@ -9,7 +13,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { ChevronDownIcon } from "lucide-react";
+import { ChevronDownIcon, EllipsisIcon } from "lucide-react";
 import {
   memo,
   useEffect,
@@ -18,12 +22,26 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
+import { createPortal } from "react-dom";
+import GitActionsControl from "../GitActionsControl";
 import { isTrailingDoubleClick } from "../Sidebar.logic";
+import { type DraftId } from "~/composerDraftStore";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
+import { AiUsageStats } from "./AiUsageStats";
+import ProjectScriptsControl, {
+  type NewProjectScriptInput,
+  type ProjectScriptActionResult,
+} from "../ProjectScriptsControl";
+import { OpenInPicker } from "./OpenInPicker";
+import { useRemoteOpenState, type RemoteOpenMode } from "../../remoteOpen";
+import { useEnvironment, usePrimaryEnvironmentId } from "../../state/environments";
+import { useT3ProjectFileScripts } from "~/hooks/useT3ProjectFileScripts";
 import { useThreadActionMenu } from "~/hooks/useThreadActionMenu";
 import { readLocalApi } from "~/localApi";
 import { threadEnvironment } from "../../state/threads";
+
+import { observeResponsiveBreakpointFade, usePanelAnimationSettings } from "../../panelAnimations";
 import { canShareWithGuestAtom } from "./guestShareAvailability";
 import { useAtomValue } from "@effect/atom-react";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
@@ -37,6 +55,13 @@ import {
 } from "../WorkspaceBreadcrumb";
 import { observeResize } from "~/lib/observeResize";
 import { cn } from "~/lib/utils";
+import { useMediaQuery } from "~/hooks/useMediaQuery";
+import { Button } from "../ui/button";
+import { Menu, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
+import { useAiUsageSnapshot } from "../../hooks/useAiUsageSnapshot";
+import { resolveDriverUsage, usageDotFillClass, usageDotRingColor } from "../../aiUsageState";
+import { HostResourceStatus } from "../HostResourceStatus";
+import { isLocalConnectionTarget } from "~/connection/desktopLocal";
 import { textDirection } from "~/textDirection";
 import { useClientSettings } from "../../hooks/useSettings";
 import { GuestShareIndicator } from "./GuestShareControls";
@@ -44,17 +69,36 @@ import { GuestShareIndicator } from "./GuestShareControls";
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
   activeThreadId: ThreadId;
+  draftId?: DraftId;
   activeThreadTitle: string;
   isServerThread: boolean;
   activeProject: EnvironmentProject | null;
+  openInCwd: string | null;
+  activeProjectScripts: ReadonlyArray<ProjectScript> | undefined;
+  preferredScriptId: string | null;
+  keybindings: ResolvedKeybindingsConfig;
+  availableEditors: ReadonlyArray<EditorId>;
   parentThreadLink: { threadId: ThreadId; title: string } | null;
   onOpenThread: (threadId: ThreadId) => void;
   rightPanelOpen: boolean;
+  gitCwd: string | null;
+  isPreparingWorktree?: boolean;
+  /** For showing usage dot on the active thread's model at conversation level. */
+  activeThreadDriverKind?: ProviderDriverKind | null;
+  activeThreadModel?: string | null;
+  readonly onOpenPullRequest?: ((number: number, repository?: string | null) => void) | undefined;
   onNewThreadInProject: () => void;
   onOpenProjectSettings?: (() => void) | undefined;
+  onRunProjectScript: (script: ProjectScript) => void;
+  onAddProjectScript: (input: NewProjectScriptInput) => Promise<ProjectScriptActionResult>;
+  onUpdateProjectScript: (
+    scriptId: string,
+    input: NewProjectScriptInput,
+  ) => Promise<ProjectScriptActionResult>;
+  onDeleteProjectScript: (scriptId: string) => Promise<ProjectScriptActionResult>;
 }
 
-function resolveRenameCommit(input: {
+export function resolveRenameCommit(input: {
   readonly title: string;
   readonly originalTitle: string;
 }): { action: "commit"; title: string } | { action: "reject-empty" } | { action: "noop" } {
@@ -66,20 +110,117 @@ function resolveRenameCommit(input: {
 
 // Delay the input-swallowing native menu through the double-click rename interval.
 const TITLE_MENU_OPEN_DELAY_MS = 500;
+// Matches the @3xl/header-actions container breakpoint owned by this header.
+const HEADER_ACTIONS_EXPANDED_BREAKPOINT_REM = 48;
+
+export function shouldShowOpenInPicker(input: {
+  readonly activeProjectName: string | undefined;
+  readonly activeThreadEnvironmentId: EnvironmentId;
+  readonly primaryEnvironmentId: EnvironmentId | null;
+  readonly remoteOpenMode: RemoteOpenMode;
+}): boolean {
+  if (!input.activeProjectName) return false;
+  if (
+    input.primaryEnvironmentId !== null &&
+    input.activeThreadEnvironmentId === input.primaryEnvironmentId
+  ) {
+    return true;
+  }
+  // Remote environments get the picker in deep-link mode (or its explicit
+  // "no SSH route" state). Non-primary local backends (e.g. WSL) keep it
+  // hidden, matching pre-remote behavior.
+  return input.remoteOpenMode !== "local-exec";
+}
+
 export const ChatHeader = memo(function ChatHeader({
   activeThreadEnvironmentId,
   activeThreadId,
+  draftId,
   activeThreadTitle,
   isServerThread,
   activeProject,
+  openInCwd,
+  activeProjectScripts,
+  preferredScriptId,
+  keybindings,
+  availableEditors,
   parentThreadLink,
   onOpenThread,
   rightPanelOpen,
+  gitCwd,
+  isPreparingWorktree = false,
+  activeThreadDriverKind = null,
+  activeThreadModel = null,
+  onOpenPullRequest,
   onNewThreadInProject,
   onOpenProjectSettings,
+  onRunProjectScript,
+  onAddProjectScript,
+  onUpdateProjectScript,
+  onDeleteProjectScript,
 }: ChatHeaderProps) {
+  const { active: panelAnimationsActive, durationMs: panelAnimationDurationMs } =
+    usePanelAnimationSettings();
+  const headerActionsRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const actions = headerActionsRef.current;
+    const container = actions?.parentElement;
+    if (!actions || !container) return;
+    return observeResponsiveBreakpointFade({
+      target: actions,
+      container,
+      active: panelAnimationsActive,
+      durationMs: panelAnimationDurationMs,
+      breakpoint: { value: HEADER_ACTIONS_EXPANDED_BREAKPOINT_REM, unit: "rem" },
+    });
+  }, [panelAnimationDurationMs, panelAnimationsActive]);
+  const isMobile = useMediaQuery("max-md");
+  // Side panels can leave a desktop header narrower than a phone.
+  const [isNarrowHeader, setIsNarrowHeader] = useState(false);
+  useEffect(() => {
+    const container = headerActionsRef.current?.parentElement;
+    if (!container) return;
+    const update = () => setIsNarrowHeader(container.clientWidth < 512);
+    update();
+    return observeResize(container, update);
+  }, []);
+  const actionsCollapsed = isMobile || isNarrowHeader;
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const [actionsContainer] = useState(() => {
+    const container = document.createElement("div");
+    container.className = "contents";
+    return container;
+  });
+  // Reparent the DOM host, not the React controls: rotating a phone or resizing
+  // a window must not discard an unsaved script or Git dialog.
+  const mountInlineActions = (node: HTMLDivElement | null) => {
+    if (node && !actionsCollapsed) node.appendChild(actionsContainer);
+  };
+  const mountMenuActions = (node: HTMLDivElement | null) => {
+    if (node && actionsCollapsed) node.appendChild(actionsContainer);
+  };
+  if (!actionsCollapsed && actionsOpen) setActionsOpen(false);
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const activeEnvironment = useEnvironment(activeThreadEnvironmentId);
   const activeProjectName = activeProject?.isScratch ? "No project" : activeProject?.title;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
+  const fileScripts = useT3ProjectFileScripts(
+    activeThreadEnvironmentId,
+    activeProjectScripts ? activeProjectCwd : null,
+  );
+  const remoteOpenState = useRemoteOpenState(activeThreadEnvironmentId);
+  const showOpenInPicker = shouldShowOpenInPicker({
+    activeProjectName,
+    activeThreadEnvironmentId,
+    primaryEnvironmentId,
+    remoteOpenMode: remoteOpenState.mode,
+  });
+  const aiUsageSnapshot = useAiUsageSnapshot(activeThreadEnvironmentId);
+  const headerUsage = (() =>
+    resolveDriverUsage(aiUsageSnapshot, activeThreadDriverKind, activeThreadModel))();
+  const headerDotClass = headerUsage ? usageDotFillClass(headerUsage.marker) : undefined;
+  const headerRingColor = headerUsage ? usageDotRingColor(headerUsage.marker) : undefined;
+
   const interfaceFont = useClientSettings((settings) => settings.fontFamilySans);
   const breadcrumbContainerRef = useRef<HTMLDivElement>(null);
   const [collapseParentTitle, setCollapseParentTitle] = useState(false);
@@ -112,6 +253,7 @@ export const ChatHeader = memo(function ChatHeader({
       ? renaming.title
       : null;
   const isRenamingTitle = renamingTitle !== null;
+  // oxlint-disable-next-line t3code/react-effect-budget -- Breadcrumb overflow tracks DOM geometry through ResizeObserver.
   useEffect(() => {
     const list = breadcrumbContainerRef.current?.querySelector("ol");
     if (!list || !parentThreadLink) return;
@@ -201,14 +343,15 @@ export const ChatHeader = memo(function ChatHeader({
     clearTimeout(titleMenuTimerRef.current);
     titleMenuTimerRef.current = null;
   };
+  // oxlint-disable-next-line t3code/react-effect-budget -- A pending native timer must be cancelled when the thread changes or unmounts.
   useEffect(
     () => () => {
       if (titleMenuTimerRef.current === null) return;
       clearTimeout(titleMenuTimerRef.current);
       titleMenuTimerRef.current = null;
     },
-    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- A pending title menu belongs to the thread that was clicked, so switching threads drops it.
-    [activeThreadEnvironmentId, activeThreadId],
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Switching threads must cancel a pending title menu.
+    [activeThreadId],
   );
   const openTitleMenuNow = () => {
     cancelPendingTitleMenu();
@@ -239,6 +382,9 @@ export const ChatHeader = memo(function ChatHeader({
   };
   const handleHeaderContextMenu = (event: ReactMouseEvent) => {
     if (renamingTitle !== null) return;
+    // The right-side controls (git, scripts, open-in) keep their own
+    // behavior; only the breadcrumb area opens the thread menu.
+    if ((event.target as HTMLElement).closest("[data-chat-header-actions]")) return;
     if (!isServerThread && onOpenProjectSettings === undefined) return;
     cancelPendingTitleMenu();
     event.preventDefault();
@@ -267,11 +413,56 @@ export const ChatHeader = memo(function ChatHeader({
       setRenaming(null);
     }
   };
+  const headerActions = (
+    <>
+      {activeProjectScripts && (
+        <>
+          <ProjectScriptsControl
+            onRequestMenuClose={() => setActionsOpen(false)}
+            presentation={actionsCollapsed ? "menu" : "toolbar"}
+            environmentId={activeThreadEnvironmentId}
+            scripts={activeProjectScripts}
+            fileScripts={fileScripts}
+            preferredScriptId={preferredScriptId}
+            onRunScript={onRunProjectScript}
+            onAddScript={onAddProjectScript}
+            onUpdateScript={onUpdateProjectScript}
+            onDeleteScript={onDeleteProjectScript}
+          />
+        </>
+      )}
+      {showOpenInPicker && (
+        <>
+          {actionsCollapsed && activeProjectScripts && <MenuSeparator />}
+          <OpenInPicker
+            presentation={actionsCollapsed ? "menu" : "toolbar"}
+            environmentId={activeThreadEnvironmentId}
+            keybindings={keybindings}
+            availableEditors={availableEditors}
+            openInCwd={openInCwd}
+          />
+        </>
+      )}
+      {activeProjectName && gitCwd && (
+        <>
+          {actionsCollapsed && (activeProjectScripts || showOpenInPicker) && <MenuSeparator />}
+          <GitActionsControl
+            presentation={actionsCollapsed ? "menu" : "toolbar"}
+            gitCwd={gitCwd}
+            activeThreadRef={scopeThreadRef(activeThreadEnvironmentId, activeThreadId)}
+            isPreparingWorktree={isPreparingWorktree}
+            onOpenPullRequest={onOpenPullRequest}
+            {...(draftId ? { draftId } : {})}
+          />
+        </>
+      )}
+    </>
+  );
   return (
     <div
       ref={breadcrumbContainerRef}
       className={cn(
-        "flex min-w-0 flex-1 items-center gap-2 sm:gap-3",
+        "@container/header-actions flex min-w-0 flex-1 items-center gap-2 sm:gap-3",
         rightPanelOpen ? "pr-10" : "pr-24",
       )}
       onContextMenu={handleHeaderContextMenu}
@@ -351,13 +542,6 @@ export const ChatHeader = memo(function ChatHeader({
               defaultValue={renamingTitle}
               onBlur={(event) => {
                 if (renameCommittedRef.current) return;
-                if (
-                  event.relatedTarget instanceof HTMLElement &&
-                  event.relatedTarget.closest("button")
-                ) {
-                  setRenaming(null);
-                  return;
-                }
                 commitRename(event.currentTarget.value);
               }}
               onFocus={(event) => event.currentTarget.select()}
@@ -408,6 +592,83 @@ export const ChatHeader = memo(function ChatHeader({
           )}
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
+      {headerDotClass && headerUsage ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <span
+                className={`inline-block size-2 shrink-0 rounded-full ${headerDotClass} cursor-help`}
+                style={
+                  headerRingColor
+                    ? { boxShadow: `0 0 0 1.5px ${headerRingColor}, 0 0 0 3px var(--card)` }
+                    : undefined
+                }
+                aria-label="provider usage status"
+              />
+            }
+          />
+          <TooltipPopup side="bottom">
+            <AiUsageStats item={headerUsage.item} />
+          </TooltipPopup>
+        </Tooltip>
+      ) : headerDotClass ? (
+        <span
+          className={`inline-block size-2 shrink-0 rounded-full ${headerDotClass}`}
+          style={
+            headerRingColor
+              ? { boxShadow: `0 0 0 1.5px ${headerRingColor}, 0 0 0 3px var(--card)` }
+              : undefined
+          }
+          aria-label="provider usage status"
+        />
+      ) : null}
+      <HostResourceStatus
+        environmentId={activeThreadEnvironmentId}
+        environmentLabel={activeEnvironment?.label ?? "Active environment"}
+        connected={activeEnvironment?.connection.phase === "connected"}
+        remote={
+          activeEnvironment ? !isLocalConnectionTarget(activeEnvironment.entry.target) : false
+        }
+        className="hidden @2xl/header-actions:flex"
+      />
+      <div
+        ref={headerActionsRef}
+        data-chat-header-actions
+        className={cn(
+          "flex shrink-0 items-center justify-end gap-2 @3xl/header-actions:gap-3",
+          // Reserve two panel toggles (32px, 28px at sm) with their 4px gap and 1px edge inset,
+          // plus the same gap the actions keep between themselves (gap-2, gap-3 at @3xl) so the
+          // terminal toggle does not sit against the last action. The page header adds 8px more
+          // right padding at sm.
+          rightPanelOpen ? "pr-0" : "pr-19.25 sm:pr-15.25 @3xl/header-actions:pr-16.25",
+          "[[data-panel-animations=true]_&]:motion-safe:transition-[padding-right] [[data-panel-animations=true]_&]:motion-safe:duration-(--panel-animation-duration) [[data-panel-animations=true]_&]:motion-safe:ease-out",
+        )}
+      >
+        <Menu open={actionsCollapsed && actionsOpen} onOpenChange={setActionsOpen}>
+          <MenuTrigger
+            className={
+              actionsCollapsed &&
+              (activeProjectScripts || showOpenInPicker || (activeProjectName && gitCwd))
+                ? undefined
+                : "hidden"
+            }
+            render={<Button size="icon-sm" variant="ghost" aria-label="More header actions" />}
+          >
+            <EllipsisIcon className="size-4" />
+          </MenuTrigger>
+          <div ref={mountInlineActions} className="contents" />
+          <MenuPopup
+            data-chat-header-actions
+            keepMounted
+            aria-label="Header actions"
+            align="end"
+            finalFocus={actionsCollapsed ? undefined : false}
+          >
+            <div ref={mountMenuActions} className="contents" />
+            {createPortal(headerActions, actionsContainer)}
+          </MenuPopup>
+        </Menu>
+      </div>
       {isServerThread ? <GuestShareIndicator threadRef={activeThreadRef} /> : null}
     </div>
   );

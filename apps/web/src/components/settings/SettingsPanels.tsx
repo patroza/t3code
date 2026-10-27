@@ -135,10 +135,12 @@ const QUIT_CONFIRMATION_MODE_LABELS: Record<QuitConfirmationMode, string> = {
 
 const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
 function AboutVersionTitle() {
+  const updateState = useDesktopUpdateState();
+  const version = updateState?.currentVersion ?? APP_VERSION;
   return (
     <span className="inline-flex items-baseline gap-2">
       <span>Version</span>
-      <code className="text-2xs font-medium text-muted-foreground">{APP_VERSION}</code>
+      <code className="text-2xs font-medium text-muted-foreground">{version}</code>
     </span>
   );
 }
@@ -393,7 +395,7 @@ export function useSettingsRestore(onRestored?: () => void) {
   );
   const isBackgroundActivityDirty = hasChangedBackgroundActivitySettings(settings);
 
-  const changedSettingLabels = [
+  const changedSettingLabels = (() => [
     ...(theme !== "system" ? ["Theme"] : []),
     ...(!followSystem ? ["Follow system"] : []),
     ...(themeHalves !== null ? ["Theme mix"] : []),
@@ -508,6 +510,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.addProjectBaseDirectory !== DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory
       ? ["Add project base directory"]
       : []),
+    ...(settings.terminalShell !== DEFAULT_UNIFIED_SETTINGS.terminalShell
+      ? ["Terminal shell"]
+      : []),
     ...(settings.confirmThreadUnpin !== DEFAULT_UNIFIED_SETTINGS.confirmThreadUnpin
       ? ["Unpin confirmation"]
       : []),
@@ -516,6 +521,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       : []),
     ...(settings.confirmThreadDelete !== DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete
       ? ["Delete confirmation"]
+      : []),
+    ...(settings.confirmWorktreeRemoval !== DEFAULT_UNIFIED_SETTINGS.confirmWorktreeRemoval
+      ? ["Worktree remove confirmation"]
       : []),
     ...(settings.confirmQuit !== DEFAULT_UNIFIED_SETTINGS.confirmQuit ? ["Quit shortcut"] : []),
     ...(isTextGenerationModelDirty ? ["Text generation model"] : []),
@@ -526,7 +534,7 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.enableAgentBrowserAccess !== DEFAULT_UNIFIED_SETTINGS.enableAgentBrowserAccess
       ? ["Agent browser access"]
       : []),
-  ];
+  ])();
 
   const restoreDefaults = async () => {
     if (changedSettingLabels.length === 0) return;
@@ -622,8 +630,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       defaultThreadEnvMode: DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode,
       newWorktreesStartFromOrigin: DEFAULT_UNIFIED_SETTINGS.newWorktreesStartFromOrigin,
       addProjectBaseDirectory: DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory,
+      terminalShell: DEFAULT_UNIFIED_SETTINGS.terminalShell,
       confirmThreadArchive: DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive,
       confirmThreadDelete: DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete,
+      confirmWorktreeRemoval: DEFAULT_UNIFIED_SETTINGS.confirmWorktreeRemoval,
       confirmThreadUnpin: DEFAULT_UNIFIED_SETTINGS.confirmThreadUnpin,
       confirmQuit: DEFAULT_UNIFIED_SETTINGS.confirmQuit,
       textGenerationModelSelection: DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
@@ -877,6 +887,33 @@ export function GeneralSettingsPanel() {
       </SettingsSection>
 
       <SettingsSection id="confirmations" title="Confirmations">
+        <SettingsRow
+          title="Terminal shell"
+          description="Shell used for integrated terminals. Leave empty to use your OS login shell. Agent providers are unaffected."
+          resetAction={
+            settings.terminalShell !== DEFAULT_UNIFIED_SETTINGS.terminalShell ? (
+              <SettingResetButton
+                label="terminal shell"
+                onClick={() =>
+                  updateSettings({
+                    terminalShell: DEFAULT_UNIFIED_SETTINGS.terminalShell,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <DraftInput
+              className="w-full sm:w-72"
+              value={settings.terminalShell}
+              onCommit={(next) => updateSettings({ terminalShell: next })}
+              placeholder="/bin/zsh"
+              spellCheck={false}
+              aria-label="Terminal shell"
+            />
+          }
+        />
+
         <SettingsRow
           {...searchableSetting("unpin-confirmation")}
           description="Ask before unpinning a thread from the pinned section."
@@ -1419,6 +1456,7 @@ export function DiffsSettingsPanel() {
             />
           }
         />
+
         <PullRequestLinksOpenInAppSetting />
       </SettingsSection>
     </SettingsPageContainer>
@@ -1725,6 +1763,33 @@ export function ThreadsSettingsPanel() {
       ) : null}
 
       <SettingsSection id="text-generation" title="Text generation">
+        <SettingsRow
+          {...searchableSetting("worktree-remove-confirmation")}
+          title="Worktree remove confirmation"
+          description="Ask before removing a worktree when its last linked thread is archived or deleted."
+          resetAction={
+            settings.confirmWorktreeRemoval !== DEFAULT_UNIFIED_SETTINGS.confirmWorktreeRemoval ? (
+              <SettingResetButton
+                label="worktree remove confirmation"
+                onClick={() =>
+                  updateSettings({
+                    confirmWorktreeRemoval: DEFAULT_UNIFIED_SETTINGS.confirmWorktreeRemoval,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.confirmWorktreeRemoval}
+              onCheckedChange={(checked) =>
+                updateSettings({ confirmWorktreeRemoval: Boolean(checked) })
+              }
+              aria-label="Confirm worktree removal"
+            />
+          }
+        />
+
         <SettingsRow
           serverScoped
           settingKeys={["textGenerationModelSelection"]}

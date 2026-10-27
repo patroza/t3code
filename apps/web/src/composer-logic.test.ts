@@ -1,3 +1,4 @@
+import { parseStandaloneComposerSlashCommand } from "./composer-logic";
 import { filterComposerPullRequestMatches } from "@t3tools/shared/composerPullRequestMatches";
 import { EnvironmentId, MessageId, ThreadId, type AssistantCitation } from "@t3tools/contracts";
 import {
@@ -532,6 +533,33 @@ describe("isCollapsedCursorAdjacentToInlineToken", () => {
 
     expect(isCollapsedCursorAdjacentToInlineToken(text, tokenEnd, "left")).toBe(true);
     expect(isCollapsedCursorAdjacentToInlineToken(text, tokenStart, "right")).toBe(true);
+  });
+
+  it("treats skill pills as inline tokens for adjacency checks", () => {
+    const text = "run $review-follow-up next";
+    const tokenStart = "run ".length;
+    const tokenEnd = tokenStart + 1;
+
+    expect(isCollapsedCursorAdjacentToInlineToken(text, tokenEnd, "left")).toBe(true);
+    expect(isCollapsedCursorAdjacentToInlineToken(text, tokenStart, "right")).toBe(true);
+  });
+});
+
+describe("parseStandaloneComposerSlashCommand", () => {
+  it("parses standalone /new command", () => {
+    expect(parseStandaloneComposerSlashCommand(" /NEW ")).toBe("new");
+  });
+
+  it("parses standalone /plan command", () => {
+    expect(parseStandaloneComposerSlashCommand(" /plan ")).toBe("plan");
+  });
+
+  it("parses standalone /default command", () => {
+    expect(parseStandaloneComposerSlashCommand("/default")).toBe("default");
+  });
+
+  it("ignores slash commands with extra message text", () => {
+    expect(parseStandaloneComposerSlashCommand("/new explain this")).toBeNull();
   });
 });
 

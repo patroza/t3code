@@ -36,6 +36,7 @@ export function useLocalDispatchState(input: {
   const activeLocalDispatch = serverAcknowledgedLocalDispatch ? null : localDispatch;
   const beginLocalDispatch = (options?: {
     preparingWorktree?: boolean;
+    messageId?: MessageId;
     submissionIntent?: ComposerSubmissionIntent;
   }) => {
     const preparingWorktree = Boolean(options?.preparingWorktree);

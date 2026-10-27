@@ -9,6 +9,7 @@ import type {
 } from "@t3tools/client-runtime/state/shell";
 import {
   EMPTY_THREAD_HISTORY_META,
+  EMPTY_ENVIRONMENT_THREAD_STATE,
   type EnvironmentThreadStatus,
   type ThreadHistoryMeta,
 } from "@t3tools/client-runtime/state/threads";
@@ -56,6 +57,7 @@ const EMPTY_THREAD_SHELL_ATOM = Atom.make<EnvironmentThreadShell | null>(null).p
 const EMPTY_THREAD_PROJECTION_ATOM = Atom.make<EnvironmentThread | null>(null).pipe(
   Atom.withLabel("web-thread-projection:empty"),
 );
+const EMPTY_THREAD_STATE_ATOM = Atom.make(EMPTY_ENVIRONMENT_THREAD_STATE);
 const EMPTY_THREAD_STATUS_ATOM = Atom.make<EnvironmentThreadStatus>("empty").pipe(
   Atom.withLabel("web-thread-status:empty"),
 );
@@ -149,6 +151,12 @@ export function useChildThreadInputs(ref: ScopedThreadRef | null) {
 export function useThreadProjection(ref: ScopedThreadRef | null): EnvironmentThread | null {
   return useAtomValue(
     ref === null ? EMPTY_THREAD_PROJECTION_ATOM : environmentThreadDetails.threadAtom(ref),
+  );
+}
+
+export function useThreadState(ref: ScopedThreadRef | null) {
+  return useAtomValue(
+    ref === null ? EMPTY_THREAD_STATE_ATOM : environmentThreadDetails.stateAtom(ref),
   );
 }
 
@@ -369,6 +377,14 @@ export function readEnvironmentThreadRefs(
 
 export function readThreadShells(): ReadonlyArray<EnvironmentThreadShell> {
   return appAtomRegistry.get(environmentThreadShells.threadShellsAtom);
+}
+
+export function findThreadRef(threadId: ThreadId): ScopedThreadRef | null {
+  return (
+    appAtomRegistry
+      .get(environmentThreadShells.threadRefsAtom)
+      .find((ref) => ref.threadId === threadId) ?? null
+  );
 }
 
 function shellParentThreadId(

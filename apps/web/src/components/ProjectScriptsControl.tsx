@@ -11,11 +11,14 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { projectScriptMenuLabel } from "@t3tools/shared/projectScripts";
 import { ChevronDownIcon, DownloadIcon, PlusIcon, SettingsIcon, WrenchIcon } from "lucide-react";
 import React, { useState } from "react";
 
-import { commandForProjectScript, primaryProjectScript } from "~/projectScripts";
+import {
+  commandForProjectScript,
+  primaryProjectScript,
+  projectScriptMenuLabel,
+} from "~/projectScripts";
 import { shortcutLabelForCommand } from "~/keybindings";
 import { serverEnvironment } from "~/state/server";
 import { readEnvironmentScope } from "~/state/session";
@@ -135,6 +138,8 @@ export default function ProjectScriptsControl({
       command: fileScript.command,
       icon: fileScript.icon ?? "play",
       runOnWorktreeCreate: fileScript.runOnWorktreeCreate ?? false,
+      runOnWorktreeRemove: fileScript.runOnWorktreeRemove ?? false,
+      runOnPrMerged: fileScript.runOnPrMerged ?? false,
       waitForSetup: fileScript.runOnWorktreeCreate === true && fileScript.async === false,
       runOnSettle: fileScript.runOnSettle ?? false,
       ...(readEnvironmentScope(environmentId, AuthSettingsWriteScope) ? { keybinding: null } : {}),

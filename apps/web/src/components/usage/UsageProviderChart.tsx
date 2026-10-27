@@ -155,7 +155,7 @@ function areaPath(line: string) {
   return line === "" ? "" : `${line} L${VIEW_WIDTH},${VIEW_HEIGHT} L0,${VIEW_HEIGHT} Z`;
 }
 
-function niceScale(peak: number, count: number): { max: number; ticks: readonly number[] } {
+export function niceScale(peak: number, count: number): { max: number; ticks: readonly number[] } {
   if (peak <= 0) return { max: 0, ticks: [0] };
 
   const rawStep = peak / count;
@@ -171,7 +171,7 @@ function niceScale(peak: number, count: number): { max: number; ticks: readonly 
 
 const PLACEHOLDER_TICKS = Array.from({ length: TICK_COUNT + 1 }, (_, index) => index);
 
-function chartScale(
+export function chartScale(
   columns: readonly DayColumn[],
   loadingProviders: ReadonlySet<UsageProviderKind>,
 ) {

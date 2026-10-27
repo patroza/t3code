@@ -125,6 +125,7 @@ export function QueuedRunsControl({
       key: run.id,
       runId: run.id,
       messageId: run.userMessageId,
+      heldForEdit: run.queueEditId != null,
       serverIndex,
       text,
       // A guest's message keeps the guest's words; the owner can cancel it, not rewrite it.
@@ -144,6 +145,7 @@ export function QueuedRunsControl({
       key: message.id,
       runId: null,
       messageId: null,
+      heldForEdit: false,
       serverIndex: null,
       text: message.text,
       editable: true,
@@ -201,7 +203,7 @@ export function QueuedRunsControl({
   useImperativeHandle(ref, () => ({
     steerNext(repeat) {
       const next = queued[0];
-      if (!next || !canSend) return false;
+      if (!next || next.run.queueEditId != null || !canSend) return false;
       if (!repeat && busyRunId === null) void sendQueuedMessage(next.run.id);
       return true;
     },
@@ -358,6 +360,7 @@ export function QueuedRunsControl({
                     ))}
                   </span>
                 ) : null}
+                {item.heldForEdit ? <span className="shrink-0 text-xs">Editing</span> : null}
                 {/* In full, like a sent turn: a queued message is read before it is sent. */}
                 {previewText ? (
                   <p className="whitespace-pre-wrap wrap-anywhere">
@@ -459,7 +462,12 @@ export function QueuedRunsControl({
                         <Button
                           size="xs"
                           variant="ghost-muted"
-                          disabled={item.runId === null || busyRunId !== null || !canSend}
+                          disabled={
+                            item.runId === null ||
+                            busyRunId !== null ||
+                            !canSend ||
+                            item.heldForEdit
+                          }
                           onClick={() => {
                             if (item.runId !== null) {
                               void sendQueuedMessage(item.runId);

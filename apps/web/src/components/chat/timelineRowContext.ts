@@ -1,3 +1,7 @@
+import type {
+  MessageSenderSource,
+  MessageSenderViewer,
+} from "@t3tools/client-runtime/user-message";
 import type { WorktreeSetupSnapshot } from "@t3tools/contracts";
 import {
   type EnvironmentId,
@@ -66,6 +70,9 @@ export interface TimelineRowSharedState {
   /** Unset, expanded rows read detail and command output from the environment. */
   turnItemSource: TurnItemSource | undefined;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
+  messageViewer?: MessageSenderViewer | undefined;
+  originSource?: MessageSenderSource | null | undefined;
+  messageSourceById?: ReadonlyMap<string, MessageSenderSource> | undefined;
   workflowOpening: WorkflowOpening | null;
   /** Absent hides "Fork from this response", as in the guest view. */
   onForkFromRun:

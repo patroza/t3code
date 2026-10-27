@@ -1,4 +1,3 @@
-import { ThreadHoverCard, ThreadHoverCardPopup } from "../ThreadHoverCard";
 import { ThreadTerminalStatusButton } from "../ThreadStatusIndicators";
 import { discardComposerDraft } from "../../lib/discardComposerDraft";
 import { requestCustomSnooze } from "../CustomSnoozeDialog";
@@ -25,12 +24,10 @@ import {
   type EnvironmentMachineKind,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
-
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import {
   AlarmClockIcon,
   AlarmClockOffIcon,
-  ArrowRightLeftIcon,
   CheckIcon,
   CircleAlertIcon,
   CircleCheckIcon,
@@ -50,6 +47,7 @@ import {
 } from "lucide-react";
 import {
   memo,
+  useEffect,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -57,7 +55,6 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
-
 import { useRightPanelStore } from "../../rightPanelStore";
 import { useOpenPrLink } from "../../lib/openPullRequestLink";
 import { useUiStateStore } from "../../uiStateStore";
@@ -112,7 +109,10 @@ import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuShortcut, MenuTrigger } f
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { MiddleTruncate } from "../ui/middle-truncate";
 import { useThreadHasUnsentDraft } from "../../composerDraftStore";
-
+import { ThreadIdentityMark } from "../identity/ParticipantStack";
+import { AiUsageStats } from "../chat/AiUsageStats";
+import { resolveDriverUsage, usageDotFillClass, usageDotRingColor } from "../../aiUsageState";
+import { useAiUsageSnapshot } from "../../hooks/useAiUsageSnapshot";
 // The fields thread rows show. Provider status pushes refresh `checkedAt`,
 // status and auth on every provider; leaving those out keeps each
 // environment's map, and every memoized row, stable across them.
@@ -232,11 +232,13 @@ function SidebarThreadTooltip({
   environmentLabel,
   environmentMachine,
   providerEntry,
-  providerEntryByInstanceId,
   showInstanceBadge,
   modelInstanceId,
   modelLabel,
   branchMismatch,
+  usageDotClass,
+  usageRingColor,
+  threadUsage,
   terminalStatus,
   terminalProcessCount,
 }: {
@@ -246,7 +248,6 @@ function SidebarThreadTooltip({
   environmentLabel: string | null;
   environmentMachine: EnvironmentMachineKind;
   providerEntry: SidebarProviderEntry | null;
-  providerEntryByInstanceId: ReadonlyMap<string, SidebarProviderEntry>;
   showInstanceBadge: boolean;
   modelInstanceId: string;
   modelLabel: string;
@@ -254,113 +255,106 @@ function SidebarThreadTooltip({
     threadBranch: string;
     currentBranch: string;
   } | null;
+  usageDotClass?: string | undefined;
+  usageRingColor?: string | undefined;
+  threadUsage?: ReturnType<typeof resolveDriverUsage> | undefined;
   terminalStatus: TerminalStatusIndicator | null;
   terminalProcessCount: number;
 }) {
   const driverKind = providerEntry?.driverKind ?? null;
-  const previousProviderNames = thread.providerInstanceHistory
-    .filter((instanceId) => instanceId !== modelInstanceId)
-    .map((instanceId) => providerEntryByInstanceId.get(instanceId)?.displayName ?? instanceId);
   const supportsMultiplePullRequests = useSupportsMultiplePullRequests(thread.environmentId);
   return (
-    <ThreadHoverCardPopup side="right" align="start" sideOffset={4}>
-      <ThreadHoverCard
-        title={thread.title}
-        footer={
-          supportsMultiplePullRequests && thread.pullRequests.length > 0 ? (
-            <div className="border-t border-border/60 pt-2 pl-0.5 text-xs text-muted-foreground">
-              <ThreadPullRequestsMiniList pullRequests={thread.pullRequests} />
+    <TooltipPopup side="right" align="start" sideOffset={4} variant="glass">
+      {/* The viewport's own inset (py-1 px-2) plus this one make the floating inset. */}
+      <div className="flex min-w-0 max-w-80 flex-col gap-2 px-1 py-2">
+        <div className="min-w-0 truncate text-xs leading-tight font-medium text-foreground">
+          {thread.title}
+        </div>
+        <div className="grid gap-1.5 pl-0.5 text-xs text-muted-foreground">
+          {projectDisplayName ? (
+            <div className="flex min-w-0 items-center gap-2">
+              {project ? <ProjectFavicon project={project} className="size-3 shrink-0" /> : null}
+              <div className="min-w-0 truncate text-foreground/75">{projectDisplayName}</div>
             </div>
-          ) : null
-        }
-      >
-        {projectDisplayName ? (
-          <div className="flex min-w-0 items-center gap-2">
-            {project ? <ProjectFavicon project={project} className="size-3 shrink-0" /> : null}
-            <div className="min-w-0 truncate text-foreground/75">{projectDisplayName}</div>
-          </div>
-        ) : null}
-        {environmentLabel ? (
-          <div className="flex min-w-0 items-center gap-2">
-            <EnvironmentMachineIcon
-              kind={environmentMachine}
-              className="size-3 shrink-0 stroke-muted-foreground"
-            />
-            <div className="min-w-0 truncate text-foreground/75">{environmentLabel}</div>
-          </div>
-        ) : null}
-        {thread.branch ? (
-          <div className="flex min-w-0 items-center gap-2">
-            <GitBranchIcon className="size-3 shrink-0 stroke-muted-foreground" />
-            <MiddleTruncate value={thread.branch} className="flex" />
-          </div>
-        ) : null}
-        {branchMismatch ? (
-          <div className="flex min-w-0 items-start gap-2 text-warning">
-            <CircleAlertIcon aria-hidden className="mt-0.5 size-3 shrink-0 stroke-current" />
-            <div className="min-w-0 flex-1 wrap-break-word">
-              You're currently checked out on another branch.
+          ) : null}
+          {environmentLabel ? (
+            <div className="flex min-w-0 items-center gap-2">
+              <EnvironmentMachineIcon
+                kind={environmentMachine}
+                className="size-3 shrink-0 stroke-muted-foreground"
+              />
+              <div className="min-w-0 truncate text-foreground/75">{environmentLabel}</div>
             </div>
-          </div>
-        ) : null}
-        {driverKind ? (
-          <div className="flex min-w-0 items-center gap-2">
-            <ProviderInstanceIcon
-              driverKind={driverKind}
-              displayName={
-                providerEntry?.displayName ?? thread.runtime?.providerName ?? modelInstanceId
-              }
-              accentColor={providerEntry?.accentColor}
-              acpRegistryAgentId={providerEntry?.acpRegistryAgentId}
-              acpRegistryIconUrl={providerEntry?.acpRegistryIconUrl}
-              showBadge={showInstanceBadge && providerEntry?.accentColor !== undefined}
-              badgeContent="none"
-              badgeClassName="h-2 min-w-2 px-0"
-              iconClassName="size-3 shrink-0 grayscale opacity-60"
-            />
-            <div className="min-w-0 truncate text-foreground/75">
-              {showInstanceBadge && providerEntry
-                ? `${modelLabel} · ${providerEntry.displayName}`
-                : modelLabel}
+          ) : null}
+          {thread.branch ? (
+            <div className="flex min-w-0 items-center gap-2 text-foreground/75">
+              <GitBranchIcon className="size-3 shrink-0 stroke-muted-foreground" />
+              <MiddleTruncate value={thread.branch} className="flex" />
             </div>
-          </div>
-        ) : null}
-        {previousProviderNames.length > 0 ? (
-          <div className="flex min-w-0 items-center gap-2">
-            <ArrowRightLeftIcon className="size-3 shrink-0 stroke-muted-foreground" />
-            <div className="min-w-0 truncate text-foreground/75">
-              Handed off from {previousProviderNames.join(", ")}
+          ) : null}
+          {branchMismatch ? (
+            <div className="flex min-w-0 items-start gap-2 text-warning">
+              <CircleAlertIcon aria-hidden className="mt-0.5 size-3 shrink-0 stroke-current" />
+              <div className="min-w-0 flex-1 wrap-break-word leading-5">
+                You're currently checked out on another branch.
+              </div>
             </div>
-          </div>
-        ) : null}
-        {terminalStatus ? (
-          <div className="flex min-w-0 items-center gap-2">
-            <TerminalIcon
-              aria-hidden
-              className={cn("size-3 shrink-0", terminalStatus.colorClass)}
-            />
-            <div className="min-w-0 truncate text-foreground/75">
-              {terminalProcessLabel(terminalProcessCount)}
+          ) : null}
+          {driverKind ? (
+            <div className="flex min-w-0 items-center gap-2">
+              <ProviderInstanceIcon
+                driverKind={driverKind}
+                displayName={
+                  providerEntry?.displayName ?? thread.runtime?.providerName ?? modelInstanceId
+                }
+                accentColor={providerEntry?.accentColor}
+                acpRegistryAgentId={providerEntry?.acpRegistryAgentId}
+                acpRegistryIconUrl={providerEntry?.acpRegistryIconUrl}
+                // Initials would swallow a size-3 glyph: accent dot, name in label.
+                showBadge={showInstanceBadge && providerEntry?.accentColor !== undefined}
+                badgeContent="none"
+                badgeClassName="h-2 min-w-2 px-0"
+                iconClassName="size-3 shrink-0 grayscale opacity-60"
+                {...(usageDotClass ? { statusDotClassName: usageDotClass } : {})}
+                {...(usageRingColor ? { statusDotRingColor: usageRingColor } : {})}
+              />
+              <div className="min-w-0 truncate text-foreground/75">
+                {showInstanceBadge && providerEntry
+                  ? `${modelLabel} · ${providerEntry.displayName}`
+                  : modelLabel}
+              </div>
             </div>
-          </div>
-        ) : null}
-        {thread.runtime?.lastError ? (
-          <div
-            className={cn(
-              "flex min-w-0 items-center gap-2",
-              thread.runtime.lastErrorClass === "usage_limit" ? "text-warning" : "text-error",
-            )}
-          >
-            <CircleAlertIcon className="size-3 shrink-0 stroke-current" />
-            <div className="min-w-0 truncate">
-              {thread.runtime.lastErrorClass === "usage_limit"
-                ? "Usage limit reached"
-                : "Error occurred"}
+          ) : null}
+          {threadUsage ? (
+            <div className="min-w-0 text-foreground/75">
+              <AiUsageStats item={threadUsage.item} compact className="min-w-0" />
             </div>
+          ) : null}
+          {terminalStatus ? (
+            <div className="flex min-w-0 items-center gap-2">
+              <TerminalIcon
+                aria-hidden
+                className={cn("size-3 shrink-0", terminalStatus.colorClass)}
+              />
+              <div className="min-w-0 truncate text-foreground/75">
+                {terminalProcessLabel(terminalProcessCount)}
+              </div>
+            </div>
+          ) : null}
+          {thread.runtime?.lastError ? (
+            <div className="flex min-w-0 items-center gap-2 text-destructive-foreground">
+              <CircleAlertIcon className="size-3 shrink-0 stroke-current" />
+              <div className="min-w-0 truncate">Error occurred</div>
+            </div>
+          ) : null}
+        </div>
+        {supportsMultiplePullRequests && thread.pullRequests.length > 0 ? (
+          <div className="border-t border-border/60 pt-2 pl-0.5 text-xs text-muted-foreground">
+            <ThreadPullRequestsMiniList pullRequests={thread.pullRequests} />
           </div>
         ) : null}
-      </ThreadHoverCard>
-    </ThreadHoverCardPopup>
+      </div>
+    </TooltipPopup>
   );
 }
 
@@ -631,13 +625,15 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   const threadRef = scopeThreadRef(thread.environmentId, thread.id);
   const threadKey = scopedThreadKey(threadRef);
   const canOperateThread = useEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope);
+  useEffect(() => {
+    if (!canOperateThread && isRenaming) onCancelRename();
+  }, [canOperateThread, isRenaming, onCancelRename]);
   const { leaseLiveStatus, rowRef: leaseRowRef } = useSidebarRowSubscriptionLease(props.isActive);
   const { revealRef } = props;
   const rowRef = (row: HTMLElement | null) => {
     if (row !== null) revealRef?.(row, threadKey);
     return leaseRowRef(row);
   };
-  const isRegeneratingTitle = thread.titleRegeneration != null;
   const localLastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const lastVisitedAt = resolveThreadLastVisitedAt(thread.lastVisitedAt, localLastVisitedAt);
   const isSelected = useThreadSelectionStore((state) => state.selectedThreadKeys.has(threadKey));
@@ -655,6 +651,15 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     discardComposerDraft(threadRef);
   };
 
+  // Same semantics as v1 (never-visited counts as read): flipping the beta
+  // flag must not light up every historical thread as unread.
+
+  // Screen-reader status for an in-flight title regeneration: the v2 rows are
+  // a fork rewrite of upstream's row, so this never came across with the rest
+  // of that surface even though the projection field did.
+  const isRegeneratingTitle = thread.titleRegeneration != null;
+  // Timer wakes survive visits; clear the wake only on explicit engagement or completed work.
+  // Invalid visit timestamps count as never visited, preserving the wake signal.
   const gitCwd = thread.worktreePath ?? props.project?.workspaceRoot ?? null;
   const linkedPullRequestStatus = useLinkedThreadPullRequest(
     thread.environmentId,
@@ -665,7 +670,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   );
   const gitStatus = useEnvironmentQuery(
     leaseLiveStatus && (thread.branch != null || thread.worktreePath !== null) && gitCwd !== null
-      ? vcsEnvironment.status({
+      ? vcsEnvironment.listStatus({
           environmentId: thread.environmentId,
           input: { cwd: gitCwd, includeRemote: false },
         })
@@ -767,12 +772,18 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   const showInstanceBadge =
     providerEntry !== null &&
     shouldShowInstanceBadge(providerEntry, props.providerEntryByInstanceId.values());
+  const driverKind = providerEntry?.driverKind;
   const selectedModel = providerEntry?.models.find(
     (model) => model.slug === thread.modelSelection.model,
   );
   const modelLabel = selectedModel
     ? getTriggerDisplayModelLabel(selectedModel)
     : thread.modelSelection.model;
+  const aiUsageSnapshot = useAiUsageSnapshot(thread.environmentId);
+  const threadUsage = (() =>
+    resolveDriverUsage(aiUsageSnapshot, driverKind, thread.modelSelection.model))();
+  const usageDotClass = threadUsage ? usageDotFillClass(threadUsage.marker) : undefined;
+  const usageRingColor = threadUsage ? usageDotRingColor(threadUsage.marker) : undefined;
 
   const isRemote = thread.environmentId !== props.currentEnvironmentId;
   const showsScratchMachine = !thread.branch && props.scratchMachineLabel !== null;
@@ -785,11 +796,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       environmentLabel={props.environmentLabel}
       environmentMachine={props.environmentMachine}
       providerEntry={providerEntry}
-      providerEntryByInstanceId={props.providerEntryByInstanceId}
       showInstanceBadge={showInstanceBadge}
       modelInstanceId={modelInstanceId}
       modelLabel={modelLabel}
       branchMismatch={branchMismatch}
+      usageDotClass={usageDotClass}
+      usageRingColor={usageRingColor}
+      threadUsage={threadUsage}
       terminalStatus={terminalStatus}
       terminalProcessCount={terminalProcessCount}
     />
@@ -962,6 +975,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       </span>
     ) : null;
 
+  const participants = thread.participantSummaries ?? [];
+  const originChannel = thread.originSource?.channel ?? participants[0]?.firstChannel ?? null;
   const accessibility = resolveSidebarRowAccessibility({
     title: thread.title,
     statusLabel: topStatus?.label ?? null,
@@ -969,46 +984,59 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     isActive: props.isActive,
   });
 
-  const title = isRenaming ? (
-    <ThreadRenameInput
-      title={renamingTitle}
-      onTitleChange={onRenameTitleChange}
-      onCommit={() => onCommitRename(threadRef, renamingTitle, thread.title)}
-      onCancel={onCancelRename}
-    />
-  ) : (
-    <span
-      aria-hidden
-      className={cn(
-        "min-w-0 flex-1 text-start text-sm transition-opacity motion-reduce:transition-none",
-        shouldRecede ? "font-normal" : "font-medium",
-        variant === "card"
-          ? cn(
-              "truncate",
-              shouldRecede
-                ? "text-secondary-label redesign:text-foreground/75 redesign:group-hover/sidebar-row:text-foreground redesign:group-focus-visible/sidebar-row:text-foreground"
-                : isUnread || isWoke || status === "input" || status === "request"
-                  ? "text-foreground"
-                  : status === "failed"
-                    ? "text-foreground/95"
-                    : "text-foreground/90 redesign:text-foreground",
-            )
-          : cn(
-              "truncate group-focus-within/sidebar-row:text-foreground group-hover/sidebar-row:text-foreground",
-              shouldRecede
-                ? "text-secondary-label/70 redesign:text-secondary-label"
-                : props.isActive || isWoke || status === "input" || status === "request"
-                  ? "text-foreground"
-                  : isUnread
-                    ? "text-muted-foreground"
-                    : "text-secondary-label/70",
-            ),
-        isRegeneratingTitle && "opacity-55",
-      )}
-      dir={textDirection(thread.title)}
-    >
-      {thread.title}
-    </span>
+  const titleContent =
+    isRenaming && canOperateThread ? (
+      <ThreadRenameInput
+        title={renamingTitle}
+        onTitleChange={onRenameTitleChange}
+        onCommit={() => onCommitRename(threadRef, renamingTitle, thread.title)}
+        onCancel={onCancelRename}
+      />
+    ) : (
+      <span
+        aria-hidden
+        className={cn(
+          "min-w-0 flex-1 text-start text-sm transition-opacity motion-reduce:transition-none",
+          shouldRecede ? "font-normal" : "font-medium",
+          variant === "card"
+            ? cn(
+                "truncate",
+                shouldRecede
+                  ? "text-secondary-label redesign:text-foreground/75 redesign:group-hover/sidebar-row:text-foreground redesign:group-focus-visible/sidebar-row:text-foreground"
+                  : isUnread || isWoke || status === "input" || status === "request"
+                    ? "text-foreground"
+                    : status === "failed"
+                      ? "text-foreground/95"
+                      : "text-foreground/90 redesign:text-foreground",
+              )
+            : cn(
+                "truncate group-focus-within/sidebar-row:text-foreground group-hover/sidebar-row:text-foreground",
+                shouldRecede
+                  ? "text-secondary-label/70 redesign:text-secondary-label"
+                  : props.isActive || isWoke || status === "input" || status === "request"
+                    ? "text-foreground"
+                    : isUnread
+                      ? "text-muted-foreground"
+                      : "text-secondary-label/70",
+              ),
+          isRegeneratingTitle && "opacity-55",
+        )}
+        dir={textDirection(thread.title)}
+      >
+        {thread.title}
+      </span>
+    );
+  const title = (
+    <div className="flex min-w-0 flex-1 items-center gap-1.5">
+      {titleContent}
+      {!isRenaming ? (
+        <ThreadIdentityMark
+          environmentId={thread.environmentId}
+          originChannel={originChannel}
+          participants={participants}
+        />
+      ) : null}
+    </div>
   );
   const accessibleTitle = isRenaming ? null : <span className="sr-only">{thread.title}</span>;
 
@@ -1526,10 +1554,28 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                     />
                   </span>
                 ) : null}
-                <SidebarProviderStack
-                  thread={thread}
-                  providerEntryByInstanceId={props.providerEntryByInstanceId}
-                />
+                {driverKind ? (
+                  <span
+                    className="inline-flex shrink-0 items-center"
+                    {...(usageDotClass ? { "aria-label": "provider usage status" } : {})}
+                  >
+                    <ProviderInstanceIcon
+                      driverKind={driverKind}
+                      displayName={
+                        providerEntry?.displayName ??
+                        thread.runtime?.providerName ??
+                        modelInstanceId
+                      }
+                      accentColor={providerEntry?.accentColor}
+                      showBadge={showInstanceBadge}
+                      // Glyph dims, badge stays saturated; offset matches the composer trigger.
+                      iconClassName="size-3.5 opacity-60"
+                      badgeClassName="right-[-0.1875rem] bottom-[-0.1875rem] h-3 min-w-3 px-0.5 text-5xs"
+                      {...(usageDotClass ? { statusDotClassName: usageDotClass } : {})}
+                      {...(usageRingColor ? { statusDotRingColor: usageRingColor } : {})}
+                    />
+                  </span>
+                ) : null}
               </span>
             </div>
           </div>
@@ -1589,7 +1635,7 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
   const gitCwd = thread.worktreePath ?? props.project?.workspaceRoot ?? null;
   const gitStatus = useEnvironmentQuery(
     leaseLiveStatus && (thread.branch != null || thread.worktreePath !== null) && gitCwd !== null
-      ? vcsEnvironment.status({
+      ? vcsEnvironment.listStatus({
           environmentId: thread.environmentId,
           input: { cwd: gitCwd, includeRemote: false },
         })
@@ -1719,7 +1765,6 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
           environmentLabel={props.environmentLabel}
           environmentMachine={props.environmentMachine}
           providerEntry={providerEntry}
-          providerEntryByInstanceId={props.providerEntryByInstanceId}
           showInstanceBadge={showInstanceBadge}
           modelInstanceId={modelInstanceId}
           modelLabel={modelLabel}

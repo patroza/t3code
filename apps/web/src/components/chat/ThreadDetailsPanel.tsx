@@ -51,6 +51,9 @@ export interface ThreadDetailsPanelProps extends Pick<
   onAutoEnvironment?: (() => void) | undefined;
   onEnvironmentChange?: (environmentId: EnvironmentId) => void;
   onEnvModeChange: (mode: EnvMode) => void;
+  reuseBaseBranch?: boolean;
+  onReuseBaseBranchChange?: (value: boolean) => void;
+  /** The thread's env mode as ChatView resolves it. */
   envMode: EnvMode;
   activeThreadBranchOverride?: string | null;
   onActiveThreadBranchOverrideChange?: (branch: string | null) => void;
@@ -83,6 +86,10 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
     isServerThread: props.isServerThread,
     ...(props.draftId ? { draftId: props.draftId } : {}),
     onEnvModeChange: props.onEnvModeChange,
+    reuseBaseBranch: props.reuseBaseBranch ?? false,
+    ...(props.onReuseBaseBranchChange
+      ? { onReuseBaseBranchChange: props.onReuseBaseBranchChange }
+      : {}),
     startFromOrigin: props.startFromOrigin,
     onStartFromOriginChange: props.onStartFromOriginChange,
     envMode: props.envMode,

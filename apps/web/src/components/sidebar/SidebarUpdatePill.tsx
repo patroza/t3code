@@ -9,6 +9,7 @@ import { cn } from "../../lib/utils";
 import { ensureLocalApi } from "../../localApi";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { stackedThreadToast, toastManager } from "../ui/toast";
+import { showDesktopUpdateDownloadedToast } from "../desktopUpdate.toast";
 import {
   canCheckForUpdate,
   getArm64IntelBuildWarningDescription,
@@ -22,7 +23,6 @@ import {
   shouldShowArm64IntelBuildWarning,
   shouldToastDesktopUpdateActionResult,
 } from "../desktopUpdate.logic";
-import { showDesktopUpdateDownloadedToast } from "../desktopUpdate.toast";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Popover, PopoverCreateHandle, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { SidebarMenuItem } from "../ui/sidebar";

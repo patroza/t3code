@@ -276,6 +276,68 @@ describe("split/new/close terminal shortcuts", () => {
 });
 
 describe("shortcutLabelForCommand", () => {
+  it("returns the effective binding label", () => {
+    const bindings = compile([
+      {
+        shortcut: modShortcut("\\"),
+        command: "terminal.split",
+        whenAst: whenIdentifier("terminalFocus"),
+      },
+      {
+        shortcut: modShortcut("\\", { shiftKey: true }),
+        command: "terminal.split",
+        whenAst: whenNot(whenIdentifier("terminalFocus")),
+      },
+    ]);
+    assert.strictEqual(
+      shortcutLabelForCommand(bindings, "terminal.split", {
+        platform: "Linux",
+        context: { terminalFocus: false },
+      }),
+      "Ctrl+Shift+\\",
+    );
+  });
+
+  it("returns effective labels for non-terminal commands", () => {
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "sidebar.toggle", "MacIntel"),
+      "⌘B",
+    );
+    assert.strictEqual(shortcutLabelForCommand(DEFAULT_BINDINGS, "chat.new", "MacIntel"), "⇧⌘O");
+    assert.strictEqual(shortcutLabelForCommand(DEFAULT_BINDINGS, "diff.toggle", "Linux"), "Ctrl+D");
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "rightPanel.toggle", "MacIntel"),
+      "⌥⌘B",
+    );
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "commandPalette.toggle", "MacIntel"),
+      "⌘K",
+    );
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "modelPicker.toggle", "Linux"),
+      "Ctrl+Shift+M",
+    );
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "editor.openFavorite", "Linux"),
+      "Ctrl+O",
+    );
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "thread.jump.3", "MacIntel"),
+      "⌘3",
+    );
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "thread.previous", "Linux"),
+      "Ctrl+Shift+[",
+    );
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "modelPicker.jump.3", {
+        platform: "MacIntel",
+        context: { modelPickerOpen: true },
+      }),
+      "⌘3",
+    );
+  });
+
   it("returns null for commands shadowed by a later conflicting shortcut", () => {
     const bindings = compile([
       { shortcut: modShortcut("1", { shiftKey: true }), command: "thread.jump.1" },

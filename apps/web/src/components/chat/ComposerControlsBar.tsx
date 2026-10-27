@@ -1,3 +1,4 @@
+import type { AiUsageSnapshot } from "@t3tools/contracts";
 import type { ChatComposerProps } from "./ChatComposer";
 import type { PromptUltrathink } from "./TraitsPicker";
 import type { ProviderInstanceEntry } from "../../providerInstances";
@@ -32,6 +33,7 @@ import type { useComposerProviderModel } from "./useComposerProviderModel";
  */
 export function ComposerControlsBar(props: {
   environmentId: EnvironmentId;
+  usageSnapshot: AiUsageSnapshot | null;
   routeKind: ChatComposerProps["routeKind"];
   routeThreadRef: ChatComposerProps["routeThreadRef"];
   draftId: ChatComposerProps["draftId"];
@@ -192,6 +194,7 @@ export function ComposerControlsBar(props: {
   // Its own element, so typing (which rebuilds the controls around it) leaves it cached.
   const composerModelPicker = (
     <ComposerModelPicker
+      usageSnapshot={props.usageSnapshot}
       environmentId={environmentId}
       compact={false}
       isComposerOwned

@@ -1,3 +1,10 @@
+import { animateSidebarLayoutChanges } from "./Sidebar.logic";
+import { shouldClearThreadSelectionOnMouseDown } from "./Sidebar.logic";
+import { defaultAnimateLayoutChanges } from "@dnd-kit/sortable";
+import { getSidebarThreadIdsToPrewarm } from "./Sidebar.logic";
+import { type AnimateLayoutChanges } from "@dnd-kit/sortable";
+import { THREAD_JUMP_HINT_SHOW_DELAY_MS } from "./Sidebar.logic";
+import { afterEach, beforeEach } from "vite-plus/test";
 import { presentThreadShell } from "@t3tools/client-runtime/state/models";
 import * as DateTime from "effect/DateTime";
 import { deriveActiveWorkStartedAt } from "../session-logic.ts";
@@ -6,15 +13,23 @@ import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import {
   archiveSelectedThreadEntries,
+  createThreadJumpHintVisibilityController,
   deleteSelectedThreadEntries,
   getFallbackThreadIdAfterDelete,
   hasUnseenCompletion,
   resolveSidebarRowThreadId,
   isSidebarThreadWorking,
+  isTrailingDoubleClick,
   orderItemsByPreferredIds,
   pinOrderKeyBetween,
   resolveProjectStatusIndicator,
+  resolveSidebarProjectBadgeLabel,
+  resolveSidebarProjectBadgeColorIndex,
+  resolveSidebarThreadPrewarmLimit,
+  SIDEBAR_THREAD_PREWARM_LIMIT,
   resolveSidebarSweepKeys,
+  resolveSidebarThreadSection,
+  resolveSidebarRowAccessibility,
   resolveSidebarThreadStatus,
   resolveSidebarV2TopStatus,
   resolveThreadStatusPill,
@@ -51,6 +66,97 @@ import {
 } from "./sidebar/routeReveal";
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
+
+describe("sidebar recent project badges", () => {
+  it.each([
+    ["example-org/scanner", "S"],
+    ["pingdotgg/t3code", "T3"],
+    ["effect-app/libs", "L"],
+    ["patroza/dotfiles-omarchy", "DO"],
+    ["configurator", "C"],
+  ])("derives a compact label for %s", (displayName, expected) => {
+    expect(resolveSidebarProjectBadgeLabel(displayName)).toBe(expected);
+  });
+
+  it("assigns the same bounded color index for a stable project key", () => {
+    const first = resolveSidebarProjectBadgeColorIndex("repository:t3code", 6);
+    expect(resolveSidebarProjectBadgeColorIndex("repository:t3code", 6)).toBe(first);
+    expect(first).toBeGreaterThanOrEqual(0);
+    expect(first).toBeLessThan(6);
+  });
+});
+
+describe("resolveSidebarRowAccessibility", () => {
+  it.each([
+    {
+      title: "Can you audit the UI?",
+      statusLabel: "Working",
+      projectDisplayName: "T3 Code",
+      isActive: true,
+      expected: { label: "Can you audit the UI?, Working, T3 Code", current: "page" },
+    },
+    {
+      title: "The audit is done",
+      statusLabel: null,
+      projectDisplayName: "T3 Code",
+      isActive: false,
+      expected: { label: "The audit is done, T3 Code", current: undefined },
+    },
+    {
+      title: "Untitled task",
+      statusLabel: null,
+      projectDisplayName: null,
+      isActive: false,
+      expected: { label: "Untitled task", current: undefined },
+    },
+  ])("leads with the title without folding row actions into its name: %j", (input) => {
+    const { expected, ...state } = input;
+    expect(resolveSidebarRowAccessibility(state)).toEqual(expected);
+  });
+});
+
+describe("animateSidebarLayoutChanges", () => {
+  const baseArgs: Parameters<AnimateLayoutChanges>[0] = {
+    active: null,
+    containerId: "pinned-threads",
+    isDragging: false,
+    isSorting: false,
+    id: "thread-a",
+    index: 1,
+    items: ["thread-b", "thread-a"],
+    newIndex: 0,
+    previousItems: ["thread-a", "thread-b"],
+    previousContainerId: "pinned-threads",
+    transition: { duration: 200, easing: "ease" },
+    wasDragging: true,
+  };
+
+  it("does not replay layout movement after the pointer is released", () => {
+    expect(defaultAnimateLayoutChanges(baseArgs)).toBe(true);
+    expect(animateSidebarLayoutChanges(baseArgs)).toBe(false);
+  });
+
+  it("keeps layout movement while the user is sorting", () => {
+    expect(animateSidebarLayoutChanges({ ...baseArgs, isSorting: true })).toBe(true);
+  });
+});
+
+describe("resolveSidebarThreadSection", () => {
+  it("keeps a pinned thread in the pinned shelf", () => {
+    expect(resolveSidebarThreadSection({ snoozed: false, settled: false, pinned: true })).toBe(
+      "pinned",
+    );
+  });
+
+  it("keeps lifecycle shelves authoritative over a stale pin", () => {
+    expect(resolveSidebarThreadSection({ snoozed: true, settled: true, pinned: true })).toBe(
+      "snoozed",
+    );
+    expect(resolveSidebarThreadSection({ snoozed: false, settled: true, pinned: true })).toBe(
+      "settled",
+    );
+  });
+});
 
 describe("deleteSelectedThreadEntries", () => {
   const entries = [{ threadKey: "one" }, { threadKey: "two" }, { threadKey: "three" }] as const;
@@ -216,12 +322,240 @@ function makeLatestRun(overrides?: {
     status: "completed",
     assistantMessageId: null,
     requestedAt: "2026-03-09T10:00:00.000Z",
-    startedAt:
-      overrides?.startedAt !== undefined ? overrides.startedAt : "2026-03-09T10:00:00.000Z",
+    startedAt: overrides?.startedAt ?? "2026-03-09T10:00:00.000Z",
     completedAt:
       overrides?.completedAt !== undefined ? overrides.completedAt : "2026-03-09T10:05:00.000Z",
   };
 }
+
+describe("hasUnseenCompletion", () => {
+  it("returns true when a thread completed after its last visit", () => {
+    expect(
+      hasUnseenCompletion({
+        hasActionableProposedPlan: false,
+        hasPendingApprovals: false,
+        hasPendingUserInput: false,
+        interactionMode: "default",
+        latestRun: makeLatestRun(),
+        lastVisitedAt: "2026-03-09T10:04:00.000Z",
+        runtime: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("treats a missing client visit marker as read", () => {
+    expect(
+      hasUnseenCompletion({
+        hasActionableProposedPlan: false,
+        hasPendingApprovals: false,
+        hasPendingUserInput: false,
+        interactionMode: "default",
+        latestRun: makeLatestRun(),
+        lastVisitedAt: undefined,
+        runtime: null,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("shouldRecedeSidebarThread", () => {
+  it.each(["working", "waiting"] as const)(
+    "recedes an inactive %s thread even when it is unread and woke",
+    (status) => {
+      expect(
+        shouldRecedeSidebarThread({
+          status,
+          isUnread: true,
+          isWoke: true,
+          isActive: false,
+          isSelected: false,
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it.each(["ready", "approval", "input"] as const)(
+    "keeps an unread %s thread prominent",
+    (status) => {
+      expect(
+        shouldRecedeSidebarThread({
+          status,
+          isUnread: true,
+          isWoke: false,
+          isActive: false,
+          isSelected: false,
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it("keeps active and selected working threads prominent", () => {
+    const input = {
+      status: "working" as const,
+      isUnread: true,
+      isWoke: true,
+      isActive: false,
+      isSelected: false,
+    };
+
+    expect(shouldRecedeSidebarThread({ ...input, isActive: true })).toBe(false);
+    expect(shouldRecedeSidebarThread({ ...input, isSelected: true })).toBe(false);
+  });
+
+  it.each([false, true])("keeps input-required threads prominent with unread=%s", (isUnread) => {
+    expect(
+      shouldRecedeSidebarThread({
+        status: "input",
+        isUnread,
+        isWoke: false,
+        isActive: false,
+        isSelected: false,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("createThreadJumpHintVisibilityController", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("delays showing jump hints until the configured delay elapses", () => {
+    const visibilityChanges: boolean[] = [];
+    const controller = createThreadJumpHintVisibilityController({
+      delayMs: THREAD_JUMP_HINT_SHOW_DELAY_MS,
+      onVisibilityChange: (visible) => {
+        visibilityChanges.push(visible);
+      },
+    });
+
+    controller.sync(true);
+    vi.advanceTimersByTime(THREAD_JUMP_HINT_SHOW_DELAY_MS - 1);
+
+    expect(visibilityChanges).toEqual([]);
+
+    vi.advanceTimersByTime(1);
+
+    expect(visibilityChanges).toEqual([true]);
+  });
+
+  it("hides immediately when the modifiers are released", () => {
+    const visibilityChanges: boolean[] = [];
+    const controller = createThreadJumpHintVisibilityController({
+      delayMs: THREAD_JUMP_HINT_SHOW_DELAY_MS,
+      onVisibilityChange: (visible) => {
+        visibilityChanges.push(visible);
+      },
+    });
+
+    controller.sync(true);
+    vi.advanceTimersByTime(THREAD_JUMP_HINT_SHOW_DELAY_MS);
+    controller.sync(false);
+
+    expect(visibilityChanges).toEqual([true, false]);
+  });
+
+  it("cancels a pending reveal when the modifier is released early", () => {
+    const visibilityChanges: boolean[] = [];
+    const controller = createThreadJumpHintVisibilityController({
+      delayMs: THREAD_JUMP_HINT_SHOW_DELAY_MS,
+      onVisibilityChange: (visible) => {
+        visibilityChanges.push(visible);
+      },
+    });
+
+    controller.sync(true);
+    vi.advanceTimersByTime(Math.floor(THREAD_JUMP_HINT_SHOW_DELAY_MS / 2));
+    controller.sync(false);
+    vi.advanceTimersByTime(THREAD_JUMP_HINT_SHOW_DELAY_MS);
+
+    expect(visibilityChanges).toEqual([]);
+  });
+});
+
+describe("getSidebarThreadIdsToPrewarm", () => {
+  it("returns only the first visible thread ids up to the prewarm limit", () => {
+    expect(getSidebarThreadIdsToPrewarm(["t1", "t2", "t3"], 2)).toEqual(["t1", "t2"]);
+  });
+
+  it("returns all visible thread ids when they fit within the limit", () => {
+    expect(getSidebarThreadIdsToPrewarm(["t1", "t2"], 10)).toEqual(["t1", "t2"]);
+  });
+
+  it("returns no thread ids when the limit is zero", () => {
+    expect(getSidebarThreadIdsToPrewarm(["t1", "t2"], 0)).toEqual([]);
+  });
+});
+
+describe("resolveSidebarThreadPrewarmLimit", () => {
+  it("prewarms visible rows when the pointer can hover", () => {
+    expect(resolveSidebarThreadPrewarmLimit({ hasCoarsePointer: false })).toBe(
+      SIDEBAR_THREAD_PREWARM_LIMIT,
+    );
+  });
+
+  it("prewarms nothing behind a coarse pointer", () => {
+    // Each prewarmed row holds a live thread-detail subscription, so a touch
+    // client would otherwise retain ten threads of history it never asked for.
+    expect(resolveSidebarThreadPrewarmLimit({ hasCoarsePointer: true })).toBe(0);
+    expect(
+      getSidebarThreadIdsToPrewarm(
+        ["t1", "t2"],
+        resolveSidebarThreadPrewarmLimit({ hasCoarsePointer: true }),
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe("shouldClearThreadSelectionOnMouseDown", () => {
+  it("preserves selection for thread items", () => {
+    const child = {
+      closest: (selector: string) =>
+        selector.includes("[data-thread-item]") ? ({} as Element) : null,
+    } as unknown as HTMLElement;
+
+    expect(shouldClearThreadSelectionOnMouseDown(child)).toBe(false);
+  });
+
+  it("preserves selection for thread list toggle controls", () => {
+    const selectionSafe = {
+      closest: (selector: string) =>
+        selector.includes("[data-thread-selection-safe]") ? ({} as Element) : null,
+    } as unknown as HTMLElement;
+
+    expect(shouldClearThreadSelectionOnMouseDown(selectionSafe)).toBe(false);
+  });
+
+  it("clears selection for unrelated sidebar clicks", () => {
+    const unrelated = {
+      closest: () => null,
+    } as unknown as HTMLElement;
+
+    expect(shouldClearThreadSelectionOnMouseDown(unrelated)).toBe(true);
+  });
+});
+
+describe("isTrailingDoubleClick", () => {
+  it("treats a single click as a normal activation", () => {
+    expect(isTrailingDoubleClick(1)).toBe(false);
+  });
+
+  it("treats synthetic/keyboard activations (detail 0) as a normal activation", () => {
+    expect(isTrailingDoubleClick(0)).toBe(false);
+  });
+
+  it("ignores the second click of a double-click so it does not navigate", () => {
+    expect(isTrailingDoubleClick(2)).toBe(true);
+  });
+
+  it("ignores further clicks of a triple-click", () => {
+    expect(isTrailingDoubleClick(3)).toBe(true);
+  });
+});
 
 describe("orderItemsByPreferredIds", () => {
   it("resolves legacy preference aliases without materializing project state", () => {
@@ -492,6 +826,24 @@ describe("resolveThreadStatusPill", () => {
             ...baseThread.runtime,
             status: "completed",
             activeRunId: null,
+          },
+        },
+      }),
+    ).toMatchObject({ label: "Plan Ready", pulse: false });
+  });
+
+  it("shows plan ready over working when a plan is captured mid-turn", () => {
+    expect(
+      resolveThreadStatusPill({
+        thread: {
+          ...baseThread,
+          hasActionableProposedPlan: true,
+          interactionMode: "plan",
+          latestRun: makeLatestRun({ completedAt: null }),
+          runtime: {
+            ...baseThread.runtime,
+            status: "running",
+            activeRunId: RunId.make("turn-running"),
           },
         },
       }),

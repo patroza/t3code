@@ -28,6 +28,7 @@ export const ADD_TO_MACHINE_LABEL_CLASS =
 
 export const EnvMode = Schema.Literals(["local", "worktree"]);
 export type EnvMode = typeof EnvMode.Type;
+export type WorkspaceTarget = EnvMode | "current-worktree";
 
 const GENERIC_LOCAL_ENVIRONMENT_LABELS = new Set(["local", "local environment"]);
 
@@ -106,6 +107,18 @@ export function resolveCurrentWorkspaceLabel(activeWorktreePath: string | null):
   return activeWorktreePath ? "Current worktree" : resolveEnvModeLabel("local");
 }
 
+export function resolveWorkspaceTarget(input: {
+  effectiveEnvMode: EnvMode;
+  activeWorktreePath: string | null;
+}): WorkspaceTarget {
+  if (input.effectiveEnvMode === "worktree") {
+    return "worktree";
+  }
+  return input.activeWorktreePath ? "current-worktree" : "local";
+}
+
+// A locked thread in worktree mode with no path is still creating its
+// worktree, so it reads as a new worktree rather than the project checkout.
 export function resolveLockedWorkspaceLabel(
   activeWorktreePath: string | null,
   effectiveEnvMode: EnvMode,
@@ -206,6 +219,7 @@ export function resolveBranchTriggerLabel(input: {
   resolvedActiveBranch: string | null;
   resolvedActiveBranchIsRemote: boolean | null;
   startFromOrigin: boolean;
+  reuseBaseBranch?: boolean;
 }): string {
   const {
     activeWorktreePath,
@@ -213,11 +227,14 @@ export function resolveBranchTriggerLabel(input: {
     resolvedActiveBranch,
     resolvedActiveBranchIsRemote,
     startFromOrigin,
+    reuseBaseBranch = false,
   } = input;
   if (!resolvedActiveBranch) {
     return "Select ref";
   }
+  // Reused base branches are checked out as-is; new worktree branches describe their source.
   if (effectiveEnvMode === "worktree" && !activeWorktreePath) {
+    if (reuseBaseBranch) return resolvedActiveBranch;
     // Only the server can determine a local branch's configured remote.
     return startFromOrigin && resolvedActiveBranchIsRemote === false
       ? `From ${resolvedActiveBranch} (remote)`

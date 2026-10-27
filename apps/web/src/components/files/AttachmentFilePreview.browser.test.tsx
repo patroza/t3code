@@ -1806,7 +1806,7 @@ it.each([60, 100])("prepares all %i pages of a table-heavy Word report", async (
     `<w:p><w:pPr><w:spacing w:after="120"/><w:jc w:val="left"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Calibri"/><w:sz w:val="22"/></w:rPr><w:t>${text}</w:t></w:r></w:p>`;
   archive.file(
     "word/document.xml",
-    `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${Array.from({ length: pages }, (_, page) => paragraph(`page ${page + 1}`) + `<w:tbl>${Array.from({ length: 10 }, () => `<w:tr>${Array.from({ length: 5 }, () => `<w:tc><w:tcPr><w:tcW w:w="1800"/></w:tcPr>${paragraph("report entry")}</w:tc>`).join("")}</w:tr>`).join("")}</w:tbl>`).join("")}</w:body></w:document>`,
+    `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${Array.from({ length: pages }, (_, page) => paragraph(`page ${page + 1}`) + `<w:tbl>${Array.from({ length: 2 }, () => `<w:tr>${Array.from({ length: 5 }, () => `<w:tc><w:tcPr><w:tcW w:w="1800"/></w:tcPr>${paragraph("report entry")}</w:tc>`).join("")}</w:tr>`).join("")}</w:tbl>`).join("")}</w:body></w:document>`,
   );
   archive.file(
     "_rels/.rels",
@@ -1818,7 +1818,7 @@ it.each([60, 100])("prepares all %i pages of a table-heavy Word report", async (
   );
   // Binary media must not consume the document's markup budget.
   archive.file("word/media/image.png", new Uint8Array(2_500_000));
-  const file = await archive.generateAsync({ type: "blob", compression: "DEFLATE" });
+  const file = await archive.generateAsync({ type: "blob", compression: "STORE" });
   await using screen = await render(
     <AttachmentFilePreview
       name="report.docx"

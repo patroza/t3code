@@ -195,6 +195,8 @@ interface ComposerSendInput {
   readonly isConnecting: boolean;
   readonly isRevertingCheckpoint: boolean;
   readonly threadDetailLoading: boolean;
+  readonly projectCloneSendBlockReason: string | null;
+  readonly handleStartNewThread: () => void;
   readonly activeEnvironmentUnavailable: boolean;
   readonly isSendBusy: boolean;
   readonly sendQueuesBehindSetup: boolean;
@@ -287,6 +289,8 @@ export function useComposerSend(input: ComposerSendInput) {
     isConnecting,
     isRevertingCheckpoint,
     threadDetailLoading,
+    projectCloneSendBlockReason,
+    handleStartNewThread,
     activeEnvironmentUnavailable,
     isSendBusy,
     sendQueuesBehindSetup,
@@ -434,6 +438,7 @@ export function useComposerSend(input: ComposerSendInput) {
       isRevertingCheckpoint ||
       !clientSettingsHydrated ||
       threadDetailLoading ||
+      projectCloneSendBlockReason !== null ||
       readPendingEnvironmentChange() !== null ||
       sendInFlightRef.current ||
       feedbackUploadsInFlightRef.current.has(routeThreadKey)
@@ -729,7 +734,8 @@ export function useComposerSend(input: ComposerSendInput) {
         ? parseStandaloneComposerSlashCommand(trimmed)
         : null;
     if (standaloneSlashCommand && multipleModelSelections === null) {
-      handleInteractionModeChange(standaloneSlashCommand);
+      if (standaloneSlashCommand === "new") handleStartNewThread();
+      else handleInteractionModeChange(standaloneSlashCommand);
       promptRef.current = "";
       clearComposerDraftContent(composerDraftTarget);
       composerRef.current?.resetCursorState();
@@ -987,8 +993,8 @@ export function useComposerSend(input: ComposerSendInput) {
         .getState()
         .getComposerDraft(composerDraftTarget);
       const changedBeforeDecline = draftChangedSinceSend();
-      const pendingIdsBeforeDecline = pendingApprovalsRef.current.map(
-        (approval) => approval.requestId,
+      const pendingIdsBeforeDecline = new Set(
+        pendingApprovalsRef.current.map((approval) => approval.requestId),
       );
       const approvalResponding = approvalsToDecline.some((approval) =>
         respondingRequestIdsRef.current.includes(approval.requestId),
@@ -1043,7 +1049,7 @@ export function useComposerSend(input: ComposerSendInput) {
       // An approval that arrived during the decline would block the redirect; keep the draft so
       // the next send declines it too.
       const approvalArrived = pendingApprovalsRef.current.some(
-        (approval) => !pendingIdsBeforeDecline.includes(approval.requestId),
+        (approval) => !pendingIdsBeforeDecline.has(approval.requestId),
       );
       if (
         !declined ||

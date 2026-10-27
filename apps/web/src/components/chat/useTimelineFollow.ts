@@ -213,6 +213,23 @@ export function useTimelineFollow(input: TimelineFollowInput) {
   const follow =
     followSnapshot.visit === visit ? followSnapshot.follow : initialTimelineFollow(visit.followEnd);
   const timelineLiveFollowEnabled = follow.mode === "following";
+  const [activity, setActivity] = useState({ visit, entries: timelineEntries, unread: false });
+  const hasUnreadTimelineActivity =
+    activity.visit === visit && activity.unread && !timelineLiveFollowEnabled;
+  if (
+    activity.visit !== visit ||
+    activity.entries !== timelineEntries ||
+    (activity.unread && timelineLiveFollowEnabled)
+  ) {
+    setActivity({
+      visit,
+      entries: timelineEntries,
+      unread:
+        activity.visit === visit &&
+        !timelineLiveFollowEnabled &&
+        (activity.unread || (activity.entries !== timelineEntries && !follow.atEnd)),
+    });
+  }
   const readFollow = () => followStore.read(visit);
   // Async settles outlive their render; this reads the visit shown now.
   const readCurrentFollow = useStableCallback(readFollow);
@@ -582,8 +599,21 @@ export function useTimelineFollow(input: TimelineFollowInput) {
     setTimelineAnchor({ threadKey, messageId });
   };
 
+  const anchorMessageForNavigationStable = useStableCallback(
+    (threadKey: string | null, messageId: MessageId) => {
+      releaseFollowForNavigation();
+      const scroll = visitScroll();
+      scroll.positionedAnchor = null;
+      scroll.settledAnchor = null;
+      setLaidOutAnchor(null);
+      setShowScrollToBottom(false);
+      setTimelineAnchor({ threadKey, messageId });
+    },
+  );
+
   return {
     showScrollToBottom,
+    hasUnreadTimelineActivity,
     timelineLiveFollowEnabled,
     isTimelineAtLogicalEndStable,
     onComposerPageScrollKeyDownStable,
@@ -596,6 +626,7 @@ export function useTimelineFollow(input: TimelineFollowInput) {
     onTimelineFooterGrowStable,
     onIsAtEndChangeStable,
     anchorNewTurn,
+    anchorMessageForNavigationStable,
     attachTimelineViewport,
     attachComposerOverlay: followStore.attachComposerOverlay,
   };

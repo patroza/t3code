@@ -177,6 +177,7 @@ import { useOpenChangeRequestLink } from "~/lib/openPullRequestLink";
 import { useOpenLink } from "../browser/useOpenLink";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { isPreviewAvailableFor } from "../browser/previewRuntime";
+import { isLocalMarkdownImageSrc, normalizeLocalMarkdownImageSrc } from "../markdown-images";
 import {
   isBrowserPreviewFile,
   openFileInPreview,
@@ -214,7 +215,6 @@ import {
   nodeToPlainText,
 } from "./chat/MarkdownCodeBlock.logic";
 import { reportMarkdownActionFailure } from "./chat/markdownActionFailure";
-
 const isAssetNotFoundError = Schema.is(AssetWorkspaceAssetNotFoundError);
 
 interface ChatMarkdownProps {
@@ -1497,6 +1497,26 @@ const CHAT_MARKDOWN_COMPONENTS = {
           style={authoredSizeStyle}
           workspaceRoot={cwd}
           workspaceMutationId={workspaceMutationId}
+          onImageExpand={imageExpand}
+        />
+      );
+    }
+    // Codex ACP uses `attachment:` / generated_images host paths that the
+    // shared classifier treats as blocked URI schemes.
+    if (isLocalMarkdownImageSrc(srcString) && threadRef) {
+      return (
+        <ChatMarkdownAssetImage
+          environmentId={threadRef.environmentId}
+          resource={{
+            _tag: "workspace-file",
+            threadId: threadRef.threadId,
+            path: normalizeLocalMarkdownImageSrc(srcString),
+          }}
+          alt={altText}
+          kind={kind}
+          copyMarkdown={copyMarkdown}
+          srcFragment={markdownImageSourceFragment(classifiedSrc)}
+          style={authoredSizeStyle}
           onImageExpand={imageExpand}
         />
       );

@@ -1260,7 +1260,20 @@ export function restorePlanFollowUpComposer(input: {
   });
 }
 
-/** Includes the annotation screenshot only within the attachment cap; exceeding it rejects the whole turn. */
+export function isVideoPreviewRequestCurrent(
+  requestThreadKey: string,
+  currentThreadKey: string | null,
+  requestId: number,
+  currentRequestId: number,
+): boolean {
+  return requestThreadKey === currentThreadKey && requestId === currentRequestId;
+}
+
+/**
+ * Adds a directly sent preview annotation to the composer's images and
+ * annotations. Its screenshot rides along only while the turn has room for
+ * another attachment; over the cap the server rejects the whole turn.
+ */
 export function mergeDirectPreviewAnnotation(input: {
   readonly images: ReadonlyArray<ComposerImageAttachment>;
   readonly fileCount: number;

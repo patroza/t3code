@@ -22,6 +22,7 @@ export interface PersistedUiState {
   projectExpandedById?: Record<string, boolean>;
   projectOrder?: string[];
   threadLastVisitedAtById?: Record<string, string>;
+  pinnedThreadKeys?: string[];
   collapsedProjectCwds?: string[];
   expandedProjectCwds?: string[];
   projectOrderCwds?: string[];
@@ -40,6 +41,7 @@ export interface UiProjectState {
 
 export interface UiThreadState {
   threadLastVisitedAtById: Record<string, string>;
+  pinnedThreadKeys: string[];
   threadChangedFilesExpandedById: Record<string, Record<string, boolean>>;
 }
 
@@ -59,6 +61,7 @@ const initialState: UiState = {
   projectOrder: [],
   sidebarProjectScopeKey: null,
   threadLastVisitedAtById: {},
+  pinnedThreadKeys: [],
   threadChangedFilesExpandedById: {},
   defaultAdvertisedEndpointKey: null,
   pullRequestMergeMethod: "merge",
@@ -145,6 +148,7 @@ export function parsePersistedState(parsed: PersistedUiState): UiState {
     projectExpandedById,
     projectOrder,
     threadLastVisitedAtById: sanitizeTimestampRecord(parsed.threadLastVisitedAtById),
+    pinnedThreadKeys: sanitizeStringArray(parsed.pinnedThreadKeys),
     threadChangedFilesExpandedById:
       parsed.threadChangedFilesExpansionVersion === THREAD_CHANGED_FILES_EXPANSION_VERSION
         ? sanitizePersistedThreadChangedFilesExpanded(parsed.threadChangedFilesExpandedById)
@@ -217,12 +221,14 @@ export function persistState(state: UiState): void {
         ([key]) => key !== LEGACY_PROJECT_EXPANSION_DEFAULT_KEY,
       ),
     );
+
     window.localStorage.setItem(
       PERSISTED_STATE_KEY,
       JSON.stringify({
         projectExpandedById,
         projectOrder: state.projectOrder,
         threadLastVisitedAtById: state.threadLastVisitedAtById,
+        pinnedThreadKeys: state.pinnedThreadKeys,
         defaultAdvertisedEndpointKey: state.defaultAdvertisedEndpointKey,
         sidebarProjectScopeKey: state.sidebarProjectScopeKey,
         threadChangedFilesExpansionVersion: THREAD_CHANGED_FILES_EXPANSION_VERSION,
@@ -289,7 +295,35 @@ export function markThreadUnread(
   };
 }
 
-function setThreadChangedFilesExpanded(
+/**
+ * Drop all per-thread UI state for a deleted thread. Without this, both
+ * `threadLastVisitedAtById` and `threadChangedFilesExpandedById` grew one entry
+ * per thread ever visited and were persisted to localStorage indefinitely.
+ */
+export function removeThreadUiState(state: UiState, threadId: string): UiState {
+  const hasVisited = threadId in state.threadLastVisitedAtById;
+  const hasChangedFiles = threadId in state.threadChangedFilesExpandedById;
+  if (!hasVisited && !hasChangedFiles) {
+    return state;
+  }
+  const { [threadId]: _visited, ...threadLastVisitedAtById } = state.threadLastVisitedAtById;
+  const { [threadId]: _changed, ...threadChangedFilesExpandedById } =
+    state.threadChangedFilesExpandedById;
+  return {
+    ...state,
+    threadLastVisitedAtById,
+    threadChangedFilesExpandedById,
+  };
+}
+
+export function toggleThreadPinned(state: UiState, threadKey: string): UiState {
+  const pinnedThreadKeys = state.pinnedThreadKeys.includes(threadKey)
+    ? state.pinnedThreadKeys.filter((candidate) => candidate !== threadKey)
+    : [...state.pinnedThreadKeys, threadKey];
+  return { ...state, pinnedThreadKeys };
+}
+
+export function setThreadChangedFilesExpanded(
   state: UiState,
   threadId: string,
   turnId: string,
@@ -323,7 +357,7 @@ function setDefaultAdvertisedEndpointKey(state: UiState, key: string | null): Ui
   };
 }
 
-function setSidebarProjectScopeKey(state: UiState, projectKey: string | null): UiState {
+export function setSidebarProjectScopeKey(state: UiState, projectKey: string | null): UiState {
   const nextKey = sanitizeOptionalKey(projectKey);
   if (state.sidebarProjectScopeKey === nextKey) {
     return state;
@@ -420,6 +454,8 @@ export function reorderProjects(
 interface UiStateStore extends UiState {
   markThreadVisited: (threadId: string, visitedAt: string) => void;
   markThreadUnread: (threadId: string, latestTurnCompletedAt: string | null | undefined) => void;
+  removeThread: (threadId: string) => void;
+  toggleThreadPinned: (threadKey: string) => void;
   setThreadChangedFilesExpanded: (threadId: string, turnId: string, expanded: boolean) => void;
   setDefaultAdvertisedEndpointKey: (key: string | null) => void;
   setSidebarProjectScopeKey: (projectKey: string | null) => void;
@@ -438,6 +474,8 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
     set((state) => markThreadVisited(state, threadId, visitedAt)),
   markThreadUnread: (threadId, latestTurnCompletedAt) =>
     set((state) => markThreadUnread(state, threadId, latestTurnCompletedAt)),
+  removeThread: (threadId) => set((state) => removeThreadUiState(state, threadId)),
+  toggleThreadPinned: (threadKey) => set((state) => toggleThreadPinned(state, threadKey)),
   setThreadChangedFilesExpanded: (threadId, turnId, expanded) =>
     set((state) => setThreadChangedFilesExpanded(state, threadId, turnId, expanded)),
   setDefaultAdvertisedEndpointKey: (key) =>

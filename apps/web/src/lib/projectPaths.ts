@@ -1,5 +1,7 @@
 export {
   appendBrowsePathSegment,
+  canNavigateUp,
+  getBrowseParentPath,
   ensureBrowseDirectoryPath,
   findProjectByPath,
   getBrowseDirectoryPath,

@@ -157,6 +157,9 @@ vi.mock(import("~/components/ui/toast"), async (original) => {
         state.toasts.push(toast);
         return "toast";
       }) as never,
+      update: ((_id: string, toast: Toast) => {
+        Object.assign(state.toasts[0]!, toast);
+      }) as never,
     },
   };
 });

@@ -11,6 +11,7 @@ import { HostedEmptyState } from "../components/HostedEmptyState";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
 import { SidebarInset } from "../components/ui/sidebar";
 import { WorkspacePageHeader } from "../components/WorkspacePageHeader";
+import { hasThreadDeepLinkIntent } from "../deepLinkStore";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import {
   readProject,
@@ -32,6 +33,8 @@ function ChatIndexRouteView() {
   return <IndexDraftLanding />;
 }
 
+/** Start a draft for the recent project, except while a deep link is selecting its real thread. */
+
 function IndexDraftLanding() {
   const projects = useProjects();
   const threads = useThreadShells();
@@ -42,6 +45,8 @@ function IndexDraftLanding() {
   const isStillOnIndex = useEffectEvent(() => router.state.location.pathname === "/");
   const startedAttemptRef = useRef<number | null>(null);
   const [startState, setStartState] = useState({ failed: false, retryRequest: 0 });
+  // Re-read each render: store is module-level; coordinator clears/marks it.
+  const deferForDeepLink = hasThreadDeepLinkIntent();
 
   const mostRecentProject =
     sortScopedProjectsForSidebar(projects, threads, "updated_at")[0] ?? null;
@@ -49,7 +54,12 @@ function IndexDraftLanding() {
 
   useEffect(() => {
     // Starting a draft after the user has left would replace the page they picked.
-    if (mostRecentProject === null || startedAttemptRef.current === attempt || !isStillOnIndex()) {
+    if (
+      mostRecentProject === null ||
+      startedAttemptRef.current === attempt ||
+      deferForDeepLink ||
+      !isStillOnIndex()
+    ) {
       return;
     }
     const projectRef = scopeProjectRef(mostRecentProject.environmentId, mostRecentProject.id);
@@ -66,8 +76,11 @@ function IndexDraftLanding() {
       .catch(() => {
         setStartState((state) => ({ ...state, failed: true }));
       });
-  }, [attempt, handleNewThread, mostRecentProject]);
+  }, [attempt, deferForDeepLink, handleNewThread, mostRecentProject]);
 
+  if (!bootstrapped || deferForDeepLink) {
+    return null;
+  }
   if (mostRecentProject !== null) {
     return startState.failed ? (
       <DraftStartError

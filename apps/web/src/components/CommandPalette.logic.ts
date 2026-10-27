@@ -28,6 +28,7 @@ import {
   THREAD_JUMP_KEYBINDING_COMMANDS,
 } from "@t3tools/contracts";
 import { filterFilesystemBrowseEntries } from "@t3tools/client-runtime/state/filesystem";
+import { buildThreadAttributeSearchTerms } from "@t3tools/shared/threadAttributeSearch";
 import { type ReactNode } from "react";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 import { type Project, type SidebarThreadSummary, type Thread } from "../types";
@@ -337,6 +338,42 @@ export function enumerateCommandPaletteItems(
 
 export type CommandPaletteMode = "root" | "root-browse" | "submenu" | "submenu-browse";
 
+export function filterBrowseEntries(input: {
+  browseEntries: ReadonlyArray<FilesystemBrowseEntry>;
+  browseFilterQuery: string;
+  highlightedItemValue: string | null;
+}): {
+  filteredEntries: FilesystemBrowseEntry[];
+  highlightedEntry: FilesystemBrowseEntry | null;
+  exactEntry: FilesystemBrowseEntry | null;
+} {
+  const lowerFilter = input.browseFilterQuery.toLowerCase();
+  const showHidden = input.browseFilterQuery.startsWith(".");
+
+  const filteredEntries = input.browseEntries.filter(
+    (entry) =>
+      entry.name.toLowerCase().startsWith(lowerFilter) &&
+      (showHidden || !entry.name.startsWith(".")),
+  );
+
+  let highlightedEntry: FilesystemBrowseEntry | null = null;
+  if (input.highlightedItemValue?.startsWith("browse:")) {
+    const highlightedPath = input.highlightedItemValue.slice("browse:".length);
+    highlightedEntry = filteredEntries.find((entry) => entry.fullPath === highlightedPath) ?? null;
+  }
+
+  const exactEntry =
+    input.browseFilterQuery.length > 0
+      ? (filteredEntries.find((entry) => entry.name === input.browseFilterQuery) ?? null)
+      : null;
+
+  return { filteredEntries, highlightedEntry, exactEntry };
+}
+
+// A project as the palette shows it. `displayName` is the grouped label (for
+// example "owner/repo" when projects are merged across machines). Keep `title`
+// as the real project title: the automatic project icon is derived from it, and
+// every other surface uses the real title, so overriding it desyncs the icon.
 export type CommandPaletteProject = Project & { readonly displayName: string };
 
 export function buildCommandPaletteProjectMetadata(input: {
@@ -392,6 +429,8 @@ export type BuildThreadActionItemsThread = Pick<
   | "id"
   | "lineage"
   | "modelSelection"
+  | "originSource"
+  | "participantSummaries"
   | "projectId"
   | "runtime"
   | "title"
@@ -414,13 +453,16 @@ export function buildThreadActionItems<TThread extends BuildThreadActionItemsThr
   renderLeadingContent?: (thread: TThread) => ReactNode;
   renderTrailingContent?: (thread: TThread) => ReactNode;
   renderDescription?: (thread: TThread, meta: { projectTitle: string | undefined }) => ReactNode;
+  includeArchived?: boolean;
   runThread: (thread: TThread) => Promise<void>;
   /** Makes the environment searchable; pass it only with two or more environments. */
   environmentLabelOf?: (thread: TThread) => string | null;
 }): CommandPaletteActionItem[] {
   // Callers order these: recents by last use, search results by rank.
   const visibleThreads = input.threads.filter(
-    (thread) => thread.archivedAt === null && !isSidebarSubagentThread(thread),
+    (thread) =>
+      (input.includeArchived === true || thread.archivedAt === null) &&
+      !isSidebarSubagentThread(thread),
   );
 
   return visibleThreads.map((thread) => {
@@ -448,11 +490,19 @@ export function buildThreadActionItems<TThread extends BuildThreadActionItemsThr
       ? input.renderDescription(thread, { projectTitle })
       : descriptionParts.join(` · `);
 
+    const attributeTerms = buildThreadAttributeSearchTerms({
+      title: thread.title,
+      branch: thread.branch,
+      originSource: thread.originSource ?? null,
+      participantSummaries: thread.participantSummaries ?? [],
+      extraTerms: [projectTitle],
+    });
+
     return Object.assign(
       {
         kind: "action" as const,
         value: `thread:${thread.environmentId}:${thread.id}`,
-        searchTerms: [thread.title],
+        searchTerms: [thread.title, ...attributeTerms],
         threadSearch: threadSearchSubject(
           {
             ...thread,
@@ -511,7 +561,10 @@ function scorePaletteItem(
   now: number,
   options: { readonly typos: boolean },
 ) {
-  if (item.threadSearch) return scoreThreadSearch(normalizedQuery, item.threadSearch, now, options);
+  if (item.threadSearch) {
+    const match = scoreThreadSearch(normalizedQuery, item.threadSearch, now, options);
+    if (match) return match;
+  }
   // The title names the item; search terms are keywords. Ranges index the
   // first term, so they only highlight a title that is that term.
   const name = typeof item.title === "string" ? item.title : item.searchTitle;

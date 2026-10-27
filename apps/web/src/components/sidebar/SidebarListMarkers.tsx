@@ -75,7 +75,9 @@ export function SidebarDragBoundary(props: {
   return (
     <SortableSidebarMarker
       marker={props.marker}
-      data-testid={`sidebar-${props.marker}`}
+      data-testid={
+        props.marker === "pinned-divider" ? "sidebar-pinned-divider" : `sidebar-${props.marker}`
+      }
       className="pointer-events-none relative mx-0.5 -mb-px h-0"
     >
       {props.visible ? (

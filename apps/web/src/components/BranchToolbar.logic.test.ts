@@ -1,3 +1,5 @@
+import { resolveBranchTriggerLabel } from "./BranchToolbar.logic";
+import { resolveBranchToolbarValue } from "./BranchToolbar.logic";
 import { type VcsRef } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
@@ -31,6 +33,149 @@ describe("resolveDraftEnvModeAfterBranchChange", () => {
         effectiveEnvMode: "local",
       }),
     ).toBe("worktree");
+  });
+});
+
+describe("resolveBranchToolbarValue", () => {
+  it("defaults new-worktree mode to current git ref when no explicit base ref is set", () => {
+    expect(
+      resolveBranchToolbarValue({
+        envMode: "worktree",
+        activeWorktreePath: null,
+        activeThreadBranch: null,
+        currentGitBranch: "main",
+      }),
+    ).toBe("main");
+  });
+
+  it("keeps an explicitly selected worktree base ref", () => {
+    expect(
+      resolveBranchToolbarValue({
+        envMode: "worktree",
+        activeWorktreePath: null,
+        activeThreadBranch: "feature/base",
+        currentGitBranch: "main",
+      }),
+    ).toBe("feature/base");
+  });
+
+  it("shows the actual checked-out ref when not selecting a new worktree base", () => {
+    expect(
+      resolveBranchToolbarValue({
+        envMode: "local",
+        activeWorktreePath: null,
+        activeThreadBranch: "feature/base",
+        currentGitBranch: "main",
+      }),
+    ).toBe("main");
+  });
+});
+
+describe("resolveBranchTriggerLabel", () => {
+  it("marks the remote base when a new worktree will start from remote", () => {
+    expect(
+      resolveBranchTriggerLabel({
+        activeWorktreePath: null,
+        effectiveEnvMode: "worktree",
+        resolvedActiveBranch: "main",
+        resolvedActiveBranchIsRemote: false,
+        startFromOrigin: true,
+      }),
+    ).toBe("From main (remote)");
+  });
+
+  it("marks the remote base for local branch names that contain slashes", () => {
+    expect(
+      resolveBranchTriggerLabel({
+        activeWorktreePath: null,
+        effectiveEnvMode: "worktree",
+        resolvedActiveBranch: "feature/demo",
+        resolvedActiveBranchIsRemote: false,
+        startFromOrigin: true,
+      }),
+    ).toBe("From feature/demo (remote)");
+  });
+
+  it("shows the local ref when start from remote is disabled", () => {
+    expect(
+      resolveBranchTriggerLabel({
+        activeWorktreePath: null,
+        effectiveEnvMode: "worktree",
+        resolvedActiveBranch: "main",
+        resolvedActiveBranchIsRemote: false,
+        startFromOrigin: false,
+      }),
+    ).toBe("From main");
+  });
+
+  it("shows the bare branch name when reusing the selected worktree base branch", () => {
+    expect(
+      resolveBranchTriggerLabel({
+        activeWorktreePath: null,
+        effectiveEnvMode: "worktree",
+        resolvedActiveBranch: "main",
+        resolvedActiveBranchIsRemote: false,
+        startFromOrigin: true,
+        reuseBaseBranch: true,
+      }),
+    ).toBe("main");
+  });
+
+  it("does not duplicate the origin prefix for an explicit remote ref", () => {
+    expect(
+      resolveBranchTriggerLabel({
+        activeWorktreePath: null,
+        effectiveEnvMode: "worktree",
+        resolvedActiveBranch: "origin/feature/demo",
+        resolvedActiveBranchIsRemote: true,
+        startFromOrigin: true,
+      }),
+    ).toBe("From origin/feature/demo");
+  });
+
+  it("preserves an explicit ref from a non-origin remote", () => {
+    expect(
+      resolveBranchTriggerLabel({
+        activeWorktreePath: null,
+        effectiveEnvMode: "worktree",
+        resolvedActiveBranch: "upstream/feature/demo",
+        resolvedActiveBranchIsRemote: true,
+        startFromOrigin: true,
+      }),
+    ).toBe("From upstream/feature/demo");
+  });
+
+  it("keeps current-checkout labels and empty state unchanged", () => {
+    expect(
+      resolveBranchTriggerLabel({
+        activeWorktreePath: null,
+        effectiveEnvMode: "local",
+        resolvedActiveBranch: "main",
+        resolvedActiveBranchIsRemote: false,
+        startFromOrigin: true,
+      }),
+    ).toBe("main");
+    expect(
+      resolveBranchTriggerLabel({
+        activeWorktreePath: null,
+        effectiveEnvMode: "worktree",
+        resolvedActiveBranch: null,
+        resolvedActiveBranchIsRemote: null,
+        startFromOrigin: true,
+      }),
+    ).toBe("Select ref");
+  });
+
+  it("does not fabricate a remote marker while branch metadata is loading", () => {
+    expect(
+      resolveBranchTriggerLabel({
+        activeWorktreePath: null,
+        effectiveEnvMode: "worktree",
+        resolvedActiveBranch: "upstream/feature/demo",
+        resolvedActiveBranchIsRemote: null,
+        startFromOrigin: true,
+      }),
+    ).toBe("From upstream/feature/demo");
   });
 });
 
