@@ -7,16 +7,31 @@ import { expandHomePath } from "../projectAliases.ts";
 /** Scanner App project alias. MAKO, Easy Life, and Empasa scanning chats use this. */
 export const SCANNER_GROUP_CHAT_PROJECT = "macs-scanner";
 
+/** Omega Scanner team channel. Scanner group chats are copied here so that channel sees them. */
+export const SCANNER_GROUP_CHAT_MIRROR: GroupChatMirror = {
+  tenantId: "77e3cbed-2705-4d62-8421-efde364a4eeb",
+  teamId: "1523eb08-b152-4a1d-91e1-8658cf950273",
+  channelId: "19:ff57061cd9894df08d0d0230c76947af@thread.tacv2",
+};
+
+export interface GroupChatMirror {
+  readonly tenantId: string;
+  readonly teamId: string;
+  readonly channelId: string;
+}
+
 export interface GroupChatRule {
   readonly conversationId?: string | undefined;
   readonly titleIncludes?: string | undefined;
   readonly projectShortName: string;
+  readonly mirror?: GroupChatMirror | undefined;
 }
 
 interface ResolvedGroupChat {
   readonly projectShortName: string;
   readonly passive: true;
   readonly title: string;
+  readonly mirror: GroupChatMirror | null;
 }
 
 type GroupChatEvent = "message" | "join";
@@ -141,6 +156,7 @@ export function resolveGroupChat(input: {
       projectShortName: rule.projectShortName,
       passive: true,
       title: displayTitle ?? rule.titleIncludes ?? "Teams group chat",
+      mirror: mirrorFor(rule.projectShortName, rule.mirror),
     };
   }
   if (displayTitle !== undefined && matchesBuiltinScannerGroupChat(displayTitle)) {
@@ -148,9 +164,18 @@ export function resolveGroupChat(input: {
       projectShortName: SCANNER_GROUP_CHAT_PROJECT,
       passive: true,
       title: displayTitle,
+      mirror: SCANNER_GROUP_CHAT_MIRROR,
     };
   }
   return null;
+}
+
+function mirrorFor(
+  projectShortName: string,
+  mirror: GroupChatMirror | undefined,
+): GroupChatMirror | null {
+  if (mirror !== undefined) return mirror;
+  return projectShortName === SCANNER_GROUP_CHAT_PROJECT ? SCANNER_GROUP_CHAT_MIRROR : null;
 }
 
 export function parseGroupChatCommand(text: string): GroupChatCommand | null {
@@ -218,6 +243,72 @@ export function buildGroupChatPrompt(input: {
   ]
     .filter((line): line is string => line !== null)
     .join("\n");
+}
+
+export function groupChatChannelSeed(chat: {
+  readonly title: string;
+  readonly projectShortName: string;
+}): string {
+  return [
+    `**${chat.title}**`,
+    `Passive Teams group chat, mapped to **${chat.projectShortName}**.`,
+    "Omegent stays silent in that chat. This thread is the observation log.",
+  ].join("\n");
+}
+
+/** Teams thread id for replies. A new channel message's activity id becomes the thread root. */
+export function teamsChannelThreadId(
+  mirror: GroupChatMirror,
+  created: { readonly id: string; readonly activityId?: string | undefined },
+): string {
+  if (created.id.includes(";messageid=")) return created.id;
+  if (created.activityId !== undefined && created.activityId.length > 0) {
+    return `${mirror.channelId};messageid=${created.activityId}`;
+  }
+  return created.id;
+}
+
+export function groupChatMirrorsFile(dataDir: string): string {
+  return NodePath.join(dataDir, "group-chat-mirrors.json");
+}
+
+export function readGroupChatMirror(filePath: string, sourceKey: string): string | null {
+  try {
+    const parsed = JSON.parse(NodeFS.readFileSync(filePath, "utf8")) as unknown;
+    if (!isRecord(parsed)) return null;
+    const value = parsed[sourceKey];
+    return typeof value === "string" && value.length > 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+let mirrorWrite: Promise<void> = Promise.resolve();
+
+export function rememberGroupChatMirror(
+  filePath: string,
+  sourceKey: string,
+  conversationId: string,
+): Promise<void> {
+  const run = mirrorWrite.then(() => {
+    let current: Record<string, unknown> = {};
+    try {
+      const parsed = JSON.parse(NodeFS.readFileSync(filePath, "utf8")) as unknown;
+      if (isRecord(parsed)) current = { ...parsed };
+    } catch {
+      current = {};
+    }
+    current[sourceKey] = conversationId;
+    NodeFS.mkdirSync(NodePath.dirname(filePath), { recursive: true });
+    const temporary = `${filePath}.tmp`;
+    NodeFS.writeFileSync(temporary, `${JSON.stringify(current)}\n`);
+    NodeFS.renameSync(temporary, filePath);
+  });
+  mirrorWrite = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
 }
 
 export function groupChatLogLine(author: string, text: string): string {
@@ -338,10 +429,45 @@ function parseGroupChatRule(value: unknown, index: number): GroupChatRule {
       `Teams group chat rule #${index + 1} must include conversationId or titleIncludes.`,
     );
   }
+  const mirror = parseGroupChatMirror(value, index);
   return {
     projectShortName,
     ...(conversationId === undefined ? {} : { conversationId }),
     ...(titleIncludes === undefined ? {} : { titleIncludes }),
+    ...(mirror === undefined ? {} : { mirror }),
+  };
+}
+
+const MIRROR_CHANNEL_ID = /^19:\S+@thread\.tacv2$/u;
+
+function optionalTrimmed(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function parseGroupChatMirror(
+  value: Record<string, unknown>,
+  index: number,
+): GroupChatMirror | undefined {
+  const tenantId = optionalTrimmed(value.mirrorTenantId);
+  const teamId = optionalTrimmed(value.mirrorTeamId);
+  const channelId = optionalTrimmed(value.mirrorChannelId);
+  if (tenantId === undefined && teamId === undefined && channelId === undefined) return undefined;
+  if (
+    tenantId === undefined ||
+    teamId === undefined ||
+    channelId === undefined ||
+    !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu.test(tenantId) ||
+    !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu.test(teamId) ||
+    !MIRROR_CHANNEL_ID.test(channelId)
+  ) {
+    throw new Error(
+      `Teams group chat rule #${index + 1} must set mirrorTenantId, mirrorTeamId, and mirrorChannelId together.`,
+    );
+  }
+  return {
+    tenantId: tenantId.toLowerCase(),
+    teamId: teamId.toLowerCase(),
+    channelId,
   };
 }
 

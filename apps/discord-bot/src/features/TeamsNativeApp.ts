@@ -7,7 +7,11 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import { TeamsSeenStore, layer as teamsSeenLayer } from "../store/TeamsSeenStore.ts";
-import { mentionsTeamsRecipient, registerTeamsMessageEvents } from "../teams/messageEvents.ts";
+import {
+  mentionsTeamsRecipient,
+  registerTeamsMessageEvents,
+  type TeamsMessageContext,
+} from "../teams/messageEvents.ts";
 
 import type { DiscordBotConfig } from "../config.ts";
 import { classifyTeamsAgentAccess, IdentityMapStore, type PersonIdentity } from "../identityMap.ts";
@@ -21,7 +25,7 @@ import {
   isTeamsGroupChat,
   loadGroupChatRulesFromFileSync,
 } from "../teams/groupChats.ts";
-import { ingestTeamsGroupChat } from "./TeamsGroupChatObserver.ts";
+import { ingestTeamsGroupChat, type TeamsChannelPoster } from "./TeamsGroupChatObserver.ts";
 import {
   makeTeamsChannelDescriptionReader,
   teamsDescriptionProject,
@@ -33,6 +37,26 @@ import { BridgeHub } from "./BridgeHub.ts";
 import { ThreadWarmCacheStore } from "../store/ThreadWarmCacheStore.ts";
 import { BotResponseTransport } from "./BotResponseTransport.ts";
 import { makeTeamsResponseTransport } from "../teams/ResponseTransport.ts";
+
+function teamsChannelPoster(api: TeamsMessageContext["api"]): TeamsChannelPoster {
+  return {
+    openThread: (input) =>
+      api.conversations.create({
+        tenantId: input.mirror.tenantId,
+        isGroup: true,
+        channelData: {
+          channel: { id: input.mirror.channelId },
+          team: { id: input.mirror.teamId, aadGroupId: input.mirror.teamId },
+          tenant: { id: input.mirror.tenantId },
+        },
+        activity: { type: "message", text: input.text },
+      }),
+    reply: (conversationId, text) =>
+      api.conversations
+        .createActivity(conversationId, { type: "message", text })
+        .then(() => undefined),
+  };
+}
 
 interface TeamsConversationCoordinates {
   readonly tenantId: string;
@@ -293,7 +317,7 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
     };
   });
 
-  app.on("conversationUpdate", async ({ activity }) => {
+  app.on("conversationUpdate", async ({ activity, api }) => {
     if (
       !botWasAdded({
         recipientId: activity.recipient?.id,
@@ -323,18 +347,25 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
           }),
         );
         if (!claimed) return;
-        yield* ingestTeamsGroupChat(config, groupChatRules, identityMap.list(), runtime, {
-          event: "join",
-          tenantId: location.tenantId,
-          conversationId: location.conversationId,
-          conversationType: activity.conversation.conversationType,
-          isGroup: activity.conversation.isGroup,
-          teamId: location.teamId,
-          title: activity.conversation.name ?? activity.topicName,
-          text: "",
-          fromBot: false,
-          mentionedBot: false,
-        }).pipe(
+        yield* ingestTeamsGroupChat(
+          config,
+          groupChatRules,
+          identityMap.list(),
+          runtime,
+          {
+            event: "join",
+            tenantId: location.tenantId,
+            conversationId: location.conversationId,
+            conversationType: activity.conversation.conversationType,
+            isGroup: activity.conversation.isGroup,
+            teamId: location.teamId,
+            title: activity.conversation.name ?? activity.topicName,
+            text: "",
+            fromBot: false,
+            mentionedBot: false,
+          },
+          teamsChannelPoster(api),
+        ).pipe(
           Effect.catch((error) =>
             Effect.logError("Passive Teams group chat join failed", { error: String(error) }),
           ),
@@ -363,22 +394,30 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
             }),
           );
           if (!claimed) return;
-          yield* ingestTeamsGroupChat(config, groupChatRules, identityMap.list(), runtime, {
-            event: "message",
-            tenantId: location.tenantId,
-            conversationId: location.conversationId,
-            conversationType: activity.conversation.conversationType,
-            isGroup: activity.conversation.isGroup,
-            teamId: location.teamId,
-            title: activity.conversation.name,
-            text: activity.text ?? "",
-            messageId: activity.id,
-            author: activity.from?.name,
-            authorAadObjectId: activity.from?.aadObjectId,
-            authorUserId: activity.from?.id,
-            fromBot: activity.from?.id !== undefined && activity.from.id === activity.recipient?.id,
-            mentionedBot: mentionsTeamsRecipient(activity),
-          }).pipe(
+          yield* ingestTeamsGroupChat(
+            config,
+            groupChatRules,
+            identityMap.list(),
+            runtime,
+            {
+              event: "message",
+              tenantId: location.tenantId,
+              conversationId: location.conversationId,
+              conversationType: activity.conversation.conversationType,
+              isGroup: activity.conversation.isGroup,
+              teamId: location.teamId,
+              title: activity.conversation.name,
+              text: activity.text ?? "",
+              messageId: activity.id,
+              author: activity.from?.name,
+              authorAadObjectId: activity.from?.aadObjectId,
+              authorUserId: activity.from?.id,
+              fromBot:
+                activity.from?.id !== undefined && activity.from.id === activity.recipient?.id,
+              mentionedBot: mentionsTeamsRecipient(activity),
+            },
+            teamsChannelPoster(api),
+          ).pipe(
             Effect.catch((error) =>
               Effect.logError("Passive Teams group chat failed", { error: String(error) }),
             ),

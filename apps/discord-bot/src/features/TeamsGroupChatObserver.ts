@@ -12,10 +12,16 @@ import { classifyTeamsAgentAccess, type PersonIdentity } from "../identityMap.ts
 import { ThreadLinkStore } from "../store/ThreadLinkStore.ts";
 import { T3Session } from "../t3/T3Session.ts";
 import {
+  groupChatChannelSeed,
   groupChatLogLine,
+  groupChatMirrorsFile,
   planTeamsGroupChat,
   groupChatThreadName,
+  readGroupChatMirror,
+  rememberGroupChatMirror,
+  teamsChannelThreadId,
   type GroupChatCommand,
+  type GroupChatMirror,
   type GroupChatPlan,
   type GroupChatRule,
 } from "../teams/groupChats.ts";
@@ -83,6 +89,65 @@ function postDiscord(runtime: Context.Context<never>, channelId: string, content
   return useRuntime(runtime, rest.createMessage(channelId, { content })).pipe(Effect.asVoid);
 }
 
+export interface TeamsChannelPoster {
+  openThread(input: {
+    readonly mirror: GroupChatMirror;
+    readonly text: string;
+  }): Promise<{ readonly id: string; readonly activityId?: string | undefined }>;
+  reply(conversationId: string, text: string): Promise<void>;
+}
+
+const copyToChannelThread = Effect.fn("copyToChannelThread")(function* (
+  poster: TeamsChannelPoster | null,
+  filePath: string,
+  sourceKey: string,
+  mirror: GroupChatMirror | null,
+  chat: { readonly title: string; readonly projectShortName: string },
+  text: string | null,
+) {
+  if (poster === null || mirror === null) return { created: false, conversationId: null };
+  const savedId = readGroupChatMirror(filePath, sourceKey);
+  const openedId =
+    savedId ??
+    (yield* Effect.tryPromise({
+      try: () => poster.openThread({ mirror, text: groupChatChannelSeed(chat) }),
+      catch: (error: unknown) => String(error),
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.logError("Could not open the Teams channel thread", { error }).pipe(Effect.as(null)),
+      ),
+      Effect.map((opened) => (opened === null ? null : teamsChannelThreadId(mirror, opened))),
+    ));
+  if (openedId === null) return { created: false, conversationId: null };
+  if (savedId === null) {
+    const remembered = yield* Effect.tryPromise({
+      try: () => rememberGroupChatMirror(filePath, sourceKey, openedId),
+      catch: (error: unknown) => String(error),
+    }).pipe(
+      Effect.as(true),
+      Effect.catch((error) =>
+        Effect.logError("Could not remember the Teams channel thread", { error }).pipe(
+          Effect.as(false),
+        ),
+      ),
+    );
+    if (!remembered) return { created: false, conversationId: null };
+  }
+  if (text !== null) {
+    yield* Effect.tryPromise({
+      try: () => poster.reply(openedId, text),
+      catch: (error: unknown) => String(error),
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.logError("Could not post to the Teams channel thread", { error }).pipe(
+          Effect.asVoid,
+        ),
+      ),
+    );
+  }
+  return { created: savedId === null, conversationId: openedId };
+});
+
 const runGroupChatCommand = Effect.fn("runGroupChatCommand")(function* (
   runtime: Context.Context<never>,
   discordThreadId: string,
@@ -136,7 +201,7 @@ const runGroupChatCommand = Effect.fn("runGroupChatCommand")(function* (
 
 /**
  * Observe a Teams group chat without sending anything back to it.
- * One T3 thread and one Discord alerts thread are created for the chat.
+ * One T3 thread, one Discord alerts thread, and one internal Teams channel thread.
  */
 export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* (
   config: DiscordBotConfig,
@@ -144,6 +209,7 @@ export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* 
   people: ReadonlyArray<PersonIdentity>,
   runtime: Context.Context<never>,
   activity: TeamsGroupChatActivity,
+  poster: TeamsChannelPoster | null,
 ) {
   const access =
     activity.event === "join"
@@ -184,12 +250,18 @@ export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* 
 
   const links = yield* ThreadLinkStore;
   const existing = yield* links.getBySourceThread("teams", plan.sourceKey);
+  const mirrorsFile = groupChatMirrorsFile(config.dataDir);
   if (plan.kind === "ignore") {
     if (existing !== null) {
-      yield* postDiscord(
-        runtime,
-        existing.discordThreadId,
-        groupChatLogLine(activity.author ?? "unknown", activity.text),
+      const line = groupChatLogLine(activity.author ?? "unknown", activity.text);
+      yield* postDiscord(runtime, existing.discordThreadId, line);
+      yield* copyToChannelThread(
+        poster,
+        mirrorsFile,
+        plan.sourceKey,
+        plan.chat.mirror,
+        plan.chat,
+        line,
       );
     }
     return { handled: true as const };
@@ -207,6 +279,14 @@ export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* 
       existing.discordThreadId,
       existing.t3ThreadId,
       plan.command,
+    );
+    yield* copyToChannelThread(
+      poster,
+      mirrorsFile,
+      plan.sourceKey,
+      plan.chat.mirror,
+      plan.chat,
+      groupChatLogLine(activity.author ?? "unknown", activity.text),
     );
     return { handled: true as const };
   }
@@ -231,16 +311,20 @@ export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* 
     (yield* openAlertThread(runtime, alertsChannelId ?? "", plan.chat));
   if (discordThreadId.length === 0) return { handled: true as const };
 
-  if (plan.wake !== "joined") {
-    yield* postDiscord(
-      runtime,
-      discordThreadId,
-      groupChatLogLine(activity.author ?? "unknown", activity.text),
-    );
-  }
+  const observation =
+    plan.wake === "joined" ? null : groupChatLogLine(activity.author ?? "unknown", activity.text);
+  if (observation !== null) yield* postDiscord(runtime, discordThreadId, observation);
+  const channelThread = yield* copyToChannelThread(
+    poster,
+    mirrorsFile,
+    plan.sourceKey,
+    plan.chat.mirror,
+    plan.chat,
+    observation,
+  );
 
   const knownPerson = access?.allowed === true ? access.person : null;
-  yield* useRuntime(
+  const t3ThreadId = yield* useRuntime(
     runtime,
     startOrContinueLinkedTurn(config, {
       source: { sourceKind: "teams", sourceThreadId: plan.sourceKey },
@@ -267,5 +351,24 @@ export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* 
       promptContext: { kind: "raw", value: plan.prompt },
     }),
   );
+  if (
+    channelThread.created &&
+    channelThread.conversationId !== null &&
+    config.webUiBaseUrl !== undefined &&
+    poster !== null
+  ) {
+    const conversationId = channelThread.conversationId;
+    const link = `${config.webUiBaseUrl.replace(/\/$/u, "")}/?thread=${t3ThreadId}`;
+    yield* Effect.tryPromise({
+      try: () => poster.reply(conversationId, link),
+      catch: (error: unknown) => String(error),
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.logError("Could not post the Omegent link to the Teams channel thread", {
+          error,
+        }).pipe(Effect.asVoid),
+      ),
+    );
+  }
   return { handled: true as const };
 });
