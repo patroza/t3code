@@ -7,8 +7,19 @@ import { CommandPalette } from "./CommandPalette";
 import { useComposerHandleContext } from "../composerHandleContext";
 import { openCommandPalette } from "../commandPaletteBus";
 import { installCommandPaletteCommands } from "../shortcuts/commandPaletteCommands";
+import { userEvent, page } from "vite-plus/test/browser";
+import { useCommandPaletteStore } from "../commandPaletteStore";
 import { primaryServerKeybindingsAtom } from "../state/server";
 
+const browseRace = vi.hoisted(() => ({ enabled: false, load: vi.fn<() => Promise<void>>() }));
+const browseEnvironment = {
+  environmentId: "browse-env",
+  label: "Browse host",
+  entry: { target: { _tag: "PrimaryConnectionTarget" } },
+  connection: { phase: "connected", error: null },
+  serverConfig: { environment: { platform: { os: "linux" }, capabilities: {} }, settings: {} },
+  displayUrl: null,
+};
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
   useNavigate: () => vi.fn(),
@@ -58,11 +69,12 @@ vi.mock("../lib/archivedThreadsState", async (importOriginal) => {
 vi.mock("../hooks/useOpenPanelPullRequestUrl", () => ({ useOpenPanelPullRequestUrl: () => null }));
 vi.mock("../connection/useDesktopLocalBootstraps", () => ({ useDesktopLocalBootstraps: () => [] }));
 vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
-vi.mock("../state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => vi.fn() }));
+vi.mock("../state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => browseRace.load }));
 vi.mock("../state/environments", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/environments")>()),
-  useEnvironments: () => ({ environments: [] }),
-  usePrimaryEnvironmentId: () => null,
+  useEnvironmentProviders: () => new Map(),
+  useEnvironments: () => ({ environments: browseRace.enabled ? [browseEnvironment] : [] }),
+  usePrimaryEnvironmentId: () => (browseRace.enabled ? "browse-env" : null),
 }));
 vi.mock("../state/entities", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/entities")>()),
@@ -80,11 +92,31 @@ vi.mock("../state/queries", async (importOriginal) => ({
 }));
 vi.mock("../state/session", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/session")>()),
-  useEnvironmentScope: () => false,
+  useEnvironmentScope: () => browseRace.enabled,
+  readEnvironmentScope: () => browseRace.enabled,
 }));
 vi.mock("../state/query", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/query")>()),
-  useEnvironmentQuery: () => ({}),
+  useEnvironmentQuery: (atom: unknown) =>
+    atom && typeof atom === "object" && "browseFixture" in atom
+      ? {
+          data: {
+            entries: [{ name: "child", fullPath: "/home/test/child" }],
+            parentPath: "/home/test",
+          },
+          isPending: false,
+          error: null,
+        }
+      : { data: null, error: null },
+}));
+vi.mock("../state/filesystem", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/filesystem")>()),
+  filesystemEnvironment: { browse: () => ({ browseFixture: true }) },
+  useFilesystemReadAccess: () => ({
+    canReadFiles: browseRace.enabled,
+    isPending: false,
+    error: null,
+  }),
 }));
 vi.mock("./settings/useAvailableSettingsSearchItems", () => ({
   useAvailableSettingsSearchItems: () => [],
@@ -230,5 +262,53 @@ describe("command palette focus restoration", () => {
     const composer = container.querySelector("textarea")!;
     expect(document.activeElement).toBe(composer);
     expect(composer.selectionStart).toBe(composer.value.length);
+  });
+  it("keeps the source picker restored when Back cancels an unfinished folder browse", async () => {
+    browseRace.enabled = true;
+    browseRace.load.mockResolvedValue(undefined);
+    useCommandPaletteStore.setState(useCommandPaletteStore.getInitialState(), true);
+    try {
+      await using harness = await setup();
+      const { screen, flushFocus } = harness;
+      await act(() => screen.rerender(<CommandPalette>{null}</CommandPalette>));
+      await act(() => openCommandPalette({ open: "add-project" }));
+      await flushFocus();
+      await userEvent.click(page.getByText("Local folder", { exact: true }));
+      await flushFocus();
+      expect(document.querySelector<HTMLInputElement>("[data-command-palette] input")?.value).toBe(
+        "~/",
+      );
+      expect(browseRace.load).toHaveBeenCalledOnce();
+      let finishBrowse!: () => void;
+      browseRace.load.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finishBrowse = resolve;
+          }),
+      );
+      await userEvent.click(page.getByText("child", { exact: true }));
+      await flushFocus();
+      expect(finishBrowse).toBeTypeOf("function");
+      await act(() =>
+        document.querySelector<HTMLButtonElement>('button[aria-label="Back"]')!.click(),
+      );
+      await flushFocus();
+      const restored = document.querySelector<HTMLInputElement>(
+        "[data-command-palette] input",
+      )?.value;
+      expect(restored).toBe("");
+      await act(async () => {
+        finishBrowse();
+        await Promise.resolve();
+      });
+      await flushFocus();
+      expect(document.querySelector<HTMLInputElement>("[data-command-palette] input")?.value).toBe(
+        restored,
+      );
+      await expect.element(page.getByText("Local folder", { exact: true })).toBeVisible();
+    } finally {
+      browseRace.enabled = false;
+      browseRace.load.mockReset();
+    }
   });
 });

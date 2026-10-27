@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { act, useSyncExternalStore } from "react";
+import { act, useEffect, useState, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 import { AsyncResult } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
@@ -59,9 +59,33 @@ vi.mock("./ThreadScreenHost", () => ({
   ThreadScreenFallback: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 vi.mock("./NewTaskDraftScreen", () => ({
-  NewTaskDraftScreen: (props: { initialProjectRef: { branch?: string | null } }) => {
+  NewTaskDraftScreen: (props: {
+    initialProjectRef: { projectId?: string; branch?: string | null };
+    initialWorkspaceSelection?: { branch: string | null };
+  }) => {
     harness.draftProjectRefs.push(props.initialProjectRef);
-    return <p>draft on {props.initialProjectRef.branch}</p>;
+    const [selectedProject, setSelectedProject] = useState(props.initialProjectRef.projectId);
+    const [selectedBranch, setSelectedBranch] = useState(props.initialWorkspaceSelection?.branch);
+    // Route inputs initialize editable selections; stable inputs must not undo picker changes.
+    useEffect(
+      () => setSelectedProject(props.initialProjectRef.projectId),
+      [props.initialProjectRef],
+    );
+    useEffect(
+      () => setSelectedBranch(props.initialWorkspaceSelection?.branch),
+      [props.initialWorkspaceSelection],
+    );
+    return props.initialWorkspaceSelection ? (
+      <>
+        <p>
+          selected project: {selectedProject}; selected branch: {selectedBranch}
+        </p>
+        <button onClick={() => setSelectedProject("picked-project")}>Pick project</button>
+        <button onClick={() => setSelectedBranch("picked-branch")}>Pick branch</button>
+      </>
+    ) : (
+      <p>draft on {props.initialProjectRef.branch}</p>
+    );
   },
 }));
 vi.mock("./new-task-context-presentation", () => ({
@@ -188,4 +212,59 @@ it("hands the draft screen the same project ref across re-renders", async () => 
   // A stable ref lets the compiled screen skip re-rendering the draft screen at all; an unstable
   // one re-renders it with a second ref.
   expect(new Set(harness.draftProjectRefs).size).toBe(1);
+});
+
+it("preserves picker choices across catalog and equivalent route updates, and applies new route intent", async () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  harness.checkout.mockReset();
+  harness.set({ projects: [project], catalog: connected });
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  using _root = { [Symbol.dispose]: () => act(() => root.unmount()) };
+  const renderRoute = (params: object) => {
+    harness.route = { key: "picker-route", name: "Thread", params: { draft: params } };
+    act(() =>
+      root.render(
+        <NewTaskDraftRouteScreen
+          route={{ key: "picker-route", name: "Thread", params } as never}
+        />,
+      ),
+    );
+  };
+  const params = {
+    environmentId: "env-1",
+    projectId: "project-1",
+    workspaceMode: "local",
+    branch: "initial-branch",
+  };
+  renderRoute(params);
+  expect(container.textContent).toContain(
+    "selected project: project-1; selected branch: initial-branch",
+  );
+  act(() => container.querySelectorAll("button")[1]!.click());
+  const expectPickedBranch = () =>
+    expect(container.textContent).toContain(
+      "selected project: project-1; selected branch: picked-branch",
+    );
+  expectPickedBranch();
+  act(() => harness.set({ projects: [{ ...project }], catalog: { ...connected } }));
+  expectPickedBranch();
+  act(() => container.querySelectorAll("button")[0]!.click());
+  const expectPicked = () =>
+    expect(container.textContent).toContain(
+      "selected project: picked-project; selected branch: picked-branch",
+    );
+  expectPicked();
+  renderRoute({
+    ...params,
+    environmentId: ["env-1"],
+    projectId: ["project-1"],
+    branch: ["initial-branch"],
+  });
+  expectPicked();
+  renderRoute({ ...params, projectId: "project-2", branch: "next-branch" });
+  expect(container.textContent).toContain(
+    "selected project: project-2; selected branch: next-branch",
+  );
+  expect(harness.checkout).not.toHaveBeenCalled();
 });

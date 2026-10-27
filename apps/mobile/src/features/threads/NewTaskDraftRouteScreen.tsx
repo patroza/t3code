@@ -7,7 +7,7 @@ import {
   usePreventRemoveContext,
   type StaticScreenProps,
 } from "@react-navigation/native";
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { View } from "react-native";
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -107,13 +107,31 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
   const draftId = firstParam(params.draftId);
   const workspaceMode = firstParam(params.workspaceMode);
   const workspacePicker = workspaceMode === "local" || workspaceMode === "worktree";
-  const initialWorkspaceSelection: ComposerDraftWorkspaceSelection | undefined = workspacePicker
-    ? {
+  const initialBranch = firstParam(params.branch) ?? null;
+  const initialWorktreePath = firstParam(params.worktreePath) ?? null;
+  // Catalog refreshes must not reapply route workspace intent over picker edits.
+  const [initialWorkspaceSelection, setInitialWorkspaceSelection] = useState<
+    ComposerDraftWorkspaceSelection | undefined
+  >(() =>
+    workspacePicker
+      ? { mode: workspaceMode, branch: initialBranch, worktreePath: initialWorktreePath }
+      : undefined,
+  );
+  if (workspacePicker) {
+    if (
+      initialWorkspaceSelection?.mode !== workspaceMode ||
+      initialWorkspaceSelection.branch !== initialBranch ||
+      initialWorkspaceSelection.worktreePath !== initialWorktreePath
+    ) {
+      setInitialWorkspaceSelection({
         mode: workspaceMode,
-        branch: firstParam(params.branch) ?? null,
-        worktreePath: firstParam(params.worktreePath) ?? null,
-      }
-    : undefined;
+        branch: initialBranch,
+        worktreePath: initialWorktreePath,
+      });
+    }
+  } else if (initialWorkspaceSelection !== undefined) {
+    setInitialWorkspaceSelection(undefined);
+  }
   const projects = useProjects();
   const { state: catalogState } = useWorkspaceState();
 
@@ -202,18 +220,18 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
       : null;
   const preparedBranch = prepared ? prepared.branch : initialProjectRef.branch;
   const preparedWorktreePath = prepared ? prepared.worktreePath : initialProjectRef.worktreePath;
-  // NewTaskDraftScreen re-applies the route project (and rewrites the draft's
-  // workspace) whenever this object's identity changes. initialProjectRef is new
-  // every render, so read its fields first: the compiler then memoizes this
-  // object on them, instead of on initialProjectRef.
+  // Keep route intent stable while catalogs refresh or the user edits picker selections.
   const { environmentId, projectId, cloning } = initialProjectRef;
-  const preparedProjectRef = {
-    environmentId,
-    projectId,
-    branch: preparedBranch,
-    worktreePath: preparedWorktreePath,
-    cloning,
-  };
+  const preparedProjectRef = useMemo(
+    () => ({
+      environmentId,
+      projectId,
+      branch: preparedBranch,
+      worktreePath: preparedWorktreePath,
+      cloning,
+    }),
+    [environmentId, projectId, preparedBranch, preparedWorktreePath, cloning],
+  );
   const preparingBranch = checkoutPending || (needsPreparation && result?._tag !== "Success");
 
   if (!initialized) return null;
