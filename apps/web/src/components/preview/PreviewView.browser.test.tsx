@@ -169,6 +169,7 @@ import { useComposerDraftStore } from "~/composerDraftStore";
 import { useBrowserPointerStore } from "~/browser/browserPointerStore";
 import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
 import { usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
+import { dispatchPreviewAction } from "./previewActionBus";
 import { PreviewView } from "./PreviewView";
 
 const TEST_THREAD_REF = {
@@ -323,11 +324,14 @@ describe("PreviewView", () => {
 
         await userEvent.click(page.getByRole("button", { name: "Preview menu" }));
         await userEvent.click(page.getByRole("menuitem", { name: "Show device toolbar" }));
-        expect(commit).toHaveBeenCalledExactlyOnceWith(TEST_RUNTIME_TAB_ID, {
-          _tag: "freeform",
-          width: 1250,
-          height: 938,
-        });
+        expect(commit).toHaveBeenCalledExactlyOnceWith(
+          { runtimeTabId: TEST_RUNTIME_TAB_ID, threadRef: TEST_THREAD_REF, tabId: "tab-1" },
+          {
+            _tag: "freeform",
+            width: 1250,
+            height: 938,
+          },
+        );
       } finally {
         commit.mockReset();
         await act(() => useBrowserSurfaceStore.setState({ activityByTabId: {}, byTabId: {} }));
@@ -575,5 +579,19 @@ describe("PreviewView", () => {
     await vi.waitFor(() => expect(onSendAnnotation).toHaveBeenCalledWith(sent, null));
     expect(mocks.addPreviewAnnotation).toHaveBeenCalledWith(TEST_THREAD_REF, sent);
     expect(mocks.addImage).not.toHaveBeenCalled();
+  });
+
+  it("focuses the address bar each time the focus-url shortcut fires", async () => {
+    setup();
+    await using _screen = await render(view());
+    const address = page.getByRole("textbox");
+
+    act(() => dispatchPreviewAction("focus-url"));
+    await expect.element(address).toHaveFocus();
+
+    (address.element() as HTMLInputElement).blur();
+    await expect.element(address).not.toHaveFocus();
+    act(() => dispatchPreviewAction("focus-url"));
+    await expect.element(address).toHaveFocus();
   });
 });

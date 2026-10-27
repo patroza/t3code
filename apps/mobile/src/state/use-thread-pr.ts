@@ -1,25 +1,64 @@
 import { useAtomValue } from "@effect/atom-react";
-import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import {
   createLinkedPullRequestSummaryAtomFamily,
   pullRequestDetailToVcsStatus,
 } from "@t3tools/client-runtime/state/pull-requests";
+import type { EnvironmentId, PullRequestSummary } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
 import { Atom } from "effect/reactivity";
 import { useCallback, useEffect, useMemo } from "react";
+import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { appAtomRegistry } from "./atom-registry";
 
 import { connectionAtomRuntime } from "../connection/runtime";
-import { appAtomRegistry } from "./atom-registry";
 import { serverEnvironment } from "./server";
 import { useEnvironmentQuery } from "./query";
+import { vcsEnvironment } from "./vcs";
 import {
+  rememberBounded,
   resolveThreadPrSource,
   presentThreadPr,
   type ThreadPrPresentation,
 } from "./thread-pr-presentation";
-import { vcsEnvironment } from "./vcs";
 
-const pullRequestSummaryAtom = createLinkedPullRequestSummaryAtomFamily(connectionAtomRuntime);
+const MAX_PULL_REQUEST_SNAPSHOTS = 500;
+
+// One bounded cache survives row virtualization (the summary query is dropped once idle) without
+// retaining one live atom for every pull request ever seen.
+const pullRequestSnapshotsAtom = Atom.make<ReadonlyMap<string, PullRequestSummary>>(new Map()).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("mobile:thread-pr-snapshots"),
+);
+
+function snapshotKey(
+  environmentId: EnvironmentId,
+  reference: { readonly projectId: string; readonly repository: string; readonly number: number },
+): string {
+  return JSON.stringify([
+    environmentId,
+    reference.projectId,
+    reference.repository,
+    reference.number,
+  ]);
+}
+
+const pullRequestSummaryAtom = createLinkedPullRequestSummaryAtomFamily(
+  connectionAtomRuntime,
+  undefined,
+  ({ environmentId, input }, summary, registry) =>
+    Effect.sync(() =>
+      registry.update(pullRequestSnapshotsAtom, (current) =>
+        rememberBounded(
+          current,
+          snapshotKey(environmentId, input),
+          summary,
+          MAX_PULL_REQUEST_SNAPSHOTS,
+        ),
+      ),
+    ),
+);
+
 const MAX_THREAD_PR_SNAPSHOTS = 500;
 
 interface ThreadPrSnapshot {
@@ -39,12 +78,6 @@ export {
   type ThreadPrPresentation,
 } from "./thread-pr-presentation";
 
-/**
- * Linked PRs use server snapshots. Visible rows share a summary request for
- * the same PR in the same environment. When the server has not linked a PR,
- * list rows may still pass a project cwd so unlinked branches can fall back
- * to a budgeted git status query.
- */
 export function useThreadPr(
   thread: EnvironmentThreadShell,
   projectCwd?: string | null,
@@ -76,7 +109,8 @@ export function useThreadPr(
       [threadKey],
     ),
   );
-  const snapshot = snapshotEntry?.identity === snapshotIdentity ? snapshotEntry.presentation : null;
+  const branchSnapshot =
+    snapshotEntry?.identity === snapshotIdentity ? snapshotEntry.presentation : null;
   const gitStatus = useEnvironmentQuery(
     pullRequestRef === null && thread.branch !== null && cwd !== null
       ? vcsEnvironment.listStatus({
@@ -84,6 +118,12 @@ export function useThreadPr(
           input: { cwd },
         })
       : null,
+  );
+
+  const key = pullRequestRef === null ? null : snapshotKey(thread.environmentId, pullRequestRef);
+  // Select this row's entry so answers for other pull requests do not re-render it.
+  const snapshot = useAtomValue(pullRequestSnapshotsAtom, (current) =>
+    key === null ? undefined : current.get(key),
   );
   const pullRequestSummary = useEnvironmentQuery(
     pullRequestRef === null
@@ -97,25 +137,28 @@ export function useThreadPr(
           },
         }),
   );
-
-  const live = useMemo<ThreadPrPresentation | null | undefined>(() => {
-    if (pullRequestRef !== null) {
-      const summary = pullRequestSummary.data;
-      return summary === null
-        ? undefined
+  const summary = pullRequestRef === null ? undefined : (pullRequestSummary.data ?? snapshot);
+  // Rows pass `pr` into callbacks; a fresh object per render would invalidate them.
+  const summaryPresentation = useMemo(
+    () =>
+      summary === undefined
+        ? null
         : presentThreadPr(pullRequestDetailToVcsStatus(summary), {
             kind: summary.provider,
             name: summary.provider,
             baseUrl: "",
-          });
-    }
+          }),
+    [summary],
+  );
+  const live = useMemo<ThreadPrPresentation | null | undefined>(() => {
+    if (pullRequestRef !== null) return null;
 
     if (thread.branch === null || cwd === null) return null;
     const status = gitStatus.data;
     if (status === null) return undefined;
     if (status.refName !== thread.branch || !status.pr) return null;
     return presentThreadPr(status.pr, status.sourceControlProvider);
-  }, [cwd, gitStatus.data, pullRequestRef, pullRequestSummary.data, thread.branch]);
+  }, [cwd, gitStatus.data, pullRequestRef, thread.branch]);
 
   useEffect(() => {
     if (live === undefined) return;
@@ -142,5 +185,5 @@ export function useThreadPr(
     });
   }, [live, snapshotIdentity, threadKey]);
 
-  return linkedPresentation ?? (live === undefined ? snapshot : live);
+  return linkedPresentation ?? summaryPresentation ?? (live === undefined ? branchSnapshot : live);
 }

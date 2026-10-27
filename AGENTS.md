@@ -364,6 +364,10 @@ An empty database is a bad test. Seed your worktree's `.t3` with a copy of real 
 
 Use these as implementation references when designing protocol handling, UX flows, and operational safeguards.
 
+## Evals
+
+`evals/` checks how real models behave with T3 Code's model-facing text: agent instructions, MCP tool descriptions and schemas, and generated titles. Before you change that text, read [evals/README.md](evals/README.md) and run the evals it names. When you fix a model behavior bug, add a case that fails before the fix.
+
 ## Vendored Repositories
 
 This project vendors external repositories under `.repos/` as read-only reference material for coding

@@ -79,6 +79,10 @@ const buildSourcemap: boolean | "hidden" =
       : true;
 
 const isolatedUnitTestFiles = [
+  // The published-theme harness must bind its server atom before the palette module loads.
+  "src/hooks/useEnvironmentTheme.test.ts",
+  // The terminal attach harness replaces modules also imported by terminal/status components.
+  "src/state/terminalSessions.test.ts",
   // Retained action toasts use scoped server and runtime mocks.
   "src/components/GitActionsControl.lifecycle.test.ts",
   // Hook mocks must bind before imports, without a preceding file’s cached theme hook.
@@ -353,6 +357,7 @@ const browserTestProject = {
       "@base-ui/react/preview-card",
       "@formkit/auto-animate",
       "@pierre/diffs/worker",
+      "@pierre/trees/react",
       "dompurify",
       "hast-util-to-html",
       "hast-util-to-jsx-runtime",

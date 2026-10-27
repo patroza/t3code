@@ -46,22 +46,24 @@ vi.mock(import("./SettingsScopeContext"), async (original) => ({
   useOptionalSettingsScope: () => null,
 }));
 
-import { IntegrationsSettingsPanel } from "./IntegrationsSettings";
+import { BrowserSettingsPanel, DevicesSettingsPanel } from "./IntegrationsSettings";
 
 async function openSettings() {
   listBrowserImportSources.mockClear();
-  return render(<IntegrationsSettingsPanel />);
+  return render(<BrowserSettingsPanel />);
 }
 
 describe("Integrations browser discovery", () => {
-  it("keeps agent browser access in the single Browser section", async () => {
+  it("keeps agent browser access in the Browser settings page", async () => {
     await using screen = await openSettings();
     const { container } = screen;
 
-    expect(page.getByRole("heading", { name: "Browser", exact: true }).elements()).toHaveLength(1);
+    expect(page.getByRole("heading", { name: "Browsing", exact: true }).elements()).toHaveLength(1);
     const access = page.getByRole("switch", { name: "Agent browser access", exact: true });
     await expect.element(access).toBeVisible();
-    expect(access.element().closest("section")).toBe(container.querySelector("section#browser"));
+    expect(access.element().closest("section")).toBe(
+      container.querySelector("section#browser-agent-access"),
+    );
     expect(access.element().closest("#agent-browser-access")).not.toBeNull();
   });
 
@@ -73,11 +75,9 @@ describe("Integrations browser discovery", () => {
     expect(listBrowserImportSources).not.toHaveBeenCalled();
   });
 
-  it("places device settings after browser settings", async () => {
-    await using screen = await openSettings();
-    const { container } = screen;
-    const sections = [...container.querySelectorAll("section[id]")].map((section) => section.id);
-    expect(sections.indexOf("browser")).toBeGreaterThanOrEqual(0);
-    expect(sections.indexOf("devices")).toBeGreaterThan(sections.indexOf("browser"));
+  it("keeps device settings on their dedicated page", async () => {
+    await using screen = await render(<DevicesSettingsPanel />);
+    expect(screen.container.querySelector("section#devices")).not.toBeNull();
+    expect(screen.container.querySelector("section#browser")).toBeNull();
   });
 });

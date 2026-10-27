@@ -25,10 +25,12 @@ import {
   Profiler,
   StrictMode,
   useState,
+  useRef,
   type ComponentProps,
   type ReactElement,
 } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
+import { flushSync } from "react-dom";
 
 import { userEvent } from "vite-plus/test/browser";
 import { serverEnvironment } from "../../state/server";
@@ -38,7 +40,7 @@ import { readTimelinePosition } from "./timelineScrollAnchoring";
 import { useComposerFocusState } from "./useComposerFocusState";
 import "~/index.css";
 
-import { act, render } from "../../../test/render";
+import { act, fakeTimers, render } from "../../../test/render";
 import { MessagesTimeline } from "./MessagesTimeline";
 import { makeStreamingTimelineFixture } from "../../test-fixtures";
 import { deriveTimelineEntriesFromVisibleTurnItems } from "../../session-logic";
@@ -47,6 +49,9 @@ import { parseMarkdownWithMath } from "@t3tools/shared/markdownMath";
 import { collectThreadFindRanges } from "./threadFindHighlights";
 import { toastManager } from "../ui/toast";
 import type { CitedHistory } from "./citationProcedure";
+import type { TimelineNavigation } from "./timelineViewport";
+import { useTimelineFollow } from "./useTimelineFollow";
+import { rememberTimelinePosition } from "./timelineScrollAnchoring";
 
 const environmentQuery = vi.hoisted(() => ({
   error: "Pull request not found",
@@ -114,7 +119,6 @@ function baseProps(): Omit<TimelineProps, "timelineEntries"> {
     emptyPlaceholderInset: 0,
     liveFollowEnabled: true,
     onIsAtEndChange: () => {},
-    onManualNavigation: () => {},
   };
 }
 
@@ -345,6 +349,154 @@ describe("MessagesTimeline messages", () => {
       expect(props.listRef.current!.getState().sizeAtIndex(0)).toBeGreaterThan(0);
     });
     expect(maxNestedCommits).toBeLessThan(20);
+  });
+
+  it("keeps the first and last message headings reachable from either end", async () => {
+    setup();
+    const props = baseProps();
+    // Folded messages at both ends: their headings must not live inside the fold.
+    const entries = Array.from({ length: 120 }, (_, index) =>
+      index === 0
+        ? message("First turn", { scheduledTaskId: TASK_ID }, "turn-0")
+        : index === 119
+          ? message(
+              "Last turn",
+              { createdBy: "agent", senderThreadId: ThreadId.make("thread-sender") },
+              "turn-119",
+            )
+          : message(
+              `Turn ${index}:\n\n${"x ".repeat(200)}`,
+              { role: index % 2 === 0 ? "user" : "assistant" },
+              `turn-${index}`,
+            ),
+    );
+    await using screen = await renderElement(
+      <MessagesTimeline {...props} timelineEntries={entries} />,
+    );
+    const headings = () => [...screen.container.querySelectorAll("h3")];
+    const headingFor = (text: string) =>
+      headings().find((heading) => heading.parentElement?.textContent?.includes(text));
+    const viewport = props.listRef.current!.getScrollableNode()!;
+    // A screen reader scrolls the heading it moves to into view.
+    const expectHeadingInView = async (text: string, neighbour: string) => {
+      await act(() => headingFor(text)!.scrollIntoView({ block: "start" }));
+      await vi.waitFor(() => expect(screen.text()).toContain(neighbour));
+      const row = headingFor(text)!.parentElement!.getBoundingClientRect();
+      const view = viewport.getBoundingClientRect();
+      expect(row.top).toBeLessThan(view.bottom);
+      expect(row.bottom).toBeGreaterThan(view.top);
+    };
+
+    await vi.waitFor(() => {
+      expect(screen.text()).toContain("Turn 118:");
+      // LegendList can retain an unused offscreen container until it needs recycling.
+      const middle = screen.container.querySelector('[data-message-id="turn-60"]');
+      if (middle) {
+        const row = middle.getBoundingClientRect();
+        const view = viewport.getBoundingClientRect();
+        expect(row.bottom <= view.top || row.top >= view.bottom).toBe(true);
+      }
+    });
+    // Wrapping follows DOM order, so the ends must also sit first and last.
+    await vi.waitFor(() => {
+      expect(headings()[0]).toBe(headingFor("First turn"));
+      expect(headings().at(-1)).toBe(headingFor("Last turn"));
+    });
+
+    await expectHeadingInView("First turn", "Turn 1:");
+    expect(headingFor("Last turn")).toBeDefined();
+    await expectHeadingInView("Last turn", "Turn 118:");
+  });
+
+  it("keeps rows in item order after a reload or thread switch, before any timer runs", async () => {
+    setup();
+    // NVDA's browse mode keeps the first DOM order it reads, so a timer that sorts rows later is too late.
+    using _timers = fakeTimers();
+    const thread = (name: string) =>
+      Array.from({ length: 120 }, (_, index) =>
+        message(
+          `${name} turn ${index}:\n\n${"x ".repeat(200)}`,
+          { role: index % 2 === 0 ? "user" : "assistant" },
+          `${name}-${index}`,
+        ),
+      );
+    const props = baseProps();
+    await using screen = await renderElement(
+      <MessagesTimeline {...props} timelineEntries={thread("A")} />,
+    );
+    const turnsInDomOrder = () =>
+      [...screen.container.querySelectorAll("h3")].map((heading) =>
+        Number(/turn (\d+):/.exec(heading.parentElement?.textContent ?? "")?.[1]),
+      );
+    const expectItemOrder = () => {
+      const turns = turnsInDomOrder();
+      expect(turns).toEqual(turns.toSorted((a, b) => a - b));
+    };
+
+    expect(screen.text()).toContain("A turn 118:");
+    expect(turnsInDomOrder()).toContain(0);
+    expectItemOrder();
+
+    await screen.rerender(
+      <MessagesTimeline
+        {...props}
+        routeThreadKey={`${props.routeThreadKey}-other`}
+        timelineEntries={thread("B")}
+      />,
+    );
+    expect(screen.text()).toContain("B turn 118:");
+    expect(screen.text()).not.toContain("A turn");
+    expectItemOrder();
+  });
+
+  it("puts rows back in item order soon after a continuous scroll stops", async () => {
+    setup();
+    const props = baseProps();
+    await using screen = await renderElement(
+      <MessagesTimeline
+        {...props}
+        timelineEntries={Array.from({ length: 120 }, (_, index) =>
+          message(
+            `Turn ${index}:\n\n${"x ".repeat(200)}`,
+            { role: index % 2 === 0 ? "user" : "assistant" },
+            `turn-${index}`,
+          ),
+        )}
+      />,
+    );
+    await vi.waitFor(() => expect(screen.text()).toContain("Turn 118:"));
+    using _timers = fakeTimers();
+    const turnsInDomOrder = () =>
+      [...screen.container.querySelectorAll("h3")].map((heading) =>
+        Number(/Turn (\d+):/.exec(heading.parentElement?.textContent ?? "")?.[1]),
+      );
+    const viewport = props.listRef.current!.getScrollableNode()!;
+
+    const scroll = async (by: number) => {
+      for (let step = 0; step < 40; step++) {
+        await act(() => {
+          viewport.scrollTop += by;
+          viewport.dispatchEvent(new Event("scroll"));
+          vi.advanceTimersByTime(16);
+        });
+      }
+      // Wrapping right after a scroll must still reach the first and last message.
+      expect(turnsInDomOrder()[0]).toBe(0);
+      expect(turnsInDomOrder().at(-1)).toBe(119);
+    };
+
+    await act(() => {
+      viewport.scrollTop = 0;
+      viewport.dispatchEvent(new Event("scroll"));
+      vi.advanceTimersByTime(300);
+    });
+    await scroll(300);
+    expect(turnsInDomOrder().filter((turn) => turn > 0 && turn < 100).length).toBeGreaterThan(0);
+    await scroll(-300);
+
+    await act(() => vi.advanceTimersByTime(300));
+    const turns = turnsInDomOrder();
+    expect(turns).toEqual(turns.toSorted((a, b) => a - b));
   });
 
   it("preserves XML-like tags and comparisons in user messages as text", async () => {
@@ -841,6 +993,36 @@ describe("MessagesTimeline history and thread links", () => {
 
   it("opens a thread at its newest message after an empty pane and restores it on return", async () => {
     const props = baseProps();
+    function FollowedTimeline(props: TimelineProps) {
+      const composerRef = useRef(null);
+      const [anchor, setAnchor] = useState<{
+        threadKey: string | null;
+        messageId: MessageId | null;
+      }>({ threadKey: null, messageId: null });
+      const follow = useTimelineFollow({
+        legendListRef: props.listRef,
+        composerRef,
+        composerTimelineInset: 0,
+        routeThreadKey: props.routeThreadKey,
+        activeThreadKey: props.routeThreadKey,
+        isServerThread: false,
+        serverProjection: null,
+        threadStatus: "live",
+        activeActivityRun: null,
+        activeRunningTurnId: null,
+        timelineEntries: props.timelineEntries,
+        timelineAnchorMessageId: anchor.messageId,
+        setTimelineAnchor: setAnchor,
+      });
+      return (
+        <MessagesTimeline
+          {...props}
+          liveFollowEnabled={props.liveFollowEnabled && follow.timelineLiveFollowEnabled}
+          onViewportAttach={follow.attachTimelineViewport}
+          onIsAtEndChange={follow.onIsAtEndChangeStable}
+        />
+      );
+    }
     const entries = Array.from({ length: 12 }, (_, index) =>
       message(
         Array.from({ length: 60 }, (_, line) => `Paragraph ${index}.${line}`).join("\n\n"),
@@ -848,15 +1030,18 @@ describe("MessagesTimeline history and thread links", () => {
         `message-${index}`,
       ),
     );
-    await using screen = await renderTimeline([], {
-      ...props,
-      routeThreadKey: `${props.routeThreadKey}-loading`,
-      hideEmptyPlaceholder: true,
-    });
+    await using screen = await renderElement(
+      <FollowedTimeline
+        {...props}
+        timelineEntries={[]}
+        routeThreadKey={`${props.routeThreadKey}-loading`}
+        hideEmptyPlaceholder
+      />,
+    );
 
     // Each row is much taller than LegendList's estimate.
     await act(async () =>
-      screen.rerender(<MessagesTimeline {...props} timelineEntries={entries} />),
+      screen.rerender(<FollowedTimeline {...props} timelineEntries={entries} />),
     );
     const viewport = props.listRef.current!.getScrollableNode();
     await vi.waitFor(() => {
@@ -870,7 +1055,7 @@ describe("MessagesTimeline history and thread links", () => {
     const otherThreadKey = `${props.routeThreadKey}-other`;
     await act(async () =>
       screen.rerender(
-        <MessagesTimeline
+        <FollowedTimeline
           {...props}
           routeThreadKey={otherThreadKey}
           timelineEntries={entries}
@@ -893,7 +1078,7 @@ describe("MessagesTimeline history and thread links", () => {
     });
 
     await act(async () =>
-      screen.rerender(<MessagesTimeline {...props} timelineEntries={entries} />),
+      screen.rerender(<FollowedTimeline {...props} timelineEntries={entries} />),
     );
     await vi.waitFor(() => {
       expect(screen.text()).toContain("Paragraph 11.59");
@@ -1136,6 +1321,7 @@ describe("timeline tooltip scroll dismissal", () => {
     document.querySelector('[data-slot="tooltip-popup"][data-open]')?.textContent ?? null;
 
   async function renderTooltip(pullRequest: boolean, outside: boolean) {
+    environmentQuery.data = null;
     const tooltip = pullRequest ? (
       <PullRequestLinkPreview
         link={<button>message link</button>}
@@ -1281,7 +1467,10 @@ describe("MessagesTimeline scroll position", () => {
       const [liveFollowEnabled, setLiveFollowEnabled] = useState(true);
       // The chat view stops following the live edge when the reader scrolls.
       return (
-        <div className="contents" onWheelCapture={() => setLiveFollowEnabled(false)}>
+        <div
+          className="contents"
+          onWheelCapture={() => flushSync(() => setLiveFollowEnabled(false))}
+        >
           <MessagesTimeline
             {...props}
             timelineEntries={tallEntries}
@@ -1329,8 +1518,12 @@ describe("MessagesTimeline scroll position", () => {
     function Thread() {
       const composer = useComposerFocusState();
       const [liveFollowEnabled, setLiveFollowEnabled] = useState(true);
+      // Production follow is an external store: its release commits before the native scroll.
       return (
-        <div className="contents" onWheelCapture={() => setLiveFollowEnabled(false)}>
+        <div
+          className="contents"
+          onWheelCapture={() => flushSync(() => setLiveFollowEnabled(false))}
+        >
           <button onClick={() => composer.setIsComposerScrollCollapsed(true)}>Collapse</button>
           <output>{composer.isComposerScrollCollapsed ? "collapsed" : "resting"}</output>
           <MessagesTimeline
@@ -1738,6 +1931,8 @@ describe("MessagesTimeline attachments", () => {
     const props = baseProps();
     await using screen = await renderTimeline(
       [
+        // The first message row is always mounted, so the recordings go in the second.
+        message("Start of the thread.", { role: "user" }, "opening"),
         message(
           "Two recordings.",
           {
@@ -1763,7 +1958,7 @@ describe("MessagesTimeline attachments", () => {
     await vi.waitFor(
       async () => {
         await act(() => {
-          void props.listRef.current?.scrollToIndex({ index: 0, animated: false });
+          void props.listRef.current?.scrollToIndex({ index: 1, animated: false });
         });
         expect(screen.container.querySelectorAll("audio")).toHaveLength(2);
       },
@@ -1798,6 +1993,125 @@ describe("MessagesTimeline attachments", () => {
       void props.listRef.current!.scrollToIndex({ index: 20, animated: false });
     });
     await vi.waitFor(() => expect(one!.isConnected).toBe(false));
+  });
+});
+
+describe("MessagesTimeline thread find", () => {
+  // Opening find is navigation; on a list already showing the thread the open
+  // action navigates, so the list itself releases follow only when it starts
+  // showing a thread whose find is already open.
+  function renderObserved() {
+    const navigations: TimelineNavigation[] = [];
+    const base = baseProps();
+    const element = (next: Partial<TimelineProps>) => (
+      <MessagesTimeline
+        {...base}
+        timelineEntries={[message("Where is the sidebar fix?")]}
+        onViewportAttach={(viewport) =>
+          viewport.subscribe((navigation) => navigations.push(navigation))
+        }
+        {...next}
+      />
+    );
+    return { navigations, element };
+  }
+  const released = { source: "command", releasesFollow: true };
+
+  it("releases follow once when it starts showing a thread whose find is open", async () => {
+    setup();
+    const { navigations, element } = renderObserved();
+    await using screen = await renderElement(element({}));
+    expect(navigations).toEqual([]);
+
+    const other = "environment-local:thread-find-open";
+    await screen.rerender(element({ routeThreadKey: other, findOpen: true }));
+    expect(navigations).toEqual([released]);
+    await screen.rerender(element({ routeThreadKey: other, findOpen: false }));
+    await screen.rerender(element({ routeThreadKey: other, findOpen: true }));
+    expect(navigations).toEqual([released]);
+  });
+
+  it("releases follow once when it mounts on a thread whose find is open", async () => {
+    setup();
+    const { navigations, element } = renderObserved();
+    await using screen = await renderElement(element({ findOpen: true }));
+    await screen.rerender(element({ findOpen: true }));
+    expect(navigations).toEqual([released]);
+  });
+
+  it("still restores the position of a thread it switches to whose find is open", async () => {
+    setup();
+    const base = baseProps();
+    const other = "environment-local:thread-find-open-positioned";
+    const replies = Array.from({ length: 40 }, (_, index) =>
+      message(`Reply ${index}\n\n${"line\n\n".repeat(8)}`, { role: "assistant" }, `r-${index}`),
+    );
+    rememberTimelinePosition(
+      other,
+      { rowId: "entry-r-20", offsetWithinRow: 0, scrollOffset: 0, atEnd: false },
+      false,
+    );
+    await using screen = await renderElement(
+      <MessagesTimeline {...base} timelineEntries={[message("Short thread")]} />,
+    );
+    await screen.rerender(
+      <MessagesTimeline
+        {...base}
+        routeThreadKey={other}
+        timelineEntries={replies}
+        liveFollowEnabled={false}
+        findOpen
+      />,
+    );
+    const viewport = base.listRef.current!.getScrollableNode()!;
+    await vi.waitFor(() => {
+      const row = screen.container.querySelector('[data-timeline-row-id="entry-r-20"]');
+      expect(row).not.toBeNull();
+      expect(
+        Math.abs(row!.getBoundingClientRect().top - viewport.getBoundingClientRect().top),
+      ).toBeLessThanOrEqual(2);
+    });
+  });
+  it("reveals find's match, not the remembered row, on a thread it switches to", async () => {
+    setup();
+    const base = baseProps();
+    const other = "environment-local:thread-find-open-match";
+    const replies = Array.from({ length: 40 }, (_, index) =>
+      message(
+        `${index === 5 ? "Needle here" : `Reply ${index}`}\n\n${"line\n\n".repeat(8)}`,
+        { role: "assistant" },
+        `r-${index}`,
+      ),
+    );
+    rememberTimelinePosition(
+      other,
+      { rowId: "entry-r-20", offsetWithinRow: 0, scrollOffset: 0, atEnd: false },
+      false,
+    );
+    await using screen = await renderElement(
+      <MessagesTimeline {...base} timelineEntries={[message("Short thread")]} />,
+    );
+    await screen.rerender(
+      <MessagesTimeline
+        {...base}
+        routeThreadKey={other}
+        timelineEntries={replies}
+        liveFollowEnabled={false}
+        findOpen
+        findExpanded
+        findQuery="Needle"
+        activeFindMatch={{ entryId: "entry-r-5", runId: null, occurrence: 0 }}
+      />,
+    );
+    const viewport = base.listRef.current!.getScrollableNode()!;
+    await vi.waitFor(() => {
+      const row = screen.container.querySelector('[data-timeline-row-id="entry-r-5"]');
+      expect(row).not.toBeNull();
+      const bounds = viewport.getBoundingClientRect();
+      const top = row!.getBoundingClientRect().top;
+      expect(top).toBeGreaterThanOrEqual(bounds.top);
+      expect(top).toBeLessThan(bounds.bottom);
+    });
   });
 });
 

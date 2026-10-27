@@ -20,7 +20,6 @@ import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { useWorkspaceSurface } from "./useWorkspaceSurface";
 import {
   useDeviceType,
-  useDuoBottomBarInset,
   useNativeColumnLayoutMetrics,
   useNativeLayoutMetrics,
 } from "../../native/native-layout-metrics";
@@ -37,7 +36,6 @@ import {
 import { WorkspaceToolbar } from "./WorkspaceToolbar";
 import {
   WORKSPACE_DOCK,
-  workspaceSearchBottomClearance,
   workspaceDockBottomClearance,
   workspaceToolbarHeight,
 } from "./workspace-tabs-state";
@@ -94,7 +92,6 @@ function WorkspaceRootContent() {
       (nativeMetrics !== null && nativeMetrics.verticalBarEdge !== "none"));
   const width = columnMetrics?.width ?? windowWidth;
   const insets = useSafeAreaInsets();
-  const bottomBarInset = useDuoBottomBarInset();
   const keyboardHeight = useKeyboardState((keyboard) => keyboard.height);
   const workspace = useWorkspaceTabs()!;
   const { state } = workspace;
@@ -124,11 +121,8 @@ function WorkspaceRootContent() {
     layout.primarySidebarOverlaysContent && state.selectedTab === "usage"
       ? workspaceDockBottomClearance({ bottomInset: insets.bottom, keyboardHeight })
       : Platform.OS === "ios" && isDuoDevice(deviceType)
-        ? workspaceSearchBottomClearance({
-            bottomInset: insets.bottom,
-            bottomBarInset,
-            keyboardHeight,
-          })
+        ? // The column's safe area already holds the Duo's search toolbar and keyboard.
+          Math.max(insets.bottom, keyboardHeight) + 16
         : compactTabs || deviceType === "pad"
           ? workspaceDockBottomClearance({ bottomInset: insets.bottom, keyboardHeight })
           : Platform.OS === "ios"
