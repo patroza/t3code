@@ -214,12 +214,15 @@ Press **Resume** in an empty composer on web and desktop, or **Resume queue** on
 continue. Sending a new message also resumes the queue, unless it steers a turn that is already
 running. You can edit, reorder, or remove held messages without starting them.
 
-The pencil on a queued message opens it in the composer for editing. The original message
-stays in the queue until you save, and it is highlighted while you edit. The message's
+The pencil on a queued row opens that message in the composer for editing. The original message
+stays in its queue position and cannot start while you edit, even if the current turn finishes.
+Its row is highlighted while you edit. The message's
 attachments appear above the text with a remove control, and new images can be added the usual way.
 The checkmark saves the queued message in place; **Cancel** next to it leaves it unchanged. Whatever
-you had typed in the composer before starting the edit is restored afterwards. If the queued
-message starts or is removed while you are editing, the edit ends: changed content moves into the
+you had typed in the composer before starting the edit is restored afterwards. Saving or cancelling
+releases the edit hold, but does not resume a queue paused by Stop or a server restart. If you close
+the app during an edit, reopen the message with its pencil to finish or cancel it.
+If the message is removed while you are editing, the edit ends: changed content moves into the
 composer when it is empty, and is discarded otherwise.
 
 ## Commands and skills

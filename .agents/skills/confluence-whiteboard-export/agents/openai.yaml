@@ -1,0 +1,4 @@
+interface:
+  display_name: "Confluence Whiteboard Export"
+  short_description: "Export a whiteboard as PNG or cropped SVG"
+  default_prompt: "Use $confluence-whiteboard-export to export this Confluence whiteboard, choosing PNG or SVG for the need, and include every pasted image."

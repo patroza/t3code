@@ -13,6 +13,10 @@ export const CLI_RUNTIME_EXTERNAL_PREFIXES = [
   "@clerk/electron-passkeys",
   "node-gyp-build",
   "node-addon-api",
+  "detect-libc",
+  // Keep ws's optional native accelerators external: bundled node-gyp-build
+  // cannot find their adjacent prebuilds. ws falls back to JavaScript if absent.
+
   "bufferutil",
   "utf-8-validate",
 ] as const;

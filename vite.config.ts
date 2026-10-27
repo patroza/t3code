@@ -151,7 +151,14 @@ export default defineConfig({
       : {}),
   },
   staged: {
+    // Keep commit format/lint in sync with lint-staged.config.js; the ship gate owns types/tests.
+    // A commit containing only unsupported formats must treat empty formatter input as a no-op.
+
     "*": "vp fmt --no-error-on-unmatched-pattern",
+    // Lint (with autofix) only the code files oxlint understands.
+    // lint-staged.config.js also drops `.repos/**` (oxlint ignorePatterns) so a
+    // vendor-ref sync does not fail with "No files found to lint".
+    "*.{js,jsx,ts,tsx,mjs,cjs,mts,cts}": "vp lint --fix",
   },
   fmt: {
     ignorePatterns: [
@@ -224,7 +231,6 @@ export default defineConfig({
       "unicorn/prefer-set-has": "off",
       "unicorn/prefer-array-find": "off",
       "unicorn/no-new-array": "off",
-      "unicorn/no-array-reverse": "off",
       "react/no-object-type-as-default-prop": "off",
       "react/jsx-no-constructed-context-values": "off",
       "react/memo-dependencies": "error",
@@ -250,6 +256,7 @@ export default defineConfig({
       "unicorn/no-useless-fallback-in-spread": "error",
       "unicorn/require-module-specifiers": "error",
       "unicorn/no-array-sort": "off",
+      "unicorn/no-array-reverse": "off",
       "unicorn/consistent-function-scoping": "off",
       "oxc/no-map-spread": "off",
       "react-in-jsx-scope": "off",
@@ -282,6 +289,7 @@ export default defineConfig({
       "t3code/no-inline-schema-compile": "error",
       "t3code/no-low-value-comments": "error",
       "t3code/no-manual-effect-runtime-in-tests": "error",
+      "t3code/no-unsupported-hermes-array-methods": "error",
       "t3code/no-native-title-tooltip": "error",
       // Test files only (the rule checks the filename).
       "t3code/no-polling-loop-in-tests": "error",
@@ -621,6 +629,7 @@ export default defineConfig({
           "apps/mobile/src/features/settings/SettingsEnvironmentsRouteScreen.tsx",
           "apps/mobile/src/features/threads/GitActionProgressOverlay.tsx",
           "apps/mobile/src/features/threads/NewTaskDraftScreen.tsx",
+          "apps/mobile/src/features/threads/ThreadNavigationSidebar.tsx",
           "apps/mobile/src/features/threads/ThreadComposer.tsx",
           "apps/mobile/src/features/threads/ThreadFeed.tsx",
           "apps/mobile/src/features/settings/appearance/components/FontSizeSliderRow.tsx",
@@ -640,6 +649,15 @@ export default defineConfig({
           "t3code/no-mobile-uniwind-theme-escape-hatches": ["error", { allowUniwindTheme: true }],
         },
       },
+      // Legacy manual Effect runners tracked as debt: no net-new occurrences.
+      // Lower a ceiling when you migrate a file, and delete its entry at zero.
+      ...Object.entries({
+        "apps/server/src/provider/Layers/CursorProvider.test.ts": 1,
+        "apps/server/src/relay/AgentAwarenessRelay.test.ts": 1,
+      }).map(([file, maxOccurrences]) => {
+        const rule: ["error", { maxOccurrences: number }] = ["error", { maxOccurrences }];
+        return { files: [file], rules: { "t3code/no-manual-effect-runtime-in-tests": rule } };
+      }),
     ],
     options: {
       reportUnusedDisableDirectives: "error",
