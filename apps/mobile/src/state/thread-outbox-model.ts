@@ -174,7 +174,7 @@ export function resolveThreadOutboxDeliveryAction(input: {
   readonly threadExists: boolean;
   readonly shellStatus: EnvironmentShellStatus;
   readonly environmentConnected: boolean;
-  readonly threadBusy: boolean;
+  readonly threadBusy?: boolean;
   /**
    * Set when the shell can leave idle subagent children out: absence alone is not deletion there,
    * only a settled family read without the row is.
@@ -194,6 +194,9 @@ export function resolveThreadOutboxDeliveryAction(input: {
       ? "remove"
       : "wait";
   }
+  // Once connected, hand ownership to the server immediately. The server
+  // persists follow-ups that arrive during an active turn; this local outbox
+  // is only the offline/transport safety boundary.
   return input.environmentConnected ? "send" : "wait";
 }
 

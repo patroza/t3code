@@ -26,6 +26,10 @@ vi.mock("react", () => ({
   useCallback: (callback: unknown) => callback,
   useMemo: (factory: () => unknown) => factory(),
 }));
+// The real package is Flow, which the node test runner cannot parse.
+vi.mock("react-native", () => ({
+  Alert: { alert: () => {} },
+}));
 vi.mock("@effect/atom-react", () => ({ useAtomMount: () => {} }));
 vi.mock("./session", () => ({
   useEnvironmentScope: (environmentId: unknown, scope: string) =>

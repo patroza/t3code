@@ -9,7 +9,6 @@ import {
   getThreadListV2RowAppearance,
 } from "./thread-list-v2-row-appearance";
 import { RowPressable } from "../../components/ui/RowPressable";
-import { CustomSnoozeSheet } from "./CustomSnoozeSheet";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { threadArrangementOpenAtom } from "../../state/thread-order";
 import { threadEnvironment } from "../../state/threads";
@@ -56,8 +55,13 @@ import {
   type ThreadPrPresentation,
 } from "../../state/thread-pr-presentation";
 import { useThreadPr } from "../../state/use-thread-pr";
+import { prefetchEnvironmentThread } from "../../state/threads";
+import { composerDraftsAtom, hasComposerDraftMessage } from "../../state/use-composer-drafts";
+import { scopedThreadKey } from "../../lib/scopedEntities";
 import { useSwipeRowDormant } from "../home/swipe-row-activation";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
+import { ThreadIdentityMark } from "../identity/ParticipantStack";
+import { CustomSnoozeSheet } from "./CustomSnoozeSheet";
 import { buildThreadTitleRegenerationMenuItems } from "./thread-title-regeneration-menu";
 import {
   THREAD_LIST_V2_SETTLED_PAGE_COUNT,
@@ -72,6 +76,7 @@ import {
 import { QueuedMessageIcon } from "./queued-message-icon";
 import { shouldRecedeThreadRow } from "./thread-row-emphasis";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
+import { useAtomValue } from "@effect/atom-react";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 import { pullRequestStatus } from "../pull-requests/pullRequestStatus";
@@ -620,6 +625,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly canMoveDown?: boolean;
   readonly onSwipeableWillOpen: (methods: SwipeableMethods) => void;
   readonly onSwipeableClose: (methods: SwipeableMethods) => void;
+  readonly projectCwd?: string | null;
+  /** List key checked against the Home swipe row activation. */
   readonly activationKey?: string;
   readonly searchMatch?: EnvironmentThreadSearchMatch;
   readonly searchQuery?: string;
@@ -650,6 +657,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     onSetThreadAutoSettle,
     onMoveThread,
   } = props;
+  const drafts = useAtomValue(composerDraftsAtom);
+  const hasDraft = hasComposerDraftMessage(
+    drafts[scopedThreadKey(thread.environmentId, thread.id)],
+  );
   const snoozedRow = props.snoozed === true;
   const pinnedRow = props.pinned === true;
   const dormant = useSwipeRowDormant(props.activationKey);
@@ -1051,6 +1062,17 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           {thread.title}
         </Text>
         <View className="flex-row items-center gap-1.5" style={{ minHeight: titleLineHeight }}>
+          <ThreadIdentityMark
+            environmentId={thread.environmentId}
+            originChannel={thread.originSource?.channel}
+            participants={thread.participantSummaries}
+          />
+          {hasDraft ? (
+            <View
+              accessibilityLabel="Unsent draft"
+              className="size-1.5 shrink-0 rounded-full bg-blue-500"
+            />
+          ) : null}
           {props.hasQueuedMessages ? <QueuedMessageIcon selected={selected} /> : null}
           {pinnedRow ? (
             <SymbolView
@@ -1131,6 +1153,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           )}
         </View>
       </View>
+
       {props.searchMatch ? (
         <View className="mt-1" style={{ paddingLeft: titleTextInset }}>
           <ThreadSearchMatchExcerpt
@@ -1270,6 +1293,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         }
         accessibilityRole="button"
         accessibilityState={{ selected }}
+        onPressIn={() => {
+          prefetchEnvironmentThread(thread.environmentId, thread.id);
+        }}
         accessibilityActions={rowAccessibilityActions}
         onAccessibilityAction={(event) => {
           if (event.nativeEvent.actionName === "openPullRequests") handleOpenPullRequests();
@@ -1304,6 +1330,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         accessibilityRole="button"
         accessibilityState={{ selected }}
         className={rowAppearance.className}
+        onPressIn={() => {
+          prefetchEnvironmentThread(thread.environmentId, thread.id);
+        }}
         onPress={() => {
           close();
           selectThread();
@@ -1315,6 +1344,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             "min-h-[44px] flex-row items-center gap-2.5 py-2",
             sidebarPane ? "px-3" : "px-5",
           )}
+          testID="thread-list-row-settled"
         >
           {props.project ? (
             <View className="opacity-40">
@@ -1329,17 +1359,31 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             </View>
           ) : null}
           <View className="min-w-0 flex-1">
-            <Text
-              className={cn(
-                "text-base",
-                selected
-                  ? selectedThreadRowColors.foregroundClassName
-                  : rowAppearance.mutedForegroundClassName,
-              )}
-              numberOfLines={1}
-            >
-              {thread.title}
-            </Text>
+            <View className="flex-row items-center gap-1.5">
+              <Text
+                className={cn(
+                  "min-w-0 flex-1 text-base",
+                  selected
+                    ? selectedThreadRowColors.foregroundClassName
+                    : rowAppearance.mutedForegroundClassName,
+                )}
+                numberOfLines={1}
+              >
+                {thread.title}
+              </Text>
+              <ThreadIdentityMark
+                environmentId={thread.environmentId}
+                originChannel={thread.originSource?.channel}
+                participants={thread.participantSummaries}
+                className="opacity-60"
+              />
+              {hasDraft ? (
+                <View
+                  accessibilityLabel="Unsent draft"
+                  className="size-1.5 shrink-0 rounded-full bg-blue-500"
+                />
+              ) : null}
+            </View>
             {props.searchMatch ? (
               <ThreadSearchMatchExcerpt
                 sidebar={sidebarPane}

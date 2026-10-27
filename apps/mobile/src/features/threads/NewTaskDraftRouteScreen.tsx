@@ -36,8 +36,14 @@ import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { ThreadScreenFallback } from "./ThreadScreenHost";
 import { NewTaskDraftScreen } from "./NewTaskDraftScreen";
 
+import type { ComposerDraftWorkspaceSelection } from "../../state/use-composer-drafts";
+
 import type { NewTaskDraftRouteParams } from "./thread-route-state";
 export type { NewTaskDraftRouteParams } from "./thread-route-state";
+
+function firstParam(value: string | string[] | null | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : (value ?? undefined);
+}
 
 const branchCheckouts = makeNewTaskBranchCheckouts({
   run: (request) =>
@@ -98,7 +104,16 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
     // oxlint-disable-next-line react/set-state-in-effect -- Draft reset runs once before first paint; initialized gates the screen until then.
     setInitialized(true);
   }, [reset]);
-  const draftId = Array.isArray(params.draftId) ? params.draftId[0] : params.draftId;
+  const draftId = firstParam(params.draftId);
+  const workspaceMode = firstParam(params.workspaceMode);
+  const workspacePicker = workspaceMode === "local" || workspaceMode === "worktree";
+  const initialWorkspaceSelection: ComposerDraftWorkspaceSelection | undefined = workspacePicker
+    ? {
+        mode: workspaceMode,
+        branch: firstParam(params.branch) ?? null,
+        worktreePath: firstParam(params.worktreePath) ?? null,
+      }
+    : undefined;
   const projects = useProjects();
   const { state: catalogState } = useWorkspaceState();
 
@@ -107,8 +122,8 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
       ? params.environmentId[0]
       : params.environmentId,
     projectId: Array.isArray(params.projectId) ? params.projectId[0] : params.projectId,
-    branch: params.branch,
-    worktreePath: params.worktreePath,
+    branch: workspacePicker ? null : (firstParam(params.branch) ?? null),
+    worktreePath: workspacePicker ? null : (firstParam(params.worktreePath) ?? null),
     cloning: (Array.isArray(params.cloning) ? params.cloning[0] : params.cloning) === "1",
   };
 
@@ -214,6 +229,7 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
       ) : (
         <NewTaskDraftScreen
           initialProjectRef={preparedProjectRef}
+          initialWorkspaceSelection={initialWorkspaceSelection}
           incomingShareId={
             Array.isArray(params.incomingShareId)
               ? params.incomingShareId[0]

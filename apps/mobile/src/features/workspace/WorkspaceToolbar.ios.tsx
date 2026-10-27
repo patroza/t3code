@@ -14,7 +14,9 @@ import {
   NativeWorkspaceTabActivityContext,
 } from "../../native/v5-workspace-context";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
+
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
+import { useSelectWorkspaceTab } from "./useSelectWorkspaceTab";
 import { useWorkspaceTabs } from "./WorkspaceTabsContext";
 import { useCompactWorkspaceTabs, useSidebarWorkspaceTabs } from "./useSystemWorkspaceTabBar";
 import { WorkspaceTabToolbarButtons } from "./WorkspaceSectionToolbar";
@@ -29,6 +31,7 @@ export function WorkspaceToolbar(props: {
   readonly onNewTask: () => void;
   readonly sidebar?: boolean;
 }) {
+  const selectTab = useSelectWorkspaceTab();
   const workspace = useWorkspaceTabs()!;
   const activeNewTask = useActiveNewTask();
   const deviceType = useDeviceType();
@@ -188,6 +191,11 @@ export function WorkspaceToolbar(props: {
           header's own items, so an empty one would hide the Settings scope filter. */}
       {workspace.settingsOpen && !foldedSearch ? null : (
         <Toolbar placement="right">
+          <Toolbar.Button
+            accessibilityLabel="Open settings"
+            icon="gearshape"
+            onPress={() => selectTab("settings")}
+          />
           {searchButton}
           {nativeToolbarCompose && foldedSearch ? <Toolbar.Spacer width={8} /> : null}
           {composeButton}

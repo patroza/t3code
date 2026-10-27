@@ -1,4 +1,5 @@
 import type {
+  CommandId,
   ChatAttachment,
   MessageId,
   OrchestrationMessageContext,
@@ -26,6 +27,8 @@ import {
 } from "./use-composer-drafts";
 
 export interface QueuedRunEdit {
+  readonly sequence: number;
+  readonly editId: CommandId;
   readonly runId: RunId;
   readonly messageId: MessageId;
   readonly originalText: string;
@@ -118,9 +121,11 @@ export function beginQueuedRunEdit(
   // The composer moves off the thread draft, so a paste or pick still running for it is dropped.
   abortComposerDraftOperations(threadKey);
   const draftKey = queuedEditDraftKey(threadKey, edit.runId);
-  clearComposerDraft(draftKey);
-  setComposerDraftText(draftKey, edit.originalText);
-  setComposerDraftContext(draftKey, edit.context);
+  const draft = getComposerDraftSnapshot(draftKey);
+  if (draft.text.length === 0 && draft.attachments.length === 0) {
+    setComposerDraftText(draftKey, edit.originalText);
+    setComposerDraftContext(draftKey, edit.context);
+  }
   queuedRunEdits.begin(threadKey, edit, { runs, onRunLeftQueue: exitQueuedRunEdit });
 }
 

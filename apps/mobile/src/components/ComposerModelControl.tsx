@@ -1,3 +1,4 @@
+import type { ComponentProps } from "react";
 import type { ModelSelection, ProviderDriverKind } from "@t3tools/contracts";
 import {
   buildTraitsTriggerDisplay,
@@ -7,7 +8,8 @@ import type { ModelOption } from "../lib/modelOptions";
 import { resolveProviderOptionDescriptors } from "../lib/providerOptions";
 import { AppText as Text } from "./ui/AppText";
 import { ComposerInlineControl } from "./ComposerToolbar";
-import { ProviderIcon, ProviderInstanceIcon } from "./ProviderIcon";
+import { ProviderUsageIcon } from "./ProviderUsageIcon";
+import { ProviderInstanceIcon } from "./ProviderIcon";
 
 export function ComposerModelControl(props: {
   readonly modelOption: ModelOption | null;
@@ -16,6 +18,7 @@ export function ComposerModelControl(props: {
   readonly reportedSelection?: ModelSelection | null | undefined;
   readonly prompt: string;
   readonly surfaceColor: string;
+  readonly usageMarker?: ComponentProps<typeof ProviderUsageIcon>["marker"];
   readonly disabled?: boolean;
   readonly size?: "regular" | "large";
   readonly iconOnly?: boolean;
@@ -63,7 +66,8 @@ export function ComposerModelControl(props: {
             size={size}
           />
         ) : (
-          <ProviderIcon
+          <ProviderUsageIcon
+            marker={props.usageMarker}
             iconUrl={props.modelOption?.providerIconUrl}
             provider={props.modelOption?.providerDriver}
             size={size}

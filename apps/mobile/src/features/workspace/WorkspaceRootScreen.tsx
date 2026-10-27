@@ -9,7 +9,9 @@ import { Platform, View, useWindowDimensions } from "react-native";
 import { useKeyboardState } from "react-native-keyboard-controller";
 import { SafeAreaInsetsContext, useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { CompactBrandTitle } from "../../components/CompactBrandTitle";
+import { AppText as Text } from "../../components/ui/AppText";
+import { useHomeListMode } from "../home/home-list-options";
+import { HOME_LIST_MODE_TITLES } from "../home/homeListMode";
 import { AndroidScreenHeader } from "../../components/ui/AndroidScreenHeader";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { NativePrimaryColumnContext } from "../../native/v5-workspace-context";
@@ -49,20 +51,18 @@ import { useSelectWorkspaceTab } from "./useSelectWorkspaceTab";
 const TAB_TITLES = WORKSPACE_TAB_LABELS;
 
 function WorkspaceRootTitle(props: {
+  readonly title: string;
   readonly maxWidth: number;
   readonly onOpenEnvironments: () => void;
 }) {
-  const { state, settingsOpen } = useWorkspaceTabs()!;
-  const enabled = useEnabledNavigationTabs();
-  const tabTitle = settingsOpen
-    ? "Settings"
-    : enabled.length
-      ? TAB_TITLES[state.selectedTab]
-      : "Navigation";
   return (
     <View style={{ width: props.maxWidth, minHeight: 32, justifyContent: "center" }}>
       <WorkspaceConnectionTitle
-        brand={<CompactBrandTitle accessibilityLabel={`T3 Code, ${tabTitle}`} />}
+        brand={
+          <Text className="text-[18px] font-t3-bold text-foreground" numberOfLines={1}>
+            {props.title}
+          </Text>
+        }
         maxWidth={props.maxWidth}
         onPress={props.onOpenEnvironments}
       />
@@ -95,14 +95,24 @@ function WorkspaceRootContent() {
   const keyboardHeight = useKeyboardState((keyboard) => keyboard.height);
   const workspace = useWorkspaceTabs()!;
   const { state } = workspace;
+  const listMode = useHomeListMode();
+  const title = workspace.settingsOpen
+    ? "Settings"
+    : enabled.length === 0
+      ? "Navigation"
+      : state.selectedTab === "threads"
+        ? HOME_LIST_MODE_TITLES[listMode]
+        : TAB_TITLES[state.selectedTab];
+  const solidHeader = deviceType === "duo-folded" || state.selectedTab === "usage";
   const renderHeaderTitle = useCallback(
     () => (
       <WorkspaceRootTitle
+        title={title}
         maxWidth={Math.max(0, width - 160)}
         onOpenEnvironments={() => openSettings(navigation, "SettingsEnvironments")}
       />
     ),
-    [width, navigation],
+    [width, navigation, title],
   );
   // Settings is a workspace tab too; its list takes the place of the selected tab's.
   const settingsOpen = workspace.settingsOpen;
@@ -139,21 +149,19 @@ function WorkspaceRootContent() {
               settingsOpen,
               state.selectedTab,
               state.selectionRevision,
+              title,
               width,
               sidebarNavigation,
               enabled.length,
             ]}
             options={{
-              title: settingsOpen
-                ? "Settings"
-                : enabled.length
-                  ? TAB_TITLES[state.selectedTab]
-                  : "Navigation",
+              title,
               headerShown: true,
-              headerTransparent: NATIVE_LIQUID_GLASS_SUPPORTED,
-              headerStyle: NATIVE_LIQUID_GLASS_SUPPORTED
-                ? { backgroundColor: "transparent" }
-                : undefined,
+              headerTransparent: NATIVE_LIQUID_GLASS_SUPPORTED && !solidHeader,
+              headerStyle:
+                NATIVE_LIQUID_GLASS_SUPPORTED && !solidHeader
+                  ? { backgroundColor: "transparent" }
+                  : undefined,
               contentStyle: undefined,
               ...(enabled.length === 0
                 ? { headerSearchBarOptions: undefined, unstable_headerRightItems: () => [] }

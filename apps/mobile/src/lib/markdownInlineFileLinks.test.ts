@@ -126,7 +126,7 @@ function previousFileLinks(markdown: string, fileLink: RegExp): string {
       node.children.forEach(visit);
   };
   visit(parser.parse(markdown));
-  for (const edit of edits.toReversed())
+  for (const edit of edits.slice().reverse())
     markdown = markdown.slice(0, edit.start) + edit.content + markdown.slice(edit.end);
   return markdown;
 }
@@ -180,7 +180,7 @@ function previousTableBreaks(markdown: string): string {
     });
   };
   visit(parser.parse(markdown));
-  for (const lineStart of lineStarts.toReversed()) {
+  for (const lineStart of lineStarts.slice().reverse()) {
     // The header row may be a lazy line without its container markers (`>` or list indent),
     // so copy the delimiter row's markers onto the blank line and the header row.
     const [, header = "", cells = "", ending = "\n", markers = ""] =

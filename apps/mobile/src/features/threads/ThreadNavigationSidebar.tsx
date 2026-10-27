@@ -1,3 +1,10 @@
+import { AsyncResult } from "effect/reactivity";
+import { identityClaimPersonIdByEnvironmentAtom } from "../../state/identity";
+import {
+  resolveHideSettledOnProjects,
+  resolveHideSettledOnRecent,
+} from "../../persistence/mobile-preferences";
+import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { useActiveNewTask } from "../../state/active-new-task";
 import { ThreadUndoNotice } from "../home/ThreadUndoNotice";
 import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
@@ -7,12 +14,16 @@ import type {
   EnvironmentProject,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
+import {
+  claimPersonIdForEnvironment,
+  threadMatchesMine,
+} from "@t3tools/client-runtime/state/identity";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { AnimatedLegendList } from "@legendapp/list/reanimated";
 import { THREAD_SIDEBAR_ROW_LAYOUT } from "./threadListAnimations";
 import type { MenuAction } from "@react-native-menu/menu";
-import { useAtomValue } from "@effect/atom-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
+import { useEffect, useRef, useState } from "react";
 import type { LayoutChangeEvent, TextInputInstance } from "react-native";
 import { Platform, StyleSheet, TextInput, View } from "react-native";
 import { GestureDetector, useNativeGesture } from "react-native-gesture-handler";
@@ -21,7 +32,6 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { SearchBarCommands } from "react-native-screens";
 
 import { AppText as Text } from "../../components/ui/AppText";
-import { CompactBrandTitle } from "../../components/CompactBrandTitle";
 import { Menu } from "../../components/ui/Menu";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
@@ -41,8 +51,15 @@ import { useThreadListV2 } from "./useThreadListV2";
 import { useThreadJumpShortcuts } from "../keyboard/threadKeyboardShortcuts";
 import { requestThreadMessageJump } from "./threadMessageJump";
 import { useThreadListSearchMatches } from "./useThreadListSearchMatches";
-import { useHomeListOptions } from "../home/home-list-options";
+import { DEFAULT_OWNERSHIP_FILTER, useHomeListOptions } from "../home/home-list-options";
 import { buildHomeListFilterMenu } from "../home/home-list-filter-menu";
+import {
+  HOME_LIST_MODE_LABELS,
+  HOME_LIST_MODE_TITLES,
+  HOME_LIST_MODES,
+  HOME_THREAD_GROUPING_LABELS,
+  HOME_THREAD_GROUPINGS,
+} from "../home/homeListMode";
 import { buildHomeProjectScopes } from "../home/homeThreadList";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "../home/thread-swipe-actions";
 import { usePendingTaskListActions } from "../home/usePendingTaskListActions";
@@ -159,6 +176,8 @@ function ThreadNavigationSidebarPane(
     renameThread,
     regenerateThreadTitle,
   } = useThreadListActions();
+  const preferencesResult = useAtomValue(mobilePreferencesAtom);
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const pendingTasks = usePendingNewTasks();
   const activeNewTask = useActiveNewTask();
   const queuedThreadKeys = useQueuedThreadKeys();
@@ -175,20 +194,44 @@ function ThreadNavigationSidebarPane(
   const availableEnvironmentIds = new Set(
     environments.map((environment) => environment.environmentId),
   );
-  const { options, setSelectedEnvironmentId, setSelectedProjectKey } =
-    useHomeListOptions(availableEnvironmentIds);
-  const searchEnvironmentIds =
-    options.selectedEnvironmentId === null
-      ? workspaceEnvironments
-          .filter((environment) => environment.connectionState === "connected")
-          .map((environment) => environment.environmentId)
-      : workspaceEnvironments.some(
-            (environment) =>
-              environment.environmentId === options.selectedEnvironmentId &&
-              environment.connectionState === "connected",
-          )
-        ? [options.selectedEnvironmentId]
-        : [];
+  const {
+    options,
+    setSelectedProjectKey,
+    toggleSelectedEnvironmentId,
+    clearSelectedEnvironments,
+    setOwnershipFilter,
+    setOwnershipRelation,
+    setListMode,
+    setThreadGrouping,
+    setProjectSortOrder,
+    setThreadSortOrder,
+  } = useHomeListOptions(availableEnvironmentIds);
+  const claimPersonIdByEnvironment = useAtomValue(identityClaimPersonIdByEnvironmentAtom);
+  const searchEnvironmentIds = (() => {
+    const connectedIds = workspaceEnvironments
+      .filter((environment) => environment.connectionState === "connected")
+      .map((environment) => environment.environmentId);
+    if (options.selectedEnvironmentIds.length === 0) {
+      return connectedIds;
+    }
+    const selected = new Set(options.selectedEnvironmentIds);
+    return connectedIds.filter((environmentId) => selected.has(environmentId));
+  })();
+  const hideSettledOnRecent = AsyncResult.isSuccess(preferencesResult)
+    ? resolveHideSettledOnRecent(preferencesResult.value)
+    : true;
+  const hideSettledOnProjects = AsyncResult.isSuccess(preferencesResult)
+    ? resolveHideSettledOnProjects(preferencesResult.value)
+    : false;
+  const hideSettledThreads =
+    options.threadGrouping === "project" ? hideSettledOnProjects : hideSettledOnRecent;
+  const setHideSettledThreads = (hide: boolean) => {
+    if (options.threadGrouping === "project") {
+      savePreferences({ hideSettledOnProjects: hide });
+      return;
+    }
+    savePreferences({ hideSettledOnRecent: hide });
+  };
   const projectScopeKey = options.selectedProjectKey;
   const resolvedProjectKey = resolveScratchProjectScopeKey(projectScopeKey, projects, {
     sidebarProjectGroupingMode: options.projectGroupingMode,
@@ -199,34 +242,30 @@ function ThreadNavigationSidebarPane(
       setSelectedProjectKey(resolvedProjectKey);
     }
   }, [projectScopeKey, resolvedProjectKey, setSelectedProjectKey]);
-  const projectScopes = useMemo(
-    () =>
-      buildHomeProjectScopes({
-        projects,
-        environmentId: options.selectedEnvironmentId,
-        projectGroupingMode: options.projectGroupingMode,
-      }),
-    [projects, options.selectedEnvironmentId, options.projectGroupingMode],
-  );
-  const projectFilterOptions = projectScopes.map((scope) => ({
-    key: scope.key,
-    label: scope.title,
-  }));
-  const projectTitleByProjectKey = useMemo(
-    () =>
-      new Map(
-        projectScopes.flatMap((scope) =>
-          scope.projectRefs.map(
-            (projectRef) =>
-              [
-                scopedProjectKey(projectRef.environmentId, projectRef.projectId),
-                scope.title,
-              ] as const,
-          ),
+
+  const projectScopes = (() =>
+    buildHomeProjectScopes({
+      projects,
+      selectedEnvironmentIds: options.selectedEnvironmentIds,
+      projectGroupingMode: options.projectGroupingMode,
+    }))();
+  const projectFilterOptions = (() =>
+    projectScopes.map((scope) => ({
+      key: scope.key,
+      label: scope.title,
+    })))();
+  const projectTitleByProjectKey = (() =>
+    new Map(
+      projectScopes.flatMap((scope) =>
+        scope.projectRefs.map(
+          (projectRef) =>
+            [
+              scopedProjectKey(projectRef.environmentId, projectRef.projectId),
+              scope.title,
+            ] as const,
         ),
       ),
-    [projectScopes],
-  );
+    ))();
   const selectedProjectScope =
     projectScopes.find((scope) => scope.key === resolvedProjectKey) ?? null;
   const threadSearch = useThreadSearch(
@@ -236,22 +275,45 @@ function ThreadNavigationSidebarPane(
       ? {}
       : { projectIds: selectedProjectScope.projectRefs.map((ref) => ref.projectId) },
   );
-  // This map reaches LegendList's extraData, which re-renders every row whenever it changes
-  // identity; the hook keeps it stable.
-  const threadSearchMatchByKey = useThreadListSearchMatches(threads, threadSearch);
+  const selectedProjectRefs =
+    selectedProjectScope === null
+      ? null
+      : new Set(
+          selectedProjectScope.projectRefs.map((ref) =>
+            scopedProjectKey(ref.environmentId, ref.projectId),
+          ),
+        );
+  const scopedThreads = threads.filter(
+    (thread) =>
+      (selectedProjectRefs === null ||
+        selectedProjectRefs.has(scopedProjectKey(thread.environmentId, thread.projectId))) &&
+      threadMatchesMine({
+        claimPersonId: claimPersonIdForEnvironment(
+          claimPersonIdByEnvironment,
+          thread.environmentId,
+        ),
+        originPersonId: thread.originSource?.personId ?? null,
+        participantPersonIds: (thread.participantSummaries ?? []).map(
+          (participant) => participant.personId,
+        ),
+        mode: options.ownershipFilter,
+        relation: options.ownershipRelation,
+      }),
+  );
+  const threadSearchMatchByKey = useThreadListSearchMatches(scopedThreads, threadSearch);
   const selectedProjectKey = selectedProjectScope?.key ?? null;
-  const projectByKey = useMemo(() => {
+  const projectByKey = (() => {
     const map = new Map<string, EnvironmentProject>();
     for (const project of projects) {
       map.set(scopedProjectKey(project.environmentId, project.id), project);
     }
     return map;
-  }, [projects]);
+  })();
 
   const [settledVisibleCount, setSettledVisibleCount] = useState(
     THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
   );
-  const settledResetKey = `${options.selectedEnvironmentId ?? "all"}:${selectedProjectKey ?? "all"}:${props.searchQuery.trim()}`;
+  const settledResetKey = `${options.selectedEnvironmentIds.join(",") || "all"}:${selectedProjectKey ?? "all"}:${props.searchQuery.trim()}`;
   const [lastSettledResetKey, setLastSettledResetKey] = useState(settledResetKey);
   if (lastSettledResetKey !== settledResetKey) {
     setLastSettledResetKey(settledResetKey);
@@ -299,9 +361,11 @@ function ThreadNavigationSidebarPane(
     contentOnlyThreadKeys,
     olderSettledShelf,
   } = useThreadListV2({
-    threads,
-    pendingTasks,
-    environmentId: options.selectedEnvironmentId,
+    threads: options.listMode === "threads" ? scopedThreads : [],
+    pendingTasks: options.listMode === "threads" ? pendingTasks : [],
+    environmentId: null,
+    selectedEnvironmentIds: options.selectedEnvironmentIds,
+    orderByRecency: options.threadGrouping === "recency",
     projectRefs: selectedProjectScope === null ? null : selectedProjectScope.projectRefs,
     searchQuery: props.searchQuery,
     searchMatches: threadSearchMatchByKey,
@@ -349,7 +413,16 @@ function ThreadNavigationSidebarPane(
           },
         ]
       : threadListV2Items;
-  const listMenuActions = [
+  const listMenuActions = ((): MenuAction[] => [
+    {
+      id: "list-mode",
+      title: "View",
+      subactions: HOME_LIST_MODES.map((mode) => ({
+        id: `list-mode:${mode}`,
+        title: HOME_LIST_MODE_LABELS[mode],
+        state: options.listMode === mode ? ("on" as const) : ("off" as const),
+      })),
+    },
     {
       id: "environment",
       title: "Environment",
@@ -358,13 +431,14 @@ function ThreadNavigationSidebarPane(
           id: "environment:all",
           title: "All environments",
           subtitle: "Show threads from every environment",
-          state: options.selectedEnvironmentId === null ? "on" : "off",
+          state: options.selectedEnvironmentIds.length === 0 ? "on" : "off",
         },
         ...environments.map((environment) => ({
           id: `environment:${environment.environmentId}`,
           title: environment.label,
           state:
-            options.selectedEnvironmentId === environment.environmentId
+            options.selectedEnvironmentIds.length === 0 ||
+            options.selectedEnvironmentIds.includes(environment.environmentId)
               ? ("on" as const)
               : ("off" as const),
         })),
@@ -391,22 +465,58 @@ function ThreadNavigationSidebarPane(
             ],
           },
         ] satisfies MenuAction[])),
-  ] satisfies MenuAction[];
+    ...(options.listMode === "threads"
+      ? ([
+          {
+            id: "grouping",
+            title: "Group threads",
+            subactions: HOME_THREAD_GROUPINGS.map((grouping) => ({
+              id: `grouping:${grouping}`,
+              title: HOME_THREAD_GROUPING_LABELS[grouping],
+              state: options.threadGrouping === grouping ? ("on" as const) : ("off" as const),
+            })),
+          },
+          {
+            id: "hide-settled",
+            title: "Hide settled",
+            state: hideSettledThreads ? ("on" as const) : ("off" as const),
+          },
+        ] satisfies MenuAction[])
+      : []),
+  ])();
   const handleListMenuAction = ({
     nativeEvent,
   }: {
     readonly nativeEvent: { readonly event: string };
   }) => {
     const event = nativeEvent.event;
+    if (event.startsWith("list-mode:")) {
+      const mode = event.slice("list-mode:".length);
+      if (mode === "threads") {
+        setListMode(mode);
+      }
+      return;
+    }
     if (event === "environment:all") {
-      setSelectedEnvironmentId(null);
+      clearSelectedEnvironments();
       return;
     }
     if (event.startsWith("environment:")) {
       const environment = environments.find(
         (candidate) => String(candidate.environmentId) === event.slice("environment:".length),
       );
-      if (environment) setSelectedEnvironmentId(environment.environmentId);
+      if (environment) toggleSelectedEnvironmentId(environment.environmentId);
+      return;
+    }
+    if (event === "hide-settled") {
+      setHideSettledThreads(!hideSettledThreads);
+      return;
+    }
+    if (event.startsWith("grouping:")) {
+      const grouping = event.slice("grouping:".length);
+      if (grouping === "recency" || grouping === "project" || grouping === "none") {
+        setThreadGrouping(grouping);
+      }
       return;
     }
     if (event === "project:all") {
@@ -493,6 +603,9 @@ function ThreadNavigationSidebarPane(
     }
     if (previous.type === "v2-show-more" && item.type === "v2-show-more") {
       return previous.hiddenCount === item.hiddenCount && previous.state === item.state;
+    }
+    if (previous.type === "v2-recency-header" && item.type === "v2-recency-header") {
+      return previous.key === item.key && previous.label === item.label;
     }
     return false;
   };
@@ -627,6 +740,12 @@ function ThreadNavigationSidebarPane(
           />
         );
       }
+      case "v2-recency-header":
+        return (
+          <View className="px-3 pb-1 pt-3">
+            <Text className="text-xs font-t3-medium text-foreground-muted">{item.label}</Text>
+          </View>
+        );
       case "v2-working-shelf":
         return (
           <ThreadListV2WorkingShelfHeader
@@ -671,23 +790,55 @@ function ThreadNavigationSidebarPane(
         );
     }
   };
-  const filterCustomized = options.selectedEnvironmentId !== null || selectedProjectKey !== null;
+  const filterCustomized =
+    options.selectedEnvironmentIds.length > 0 ||
+    options.ownershipFilter !== DEFAULT_OWNERSHIP_FILTER ||
+    options.ownershipRelation !== "both" ||
+    selectedProjectKey !== null ||
+    options.threadGrouping !== "project" ||
+    (options.listMode === "threads" &&
+      hideSettledThreads !== (options.threadGrouping !== "project"));
   const filterIcon = filterCustomized
     ? "line.3.horizontal.decrease.circle.fill"
     : "line.3.horizontal.decrease.circle";
-  const filterMenu = buildHomeListFilterMenu({
-    environments,
-    projects: projectFilterOptions,
-    selectedEnvironmentId: options.selectedEnvironmentId,
-    selectedProjectKey,
-    onEnvironmentChange: setSelectedEnvironmentId,
-    onProjectChange: setSelectedProjectKey,
-  });
-  const nativeHeaderItems = createSidebarHeaderItems({
-    filterIcon,
-    filterMenu,
-    onOpenSettings: props.onOpenSettings,
-  });
+  const filterMenu = (() =>
+    buildHomeListFilterMenu({
+      environments,
+      projects: projectFilterOptions,
+      selectedEnvironmentIds: options.selectedEnvironmentIds,
+      selectedProjectKey,
+      ownershipFilter: options.ownershipFilter,
+      ownershipRelation: options.ownershipRelation,
+      projectSortOrder: options.projectSortOrder,
+      threadSortOrder: options.threadSortOrder,
+      onClearEnvironments: clearSelectedEnvironments,
+      onToggleEnvironment: toggleSelectedEnvironmentId,
+      onProjectChange: setSelectedProjectKey,
+      onOwnershipFilterChange: setOwnershipFilter,
+      onOwnershipRelationChange: setOwnershipRelation,
+      onProjectSortOrderChange: setProjectSortOrder,
+      onThreadSortOrderChange: setThreadSortOrder,
+      listOrganization: false,
+      threadGrouping: options.listMode === "threads" ? options.threadGrouping : undefined,
+      onThreadGroupingChange: options.listMode === "threads" ? setThreadGrouping : undefined,
+      ...(options.listMode === "threads"
+        ? {
+            hideSettledThreads,
+            onHideSettledThreadsChange: setHideSettledThreads,
+          }
+        : {}),
+    }))();
+  const nativeHeaderItems = (() =>
+    createSidebarHeaderItems({
+      filterIcon,
+      filterMenu,
+      listMode: options.listMode,
+      onListModeChange: setListMode,
+      onOpenSettings: props.onOpenSettings,
+    }))();
+  // Snoozed threads need no special case: the shelf header is a list row
+  // even while collapsed.
+  const snoozedCount = threadListV2Layout.snoozedCount;
   const listEmpty = (
     <Text
       className={
@@ -703,10 +854,18 @@ function ThreadNavigationSidebarPane(
           : props.searchQuery.trim().length > 0
             ? threadSearch.isPending
               ? "Searching thread messages…"
-              : "No matching threads"
-            : selectedProjectScope !== null
-              ? `No threads in ${selectedProjectScope.title}`
-              : "No threads yet"}
+              : snoozedCount > 0
+                ? snoozedCount === 1
+                  ? "1 matching thread snoozed"
+                  : "All matching threads snoozed"
+                : "No matching threads"
+            : snoozedCount > 0
+              ? snoozedCount === 1
+                ? "1 thread snoozed"
+                : `${snoozedCount} threads snoozed`
+              : selectedProjectScope !== null
+                ? `No threads in ${selectedProjectScope.title}`
+                : "No threads yet"}
     </Text>
   );
 
@@ -714,14 +873,26 @@ function ThreadNavigationSidebarPane(
     return (
       <>
         <NativeStackScreenOptions
-          optionsVersion={[nativeHeaderItems, props.width]}
+          optionsVersion={[nativeHeaderItems, options.listMode, props.width]}
           options={{
             ...getConnectionAwareBrandHeaderOptions({
               headerWidth: props.width,
               trailingItemCount: nativeHeaderItems.length,
               onOpenEnvironments: props.onOpenEnvironmentSettings,
               fallbackTitleStyle: { fontSize: 18, fontWeight: "800" },
+              title: HOME_LIST_MODE_TITLES[options.listMode],
+              brand: (
+                <Text className="text-[18px] font-t3-bold text-foreground" numberOfLines={1}>
+                  {HOME_LIST_MODE_TITLES[options.listMode]}
+                </Text>
+              ),
             }),
+            ...(NATIVE_LIQUID_GLASS_SUPPORTED
+              ? {
+                  headerTransparent: true,
+                  headerStyle: { backgroundColor: "transparent" },
+                }
+              : {}),
             headerSearchBarOptions: {
               ref: searchBarRef,
               autoCapitalize: "none",
@@ -875,43 +1046,52 @@ function ThreadNavigationSidebarPane(
               onPress={props.onOpenEnvironmentSettings}
               size="pageTitle"
               brand={
-                <View className="h-11 flex-1 justify-center">
-                  <CompactBrandTitle allowFontScaling={false} />
-                </View>
+                <Text className="flex-1 text-[34px] font-t3-bold text-foreground" numberOfLines={1}>
+                  {HOME_LIST_MODE_TITLES[options.listMode]}
+                </Text>
               }
             />
             <View className="flex-row items-center gap-2.5">
               <Menu actions={listMenuActions} onPressAction={handleListMenuAction}>
-                <SidebarFilterButton accessibilityLabel="Filter threads" icon={filterIcon} />
+                <SidebarFilterButton
+                  accessibilityLabel="Filter and sort threads"
+                  icon={filterIcon}
+                />
               </Menu>
-              <SidebarHeaderActions onOpenSettings={props.onOpenSettings} />
+              <SidebarHeaderActions
+                listMode={options.listMode}
+                onListModeChange={setListMode}
+                onOpenSettings={props.onOpenSettings}
+              />
             </View>
           </View>
 
-          <View className="mx-4 mt-[9px] h-[38px] flex-row items-center gap-1.5 rounded-xl bg-sidebar-search pr-2.5 pl-[11px]">
-            <SymbolView
-              name="magnifyingglass"
-              size={15}
-              tintColorClassName="accent-drawer-foreground-muted"
-              type="monochrome"
-            />
-            <TextInput
-              ref={searchInputRef}
-              accessibilityLabel="Search threads"
-              autoCapitalize="none"
-              autoCorrect={false}
-              clearButtonMode="while-editing"
-              onChangeText={props.onSearchQueryChange}
-              placeholder="Search"
-              placeholderTextColorClassName="accent-placeholder"
-              selectionColorClassName={undefined}
-              cursorColorClassName={undefined}
-              selectionHandleColorClassName={undefined}
-              returnKeyType="search"
-              className="h-[34px] flex-1 px-0 py-0 font-sans text-base text-drawer-foreground"
-              value={props.searchQuery}
-            />
-          </View>
+          {
+            <View className="mx-4 mt-[9px] h-[38px] flex-row items-center gap-1.5 rounded-xl bg-sidebar-search pr-2.5 pl-[11px]">
+              <SymbolView
+                name="magnifyingglass"
+                size={15}
+                tintColorClassName="accent-drawer-foreground-muted"
+                type="monochrome"
+              />
+              <TextInput
+                ref={searchInputRef}
+                accessibilityLabel="Search threads"
+                autoCapitalize="none"
+                autoCorrect={false}
+                clearButtonMode="while-editing"
+                onChangeText={props.onSearchQueryChange}
+                placeholder="Search"
+                placeholderTextColorClassName="accent-placeholder"
+                selectionColorClassName={undefined}
+                cursorColorClassName={undefined}
+                selectionHandleColorClassName={undefined}
+                returnKeyType="search"
+                className="h-[34px] flex-1 px-0 py-0 font-sans text-base text-drawer-foreground"
+                value={props.searchQuery}
+              />
+            </View>
+          }
         </View>
       )}
       <ThreadUndoNotice visible={props.visible} />

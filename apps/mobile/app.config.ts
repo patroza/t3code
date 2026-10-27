@@ -29,6 +29,14 @@ if (
     "T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID must be a reverse-DNS identifier such as com.example.t3code when T3CODE_IOS_PERSONAL_TEAM=1.",
   );
 }
+const IOS_BUNDLE_IDENTIFIER = repoEnv.T3CODE_MOBILE_IOS_BUNDLE_IDENTIFIER ?? "com.t3tools.t3code";
+const IOS_TEAM_ID = isIosPersonalTeamBuild
+  ? repoEnv.T3CODE_MOBILE_IOS_TEAM_ID
+  : (repoEnv.T3CODE_MOBILE_IOS_TEAM_ID ?? "ARK85ZXQ4Z");
+const EXPO_OWNER = repoEnv.T3CODE_MOBILE_EXPO_OWNER ?? "pingdotgg";
+const EAS_PROJECT_ID =
+  repoEnv.T3CODE_MOBILE_EAS_PROJECT_ID ??
+  (EXPO_OWNER === "pingdotgg" ? "d763fcb8-d37c-41ea-a773-b54a0ab4a454" : undefined);
 
 const DEVELOPMENT_ASSETS = {
   appIcon: fromRepoRoot(BRAND_ASSET_PATHS.developmentIosIconPng),
@@ -73,7 +81,9 @@ const VARIANT_CONFIG = {
   development: {
     appName: "T3 Code Dev",
     scheme: "t3code-dev",
-    iosBundleIdentifier: "com.t3tools.t3code.dev",
+    iosIcon: "./assets/icon-composer-dev.icon",
+    splashIcon: "./assets/splash-icon-dev.png",
+    iosBundleIdentifier: `${IOS_BUNDLE_IDENTIFIER}.dev`,
     androidPackage: "com.t3tools.t3code.dev",
     relyingParty: "clerk.t3.codes",
     assets: DEVELOPMENT_ASSETS,
@@ -81,7 +91,9 @@ const VARIANT_CONFIG = {
   preview: {
     appName: "T3 Code Preview",
     scheme: "t3code-preview",
-    iosBundleIdentifier: "com.t3tools.t3code.preview",
+    iosIcon: "./assets/icon-composer-prod.icon",
+    splashIcon: "./assets/splash-icon-prod.png",
+    iosBundleIdentifier: `${IOS_BUNDLE_IDENTIFIER}.preview`,
     androidPackage: "com.t3tools.t3code.preview",
     relyingParty: "clerk.t3.codes",
     assets: PREVIEW_ASSETS,
@@ -89,7 +101,9 @@ const VARIANT_CONFIG = {
   production: {
     appName: "T3 Code",
     scheme: "t3code",
-    iosBundleIdentifier: "com.t3tools.t3code",
+    iosIcon: "./assets/icon-composer-prod.icon",
+    splashIcon: "./assets/splash-icon-prod.png",
+    iosBundleIdentifier: IOS_BUNDLE_IDENTIFIER,
     androidPackage: "com.t3tools.t3code",
     relyingParty: "clerk.t3.codes",
     assets: RELEASE_ASSETS,
@@ -221,32 +235,47 @@ const config: ExpoConfig = {
   platforms: ["ios", "android"],
   scheme: variant.scheme,
   version: repoEnv.T3CODE_MOBILE_VERSION ?? "2.1.0",
-  runtimeVersion: {
-    // Skip costly fingerprinting on dev launches; preview and production OTAs require matching native projects.
-    policy: runtimeVersionPolicy,
-  },
+  runtimeVersion: (() => {
+    const override = process.env.MOBILE_RUNTIME_VERSION_OVERRIDE?.trim();
+    if (override) return override;
+    return {
+      // Development manifests resolve on every launch, so avoid fingerprint's
+      // expensive native-project calculation there. Preview and production stay
+      // fingerprinted so OTAs only reach binaries with matching native projects.
+      policy: runtimeVersionPolicy,
+    };
+  })(),
   orientation: "portrait",
   icon: variant.assets.appIcon,
   userInterfaceStyle: "automatic",
-  updates: {
-    enabled: repoEnv.T3CODE_MOBILE_UPDATES_ENABLED !== "0",
-    url: "https://u.expo.dev/d763fcb8-d37c-41ea-a773-b54a0ab4a454",
-    checkAutomatically: "ON_LOAD",
-    fallbackToCacheTimeout: 0,
-  },
+  updates:
+    EAS_PROJECT_ID === undefined
+      ? { enabled: false }
+      : {
+          enabled: !isIosPersonalTeamBuild && process.env.T3CODE_MOBILE_UPDATES_ENABLED !== "0",
+          url: `https://u.expo.dev/${EAS_PROJECT_ID}`,
+          checkAutomatically: "ON_LOAD",
+          fallbackToCacheTimeout: 0,
+        },
   ios: {
     icon: variant.assets.iosIcon,
     supportsTablet: true,
     requireFullScreen: process.env.T3_SHOWCASE_CAPTURE_BUILD === "1",
     bundleIdentifier: iosBundleIdentifier,
-    // Avoid Personal Team fallback: it cannot sign App Groups, Apple sign-in or push entitlements.
-    appleTeamId: "ARK85ZXQ4Z",
-    associatedDomains: [
-      `applinks:${variant.relyingParty}`,
-      `webcredentials:${variant.relyingParty}`,
-    ],
+    // Pin code signing to the T3 Tools team so non-interactive `expo run:ios`
+    // does not fall back to a personal team (which cannot sign app groups,
+    // Sign in with Apple, or push notification entitlements).
+    ...(IOS_TEAM_ID ? { appleTeamId: IOS_TEAM_ID } : {}),
+    ...(isIosPersonalTeamBuild
+      ? {}
+      : {
+          associatedDomains: [
+            `applinks:${variant.relyingParty}`,
+            `webcredentials:${variant.relyingParty}`,
+          ],
+        }),
     entitlements: {
-      "keychain-access-groups": [`$(AppIdentifierPrefix)${variant.iosBundleIdentifier}`],
+      "keychain-access-groups": [`$(AppIdentifierPrefix)${iosBundleIdentifier}`],
     },
     infoPlist: {
       UISupportedInterfaceOrientations: [
@@ -448,11 +477,9 @@ const config: ExpoConfig = {
       tracesDataset: repoEnv.EXPO_PUBLIC_OTLP_TRACES_DATASET ?? null,
       tracesToken: repoEnv.EXPO_PUBLIC_OTLP_TRACES_TOKEN ?? null,
     },
-    eas: {
-      projectId: "d763fcb8-d37c-41ea-a773-b54a0ab4a454",
-    },
+    ...(EAS_PROJECT_ID === undefined ? {} : { eas: { projectId: EAS_PROJECT_ID } }),
   },
-  owner: "pingdotgg",
+  owner: EXPO_OWNER,
   experiments: {
     // Metro only runs babel-plugin-react-compiler when this is set; see src/reactCompilerCoverage.test.ts.
     reactCompiler: true,

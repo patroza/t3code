@@ -57,6 +57,23 @@ function makeThread(
 
 const NOW = "2026-06-02T00:00:00.000Z";
 
+const linkedPullRequest = {
+  projectId: ProjectId.make("project-1"),
+  repository: "pingdotgg/t3code",
+  number: 42,
+  url: "https://github.com/pingdotgg/t3code/pull/42",
+};
+
+function countDateParses(build: () => void): number {
+  const spy = vi.spyOn(Date, "parse");
+  try {
+    build();
+    return spy.mock.calls.length;
+  } finally {
+    spy.mockRestore();
+  }
+}
+
 describe("resolveThreadListV2SnoozeMenuSelection", () => {
   it("recomputes presets that remain available instead of using old timestamps", () => {
     const displayedPresets = resolveSnoozePresets(new Date(2026, 4, 8, 10));
@@ -193,6 +210,54 @@ describe("search lists ranked matches", () => {
   });
 });
 
+describe("fork thread list filters", () => {
+  it("keeps every selected environment in ranked search while excluding the rest", () => {
+    const secondEnvironment = EnvironmentId.make("environment-2");
+    const thirdEnvironment = EnvironmentId.make("environment-3");
+    const layout = buildThreadListV2Items({
+      threads: [
+        makeThread({ id: ThreadId.make("first"), title: "Deploy" }),
+        makeThread({
+          id: ThreadId.make("second"),
+          title: "Deploy",
+          environmentId: secondEnvironment,
+        }),
+        makeThread({
+          id: ThreadId.make("excluded"),
+          title: "Deploy",
+          environmentId: thirdEnvironment,
+        }),
+      ],
+      environmentId: null,
+      selectedEnvironmentIds: [environmentId, secondEnvironment],
+      searchQuery: "deploy",
+      now: NOW,
+    });
+    expect(
+      layout.items
+        .map(({ thread }) => thread.id)
+        .slice()
+        .sort(),
+    ).toEqual(["first", "second"]);
+  });
+
+  it("lists linked pull-request matches without treating them as message-only matches", () => {
+    const thread = makeThread({
+      id: ThreadId.make("linked"),
+      title: "Weekly notes",
+      linkedPullRequest,
+    });
+    const layout = buildThreadListV2Items({
+      threads: [thread],
+      environmentId: null,
+      searchQuery: "#42",
+      now: NOW,
+    });
+    expect(layout.items.map(({ thread }) => thread.id)).toEqual(["linked"]);
+    expect([...layout.contentOnlyThreadKeys]).toEqual([]);
+  });
+});
+
 describe("sortThreadsForListV2", () => {
   it("honors a saved active order and leaves new threads above it", () => {
     const sorted = sortThreadsForListV2([
@@ -254,6 +319,133 @@ describe("getThreadListV2OrderedSection", () => {
 });
 
 describe("buildThreadListV2Items", () => {
+  it("keeps upstream order by default and changes only card ordering for recency", () => {
+    const threads = [
+      makeThread({
+        id: ThreadId.make("newer-created"),
+        title: "Newer created",
+        createdAt: "2026-06-01T12:00:00.000Z",
+        latestUserMessageAt: "2026-06-01T13:00:00.000Z",
+      }),
+      makeThread({
+        id: ThreadId.make("older-created-more-recent"),
+        title: "Older created, more recent",
+        createdAt: "2026-06-01T08:00:00.000Z",
+        latestUserMessageAt: "2026-06-01T18:00:00.000Z",
+      }),
+    ];
+
+    const defaultOrder = buildThreadListV2Items({ threads, searchQuery: "", now: NOW });
+    const recency = buildThreadListV2Items({
+      threads,
+      searchQuery: "",
+      now: NOW,
+      orderByRecency: true,
+    });
+
+    expect(defaultOrder.items.map((item) => item.thread.id)).toEqual([
+      "newer-created",
+      "older-created-more-recent",
+    ]);
+    expect(recency.items.map((item) => item.thread.id)).toEqual([
+      "older-created-more-recent",
+      "newer-created",
+    ]);
+    expect(
+      recency.items.map(({ variant, pinned, snoozed }) => ({ variant, pinned, snoozed })),
+    ).toEqual(
+      defaultOrder.items.map(({ variant, pinned, snoozed }) => ({ variant, pinned, snoozed })),
+    );
+  });
+
+  it("places a persisted settled thread in the settled shelf", () => {
+    const thread = makeThread({
+      id: ThreadId.make("linked-merged"),
+      title: "Linked merged pull request",
+      linkedPullRequest,
+      settledOverride: "settled",
+      settledAt: NOW,
+    });
+    const layout = buildThreadListV2Items({
+      threads: [thread],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+
+    expect(layout.settledCount).toBe(1);
+    expect(layout.items[0]?.variant).toBe("slim");
+  });
+
+  it("hides snoozed threads and counts them — visibility parity with web", () => {
+    const layout = buildThreadListV2Items({
+      threads: [
+        makeThread({ id: ThreadId.make("active"), title: "Active" }),
+        makeThread({
+          id: ThreadId.make("snoozed"),
+          title: "Snoozed",
+          snoozedUntil: "2026-06-03T09:00:00.000Z",
+          snoozedAt: "2026-06-01T12:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("woken"),
+          title: "Woken",
+          snoozedUntil: "2026-06-01T18:00:00.000Z",
+          snoozedAt: "2026-06-01T12:00:00.000Z",
+        }),
+      ],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+
+    expect(layout.items.map((item) => item.thread.id)).toEqual(["active", "woken"]);
+    expect(layout.snoozedCount).toBe(1);
+  });
+
+  it("places settled pinned threads in the settled shelf", () => {
+    const layout = buildThreadListV2Items({
+      threads: [
+        makeThread({ id: ThreadId.make("active"), title: "Active" }),
+        makeThread({
+          id: ThreadId.make("pinned-settled"),
+          title: "Pinned while settled",
+          pinnedAt: "2026-06-01T12:00:00.000Z",
+          settledOverride: "settled",
+          settledAt: "2026-06-01T12:00:00.000Z",
+        }),
+      ],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+
+    expect(layout.items.map((item) => item.thread.id)).toEqual(["active", "pinned-settled"]);
+    expect(layout.items.map((item) => item.pinned)).toEqual([false, false]);
+    expect(layout.settledCount).toBe(1);
+  });
+
+  it("keeps active pinned threads in the pinned block", () => {
+    const pinned = makeThread({
+      id: ThreadId.make("pinned"),
+      title: "Pinned thread",
+      pinnedAt: "2026-06-01T12:00:00.000Z",
+    });
+    const layout = buildThreadListV2Items({
+      threads: [pinned],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+
+    expect(layout.items[0]).toMatchObject({
+      thread: { id: "pinned" },
+      variant: "card",
+      pinned: true,
+    });
+    expect(layout.settledCount).toBe(0);
+  });
+
   it("hides snoozed threads and counts them — visibility parity with web", () => {
     const layout = buildThreadListV2Items({
       threads: [
@@ -648,6 +840,37 @@ describe("buildThreadListV2Items settled sort reuse", () => {
     ]);
   });
 
+  it("re-sorts when the same settled rows arrive in a different order", () => {
+    const first = makeSettled("twin", "2026-06-01T01:00:00.000Z");
+    const second = makeSettled("twin", "2026-06-01T01:00:00.000Z", {
+      environmentId: otherEnvironmentId,
+    });
+    expect(settledOrder([first, second])).toEqual([
+      `${environmentId}:twin`,
+      `${otherEnvironmentId}:twin`,
+    ]);
+    expect(settledOrder([second, first])).toEqual([
+      `${otherEnvironmentId}:twin`,
+      `${environmentId}:twin`,
+    ]);
+  });
+
+  it("skips the settled sort when only unsettled rows change", () => {
+    const settled = Array.from({ length: 50 }, (_, index) =>
+      makeSettled(`settled-${index}`, `2026-06-01T00:${String(index).padStart(2, "0")}:00.000Z`),
+    );
+    const streaming = makeThread({ id: ThreadId.make("streaming"), title: "Streaming" });
+    const baseline = countDateParses(() => settledOrder([streaming, ...settled]));
+    const updated = { ...streaming, updatedAt: "2026-06-01T23:00:00.000Z" };
+    let order: string[] = [];
+    const reused = countDateParses(() => {
+      order = settledOrder([updated, ...settled]);
+    });
+
+    expect(order).toEqual([...settled].reverse().map((thread) => `${environmentId}:${thread.id}`));
+    expect(baseline - reused).toBeGreaterThanOrEqual(settled.length);
+  });
+
   it("recomputes when builds alternate between environments", () => {
     const remoteOlder = makeSettled("remote-older", "2026-06-01T01:30:00.000Z", {
       environmentId: otherEnvironmentId,
@@ -763,6 +986,99 @@ describe("buildThreadListV2ListItems", () => {
         item.type === "v2-thread" || item.type === "v2-pending" ? item.showTrailingDivider : null,
       ),
     ).toEqual([true, true, true, false, null, false]);
+  });
+
+  it("puts queued tasks above active rows when nothing has settled yet", () => {
+    const activeOnly = buildThreadListV2Items({
+      threads: [makeThread({ id: ThreadId.make("active"), title: "active" })],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+    const items = buildThreadListV2ListItems({
+      items: activeOnly.items,
+      pendingTasks: [makePendingTask("queued-1")],
+    });
+
+    expect(items.map((item) => item.type)).toEqual(["v2-pending", "v2-thread"]);
+  });
+
+  it("keeps the settled shelf between active and settled rows when nothing is queued", () => {
+    const items = buildThreadListV2ListItems({
+      items: layout.items,
+      pendingTasks: [],
+      settledCount: layout.settledCount,
+      settledShelfHeaderIndex: layout.settledShelfHeaderIndex,
+    });
+
+    expect(items.map((item) => item.key)).toEqual([
+      `v2-thread:${environmentId}:active`,
+      "v2-settled-shelf",
+      `v2-thread:${environmentId}:settled`,
+    ]);
+  });
+
+  it("adds recency headers to unpinned active and settled sections; pins stay above", () => {
+    const now = "2026-06-02T12:00:00.000Z";
+    const groupedLayout = buildThreadListV2Items({
+      threads: [
+        makeThread({
+          id: ThreadId.make("pinned"),
+          title: "pinned",
+          pinnedAt: now,
+          latestUserMessageAt: "2026-05-20T10:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("active-recent"),
+          title: "active recent",
+          latestUserMessageAt: "2026-06-02T11:30:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("active-yesterday"),
+          title: "active yesterday",
+          latestUserMessageAt: "2026-06-01T10:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("settled-recent"),
+          title: "settled recent",
+          settledOverride: "settled",
+          settledAt: now,
+          latestUserMessageAt: "2026-06-02T11:15:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("settled-yesterday"),
+          title: "settled yesterday",
+          settledOverride: "settled",
+          settledAt: now,
+          latestUserMessageAt: "2026-06-01T09:00:00.000Z",
+        }),
+      ],
+      environmentId: null,
+      searchQuery: "",
+      now,
+      orderByRecency: true,
+    });
+    const items = buildThreadListV2ListItems({
+      items: groupedLayout.items,
+      pendingTasks: [],
+      settledCount: groupedLayout.settledCount,
+      settledShelfHeaderIndex: groupedLayout.settledShelfHeaderIndex,
+      groupByRecency: true,
+      snoozeLabelNow: now,
+    });
+
+    expect(items.map((item) => item.key)).toEqual([
+      `v2-thread:${environmentId}:pinned`,
+      "v2-recency-header:active:last_hour",
+      `v2-thread:${environmentId}:active-recent`,
+      "v2-recency-header:active:yesterday",
+      `v2-thread:${environmentId}:active-yesterday`,
+      "v2-settled-shelf",
+      "v2-recency-header:settled:last_hour",
+      `v2-thread:${environmentId}:settled-recent`,
+      "v2-recency-header:settled:yesterday",
+      `v2-thread:${environmentId}:settled-yesterday`,
+    ]);
   });
 
   it("places queued tasks above active rows and a collapsed snoozed shelf", () => {

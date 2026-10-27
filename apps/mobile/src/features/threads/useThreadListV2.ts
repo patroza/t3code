@@ -36,6 +36,8 @@ export function useThreadListV2(input: {
   readonly threads: LayoutInput["threads"];
   readonly pendingTasks: ReadonlyArray<PendingNewTask>;
   readonly environmentId: EnvironmentId | null;
+  readonly selectedEnvironmentIds?: readonly EnvironmentId[];
+  readonly orderByRecency?: boolean;
   readonly projectRefs: LayoutInput["projectRefs"];
   readonly searchQuery: string;
   /** Threads that match the search by content, keyed like `threadSearchMatchKey`. */
@@ -102,6 +104,9 @@ export function useThreadListV2(input: {
     pendingOrder: input.pendingOrder,
     threads: threads.filter((thread) => thread.archivedAt === null),
     environmentId: input.environmentId,
+    selectedEnvironmentIds:
+      input.selectedEnvironmentIds ?? (input.environmentId === null ? [] : [input.environmentId]),
+    orderByRecency: input.orderByRecency === true,
     projectRefs: input.projectRefs,
     searchQuery: input.searchQuery,
     matchedThreadKeys: new Set(input.searchMatches.keys()),
@@ -139,7 +144,10 @@ export function useThreadListV2(input: {
   const searchQuery = input.searchQuery.trim().toLocaleLowerCase();
   const pendingTasks = input.pendingTasks.filter(
     (pendingTask) =>
-      (input.environmentId === null || pendingTask.environmentId === input.environmentId) &&
+      (input.selectedEnvironmentIds !== undefined
+        ? input.selectedEnvironmentIds.length === 0 ||
+          input.selectedEnvironmentIds.includes(pendingTask.environmentId)
+        : input.environmentId === null || pendingTask.environmentId === input.environmentId) &&
       (scopedProjectKeys === null ||
         scopedProjectKeys.has(
           scopedProjectKey(pendingTask.environmentId, pendingTask.projectId),
@@ -163,18 +171,23 @@ export function useThreadListV2(input: {
     queuedThreadKeys: input.queuedThreadKeys,
     moveAvailability,
     shelfPreferencesLoading: !input.shelfPreferencesLoaded,
+    groupByRecency: input.orderByRecency === true,
   });
-  return { layout, items, contentOnlyThreadKeys, olderSettledShelf };
+  return { layout, items, contentOnlyThreadKeys, olderSettledShelf, pendingTasks };
 }
 
 /** The list's scope per environment: its projects there, or every project. */
 function olderSettledScopes(input: {
   readonly environmentId: EnvironmentId | null;
+  readonly selectedEnvironmentIds?: readonly EnvironmentId[];
   readonly projectRefs: LayoutInput["projectRefs"];
   readonly settlementEnvironmentIds: ReadonlySet<EnvironmentId>;
 }): ReadonlyArray<OlderSettledScope> {
-  const environmentIds =
-    input.environmentId === null ? [...input.settlementEnvironmentIds] : [input.environmentId];
+  const environmentIds = input.selectedEnvironmentIds?.length
+    ? input.selectedEnvironmentIds
+    : input.environmentId === null
+      ? [...input.settlementEnvironmentIds]
+      : [input.environmentId];
   return environmentIds.flatMap((environmentId): ReadonlyArray<OlderSettledScope> => {
     if (input.projectRefs == null) return [{ environmentId, projectIds: null }];
     const projectIds = input.projectRefs.flatMap((ref) =>

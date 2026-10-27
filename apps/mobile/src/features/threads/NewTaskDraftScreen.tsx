@@ -60,6 +60,7 @@ import {
   updateComposerDraftSettings,
   scheduleUnusedComposerAttachmentCleanup,
   type ComposerDraft,
+  type ComposerDraftWorkspaceSelection,
   waitForComposerDraftsLoaded,
 } from "../../state/use-composer-drafts";
 import { useEnvironmentServerConfig, useProjects } from "../../state/entities";
@@ -149,6 +150,7 @@ export function NewTaskDraftScreen(props: {
     readonly worktreePath?: string | null;
     readonly cloning?: boolean;
   };
+  readonly initialWorkspaceSelection?: ComposerDraftWorkspaceSelection;
   readonly draftId?: string;
   readonly incomingShareId?: string;
 }) {
@@ -501,8 +503,25 @@ export function NewTaskDraftScreen(props: {
     setProject,
   ]);
 
+  const appliedInitialWorkspaceSelectionRef = useRef<ComposerDraftWorkspaceSelection | undefined>(
+    undefined,
+  );
   const { loadBranches } = flow;
   useEffect(() => {
+    const selection = props.initialWorkspaceSelection;
+    const initialEnvironmentId = props.initialProjectRef?.environmentId;
+    const initialProjectId = props.initialProjectRef?.projectId;
+    if (
+      selection &&
+      flow.draftKey &&
+      selectedProject &&
+      selectedProject.environmentId === initialEnvironmentId &&
+      selectedProject.id === initialProjectId &&
+      appliedInitialWorkspaceSelectionRef.current !== selection
+    ) {
+      appliedInitialWorkspaceSelectionRef.current = selection;
+      updateComposerDraftSettings(flow.draftKey, { workspaceSelection: selection });
+    }
     if (!selectedProject) {
       loadedBranchesProjectKeyRef.current = null;
       return;
@@ -513,7 +532,14 @@ export function NewTaskDraftScreen(props: {
     }
     loadedBranchesProjectKeyRef.current = projectKey;
     loadBranches();
-  }, [loadBranches, selectedProject]);
+  }, [
+    loadBranches,
+    selectedProject,
+    flow.draftKey,
+    props.initialProjectRef?.environmentId,
+    props.initialProjectRef?.projectId,
+    props.initialWorkspaceSelection,
+  ]);
 
   useEffect(() => {
     const shareId = props.incomingShareId;

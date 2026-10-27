@@ -407,7 +407,9 @@ export async function pickComposerMedia(input: {
     };
   }
 
-  // Android pickers report background state; guard against deferred restarts mid-pick.
+  // System pickers need no library permission; requesting one without the
+  // disabled NSPhotoLibraryUsageDescription would crash iOS.
+  // Android pickers report background state; guard deferred restarts mid-pick.
   const endHandoff = beginForegroundHandoff();
   let result: Awaited<ReturnType<typeof imagePicker.launchImageLibraryAsync>>;
   try {
@@ -423,7 +425,10 @@ export async function pickComposerMedia(input: {
   } catch (error) {
     return {
       attachments: [],
-      error: error instanceof Error ? error.message : "Could not open the photo library.",
+      error:
+        error instanceof Error
+          ? error.message
+          : "Could not open the photo library to attach images.",
     };
   } finally {
     endHandoff();

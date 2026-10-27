@@ -29,11 +29,14 @@ import * as Haptics from "expo-haptics";
 import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 import { useViewabilityAmount, type LegendListRef } from "@legendapp/list/react-native";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import type { HandoffEndpoints } from "@t3tools/client-runtime/handoff";
 import {
-  IDLE_COMPACTING_LABELS,
   resolveUserMessagePresentation,
+  userMessageSenderCaption,
+  type MessageSenderSource,
+  type MessageSenderViewer,
 } from "@t3tools/client-runtime/user-message";
+import type { HandoffEndpoints } from "@t3tools/client-runtime/handoff";
+import { IDLE_COMPACTING_LABELS } from "@t3tools/client-runtime/user-message";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
 import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
 import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
@@ -156,6 +159,7 @@ import {
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { VideoPreviewModal, type VideoPreviewSource } from "../../components/VideoPreviewModal";
+
 import { markdownFileEmbedLabel, resolveMarkdownMediaPreview } from "../../lib/markdownMedia";
 import { attachmentVideoPreviewSource } from "../../lib/videoPreviewSource";
 import { CopyTextButton } from "./CopyTextButton";
@@ -341,6 +345,12 @@ export interface ThreadFeedProps {
   readonly pendingHandoff?: HandoffEndpoints | null;
   readonly contentPresentation: ThreadContentPresentation;
   readonly agentLabel: string;
+  /** This client's claim and source channel. Same person and channel stays unlabeled. */
+  readonly messageViewer?: MessageSenderViewer | undefined;
+  /** Thread origin, used when an agent message has no sender of its own. */
+  readonly originSource?: MessageSenderSource | null | undefined;
+  /** Conversation-message senders, for history whose turn item has no source. */
+  readonly messageSourceById?: ReadonlyMap<string, MessageSenderSource> | undefined;
   readonly latestRun: ThreadFeedLatestRun | null;
   readonly activeWorkStartedAt: string | null;
   readonly runlessWorkActive?: boolean;
@@ -1038,6 +1048,52 @@ function useMarkdownStyles(): MarkdownStyleSets {
   ]);
 }
 
+function UserMessageSenderCaption(props: {
+  readonly environmentId: EnvironmentId;
+  readonly senderThreadId?: ThreadId;
+  readonly label: string | undefined;
+}) {
+  if (!props.label) return null;
+  return (
+    <AgentMessageAttribution
+      environmentId={props.environmentId}
+      senderThreadId={props.senderThreadId}
+      label={props.label}
+    />
+  );
+}
+
+function AgentMessageAttribution(props: {
+  readonly environmentId: EnvironmentId;
+  readonly senderThreadId?: ThreadId;
+  readonly label?: string;
+}) {
+  const selectDetail = useSelectWorkspaceDetail();
+  const senderThreadId = props.senderThreadId;
+  const label = (
+    <Text className="mb-1 pr-1 font-t3-medium text-2xs text-foreground-muted opacity-60">
+      {props.label ?? "Sent by another agent"}
+    </Text>
+  );
+  return senderThreadId ? (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Open sending thread"
+      hitSlop={4}
+      onPress={() =>
+        selectDetail({
+          name: "Thread",
+          params: { environmentId: String(props.environmentId), threadId: String(senderThreadId) },
+        })
+      }
+    >
+      {label}
+    </Pressable>
+  ) : (
+    label
+  );
+}
+
 /** Messages from other agents fold to one line so the user's own messages stay easy to find. */
 function AgentMessageFoldHeader(props: {
   readonly environmentId: EnvironmentId;
@@ -1243,6 +1299,9 @@ function renderFeedEntry(
     | "onEditPendingMessage"
     | "threadId"
     | "workspaceRoot"
+    | "messageViewer"
+    | "originSource"
+    | "messageSourceById"
   > & {
     readonly copiedRowId: string | null;
     readonly expandedWorkRows: Record<string, boolean>;
@@ -1548,7 +1607,18 @@ function renderFeedEntry(
             <Text className="mb-1 pr-1 font-t3-medium text-2xs text-foreground-muted opacity-60">
               Sent by T3 Code
             </Text>
-          ) : null}
+          ) : (
+            <UserMessageSenderCaption
+              environmentId={props.environmentId}
+              senderThreadId={message.senderThreadId}
+              label={userMessageSenderCaption({
+                createdBy: message.createdBy,
+                source: message.source ?? props.messageSourceById?.get(message.id),
+                originSource: props.originSource,
+                viewer: props.messageViewer,
+              })}
+            />
+          )}
           {presentation.guestName !== undefined ? (
             <GuestMessageName name={presentation.guestName} />
           ) : null}
@@ -3113,6 +3183,9 @@ export const ThreadFeed = memo(function ThreadFeed({
             skills: props.skills,
             workspaceRoot: props.workspaceRoot,
             workflowOpening,
+            messageViewer: props.messageViewer,
+            originSource: props.originSource,
+            messageSourceById: props.messageSourceById,
           })}
           {props.worktreeSetup && info.index === setupAnchorIndex ? (
             <WorktreeSetupCard key={props.threadId} {...props.worktreeSetup} />
