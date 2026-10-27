@@ -1,3 +1,4 @@
+import * as PlatformError from "effect/PlatformError";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -8,14 +9,20 @@ import { ChildProcessSpawner } from "effect/process";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import {
+  buildTailscaleHttpsBaseUrl,
   ensureTailscaleServe,
+  findRootServeMappingForLocalPort,
   parseTailscaleExitNode,
-  parseTailscaleSshEnabled,
+  parseTailscaleServeMappings,
   parseTailscaleStatus,
+  readTailscaleServeMappings,
+  readTailscaleExitNode,
+  parseTailscaleSshEnabled,
   readTailscaleSshEnabled,
   readTailscaleStatus,
   TailscaleCommandExitError,
   TailscaleCommandSpawnError,
+  TailscaleServeStatusParseError,
   TailscaleStatusParseError,
 } from "./tailscale.ts";
 
@@ -50,6 +57,17 @@ function assertCarriesNoSecret(error: object, secret: string): void {
   walk(error, "error");
 }
 const tailscaleStatusJson = `{"Self":{"DNSName":"desktop.tail.ts.net.","TailscaleIPs":["100.100.100.100","fd7a:115c:a1e0::1","192.168.1.20"]}}`;
+const tailscaleStatusWithSingleIpJson = `{"Self":{"DNSName":"desktop.tail.ts.net.","TailscaleIPs":["100.90.1.2"]}}`;
+// Shaped after real `tailscale serve status --json`: TCP lists the listening
+// ports, Web carries the routes. The serve port deliberately differs from the
+// local port it proxies, which is the case the resolver used to get wrong.
+const tailscaleServeStatusJson = `{
+  "TCP": { "45733": { "HTTPS": true }, "8443": { "HTTPS": true } },
+  "Web": {
+    "desktop.tail.ts.net:45733": { "Handlers": { "/": { "Proxy": "http://127.0.0.1:5733" } } },
+    "desktop.tail.ts.net:8443": { "Handlers": { "/docs": { "Proxy": "http://127.0.0.1:6001" } } }
+  }
+}`;
 
 function mockHandle(result: { stdout?: string; stderr?: string; code?: number }) {
   return ChildProcessSpawner.makeHandle({
@@ -141,6 +159,89 @@ describe("tailscale", () => {
     }),
   );
 
+  it.effect("preserves status decoding failures without exposing cause text", () =>
+    Effect.gen(function* () {
+      const error = yield* parseTailscaleStatus("{not-json").pipe(Effect.flip);
+
+      assert.instanceOf(error, TailscaleStatusParseError);
+      assert.equal(error.message, "Failed to decode tailscale status JSON.");
+      assert.isDefined(error.cause);
+      assert.notInclude(error.message, String(error.cause));
+    }),
+  );
+
+  it.effect("flattens serve mappings, keeping the serve port distinct from the local port", () =>
+    Effect.gen(function* () {
+      const mappings = yield* parseTailscaleServeMappings(tailscaleServeStatusJson);
+
+      assert.deepEqual(mappings, [
+        {
+          magicDnsName: "desktop.tail.ts.net",
+          servePort: 45733,
+          path: "/",
+          localHost: "127.0.0.1",
+          localPort: 5733,
+          url: "https://desktop.tail.ts.net:45733/",
+        },
+        {
+          magicDnsName: "desktop.tail.ts.net",
+          servePort: 8443,
+          path: "/docs",
+          localHost: "127.0.0.1",
+          localPort: 6001,
+          url: "https://desktop.tail.ts.net:8443/docs",
+        },
+      ]);
+    }),
+  );
+
+  it.effect("treats a tailnet with no serve mappings as empty rather than failing", () =>
+    Effect.gen(function* () {
+      assert.deepEqual(yield* parseTailscaleServeMappings("{}"), []);
+      // TCP forwards and text handlers carry no local HTTP port to route to.
+      assert.deepEqual(
+        yield* parseTailscaleServeMappings(
+          `{"TCP":{"445":{"TCPForward":"127.0.0.1:445"}},"Web":{"desktop.tail.ts.net:443":{"Handlers":{"/":{"Text":"hello"}}}}}`,
+        ),
+        [],
+      );
+    }),
+  );
+
+  it.effect("preserves serve status decoding failures", () =>
+    Effect.gen(function* () {
+      const error = yield* parseTailscaleServeMappings("{not-json").pipe(Effect.flip);
+
+      assert.instanceOf(error, TailscaleServeStatusParseError);
+      assert.equal(error.message, "Failed to decode tailscale serve status JSON.");
+    }),
+  );
+
+  it.effect("matches only root mappings when resolving a local port", () =>
+    Effect.gen(function* () {
+      const mappings = yield* parseTailscaleServeMappings(tailscaleServeStatusJson);
+
+      assert.equal(findRootServeMappingForLocalPort(mappings, 5733)?.servePort, 45733);
+      // Served under /docs, so it cannot carry a dev server's absolute asset
+      // paths — treated as no mapping at all.
+      assert.isUndefined(findRootServeMappingForLocalPort(mappings, 6001));
+      assert.isUndefined(findRootServeMappingForLocalPort(mappings, 9999));
+    }),
+  );
+
+  it.effect("reads serve mappings through the process spawner service", () => {
+    const layer = layerMockSpawner((command, args) => {
+      assert.equal(command, "tailscale");
+      assert.deepEqual(args, ["serve", "status", "--json"]);
+      return { stdout: tailscaleServeStatusJson };
+    });
+
+    return Effect.gen(function* () {
+      const mappings = yield* readTailscaleServeMappings;
+      assert.equal(mappings.length, 2);
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("reads Tailscale SSH enablement from local prefs", () => {
     const prefsJson =
       '{\n\t"ControlURL": "https://controlplane.tailscale.com",\n\t"RunSSH": true,\n\t"WantRunning": true\n}\n';
@@ -157,6 +258,80 @@ describe("tailscale", () => {
       assert.isFalse(yield* parseTailscaleSshEnabled("{}"));
       const error = yield* parseTailscaleSshEnabled("{not-json").pipe(Effect.flip);
       assert.instanceOf(error, TailscaleStatusParseError);
+    });
+  });
+
+  it.effect("builds clean HTTPS base URLs", () =>
+    Effect.sync(() => {
+      assert.equal(
+        buildTailscaleHttpsBaseUrl({ magicDnsName: "desktop.tail.ts.net" }),
+        "https://desktop.tail.ts.net/",
+      );
+      assert.equal(
+        buildTailscaleHttpsBaseUrl({ magicDnsName: "desktop.tail.ts.net", servePort: 8443 }),
+        "https://desktop.tail.ts.net:8443/",
+      );
+    }),
+  );
+
+  it.effect("reads the active exit node through the shared status command", () => {
+    const layer = layerMockSpawner((command, args) => {
+      assert.equal(command, "tailscale");
+      assert.deepEqual(args, ["status", "--json"]);
+      return {
+        stdout: JSON.stringify({
+          ExitNodeStatus: { Online: true },
+          Peer: { gateway: { DNSName: "gateway.tail.ts.net.", ExitNode: true } },
+        }),
+      };
+    });
+    return Effect.gen(function* () {
+      assert.deepEqual(yield* readTailscaleExitNode.pipe(Effect.provide(layer)), {
+        name: "gateway",
+        online: true,
+      });
+    });
+  });
+
+  it.effect("reads tailscale status through the process spawner service", () => {
+    const layer = layerMockSpawner((command, args) => {
+      assert.equal(command, "tailscale");
+      assert.deepEqual(args, ["status", "--json"]);
+      return {
+        stdout: tailscaleStatusWithSingleIpJson,
+      };
+    });
+
+    return Effect.gen(function* () {
+      const status = yield* readTailscaleStatus.pipe(Effect.provide(layer));
+      assert.deepEqual(status, {
+        magicDnsName: "desktop.tail.ts.net",
+        tailnetIpv4Addresses: ["100.90.1.2"],
+        httpsServeEnabled: null,
+      });
+    });
+  });
+
+  it.effect("preserves tailscale spawn failures as causes", () => {
+    const systemCause = new Error("private executable lookup detail");
+    const cause = PlatformError.systemError({
+      _tag: "NotFound",
+      module: "ChildProcess",
+      method: "spawn",
+      cause: systemCause,
+    });
+    const layer = layerSpawner(ChildProcessSpawner.make(() => Effect.fail(cause)));
+
+    return Effect.gen(function* () {
+      const error = yield* readTailscaleStatus.pipe(Effect.flip, Effect.provide(layer));
+
+      assert.instanceOf(error, TailscaleCommandSpawnError);
+      assert.equal(error.executable, "tailscale");
+      assert.equal(error.subcommand, "status");
+      assert.equal(error.argumentCount, 2);
+      assert.strictEqual(error.cause, cause);
+      assert.equal(error.message, "Failed to spawn tailscale status.");
+      assert.notInclude(error.message, systemCause.message);
     });
   });
 

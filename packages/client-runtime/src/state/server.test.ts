@@ -43,6 +43,7 @@ import {
   recordFetchedWorkspaceSnapshot,
   withFetchedWorkspaceSnapshots,
   matchesServerUpdateReadyEvent,
+  projectServerWebVersion,
   matchesServerUpdateResumeEvent,
   nudgeReconnectDuringUpdateRestart,
   resolveServerConfigValue,
@@ -330,7 +331,7 @@ describe("server state projection", () => {
             const first = yield* h.send(snapshotEvent({ ...CONFIG, observability }));
             yield* TestClock.adjust("500 millis");
             const reordered = Object.fromEntries(
-              Object.entries(observability).toReversed(),
+              Object.entries(observability).reverse(),
             ) as typeof observability;
             for (const next of [
               { ...CONFIG, observability: reordered },
@@ -895,6 +896,30 @@ describe("server state projection", () => {
       );
     }),
   );
+
+  it("tracks the latest web version and ignores non-web lifecycle events", () => {
+    const [seeded, seededEmit] = projectServerWebVersion(Option.none(), {
+      type: "webVersionChanged",
+      payload: { webVersion: "v1" },
+    });
+    expect(Option.getOrThrow(seeded)).toBe("v1");
+    expect(seededEmit).toEqual(["v1"]);
+
+    // A welcome in the same stream must not clear or emit a web version.
+    const [afterWelcome, welcomeEmit] = projectServerWebVersion(seeded, {
+      type: "welcome",
+      payload: {},
+    });
+    expect(Option.getOrThrow(afterWelcome)).toBe("v1");
+    expect(welcomeEmit).toEqual([]);
+
+    const [afterSwap, swapEmit] = projectServerWebVersion(afterWelcome, {
+      type: "webVersionChanged",
+      payload: { webVersion: "v2" },
+    });
+    expect(Option.getOrThrow(afterSwap)).toBe("v2");
+    expect(swapEmit).toEqual(["v2"]);
+  });
 
   it("prefers an active session config over cache until a live event arrives", () => {
     const config = (source: string, serverVersion: string) =>

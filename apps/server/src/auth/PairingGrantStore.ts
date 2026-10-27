@@ -1,9 +1,14 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+
 import {
   AuthStandardClientScopes,
   type AuthEnvironmentScope,
   type AuthPairingLink,
   type ServerAuthBootstrapMethod,
 } from "@t3tools/contracts";
+import { LOCAL_BOOTSTRAP_CREDENTIAL_FILE } from "@t3tools/shared/serverRuntime";
 import {
   DESKTOP_BOOTSTRAP_TOKEN_WINDOW_MS,
   isValidDesktopBootstrapToken,
@@ -22,6 +27,18 @@ import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "../config.ts";
 import * as AuthPairingLinks from "../persistence/AuthPairingLinks.ts";
+
+function readLocalBootstrapCredential(stateDir: string): string | undefined {
+  try {
+    const credential = NodeFS.readFileSync(
+      NodePath.join(stateDir, LOCAL_BOOTSTRAP_CREDENTIAL_FILE),
+      "utf8",
+    ).trim();
+    return credential.length > 0 ? credential : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export interface BootstrapGrant {
   readonly method: ServerAuthBootstrapMethod;
@@ -248,13 +265,14 @@ type ConsumeResult =
 
 const DEFAULT_ONE_TIME_TOKEN_TTL_MINUTES = Duration.minutes(5);
 const DESKTOP_BOOTSTRAP_TTL_HOURS = Duration.hours(24);
+const LOCAL_BOOTSTRAP_TTL = Duration.days(3650);
 const DEV_STARTUP_TTL_HOURS = Duration.hours(24);
 const PAIRING_TOKEN_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 const PAIRING_TOKEN_LENGTH = 12;
 const PAIRING_TOKEN_REJECTION_LIMIT =
   Math.floor(256 / PAIRING_TOKEN_ALPHABET.length) * PAIRING_TOKEN_ALPHABET.length;
 
-const make = Effect.gen(function* () {
+export const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const config = yield* ServerConfig.ServerConfig;
   const pairingLinks = yield* AuthPairingLinks.AuthPairingLinkRepository;
@@ -303,11 +321,16 @@ const make = Effect.gen(function* () {
       id,
     }).pipe(Effect.asVoid);
 
-  // Accept tokens derived from the rotating desktop secret; older desktops send only a token.
+  // Desktop secrets and local-bootstrap-credential files derive rotating renderer tokens.
+  // Accept the current derived token; older clients may still send the seeded file token.
   const desktopBootstrapSecret = config.desktopBootstrapSecret;
+  const localCredential = readLocalBootstrapCredential(config.stateDir);
   const consumeRotatingDesktopToken = (credential: string, nowMs: number) =>
-    desktopBootstrapSecret !== undefined &&
-    isValidDesktopBootstrapToken(desktopBootstrapSecret, credential, nowMs);
+    (desktopBootstrapSecret !== undefined &&
+      isValidDesktopBootstrapToken(desktopBootstrapSecret, credential, nowMs)) ||
+    (localCredential !== undefined &&
+      localCredential !== desktopBootstrapSecret &&
+      isValidDesktopBootstrapToken(localCredential, credential, nowMs));
 
   if (config.desktopBootstrapToken && desktopBootstrapSecret === undefined) {
     const now = yield* DateTime.now;
@@ -319,6 +342,18 @@ const make = Effect.gen(function* () {
         milliseconds: Duration.toMillis(DESKTOP_BOOTSTRAP_TTL_HOURS),
       }),
       // Reloads and expired bearer sessions must be able to re-exchange the desktop seed.
+      remainingUses: "unbounded",
+    });
+  }
+  if (localCredential !== undefined && localCredential !== config.desktopBootstrapToken) {
+    const now = yield* DateTime.now;
+    yield* seedGrant(localCredential, {
+      method: "desktop-bootstrap",
+      scopes: AuthStandardClientScopes,
+      subject: "local-bootstrap",
+      expiresAt: DateTime.add(now, {
+        milliseconds: Duration.toMillis(LOCAL_BOOTSTRAP_TTL),
+      }),
       remainingUses: "unbounded",
     });
   }

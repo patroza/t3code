@@ -38,6 +38,7 @@ import {
   createVcsActionManager,
   createVcsActionTransportId,
   EMPTY_VCS_ACTION_STATE,
+  isCommitSigningFailure,
   normalizeVcsActionProgressEvent,
   parseVcsActionTargetKey,
   VcsActionMissingTerminalEventError,
@@ -200,6 +201,74 @@ describe("vcsActionState", () => {
     });
   });
 
+  it("keeps running presentation state until the finished action settles", () => {
+    const initial = beginVcsActionState({
+      operation: "run_change_request",
+      label: "Running source control action",
+      actionId,
+    });
+    const pushing = applyVcsActionProgressEvent(
+      initial,
+      progress({
+        actionId,
+        action,
+        cwd,
+        kind: "phase_started",
+        phase: "push",
+        label: "Pushing...",
+      }),
+    );
+    const finished = applyVcsActionProgressEvent(
+      pushing,
+      progress({
+        actionId,
+        action,
+        cwd,
+        kind: "action_finished",
+        result,
+      }),
+    );
+
+    expect(finished).toMatchObject({
+      isRunning: true,
+      operation: "run_change_request",
+      actionId,
+      action,
+      currentLabel: "Pushing...",
+      currentPhaseLabel: "Pushing...",
+      lastOutputLine: null,
+      error: null,
+    });
+  });
+
+  it("keeps running presentation state and retains a terminal action error until settle", () => {
+    const initial = beginVcsActionState({
+      operation: "run_change_request",
+      label: "Running source control action",
+      actionId,
+    });
+    const failed = applyVcsActionProgressEvent(
+      initial,
+      progress({
+        actionId,
+        action,
+        cwd,
+        kind: "action_failed",
+        phase: null,
+        message: "Push failed.",
+        failureKind: "unknown",
+      }),
+    );
+
+    expect(failed).toMatchObject({
+      isRunning: true,
+      operation: "run_change_request",
+      actionId,
+      action,
+      error: "Push failed.",
+    });
+  });
+
   it("ignores progress after a newer action owns the target", () => {
     const current = beginVcsActionState({
       operation: "pull",
@@ -312,6 +381,7 @@ describe("vcsActionState", () => {
             kind: "action_failed",
             phase: "push",
             message: remoteMessage,
+            failureKind: "unknown",
           },
         ]),
         {
@@ -331,11 +401,43 @@ describe("vcsActionState", () => {
         environmentId,
         cwd,
         phase: "push",
+        failureKind: "unknown",
         remoteMessageLength: remoteMessage.length,
       });
       expect(error).not.toHaveProperty("detail");
       expect(error.message).toBe("Source control action 'commit_push' failed during push.");
       expect(error.message).not.toContain(remoteMessage);
+    }),
+  );
+
+  it.effect("prefers a classified terminal failure over a following stream error", () =>
+    Effect.gen(function* () {
+      const target = { environmentId, cwd };
+      const transportActionId = createVcsActionTransportId(target, actionId);
+      const transportError = new Error("rpc stream closed");
+      const stream = Stream.fromIterable<GitActionProgressEvent>([
+        {
+          actionId: transportActionId,
+          action,
+          cwd,
+          kind: "action_failed",
+          phase: "commit",
+          message: "Remote diagnostic that must stay sanitized.",
+          failureKind: "commit_signing_failed",
+        },
+      ]).pipe(Stream.concat(Stream.fail(transportError)));
+
+      const error = yield* consumeVcsActionProgress(stream, {
+        target,
+        transportActionId,
+        actionId,
+        action,
+        onProgress: () => Effect.void,
+      }).pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(VcsActionRemoteFailureError);
+      expect(error).toMatchObject({ failureKind: "commit_signing_failed" });
+      expect(isCommitSigningFailure(error)).toBe(true);
     }),
   );
 
@@ -478,6 +580,7 @@ describe("vcsActionState", () => {
                       action,
                       phase: "push",
                       message: "push failed after creating the branch",
+                      failureKind: "unknown",
                     }),
                   ),
         } as unknown as WsRpcProtocolClient;

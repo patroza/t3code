@@ -9,6 +9,7 @@ import {
   type AuthWebSocketTicketUse,
 } from "@t3tools/contracts";
 import { encodeOAuthScope } from "@t3tools/shared/oauthScope";
+import { appendOmegentT3ProductHandshake } from "@t3tools/shared/productFamily";
 import { hashTelemetryId } from "@t3tools/shared/telemetryId";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -297,7 +298,7 @@ export const resolveRemoteWebSocketConnectionUrl = Effect.fn(
     input.connectionMethod,
     yield* readClientOwnerParams,
   );
-  return url.toString();
+  return appendOmegentT3ProductHandshake(url.toString());
 });
 
 /**
@@ -353,5 +354,5 @@ export const resolveRemoteDpopWebSocketConnectionUrl = Effect.fn(
     input.connectionMethod,
     yield* readClientOwnerParams,
   );
-  return url.toString();
+  return appendOmegentT3ProductHandshake(url.toString());
 });

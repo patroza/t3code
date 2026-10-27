@@ -308,8 +308,12 @@ const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(function* (
       Ref.update(ownedDataClears, (environmentIds) => [...environmentIds, environmentId]),
   });
   const networkStatus = yield* SubscriptionRef.make<"unknown" | "offline" | "online">("online");
+  // Status reads come from a separate ref so a test can simulate a platform
+  // listener that missed a transition while the app was suspended.
+  const liveNetworkStatus = yield* Ref.make<"unknown" | "offline" | "online">("online");
+  const wakeups = yield* SubscriptionRef.make(0);
   const connectivity = Connectivity.Connectivity.of({
-    status: SubscriptionRef.get(networkStatus),
+    status: Ref.get(liveNetworkStatus),
     changes: SubscriptionRef.changes(networkStatus),
   });
   const profileStore = ConnectionProfileStore.ConnectionProfileStore.of({
@@ -447,7 +451,12 @@ const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(function* (
         Layer.succeed(Connectivity.Connectivity, connectivity),
         Layer.succeed(
           ConnectionWakeups.ConnectionWakeups,
-          ConnectionWakeups.ConnectionWakeups.of({ changes: Stream.never }),
+          ConnectionWakeups.ConnectionWakeups.of({
+            changes: SubscriptionRef.changes(wakeups).pipe(
+              Stream.drop(1),
+              Stream.map(() => "application-active" as const),
+            ),
+          }),
         ),
         Layer.succeed(ConnectionDriver.ConnectionDriver, driver),
         layerCache,
@@ -471,6 +480,11 @@ const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(function* (
     storedDisabled,
     disconnectedSshTargets,
     networkStatus,
+    // Changes the network the device is actually on without emitting a change
+    // event, mimicking a listener that was suspended while backgrounded.
+    setLiveNetworkStatus: (status: "unknown" | "offline" | "online") =>
+      Ref.set(liveNetworkStatus, status),
+    resume: SubscriptionRef.update(wakeups, (count) => count + 1),
     connectedRoutes,
   };
 });
@@ -561,6 +575,79 @@ describe("EnvironmentRegistry", () => {
 
       expect(yield* Ref.get(harness.sessions)).toHaveLength(0);
       expect(yield* Ref.get(harness.releasedSessions)).toBe(0);
+    }),
+  );
+
+  it.effect("hydrates connection profiles into catalog entries", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([SSH_CONNECTION], [SSH_PROFILE]);
+
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        const entry = (yield* SubscriptionRef.get(registry.entries)).get(
+          SSH_CONNECTION.environmentId,
+        );
+
+        expect(entry?.target).toEqual(SSH_CONNECTION);
+        expect(Option.getOrThrow(entry?.profile ?? Option.none())).toEqual(SSH_PROFILE);
+      }).pipe(Effect.provide(harness.layer), Effect.scoped);
+    }),
+  );
+
+  it.effect("publishes network status changes independently of connection state", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([]);
+
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        const offline = yield* Effect.forkChild(
+          SubscriptionRef.changes(registry.networkStatus).pipe(
+            Stream.filter((status) => status === "offline"),
+            Stream.runHead,
+            Effect.map(Option.getOrThrow),
+          ),
+        );
+
+        yield* SubscriptionRef.set(harness.networkStatus, "offline");
+
+        expect(yield* Fiber.join(offline)).toBe("offline");
+        expect(yield* SubscriptionRef.get(registry.networkStatus)).toBe("offline");
+      }).pipe(Effect.provide(harness.layer), Effect.scoped);
+    }),
+  );
+
+  it.effect("recovers the network status a suspended listener never reported", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([]);
+
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        const offline = yield* Effect.forkChild(
+          SubscriptionRef.changes(registry.networkStatus).pipe(
+            Stream.filter((status) => status === "offline"),
+            Stream.runHead,
+          ),
+        );
+        yield* SubscriptionRef.set(harness.networkStatus, "offline");
+        yield* Fiber.join(offline);
+
+        // The device came back online while backgrounded and the listener never
+        // reported the transition, so only a fresh read can observe it.
+        yield* harness.setLiveNetworkStatus("online");
+        // The forked listener subscribes after `start`, so repeat the resume
+        // until it is observed rather than racing the first one.
+        yield* harness.resume.pipe(
+          Effect.andThen(Effect.yieldNow),
+          Effect.repeat({
+            while: () =>
+              SubscriptionRef.get(registry.networkStatus).pipe(
+                Effect.map((status) => status !== "online"),
+              ),
+          }),
+        );
+
+        expect(yield* SubscriptionRef.get(registry.networkStatus)).toBe("online");
+      }).pipe(Effect.provide(harness.layer), Effect.scoped);
     }),
   );
 

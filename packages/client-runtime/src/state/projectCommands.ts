@@ -25,6 +25,8 @@ import {
   createEnvironmentCommand,
   createEnvironmentRpcCommand,
   createEnvironmentRpcQueryAtomFamily,
+  createEnvironmentRpcSubscriptionAtomFamily,
+  refreshQueryOnSuccess,
 } from "./runtime.ts";
 import {
   type CreateProjectInput,
@@ -98,6 +100,40 @@ export function createProjectEnvironmentAtoms<R, E>(
     key: ({ environmentId, input }: { environmentId: string; input: { projectId: string } }) =>
       JSON.stringify([environmentId, input.projectId]),
   };
+  const readFileQuery = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:projects:read-file-query",
+    tag: WS_METHODS.projectsReadFile,
+    execute: (input) =>
+      fileMetadata.seedAfterRead(
+        request(WS_METHODS.projectsReadFile, input),
+        (result, isCurrent) =>
+          result.exists === false
+            ? Effect.void
+            : fileMetadata.rememberFile(input.cwd, result, isCurrent),
+      ),
+    // Workspace files can change outside T3 Code, so always revalidate cached reads on mount.
+    staleTimeMs: 0,
+    idleTtlMs: 0,
+  });
+  const fileChanges = createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+    label: "environment-data:projects:file-changes",
+    tag: WS_METHODS.projectsWatchFile,
+    idleTtlMs: 0,
+  });
+  type ReadFileAtom = ReturnType<typeof readFileQuery>;
+  const liveReadFileAtoms = new WeakMap<ReadFileAtom, ReadFileAtom>();
+  const readFile = (target: Parameters<typeof readFileQuery>[0]): ReadFileAtom => {
+    const queryAtom = readFileQuery(target);
+    const cached = liveReadFileAtoms.get(queryAtom);
+    if (cached) return cached;
+
+    const changesAtom = fileChanges(target);
+    const liveAtom = refreshQueryOnSuccess(queryAtom, changesAtom).pipe(
+      Atom.withLabel(`environment-data:projects:read-file:${target.input.relativePath}`),
+    );
+    liveReadFileAtoms.set(queryAtom, liveAtom);
+    return liveAtom;
+  };
   return {
     fileMetadata: fileMetadata.metadata,
     fileMetadataThread: fileMetadata.retainThread,
@@ -140,20 +176,7 @@ export function createProjectEnvironmentAtoms<R, E>(
       tag: WS_METHODS.projectsListIgnoredFiles,
       staleTimeMs: 15_000,
     }),
-    readFile: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:projects:read-file",
-      tag: WS_METHODS.projectsReadFile,
-      staleTimeMs: 30_000,
-      idleTtlMs: 5 * 60_000,
-      execute: (input) =>
-        fileMetadata.seedAfterRead(
-          request(WS_METHODS.projectsReadFile, input),
-          (result, isCurrent) =>
-            result.exists === false
-              ? Effect.void
-              : fileMetadata.rememberFile(input.cwd, result, isCurrent),
-        ),
-    }),
+    readFile,
     optimisticFile: (target: OptimisticProjectFileTarget) =>
       optimisticFileFamily(optimisticProjectFileKey(target)),
     create: createEnvironmentCommand(runtime, {

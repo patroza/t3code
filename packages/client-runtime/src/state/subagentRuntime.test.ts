@@ -150,7 +150,7 @@ describe("deriveWorkflowGroups over a dynamic workflow", () => {
   it.each([false, true])("keeps a reported phase title, missing title first=%s", (missingFirst) => {
     const agents = [member({ phaseTitle: "Review" }), member({ index: 2, phaseTitle: undefined })];
     const groups = groupsOf([
-      subagent({ workflow: { phases: [], agents: missingFirst ? agents.toReversed() : agents } }),
+      subagent({ workflow: { phases: [], agents: missingFirst ? [...agents].reverse() : agents } }),
     ]);
     expect(groups[0]?.phases[0]?.title).toBe("Review");
   });

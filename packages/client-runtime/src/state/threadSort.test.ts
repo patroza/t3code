@@ -310,7 +310,10 @@ describe("sortActiveThreadsByOrderKey", () => {
       createdAt: "2026-03-09T10:00:00.000Z",
       activeOrderKey: null as string | null,
     }));
-    const orderedIds = threads.map((thread) => thread.id).toReversed();
+    const orderedIds = threads
+      .map((thread) => thread.id)
+      .slice()
+      .reverse();
     const assignments = planPinnedReorder({
       orderedIds,
       movedId: orderedIds[0]!,

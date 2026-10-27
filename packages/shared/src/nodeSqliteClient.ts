@@ -164,6 +164,8 @@ const classifyError = (cause: unknown, message: string, operation: string) => {
 // SQLite retains text/blob bindings until rebind or finalization; node:sqlite cannot clear them.
 const LARGE_BINDING_SIZE = 64 * 1024;
 
+// Measure binary storage without copying it. SQLite blob bindings use buffer views.
+
 const isBlob = (value: unknown): value is ArrayBufferView | ArrayBufferLike =>
   ArrayBuffer.isView(value) || NodeUtil.types.isAnyArrayBuffer(value);
 

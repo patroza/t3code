@@ -810,6 +810,22 @@ export const ServerLifecycleStreamReadyEvent = Schema.Struct({
 });
 export type ServerLifecycleStreamReadyEvent = typeof ServerLifecycleStreamReadyEvent.Type;
 
+export const ServerLifecycleWebVersionPayload = Schema.Struct({
+  // Identity of the served web bundle (a hash of index.html). Clients compare
+  // the value they booted with against later broadcasts to detect that the
+  // server's static assets were hot-swapped underneath them.
+  webVersion: TrimmedNonEmptyString,
+});
+export type ServerLifecycleWebVersionPayload = typeof ServerLifecycleWebVersionPayload.Type;
+
+export const ServerLifecycleStreamWebVersionChangedEvent = Schema.Struct({
+  version: Schema.Literal(1),
+  sequence: NonNegativeInt,
+  type: Schema.Literal("webVersionChanged"),
+  payload: ServerLifecycleWebVersionPayload,
+});
+export type ServerLifecycleStreamWebVersionChangedEvent =
+  typeof ServerLifecycleStreamWebVersionChangedEvent.Type;
 export const ServerLifecycleStreamLegacyThreadMigrationEvent = Schema.Struct({
   version: Schema.Literal(1),
   sequence: NonNegativeInt,
@@ -822,6 +838,7 @@ export type ServerLifecycleStreamLegacyThreadMigrationEvent =
 export const ServerLifecycleStreamEvent = Schema.Union([
   ServerLifecycleStreamWelcomeEvent,
   ServerLifecycleStreamReadyEvent,
+  ServerLifecycleStreamWebVersionChangedEvent,
   ServerLifecycleStreamLegacyThreadMigrationEvent,
 ]);
 export type ServerLifecycleStreamEvent = typeof ServerLifecycleStreamEvent.Type;
@@ -850,7 +867,6 @@ export class ServerProviderUpdateError extends Schema.TaggedError<ServerProvider
     return `Provider update failed for ${this.provider}: ${this.reason}`;
   }
 }
-
 export const ServerSelfUpdateInput = Schema.Struct({
   /** Exact npm version, never a dist-tag, so server and client agree on the request. */
   targetVersion: TrimmedNonEmptyString,

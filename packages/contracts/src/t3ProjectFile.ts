@@ -11,6 +11,21 @@ export const T3_PROJECT_FILE_SCHEMA_URL = "https://t3.codes/schema/t3.json";
 
 const T3_PROJECT_FILE_PATH_MAX_LENGTH = 512;
 const T3_PROJECT_FILE_MAX_SCRIPTS = 50;
+const T3_PROJECT_FILE_MAX_DEV_STACK_CONSUMERS = 20;
+const T3_PROJECT_FILE_MAX_DEV_STACK_ROLES = 10;
+const T3_PROJECT_FILE_MAX_JIRA_PROJECTS = 20;
+const JIRA_PROJECT_PREFIX_PATTERN = /^[A-Z][A-Z0-9]{1,9}$/u;
+
+const JiraProjectPrefix = Schema.String.pipe(
+  Schema.decodeTo(
+    Schema.String.check(Schema.isPattern(JIRA_PROJECT_PREFIX_PATTERN)),
+    SchemaTransformation.trim().pipe(
+      SchemaTransformation.composeTransformation(SchemaTransformation.toUpperCase()),
+    ),
+  ),
+).annotate({
+  description: "A Jira project key, 2–10 letters or digits, such as SA or CFG.",
+});
 
 // Encoded-side annotations survive into JSON Schema; decoding still trims and rejects empty strings.
 const trimmedNonEmpty = (annotations: { readonly description: string }, maxLength?: number) => {
@@ -38,6 +53,18 @@ export const T3ProjectFileScript = Schema.Struct({
     Schema.Boolean.annotate({
       description:
         "When true, the script runs automatically after a worktree is created for a new thread.",
+    }),
+  ),
+  runOnWorktreeRemove: Schema.optionalKey(
+    Schema.Boolean.annotate({
+      description:
+        "When true, the script runs automatically before a worktree is removed. Removal waits for the script to exit; a non-zero exit blocks removal.",
+    }),
+  ),
+  runOnPrMerged: Schema.optionalKey(
+    Schema.Boolean.annotate({
+      description:
+        "When true, the script runs automatically when T3 observes the branch change request transition to merged (independent of worktree removal). Runs in the status cwd (worktree or project root).",
     }),
   ),
   runOnSettle: Schema.optionalKey(
@@ -68,6 +95,40 @@ export const T3ProjectFileScript = Schema.Struct({
   description: "A project script that team members can import into T3 Code.",
 });
 export type T3ProjectFileScript = typeof T3ProjectFileScript.Type;
+
+/**
+ * Policy for repository dev servers outside T3's process tree. The repository-wide
+ * idle window applies to existing `$TMPDIR/dev-stacks` instances on the next sweep.
+ */
+export const T3ProjectFileDevStacks = Schema.Struct({
+  idleMinutes: Schema.optionalKey(
+    Schema.Number.check(Schema.isGreaterThan(0)).annotate({
+      description:
+        "Minutes a registered dev stack may go without an observed consumer before T3 stops it. Defaults to 20.",
+    }),
+  ),
+  consumers: Schema.optionalKey(
+    Schema.Array(
+      trimmedNonEmpty({ description: "Substring matched against process command lines." }),
+    )
+      .annotate({
+        description:
+          'Processes whose presence inside the worktree counts as the stack being in use, e.g. ["playwright", "vitest"]. Deliberately narrow: a shell sitting in the worktree is not a consumer, and treating it as one would keep every stack alive for the length of a session.',
+      })
+      .check(Schema.isMaxLength(T3_PROJECT_FILE_MAX_DEV_STACK_CONSUMERS)),
+  ),
+  entryRoles: Schema.optionalKey(
+    Schema.Array(trimmedNonEmpty({ description: "A role name used in the dev-stack registry." }))
+      .annotate({
+        description:
+          'Roles a consumer connects to, most specific first, e.g. ["frontend", "api"]. T3 watches the first role present in an instance. Ordering matters: a frontend usually holds keep-alive connections to its own API, so counting the API port would read the stack as busy for as long as the frontend is up.',
+      })
+      .check(Schema.isMaxLength(T3_PROJECT_FILE_MAX_DEV_STACK_ROLES)),
+  ),
+}).annotate({
+  description: "How T3 supervises long-running dev stacks this repository registers.",
+});
+export type T3ProjectFileDevStacks = typeof T3ProjectFileDevStacks.Type;
 
 export const T3ProjectFile = Schema.Struct({
   $schema: Schema.optionalKey(
@@ -102,6 +163,20 @@ export const T3ProjectFile = Schema.Struct({
         description: "Project scripts shared with everyone who opens this repository in T3 Code.",
       })
       .check(Schema.isMaxLength(T3_PROJECT_FILE_MAX_SCRIPTS)),
+  ),
+  devStacks: Schema.optionalKey(
+    T3ProjectFileDevStacks.annotate({
+      description:
+        "Opt in to T3 supervising the dev stacks this repository registers under $TMPDIR/dev-stacks. Omit it and T3 leaves them alone.",
+    }),
+  ),
+  jiraProjects: Schema.optionalKey(
+    Schema.Array(JiraProjectPrefix)
+      .annotate({
+        description:
+          "Jira project keys whose bare PROJ-123 tokens count in Discord and GitHub for this repository. List every key this repo should accept, for example SA and CFG. A pasted Jira link still counts either way. Omit the field and only links count.",
+      })
+      .check(Schema.isMaxLength(T3_PROJECT_FILE_MAX_JIRA_PROJECTS)),
   ),
 }).annotate({
   title: "T3 project file",
