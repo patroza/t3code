@@ -387,8 +387,11 @@ describe("MessagesTimeline messages", () => {
       expect(row.bottom).toBeGreaterThan(view.top);
     };
 
-    await vi.waitFor(() => expect(screen.text()).toContain("Turn 118:"));
-    expect(screen.text()).not.toContain("Turn 60:");
+    // Range updates can mount the end before the initial middle rows are recycled.
+    await vi.waitFor(() => {
+      expect(screen.text()).toContain("Turn 118:");
+      expect(screen.text()).not.toContain("Turn 60:");
+    });
     // Wrapping follows DOM order, so the ends must also sit first and last.
     await vi.waitFor(() => {
       expect(headings()[0]).toBe(headingFor("First turn"));
