@@ -4,6 +4,13 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import { mentionsTeamsRecipient } from "./messageEvents.ts";
 import type { TeamsGatewayBinding, TeamsGatewayConfig } from "./gatewayConfig.ts";
+import {
+  groupChatWorkspaceTarget,
+  isTeamsGroupChat,
+  routeGroupChat,
+  type GroupChatMirror,
+  type GroupChatRule,
+} from "./groupChats.ts";
 
 /** Only pass activities here after the Microsoft SDK has authenticated the request. */
 export interface GatewayActivity {
@@ -13,9 +20,15 @@ export interface GatewayActivity {
   readonly serviceUrl: string;
   readonly timestamp?: string | Date;
   readonly text?: string;
-  readonly from?: { readonly id?: string; readonly aadObjectId?: string };
+  readonly from?: { readonly id?: string; readonly aadObjectId?: string; readonly name?: string };
   readonly recipient?: { readonly id?: string };
-  readonly conversation: { readonly id: string; readonly tenantId?: string };
+  readonly conversation: {
+    readonly id: string;
+    readonly tenantId?: string;
+    readonly conversationType?: string;
+    readonly name?: string;
+    readonly isGroup?: boolean;
+  };
   readonly channelData?:
     | undefined
     | {
@@ -44,6 +57,17 @@ export type IntakeDecision =
       readonly lease: GatewayLease;
       readonly text: string;
       readonly context: string;
+    };
+export type GroupChatIntake =
+  | { readonly kind: "not-group" }
+  | { readonly kind: "reject"; readonly reason: string }
+  | { readonly kind: "silent"; readonly reason: "unmapped" | "ambiguous" }
+  | {
+      readonly kind: "handle";
+      readonly workspaceId: string;
+      readonly rules: ReadonlyArray<GroupChatRule>;
+      readonly builtinScanner: boolean;
+      readonly builtinMirror?: GroupChatMirror;
     };
 
 const digest = (value: unknown) =>
@@ -86,7 +110,7 @@ export function safeTeamsServiceUrl(value: string): boolean {
 export class TeamsGatewayPolicy {
   private readonly receipts = new Map<
     string,
-    { at: number; workspace: string; kind?: "ambient" | "mention" }
+    { at: number; workspace: string; kind?: "ambient" | "mention" | "group" }
   >();
   private readonly revoked = new Set<string>();
   private readonly contexts = new Map<
@@ -145,7 +169,10 @@ export class TeamsGatewayPolicy {
           row[1] === null ||
           typeof row[1].at !== "number" ||
           typeof row[1].workspace !== "string" ||
-          ("kind" in row[1] && row[1].kind !== "ambient" && row[1].kind !== "mention")
+          ("kind" in row[1] &&
+            row[1].kind !== "ambient" &&
+            row[1].kind !== "mention" &&
+            row[1].kind !== "group")
         )
           throw new Error("Invalid gateway receipt");
         this.receipts.set(row[0], row[1]);
@@ -224,15 +251,11 @@ export class TeamsGatewayPolicy {
     return decision.kind === "mention" ? decision.lease : null;
   }
 
-  accept(activity: GatewayActivity, cardAction = false): IntakeDecision {
-    const reject = (reason: string): IntakeDecision => ({ kind: "reject", reason });
-    let config: TeamsGatewayConfig;
-    try {
-      config = this.config();
-    } catch {
-      this.contexts.clear();
-      return reject("configuration-unavailable");
-    }
+  private rejectedEnvelope(
+    activity: GatewayActivity,
+    config: TeamsGatewayConfig,
+    allowBot = false,
+  ): string | null {
     const now = this.now();
     const time = activity.timestamp === undefined ? NaN : new Date(activity.timestamp).getTime();
     if (
@@ -244,20 +267,121 @@ export class TeamsGatewayPolicy {
       time < now - 86400000 ||
       time > now + 300000 ||
       botId(activity.recipient?.id) !== config.identity.entraClientId.toLowerCase() ||
-      activity.from?.id === activity.recipient?.id
+      (!allowBot && activity.from?.id === activity.recipient?.id)
     ) {
-      return reject("invalid-envelope");
+      return "invalid-envelope";
     }
-    const tenant = (
-      activity.channelData?.tenant?.id ?? activity.conversation.tenantId
-    )?.toLowerCase();
     if (
       activity.channelData?.tenant?.id &&
       activity.conversation.tenantId &&
       activity.channelData.tenant.id.toLowerCase() !== activity.conversation.tenantId.toLowerCase()
     ) {
-      return reject("tenant-mismatch");
+      return "tenant-mismatch";
     }
+    return null;
+  }
+
+  private claimGroup(workspace: string, receipt: string): "ok" | "duplicate" | "receipt-capacity" {
+    const now = this.now();
+    for (const [key, row] of this.receipts) if (row.at < now - 90000000) this.receipts.delete(key);
+    if (this.receipts.has(receipt)) return "duplicate";
+    if ([...this.receipts.values()].filter((row) => row.workspace === workspace).length >= 20000) {
+      return "receipt-capacity";
+    }
+    this.receipts.set(receipt, { at: now, workspace, kind: "group" });
+    this.persist();
+    return "ok";
+  }
+
+  /**
+   * Group chats have no channel binding. Claim the activity once and name the
+   * single workspace that should observe it. Never store the customer text.
+   */
+  acceptGroupChat(activity: GatewayActivity): GroupChatIntake {
+    let config: TeamsGatewayConfig;
+    try {
+      config = this.config();
+    } catch {
+      return { kind: "reject", reason: "configuration-unavailable" };
+    }
+    if (
+      !isTeamsGroupChat({
+        conversationType: activity.conversation.conversationType,
+        isGroup: activity.conversation.isGroup,
+        teamId: activity.channelData?.team?.id,
+      })
+    ) {
+      return { kind: "not-group" };
+    }
+    const envelope = this.rejectedEnvelope(
+      activity,
+      config,
+      activity.type === "conversationUpdate",
+    );
+    if (envelope !== null) return { kind: "reject", reason: envelope };
+    let routed: ReturnType<typeof routeGroupChat>;
+    let targets: ReturnType<typeof groupChatWorkspaceTarget>[];
+    try {
+      targets = Object.entries(config.workspaces)
+        .filter(([, workspace]) => workspace.enabled)
+        .map(([id, workspace]) => groupChatWorkspaceTarget(id, workspace));
+      routed = routeGroupChat({
+        title: activity.conversation.name,
+        conversationId: activity.conversation.id,
+        workspaces: targets,
+      });
+    } catch {
+      return { kind: "reject", reason: "configuration-unavailable" };
+    }
+    const tenant = (
+      activity.channelData?.tenant?.id ??
+      activity.conversation.tenantId ??
+      ""
+    ).toLowerCase();
+    const chatId = activity.conversation.id.split(";messageid=")[0] ?? activity.conversation.id;
+    const claimed = this.claimGroup(
+      routed.kind === "match" ? routed.workspaceId : "_group",
+      digest(["group", tenant, chatId, activity.id]),
+    );
+    if (claimed !== "ok") return { kind: "reject", reason: claimed };
+    if (routed.kind === "none") return { kind: "silent", reason: "unmapped" };
+    if (routed.kind === "ambiguous") return { kind: "silent", reason: "ambiguous" };
+    const target = targets.find((item) => item.id === routed.workspaceId);
+    if (target === undefined) return { kind: "silent", reason: "unmapped" };
+    return {
+      kind: "handle",
+      workspaceId: target.id,
+      rules: target.rules,
+      builtinScanner: target.scannerGroupChats,
+      ...(target.builtinMirror === undefined ? {} : { builtinMirror: target.builtinMirror }),
+    };
+  }
+
+  accept(activity: GatewayActivity, cardAction = false): IntakeDecision {
+    const reject = (reason: string): IntakeDecision => ({ kind: "reject", reason });
+    let config: TeamsGatewayConfig;
+    try {
+      config = this.config();
+    } catch {
+      this.contexts.clear();
+      return reject("configuration-unavailable");
+    }
+    const envelope = this.rejectedEnvelope(activity, config);
+    if (envelope !== null) return reject(envelope);
+    // Customer group chats are observed by acceptGroupChat. Delivering them here would reply in that chat.
+    if (
+      isTeamsGroupChat({
+        conversationType: activity.conversation.conversationType,
+        isGroup: activity.conversation.isGroup,
+        teamId: activity.channelData?.team?.id,
+      })
+    ) {
+      return reject("group-chat");
+    }
+    const now = this.now();
+    const tenant = (
+      activity.channelData?.tenant?.id ?? activity.conversation.tenantId
+    )?.toLowerCase();
     const matches = config.bindings.filter(
       (binding) =>
         binding.enabled &&

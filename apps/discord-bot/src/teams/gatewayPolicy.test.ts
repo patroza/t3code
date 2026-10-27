@@ -15,8 +15,8 @@ const tenant = "22222222-2222-4222-8222-222222222222";
 const actor = "33333333-3333-4333-8333-333333333333";
 const team = "44444444-4444-4444-8444-444444444444";
 const project = "55555555-5555-4555-8555-555555555555";
-function fixture(directory: string): TeamsGatewayConfig {
-  return parseGatewayConfig({
+function rawConfig(directory: string) {
+  return {
     version: 1,
     enabled: true,
     identity: { entraClientId: appId, homeTenantId: tenant },
@@ -77,7 +77,10 @@ function fixture(directory: string): TeamsGatewayConfig {
       maxContextMessages: 2,
       contextTtlSeconds: 60,
     },
-  });
+  };
+}
+function fixture(directory: string): TeamsGatewayConfig {
+  return parseGatewayConfig(rawConfig(directory));
 }
 
 describe("shared Teams gateway", () => {
@@ -101,6 +104,20 @@ describe("shared Teams gateway", () => {
       entities: [{ type: "mention", mentioned: { id: "28:" + appId } }],
       ...overrides,
     };
+  }
+  function groupActivity(overrides: Partial<GatewayActivity> = {}): GatewayActivity {
+    return activity({
+      text: "secret customer text",
+      entities: [],
+      channelData: { tenant: { id: tenant } },
+      conversation: {
+        id: "19:mako@thread.v2",
+        tenantId: tenant,
+        conversationType: "groupChat",
+        name: "MAKO Scanner",
+      },
+      ...overrides,
+    });
   }
   beforeEach(() => {
     directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "teams-gateway-"));
@@ -568,5 +585,184 @@ describe("shared Teams gateway", () => {
     expect(() =>
       parseGatewayConfig({ ...config, bindings: [{ ...config.bindings[0], allowedActorIds: [] }] }),
     ).toThrow("actor");
+  });
+
+  it("does not store a group chat, and does not run it as a channel mention", async () => {
+    const dispatcher = new TeamsGatewayDispatcher(policy);
+    const execute = vi.fn(async (_decision: MentionDecision) => {});
+    expect(policy.accept(groupActivity())).toMatchObject({ kind: "reject", reason: "group-chat" });
+    expect(dispatcher.receive(groupActivity(), execute)).toBe("reject:group-chat");
+    await dispatcher.drain();
+    expect(execute).not.toHaveBeenCalled();
+    expect(
+      policy.acceptGroupChat(
+        activity({
+          conversation: { id: "19:dm", tenantId: tenant, conversationType: "personal" },
+          channelData: undefined,
+          entities: [],
+          text: "secret",
+        }),
+      ),
+    ).toEqual({ kind: "not-group" });
+    expect(policy.accept(activity())).toMatchObject({ kind: "mention", context: "" });
+  });
+
+  it("routes a scanner group chat without storing the customer text", () => {
+    config = {
+      ...config,
+      workspaces: {
+        ...config.workspaces,
+        alpha: { ...config.workspaces.alpha!, scannerGroupChats: true },
+      },
+    } as TeamsGatewayConfig;
+    const routed = new TeamsGatewayPolicy(
+      () => config,
+      directory,
+      () => true,
+      () => now,
+    );
+    const decision = routed.acceptGroupChat(groupActivity({ id: "mako-1" }));
+    expect(decision).toMatchObject({
+      kind: "handle",
+      workspaceId: "alpha",
+      builtinScanner: true,
+    });
+    expect(JSON.stringify(decision)).not.toContain("secret");
+    expect(routed.acceptGroupChat(groupActivity({ id: "mako-1" }))).toMatchObject({
+      kind: "reject",
+      reason: "duplicate",
+    });
+    expect(
+      routed.acceptGroupChat(
+        groupActivity({
+          id: "alfa-1",
+          conversation: {
+            id: "19:alfa@thread.v2",
+            tenantId: tenant,
+            conversationType: "groupChat",
+            name: "Alfa Omega Configurator",
+          },
+        }),
+      ),
+    ).toMatchObject({ kind: "silent", reason: "unmapped" });
+    expect(routed.accept(activity())).toMatchObject({ kind: "mention", context: "" });
+  });
+
+  it("lets a conversation pin beat the scanner workspace", () => {
+    const mirror = {
+      tenantId: "77777777-7777-4777-8777-777777777777",
+      teamId: "88888888-8888-4888-8888-888888888888",
+      channelId: "19:ihd@thread.tacv2",
+    };
+    config = {
+      ...config,
+      workspaces: {
+        ...config.workspaces,
+        alpha: { ...config.workspaces.alpha!, scannerGroupChats: true },
+        beta: {
+          ...config.workspaces.beta!,
+          groupChats: [
+            {
+              conversationId: "19:mako@thread.v2",
+              projectShortName: "project-beta",
+              mirrorTenantId: mirror.tenantId,
+              mirrorTeamId: mirror.teamId,
+              mirrorChannelId: mirror.channelId,
+            },
+          ],
+        },
+      },
+    } as TeamsGatewayConfig;
+    const routed = new TeamsGatewayPolicy(
+      () => config,
+      directory,
+      () => true,
+      () => now,
+    );
+    expect(routed.acceptGroupChat(groupActivity())).toMatchObject({
+      kind: "handle",
+      workspaceId: "beta",
+      builtinScanner: false,
+      rules: [
+        {
+          conversationId: "19:mako@thread.v2",
+          projectShortName: "project-beta",
+          mirror,
+        },
+      ],
+    });
+  });
+
+  it("stays silent when two workspaces would both observe the chat", () => {
+    config = {
+      ...config,
+      workspaces: {
+        alpha: { ...config.workspaces.alpha!, scannerGroupChats: true },
+        beta: { ...config.workspaces.beta!, scannerGroupChats: true },
+      },
+    } as TeamsGatewayConfig;
+    const routed = new TeamsGatewayPolicy(
+      () => config,
+      directory,
+      () => true,
+      () => now,
+    );
+    expect(routed.acceptGroupChat(groupActivity())).toMatchObject({
+      kind: "silent",
+      reason: "ambiguous",
+    });
+    expect(JSON.stringify(routed.accept(activity()))).not.toContain("secret");
+    expect(routed.accept(activity())).toMatchObject({ kind: "mention", context: "" });
+  });
+
+  it("requires discord for group chat routing and a single scanner workspace", () => {
+    const raw = rawConfig(directory);
+    expect(() =>
+      parseGatewayConfig({
+        ...raw,
+        workspaces: {
+          ...raw.workspaces,
+          alpha: { ...raw.workspaces.alpha, scannerGroupChats: true },
+        },
+      }),
+    ).toThrow(/discord/u);
+    const discord = {
+      tokenFile: directory + "/discord-token",
+      alertsChannelId: "123456789012345678",
+    };
+    expect(() =>
+      parseGatewayConfig({
+        ...raw,
+        discord,
+        workspaces: {
+          alpha: { ...raw.workspaces.alpha, scannerGroupChats: true },
+          beta: { ...raw.workspaces.beta, scannerGroupChats: true },
+        },
+      }),
+    ).toThrow(/scannerGroupChats/u);
+    expect(() =>
+      parseGatewayConfig({
+        ...raw,
+        discord,
+        workspaces: {
+          ...raw.workspaces,
+          alpha: {
+            ...raw.workspaces.alpha,
+            scannerGroupChats: true,
+            scannerMirrorTenantId: "77777777-7777-4777-8777-777777777777",
+          },
+        },
+      }),
+    ).toThrow(/scannerMirror/u);
+    const parsed = parseGatewayConfig({
+      ...raw,
+      discord,
+      workspaces: {
+        ...raw.workspaces,
+        alpha: { ...raw.workspaces.alpha, scannerGroupChats: true },
+      },
+    });
+    expect(parsed.discord?.alertsChannelId).toBe(discord.alertsChannelId);
+    expect(parsed.workspaces.alpha?.scannerGroupChats).toBe(true);
   });
 });

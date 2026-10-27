@@ -7,11 +7,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import { TeamsSeenStore, layer as teamsSeenLayer } from "../store/TeamsSeenStore.ts";
-import {
-  mentionsTeamsRecipient,
-  registerTeamsMessageEvents,
-  type TeamsMessageContext,
-} from "../teams/messageEvents.ts";
+import { mentionsTeamsRecipient, registerTeamsMessageEvents } from "../teams/messageEvents.ts";
 
 import type { DiscordBotConfig } from "../config.ts";
 import { classifyTeamsAgentAccess, IdentityMapStore, type PersonIdentity } from "../identityMap.ts";
@@ -25,7 +21,7 @@ import {
   isTeamsGroupChat,
   loadGroupChatRulesFromFileSync,
 } from "../teams/groupChats.ts";
-import { ingestTeamsGroupChat, type TeamsChannelPoster } from "./TeamsGroupChatObserver.ts";
+import { ingestTeamsGroupChat, teamsChannelPoster } from "./TeamsGroupChatObserver.ts";
 import {
   makeTeamsChannelDescriptionReader,
   teamsDescriptionProject,
@@ -37,26 +33,6 @@ import { BridgeHub } from "./BridgeHub.ts";
 import { ThreadWarmCacheStore } from "../store/ThreadWarmCacheStore.ts";
 import { BotResponseTransport } from "./BotResponseTransport.ts";
 import { makeTeamsResponseTransport } from "../teams/ResponseTransport.ts";
-
-function teamsChannelPoster(api: TeamsMessageContext["api"]): TeamsChannelPoster {
-  return {
-    openThread: (input) =>
-      api.conversations.create({
-        tenantId: input.mirror.tenantId,
-        isGroup: true,
-        channelData: {
-          channel: { id: input.mirror.channelId },
-          team: { id: input.mirror.teamId, aadGroupId: input.mirror.teamId },
-          tenant: { id: input.mirror.tenantId },
-        },
-        activity: { type: "message", text: input.text },
-      }),
-    reply: (conversationId, text) =>
-      api.conversations
-        .createActivity(conversationId, { type: "message", text })
-        .then(() => undefined),
-  };
-}
 
 interface TeamsConversationCoordinates {
   readonly tenantId: string;

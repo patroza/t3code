@@ -11,6 +11,7 @@ import type { DiscordBotConfig } from "../config.ts";
 import { classifyTeamsAgentAccess, type PersonIdentity } from "../identityMap.ts";
 import { ThreadLinkStore } from "../store/ThreadLinkStore.ts";
 import { T3Session } from "../t3/T3Session.ts";
+import type { TeamsMessageContext } from "../teams/messageEvents.ts";
 import {
   groupChatChannelSeed,
   groupChatLogLine,
@@ -95,6 +96,26 @@ export interface TeamsChannelPoster {
     readonly text: string;
   }): Promise<{ readonly id: string; readonly activityId?: string | undefined }>;
   reply(conversationId: string, text: string): Promise<void>;
+}
+
+export function teamsChannelPoster(api: TeamsMessageContext["api"]): TeamsChannelPoster {
+  return {
+    openThread: (input) =>
+      api.conversations.create({
+        tenantId: input.mirror.tenantId,
+        isGroup: true,
+        channelData: {
+          channel: { id: input.mirror.channelId },
+          team: { id: input.mirror.teamId, aadGroupId: input.mirror.teamId },
+          tenant: { id: input.mirror.tenantId },
+        },
+        activity: { type: "message", text: input.text },
+      }),
+    reply: (conversationId, text) =>
+      api.conversations
+        .createActivity(conversationId, { type: "message", text })
+        .then(() => undefined),
+  };
 }
 
 const copyToChannelThread = Effect.fn("copyToChannelThread")(function* (
@@ -210,6 +231,10 @@ export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* 
   runtime: Context.Context<never>,
   activity: TeamsGroupChatActivity,
   poster: TeamsChannelPoster | null,
+  options?: {
+    readonly builtinScanner?: boolean;
+    readonly builtinMirror?: GroupChatMirror;
+  },
 ) {
   const access =
     activity.event === "join"
@@ -233,6 +258,8 @@ export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* 
     fromBot: activity.fromBot,
     knownUser: access?.allowed === true,
     mentionedBot: activity.mentionedBot,
+    ...(options?.builtinScanner === undefined ? {} : { builtinScanner: options.builtinScanner }),
+    ...(options?.builtinMirror === undefined ? {} : { builtinMirror: options.builtinMirror }),
     ...(activity.messageId === undefined ? {} : { messageId: activity.messageId }),
     ...(activity.author === undefined ? {} : { author: activity.author }),
   });
@@ -351,14 +378,15 @@ export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* 
       promptContext: { kind: "raw", value: plan.prompt },
     }),
   );
+  const webBase = config.publicWebUiBaseUrl ?? config.webUiBaseUrl;
   if (
     channelThread.created &&
     channelThread.conversationId !== null &&
-    config.webUiBaseUrl !== undefined &&
+    webBase !== undefined &&
     poster !== null
   ) {
     const conversationId = channelThread.conversationId;
-    const link = `${config.webUiBaseUrl.replace(/\/$/u, "")}/?thread=${t3ThreadId}`;
+    const link = `${webBase.replace(/\/$/u, "")}/?thread=${t3ThreadId}`;
     yield* Effect.tryPromise({
       try: () => poster.reply(conversationId, link),
       catch: (error: unknown) => String(error),

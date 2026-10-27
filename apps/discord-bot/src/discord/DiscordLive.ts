@@ -1,5 +1,12 @@
 import { NodeHttpClient, NodeSocket } from "@effect/platform-node";
-import { Discord, DiscordConfig, DiscordREST, Intents } from "dfx";
+import {
+  Discord,
+  DiscordConfig,
+  DiscordREST,
+  DiscordRESTLive,
+  Intents,
+  MemoryRateLimitStoreLive,
+} from "dfx";
 import * as Redacted from "effect/Redacted";
 import { DiscordIxLive } from "dfx/gateway";
 import * as Config from "effect/Config";
@@ -40,6 +47,15 @@ const wrapDiscordRestSuppressEmbeds = <A, E, R>(layer: Layer.Layer<A, E, R>) =>
         }),
       ) as Context.Context<A>;
     }),
+  );
+
+/** HTTP only, so a second process does not take the bot's gateway session. */
+export const makeDiscordRestLayer = (token: string) =>
+  wrapDiscordRestSuppressEmbeds(
+    DiscordRESTLive.pipe(
+      Layer.provide(DiscordConfig.layer({ token: Redacted.make(token) })),
+      Layer.provide([MemoryRateLimitStoreLive, NodeHttpClient.layerUndici]),
+    ),
   );
 
 export const makeDiscordLayer = (token: string) =>
