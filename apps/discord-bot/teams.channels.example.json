@@ -24,7 +24,10 @@
       "conversationId": "19:examplegroupchat@thread.v2",
       "titleIncludes": "MAKO Scanner",
       "projectShortName": "macs-scanner",
-      "passive": true
+      "passive": true,
+      "mirrorTenantId": "77e3cbed-2705-4d62-8421-efde364a4eeb",
+      "mirrorTeamId": "1523eb08-b152-4a1d-91e1-8658cf950273",
+      "mirrorChannelId": "19:ff57061cd9894df08d0d0230c76947af@thread.tacv2"
     }
   ]
 }
