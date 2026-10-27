@@ -149,6 +149,10 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(composer).not.toContain("sendDisabledReason={null}");
   });
 
+  it("marks the fork scroll-to-end control for composer clearance measurement", () => {
+    expect(readSrc("components/ChatView.tsx")).toContain('data-scroll-to-end="true"');
+  });
+
   it("timeline extraction keeps sender identity and unread activity visible", () => {
     const timeline = readSrc("components/chat/MessagesTimeline.tsx");
     expect(timeline).toContain("messageViewer");

@@ -3703,6 +3703,7 @@ export default function ChatView(props: ChatViewProps) {
                   style={{ bottom: scrollToEndClearance + 4 }}
                 >
                   <Button
+                    data-scroll-to-end="true"
                     aria-label={
                       hasUnreadTimelineActivity ? "New activity. Scroll to end" : "Scroll to end"
                     }

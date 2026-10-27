@@ -25,6 +25,52 @@ function isIgnored(cwd: string, path: string): boolean {
 }
 
 describe("EAS archive ignore rules", () => {
+  it("retains every locked workspace manifest while excluding unrelated workspace sources", () => {
+    const fixtureRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-eas-importers-"));
+    try {
+      NodeChildProcess.execFileSync("git", ["init", "--quiet"], {
+        cwd: fixtureRoot,
+        stdio: "ignore",
+      });
+      NodeFS.copyFileSync(
+        NodePath.join(repositoryRoot, ".easignore"),
+        NodePath.join(fixtureRoot, ".gitignore"),
+      );
+      const lockfile = NodeFS.readFileSync(NodePath.join(repositoryRoot, "pnpm-lock.yaml"), "utf8");
+      const importers = new Set<string>();
+      // pnpm 12 can store package-manager and workspace lockfiles as separate YAML documents.
+      for (const block of lockfile.matchAll(/^importers:\n([\s\S]*?)(?=^\S|$(?![\s\S]))/gm)) {
+        for (const entry of block[1]!.matchAll(/^  (\S[^\n]*):$/gm)) importers.add(entry[1]!);
+      }
+      expect(importers.size).toBeGreaterThan(1);
+      for (const importer of importers) {
+        const manifest = importer === "." ? "package.json" : `${importer}/package.json`;
+        expect(NodeFS.existsSync(NodePath.join(repositoryRoot, manifest)), manifest).toBe(true);
+        NodeFS.mkdirSync(NodePath.dirname(NodePath.join(fixtureRoot, manifest)), {
+          recursive: true,
+        });
+        NodeFS.writeFileSync(NodePath.join(fixtureRoot, manifest), "{}\n");
+        expect(isIgnored(fixtureRoot, manifest), `frozen-lockfile requires ${manifest}`).toBe(
+          false,
+        );
+      }
+      for (const workspace of [
+        "apps/desktop",
+        "apps/vscode",
+        "apps/discord-bot",
+        "infra/relay",
+        "infra/task-cache",
+      ]) {
+        const source = `${workspace}/src/archive-omitted.ts`;
+        NodeFS.mkdirSync(NodePath.dirname(NodePath.join(fixtureRoot, source)), { recursive: true });
+        NodeFS.writeFileSync(NodePath.join(fixtureRoot, source), "fixture\n");
+        expect(isIgnored(fixtureRoot, source), source).toBe(true);
+      }
+    } finally {
+      NodeFS.rmSync(fixtureRoot, { force: true, recursive: true });
+    }
+  });
+
   it("keeps mobile native TypeScript sources while excluding root native tooling", () => {
     const fixtureRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-easignore-"));
 

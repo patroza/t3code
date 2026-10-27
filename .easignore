@@ -5,9 +5,14 @@
 .repos/
 
 # Desktop / electron / native host tooling
-apps/desktop/
-apps/vscode/
-apps/discord-bot/
+# pnpm's frozen workspace lockfile requires every importer manifest, even
+# when the workspace's implementation is not part of the mobile build.
+apps/desktop/*
+!apps/desktop/package.json
+apps/vscode/*
+!apps/vscode/package.json
+apps/discord-bot/*
+!apps/discord-bot/package.json
 /native/*
 !/native/libghostty-vt
 /native/libghostty-vt/*
@@ -25,7 +30,13 @@ docs/
 .claude/
 .cursor/
 .vscode/
-infra/
+infra/*
+!infra/relay
+infra/relay/*
+!infra/relay/package.json
+!infra/task-cache
+infra/task-cache/*
+!infra/task-cache/package.json
 artifacts/
 .showcase/
 apps/mobile/.showcase/

@@ -11,7 +11,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
 import "~/index.css";
-import { act, render } from "../../test/render";
+import { act, fakeTimers, render } from "../../test/render";
 
 type Branched = { readonly branch: string };
 type GitActionInput = { featureBranch?: boolean; threadId?: string; action: string };
@@ -166,6 +166,8 @@ vi.mock(import("~/components/ui/toast"), async (original) => {
 
 import { useComposerDraftStore } from "~/composerDraftStore";
 import GitActionsControl from "./GitActionsControl";
+import { appAtomRegistry, AppAtomRegistryProvider } from "~/rpc/atomRegistry";
+import { vcsActionManager } from "~/state/vcs";
 
 const MemoGitActionsControl = memo(GitActionsControl);
 
@@ -226,5 +228,62 @@ describe("Git action targets across thread navigation", () => {
       scope: { cwd: "/first" },
       input: { threadId: "first", action: "commit_push_pr" },
     });
+  });
+});
+
+describe("Git panel action progress", () => {
+  it("shows elapsed time while an action runs and removes it when the action finishes", async () => {
+    setup();
+    using _clock = fakeTimers({ now: new Date("2026-10-27T10:00:00Z") });
+    let finish!: () => void;
+    const action = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const target = { environmentId: EnvironmentId.make("environment"), cwd: "/repo" };
+    const pending = vcsActionManager.track(
+      appAtomRegistry,
+      target,
+      { operation: "run_change_request", label: "Committing" },
+      async () => {
+        await action;
+        return AsyncResult.success(undefined);
+      },
+    );
+    try {
+      await using screen = await render(
+        <AppAtomRegistryProvider>
+          <GitActionsControl
+            gitCwd="/repo"
+            activeThreadRef={{
+              environmentId: target.environmentId,
+              threadId: ThreadId.make("thread"),
+            }}
+            displayMode="panel"
+          />
+        </AppAtomRegistryProvider>,
+      );
+      await expect
+        .element(screen.getByRole("timer", { name: "Git action elapsed time" }))
+        .toHaveTextContent("0s");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_000);
+      });
+      await expect
+        .element(screen.getByRole("timer", { name: "Git action elapsed time" }))
+        .toHaveTextContent("3s");
+      await expect
+        .element(screen.getByRole("button", { name: "Git action options" }))
+        .toBeVisible();
+      await act(async () => {
+        finish();
+        await pending;
+      });
+      await expect
+        .element(screen.getByRole("timer", { name: "Git action elapsed time" }))
+        .not.toBeInTheDocument();
+    } finally {
+      finish();
+      await pending;
+    }
   });
 });

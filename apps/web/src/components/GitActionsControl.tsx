@@ -401,7 +401,11 @@ function RunningGitActionElapsedTime({
     return null;
   }
 
-  return <p className={className}>{elapsed}</p>;
+  return (
+    <p aria-label="Git action elapsed time" className={className} role="timer">
+      {elapsed}
+    </p>
+  );
 }
 
 function GitActionProgressButtonContent({
@@ -2017,6 +2021,12 @@ export default function GitActionsControl({
               </span>
             </ThreadDetailsControl>
           )}
+          {isPanel && gitActionProgress ? (
+            <GitActionElapsedTime
+              startedAtMs={gitActionProgress.startedAtMs}
+              className="flex h-8 shrink-0 items-center self-start pe-2.5 text-2xs font-normal tabular-nums text-muted-foreground"
+            />
+          ) : null}
           <>
             {isPanel ? (
               <span aria-hidden="true" className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS} />

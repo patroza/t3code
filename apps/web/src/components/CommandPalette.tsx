@@ -892,6 +892,7 @@ function OpenCommandPaletteDialog(props: {
   });
 
   function popView(): void {
+    browseNavigation.invalidate();
     setAddProjectCloneFlow(null);
     setNewProjectFlow(null);
     if (viewStack.length <= 1) {
