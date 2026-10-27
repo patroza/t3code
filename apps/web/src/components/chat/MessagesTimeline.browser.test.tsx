@@ -1313,6 +1313,7 @@ describe("timeline tooltip scroll dismissal", () => {
     document.querySelector('[data-slot="tooltip-popup"][data-open]')?.textContent ?? null;
 
   async function renderTooltip(pullRequest: boolean, outside: boolean) {
+    environmentQuery.data = null;
     const tooltip = pullRequest ? (
       <PullRequestLinkPreview
         link={<button>message link</button>}
