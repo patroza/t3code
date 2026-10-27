@@ -83,7 +83,7 @@ function postDiscord(runtime: Context.Context<never>, channelId: string, content
   return useRuntime(runtime, rest.createMessage(channelId, { content })).pipe(Effect.asVoid);
 }
 
-function runGroupChatCommand(
+const runGroupChatCommand = Effect.fn("runGroupChatCommand")(function* (
   runtime: Context.Context<never>,
   discordThreadId: string,
   t3ThreadId: ThreadId,
@@ -92,7 +92,7 @@ function runGroupChatCommand(
   if (command.kind === "answer") {
     const requestId = command.requestId;
     const answersJson = command.json;
-    return useRuntime(
+    yield* useRuntime(
       runtime,
       Effect.gen(function* () {
         const t3 = yield* T3Session;
@@ -108,9 +108,10 @@ function runGroupChatCommand(
         yield* postDiscord(runtime, discordThreadId, "Submitted the requested input to T3.");
       }),
     );
+    return;
   }
   if (command.kind === "stop") {
-    return useRuntime(
+    yield* useRuntime(
       runtime,
       Effect.gen(function* () {
         const t3 = yield* T3Session;
@@ -118,11 +119,12 @@ function runGroupChatCommand(
         yield* postDiscord(runtime, discordThreadId, "Stopped the active T3 turn.");
       }),
     );
+    return;
   }
   const requestId = command.requestId;
   const decision = command.kind === "approve" ? "accept" : "decline";
   const posted = command.kind === "approve" ? "Approval approved." : "Approval denied.";
-  return useRuntime(
+  yield* useRuntime(
     runtime,
     Effect.gen(function* () {
       const t3 = yield* T3Session;
@@ -130,7 +132,7 @@ function runGroupChatCommand(
       yield* postDiscord(runtime, discordThreadId, posted);
     }),
   );
-}
+});
 
 /**
  * Observe a Teams group chat without sending anything back to it.
