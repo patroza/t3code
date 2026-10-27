@@ -14,6 +14,7 @@ import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/http";
 
+import { GitCommandError } from "@t3tools/contracts";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import type * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
@@ -558,6 +559,176 @@ it.effect("keeps Bitbucket response bodies out of checkout diagnostics", () => {
       "Bitbucket API failed in getPullRequest: Bitbucket returned HTTP 403.",
     );
     assert.notInclude(error.message, "secret-value");
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("keeps a 429 Retry-After time on the response error", () => {
+  const { layer } = makeLayer({
+    response: () => new Response("busy", { status: 429, headers: { "Retry-After": "120" } }),
+  });
+
+  return Effect.gen(function* () {
+    yield* TestClock.setTime(1_000);
+    const bitbucket = yield* BitbucketApi.BitbucketApi;
+    const error = yield* bitbucket
+      .request({ method: "GET", url: "/repositories/acme/web" })
+      .pipe(Effect.flip);
+
+    assert.instanceOf(error, BitbucketApi.BitbucketResponseError);
+    assert.strictEqual(error.status, 429);
+    assert.strictEqual(error.retryAt, 121_000);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("preserves Bitbucket response body read failures as their immediate cause", () => {
+  const cause = new Error("response stream failed");
+  const { layer } = makeLayer({
+    response: () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start: (controller) => controller.error(cause),
+        }),
+        { status: 502 },
+      ),
+  });
+
+  return Effect.gen(function* () {
+    const bitbucket = yield* BitbucketApi.BitbucketApi;
+    const error = yield* bitbucket
+      .getPullRequest({ cwd: "/repo", reference: "42" })
+      .pipe(Effect.flip);
+
+    assert.instanceOf(error, BitbucketApi.BitbucketResponseBodyReadError);
+    assert.strictEqual(error.operation, "getPullRequest");
+    assert.strictEqual(error.status, 502);
+    assert.instanceOf(error.cause, HttpClientError.HttpClientError);
+    assert.strictEqual(error.cause.cause, cause);
+    assert.strictEqual(
+      error.message,
+      "Bitbucket API failed in getPullRequest: Bitbucket returned HTTP 502.",
+    );
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("keeps the 429 retry time when the response body cannot be read", () => {
+  const { layer } = makeLayer({
+    response: () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start: (controller) => controller.error(new Error("response stream failed")),
+        }),
+        { status: 429, headers: { "Retry-After": "120" } },
+      ),
+  });
+
+  return Effect.gen(function* () {
+    yield* TestClock.setTime(1_000);
+    const bitbucket = yield* BitbucketApi.BitbucketApi;
+    const error = yield* bitbucket
+      .request({ method: "GET", url: "/repositories/acme/web" })
+      .pipe(Effect.flip);
+
+    assert.instanceOf(error, BitbucketApi.BitbucketResponseBodyReadError);
+    assert.strictEqual(error.status, 429);
+    assert.strictEqual(error.retryAt, 121_000);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("checks out same-repository pull requests with the existing Bitbucket remote", () => {
+  const { git, layer } = makeLayer({
+    response: () =>
+      Response.json({
+        ...bitbucketPullRequest,
+        source: {
+          branch: { name: "feature/source-control" },
+          repository: {
+            full_name: "pingdotgg/t3code",
+            workspace: { slug: "pingdotgg" },
+          },
+        },
+      }),
+  });
+
+  return Effect.gen(function* () {
+    const bitbucket = yield* BitbucketApi.BitbucketApi;
+    yield* bitbucket.checkoutPullRequest({
+      cwd: "/repo",
+      context: {
+        provider: {
+          kind: SourceControlProviderKind.make("bitbucket"),
+          name: "Bitbucket",
+          baseUrl: "https://bitbucket.org",
+        },
+        remoteName: "origin",
+        remoteUrl: "git@bitbucket.org:pingdotgg/t3code.git",
+      },
+      reference: "42",
+      force: true,
+    });
+
+    assert.strictEqual(git.ensureRemote.mock.calls.length, 0);
+    assert.deepStrictEqual(git.fetchRemoteBranch.mock.calls[0]?.[0], {
+      cwd: "/repo",
+      remoteName: "origin",
+      remoteBranch: "feature/source-control",
+      localBranch: "feature/source-control",
+    });
+    assert.deepStrictEqual(git.setBranchUpstream.mock.calls[0]?.[0], {
+      cwd: "/repo",
+      branch: "feature/source-control",
+      remoteName: "origin",
+      remoteBranch: "feature/source-control",
+    });
+    assert.deepStrictEqual(git.switchRef.mock.calls[0]?.[0], {
+      cwd: "/repo",
+      refName: "feature/source-control",
+    });
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("preserves Git checkout failures without deriving the domain message from them", () => {
+  const gitCause = new GitCommandError({
+    operation: "fetchRemoteBranch",
+    command: "git fetch origin feature/source-control",
+    cwd: "/repo",
+    failureKind: "unknown",
+    detail: "remote rejected the request",
+  });
+  const { layer } = makeLayer({
+    response: () =>
+      Response.json({
+        ...bitbucketPullRequest,
+        source: {
+          branch: { name: "feature/source-control" },
+          repository: {
+            full_name: "pingdotgg/t3code",
+            workspace: { slug: "pingdotgg" },
+          },
+        },
+      }),
+    git: {
+      fetchRemoteBranch: () => Effect.fail(gitCause),
+    },
+  });
+
+  return Effect.gen(function* () {
+    const bitbucket = yield* BitbucketApi.BitbucketApi;
+    const error = yield* Effect.flip(
+      bitbucket.checkoutPullRequest({
+        cwd: "/repo",
+        reference: "42",
+        force: true,
+      }),
+    );
+
+    assert.instanceOf(error, BitbucketApi.BitbucketCheckoutError);
+    assert.strictEqual(error.cwd, "/repo");
+    assert.strictEqual(error.reference, "42");
+    assert.strictEqual(
+      error.message,
+      "Bitbucket API failed in checkoutPullRequest: Failed to check out the Bitbucket pull request.",
+    );
+    assert.strictEqual(error.cause, gitCause);
   }).pipe(Effect.provide(layer));
 });
 

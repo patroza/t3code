@@ -1,3 +1,5 @@
+import { AcpSpawnError } from "effect-acp/errors";
+import { resolveCurrentProviderEnvironment } from "@t3tools/provider-core/server/DirenvEnvironment";
 // @effect-diagnostics nodeBuiltinImport:off
 
 import {
@@ -958,6 +960,32 @@ function toolStatus(
 
 type ProjectedToolStatus = ReturnType<typeof toolStatus> | "interrupted";
 
+/**
+ * Preserve a caller-projected terminal status when normalization demotes it.
+ * Explicit projections and later terminal updates still win; `interrupted` is
+ * projected at teardown and is not an ACP tool state.
+ */
+export function applyTerminalProjectedToolStatus(
+  toolCall: AcpToolCallState,
+  projectedStatus: ProjectedToolStatus | undefined,
+  previous?: AcpToolCallState,
+): AcpToolCallState {
+  const demoted =
+    toolCall.status === undefined ||
+    toolCall.status === "pending" ||
+    toolCall.status === "inProgress";
+  const preserved =
+    projectedStatus === undefined &&
+    demoted &&
+    (previous?.status === "completed" || previous?.status === "failed")
+      ? previous.status
+      : undefined;
+  const status = projectedStatus ?? preserved;
+  if (status !== "completed" && status !== "failed") return toolCall;
+  if (toolCall.status === status) return toolCall;
+  return { ...toolCall, status };
+}
+
 function nodeStatus(status: ProjectedToolStatus): OrchestrationV2ExecutionNode["status"] {
   return status === "pending" ? "running" : status;
 }
@@ -1351,6 +1379,17 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
     threadId === null
       ? Effect.succeed(acpMcpContext(undefined, self))
       : mcpSessions.read(threadId).pipe(Effect.map((session) => acpMcpContext(session, self)));
+  const makeRuntimeWithDirenv = Effect.fnUntraced(function* (input: AcpAdapterV2RuntimeInput) {
+    const base = { ...process.env, ...input.processEnvironment };
+    const resolved = yield* resolveCurrentProviderEnvironment(input.cwd, base).pipe(
+      Effect.mapError((cause) => new AcpSpawnError({ command: flavor.driver, cause })),
+    );
+    const patch: NodeJS.ProcessEnv = { ...input.processEnvironment };
+    for (const key of new Set([...Object.keys(base), ...Object.keys(resolved)])) {
+      if (base[key] !== resolved[key]) patch[key] = resolved[key];
+    }
+    return yield* flavor.makeRuntime({ ...input, processEnvironment: patch });
+  });
   const driver = flavor.driver;
   const continuationRequests = options.continuationRequests;
   const postSettleContinuationEnabled =
@@ -1875,6 +1914,19 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         // Tombstones prevent mid-stream exit_code 0 and stale monitor events from resurrecting ended tasks.
         const endedBackgroundTaskIds = yield* Ref.make<ReadonlySet<string>>(new Set());
         const endedBackgroundTaskIdLimit = 128;
+        // Grok 1.0.50 emits task_completed on the session update while the
+        // prompt RPC is still open. finishRegisteredBackgroundTool only applies
+        // once the prompt has settled, so the completion is kept until then.
+        const preSettleBackgroundCompletions = yield* Ref.make(
+          new Map<
+            string,
+            {
+              readonly taskId: string;
+              readonly status: "completed" | "failed";
+              readonly output?: string;
+            }
+          >(),
+        );
 
         const setBackgroundTaskRunning =
           /* Provider events include streaming deltas; avoid a span for each update. */
@@ -3405,7 +3457,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           yield* closeTextStream(context, "user");
           const previous = context.tools.get(incoming.toolCallId);
           const merged = mergeToolCallState(previous, incoming);
-          const normalized = flavor.normalizeToolCall?.(merged) ?? merged;
+          const normalized = applyTerminalProjectedToolStatus(
+            flavor.normalizeToolCall?.(merged) ?? merged,
+            projectedStatus,
+            previous,
+          );
           const backgroundTaskId = flavor.extractBackgroundTaskId?.(normalized);
           const backgroundCommandTaskId =
             flavor.isBackgroundCommandTool?.(normalized) === true
@@ -3532,7 +3588,14 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   output: toolOutputText(hydrated),
                 });
               }
-              yield* emitTool(context, hydrated);
+              yield* emitTool(
+                context,
+                hydrated,
+                // Empty TaskOutput keeps the start-ACK rawOutput, and normalize
+                // would put the shell back to inProgress. The poll's terminal
+                // status has to stick or the row spins after the command ended.
+                nextStatus === "failed" || nextStatus === "completed" ? nextStatus : undefined,
+              );
             }
           }
 
@@ -4222,15 +4285,39 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           }
         });
 
-        // Structured task ends are authoritative, but emitting before prompt
-        // settlement marks the result handled and suppresses its continuation.
-        const finishRegisteredBackgroundTool = Effect.fnUntraced(function* (mutation: {
-          readonly taskId: string;
-          readonly status: "completed" | "failed";
-          readonly output?: string;
-        }) {
+        // Grok's structured task end is authoritative; task updates may only say
+        // running. Apply pre-settle ends at settle so a finished shell cannot hold
+        // the turn open; if no end arrives, retain the continuation offer.
+        const finishRegisteredBackgroundTool = Effect.fnUntraced(function* (
+          mutation: {
+            readonly taskId: string;
+            readonly status: "completed" | "failed";
+            readonly output?: string;
+          },
+          options?: {
+            // Queue only pre-settle shell ends for settlement. Monitor completions
+            // stay running so the held turn can consume their report and offer a
+            // continuation after an empty drain.
+            readonly queueUntilSettle?: boolean;
+            // True only for a completion that was queued before the prompt
+            // returned. That end is part of this turn. A completion that
+            // arrives after settle still leaves Grok's own wake reply free to
+            // open a continuation run.
+            readonly settledInTurn?: boolean;
+          },
+        ) {
           const context = yield* Ref.get(activeTurn);
-          if (context === null || context.finalized || !context.promptSettled) return;
+          if (context === null || context.finalized) return;
+          if (!context.promptSettled) {
+            if (options?.queueUntilSettle === true) {
+              yield* Ref.update(preSettleBackgroundCompletions, (current) => {
+                const next = new Map(current);
+                next.set(mutation.taskId, mutation);
+                return next;
+              });
+            }
+            return;
+          }
           const toolCallId = context.toolCallIdsByBackgroundTaskId.get(mutation.taskId);
           const tool = toolCallId === undefined ? undefined : context.tools.get(toolCallId);
           if (tool === undefined) return;
@@ -4243,6 +4330,19 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             return;
           }
           context.awaitingBackgroundHydration.delete(mutation.taskId);
+          if (options?.settledInTurn === true) {
+            // The agent already answered in this turn. Finalize must not treat
+            // the queued end as unreported and open a continuation.
+            yield* Ref.update(handledBackgroundTaskIdsInActiveTurn, (current) =>
+              new Set(current).add(mutation.taskId),
+            );
+            yield* Ref.update(midTurnUnreportedCompletedTaskIds, (current) => {
+              if (!current.has(mutation.taskId)) return current;
+              const next = new Set(current);
+              next.delete(mutation.taskId);
+              return next;
+            });
+          }
           const finished = { ...tool, status: mutation.status };
           yield* emitTool(
             context,
@@ -4250,6 +4350,13 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             mutation.status,
           );
           yield* rearmDeferredFinalize(context);
+        });
+
+        const flushPreSettleBackgroundCompletions = Effect.fnUntraced(function* () {
+          const pending = yield* Ref.getAndSet(preSettleBackgroundCompletions, new Map());
+          for (const mutation of pending.values()) {
+            yield* finishRegisteredBackgroundTool(mutation, { settledInTurn: true });
+          }
         });
 
         const bufferPostSettleWake = Effect.fnUntraced(function* (
@@ -6319,11 +6426,14 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     }
                     yield* applyLateBackgroundMutation(mutation.sessionId, mutation);
                     if (mutation.status !== "running") {
-                      yield* finishRegisteredBackgroundTool({
-                        taskId: mutation.taskId,
-                        status: mutation.status,
-                        ...(mutation.output === undefined ? {} : { output: mutation.output }),
-                      });
+                      yield* finishRegisteredBackgroundTool(
+                        {
+                          taskId: mutation.taskId,
+                          status: mutation.status,
+                          ...(mutation.output === undefined ? {} : { output: mutation.output }),
+                        },
+                        { queueUntilSettle: mutation.report?.kind === "command" },
+                      );
                     }
                   }),
                 ).pipe(Effect.asVoid),
@@ -6358,15 +6468,15 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const mcpContext = yield* readMcpContext(threadId);
           runtimeMcpBridge = yield* makeRuntimeMcpBridge(mcpContext, runtimeScope);
           const runtimeGeneration = yield* Ref.get(runtimeCallbackGeneration);
-          runtime = yield* flavor
-            .makeRuntime(makeRuntimeInput(runtimeGeneration, mcpContext, resumeSessionId))
-            .pipe(
-              Effect.provideService(Scope.Scope, runtimeScope),
-              Effect.provideService(Crypto.Crypto, crypto),
-              Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
-              Effect.provideService(AgentScope, agentScope),
-              Effect.provideService(AgentScopeThreadId, threadId ?? undefined),
-            );
+          runtime = yield* makeRuntimeWithDirenv(
+            makeRuntimeInput(runtimeGeneration, mcpContext, resumeSessionId),
+          ).pipe(
+            Effect.provideService(Scope.Scope, runtimeScope),
+            Effect.provideService(Crypto.Crypto, crypto),
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
+            Effect.provideService(AgentScope, agentScope),
+            Effect.provideService(AgentScopeThreadId, threadId ?? undefined),
+          );
         });
 
         const startAcpRuntime = Effect.fnUntraced(function* (
@@ -6430,22 +6540,24 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const startup = Effect.gen(function* () {
             const mcpContext = yield* readMcpContext(threadId);
             replacementMcpBridge = yield* makeRuntimeMcpBridge(mcpContext, replacementScope);
-            const replacementRuntime = yield* flavor
-              .makeRuntime(
-                makeRuntimeInput(
-                  replacementGeneration,
-                  mcpContext,
-                  undefined,
-                  handleCandidateTermination,
-                ),
-              )
-              .pipe(
-                Effect.provideService(Scope.Scope, replacementScope),
-                Effect.provideService(Crypto.Crypto, crypto),
-                Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
-                Effect.provideService(AgentScope, agentScope),
-                Effect.provideService(AgentScopeThreadId, threadId ?? undefined),
-              );
+            const replacementRuntime = yield* makeRuntimeWithDirenv(
+              makeRuntimeInput(
+                replacementGeneration,
+                mcpContext,
+                undefined,
+                handleCandidateTermination,
+              ),
+            ).pipe(
+              Effect.provideService(Scope.Scope, replacementScope),
+              Effect.provideService(Crypto.Crypto, crypto),
+              Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
+              Effect.provideService(AgentScope, agentScope),
+              Effect.provideService(AgentScopeThreadId, threadId ?? undefined),
+            );
+            // Session setup may publish commands before it returns. Buffer those
+            // notifications, but do not expose request or extension handlers
+            // until the candidate generation has committed.
+
             yield* replacementRuntime.handleSessionUpdate((notification) =>
               Effect.suspend(() => handleCandidateSessionUpdate(notification)),
             );
@@ -6573,6 +6685,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               prepareClaimableTerminalEnvironment(yield* readMcpContext(input.threadId));
               return yield* startAcpRuntime(input.threadId);
             });
+        if (started.rejectedResume !== undefined) {
+          yield* Ref.set(initialSessionActivationFailure, started.rejectedResume);
+          itemIdentityVersion = 2;
+          yield* Ref.set(runtimeRestartRequired, false);
+          prepareClaimableTerminalEnvironment(yield* readMcpContext(input.threadId));
+        }
         yield* Ref.set(activeSessionId, started.sessionId);
         yield* setActiveSessionSetup(started);
         rememberTerminalEnvironment(started.sessionId, yield* readMcpContext(input.threadId));
@@ -7319,7 +7437,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             });
             yield* Ref.set(suppressPostSettleMonitorPrompt, false);
             yield* Ref.set(handledBackgroundTaskIdsInActiveTurn, new Set());
-            // Continuations consume existing wake traffic without re-prompting ACP.
+            yield* Ref.set(preSettleBackgroundCompletions, new Map());
+            // Continuation turns attach to wake traffic the agent already produced
+            // after the prior root turn settled; do not re-prompt the ACP session.
             const isContinuationTurn =
               (postSettleContinuationEnabled || followsAgentWorkState) &&
               acpIsProviderContinuationMessage(turnInput.message);
@@ -7583,12 +7703,32 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                           ? "interrupted"
                           : "cancelled"
                         : "completed";
+                    // Grok monitors and async subagents outlive the prompt RPC. Defer
+                    // finalize for their updates and wake traffic; finish a shell
+                    // with a received task end so it does not hold the turn open.
                     if (flavor.deferFinalizeForBackgroundWork === true && !context.interrupted) {
-                      context.promptSettled = true;
-                      context.promptSettledStatus = status;
-                      for (const [taskId, completion] of context.backgroundCommands) {
-                        if (completion === null) continue;
-                        yield* finishRegisteredBackgroundTool({ taskId, ...completion });
+                      const pendingCompletions = yield* Ref.get(preSettleBackgroundCompletions);
+                      const pendingBackgroundCompletion = pendingCompletions.size > 0;
+                      if (pendingBackgroundCompletion || hasDeferredBackgroundWork(context)) {
+                        context.promptSettled = true;
+                        context.promptSettledStatus = status;
+                        yield* flushPreSettleBackgroundCompletions();
+                        for (const [taskId, completion] of context.backgroundCommands) {
+                          if (completion === null || pendingCompletions.has(taskId)) continue;
+                          // Reportless completions still need a continuation to report
+                          // their result; only the explicit command queue is handled.
+                          yield* finishRegisteredBackgroundTool({ taskId, ...completion });
+                        }
+                        if (hasDeferredBackgroundWork(context)) {
+                          // The agent finished this prompt's reply. Background work
+                          // holds the run open, not the text it already sent.
+                          yield* closeTextStreams(context);
+                          yield* (
+                            options.testHooks?.afterPromptSettledWithBackgroundWork?.() ??
+                              Effect.void
+                          );
+                          return;
+                        }
                       }
                     }
                     if (idleError) {
@@ -8379,6 +8519,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                             yield* Ref.set(endedBackgroundTaskIds, new Set());
                             yield* Ref.set(midTurnUnreportedCompletedTaskIds, new Set());
                             yield* Ref.set(handledBackgroundTaskIdsInActiveTurn, new Set());
+                            yield* Ref.set(preSettleBackgroundCompletions, new Map());
                             yield* Ref.set(carryoverSubagents, null);
                             yield* Ref.set(suppressPostSettleMonitorPrompt, false);
                             yield* Ref.set(lastTurnRoute, null);

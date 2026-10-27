@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, expect, it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -12,6 +13,7 @@ import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+
 import { ChildProcessSpawner } from "effect/process";
 
 import { VcsProcessExitError, VcsProcessSpawnError } from "@t3tools/contracts";
@@ -342,6 +344,82 @@ describe("VcsProcess.run", () => {
     }).pipe(Effect.scoped, provideLive, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("writes stdin before waiting for exit", () =>
+    Effect.gen(function* () {
+      const result = yield* run({
+        operation: "test.stdin",
+        command: "node",
+        args: [
+          "-e",
+          [
+            "process.stdin.setEncoding('utf8');",
+            "let data='';",
+            "process.stdin.on('data', chunk => { data += chunk; });",
+            "process.stdin.on('end', () => { process.stdout.write(data); });",
+          ].join(""),
+        ],
+        cwd: process.cwd(),
+        stdin: "stdin payload",
+      });
+
+      expect(result.stdout).toBe("stdin payload");
+    }).pipe(provideLive),
+  );
+
+  it.effect("fails with VcsProcessExitError for non-zero exits by default", () =>
+    Effect.gen(function* () {
+      const secretArgument = "--token=super-secret-token";
+      const secretStderr = "remote rejected super-secret-token";
+      const error = yield* run({
+        operation: "test.exit",
+        command: "node",
+        args: [
+          "-e",
+          "process.stderr.write(process.argv[1]); process.exit(2)",
+          secretStderr,
+          secretArgument,
+        ],
+        cwd: process.cwd(),
+      }).pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(VcsProcessExitError);
+      expect(error).toMatchObject({
+        operation: "test.exit",
+        command: "node",
+        argumentCount: 4,
+        exitCode: 2,
+        detail: "Process exited with a non-zero status.",
+        failureKind: "command-failed",
+        stderrLength: secretStderr.length,
+        stderrTruncated: false,
+      });
+      expect(error.message).not.toContain(secretArgument);
+      expect(error.message).not.toContain(secretStderr);
+    }).pipe(provideLive),
+  );
+
+  it.effect("keeps guest App-wrapper diagnostics off the process error message", () =>
+    Effect.gen(function* () {
+      const wrapperLine =
+        "t3-github-app-token: app is not installed on pingdotgg/t3code (or repo does not exist)";
+      const error = yield* run({
+        operation: "test.wrapper-diagnostic",
+        command: "node",
+        args: ["-e", "process.stderr.write(process.argv[1]); process.exit(1)", wrapperLine],
+        cwd: process.cwd(),
+      }).pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(VcsProcessExitError);
+      expect(error).toMatchObject({
+        failureKind: "command-failed",
+        publicDiagnostic: wrapperLine,
+      });
+      // Operators see this on GitHubCli.detail; the VCS message stays canned.
+      expect(error.message).not.toContain("pingdotgg");
+      expect(error.message).toContain("Process exited with a non-zero status.");
+    }).pipe(provideLive),
+  );
+
   it.effect("classifies authentication failures without retaining stderr", () =>
     Effect.gen(function* () {
       const secretStderr = "authentication failed for token super-secret-token";
@@ -489,4 +567,26 @@ describe("VcsProcess.run", () => {
       expect(Buffer.concat(chunks).toString()).toBe("x".repeat(131072) + "\0S final\0");
     }).pipe(provideLive),
   );
+});
+
+describe("publicDiagnosticFromStderr", () => {
+  it("keeps only guest wrapper lines, and drops GraphQL bodies", () => {
+    expect(
+      VcsProcess.publicDiagnosticFromStderr(
+        "GraphQL: Could not resolve to a PullRequest with the number of 6613. (repository.pullRequest)",
+      ),
+    ).toBeUndefined();
+    expect(
+      VcsProcess.publicDiagnosticFromStderr(
+        "t3-github-app-token: app is not installed on pingdotgg/t3code (or repo does not exist)",
+      ),
+    ).toBe(
+      "t3-github-app-token: app is not installed on pingdotgg/t3code (or repo does not exist)",
+    );
+    expect(
+      VcsProcess.publicDiagnosticFromStderr(
+        "gh-app-wrapper: auth failed (exit 4); reminting and retrying once after 3s",
+      ),
+    ).toMatch(/^gh-app-wrapper:/);
+  });
 });

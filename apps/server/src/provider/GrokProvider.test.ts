@@ -8,10 +8,13 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientResponse } from "effect/http";
+import { GROK_DEFAULT_MODEL } from "@t3tools/contracts";
 import { GrokSettings } from "@t3tools/provider-grok/settings";
 
 import {
   buildGrokModelCapabilities,
+  buildGrokModelsFromSessionModelState,
+  buildInitialGrokProviderSnapshot,
   checkGrokProviderStatus,
   grokSlashCommandsFromInitialize,
   parseGrokModelsCliOutput,
@@ -187,6 +190,60 @@ describe("buildGrokModelCapabilities", () => {
 
     expect(capabilities.optionDescriptors).toEqual([]);
   });
+
+  it("does not synthesize a reasoning menu when ACP omits it", () => {
+    expect(
+      buildGrokModelCapabilities({
+        modelId: "grok-4.6",
+        name: "Grok 4.6",
+        _meta: { supportsReasoningEffort: true, reasoningEffort: "xhigh" },
+      }).optionDescriptors,
+    ).toEqual([]);
+  });
+
+  it("keeps non-reasoning Grok models free of reasoning controls", () => {
+    expect(
+      buildGrokModelCapabilities({ modelId: "grok-build", name: "Grok Build" }).optionDescriptors,
+    ).toEqual([]);
+  });
+});
+
+describe("buildInitialGrokProviderSnapshot", () => {
+  it.effect("returns a disabled snapshot when settings.enabled is false", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* buildInitialGrokProviderSnapshot(
+        decodeGrokSettings({ enabled: false }),
+      );
+      expect(snapshot.enabled).toBe(false);
+      expect(snapshot.status).toBe("disabled");
+      expect(snapshot.installed).toBe(false);
+      expect(snapshot.message).toContain("disabled");
+    }),
+  );
+
+  it.effect("returns a disabled snapshot by default — Grok is opt-in", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* buildInitialGrokProviderSnapshot(decodeGrokSettings({}));
+      expect(snapshot.enabled).toBe(false);
+      expect(snapshot.status).toBe("disabled");
+    }),
+  );
+
+  it.effect("returns a pending snapshot when enabled", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* buildInitialGrokProviderSnapshot(
+        decodeGrokSettings({ enabled: true }),
+      );
+      expect(snapshot.enabled).toBe(true);
+      expect(snapshot.installed).toBe(true);
+      expect(snapshot.status).toBe("warning");
+      expect(snapshot.version).toBeNull();
+      expect(snapshot.message).toContain("Checking Grok");
+      // Grok ACP accepts session/set_model mid-session.
+      expect(snapshot.requiresNewThreadForModelChange).toBeUndefined();
+      expect(snapshot.supportsConversationRollback).toBe(false);
+    }),
+  );
 });
 
 it.layer(NodeServices.layer)("checkGrokProviderStatus", (it) => {
@@ -344,7 +401,7 @@ it.layer(NodeServices.layer)("checkGrokProviderStatus", (it) => {
       expect(snapshot.installed).toBe(true);
       expect(snapshot.auth.status).toBe("authenticated");
       expect(snapshot.models.map((model) => [model.slug, model.isDefault ?? false])).toEqual([
-        ["grok-4.6", true],
+        [GROK_DEFAULT_MODEL, true],
         ["grok-4.5", false],
       ]);
       expect(snapshot.message).toContain("ACP initialize failed");
@@ -369,7 +426,7 @@ it.layer(NodeServices.layer)("checkGrokProviderStatus", (it) => {
 
       expect(snapshot.status).toBe("warning");
       expect(snapshot.message).toContain("did not list any models");
-      expect(snapshot.models.map((model) => model.slug)).toEqual(["grok-build"]);
+      expect(snapshot.models.map((model) => model.slug)).toEqual(["grok-4.6", "grok-4.5"]);
     }),
   );
 
@@ -396,6 +453,34 @@ it.layer(NodeServices.layer)("checkGrokProviderStatus", (it) => {
       expect(snapshot.status).toBe("warning");
     }),
   );
+});
+
+describe("buildGrokModelsFromSessionModelState current-model edge cases", () => {
+  const modelState = (currentModelId: string | undefined) => ({
+    ...(currentModelId === undefined ? {} : { currentModelId }),
+    availableModels: [
+      { modelId: GROK_DEFAULT_MODEL, name: "Grok 4.6" },
+      { modelId: "grok-4.5", name: "Grok 4.5" },
+    ],
+  });
+
+  it("marks the model a fresh session starts on as the picker default", () => {
+    const models = buildGrokModelsFromSessionModelState(modelState("grok-4.5") as never);
+
+    expect(models.map((model) => model.slug)).toEqual([GROK_DEFAULT_MODEL, "grok-4.5"]);
+    expect(models.find((model) => model.slug === "grok-4.5")?.isDefault).toBe(true);
+    expect(models.find((model) => model.slug === GROK_DEFAULT_MODEL)?.isDefault).toBeUndefined();
+  });
+
+  it("leaves the default unmarked when Grok reports no current model", () => {
+    const models = buildGrokModelsFromSessionModelState(modelState(undefined) as never);
+
+    expect(models.some((model) => model.isDefault)).toBe(false);
+  });
+
+  it("returns nothing when there is no model state to read", () => {
+    expect(buildGrokModelsFromSessionModelState(null)).toEqual([]);
+  });
 });
 
 describe("Grok usage limits", () => {

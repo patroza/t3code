@@ -6,22 +6,29 @@ import * as NodeChildProcess from "node:child_process";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
+import * as Duration from "effect/Duration";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
+
 import * as Result from "effect/Result";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import { TestClock } from "effect/testing";
 import { ChildProcessSpawner } from "effect/process";
 import { expect } from "vite-plus/test";
 import type {
   ChangeRequest,
   GitActionProgressEvent,
+  GitManagerServiceError,
   GitPreparePullRequestThreadInput,
   ModelSelection,
 } from "@t3tools/contracts";
@@ -50,6 +57,8 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProjectConfig from "../vcs/VcsProjectConfig.ts";
+import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
+import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as GitWorkflowService from "./GitWorkflowService.ts";
 import type { SourceControlProvider } from "@t3tools/source-control-core/server/SourceControlProvider";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
@@ -57,10 +66,12 @@ import * as ServerConfig from "../config.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ProjectLifecycleScriptRunner from "../project/ProjectLifecycleScriptRunner.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as GitManager from "./GitManager.ts";
+import * as PrLookupFreeze from "./PrLookupFreeze.ts";
 
 /** A change request the fake host reports. Omitted fields read as an open, undated request. */
 type FakeChangeRequest = Omit<ChangeRequest, "provider" | "state" | "updatedAt"> & {
@@ -209,6 +220,7 @@ function initRepo(
     yield* runGit(cwd, ["init", "--initial-branch=main"]);
     yield* runGit(cwd, ["config", "user.email", "test@example.com"]);
     yield* runGit(cwd, ["config", "user.name", "Test User"]);
+    yield* runGit(cwd, ["config", "commit.gpgSign", "false"]);
     // Override global autocrlf on Windows for LF assertions, including linked worktrees.
     yield* runGit(cwd, ["config", "core.autocrlf", "false"]);
     yield* fs.writeFileString(NodePath.join(cwd, "README.md"), "hello\n");
@@ -552,6 +564,7 @@ function runStackedAction(
     actionId?: string;
     commitMessage?: string;
     featureBranch?: boolean;
+    disableCommitSigning?: boolean;
     filePaths?: readonly string[];
   },
   options?: Parameters<GitManager.GitManager["Service"]["runStackedAction"]>[1],
@@ -565,6 +578,21 @@ function runStackedAction(
   );
 }
 
+const configureFailingCommitSigner = Effect.fn("configureFailingCommitSigner")(function* (
+  repoDir: string,
+) {
+  const signerPath = NodePath.join(repoDir, "failing-signer.sh");
+  NodeFS.writeFileSync(
+    signerPath,
+    "#!/bin/sh\necho 'gpg: signing failed: No secret key' >&2\nexit 1\n",
+    { mode: 0o755 },
+  );
+  yield* runGit(repoDir, ["config", "commit.gpgSign", "true"]);
+  // Host global config may set gpg.format=ssh, which ignores gpg.program.
+  yield* runGit(repoDir, ["config", "gpg.format", "openpgp"]);
+  yield* runGit(repoDir, ["config", "gpg.program", signerPath]);
+});
+
 function preparePullRequestThread(
   manager: GitManager.GitManager["Service"],
   input: GitPreparePullRequestThreadInput,
@@ -573,6 +601,7 @@ function preparePullRequestThread(
 }
 
 function makeManager(input?: {
+  environment?: NodeJS.ProcessEnv;
   providerScenario?: FakeProviderScenario;
   sourceControlProvider?: SourceControlProvider["Service"];
   textGeneration?: Partial<FakeGitTextGeneration>;
@@ -692,6 +721,7 @@ function makeManager(input?: {
       },
     ),
     layerServerSettings,
+    PrLookupFreeze.layer,
   ).pipe(
     Layer.provideMerge(layerSourceControlRegistry),
     Layer.provideMerge(layerVcsDriver),
@@ -706,11 +736,17 @@ function makeManager(input?: {
     if (input?.seed !== undefined) {
       yield* input.seed.pipe(Effect.provideContext(stores), Effect.orDie);
     }
-    const manager = yield* GitManager.make.pipe(
+    const { manager, prLookupFreeze } = yield* Effect.gen(function* () {
+      return {
+        manager: yield* GitManager.make,
+        prLookupFreeze: yield* PrLookupFreeze.PrLookupFreeze,
+      };
+    }).pipe(
+      Effect.provideService(HostProcess.Environment, input?.environment ?? {}),
       Effect.provide(layerManager),
       Effect.provideContext(stores),
     );
-    return { manager, providerCalls };
+    return { manager, providerCalls, prLookupFreeze };
   });
 }
 
@@ -722,7 +758,200 @@ const layerGitManagerTest = GitVcsDriver.layer.pipe(
   Layer.provideMerge(NodeServices.layer),
 );
 
+const lifecycleScriptRunnerMock = Layer.mock(
+  ProjectLifecycleScriptRunner.ProjectLifecycleScriptRunner,
+)({
+  runWorktreeRemove: () => Effect.succeed({ status: "no-script" as const }),
+  runPrMerged: () => Effect.succeed({ status: "no-script" as const }),
+});
+
 it.layer(layerGitManagerTest)("GitManager", (it) => {
+  it.effect("status includes the GitHub repository URL for repository actions", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, [
+        "remote",
+        "add",
+        "origin",
+        "git@github.com:pingdotgg/codething-mvp.git",
+      ]);
+
+      const { manager } = yield* makeManager();
+      const status = yield* manager.status({ cwd: repoDir });
+
+      expect(status.sourceControlProvider).toEqual({
+        kind: "github",
+        name: "GitHub",
+        baseUrl: "https://github.com",
+        repositoryUrl: "https://github.com/pingdotgg/codething-mvp",
+      });
+    }),
+  );
+
+  it.effect("passive worktree status streams do not start remote refreshes", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-passive-vcs-");
+      yield* initRepo(repoDir);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+      const worktreeDir = NodePath.join(repoDir, "worktree");
+      yield* runGit(repoDir, ["worktree", "add", "-b", "feature/passive", worktreeDir]);
+      yield* runGit(worktreeDir, ["push", "-u", "origin", "feature/passive"]);
+
+      const { manager } = yield* makeManager();
+      let remoteReads = 0;
+      const workflowContext = yield* Layer.build(
+        GitWorkflowService.layer.pipe(
+          Layer.provide(
+            Layer.succeed(GitManager.GitManager, {
+              ...manager,
+              remoteStatus: (input, options) =>
+                manager.remoteStatus(input, options).pipe(
+                  Effect.tap(() =>
+                    Effect.sync(() => {
+                      remoteReads += 1;
+                    }),
+                  ),
+                ),
+            }),
+          ),
+          Layer.provide(
+            VcsDriverRegistry.layer.pipe(
+              Layer.provide(VcsProjectConfig.layer),
+              Layer.provide(VcsProcess.layer),
+            ),
+          ),
+          Layer.provide(lifecycleScriptRunnerMock),
+        ),
+      );
+      const broadcasterContext = yield* Layer.build(
+        VcsStatusBroadcaster.layer.pipe(
+          Layer.provide(
+            Layer.succeed(
+              VcsStatusBroadcaster.VcsAutomaticFetchInterval,
+              Effect.succeed(Duration.seconds(1)),
+            ),
+          ),
+          Layer.provide(
+            Layer.succeed(
+              GitWorkflowService.GitWorkflowService,
+              Context.get(workflowContext, GitWorkflowService.GitWorkflowService),
+            ),
+          ),
+          Layer.provide(
+            Layer.mock(BackgroundPolicy.BackgroundPolicy)({
+              hasDemand: () => Effect.succeed(true),
+              shouldRunScopeWork: () => Effect.succeed(true),
+            }),
+          ),
+          Layer.provide(lifecycleScriptRunnerMock),
+        ),
+      );
+      const broadcaster = Context.get(
+        broadcasterContext,
+        VcsStatusBroadcaster.VcsStatusBroadcaster,
+      );
+      const passiveScope = yield* Scope.make();
+      const snapshots = yield* Deferred.make<void, GitManagerServiceError>();
+      const localUpdated = yield* Deferred.make<void>();
+      const remoteUpdated = yield* Deferred.make<void>();
+      let snapshotCount = 0;
+      for (const cwd of [repoDir, worktreeDir]) {
+        yield* Stream.runForEach(
+          broadcaster.streamStatus({ cwd, includeRemote: false }),
+          (event) => {
+            if (
+              cwd === worktreeDir &&
+              event._tag === "localUpdated" &&
+              event.local.hasWorkingTreeChanges
+            ) {
+              return Deferred.succeed(localUpdated, undefined);
+            }
+            if (cwd === worktreeDir && event._tag === "remoteUpdated") {
+              expect(event.remote?.hasUpstream).toBe(true);
+              return Deferred.succeed(remoteUpdated, undefined);
+            }
+            if (event._tag !== "snapshot") return Effect.void;
+            expect(event.local.isRepo).toBe(true);
+            expect(event.local.refName).toBe(cwd === repoDir ? "main" : "feature/passive");
+            snapshotCount += 1;
+            return snapshotCount === 2 ? Deferred.succeed(snapshots, undefined) : Effect.void;
+          },
+        ).pipe(
+          Effect.catchCause((cause) => Deferred.failCause(snapshots, cause)),
+          Effect.forkIn(passiveScope),
+        );
+      }
+      yield* Deferred.await(snapshots);
+      expect(remoteReads).toBe(0);
+      yield* TestClock.adjust("1 minute");
+      expect(remoteReads).toBe(0);
+
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(NodePath.join(worktreeDir, "README.md"), "changed\n");
+      yield* broadcaster.refreshLocalStatus(worktreeDir);
+      yield* Deferred.await(localUpdated);
+      expect(remoteReads).toBe(0);
+
+      const activeScope = yield* Scope.make();
+      yield* Stream.runDrain(broadcaster.streamStatus({ cwd: worktreeDir })).pipe(
+        Effect.forkIn(activeScope),
+      );
+      yield* Deferred.await(remoteUpdated);
+      expect(remoteReads).toBe(1);
+      yield* Scope.close(activeScope, Exit.void);
+      yield* TestClock.adjust("1 minute");
+      expect(remoteReads).toBe(1);
+      yield* Scope.close(passiveScope, Exit.void);
+    }),
+  );
+
+  it.effect("status includes draft PR metadata when branch already has a draft PR", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/status-open-pr"]);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "feature/status-open-pr"]);
+
+      const { manager } = yield* makeManager({
+        providerScenario: {
+          prListSequence: [
+            [
+              {
+                number: 13,
+                title: "Existing PR",
+                url: "https://github.com/pingdotgg/codething-mvp/pull/13",
+                baseRefName: "main",
+                headRefName: "feature/status-open-pr",
+                isDraft: true,
+              },
+            ],
+          ],
+        },
+      });
+
+      const status = yield* manager.status({ cwd: repoDir });
+      expect(status.isRepo).toBe(true);
+      expect(status.hasPrimaryRemote).toBe(true);
+      expect(status.isDefaultRef).toBe(false);
+      expect(status.refName).toBe("feature/status-open-pr");
+      expect(status.pr).toEqual({
+        number: 13,
+        title: "Existing PR",
+        url: "https://github.com/pingdotgg/codething-mvp/pull/13",
+        baseRef: "main",
+        headRef: "feature/status-open-pr",
+        state: "open",
+        isDraft: true,
+        updatedAt: null,
+      });
+    }),
+  );
+
   it.effect("status reports the listed PR whose head is the branch", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
@@ -2072,6 +2301,103 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       }),
   );
 
+  it.effect("status does not re-list PRs after observing a merged PR (terminal freeze)", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/terminal-freeze"]);
+
+      const mergedPr: FakeChangeRequest = {
+        number: 44,
+        title: "Done",
+        url: "https://github.com/pingdotgg/codething-mvp/pull/44",
+        baseRefName: "main",
+        headRefName: "feature/terminal-freeze",
+        state: "merged",
+        mergedAt: "2026-01-30T10:00:00Z",
+        updatedAt: "2026-01-30T10:00:00Z",
+      };
+      const { manager, providerCalls } = yield* makeManager({
+        providerScenario: {
+          // Two list answers: first observation freezes; invalidateStatus re-lists.
+          prListSequence: [[mergedPr], [mergedPr]],
+        },
+      });
+
+      const first = yield* manager.remoteStatus({ cwd: repoDir });
+      expect(first?.pr?.state).toBe("merged");
+      const listCallsAfterFirst = providerCalls.filter(
+        (call) => call.operation === "listChangeRequests",
+      ).length;
+      expect(listCallsAfterFirst).toBe(1);
+
+      // Bypass remote status result cache (same as list-mode poll) without
+      // bumping the PR lookup epoch (that is only for explicit invalidateStatus).
+      const second = yield* manager.remoteStatus({ cwd: repoDir }, { refreshUpstream: false });
+      expect(second?.pr?.number).toBe(44);
+      expect(second?.pr?.state).toBe("merged");
+      expect(providerCalls.filter((call) => call.operation === "listChangeRequests").length).toBe(
+        listCallsAfterFirst,
+      );
+
+      // Explicit refresh re-opens the freeze (epoch bump).
+      yield* manager.invalidateStatus(repoDir);
+      const third = yield* manager.remoteStatus({ cwd: repoDir }, { refreshUpstream: false });
+      expect(third?.pr?.number).toBe(44);
+      expect(
+        providerCalls.filter((call) => call.operation === "listChangeRequests").length,
+      ).toBeGreaterThan(listCallsAfterFirst);
+    }),
+  );
+
+  it.effect(
+    "status skips PR list while the worktree is settle-frozen and resumes on unsettle",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("t3code-git-manager-");
+        yield* initRepo(repoDir);
+        yield* runGit(repoDir, ["checkout", "-b", "feature/settle-freeze"]);
+
+        const openPr: FakeChangeRequest = {
+          number: 55,
+          title: "In review",
+          url: "https://github.com/pingdotgg/codething-mvp/pull/55",
+          baseRefName: "main",
+          headRefName: "feature/settle-freeze",
+          state: "open",
+          updatedAt: "2026-01-30T10:00:00Z",
+        };
+        const { manager, providerCalls, prLookupFreeze } = yield* makeManager({
+          providerScenario: {
+            prListSequence: [[openPr], [openPr]],
+          },
+        });
+
+        const first = yield* manager.remoteStatus({ cwd: repoDir }, { refreshUpstream: false });
+        expect(first?.pr?.number).toBe(55);
+        const listCallsAfterFirst = providerCalls.filter(
+          (call) => call.operation === "listChangeRequests",
+        ).length;
+        expect(listCallsAfterFirst).toBe(1);
+
+        yield* prLookupFreeze.noteWorktreeSettled(repoDir);
+        yield* manager.invalidateRemoteStatus(repoDir);
+        const settled = yield* manager.remoteStatus({ cwd: repoDir }, { refreshUpstream: false });
+        expect(settled?.pr?.number).toBe(55);
+        expect(providerCalls.filter((call) => call.operation === "listChangeRequests").length).toBe(
+          listCallsAfterFirst,
+        );
+
+        yield* prLookupFreeze.noteWorktreeUnsettled(repoDir);
+        yield* manager.invalidateStatus(repoDir);
+        const resumed = yield* manager.remoteStatus({ cwd: repoDir }, { refreshUpstream: false });
+        expect(resumed?.pr?.number).toBe(55);
+        expect(
+          providerCalls.filter((call) => call.operation === "listChangeRequests").length,
+        ).toBeGreaterThan(listCallsAfterFirst);
+      }),
+  );
+
   it.effect("status hides merged PRs on the default branch", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
@@ -2100,6 +2426,148 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       expect(status.refName).toBe("main");
       expect(status.pr).toBeNull();
     }),
+  );
+
+  it.effect("resolveBranchChangeRequest returns PR for a branch that is not checked out", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/sidebar-pr"]);
+      yield* runGit(repoDir, ["checkout", "main"]);
+
+      const { manager } = yield* makeManager({
+        providerScenario: {
+          prListSequence: [
+            [
+              {
+                number: 31,
+                title: "Sidebar PR lookup",
+                url: "https://github.com/pingdotgg/codething-mvp/pull/31",
+                baseRefName: "main",
+                headRefName: "feature/sidebar-pr",
+                state: "open",
+                updatedAt: "2026-01-30T10:00:00Z",
+              },
+            ],
+          ],
+        },
+      });
+
+      const resolved = yield* manager.resolveBranchChangeRequest({
+        cwd: repoDir,
+        refName: "feature/sidebar-pr",
+      });
+      expect(resolved.pr).toEqual({
+        number: 31,
+        title: "Sidebar PR lookup",
+        url: "https://github.com/pingdotgg/codething-mvp/pull/31",
+        baseRef: "main",
+        headRef: "feature/sidebar-pr",
+        state: "open",
+        updatedAt: "2026-01-30T10:00:00.000Z",
+      });
+    }),
+  );
+
+  it.effect("resolveBranchChangeRequest surfaces failing GitHub checks for open PRs", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/failing-checks"]);
+      yield* runGit(repoDir, ["checkout", "main"]);
+
+      const { manager } = yield* makeManager({
+        providerScenario: {
+          prListSequence: [
+            [
+              {
+                number: 41,
+                title: "Failing checks PR",
+                url: "https://github.com/pingdotgg/codething-mvp/pull/41",
+                baseRefName: "main",
+                headRefName: "feature/failing-checks",
+                state: "open",
+                updatedAt: "2026-01-30T10:00:00Z",
+              },
+            ],
+          ],
+          pullRequest: {
+            number: 41,
+            title: "Failing checks PR",
+            url: "https://github.com/pingdotgg/codething-mvp/pull/41",
+            baseRefName: "main",
+            headRefName: "feature/failing-checks",
+            state: "open",
+            hasFailingChecks: true,
+          },
+        },
+      });
+
+      const resolved = yield* manager.resolveBranchChangeRequest({
+        cwd: repoDir,
+        refName: "feature/failing-checks",
+      });
+      expect(resolved.pr).toEqual({
+        number: 41,
+        title: "Failing checks PR",
+        url: "https://github.com/pingdotgg/codething-mvp/pull/41",
+        baseRef: "main",
+        headRef: "feature/failing-checks",
+        state: "open",
+        updatedAt: "2026-01-30T10:00:00.000Z",
+        hasFailingChecks: true,
+      });
+    }),
+  );
+
+  it.effect(
+    "resolveBranchChangeRequest falls back to a direct GitHub head lookup when the primary lookup returns null",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("t3code-git-manager-");
+        yield* initRepo(repoDir);
+        yield* runGit(repoDir, [
+          "config",
+          "remote.origin.url",
+          "https://github.com/pingdotgg/codething-mvp.git",
+        ]);
+        yield* runGit(repoDir, ["checkout", "-b", "feature/direct-fallback"]);
+        yield* runGit(repoDir, ["checkout", "main"]);
+
+        const { manager } = yield* makeManager({
+          providerScenario: {
+            prListSequence: [
+              [],
+              [
+                {
+                  number: 44,
+                  title: "Fallback PR lookup",
+                  url: "https://github.com/pingdotgg/codething-mvp/pull/44",
+                  baseRefName: "main",
+                  headRefName: "feature/direct-fallback",
+                  state: "merged",
+                  mergedAt: "2026-01-30T10:00:00Z",
+                  updatedAt: "2026-01-30T10:00:00Z",
+                },
+              ],
+            ],
+          },
+        });
+
+        const resolved = yield* manager.resolveBranchChangeRequest({
+          cwd: repoDir,
+          refName: "feature/direct-fallback",
+        });
+        expect(resolved.pr).toEqual({
+          number: 44,
+          title: "Fallback PR lookup",
+          url: "https://github.com/pingdotgg/codething-mvp/pull/44",
+          baseRef: "main",
+          headRef: "feature/direct-fallback",
+          state: "merged",
+          updatedAt: "2026-01-30T10:00:00.000Z",
+        });
+      }),
   );
 
   it.effect("status does not inherit a merged PR from a feature branch's default upstream", () =>
@@ -3829,6 +4297,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         const events: string[] = [];
         const workflows = yield* Effect.forEach([0, 1], () =>
           GitWorkflowService.make.pipe(
+            Effect.provide(lifecycleScriptRunnerMock),
             // Cache the real filesystem result so startImmediately reaches lease acquisition.
             Effect.provideService(FileSystem.FileSystem, {
               ...fileSystem,
@@ -5055,6 +5524,325 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       );
 
       expect(errorMessage).toContain("already checked out in the main repo");
+    }),
+  );
+
+  it.effect("emits ordered progress events for commit hooks", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      NodeFS.writeFileSync(NodePath.join(repoDir, "hooked.txt"), "hooked\n");
+      NodeFS.writeFileSync(
+        NodePath.join(repoDir, ".git", "hooks", "pre-commit"),
+        '#!/bin/sh\necho "hook: start" >&2\nsleep 0.05\necho "hook: end" >&2\n',
+        { mode: 0o755 },
+      );
+
+      const { manager } = yield* makeManager();
+      const events: GitActionProgressEvent[] = [];
+
+      const result = yield* runStackedAction(
+        manager,
+        {
+          cwd: repoDir,
+          action: "commit",
+        },
+        {
+          actionId: "action-1",
+          progressReporter: {
+            publish: (event) =>
+              Effect.sync(() => {
+                events.push(event);
+              }),
+          },
+        },
+      );
+
+      expect(result.commit.status).toBe("created");
+      expect(events.map((event) => event.kind)).toContain("action_started");
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "phase_started",
+            phase: "commit",
+          }),
+          expect.objectContaining({
+            kind: "hook_started",
+            hookName: "pre-commit",
+          }),
+          expect.objectContaining({
+            kind: "hook_output",
+            text: "hook: start",
+          }),
+          expect.objectContaining({
+            kind: "hook_output",
+            text: "hook: end",
+          }),
+          expect.objectContaining({
+            kind: "hook_finished",
+            hookName: "pre-commit",
+          }),
+          expect.objectContaining({
+            kind: "action_finished",
+          }),
+        ]),
+      );
+    }),
+  );
+
+  it.effect("does not attribute ambiguous output to the wrong commit hook", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      NodeFS.writeFileSync(NodePath.join(repoDir, "multi-hook.txt"), "multi hook\n");
+      NodeFS.writeFileSync(
+        NodePath.join(repoDir, ".git", "hooks", "pre-commit"),
+        // Brief sleep gives TRACE2 time to mark the hook active before stderr lands.
+        '#!/bin/sh\nsleep 0.05\necho "output from pre-commit" >&2\nsleep 0.05\n',
+        { mode: 0o755 },
+      );
+      NodeFS.writeFileSync(
+        NodePath.join(repoDir, ".git", "hooks", "commit-msg"),
+        '#!/bin/sh\nsleep 0.05\necho "output from commit-msg" >&2\nsleep 0.05\n',
+        { mode: 0o755 },
+      );
+
+      const { manager } = yield* makeManager();
+      const events: GitActionProgressEvent[] = [];
+
+      const result = yield* runStackedAction(
+        manager,
+        {
+          cwd: repoDir,
+          action: "commit",
+          commitMessage: "test: preserve hook output attribution",
+        },
+        {
+          actionId: "action-multi-hook",
+          progressReporter: {
+            publish: (event) =>
+              Effect.sync(() => {
+                events.push(event);
+              }),
+          },
+        },
+      );
+
+      expect(result.commit.status).toBe("created");
+      const hookOutput = events.filter((event) => event.kind === "hook_output");
+      const preCommitOutput = hookOutput.find((event) =>
+        event.text.includes("output from pre-commit"),
+      );
+      const commitMsgOutput = hookOutput.find((event) =>
+        event.text.includes("output from commit-msg"),
+      );
+      const gitOutput = hookOutput.find((event) =>
+        event.text.includes("test: preserve hook output attribution"),
+      );
+
+      expect(preCommitOutput).toBeDefined();
+      expect(preCommitOutput).toMatchObject({ hookName: null });
+      expect(commitMsgOutput).toBeDefined();
+      expect(commitMsgOutput).toMatchObject({ hookName: null });
+      expect(gitOutput).toMatchObject({ hookName: null });
+    }),
+  );
+
+  it.effect("emits action_failed when a commit hook rejects", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      NodeFS.writeFileSync(NodePath.join(repoDir, "hook-failure.txt"), "broken\n");
+      NodeFS.writeFileSync(
+        NodePath.join(repoDir, ".git", "hooks", "pre-commit"),
+        '#!/bin/sh\necho "hook: fail" >&2\nexit 1\n',
+        { mode: 0o755 },
+      );
+
+      const { manager } = yield* makeManager();
+      const events: GitActionProgressEvent[] = [];
+
+      const errorMessage = yield* runStackedAction(
+        manager,
+        {
+          cwd: repoDir,
+          action: "commit",
+        },
+        {
+          actionId: "action-2",
+          progressReporter: {
+            publish: (event) =>
+              Effect.sync(() => {
+                events.push(event);
+              }),
+          },
+        },
+      ).pipe(
+        Effect.flip,
+        Effect.map((error) => error.message),
+      );
+
+      expect(errorMessage).toContain("Git command failed in GitVcsDriver.commit.commit");
+      expect(errorMessage).not.toContain("hook: fail");
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "hook_started",
+            hookName: "pre-commit",
+          }),
+          expect.objectContaining({
+            kind: "hook_output",
+            text: "hook: fail",
+          }),
+          expect.objectContaining({
+            kind: "action_failed",
+            phase: "commit",
+            failureKind: "unknown",
+          }),
+        ]),
+      );
+    }),
+  );
+
+  it.effect(
+    "classifies signing failures and retries a created feature branch without branching again",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("t3code-git-manager-");
+        yield* initRepo(repoDir);
+        NodeFS.writeFileSync(NodePath.join(repoDir, "signing.txt"), "signing retry\n");
+        yield* configureFailingCommitSigner(repoDir);
+
+        const { manager } = yield* makeManager();
+        const events: GitActionProgressEvent[] = [];
+        yield* runStackedAction(
+          manager,
+          {
+            cwd: repoDir,
+            action: "commit",
+            commitMessage: "feat: signing retry",
+            featureBranch: true,
+          },
+          {
+            progressReporter: {
+              publish: (event) =>
+                Effect.sync(() => {
+                  events.push(event);
+                }),
+            },
+          },
+        ).pipe(Effect.flip);
+
+        expect(events).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              kind: "action_failed",
+              phase: "commit",
+              failureKind: "commit_signing_failed",
+            }),
+          ]),
+        );
+        expect(
+          events.some(
+            (event) => event.kind === "hook_output" && event.text.includes("No secret key"),
+          ),
+        ).toBe(false);
+        const branchAfterFailure = yield* runGit(repoDir, ["branch", "--show-current"]).pipe(
+          Effect.map((result) => result.stdout.trim()),
+        );
+        const branchCountAfterFailure = yield* runGit(repoDir, [
+          "branch",
+          "--format=%(refname)",
+        ]).pipe(Effect.map((result) => result.stdout.trim().split("\n").length));
+
+        const retried = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "commit",
+          commitMessage: "feat: signing retry",
+          disableCommitSigning: true,
+        });
+        const branchCountAfterRetry = yield* runGit(repoDir, [
+          "branch",
+          "--format=%(refname)",
+        ]).pipe(Effect.map((result) => result.stdout.trim().split("\n").length));
+
+        expect(retried.commit.status).toBe("created");
+        expect(retried.branch.status).toBe("skipped_not_requested");
+        expect(branchAfterFailure).toBe("feature/feat-signing-retry");
+        expect(branchCountAfterRetry).toBe(branchCountAfterFailure);
+      }),
+  );
+
+  it.effect.each(["commit", "commit_push", "commit_push_pr"] as const)(
+    "forwards the unsigned override for %s",
+    (action) =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("t3code-git-manager-");
+        yield* initRepo(repoDir);
+        if (action !== "commit") {
+          const remoteDir = yield* createBareRemote();
+          yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+          yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+          yield* runGit(repoDir, ["checkout", "-b", `feature/unsigned-${action}`]);
+        }
+        NodeFS.writeFileSync(NodePath.join(repoDir, `${action}.txt`), `${action}\n`);
+        yield* configureFailingCommitSigner(repoDir);
+
+        const { manager } = yield* makeManager();
+        const result = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action,
+          commitMessage: `test: ${action} unsigned`,
+          disableCommitSigning: true,
+        });
+
+        expect(result.commit.status).toBe("created");
+        if (action !== "commit") {
+          expect(result.push.status).toBe("pushed");
+        }
+        if (action === "commit_push_pr") {
+          expect(result.pr.status).toBe("created");
+        }
+      }),
+  );
+
+  it.effect("does not advertise another retry when an unsigned attempt fails", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      NodeFS.writeFileSync(NodePath.join(repoDir, "unsigned-hook.txt"), "hook failure\n");
+      NodeFS.writeFileSync(
+        NodePath.join(repoDir, ".git", "hooks", "pre-commit"),
+        "#!/bin/sh\necho 'error: gpg failed to sign the data' >&2\nexit 1\n",
+        { mode: 0o755 },
+      );
+
+      const { manager } = yield* makeManager();
+      const events: GitActionProgressEvent[] = [];
+      yield* runStackedAction(
+        manager,
+        {
+          cwd: repoDir,
+          action: "commit",
+          commitMessage: "test: unsigned hook failure",
+          disableCommitSigning: true,
+        },
+        {
+          progressReporter: {
+            publish: (event) =>
+              Effect.sync(() => {
+                events.push(event);
+              }),
+          },
+        },
+      ).pipe(Effect.flip);
+
+      const failure = events.find((event) => event.kind === "action_failed");
+      expect(failure).toMatchObject({
+        kind: "action_failed",
+        phase: "commit",
+        failureKind: "unknown",
+      });
     }),
   );
 

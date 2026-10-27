@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import { dual } from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
 import * as Headers from "effect/http/Headers";
@@ -19,6 +20,8 @@ export class GitHubGraphQlTarget extends Context.Service<
   GitHubGraphQlTarget,
   {
     readonly host: string;
+    readonly cwd?: string | undefined;
+    readonly repository?: string | undefined;
     readonly operation: string;
     /** Overrides `SourceControlRateLimit.Interactive` for this one call. */
     readonly allowReserve?: boolean | undefined;
@@ -62,6 +65,8 @@ export class GitHubGraphQlAuth extends GraphQLMiddleware.Service<
           return yield* policy.request(
             {
               host,
+              cwd: target.cwd,
+              repository: target.repository,
               operation: target.operation,
               resource: "graphql",
               allowReserve: target.allowReserve ?? (yield* SourceControlRateLimit.Interactive),
@@ -192,13 +197,22 @@ const layerProtocol = GraphQLProtocol.layerHttp({
 
 export const layer = Layer.merge(GitHubGraphQlAuth.layer, layerProtocol);
 
-/** Isolate credentials/rate-limit scopes; transport URLs already separate hosts. */
-export const batchKey = (context: Context.Context<GitHubGraphQlTarget>) =>
-  JSON.stringify([
-    Context.getOrElse(context, GitHubRequestPolicy.PinnedGitHubCredential, () => null)
-      ?.credentialFingerprint ?? null,
+/**
+ * What decides which lookups to one host may share a batched request: the credential and
+ * rate-limit scope it will be sent under. Read from the context the lookup was made in. Resolvers
+ * already keep hosts apart, since they batch by the transport's URL too.
+ */
+export const batchKey = (context: Context.Context<GitHubGraphQlTarget>) => {
+  const pinned = Context.getOrElse(context, GitHubRequestPolicy.PinnedGitHubCredential, () => null);
+  const target = Context.getUnsafe(context, GitHubGraphQlTarget);
+  return JSON.stringify([
+    pinned?.credentialFingerprint ?? null,
     Context.getOrElse(context, SourceControlRateLimit.CredentialScope, () => ""),
+    pinned !== null && Redacted.value(pinned.token).startsWith("ghs_")
+      ? [target.repository?.toLowerCase() ?? null, target.cwd ?? null]
+      : null,
   ]);
+};
 
 const fromClientError = (
   target: { readonly host: string; readonly operation: string },

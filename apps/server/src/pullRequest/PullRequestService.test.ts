@@ -1,8 +1,10 @@
 import { SourceControlProviderKind } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+
 import * as KeyValueStore from "effect/persistence/KeyValueStore";
 import { assert, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
+
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -933,7 +935,11 @@ it.effect("routing verifies the current account on the requested host without ca
       providers: [
         fakePullRequestProvider(SourceControlProviderKind.make("github"), {
           getRoutingIdentity: (input) => {
-            assert.deepStrictEqual(input, { cwd: "/a", host: "github.example.test" });
+            assert.deepStrictEqual(input, {
+              cwd: "/a",
+              host: "github.example.test",
+              repository: "acme/web",
+            });
             return Effect.succeed({
               viewer,
               accountId: viewer === "first-account" ? "123" : "456",
@@ -2981,6 +2987,343 @@ it.effect("does not let a stale detail reopen overwrite a fresher linked summary
     const refreshed = yield* service.summary({ ...reference, allowStale: false });
     assert.strictEqual(refreshed.title, "updated after merge");
     assert.strictEqual(refreshed.state, "merged");
+  }),
+);
+
+it.effect("does not let a still-cached detail overwrite a fresher linked summary", () =>
+  Effect.gen(function* () {
+    let summaryTitle = "old title";
+    let summaryState: "open" | "merged" = "open";
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+          getChangeRequest: () => Effect.succeed(hostedChangeRequest("old body", 4)),
+          getChangeRequestSummary: () =>
+            Effect.succeed({
+              ...changeRequest(1, "2026-07-02T00:00:00Z"),
+              title: summaryTitle,
+              state: summaryState,
+            }),
+        }),
+      ],
+    });
+
+    const first = yield* service.detail(reference);
+    assert.strictEqual(first.title, "Change request 1");
+
+    summaryTitle = "merged title";
+    summaryState = "merged";
+    const settled = yield* service.summary(reference, { recoverTransientFailure: false });
+    assert.strictEqual(settled.state, "merged");
+
+    const cached = yield* service.detail(reference);
+    assert.strictEqual(cached.title, "Change request 1");
+    yield* Effect.yieldNow;
+
+    const display = yield* service.summary(reference);
+    assert.strictEqual(display.title, "merged title");
+    assert.strictEqual(display.state, "merged");
+  }),
+);
+
+it.effect("tells the client when the host has no pull request under that number", () =>
+  Effect.gen(function* () {
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 121 };
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+          getChangeRequest: () =>
+            Effect.fail(
+              new PullRequestProviderError({
+                provider: SourceControlProviderKind.make("github"),
+                operation: "getChangeRequest",
+                reason: "not-found",
+                detail: "Pull request not found. Check the PR number or URL and try again.",
+              }),
+            ),
+        }),
+      ],
+    });
+
+    const error = yield* Effect.flip(service.detail(reference));
+
+    assert.strictEqual(error._tag, "PullRequestOperationError");
+    assert.strictEqual(error._tag === "PullRequestOperationError" && error.reason, "not-found");
+  }),
+);
+
+it.effect("keeps recent detail on a transient refresh failure but not after invalidation", () =>
+  Effect.gen(function* () {
+    let failing = false;
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+          getChangeRequest: () =>
+            failing
+              ? Effect.fail(
+                  new PullRequestProviderError({
+                    provider: SourceControlProviderKind.make("github"),
+                    operation: "getChangeRequest",
+                    reason: "failed",
+                    detail: "spawn gh EAGAIN",
+                  }),
+                )
+              : Effect.succeed({
+                  ...changeRequest(1, "2026-07-02T00:00:00Z"),
+                  body: "last good body",
+                  changedFiles: 2,
+                  mergedAt: null,
+                  closedAt: null,
+                  reviewers: [],
+                  checks: [],
+                  mergeCapabilities: { merge: true, squash: true, rebase: true },
+                  viewerPermissions: {
+                    actions: ["merge"],
+                    comment: true,
+                    resolve: true,
+                    verdicts: ["comment", "approve", "request-changes"],
+                    requestReviewers: true,
+                  },
+                }),
+        }),
+      ],
+    });
+
+    yield* service.detail(reference);
+    yield* TestClock.adjust("61 seconds");
+    failing = true;
+    const strict = yield* Effect.flip(service.detail({ ...reference, allowStale: false }));
+    assert.strictEqual(strict._tag, "PullRequestOperationError");
+    const stale = yield* service.detail(reference);
+    assert.strictEqual(stale.body, "last good body");
+
+    yield* service.invalidate({ reference });
+    const invalidated = yield* Effect.flip(service.detail(reference));
+    assert.strictEqual(invalidated._tag, "PullRequestOperationError");
+  }),
+);
+
+it.effect("carries an armed auto-merge through to the detail, and silence as silence", () =>
+  Effect.gen(function* () {
+    const detailWith = (autoMergeEnabled: boolean | undefined) =>
+      Effect.gen(function* () {
+        const service = yield* makeService({
+          projects: [
+            project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+          ],
+          providers: [
+            fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+              getChangeRequest: () =>
+                Effect.succeed({
+                  ...changeRequest(1, "2026-07-02T00:00:00Z"),
+                  body: "",
+                  changedFiles: 0,
+                  mergedAt: null,
+                  closedAt: null,
+                  reviewers: [],
+                  checks: [],
+                  mergeCapabilities: { merge: true, squash: true, rebase: true },
+                  viewerPermissions: {
+                    actions: ["merge"],
+                    comment: true,
+                    resolve: true,
+                    verdicts: ["comment", "approve", "request-changes"],
+                    requestReviewers: true,
+                  },
+                  ...(autoMergeEnabled === undefined ? {} : { autoMergeEnabled }),
+                }),
+            }),
+          ],
+        });
+        return yield* service.detail({
+          projectId: "p1" as ProjectId,
+          repository: "acme/web",
+          number: 1,
+        });
+      });
+
+    assert.strictEqual((yield* detailWith(true)).autoMergeEnabled, true);
+    assert.strictEqual((yield* detailWith(false)).autoMergeEnabled, false);
+    assert.isUndefined((yield* detailWith(undefined)).autoMergeEnabled);
+  }),
+);
+
+it("names an Azure DevOps repository by its own name, not its project path", () => {
+  // `az repos pr list --repository` takes a name and detects the organisation and project from
+  // the checkout; the recorded `org/project/_git/repo` path is refused, and the repository then
+  // reads as unavailable on the page.
+  const selector = PullRequestService.repositoryIdentityOf({
+    repositoryIdentity: {
+      provider: "azure-devops",
+      displayName: "contoso/payments/_git/checkout",
+      owner: "contoso",
+      name: "checkout",
+    },
+  } as never);
+  assert.strictEqual(selector, "checkout");
+});
+
+it("falls back to the path's last segment where an Azure identity has no name", () => {
+  const selector = PullRequestService.repositoryIdentityOf({
+    repositoryIdentity: {
+      provider: "azure-devops",
+      displayName: "contoso/payments/_git/checkout",
+    },
+  } as never);
+  assert.strictEqual(selector, "checkout");
+});
+
+it("lists origin and upstream so a fork PR is still this project's", () => {
+  const names = PullRequestService.repositoriesOf({
+    repositoryIdentity: {
+      provider: "github",
+      displayName: "pingdotgg/t3code",
+      owner: "pingdotgg",
+      name: "t3code",
+      remotes: [
+        {
+          remoteName: "origin",
+          remoteUrl: "https://github.com/patroza/t3code.git",
+          owner: "patroza",
+          name: "t3code",
+          canonicalKey: "github.com/patroza/t3code",
+        },
+        {
+          remoteName: "upstream",
+          remoteUrl: "https://github.com/pingdotgg/t3code.git",
+          owner: "pingdotgg",
+          name: "t3code",
+          canonicalKey: "github.com/pingdotgg/t3code",
+        },
+      ],
+    },
+  } as never);
+  assert.deepStrictEqual(names.toSorted(), ["patroza/t3code", "pingdotgg/t3code"]);
+});
+
+it.effect("reads a fork pull request against origin, not the upstream identity", () =>
+  Effect.gen(function* () {
+    let requested: string | null = null;
+    const fork = project({
+      id: "p1",
+      title: "t3code",
+      workspaceRoot: "/t3code",
+      repository: "pingdotgg/t3code",
+    });
+    const identity = fork.repositoryIdentity!;
+    const withRemotes = {
+      ...fork,
+      repositoryIdentity: {
+        ...identity,
+        remotes: [
+          {
+            remoteName: "origin",
+            remoteUrl: "https://github.com/patroza/t3code.git",
+            owner: "patroza",
+            name: "t3code",
+            canonicalKey: "github.com/patroza/t3code",
+          },
+          {
+            remoteName: "upstream",
+            remoteUrl: "https://github.com/pingdotgg/t3code.git",
+            owner: "pingdotgg",
+            name: "t3code",
+            canonicalKey: "github.com/pingdotgg/t3code",
+          },
+        ],
+      },
+    };
+    const service = yield* makeService({
+      projects: [withRemotes],
+      providers: [
+        fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+          getChangeRequest: (input) => {
+            requested = input.repository;
+            return Effect.succeed({
+              ...changeRequest(410, "2026-08-15T00:00:00Z"),
+              url: "https://github.com/patroza/t3code/pull/410",
+              body: "",
+              changedFiles: 1,
+              mergedAt: null,
+              closedAt: null,
+              reviewers: [],
+              checks: [],
+              mergeCapabilities: { merge: true, squash: true, rebase: true },
+              viewerPermissions: {
+                actions: ["merge"],
+                comment: true,
+                resolve: true,
+                verdicts: ["comment", "approve", "request-changes"],
+                requestReviewers: true,
+              },
+            });
+          },
+        }),
+      ],
+    });
+
+    const detail = yield* service.detail({
+      projectId: "p1" as ProjectId,
+      repository: "patroza/t3code",
+      number: 410,
+    });
+
+    assert.strictEqual(requested, "patroza/t3code");
+    assert.strictEqual(detail.repository, "patroza/t3code");
+    assert.strictEqual(detail.number, 410);
+  }),
+);
+
+it("keeps a GitLab identity's whole path, because a nested group is part of the name", () => {
+  const selector = PullRequestService.repositoryIdentityOf({
+    repositoryIdentity: {
+      provider: "gitlab",
+      displayName: "group/subgroup/service",
+      owner: "group",
+      name: "service",
+    },
+  } as never);
+  assert.strictEqual(selector, "group/subgroup/service");
+});
+
+it.effect("narrows the rows of a host that ignored the filters it was handed", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "p1",
+          title: "web",
+          workspaceRoot: "/a",
+          repository: "acme/web",
+          provider: SourceControlProviderKind.make("gitlab"),
+        }),
+      ],
+      providers: [
+        fakePullRequestProvider(SourceControlProviderKind.make("gitlab"), {
+          listChangeRequests: () =>
+            Effect.succeed({
+              items: [
+                { ...changeRequest(1, "2026-07-02T00:00:00Z"), isDraft: true },
+                changeRequest(2, "2026-07-01T00:00:00Z"),
+              ],
+              truncated: false,
+              continues: false,
+            }),
+        }),
+      ],
+    });
+
+    const result = yield* service.list({ state: "open", filters: { draft: "hide" } });
+
+    assert.deepStrictEqual(
+      result.entries.map((entry) => entry.number),
+      [2],
+    );
   }),
 );
 

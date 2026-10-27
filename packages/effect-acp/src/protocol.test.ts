@@ -28,6 +28,9 @@ import {
   jsonRpcResponse,
 } from "./_internal/shared.ts";
 import { makeInMemoryStdio, makeTerminationError, makeChildStdio } from "./_internal/stdio.ts";
+const decodeJsonRpcRequestId = Schema.decodeEffect(
+  Schema.fromJsonString(Schema.Struct({ id: Schema.Number })),
+);
 
 const SessionCancelNotification = jsonRpcNotification(
   "session/cancel",
@@ -65,6 +68,9 @@ const encoder = new TextEncoder();
 const mockPeerPath = Effect.map(Effect.service(Path.Path), (path) =>
   path.join(import.meta.dirname, "../test/fixtures/acp-mock-peer.ts"),
 );
+const stdinDrainingPeerPath = Effect.map(Effect.service(Path.Path), (path) =>
+  path.join(import.meta.dirname, "../test/fixtures/stdin-draining-peer.ts"),
+);
 const mockPeerArgs = (path: string) => [path];
 
 const makeHandle = (env?: Record<string, string>) =>
@@ -79,6 +85,39 @@ const makeHandle = (env?: Record<string, string>) =>
   });
 
 it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
+  it.effect("closes child stdin before awaiting process shutdown", () =>
+    Effect.gen(function* () {
+      const exitCode = yield* Ref.make<number | null>(null);
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+          const handle = yield* spawner.spawn(
+            ChildProcess.make(process.execPath, [yield* stdinDrainingPeerPath], {
+              forceKillAfter: "100 millis",
+            }),
+          );
+          yield* Effect.addFinalizer(() =>
+            handle.exitCode.pipe(
+              Effect.flatMap((code) => Ref.set(exitCode, code)),
+              Effect.timeoutOrElse({
+                duration: "1 second",
+                orElse: () => Ref.set(exitCode, -1),
+              }),
+              Effect.catch(() => Ref.set(exitCode, -2)),
+            ),
+          );
+          yield* AcpProtocol.makeAcpPatchedProtocol({
+            stdio: makeChildStdio(handle),
+            serverRequestMethods: new Set(),
+          });
+        }),
+      );
+
+      assert.equal(yield* Ref.get(exitCode), 0);
+    }),
+  );
+
   it.effect(
     "emits exact JSON-RPC notifications and decodes inbound session/update and elicitation completion",
     () =>
@@ -144,6 +183,107 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
         assert.equal(update?._tag, "SessionUpdate");
         assert.equal(completion?._tag, "ElicitationComplete");
       }),
+  );
+
+  it.effect(
+    "drops Effect-RPC transport control frames instead of leaking them to the ACP wire",
+    () =>
+      Effect.gen(function* () {
+        const { stdio, output } = yield* makeInMemoryStdio();
+        const transport = yield* AcpProtocol.makeAcpPatchedProtocol({
+          stdio,
+          serverRequestMethods: new Set(),
+        });
+
+        // `Interrupt` is what Effect's RpcClient emits when an in-flight request
+        // fiber is cancelled (a turn Stop, a client reconnect, a superseding
+        // turn, ...). A spec-compliant ACP agent cannot decode it — leaking it
+        // wedges the session — so it must never reach stdout.
+        yield* transport.clientProtocol.send(0, {
+          _tag: "Interrupt",
+          requestId: "4294967299",
+        });
+
+        // A real ACP message (here an id:"" notification) must still be written.
+        yield* transport.clientProtocol.send(0, {
+          _tag: "Request",
+          id: "",
+          tag: "session/cancel",
+          payload: { sessionId: "session-1" },
+          headers: [],
+        });
+
+        // The first — and only — frame on the wire is the real request. Had the
+        // Interrupt leaked, it would have been taken here first.
+        const outbound = yield* Queue.take(output);
+        assert.deepEqual(yield* decodeSessionCancelNotification(outbound), {
+          jsonrpc: "2.0",
+          method: "session/cancel",
+          params: { sessionId: "session-1" },
+        });
+        assert.strictEqual(yield* Queue.size(output), 0);
+      }),
+  );
+
+  it.effect("keeps only recent raw notifications after their callbacks run", () =>
+    Effect.gen(function* () {
+      const { stdio, input } = yield* makeInMemoryStdio();
+      const handled = yield* Deferred.make<void>();
+      let handledCount = 0;
+      const transport = yield* AcpProtocol.makeAcpPatchedProtocol({
+        stdio,
+        serverRequestMethods: new Set(),
+        onNotification: () =>
+          Effect.sync(() => ++handledCount).pipe(
+            Effect.flatMap((count) =>
+              count === 64 ? Deferred.succeed(handled, undefined).pipe(Effect.asVoid) : Effect.void,
+            ),
+          ),
+      });
+
+      const messages = Array.from({ length: 64 }, (_, index) =>
+        encodeUnknownJsonString({
+          jsonrpc: "2.0",
+          method: "x/performance",
+          params: { index },
+        }),
+      );
+      yield* Queue.offer(input, encoder.encode(`${messages.join("\n")}\n`));
+      yield* Deferred.await(handled);
+
+      const retained = yield* transport.incoming.pipe(Stream.take(32), Stream.runCollect);
+
+      assert.equal(handledCount, 64);
+      assert.equal(retained.length, 32);
+      assert.deepEqual(retained[0]?.params, { index: 32 });
+      assert.deepEqual(retained[31]?.params, { index: 63 });
+    }),
+  );
+
+  it.effect("decodes standard JSON-RPC errors into typed ACP request failures", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const transport = yield* AcpProtocol.makeAcpPatchedProtocol({
+        stdio,
+        serverRequestMethods: new Set(),
+      });
+
+      const request = yield* transport.request("x/auth", {}).pipe(Effect.forkScoped);
+      const outbound = yield* decodeJsonRpcRequestId(yield* Queue.take(output));
+      yield* Queue.offer(
+        input,
+        yield* encodeJsonl(JsonRpcErrorResponse, {
+          jsonrpc: "2.0",
+          id: outbound.id,
+          error: { code: -32000, message: "Authentication required" },
+        }),
+      );
+
+      const error = yield* Fiber.join(request).pipe(Effect.flip, Effect.orDie);
+      assert.instanceOf(error, AcpError.AcpRequestError);
+      assert.equal(error.code, -32000);
+      assert.equal(error.message, "Authentication required");
+    }),
   );
 
   // clanka once sent a usage_update without `used` and `size`. One bad update

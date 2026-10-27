@@ -613,6 +613,34 @@ function withRateLimitBackoff(
     Record<Exclude<keyof PullRequestProviderApi, keyof typeof wrapped>, never>;
 }
 
+export function repositoryIdentityOf(project: OrchestrationProjectShell): string | null {
+  const identity = project.repositoryIdentity;
+  if (!identity) return null;
+  if (identity.provider === "azure-devops") {
+    const segments = (identity.displayName ?? "").split("/").filter((part) => part !== "_git");
+    return identity.name || segments.at(-1) || null;
+  }
+  if (identity.displayName) return identity.displayName;
+  return identity.owner && identity.name ? `${identity.owner}/${identity.name}` : null;
+}
+
+/**
+ * Every repository this checkout answers to. A fork records both origin and
+ * upstream; the primary identity prefers upstream, but a change request on the
+ * fork is still this project's.
+ */
+export function repositoriesOf(project: OrchestrationProjectShell): ReadonlyArray<string> {
+  const names = new Set<string>();
+  const primary = repositoryIdentityOf(project);
+  if (primary) names.add(primary.toLowerCase());
+  for (const remote of project.repositoryIdentity?.remotes ?? []) {
+    if (remote.owner && remote.name) {
+      names.add(`${remote.owner}/${remote.name}`.toLowerCase());
+    }
+  }
+  return [...names];
+}
+
 const FILTER_OPTIONS_LIMIT = 100;
 
 /**
@@ -927,8 +955,20 @@ export const make = Effect.gen(function* () {
         const own = supported[0];
         const repository = ref.repository.trim();
         const host = ref.host?.trim().toLowerCase();
-        if (own !== undefined && own.repository.toLowerCase() === repository.toLowerCase()) {
-          if (host === undefined || host === own.host) return Effect.succeed(own);
+        if (own !== undefined) {
+          const requested = repository.toLowerCase();
+          // Upstream is the primary identity on a fork; origin is still ours.
+          if (
+            (own.repository.toLowerCase() === requested ||
+              repositoriesOf(own.project).includes(requested)) &&
+            (host === undefined || host === own.host)
+          ) {
+            return Effect.succeed(
+              requested === own.repository.toLowerCase()
+                ? own
+                : { ...own, repository: ref.repository.trim() },
+            );
+          }
         }
         if (host === undefined) {
           if (own === undefined) {
@@ -1540,6 +1580,7 @@ export const make = Effect.gen(function* () {
     const identity = yield* api
       .getRoutingIdentity({
         cwd: project.project.workspaceRoot,
+        repository: project.repository,
         host,
       })
       .pipe(Effect.mapError(toPullRequestError("routeIdentity")));
@@ -1565,7 +1606,11 @@ export const make = Effect.gen(function* () {
     }
     const result = yield* api
       .withVerifiedCredential(
-        { cwd: project.project.workspaceRoot, host: project.host },
+        {
+          cwd: project.project.workspaceRoot,
+          host: project.host,
+          repository: project.repository,
+        },
         (identity) =>
           identity.accountId === input.expectedAccountId
             ? operation.pipe(Effect.provideService(routingCredential, identity), Effect.result)
@@ -1584,6 +1629,7 @@ export const make = Effect.gen(function* () {
     const identity = yield* api
       .getRoutingIdentity({
         cwd: project.project.workspaceRoot,
+        repository: project.repository,
         host: project.host,
       })
       .pipe(Effect.mapError(toPullRequestError("routeIdentity")));
