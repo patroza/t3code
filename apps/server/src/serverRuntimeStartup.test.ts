@@ -14,6 +14,7 @@ import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import { HttpServer } from "effect/http";
 import * as NetAddress from "effect/net/NetAddress";
 import * as Deferred from "effect/Deferred";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Exit from "effect/Exit";
@@ -212,7 +213,7 @@ it.effect.each([
         Layer.mock(GitVcsDriver.GitVcsDriver)({}),
         Layer.mock(AnalyticsService.AnalyticsService)({}),
         // No provider logins or Connect link, so startup records no owners.
-        FileSystem.layerNoop({}),
+        FileSystem.layerNoop({ writeFileString: () => Effect.void }),
         Layer.mock(ServerSecretStore.ServerSecretStore)({ get: () => Effect.succeedNone }),
         Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
         Layer.mock(ExternalLauncher.ExternalLauncher)({}),
@@ -224,7 +225,11 @@ it.effect.each([
         const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
         yield* startup.markHttpListening;
         const ready = yield* Effect.exit(startup.awaitCommandReady);
-        assert.equal(Exit.isSuccess(ready), scenario !== "project-failure");
+        assert.equal(
+          Exit.isSuccess(ready),
+          scenario !== "project-failure",
+          Exit.isFailure(ready) ? Cause.pretty(ready.cause) : undefined,
+        );
         const welcome = events.find((event) => event.type === "welcome");
         if (scenario === "project-failure") {
           assert.isUndefined(welcome);

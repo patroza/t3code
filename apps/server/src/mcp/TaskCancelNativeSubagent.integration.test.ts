@@ -35,6 +35,7 @@ import * as ProviderReplayHarness from "../orchestration-v2/testkit/ProviderRepl
 import { checkpointWorkspace } from "@t3tools/provider-testing/replayWorkspace";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProjectService from "../project/ProjectService.ts";
+import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
@@ -152,6 +153,9 @@ it.effect("task_cancel ends a delegated child's background native subagent", () 
         Layer.provide(
           Layer.mergeAll(
             layerAdapters,
+            Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({
+              get: () => Effect.succeed(null),
+            }),
             Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
             Layer.mock(ProjectService.ProjectService)({}),
             Layer.mock(SecretRequests.SecretRequests)({}),

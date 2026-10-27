@@ -1,4 +1,9 @@
-import type { RepositoryIdentity, SourceControlProviderError } from "@t3tools/contracts";
+import type {
+  RepositoryIdentity,
+  RepositoryIdentityRemote,
+  SourceControlProviderError,
+  SourceControlProviderKind,
+} from "@t3tools/contracts";
 import { repositoryPathFromRemoteUrl } from "@t3tools/source-control-core/server/SourceControlProvider";
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
@@ -102,33 +107,53 @@ function buildRepositoryOrigin(
   return { canonicalKey: originKey, remoteUrl: originUrl, ...(displayName ? { displayName } : {}) };
 }
 
-function buildRepositoryIdentity(input: {
+function describeRemote(input: {
   readonly remoteName: string;
   readonly remoteUrl: string;
-  readonly originUrl: string | undefined;
-  readonly rootPath: string;
-}): RepositoryIdentity {
+}): RepositoryIdentityRemote & { readonly provider?: SourceControlProviderKind } {
   const canonicalKey = sourceControlDefinitions.repositoryKeyFromRemote(input.remoteUrl);
   const sourceControlProvider = sourceControlDefinitions.recognizeRemote(input.remoteUrl);
   const repositoryPath = repositoryPathOf(canonicalKey, input.remoteUrl);
   const repositoryPathSegments = repositoryPath.split("/").filter((segment) => segment.length > 0);
   const [owner] = repositoryPathSegments;
   const repositoryName = repositoryPathSegments.at(-1);
-  const origin = buildRepositoryOrigin(input.originUrl, canonicalKey);
 
   return {
+    remoteName: input.remoteName,
+    remoteUrl: input.remoteUrl,
     canonicalKey,
-    locator: {
-      source: "git-remote",
-      remoteName: input.remoteName,
-      remoteUrl: input.remoteUrl,
-    },
-    rootPath: input.rootPath,
-    ...(repositoryPath ? { displayName: repositoryPath } : {}),
     ...(sourceControlProvider ? { provider: sourceControlProvider.kind } : {}),
     ...(owner ? { owner } : {}),
     ...(repositoryName ? { name: repositoryName } : {}),
+  };
+}
+
+function buildRepositoryIdentity(input: {
+  readonly remoteName: string;
+  readonly remoteUrl: string;
+  readonly rootPath: string;
+  readonly remotes: ReadonlyMap<string, string>;
+}): RepositoryIdentity {
+  const primary = describeRemote(input);
+  const repositoryPath = repositoryPathOf(primary.canonicalKey, input.remoteUrl);
+  const origin = buildRepositoryOrigin(input.remotes.get("origin"), primary.canonicalKey);
+
+  return {
+    canonicalKey: primary.canonicalKey,
     ...(origin ? { origin } : {}),
+    locator: {
+      source: "git-remote",
+      remoteName: primary.remoteName,
+      remoteUrl: primary.remoteUrl,
+    },
+    rootPath: input.rootPath,
+    ...(repositoryPath ? { displayName: repositoryPath } : {}),
+    ...(primary.provider ? { provider: primary.provider } : {}),
+    ...(primary.owner ? { owner: primary.owner } : {}),
+    ...(primary.name ? { name: primary.name } : {}),
+    remotes: [...input.remotes].map(([remoteName, remoteUrl]) =>
+      describeRemote({ remoteName, remoteUrl }),
+    ),
   };
 }
 
@@ -214,11 +239,7 @@ const resolveRepositoryIdentityFromCacheKey = Effect.fn(
   const remotes = parseRemoteFetchUrls(remoteResult.value.stdout);
   const remote = pickPrimaryRemote(remotes);
   return remote
-    ? buildRepositoryIdentity({
-        ...remote,
-        originUrl: remotes.get("origin"),
-        rootPath: cacheKey.rootPath,
-      })
+    ? buildRepositoryIdentity({ ...remote, rootPath: cacheKey.rootPath, remotes })
     : null;
 });
 

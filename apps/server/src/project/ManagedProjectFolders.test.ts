@@ -1,6 +1,12 @@
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { CommandId, ProjectId, ThreadId, VcsProcessSpawnError } from "@t3tools/contracts";
+import {
+  CommandId,
+  GitCommandError,
+  ProjectId,
+  ThreadId,
+  VcsProcessSpawnError,
+} from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -27,11 +33,18 @@ import * as ProjectFaviconResolver from "./ProjectFaviconResolver.ts";
 import * as ProjectService from "./ProjectService.ts";
 import * as RepositoryIdentityResolver from "./RepositoryIdentityResolver.ts";
 import * as ManagedProjectFolders from "./ManagedProjectFolders.ts";
+import * as ProjectLifecycleScriptRunner from "./ProjectLifecycleScriptRunner.ts";
 
 const layerGitWorkflow = (vcsProcess?: Layer.Layer<VcsProcess.VcsProcess>) =>
   GitWorkflow.layer.pipe(
     Layer.provide(VcsDriverRegistry.layer.pipe(Layer.provide(vcsProcess ?? VcsProcess.layer))),
     Layer.provide(Layer.mock(GitManager.GitManager)({})),
+    Layer.provide(
+      Layer.mock(ProjectLifecycleScriptRunner.ProjectLifecycleScriptRunner)({
+        runWorktreeRemove: () => Effect.succeed({ status: "no-script" as const }),
+        runPrMerged: () => Effect.succeed({ status: "no-script" as const }),
+      }),
+    ),
   );
 
 const layerEnrichment = ProjectEnrichmentService.layer.pipe(
@@ -532,4 +545,38 @@ it.effect("removes the folder when the create is cancelled before the project ex
       },
     );
   }),
+);
+
+it.effect("removes the folder when the repository cannot be made", () =>
+  withScratch(
+    ({ baseDir }) =>
+      Effect.gen(function* () {
+        const folders = yield* ManagedProjectFolders.ManagedProjectFolders;
+        const projects = yield* ProjectService.ProjectService;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+
+        const failure = yield* Effect.flip(folders.createNamedProject({ name: "Broken" }));
+
+        assert.equal(failure._tag, "NamedProjectFolderError");
+        assert.equal(failure.message, "Failed to create the project folder.");
+        assert.deepEqual(yield* fileSystem.readDirectory(path.resolve(baseDir, "projects")), []);
+        assert.deepEqual((yield* projects.snapshot).projects, []);
+      }),
+    {
+      git: Layer.mock(GitVcsDriver.GitVcsDriver)({
+        readConfigValue: () => Effect.succeed(null),
+        execute: (input) =>
+          Effect.fail(
+            new GitCommandError({
+              failureKind: "unknown",
+              operation: input.operation,
+              command: "git",
+              cwd: input.cwd,
+              detail: "git is broken",
+            }),
+          ),
+      }),
+    },
+  ),
 );

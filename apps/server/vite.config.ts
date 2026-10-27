@@ -19,7 +19,10 @@ const repoEnv = loadRepoEnv();
 const cliBuildChannel = /^[^-+]+-(?:nightly|preview)\./.test(packageJson.version)
   ? "nightly"
   : "latest";
-// Official release workflows set the telemetry channel; local builds and forks use "dev".
+const serverTestTimeout = 120_000;
+// Sent with every analytics event. Release workflows set it for pingdotgg/t3code
+// builds only, so local builds and forks report "dev". A typo fails the build
+// instead of mislabeling events.
 const TELEMETRY_CHANNELS = ["stable", "nightly", "preview", "dev"];
 const telemetryChannel = process.env.T3CODE_TELEMETRY_CHANNEL?.trim() || "dev";
 if (!TELEMETRY_CHANNELS.includes(telemetryChannel)) {
@@ -82,7 +85,11 @@ export default mergeConfig(
       entry: packExecutable ? ["src/bin.ts"] : ["src/bin.ts", "src/claude-history-worker.ts"],
       outDir: packExecutable ? "dist-exe" : "dist",
       sourcemap: !packExecutable,
-      clean: true,
+      // Never wipe dist/ wholesale during the default pack: deploy builds the
+      // server while a live process is still serving dist/client. The exe pack
+      // writes to dist-exe and can clean. cli.ts selectively removes non-client
+      // artifacts before pack instead.
+      clean: packExecutable,
       ...(packExecutable
         ? {
             exe: {
@@ -127,13 +134,155 @@ export default mergeConfig(
     test: {
       // Parallel sqlite/git/worktree/orchestration tests introduce load-sensitive flakes.
       fileParallelism: false,
-      sequence: { sequencer: WeightedShardSequencer },
+      sequence: { sequencer: WeightedShardSequencer, groupOrder: 4 },
+      // Appended to the root setup, which mergeConfig concatenates.
       setupFiles: [
         "./src/testUtils/gitConfig.setup.ts",
         "./src/testUtils/managedServiceEnv.setup.ts",
       ],
-      hookTimeout: 120_000,
-      testTimeout: 120_000,
+      projects: [
+        {
+          test: {
+            name: "server",
+            isolate: false,
+            hookTimeout: serverTestTimeout,
+            testTimeout: serverTestTimeout,
+            include: ["integration/**/*.test.ts", "scripts/**/*.test.ts", "src/**/*.test.ts"],
+            exclude: [
+              "src/usage/UsageService.test.ts",
+              // The child-process spy must bind before DocumentText is imported.
+              "src/provider/userInputAttachments.test.ts",
+              "src/persistence/OrchestrationEventStore.test.ts",
+              "src/assets/AssetAccess.test.ts",
+              "src/htmlRender/publicProxy.test.ts",
+              "src/bootstrap.test.ts",
+              "src/cli/app.test.ts",
+              "src/git/GitManager.test.ts",
+              "src/observability/HeapSnapshot.test.ts",
+              "src/os-jank.test.ts",
+              "src/serviceLauncher.test.ts",
+              "src/provider/ClaudeCapabilitiesProbe.test.ts",
+              "src/provider/ProviderInstanceRegistry.test.ts",
+              "src/orchestration-v2/Adapters/ClaudeAgentSdkQueryRunner.test.ts",
+              "src/orchestration-v2/Adapters/ClaudeAdapterV2.test.ts",
+              "src/provider/ProviderRegistry.test.ts",
+              "src/orchestration-v2/Adapters/CursorAgentSdk.test.ts",
+              "src/textGeneration/CursorTextGeneration.test.ts",
+              "src/terminal/NodePtyAdapter.test.ts",
+              "src/terminal/Manager.test.ts",
+              "src/vcs/GitVcsDriverCore.test.ts",
+              "src/workspace/WorkspaceEntries.test.ts",
+              "src/workspace/WorkspaceFileSystem.test.ts",
+              // Mocks `./ServerBrowserContexts`. Under isolate:false the real
+              // pool is already bound, so launch asks the stub browser for an
+              // executable and desktop CDP connects to ws://desktop.
+              "src/preview/ServerBrowser.test.ts",
+              // Mocks `node:fs/promises` and spies on playwright. Under
+              // isolate:false the real mkdir runs against `/test` and fails.
+              "src/preview/ServerBrowserContexts.test.ts",
+            ],
+          },
+        },
+        {
+          test: {
+            name: "server-isolated-module-mocks",
+            isolate: true,
+            hookTimeout: serverTestTimeout,
+            testTimeout: serverTestTimeout,
+            include: [
+              // Muse history discovery mocks the SDK initializer. Provider imports
+              // in another file otherwise retain the real binding and hide history.
+              "src/usage/UsageService.test.ts",
+              // The child-process spy must bind before DocumentText is imported.
+              "src/provider/userInputAttachments.test.ts",
+              // Mocks `node:fs/promises`.open so a path swap during open is
+              // visible. Under isolate:false the real module is already bound
+              // and the descriptor is not rejected.
+              "src/assets/AssetAccess.test.ts",
+              // Mocks local interface addresses; isolate it from cached node:os imports.
+              "src/htmlRender/publicProxy.test.ts",
+              "src/bootstrap.test.ts",
+              // Mocks `node:os`.homedir so `t3 app` resolves ~/.t3 into the
+              // fixture tree. Under isolate:false an earlier file binds the
+              // real os module and the mock never applies — the CLI then
+              // connects to the live Linux desktop socket.
+              "src/cli/app.test.ts",
+              // Real git with per-repo gpg.program / core.hooksPath fixtures.
+              // Under isolate:false a sibling can leak git env so signing never
+              // fails, or `git hook run post-checkout` ignores a non-executable
+              // leftover hook (`cannot find a hook named post-checkout`).
+              "src/git/GitManager.test.ts",
+              "src/vcs/GitVcsDriverCore.test.ts",
+              // Mocks `node:v8`.writeHeapSnapshot. Under isolate:false an
+              // earlier file binds the real v8 module and the partial-file
+              // cleanup assertion never sees the mocked path.
+              "src/observability/HeapSnapshot.test.ts",
+              // Mocks the synchronous login-shell probe used by shared/shell.
+              "src/os-jank.test.ts",
+              // Wraps node:child_process.spawn to observe trial IPC. Earlier
+              // CloudLink imports otherwise cache the launcher without that wrapper.
+              "src/serviceLauncher.test.ts",
+              // Wraps ChildProcessSpawner and drives SettingsWatcherLive
+              // through TestClock. Under isolate:false a sibling file in
+              // the same worker can swallow the second binaryPath probe.
+              "src/provider/ProviderRegistry.test.ts",
+              // These install different mocks for the same Cursor SDK wrapper.
+              // Isolate them from real SDK bindings and each other's fake agent.
+              "src/orchestration-v2/Adapters/CursorAgentSdk.test.ts",
+              "src/textGeneration/CursorTextGeneration.test.ts",
+              "src/terminal/NodePtyAdapter.test.ts",
+              // Wraps SynchronizedRef.make to inspect kill-fiber registration races.
+              // Cached Manager imports otherwise bypass the wrapped module.
+              "src/terminal/Manager.test.ts",
+              "src/workspace/WorkspaceEntries.test.ts",
+              // Mocks realpath; earlier runtime imports otherwise keep the native binding.
+              "src/workspace/WorkspaceFileSystem.test.ts",
+              // Mocks `./ServerBrowserContexts`. Under isolate:false the real
+              // pool is already bound, so launch asks the stub browser for an
+              // executable and desktop CDP connects to ws://desktop.
+              "src/preview/ServerBrowser.test.ts",
+              // Mocks `node:fs/promises` and spies on playwright. Under
+              // isolate:false the real mkdir runs against `/test` and fails.
+              "src/preview/ServerBrowserContexts.test.ts",
+            ],
+          },
+        },
+        {
+          test: {
+            name: "server-isolated-replay-retention",
+            // queryObjects performs full-heap collection. Keep the replay-page
+            // retention check out of the main worker's accumulated module heap.
+            isolate: true,
+            fileParallelism: false,
+            maxWorkers: 1,
+            hookTimeout: serverTestTimeout,
+            testTimeout: serverTestTimeout,
+            include: ["src/persistence/OrchestrationEventStore.test.ts"],
+          },
+        },
+        {
+          test: {
+            name: "server-isolated-claude-probe",
+            isolate: true,
+            fileParallelism: false,
+            maxWorkers: 1,
+            hookTimeout: serverTestTimeout,
+            testTimeout: serverTestTimeout,
+            include: [
+              // Mock SDK query/settings resolution before providers and adapters bind them.
+              // Under isolate:false another file may already have cached the real SDK.
+              "src/provider/ClaudeCapabilitiesProbe.test.ts",
+              "src/provider/ProviderInstanceRegistry.test.ts",
+              "src/orchestration-v2/Adapters/ClaudeAgentSdkQueryRunner.test.ts",
+              "src/orchestration-v2/Adapters/ClaudeAdapterV2.test.ts",
+            ],
+          },
+        },
+      ],
+      // Server integration tests exercise sqlite, git, and orchestration together.
+      // Under package-wide runs they can exceed the default budget on loaded CI hosts.
+      hookTimeout: serverTestTimeout,
+      testTimeout: serverTestTimeout,
     },
   }),
 );

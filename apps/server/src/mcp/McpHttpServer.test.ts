@@ -1,3 +1,4 @@
+import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import { expect, it } from "@effect/vitest";
@@ -12,11 +13,14 @@ import {
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+
 import * as Layer from "effect/Layer";
+
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { McpSchema, McpServer, Tool, Toolkit } from "effect/ai";
 import { HttpBody, HttpClient, HttpClientRequest, HttpRouter } from "effect/http";
+import { vi } from "vite-plus/test";
 
 import * as ProjectService from "../project/ProjectService.ts";
 import * as PullRequestReviewGuideService from "../pullRequest/PullRequestReviewGuideService.ts";
@@ -30,6 +34,8 @@ import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
 import { ProjectToolkit } from "./toolkits/project/tools.ts";
+
+const tabId = PreviewTabId.make("tab-mcp-test");
 
 const environmentId = EnvironmentId.make("environment-mcp-test");
 const threadId = ThreadId.make("thread-mcp-test");
@@ -65,6 +71,9 @@ const layerTest = McpHttpServer.layerPreviewToolkit.pipe(
   Layer.provideMerge(PreviewAutomationBroker.layer),
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-http-server-test-" })),
   Layer.provideMerge(NodeServices.layer),
+);
+const DiscordThreadToolTestLayer = McpHttpServer.DiscordThreadToolkitRegistrationLive.pipe(
+  Layer.provideMerge(McpServer.McpServer.layer),
 );
 const layerPullRequestsTest = McpHttpServer.layerPullRequestsToolkit.pipe(
   Layer.provideMerge(McpServer.McpServer.layer),
@@ -717,6 +726,278 @@ it.effect("terminates HTTP MCP sessions with DELETE", () =>
       expect(reusedSessionResponse.status).toBe(404);
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect("registers annotated tools and preserves authenticated request context", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
+      const toolIcon = {
+        _tag: "website" as const,
+        pageUrl: "http://example.test/",
+      };
+      const routedRequests: Array<{
+        readonly operation: string;
+        readonly tabId?: string | undefined;
+      }> = [];
+      const events = yield* broker.connect({
+        clientId: "mcp-test-client",
+        environmentId,
+      });
+      yield* Stream.runForEach(events, (event) => {
+        if (event.type === "connected") return Effect.void;
+        routedRequests.push(event.request);
+        return broker.respond({
+          clientId: "mcp-test-client",
+          connectionId: event.connectionId,
+          requestId: event.request.requestId,
+          ok: true,
+          result:
+            event.request.operation === "snapshot"
+              ? snapshotResult
+              : event.request.operation === "evaluate"
+                ? ["Connect", "Continue"]
+                : event.request.operation === "press"
+                  ? undefined
+                  : {
+                      available: true,
+                      visible: true,
+                      tabId,
+                      url: "http://example.test/",
+                      title: "Example",
+                      loading: false,
+                    },
+        });
+      }).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      const statusTool = server.tools.find(({ tool }) => tool.name === "preview_status");
+      expect(statusTool?.tool.annotations?.readOnlyHint).toBe(true);
+      expect(statusTool?.tool.annotations?.idempotentHint).toBe(true);
+      expect(statusTool?.tool.annotations?.destructiveHint).toBe(false);
+
+      const snapshotTool = server.tools.find(({ tool }) => tool.name === "preview_snapshot");
+      expect(snapshotTool?.tool.annotations?.readOnlyHint).toBe(false);
+      expect(snapshotTool?.tool.annotations?.idempotentHint).toBe(false);
+      expect(snapshotTool?.tool.annotations?.openWorldHint).toBe(true);
+
+      const actTool = server.tools.find(({ tool }) => tool.name === "preview_act");
+      expect(actTool?.tool.annotations?.readOnlyHint).toBe(false);
+      expect(actTool?.tool.annotations?.destructiveHint).toBe(true);
+      expect(actTool?.tool.annotations?.openWorldHint).toBe(true);
+      expect(actTool?.tool.outputSchema).toMatchObject({
+        anyOf: [
+          {
+            type: "object",
+            additionalProperties: true,
+            properties: { selected: { type: "array", items: { type: "string" } } },
+            required: ["selected"],
+          },
+          { type: "object", additionalProperties: true },
+        ],
+      });
+      expect(actTool?.tool.outputSchema).not.toHaveProperty("description");
+
+      const navigateTool = server.tools.find(({ tool }) => tool.name === "preview_navigate");
+      expect(navigateTool?.tool.annotations?.destructiveHint).toBe(false);
+      expect(navigateTool?.tool.annotations?.openWorldHint).toBe(true);
+
+      const status = yield* server
+        .callTool({ name: "preview_status", arguments: {} })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+      expect(status.isError).toBe(false);
+      expect(status.structuredContent).toMatchObject({
+        available: true,
+        tabId,
+      });
+
+      const malformed = yield* server
+        .callTool({ name: "preview_act", arguments: { action: "click", selector: "" } })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+          Effect.provideService(McpSchema.McpServerClient, client),
+          Effect.flip,
+        );
+      expect(malformed._tag).toBe("InvalidParams");
+
+      const snapshot = yield* server
+        .callTool({
+          name: "preview_snapshot",
+          arguments: { tabId: alternateTabId, includeImage: true },
+        })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+      expect(snapshot.isError).toBe(false);
+      expect(snapshot.content.some((content) => content.type === "image")).toBe(true);
+      expect(snapshot.structuredContent).toMatchObject({
+        screenshot: { mimeType: "image/png", width: 10, height: 5 },
+      });
+      expect(routedRequests.find(({ operation }) => operation === "snapshot")?.tabId).toBe(
+        alternateTabId,
+      );
+
+      // Arrays and primitives are wrapped so structuredContent stays a JSON object.
+      // Claude Code rejects the whole result otherwise.
+      const evaluateTool = server.tools.find(({ tool }) => tool.name === "preview_evaluate");
+      expect(evaluateTool?.tool.outputSchema).toMatchObject({ type: "object" });
+      const evaluated = yield* server
+        .callTool({ name: "preview_evaluate", arguments: { expression: "buttons()" } })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+      expect(evaluated.isError).toBe(false);
+      expect(evaluated.structuredContent).toEqual({ value: ["Connect", "Continue"], toolIcon });
+      const evaluatedText = evaluated.content[0];
+      expect(evaluatedText?.type === "text" ? decodeJsonText(evaluatedText.text) : null).toEqual({
+        toolIcon,
+        value: ["Connect", "Continue"],
+      });
+
+      const actionRequests = [
+        { name: "preview_act", arguments: { action: "click", x: 10, y: 10 } },
+        { name: "preview_act", arguments: { action: "type", text: "Hello" } },
+        { name: "preview_act", arguments: { action: "press", key: "Enter" } },
+        { name: "preview_act", arguments: { action: "scroll", deltaY: 100 } },
+        { name: "preview_wait_for", arguments: { text: "Example" } },
+      ];
+      for (const request of actionRequests) {
+        const result = yield* server
+          .callTool(request)
+          .pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+            Effect.provideService(McpSchema.McpServerClient, client),
+          );
+        expect(result.isError).toBe(false);
+        expect(result.structuredContent).toEqual({ toolIcon });
+        expect(routedRequests.at(-1)?.operation).toBe("status");
+        const text = result.content[0];
+        expect(text?.type === "text" ? decodeJsonText(text.text) : null).toEqual({ toolIcon });
+      }
+    }),
+  ).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("renames the current thread through the Discord mirror tool", () => {
+  const dispatchCalls: Array<unknown> = [];
+  const dispatch = vi.fn((command: unknown) => {
+    dispatchCalls.push(command);
+    return Promise.resolve({ sequence: 1 });
+  });
+
+  return Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+
+    const renamed = yield* server
+      .callTool({ name: "discord_rename_thread", arguments: { title: "Review PR #428" } })
+      .pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+
+    expect(renamed.isError).toBe(false);
+    expect(renamed.structuredContent).toMatchObject({
+      threadId,
+      title: "Review PR #428",
+      discordMirrorRequested: true,
+    });
+    expect(dispatchCalls).toHaveLength(1);
+    expect(dispatchCalls[0]).toMatchObject({
+      type: "thread.metadata.update",
+      threadId,
+      title: "Review PR #428",
+    });
+  }).pipe(
+    Effect.provide(
+      DiscordThreadToolTestLayer.pipe(
+        Layer.provideMerge(
+          Layer.mock(ThreadManagementService, {
+            dispatch: (command) =>
+              Effect.promise(() => dispatch(command)).pipe(
+                Effect.as({ sequence: 0, storedEvents: [] }),
+              ),
+            getThreadShell: (id) => Effect.succeed(McpToolAccessTestkit.liveThreadShell(id)),
+          }),
+        ),
+      ),
+    ),
+  );
+});
+
+it.effect("rejects a Discord rename after the calling run has ended", () => {
+  const dispatch = vi.fn((_command: unknown) => Promise.resolve({ sequence: 1 }));
+
+  return Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const result = yield* server
+      .callTool({ name: "discord_rename_thread", arguments: { title: "Review PR #428" } })
+      .pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toEqual({
+      error: {
+        _tag: "parent_not_active",
+        message: "The calling provider no longer owns an active thread run.",
+      },
+    });
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: "The calling provider no longer owns an active thread run.",
+      },
+    ]);
+    expect(dispatch).not.toHaveBeenCalled();
+  }).pipe(
+    Effect.provide(
+      DiscordThreadToolTestLayer.pipe(
+        Layer.provideMerge(
+          Layer.mock(ThreadManagementService, {
+            dispatch: (command) =>
+              Effect.promise(() => dispatch(command)).pipe(
+                Effect.as({ sequence: 0, storedEvents: [] }),
+              ),
+            getThreadShell: (id) =>
+              Effect.succeed(McpToolAccessTestkit.liveThreadShell(id, { activeRunId: null })),
+          }),
+        ),
+      ),
+    ),
+  );
+});
+
+it.effect("rejects empty Discord mirror thread titles", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+
+    const result = yield* server
+      .callTool({ name: "discord_rename_thread", arguments: { title: "   " } })
+      .pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toEqual({
+      error: { _tag: "InvalidTitle", message: "Title cannot be empty." },
+    });
+  }).pipe(
+    Effect.provide(
+      DiscordThreadToolTestLayer.pipe(
+        Layer.provideMerge(
+          Layer.mock(ThreadManagementService, { dispatch: () => Effect.die("unused") }),
+        ),
+      ),
+    ),
+  ),
 );
 
 it.effect("admits provider and OAuth client credentials and points only clients at OAuth", () =>

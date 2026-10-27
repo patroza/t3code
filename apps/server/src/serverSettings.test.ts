@@ -811,6 +811,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           providers: {
             codex: { binaryPath: "/opt/guard/bin/codex" },
             claudeAgent: { enabled: false },
+            kimi: { binaryPath: "/opt/guard/bin/kimi", customModels: ["kimi-custom"] },
             cursor: { enabled: false },
             grok: { enabled: false },
             opencode: { enabled: false },
@@ -830,6 +831,10 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           enabled: false,
           config: {},
         },
+        [ProviderInstanceId.make("kimi")]: {
+          driver: ProviderDriverKind.make("kimi"),
+          config: { binaryPath: "/opt/guard/bin/kimi", customModels: ["kimi-custom"] },
+        },
       });
 
       const persisted = JSON.parse(yield* fileSystem.readFileString(serverConfig.settingsPath));
@@ -838,6 +843,10 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       assert.deepEqual(persisted.providerInstances.codex, {
         driver: "codex",
         config: { binaryPath: "/opt/guard/bin/codex" },
+      });
+      assert.deepEqual(persisted.providerInstances.kimi, {
+        driver: "kimi",
+        config: { binaryPath: "/opt/guard/bin/kimi", customModels: ["kimi-custom"] },
       });
     }).pipe(Effect.provide(layerServerSettings())),
   );

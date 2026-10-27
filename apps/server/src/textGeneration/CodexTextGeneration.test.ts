@@ -7,6 +7,7 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import { createModelSelection } from "@t3tools/shared/model";
@@ -338,6 +339,169 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
           stagedSummary: "M README.md",
           stagedPatch: "diff --git a/README.md b/README.md",
           modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+        }),
+    ),
+  );
+
+  it.effect("uses T3CODE_CODEX_LAUNCH_ARGS for codex exec over settings", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({
+          subject: "Add important change",
+          body: "",
+        }),
+        launchArgs: "--enable settings-feature",
+        // Merged onto the real environment, not replacing it: this env is what
+        // the fake `codex` shell script is spawned with, and dropping PATH
+        // leaves it unable to resolve `cat` on systems without /bin/cat.
+        environment: { ...process.env, T3CODE_CODEX_LAUNCH_ARGS: " --strict-config --listen off " },
+        requireArg: "--strict-config",
+        forbidArg: "settings-feature",
+      },
+      (textGeneration) =>
+        textGeneration.generateCommitMessage({
+          cwd: process.cwd(),
+          branch: "feature/codex-effect",
+          stagedSummary: "M README.md",
+          stagedPatch: "diff --git a/README.md b/README.md",
+          modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+        }),
+    ),
+  );
+
+  it.effect("defaults git text generation codex effort to low", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({
+          subject: "Add important change",
+          body: "",
+        }),
+        requireReasoningEffort: "low",
+      },
+      (textGeneration) =>
+        textGeneration.generateCommitMessage({
+          cwd: process.cwd(),
+          branch: "feature/codex-effect",
+          stagedSummary: "M README.md",
+          stagedPatch: "diff --git a/README.md b/README.md",
+          modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+        }),
+    ),
+  );
+
+  it.effect("generates commit message with branch when includeBranch is true", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({
+          subject: "Add important change",
+          body: "",
+          branch: "fix/important-system-change",
+        }),
+        stdinMustContain: "branch must be a short semantic git branch fragment",
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const generated = yield* textGeneration.generateCommitMessage({
+            cwd: process.cwd(),
+            branch: "feature/codex-effect",
+            stagedSummary: "M README.md",
+            stagedPatch: "diff --git a/README.md b/README.md",
+            includeBranch: true,
+            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+          });
+
+          expect(generated.subject).toBe("Add important change");
+          expect(generated.branch).toBe("fix/important-system-change");
+        }),
+    ),
+  );
+
+  it.effect("generates PR content and trims markdown body", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({
+          title: "  Improve orchestration flow\nwith ignored suffix",
+          body: "\n## Summary\n- improve flow\n\n## Testing\n- bun test\n\n",
+        }),
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const generated = yield* textGeneration.generatePrContent({
+            cwd: process.cwd(),
+            baseBranch: "main",
+            headBranch: "feature/codex-effect",
+            commitSummary: "feat: improve orchestration flow",
+            diffSummary: "2 files changed",
+            diffPatch: "diff --git a/a.ts b/a.ts",
+            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+          });
+
+          expect(generated.title).toBe("Improve orchestration flow");
+          expect(generated.body.startsWith("## Summary")).toBe(true);
+          expect(generated.body.endsWith("\n\n")).toBe(false);
+        }),
+    ),
+  );
+
+  it.effect("generates branch names and normalizes branch fragments", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({
+          branch: "  Feat/Session  ",
+        }),
+        stdinMustNotContain: "Image attachments supplied to the model",
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const generated = yield* textGeneration.generateBranchName({
+            cwd: process.cwd(),
+            message: "Please update session handling.",
+            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+          });
+
+          expect(generated.branch).toBe("feat/session");
+        }),
+    ),
+  );
+
+  it.effect.each([
+    {
+      mode: "static",
+      output: "Add Search",
+      expected: "team/add-search",
+      instruction: "without a prefix or namespace",
+    },
+    {
+      mode: "semantic",
+      output: "feat/add-search",
+      expected: "feat/add-search",
+      instruction: "semantic prefix",
+    },
+    {
+      mode: "custom",
+      output: "Julius/ABC-123.v2",
+      expected: "Julius/ABC-123.v2",
+      instruction: "Preserve the issue ID and capitalization.",
+    },
+  ] as const)("generates a branch using $mode naming", (example) =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({ branch: example.output }),
+        stdinMustContain: example.instruction,
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const generated = yield* textGeneration.generateBranchName({
+            cwd: process.cwd(),
+            message: "Add search",
+            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+            naming: {
+              mode: example.mode,
+              prefix: "team/",
+              instructions: "Preserve the issue ID and capitalization.",
+            },
+          });
+          expect(generated.branch).toBe(example.expected);
         }),
     ),
   );

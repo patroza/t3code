@@ -157,6 +157,7 @@ const layerService = (input: {
     ),
     Layer.provideMerge(NodeServices.layer),
     Layer.provideMerge(Layer.succeed(HostProcess.Platform, input.platform ?? "linux")),
+    Layer.provideMerge(Layer.succeed(HostProcess.HomeDirectory, input.home)),
     Layer.provideMerge(ServerSettings.layerTest(input.settings)),
     Layer.provideMerge(
       Layer.succeed(
@@ -221,8 +222,21 @@ function totalOutputTokens(summary: { buckets: readonly { totals: { outputTokens
   return summary.buckets.reduce((sum, bucket) => sum + bucket.totals.outputTokens, 0);
 }
 
+/** Cursor account rows only. A developer machine's `~/.kimi` history is another source. */
+function cursorOutputTokens(summary: {
+  readonly buckets: readonly { provider: string; totals: { outputTokens: number } }[];
+}) {
+  return summary.buckets.reduce(
+    (sum, bucket) => sum + (bucket.provider === "cursor" ? bucket.totals.outputTokens : 0),
+    0,
+  );
+}
+
+/** Inside `WINDOW`: the time Cursor tests run at. */
 const CURSOR_NOW = Date.parse("2026-08-02T12:00:00Z");
 const HOUR_MS = 60 * 60 * 1000;
+
+const CURSOR_RETENTION_MS = 92 * 24 * HOUR_MS;
 
 function makeFakeCursor() {
   const state = {
@@ -1248,6 +1262,140 @@ describe("UsageService", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.live("answers Cursor from its cache while one shared refresh runs", () =>
+    Effect.gen(function* () {
+      const { settings, home } = yield* setup;
+      yield* writeCursorLogin(home);
+      yield* TestClock.setTime(CURSOR_NOW);
+      const cursor = makeFakeCursor();
+      cursor.state.events = [{ timestampMs: CURSOR_NOW - 2 * HOUR_MS, outputTokens: 5 }];
+      const gate = yield* Deferred.make<void>();
+      cursor.state.gate = gate;
+      yield* Effect.gen(function* () {
+        const service = yield* makeWithCursor(cursor.read);
+        const cold = yield* service.readSummary(WINDOW);
+        assert.strictEqual(cursorSource(cold)?.refreshing, true);
+        assert.strictEqual(cursorSource(cold)?.status, "ok");
+        assert.strictEqual(totalOutputTokens(cold), 0);
+        const joined = yield* service.readSummary(WINDOW);
+        assert.strictEqual(cursorSource(joined)?.refreshing, true);
+
+        const waited = yield* service
+          .readSummary({ ...WINDOW, awaitRefresh: true })
+          .pipe(Effect.forkChild);
+        yield* Deferred.succeed(gate, undefined);
+        const refreshed = yield* Fiber.join(waited);
+        assert.isFalse(refreshed.sources.some((source) => source.refreshing));
+        assert.strictEqual(cursorSource(refreshed)?.status, "ok");
+        assert.strictEqual(totalOutputTokens(refreshed), 5);
+        assert.strictEqual(cursor.state.calls.length, 1);
+
+        yield* TestClock.adjust(Duration.seconds(30));
+        const cached = yield* service.readSummary(WINDOW);
+        assert.isUndefined(cursorSource(cached)?.refreshing);
+        assert.strictEqual(totalOutputTokens(cached), 5);
+        assert.strictEqual(cursor.state.calls.length, 1);
+
+        yield* TestClock.adjust(Duration.seconds(31));
+        cursor.state.events.push({ timestampMs: CURSOR_NOW, outputTokens: 7 });
+        const stale = yield* service.readSummary(WINDOW);
+        assert.strictEqual(cursorSource(stale)?.refreshing, true);
+        assert.strictEqual(totalOutputTokens(stale), 5);
+        const fresh = yield* service.readSummary({ ...WINDOW, awaitRefresh: true });
+        assert.isUndefined(cursorSource(fresh)?.refreshing);
+        assert.strictEqual(totalOutputTokens(fresh), 12);
+        assert.strictEqual(cursor.state.calls.length, 2);
+      }).pipe(Effect.provide(layerService({ prefix: "usage-service-cursor-swr", home, settings })));
+    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+  );
+
+  it.live("caches Cursor's whole retention and then refetches only the newest edge", () =>
+    Effect.gen(function* () {
+      const { settings, home } = yield* setup;
+      yield* writeCursorLogin(home);
+      yield* TestClock.setTime(CURSOR_NOW);
+      const cursor = makeFakeCursor();
+      cursor.state.events = [
+        { timestampMs: Date.parse("2026-07-10T10:00:00Z"), outputTokens: 17 },
+        { timestampMs: CURSOR_NOW - 24 * HOUR_MS, outputTokens: 5 },
+        { timestampMs: CURSOR_NOW - HOUR_MS / 2, outputTokens: 7 },
+        { timestampMs: CURSOR_NOW - HOUR_MS / 2, outputTokens: 7 },
+      ];
+      yield* Effect.gen(function* () {
+        const service = yield* makeWithCursor(cursor.read);
+        const read = (input: UsageSummaryInput) =>
+          service.readSummary({ ...input, awaitRefresh: true });
+        assert.strictEqual(cursorOutputTokens(yield* read(WINDOW)), 19);
+        assert.deepStrictEqual(cursor.state.calls, [
+          { sinceMs: CURSOR_NOW - CURSOR_RETENTION_MS, untilMs: CURSOR_NOW },
+        ]);
+
+        // A wider window is answered from the same cache. Count Cursor only so a
+        // developer machine's `~/.kimi` history in this range does not fail the assert.
+        const wide = { ...WINDOW, sinceDay: UsageDay.make("2026-07-01") };
+        assert.strictEqual(cursorOutputTokens(yield* read(wide)), 36);
+        assert.strictEqual(cursor.state.calls.length, 1);
+
+        cursor.state.events.push(
+          { timestampMs: CURSOR_NOW - HOUR_MS / 6, outputTokens: 11 },
+          { timestampMs: CURSOR_NOW + HOUR_MS, outputTokens: 13 },
+        );
+        yield* TestClock.adjust(Duration.hours(2));
+        assert.strictEqual(cursorOutputTokens(yield* read(WINDOW)), 43);
+        assert.deepStrictEqual(cursor.state.calls[1], {
+          sinceMs: CURSOR_NOW - HOUR_MS,
+          untilMs: CURSOR_NOW + 2 * HOUR_MS,
+        });
+
+        cursor.state.accountKey = "account-b";
+        yield* TestClock.adjust(Duration.minutes(2));
+        assert.strictEqual(cursorOutputTokens(yield* read(wide)), 60);
+        assert.strictEqual(cursor.state.calls.length, 4);
+        assert.strictEqual(cursorSource(yield* read(wide))?.fingerprint.volumeId, "account-b");
+      }).pipe(
+        Effect.provide(
+          layerService({ prefix: "usage-service-cursor-incremental", home, settings }),
+        ),
+      );
+    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+  );
+
+  it.live("reports a failed Cursor refresh from its cache without refreshing", () =>
+    Effect.gen(function* () {
+      const { settings, home } = yield* setup;
+      yield* writeCursorLogin(home);
+      yield* TestClock.setTime(CURSOR_NOW);
+      const cursor = makeFakeCursor();
+      cursor.state.events = [{ timestampMs: CURSOR_NOW - HOUR_MS * 3, outputTokens: 5 }];
+      yield* Effect.gen(function* () {
+        const service = yield* makeWithCursor(cursor.read);
+        yield* service.readSummary({ ...WINDOW, awaitRefresh: true });
+
+        yield* TestClock.adjust(Duration.minutes(2));
+        cursor.state.error = "Sign in to Cursor again to read account usage.";
+        const failed = yield* service.readSummary({ ...WINDOW, awaitRefresh: true });
+        assert.strictEqual(cursorSource(failed)?.status, "partial");
+        assert.strictEqual(cursorSource(failed)?.message, cursor.state.error);
+        assert.isUndefined(cursorSource(failed)?.refreshing);
+        assert.strictEqual(totalOutputTokens(failed), 5);
+
+        const again = yield* service.readSummary(WINDOW);
+        assert.strictEqual(cursorSource(again)?.status, "partial");
+        assert.isUndefined(cursorSource(again)?.refreshing);
+        assert.strictEqual(cursor.state.calls.length, 2);
+
+        yield* TestClock.adjust(Duration.minutes(2));
+        cursor.state.accountKey = "account-b";
+        const switched = yield* service.readSummary({ ...WINDOW, awaitRefresh: true });
+        assert.strictEqual(cursorSource(switched)?.status, "missing");
+        assert.strictEqual(cursorSource(switched)?.message, cursor.state.error);
+        assert.strictEqual(totalOutputTokens(switched), 0);
+      }).pipe(
+        Effect.provide(layerService({ prefix: "usage-service-cursor-failure", home, settings })),
+      );
+    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+  );
+
   it.live("restores the Cursor account cache after a restart", () =>
     Effect.gen(function* () {
       const { settings, home } = yield* setup;
@@ -1719,7 +1867,14 @@ describe("UsageService", () => {
       const removed = yield* service.readSummary(WINDOW);
       assert.deepStrictEqual(removed.buckets, summary.buckets);
 
-      const sources = summary.sources.filter((source) => source.status === "ok");
+      // `~/.kimi/sessions` on a developer machine is another ok source. Count
+      // only the homes this test created.
+      const homeRoot = yield* Effect.promise(() => NodeFSP.realpath(home));
+      const sources = summary.sources.filter(
+        (source) =>
+          source.status === "ok" &&
+          source.fingerprint.resolvedHomePath.startsWith(`${homeRoot}${NodePath.sep}`),
+      );
       assert.strictEqual(sources.length, 4);
       assert.strictEqual(
         sources.reduce((sum, source) => sum + source.scannedFiles, 0),
@@ -1999,20 +2154,18 @@ describe("UsageService", () => {
             if (malformed > 0) assert.match(source?.message ?? "", /1 malformed or inconsistent/);
             else assert.notMatch(source?.message ?? "", /malformed|inconsistent/);
           };
-          const open = vi.spyOn(NodeFSP, "open");
-          open.mockClear();
-          yield* Effect.addFinalizer(() => Effect.sync(() => open.mockRestore()));
           const first = yield* UsageService.make;
           const cold = yield* first.readSummary(WINDOW);
-          assert.isTrue(open.mock.calls.some(([path]) => path === transcript));
           verify(cold, 20, 20, 1);
           yield* first.awaitPersisted;
+          // With the transcript temporarily unavailable, these reads must come
+          // from the persisted cache rather than scanning it again.
+          const hiddenTranscript = `${transcript}.hidden`;
+          yield* Effect.promise(() => NodeFSP.rename(transcript, hiddenTranscript));
           const restarted = yield* UsageService.make;
-          open.mockClear();
           verify(yield* first.readSummary(WINDOW), 20, 20, 1);
           verify(yield* restarted.readSummary(WINDOW), 20, 20, 1);
-          assert.isFalse(open.mock.calls.some(([path]) => path === transcript));
-          open.mockRestore();
+          yield* Effect.promise(() => NodeFSP.rename(hiddenTranscript, transcript));
 
           const append = "\n" + counted(10, 2, 140, 30) + "\n";
           content += append;

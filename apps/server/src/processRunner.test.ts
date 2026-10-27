@@ -1,11 +1,16 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
+
 import * as Effect from "effect/Effect";
+
 import * as Layer from "effect/Layer";
+
 import * as PlatformError from "effect/PlatformError";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
+
 import { ChildProcessSpawner } from "effect/process";
+
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 
@@ -16,6 +21,8 @@ type ChildProcessCommand = {
   readonly args: ReadonlyArray<string>;
   readonly options: {
     readonly shell?: boolean | string;
+    readonly env?: NodeJS.ProcessEnv;
+    readonly extendEnv?: boolean;
   };
 };
 
@@ -76,6 +83,68 @@ const runWith =
     );
 
 describe("runProcess", () => {
+  it.effect("can launch with an exact non-extending environment", () => {
+    const environment = { PATH: "/project/bin", KEEP: "value" };
+    const spawner = makeSpawner((command) =>
+      Effect.sync(() => {
+        expect(command.options.env).toEqual(environment);
+        expect(command.options.extendEnv).toBe(false);
+        return makeHandle({ stdout: "ok" });
+      }),
+    );
+
+    return runWith(spawner)({
+      command: "/project/bin/direnv",
+      args: ["export", "json"],
+      env: environment,
+      extendEnv: false,
+    });
+  });
+
+  it.effect("collects stdout through an injected ChildProcessSpawner", () =>
+    Effect.gen(function* () {
+      const spawner = makeSpawner((command) =>
+        Effect.sync(() => {
+          expect(command.command).toBe("fake");
+          expect(command.args).toEqual(["stdout-bytes", "32"]);
+          return makeHandle({ stdout: "x".repeat(32) });
+        }),
+      );
+
+      const result = yield* runWith(spawner)({
+        command: "fake",
+        args: ["stdout-bytes", "32"],
+      });
+
+      expect(result.code).toBe(0);
+      expect(result.stdout).toBe("x".repeat(32));
+      expect(result.timedOut).toBe(false);
+    }),
+  );
+
+  it.effect("runs through the ProcessRunner service", () => {
+    const spawner = makeSpawner((command) =>
+      Effect.sync(() => {
+        expect(command.command).toBe("fake");
+        expect(command.args).toEqual(["--service"]);
+        return makeHandle({ stdout: "service ok" });
+      }),
+    );
+    const layer = ProcessRunner.layer.pipe(
+      Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner)),
+    );
+
+    return Effect.gen(function* () {
+      const runner = yield* ProcessRunner.ProcessRunner;
+      const result = yield* runner.run({
+        command: "fake",
+        args: ["--service"],
+      });
+
+      expect(result.stdout).toBe("service ok");
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("resolves and escapes Windows command shims before spawning", () => {
     const spawner = makeSpawner((command) =>
       Effect.sync(() => {

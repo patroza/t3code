@@ -120,6 +120,7 @@ interface PreviewAutomationRequestErrorContext {
 interface BrokerState {
   readonly clients: ReadonlyMap<string, ClientConnection>;
   readonly assignments: ReadonlyMap<string, HostAssignment>;
+  readonly threadClaims: ReadonlyMap<string, ClientConnection>;
   readonly pending: ReadonlyMap<string, PendingRequest>;
   readonly requestSequence: number;
   readonly focusSequence: number;
@@ -132,11 +133,15 @@ const removeConnectionFromState = (
 ): { readonly state: BrokerState; readonly disconnected: ReadonlyArray<PendingRequest> } => {
   const clients = new Map(current.clients);
   const assignments = new Map(current.assignments);
+  const threadClaims = new Map(current.threadClaims);
   const pending = new Map(current.pending);
   const disconnected: PendingRequest[] = [];
   if (current.clients.get(clientId)?.queue === queue) clients.delete(clientId);
   for (const [assignmentKey, assignment] of assignments) {
     if (assignment.queue === queue) assignments.delete(assignmentKey);
+  }
+  for (const [claimKey, claim] of threadClaims) {
+    if (claim.queue === queue) threadClaims.delete(claimKey);
   }
   for (const [requestId, entry] of pending) {
     if (entry.queue !== queue) continue;
@@ -144,7 +149,7 @@ const removeConnectionFromState = (
     disconnected.push(entry);
   }
   return {
-    state: { ...current, clients, assignments, pending },
+    state: { ...current, clients, assignments, threadClaims, pending },
     disconnected,
   };
 };
@@ -165,6 +170,11 @@ const selectorDiagnosticsFromInput = (
 /** Codex/OpenCode share sessions across threads; include thread id to isolate tabs and ownership. */
 const hostAssignmentKey = (scope: McpInvocationContext.McpThreadInvocationScope): string =>
   `${scope.environmentId}\u0000${scope.thread.providerSessionId}\u0000${scope.thread.threadId}`;
+
+const threadClaimKey = (
+  environmentId: McpInvocationContext.McpInvocationScope["environmentId"],
+  threadId: McpInvocationContext.McpThreadCaller["threadId"],
+): string => `${environmentId}\u0000${threadId}`;
 
 const isPreviewTabId = Schema.is(PreviewTabId);
 const decodeControlReason = Schema.decodeUnknownOption(PreviewAutomationControlReason);
@@ -351,6 +361,7 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
   const state = yield* SynchronizedRef.make<BrokerState>({
     clients: new Map(),
     assignments: new Map(),
+    threadClaims: new Map(),
     pending: new Map(),
     requestSequence: 0,
     focusSequence: 0,
@@ -461,6 +472,13 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
         return current;
       }
       const clients = new Map(current.clients);
+      if (host.threadId !== undefined) {
+        const threadClaims = new Map(current.threadClaims);
+        const claimKey = threadClaimKey(host.environmentId, host.threadId);
+        if (host.focused) threadClaims.set(claimKey, currentHost);
+        else threadClaims.delete(claimKey);
+        return { ...current, threadClaims };
+      }
       const focusSequence = host.focused ? current.focusSequence + 1 : current.focusSequence;
       clients.set(host.clientId, {
         ...currentHost,
@@ -519,7 +537,15 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
       const assigned = assignments.get(assignmentKey);
       const assignedConnection = assigned ? current.clients.get(assigned.clientId) : undefined;
       const hasLiveAssignment = assignedConnection?.environmentId === input.scope.environmentId;
-      // Pin interactions to one desktop runtime so cookie/DOM state cannot jump between hosts.
+      const claimedConnection = current.threadClaims.get(
+        threadClaimKey(input.scope.environmentId, input.scope.thread.threadId),
+      );
+      const hasLiveClaim =
+        claimedConnection?.environmentId === input.scope.environmentId &&
+        current.clients.get(claimedConnection.clientId)?.connectionId ===
+          claimedConnection.connectionId;
+      // Pin sessions to one physical runtime so cookie/DOM state cannot jump hosts.
+      // An explicit thread claim overrides that pin; new sessions prefer the live tab owner.
       const ownsTargetTab = (host: ClientConnection, visibleOnly = false) =>
         host.liveTabs.some(
           (tab) =>
@@ -528,26 +554,30 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
             (input.tabId === undefined || tab.tabId === input.tabId),
         );
       const connection =
-        hasLiveAssignment && supportsOperation(assignedConnection, input.operation)
-          ? assignedConnection
-          : hasLiveAssignment
+        hasLiveClaim && supportsOperation(claimedConnection, input.operation)
+          ? claimedConnection
+          : hasLiveClaim
             ? undefined
-            : Array.from(current.clients.values())
-                .filter(
-                  (host) =>
-                    host.environmentId === input.scope.environmentId &&
-                    supportsOperation(host, input.operation),
-                )
-                .sort(
-                  (left, right) =>
-                    Number(input.tabId !== undefined && ownsTargetTab(right)) -
-                      Number(input.tabId !== undefined && ownsTargetTab(left)) ||
-                    Number(right.preferred) - Number(left.preferred) ||
-                    Number(ownsTargetTab(right, true)) - Number(ownsTargetTab(left, true)) ||
-                    Number(ownsTargetTab(right)) - Number(ownsTargetTab(left)) ||
-                    Number(right.focused) - Number(left.focused) ||
-                    right.focusOrder - left.focusOrder,
-                )[0];
+            : hasLiveAssignment && supportsOperation(assignedConnection, input.operation)
+              ? assignedConnection
+              : hasLiveAssignment
+                ? undefined
+                : Array.from(current.clients.values())
+                    .filter(
+                      (host) =>
+                        host.environmentId === input.scope.environmentId &&
+                        supportsOperation(host, input.operation),
+                    )
+                    .sort(
+                      (left, right) =>
+                        Number(input.tabId !== undefined && ownsTargetTab(right)) -
+                          Number(input.tabId !== undefined && ownsTargetTab(left)) ||
+                        Number(right.preferred) - Number(left.preferred) ||
+                        Number(ownsTargetTab(right, true)) - Number(ownsTargetTab(left, true)) ||
+                        Number(ownsTargetTab(right)) - Number(ownsTargetTab(left)) ||
+                        Number(right.focused) - Number(left.focused) ||
+                        right.focusOrder - left.focusOrder,
+                    )[0];
       if (!connection) {
         if (!hasLiveAssignment) assignments.delete(assignmentKey);
         return [undefined, { ...current, assignments }] as const;

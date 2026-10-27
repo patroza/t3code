@@ -23,6 +23,7 @@ const watch = (overrides: Partial<ThreadPullRequestWatch> = {}): ThreadPullReque
   failedChecks: [],
   passed: false,
   passedChecks: [],
+  pendingChecks: [],
   remarksThrough: STARTED,
   remarkIds: [],
   conflicting: false,
@@ -131,7 +132,10 @@ describe("evaluatePullRequestWatch", () => {
       ],
     });
     const second = evaluatePullRequestWatch(first.next, gated, noRemarks);
-    assert.deepEqual(second.changes, [{ kind: "checks-passed", count: 2, required: true }]);
+    assert.deepEqual(second.changes, [
+      { kind: "checks-passed", count: 2, required: true },
+      { kind: "checks-settled", checks: [check("Smoke Tests", "success")] },
+    ]);
     assert.deepEqual(evaluatePullRequestWatch(second.next, gated, noRemarks).changes, []);
 
     const pending = detail({
@@ -141,11 +145,63 @@ describe("evaluatePullRequestWatch", () => {
     assert.deepEqual(waiting.changes, []);
     assert.deepEqual(evaluatePullRequestWatch(waiting.next, gated, noRemarks).changes, [
       { kind: "checks-passed", count: 2, required: true },
+      { kind: "checks-settled", checks: [check("Smoke Tests", "success")] },
     ]);
   });
 
-  // regression: #23712 required checks woke the agent early and the rest finishing never did
-  it("wakes again when the other checks finish after the required ones passed", () => {
+  it("reports a check that was still running after the required checks passed", () => {
+    const required = (name: string, status: PullRequestCheck["status"]) => ({
+      ...check(name, status),
+      required: true,
+    });
+    const running = detail({
+      checks: [
+        required("test", "success"),
+        required("lint", "success"),
+        check("Test Packages", "pending"),
+      ],
+    });
+    const passed = evaluatePullRequestWatch(watch(), running, noRemarks);
+    assert.deepEqual(passed.changes, [{ kind: "checks-passed", count: 2, required: true }]);
+    assert.deepEqual(passed.next.pendingChecks, ["Test Packages"]);
+    assert.deepEqual(passed.next.owedChecks, ["Test Packages"]);
+
+    const done = detail({
+      checks: [
+        required("test", "success"),
+        required("lint", "success"),
+        check("Test Packages", "success"),
+      ],
+    });
+    const settled = evaluatePullRequestWatch(passed.next, done, noRemarks);
+    assert.deepEqual(settled.changes, [
+      { kind: "checks-settled", checks: [check("Test Packages", "success")] },
+    ]);
+    assert.deepEqual(settled.next.pendingChecks, []);
+    assert.deepEqual(settled.next.owedChecks, []);
+    assert.deepEqual(evaluatePullRequestWatch(settled.next, done, noRemarks).changes, []);
+
+    // One that shows up already passed was never pending, so it is not news.
+    const extra = detail({
+      checks: [...done.checks, check("CodeRabbit", "success")],
+    });
+    assert.deepEqual(evaluatePullRequestWatch(settled.next, extra, noRemarks).changes, []);
+  });
+
+  it("reports one finished check while another is still running", () => {
+    const running = detail({ checks: [check("lint", "pending"), check("test", "pending")] });
+    const first = evaluatePullRequestWatch(watch(), running, noRemarks);
+    assert.deepEqual(first.changes, []);
+    assert.deepEqual(first.next.pendingChecks, ["lint", "test"]);
+    const lintDone = detail({ checks: [check("lint", "success"), check("test", "pending")] });
+    const settled = evaluatePullRequestWatch(first.next, lintDone, noRemarks);
+    assert.deepEqual(settled.changes, [
+      { kind: "checks-settled", checks: [check("lint", "success")] },
+    ]);
+    assert.deepEqual(settled.next.pendingChecks, ["test"]);
+  });
+
+  it("tracks remaining checks through advisory churn and required promotion", () => {
     const required = (name: string, status: PullRequestCheck["status"]) => ({
       ...check(name, status),
       required: true,
@@ -162,15 +218,17 @@ describe("evaluatePullRequestWatch", () => {
     const final = evaluatePullRequestWatch(first.next, done, noRemarks);
     assert.deepEqual(
       final.changes.map((change) => change.kind),
-      ["checks-passed"],
+      ["checks-settled"],
     );
     assert.deepEqual(evaluatePullRequestWatch(final.next, done, noRemarks).changes, []);
-    // A later advisory job running and passing is not more news.
+    // A later advisory job is reported once it was observed running.
     const botPending = detail({ checks: [...done.checks, check("bot", "pending")] });
     const churn = evaluatePullRequestWatch(final.next, botPending, noRemarks);
     assert.deepEqual(churn.changes, []);
     const botDone = detail({ checks: [...done.checks, check("bot", "success")] });
-    assert.deepEqual(evaluatePullRequestWatch(churn.next, botDone, noRemarks).changes, []);
+    assert.deepEqual(evaluatePullRequestWatch(churn.next, botDone, noRemarks).changes, [
+      { kind: "checks-settled", checks: [check("bot", "success")] },
+    ]);
 
     // A pending check that turns required on the next read still finishes with one wake.
     const promoted = detail({
@@ -186,7 +244,7 @@ describe("evaluatePullRequestWatch", () => {
     assert.deepEqual(evaluatePullRequestWatch(green.next, botDone, noRemarks).changes, []);
   });
 
-  it("reports an owed non-required failure once after the required notice", () => {
+  it("reports a non-required failure and recovery after the required notice", () => {
     const required = { ...check("test", "success"), required: true };
     const early = detail({ checks: [required, check("e2e", "pending")] });
     const first = evaluatePullRequestWatch(watch(), early, noRemarks);
@@ -200,23 +258,25 @@ describe("evaluatePullRequestWatch", () => {
     assert.deepEqual(repeated.changes, []);
     const recovered = detail({ checks: [required, check("e2e", "success")] });
     const final = evaluatePullRequestWatch(repeated.next, recovered, noRemarks);
-    assert.deepEqual(final.changes, [{ kind: "checks-passed", count: 2, required: false }]);
+    assert.deepEqual(final.changes, [
+      { kind: "checks-settled", checks: [check("e2e", "success")] },
+    ]);
     assert.deepEqual(evaluatePullRequestWatch(final.next, recovered, noRemarks).changes, []);
   });
 
-  it("clears old-head owed checks when a new head is pushed", () => {
+  it("clears old-head pending checks when a new head is pushed", () => {
     const required = { ...check("test", "success"), required: true };
     const early = detail({ checks: [required, check("e2e", "pending")] });
     const first = evaluatePullRequestWatch(watch(), early, noRemarks);
-    assert.deepEqual(first.next.owedChecks, ["e2e"]);
+    assert.deepEqual(first.next.pendingChecks, ["e2e"]);
     const unreadHead = detail({ headSha: "bbbbbbbbbb", checks: [] });
     const unread = evaluatePullRequestWatch(first.next, unreadHead, noRemarks);
     assert.deepEqual(unread.changes, []);
-    assert.deepEqual(unread.next.owedChecks, []);
+    assert.deepEqual(unread.next.pendingChecks, []);
     const pushed = detail({ ...unreadHead, checks: [required] });
     const newHead = evaluatePullRequestWatch(unread.next, pushed, noRemarks);
     assert.deepEqual(newHead.changes, [{ kind: "checks-passed", count: 1, required: true }]);
-    assert.deepEqual(newHead.next.owedChecks, []);
+    assert.deepEqual(newHead.next.pendingChecks, []);
     const lateResult = detail({ ...pushed, checks: [required, check("e2e", "success")] });
     const final = evaluatePullRequestWatch(newHead.next, lateResult, noRemarks);
     assert.deepEqual(final.changes, []);

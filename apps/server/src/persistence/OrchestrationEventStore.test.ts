@@ -1,3 +1,5 @@
+import * as NodeV8 from "node:v8";
+
 import {
   CommandId,
   EventId,
@@ -629,4 +631,59 @@ it.effect.each(["high-water", "replay"] as const)(
         }
       }),
     ).pipe(Effect.provide(Layer.fresh(layerTest))),
+);
+
+it.effect("releases consumed application replay pages", () =>
+  Effect.gen(function* () {
+    const store = yield* OrchestrationEventStore.OrchestrationEventStore;
+    const afterSequence = yield* store.latestApplicationSequence;
+    yield* Effect.forEach(
+      Array.from({ length: 1501 }, (_, index) => index),
+      (index) =>
+        store.appendProjectEvent({
+          type: "project.created",
+          eventId: EventId.make(`retention-${index}`),
+          aggregateKind: "project",
+          aggregateId: ProjectId.make(`retention-${index}`),
+          occurredAt: "2026-09-08T00:00:00Z",
+          commandId: null,
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          payload: {
+            projectId: ProjectId.make(`retention-${index}`),
+            title: "Replay",
+            workspaceRoot: "/tmp/replay",
+            defaultModelSelection: null,
+            scripts: [],
+            createdAt: "2026-09-08T00:00:00Z",
+            updatedAt: "2026-09-08T00:00:00Z",
+          },
+        }),
+      { discard: true },
+    );
+    // oxlint-disable-next-line typescript/no-extraneous-class -- Counts retained page markers after full GC.
+    class ReplayPage {}
+    let count = 0;
+    yield* store
+      .readApplicationEvents({
+        afterSequence,
+        throughSequence: yield* store.latestApplicationSequence,
+      })
+      .pipe(
+        Stream.runForEach((event) =>
+          Effect.gen(function* () {
+            if (count % 500 === 0) {
+              Object.assign(event, { replayPage: new ReplayPage() });
+              // V8 can still see transient roots on Effect's previous-page pull stack.
+              // Unwind it before GC; retained pages must still satisfy the same live-page bound.
+              yield* Effect.yieldNow;
+              assert.isAtMost(NodeV8.queryObjects(ReplayPage, { format: "count" }), 1);
+            }
+            count++;
+          }),
+        ),
+      );
+    assert.equal(count, 1501);
+  }).pipe(Effect.provide(layerTest)),
 );

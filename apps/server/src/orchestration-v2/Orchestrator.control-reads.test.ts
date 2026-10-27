@@ -6,6 +6,9 @@ import {
   NodeId,
   type OrchestrationV2DomainEvent,
   PlanId,
+  PersonId,
+  IdentityUsername,
+  type SourceRef,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -892,6 +895,7 @@ it.effect("wakes the parent once when its delegated task asks a question", () =>
       threadId: parentThreadId,
       projectId: ProjectId.make("project:question"),
       title: "Parent",
+
       modelSelection,
       runtimeMode: "full-access",
       interactionMode: "default",
@@ -1371,6 +1375,57 @@ it.effect("explicit settle clears snooze atomically and stays idempotent after r
     } as const;
     assert.deepInclude(yield* projections.getThreadShell(threadId), active);
     assert.deepInclude((yield* projections.getThreadProjection(threadId)).thread, active);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("keeps the Teams thread starter while stamping later message authors", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const threadId = ThreadId.make("thread:teams-source");
+    const source = (username: string): SourceRef => ({
+      channel: "teams",
+      personId: PersonId.make(username),
+      username: IdentityUsername.make(username),
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("create-teams-source"),
+      threadId,
+      projectId: ProjectId.make("project:teams-source"),
+      title: "Teams attribution",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "user",
+      creationSource: "web",
+    });
+    for (const [index, username] of ["starter", "requester", "starter"].entries()) {
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make(`teams-source-${index}`),
+        threadId,
+        messageId: MessageId.make(`teams-message-${index}`),
+        text: "Hello",
+        attachments: [],
+        createdBy: "user",
+        creationSource: "web",
+        dispatchMode: { type: "defer_start" },
+        source: source(username),
+      });
+    }
+    const projection = yield* projections.getThreadProjection(threadId);
+    assert.deepEqual(projection.thread.originSource, source("starter"));
+    assert.deepEqual(
+      projection.thread.participantSummaries?.map((person) => String(person.username)),
+      ["starter", "requester"],
+    );
+    assert.deepEqual(
+      projection.messages.map((message) => message.source?.username?.toString()),
+      ["starter", "requester", "starter"],
+    );
   }).pipe(Effect.provide(layerTest)),
 );
 

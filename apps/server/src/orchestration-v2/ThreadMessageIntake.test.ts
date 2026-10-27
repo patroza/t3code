@@ -10,6 +10,9 @@ import {
   EventId,
   GuestMessageId,
   MessageId,
+  OrchestrationDispatchCommandError,
+  ProjectId,
+  ProviderInstanceId,
   RuntimeRequestId,
   ThreadId,
   TurnItemId,
@@ -33,7 +36,7 @@ import {
   OrchestratorDispatchError,
 } from "./Orchestrator.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
-import { dispatchCommand } from "./ThreadMessageIntake.ts";
+import { dispatchCommand, sendToThread } from "./ThreadMessageIntake.ts";
 
 const layerIntakeTest = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-question-intake-",
@@ -373,6 +376,122 @@ it.effect("a retried response re-claims the preserved pending uploads", () =>
   }).pipe(Effect.provide(layerIntakeTest)),
 );
 
+it.effect("applies the image budget across all questions before dispatch", () =>
+  Effect.gen(function* () {
+    const attachments = Array.from({ length: 5 }, (_, index) => ({
+      type: "image" as const,
+      id: ChatAttachmentId.make(`existing-budget-${index}`),
+      name: `${index}.png`,
+      mimeType: "image/png",
+      sizeBytes: 10 * 1024 * 1024,
+    }));
+    const captured: OrchestrationV2ServerCommand[] = [];
+    const result = yield* Effect.exit(
+      dispatchCommand({
+        type: "runtime-request.respond",
+        commandId: CommandId.make("command-image-budget"),
+        threadId: ThreadId.make("thread-image-budget"),
+        requestId: RuntimeRequestId.make("question-image-budget"),
+        answers: {},
+        attachmentsByQuestionId: { q1: attachments, q2: attachments },
+      }).pipe(Effect.provide(layerFailingDispatch(captured))),
+    );
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure") expect(String(result.cause)).toContain("80 MiB");
+    expect(captured).toEqual([]);
+  }).pipe(Effect.provide(layerIntakeTest)),
+);
+
+it.effect("releases claimed copies when a project disables the message's provider instance", () =>
+  Effect.gen(function* () {
+    const config = yield* ServerConfig.ServerConfig;
+    const pendingId = ChatAttachmentId.make(createPendingAttachmentId()!);
+    NodeFS.writeFileSync(
+      NodePath.join(config.attachmentsDir, `${pendingId}.png`),
+      new Uint8Array([1, 2, 3]),
+    );
+    const result = yield* sendToThread({
+      projectId: ProjectId.make("project-disabled-send"),
+      commandId: CommandId.make("command-disabled-send"),
+      threadId: ThreadId.make("thread-disabled-send"),
+      messageId: MessageId.make("message-disabled-send"),
+      text: "Hello",
+      attachments: [
+        {
+          type: "image",
+          id: pendingId,
+          name: "screen.png",
+          mimeType: "image/png",
+          sizeBytes: 3,
+        },
+      ],
+      mode: "auto",
+      createdBy: "user",
+      creationSource: "web",
+    }).pipe(
+      Effect.provide(
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          sendToThread: (input) =>
+            Effect.fail(
+              new ThreadManagementService.ThreadManagementProviderInstanceDisabledError({
+                projectId: input.projectId,
+                instanceId: ProviderInstanceId.make("codex"),
+              }),
+            ),
+        }),
+      ),
+      Effect.result,
+    );
+    expect(result._tag).toBe("Failure");
+    expect(
+      NodeFS.readdirSync(config.attachmentsDir).filter((entry) =>
+        entry.startsWith("thread-disabled-send-"),
+      ),
+    ).toEqual([]);
+    expect(NodeFS.existsSync(NodePath.join(config.attachmentsDir, `${pendingId}.png`))).toBe(true);
+  }).pipe(Effect.provide(layerIntakeTest)),
+);
+
+it.effect("refuses a cloning project before claiming pending message attachments", () =>
+  Effect.gen(function* () {
+    const command: OrchestrationV2Command = {
+      type: "message.dispatch",
+      commandId: CommandId.make("clone:attachment"),
+      threadId: ThreadId.make("clone:thread"),
+      messageId: MessageId.make("clone:message"),
+      text: "Start work",
+      attachments: [
+        {
+          type: "image",
+          id: ChatAttachmentId.make(createPendingAttachmentId()!),
+          name: "reference.png",
+          mimeType: "image/png",
+          sizeBytes: 4,
+        },
+      ],
+      dispatchMode: { type: "start_immediately" },
+      createdBy: "user",
+      creationSource: "web",
+    };
+    const error = yield* dispatchCommand(command).pipe(
+      Effect.provide(
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          assertCommandReady: () =>
+            Effect.fail(
+              new OrchestrationDispatchCommandError({
+                message: "The repository is still being cloned.",
+              }),
+            ),
+        }),
+      ),
+      Effect.flip,
+    );
+    // The attachment has no pending file: reaching claims would fail with a
+    // missing attachment instead of returning the readiness error.
+    expect(error.message).toBe("The repository is still being cloned.");
+  }).pipe(Effect.provide(layerIntakeTest)),
+);
+
 it.effect("sends a guest message with the guest's files, never ones the client names", () =>
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
@@ -390,6 +509,7 @@ it.effect("sends a guest message with the guest's files, never ones the client n
     const guestMessageId = GuestMessageId.make("guest-message:files");
     const captured: OrchestrationV2ServerCommand[] = [];
     const layerGuestShare = Layer.mock(ThreadManagementService.ThreadManagementService)({
+      assertCommandReady: () => Effect.void,
       dispatch: layerFailingDispatchHandler(captured),
       // Only the share is read.
       getThreadSnapshotWindow: () =>

@@ -1,3 +1,4 @@
+import { resolveCurrentProviderEnvironment } from "../../provider/DirenvEnvironment.ts";
 import * as DocumentText from "../../provider/DocumentText.ts";
 import { revertCodexThread } from "../../provider/CodexThreadRevert.ts";
 import { historyResponseItems } from "@t3tools/provider-core/server/handoffBudget";
@@ -1638,7 +1639,19 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           providerSessionId: input.providerSessionId,
           runtimePolicy: input.runtimePolicy,
           settings: resolvedRuntime?.config ?? adapterOptions.settings,
-          environment: resolvedRuntime?.environment ?? adapterOptions.environment,
+          environment: yield* resolveCurrentProviderEnvironment(
+            input.runtimePolicy.cwd ?? process.cwd(),
+            resolvedRuntime?.environment ?? adapterOptions.environment,
+          ).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapter.ProviderAdapterOpenSessionError({
+                  driver: CODEX_PROVIDER,
+                  providerSessionId: input.providerSessionId,
+                  cause,
+                }),
+            ),
+          ),
         });
         const additionalContextByThread = yield* Ref.make(
           new Map<

@@ -2,6 +2,8 @@ import { SourceControlProviderError, SourceControlProviderKind } from "@t3tools/
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as ServerConfig from "../config.ts";
 import * as GitManager from "../git/GitManager.ts";
+import * as PrLookupFreeze from "../git/PrLookupFreeze.ts";
+import * as ProjectLifecycleScriptRunner from "../project/ProjectLifecycleScriptRunner.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProjectConfig from "../vcs/VcsProjectConfig.ts";
@@ -32,6 +34,7 @@ export const layer = Layer.merge(
 // Keep repository detection, branch selection and worktree creation on the real Git path.
 export const layerRealGit = GitWorkflow.layer.pipe(
   Layer.provide(GitManager.layer),
+  Layer.provide(PrLookupFreeze.layer),
   Layer.provide(
     Layer.mergeAll(
       Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
@@ -49,6 +52,10 @@ export const layerRealGit = GitWorkflow.layer.pipe(
       Layer.mock(TextGeneration.TextGeneration)({}),
       Layer.mock(ProviderRegistry.ProviderRegistry)({}),
       Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({}),
+      Layer.mock(ProjectLifecycleScriptRunner.ProjectLifecycleScriptRunner)({
+        runWorktreeRemove: () => Effect.succeed({ status: "no-script" as const }),
+        runPrMerged: () => Effect.succeed({ status: "no-script" as const }),
+      }),
       Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
       Layer.mock(ProjectStore.ProjectStoreV2)({}),
       ServerSettings.layerTest(),

@@ -59,6 +59,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as SynchronizedRef from "effect/SynchronizedRef";
+import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "../config.ts";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
@@ -1460,8 +1461,25 @@ export const make = Effect.fn("TerminalManager.make")(function* () {
   const { terminalLogsDir, providerStatusCacheDir, baseDir } = yield* ServerConfig.ServerConfig;
   const ptyAdapter = yield* PtyAdapter.PtyAdapter;
   const portDiscovery = yield* PortScanner.PortDiscovery;
+  const platform = yield* HostProcess.Platform;
   const nativeTelemetry = yield* NativeTelemetryClient.NativeTelemetryClient;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
+
+  // Keep the live terminal-shell setting in a closure for synchronous PTY spawning.
+  // Provider processes use a separate environment and must never inherit this terminal preference.
+  let terminalShellOverride = yield* serverSettings.getSettings.pipe(
+    Effect.map((settings) => settings.terminalShell.trim()),
+    Effect.orElseSucceed(() => ""),
+  );
+  yield* serverSettings.streamChanges.pipe(
+    Stream.runForEach((next) =>
+      Effect.sync(() => {
+        terminalShellOverride = next.terminalShell.trim();
+      }),
+    ),
+    Effect.forkScoped,
+  );
+
   const path = yield* Path.Path;
   const resolveProviderInstanceEnvironment = Effect.fn(
     "terminal.resolveProviderInstanceEnvironment",
@@ -1476,6 +1494,10 @@ export const make = Effect.fn("TerminalManager.make")(function* () {
   return yield* makeWithOptions({
     logsDir: terminalLogsDir,
     ptyAdapter,
+    shellResolver: () =>
+      terminalShellOverride.length > 0
+        ? terminalShellOverride
+        : defaultShellResolver(platform, process.env),
     processTable: nativeTelemetry.processTable.pipe(
       Effect.mapError(
         (cause) => new TerminalSubprocessCheckError({ cause, command: "resource-monitor" }),
@@ -2242,7 +2264,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         cwd: session.cwd,
         cols: session.cols,
         rows: session.rows,
-        env: spawnEnv,
+        // Point the terminal's own $SHELL at the shell that actually starts
+        // (including any configured override) so tools launched inside the
+        // terminal agree with it. Scoped to this PTY's env only — never the
+        // shared process env, so agent providers are unaffected.
+        env: platform === "win32" ? spawnEnv : { ...spawnEnv, SHELL: candidate.shell },
       }),
     );
 

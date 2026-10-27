@@ -10,6 +10,7 @@ import type { TranscriptUsageFormat } from "@t3tools/provider-core/server/usage"
 import * as Schema from "effect/Schema";
 
 import { TEST_FORMATS } from "./usageTestFormats.ts";
+import { kimiUsageFormat } from "./kimiUsageReader.ts";
 import { readTranscriptRecords, transcriptLineGate } from "./usageTranscriptReader.ts";
 
 let dir: string;
@@ -374,4 +375,60 @@ describe("transcriptLineGate", () => {
       }
     }
   });
+});
+
+describe("Kimi transcript usage scanning", () => {
+  it.each([1_024, 16])(
+    "keeps StatusUpdate usage and ignores unrelated lines with threshold %s",
+    async (streamingThresholdBytes) => {
+      const sessionId = "kimi-session-usage";
+      const sessionDir = NodePath.join(dir, sessionId);
+      await NodeFSP.mkdir(sessionDir);
+      const filePath = NodePath.join(sessionDir, "wire.jsonl");
+      const timestamp = 1785096129.2452343;
+      const tokenUsage = {
+        input_other: 15296,
+        output: 129,
+        input_cache_read: 2304,
+        input_cache_creation: 0,
+      };
+      await NodeFSP.writeFile(
+        filePath,
+        [
+          {
+            timestamp,
+            message: { type: "TextPart", payload: { text: "Unrelated assistant text" } },
+          },
+          { timestamp, message: { type: "ToolResult", payload: { token_usage: tokenUsage } } },
+          {
+            timestamp,
+            message: {
+              type: "StatusUpdate",
+              payload: { token_usage: tokenUsage, message_id: "response-1" },
+            },
+          },
+        ]
+          .map((record) => JSON.stringify(record))
+          .join("\n") + "\n",
+      );
+
+      const result = await readTranscriptRecords(filePath, kimiUsageFormat, undefined, {
+        streamingThresholdBytes,
+      });
+      assert.isNotNull(result);
+      assert.lengthOf(result.records, 1);
+      const record = result.records[0]!;
+      assert.equal(record.provider, "kimi");
+      assert.equal(record.sessionId, sessionId);
+      assert.equal(record.timestampMs, 1785096129245);
+      assert.equal(record.dedupeKey, "response-1");
+      assert.deepEqual(record.totals, {
+        uncachedInputTokens: 15296,
+        cachedInputTokens: 2304,
+        cacheCreationTokens: 0,
+        outputTokens: 129,
+        reasoningTokens: 0,
+      });
+    },
+  );
 });

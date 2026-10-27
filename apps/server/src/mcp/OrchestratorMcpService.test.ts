@@ -47,6 +47,7 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import { buildUnavailableProviderSnapshot } from "../provider/unavailableProviderSnapshot.ts";
+import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -1755,6 +1756,11 @@ describe("OrchestratorMcpService provider resolution", () => {
             },
           });
           const layerThreads = ThreadManagementService.layer.pipe(
+            Layer.provide(
+              Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({
+                get: () => Effect.succeed(null),
+              }),
+            ),
             Layer.provideMerge(layerOrchestrator),
             Layer.provide(
               LegacyV1ThreadImporter.layer.pipe(

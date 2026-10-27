@@ -1,3 +1,4 @@
+import { resolveCurrentProviderEnvironment } from "../../provider/DirenvEnvironment.ts";
 import * as DocumentText from "../../provider/DocumentText.ts";
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
 import { claudeTaskOutputRoot, tailClaudeTaskOutput } from "./ClaudeTaskOutputTail.ts";
@@ -9735,7 +9736,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             attachmentsDir,
             settings: adapterOptions.settings,
             environment: claudeQueryEnvironment(
-              adapterOptions.environment,
+              yield* resolveCurrentProviderEnvironment(
+                turnInput.runtimePolicy.cwd ?? process.cwd(),
+                adapterOptions.environment,
+              ),
               turnInput.appThread,
               turnInput.appThread.lineage.relationshipToParent === "subagent"
                 ? yield* resolveSubagentPromptCacheTtl(turnInput.runtimePolicy.cwd)

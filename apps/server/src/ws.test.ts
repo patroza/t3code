@@ -1,3 +1,8 @@
+import * as AiUsageMonitor from "./aiUsage/AiUsageMonitor.ts";
+import * as HostResourceProbe from "./diagnostics/HostResourceProbe.ts";
+import * as IdentityService from "./identity/IdentityService.ts";
+import * as PortExposure from "./preview/PortExposure.ts";
+import * as WorktreeLifecycle from "./orchestration-v2/WorktreeLifecycleService.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -393,6 +398,11 @@ it.effect("shell snapshots omit idle children and older settled threads only on 
 
 // Build the production RPC layer; unrelated capabilities fail if this test calls them.
 const layerUnusedConfigRpcServices = Layer.mergeAll(
+  Layer.mock(AiUsageMonitor.AiUsageMonitor)({}),
+  Layer.mock(HostResourceProbe.HostResourceProbe)({}),
+  Layer.mock(IdentityService.IdentityService)({}),
+  Layer.mock(PortExposure.PreviewPortExposure)({}),
+  Layer.mock(WorktreeLifecycle.WorktreeLifecycle)({}),
   Layer.mock(DocumentText.DocumentText)({}),
   Layer.mock(ServerSecretStore.ServerSecretStore)({}),
   Layer.mock(WorkspacePaths.WorkspacePaths)({}),
@@ -571,6 +581,7 @@ it.effect(
             {},
             {},
             yield* PreviewAutomationBroker.PreviewAutomationBroker,
+            true,
             yield* ServerBrowser.ServerBrowser,
           ).pipe(Layer.provide(configRpcServices)),
         ),
@@ -739,6 +750,7 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
           {},
           {},
           yield* PreviewAutomationBroker.PreviewAutomationBroker,
+          true,
           yield* ServerBrowser.ServerBrowser,
         ).pipe(Layer.provide(configRpcServices)),
       ),

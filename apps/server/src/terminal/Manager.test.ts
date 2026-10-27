@@ -4,6 +4,7 @@ import {
   DEFAULT_TERMINAL_ID,
   type TerminalAttachStreamEvent,
   type TerminalEvent,
+  type TerminalMetadataStreamEvent,
   type TerminalOpenInput,
   type TerminalRestartInput,
   ProviderDriverKind,
@@ -11,6 +12,7 @@ import {
   TerminalProviderInstanceNotFoundError,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Base64Url from "effect/encoding/Base64Url";
@@ -20,11 +22,14 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
 import * as Path from "effect/Path";
+
 import * as Ref from "effect/Ref";
+
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
+
 import { expect, vi } from "vite-plus/test";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -728,7 +733,7 @@ it.layer(
       expect(events.filter((event) => event.type === "output").map((event) => event.data)).toEqual(
         writes,
       );
-      const snapshot = events.filter((event) => event.type === "snapshot").at(-1)?.snapshot;
+      const snapshot = events.findLast((event) => event.type === "snapshot")?.snapshot;
       expect(snapshot?.history).toBe("aa😀\rEND");
       expect(snapshot?.sequence).toBe(reopened.sequence);
     }),
@@ -1434,6 +1439,168 @@ it.layer(
       expect(events[0]?.type).toBe("snapshot");
       expect(ptyAdapter.spawnInputs).toHaveLength(1);
       expect(ptyAdapter.processes[0]?.killed).toBe(false);
+    }),
+  );
+
+  it.effect("fails closed when attaching would create a missing provider terminal", () =>
+    Effect.gen(function* () {
+      const providerInstanceId = ProviderInstanceId.make("deleted_instance");
+      const { manager, ptyAdapter } = yield* createManager(5, {
+        resolveProviderInstanceEnvironment: (requestedId) =>
+          Effect.fail(
+            new TerminalProviderInstanceNotFoundError({
+              providerInstanceId: ProviderInstanceId.make(requestedId),
+            }),
+          ),
+      });
+
+      const error = yield* manager
+        .attachStream(openInput({ providerInstanceId }), () => Effect.void)
+        .pipe(Effect.flip);
+
+      assert.deepStrictEqual(
+        error,
+        new TerminalProviderInstanceNotFoundError({ providerInstanceId }),
+      );
+      expect(ptyAdapter.spawnInputs).toHaveLength(0);
+    }),
+  );
+
+  it.effect("starts zsh with prompt spacer disabled to avoid `%` end markers", () =>
+    Effect.gen(function* () {
+      if ((yield* HostProcess.Platform) === "win32") return;
+      const { manager, ptyAdapter } = yield* createManager(5, {
+        shellResolver: () => "/bin/zsh",
+      });
+      yield* manager.open(openInput());
+      const spawnInput = ptyAdapter.spawnInputs[0];
+      expect(spawnInput).toBeDefined();
+      if (!spawnInput) return;
+
+      expect(spawnInput.args).toEqual(["-o", "nopromptsp"]);
+    }),
+  );
+
+  it.effect("points the terminal's own $SHELL at the shell that starts", () =>
+    Effect.gen(function* () {
+      if ((yield* HostProcess.Platform) === "win32") return;
+      const { manager, ptyAdapter } = yield* createManager(5, {
+        shellResolver: () => "/bin/zsh",
+        env: { SHELL: "/bin/bash" },
+      });
+      yield* manager.open(openInput());
+      const spawnInput = ptyAdapter.spawnInputs[0];
+      expect(spawnInput).toBeDefined();
+      if (!spawnInput) return;
+
+      // The configured shell wins for the launched process and its own $SHELL,
+      // even though the host login shell ($SHELL) was bash.
+      expect(spawnInput.shell).toBe("/bin/zsh");
+      expect(spawnInput.env.SHELL).toBe("/bin/zsh");
+    }),
+  );
+
+  it.effect("bridges PTY callbacks back into Effect-managed event streaming", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter, getEvents } = yield* createManager(5, {
+        ptyAdapter: new FakePtyAdapter("async"),
+      });
+
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      const delivered = yield* Deferred.make<void>();
+      const unsubscribe = yield* manager.subscribe((event) =>
+        event.type === "output" && event.data === "hello from callback\n"
+          ? Deferred.succeed(delivered, undefined)
+          : Effect.void,
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+      process.emitData("hello from callback\n");
+      yield* Deferred.await(delivered);
+      expect(
+        (yield* getEvents).some(
+          (event) => event.type === "output" && event.data === "hello from callback\n",
+        ),
+      ).toBe(true);
+    }),
+  );
+
+  it.effect("pushes PTY callbacks to direct event subscribers", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager(5, {
+        ptyAdapter: new FakePtyAdapter("async"),
+      });
+      const subscriberEvents = yield* Ref.make<ReadonlyArray<TerminalEvent>>([]);
+      const delivered = yield* Deferred.make<void>();
+      const unsubscribe = yield* manager.subscribe((event) =>
+        Ref.update(subscriberEvents, (events) => [...events, event]).pipe(
+          Effect.andThen(
+            event.type === "output" && event.data === "hello from subscriber\n"
+              ? Deferred.succeed(delivered, undefined)
+              : Effect.void,
+          ),
+        ),
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      process.emitData("hello from subscriber\n");
+
+      yield* Deferred.await(delivered);
+      expect(
+        (yield* Ref.get(subscriberEvents)).some(
+          (event) => event.type === "output" && event.data === "hello from subscriber\n",
+        ),
+      ).toBe(true);
+    }),
+  );
+
+  it.effect("subscribes terminal metadata with an initial snapshot and live deltas", () =>
+    Effect.gen(function* () {
+      const { manager } = yield* createManager();
+      yield* manager.open(openInput({ threadId: "existing-thread" }));
+
+      const metadataEvents = yield* Ref.make<ReadonlyArray<TerminalMetadataStreamEvent>>([]);
+      const added = yield* Deferred.make<void>();
+      const removed = yield* Deferred.make<void>();
+      const unsubscribe = yield* manager.subscribeMetadata((event) =>
+        Ref.update(metadataEvents, (events) => [...events, event]).pipe(
+          Effect.andThen(
+            event.type === "upsert" && event.terminal.threadId === "new-thread"
+              ? Deferred.succeed(added, undefined)
+              : event.type === "remove" && event.threadId === "new-thread"
+                ? Deferred.succeed(removed, undefined)
+                : Effect.void,
+          ),
+        ),
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+
+      const initialEvents = yield* Ref.get(metadataEvents);
+      expect(initialEvents[0]).toMatchObject({
+        type: "snapshot",
+        terminals: [
+          {
+            threadId: "existing-thread",
+            terminalId: DEFAULT_TERMINAL_ID,
+          },
+        ],
+      });
+
+      yield* manager.open(openInput({ threadId: "new-thread" }));
+
+      yield* Deferred.await(added);
+
+      yield* manager.close({ threadId: "new-thread", terminalId: DEFAULT_TERMINAL_ID });
+
+      yield* Deferred.await(removed);
     }),
   );
 
