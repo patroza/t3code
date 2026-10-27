@@ -1,0 +1,447 @@
+// Server-owned thread/work-item associations are authoritative for inbound bridges.
+// Discord may mirror them for pins or supply legacy links as an import fallback.
+
+import type { ThreadId } from "@t3tools/contracts";
+import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
+
+import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
+import { ServerConfig } from "../config.ts";
+
+const FALSE_POSITIVE_JIRA_KEYS = new Set(["UTF-8", "ISO-8601", "HTTP-1", "HTTP-2", "TLS-1"]);
+
+const JIRA_ISSUE_KEY_PATTERN = /\b([A-Z][A-Z0-9]{1,9}-\d{1,7})\b/giu;
+const JIRA_BROWSE_URL_PATTERN =
+  /https?:\/\/[^\s<>"']+\.atlassian\.net\/(?:browse|jira\/browse)\/([A-Z][A-Z0-9]{1,9}-\d{1,7})(?:[^\s<>"']*)?/giu;
+const JIRA_SELECTED_ISSUE_PATTERN = /[?&]selectedIssue=([A-Z][A-Z0-9]{1,9}-\d{1,7})\b/giu;
+
+export function normalizeJiraIssueKey(raw: string): string | null {
+  const key = raw.trim().toUpperCase();
+  if (!/^[A-Z][A-Z0-9]{1,9}-\d{1,7}$/u.test(key)) return null;
+  if (FALSE_POSITIVE_JIRA_KEYS.has(key)) return null;
+  return key;
+}
+
+function bareKeyProjectSet(projects: ReadonlyArray<string> | ReadonlySet<string> | undefined) {
+  const set = new Set<string>();
+  for (const project of projects ?? []) {
+    const prefix = project.trim().toUpperCase();
+    if (prefix.length > 0) set.add(prefix);
+  }
+  return set;
+}
+
+function isConfiguredBareKey(key: string, projects: ReadonlySet<string>): boolean {
+  if (projects.size === 0) return false;
+  const dash = key.lastIndexOf("-");
+  if (dash <= 0) return false;
+  return projects.has(key.slice(0, dash));
+}
+
+function collectJiraKeyHits(
+  text: string,
+  pattern: RegExp,
+  bareKeyProjects: ReadonlySet<string> | null,
+): Array<{ index: number; key: string }> {
+  const hits: Array<{ index: number; key: string }> = [];
+  pattern.lastIndex = 0;
+  for (const match of text.matchAll(pattern)) {
+    const key = normalizeJiraIssueKey(match[1] ?? "");
+    if (key === null) continue;
+    if (bareKeyProjects !== null && !isConfiguredBareKey(key, bareKeyProjects)) continue;
+    hits.push({ index: match.index ?? 0, key });
+  }
+  return hits;
+}
+
+/**
+ * Scan free text for Jira issue keys.
+ * Bare keys count only for `bareKeyProjects`. Atlassian links count for any project.
+ * Omit the list and only links are returned.
+ */
+export function extractJiraIssueKeysFromText(
+  text: string,
+  bareKeyProjects?: ReadonlyArray<string> | ReadonlySet<string>,
+): ReadonlyArray<string> {
+  if (text.trim().length === 0) return [];
+  const projects = bareKeyProjectSet(bareKeyProjects);
+  const hits = [
+    ...collectJiraKeyHits(text, JIRA_BROWSE_URL_PATTERN, null),
+    ...collectJiraKeyHits(text, JIRA_SELECTED_ISSUE_PATTERN, null),
+    ...collectJiraKeyHits(text, JIRA_ISSUE_KEY_PATTERN, projects),
+  ].sort((a, b) => a.index - b.index || a.key.localeCompare(b.key));
+  const found: string[] = [];
+  const seen = new Set<string>();
+  for (const hit of hits) {
+    if (seen.has(hit.key)) continue;
+    seen.add(hit.key);
+    found.push(hit.key);
+  }
+  return found;
+}
+
+/** Normalize a GitHub PR URL or `owner/repo#n` form to a stable key. */
+export function normalizeGitHubPullRequestRef(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return null;
+
+  const urlMatch = trimmed.match(
+    /^https?:\/\/(?:www\.)?github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/[^?\s]*)?(?:[?#]\S*)?$/iu,
+  );
+  if (urlMatch) {
+    const owner = urlMatch[1]!.toLowerCase();
+    const repo = urlMatch[2]!.toLowerCase();
+    const number = urlMatch[3]!;
+    return `github.com/${owner}/${repo}/pull/${number}`;
+  }
+
+  const shortMatch = trimmed.match(/^([^/\s]+)\/([^#\s]+)#(\d+)$/u);
+  if (shortMatch) {
+    const owner = shortMatch[1]!.toLowerCase();
+    const repo = shortMatch[2]!.toLowerCase();
+    const number = shortMatch[3]!;
+    return `github.com/${owner}/${repo}/pull/${number}`;
+  }
+
+  return null;
+}
+
+export function mergeOrderedUnique(
+  existing: ReadonlyArray<string> | null | undefined,
+  incoming: ReadonlyArray<string> | null | undefined,
+  normalize: (raw: string) => string | null,
+): ReadonlyArray<string> {
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of [...(existing ?? []), ...(incoming ?? [])]) {
+    const key = normalize(raw);
+    if (key === null || seen.has(key)) continue;
+    seen.add(key);
+    result.push(key);
+  }
+  return result;
+}
+
+export type WorkItemLookupResult =
+  | { readonly _tag: "unlinked" }
+  | { readonly _tag: "ambiguous"; readonly threadIds: ReadonlyArray<ThreadId> }
+  | { readonly _tag: "linked"; readonly threadId: ThreadId };
+
+export const ThreadWorkItemRecord = Schema.Struct({
+  threadId: Schema.String,
+  jiraIssueKeys: Schema.Array(Schema.String),
+  githubPullRequests: Schema.Array(Schema.String),
+  /** Optional sources that contributed (discord, jira-webhook, github-webhook, manual). */
+  sources: Schema.optional(Schema.Array(Schema.String)),
+  updatedAt: Schema.String,
+});
+export type ThreadWorkItemRecord = {
+  readonly threadId: ThreadId;
+  readonly jiraIssueKeys: ReadonlyArray<string>;
+  readonly githubPullRequests: ReadonlyArray<string>;
+  readonly sources: ReadonlyArray<string>;
+  readonly updatedAt: string;
+};
+
+const ThreadWorkItemFile = Schema.Struct({
+  version: Schema.Number,
+  records: Schema.Array(ThreadWorkItemRecord),
+});
+
+const decodeFile = Schema.decodeUnknownSync(Schema.fromJsonString(ThreadWorkItemFile));
+
+const DiscordThreadLink = Schema.Struct({
+  t3ThreadId: Schema.String,
+  status: Schema.optional(Schema.String),
+  jiraIssueKeys: Schema.optional(Schema.Array(Schema.String)),
+  /** When present, this is the only Discord Jira set imported for thread linking. */
+  linkedJiraIssueKeys: Schema.optional(Schema.Array(Schema.String)),
+  /** Pin-backfill keys. Removed from discord-only work-item rows. */
+  backfillJiraIssueKeys: Schema.optional(Schema.Array(Schema.String)),
+  prUrls: Schema.optional(Schema.Array(Schema.String)),
+});
+const DiscordLinksFile = Schema.Struct({
+  version: Schema.optional(Schema.Number),
+  links: Schema.Array(DiscordThreadLink),
+});
+const decodeDiscordLinks = Schema.decodeUnknownSync(Schema.fromJsonString(DiscordLinksFile));
+
+const EXTERNAL_WORK_ITEM_SOURCES = new Set(["jira-webhook", "github-webhook"]);
+
+/**
+ * Jira and GitHub webhooks are the only writers of work-item identity.
+ * Discord mentions and pin backfill do not qualify.
+ */
+export function hasExternalWorkItemSource(sources: ReadonlyArray<string> | undefined): boolean {
+  if (!Array.isArray(sources)) return false;
+  return sources.some(
+    (source) =>
+      typeof source === "string" && EXTERNAL_WORK_ITEM_SOURCES.has(source.trim().toLowerCase()),
+  );
+}
+
+function parseDiscordLinksOrNull(
+  linksJson: string,
+): ReadonlyArray<typeof DiscordThreadLink.Type> | null {
+  try {
+    return decodeDiscordLinks(linksJson).links;
+  } catch {
+    return null;
+  }
+}
+
+export class ThreadWorkItemStore extends Context.Service<
+  ThreadWorkItemStore,
+  {
+    readonly getByThreadId: (threadId: ThreadId) => Effect.Effect<ThreadWorkItemRecord | null>;
+    readonly list: () => Effect.Effect<ReadonlyArray<ThreadWorkItemRecord>>;
+    readonly appendForThread: (input: {
+      readonly threadId: ThreadId;
+      readonly jiraIssueKeys?: ReadonlyArray<string>;
+      readonly githubPullRequests?: ReadonlyArray<string>;
+      readonly source: string;
+    }) => Effect.Effect<ThreadWorkItemRecord>;
+    readonly resolveJiraIssue: (issueKey: string) => Effect.Effect<WorkItemLookupResult>;
+    readonly resolveGitHubPullRequest: (prRef: string) => Effect.Effect<WorkItemLookupResult>;
+    /**
+     * Drop Discord-only rows from the work-item store.
+     * Discord links are not a source of Jira or PR identity. Rows that Jira or
+     * GitHub already recorded are left alone.
+     */
+    readonly importDiscordLinksJson: (linksJson: string) => Effect.Effect<{
+      readonly threadsTouched: number;
+      readonly jiraKeysAdded: number;
+      readonly jiraKeysRemoved: number;
+      readonly prsAdded: number;
+      readonly prsRemoved: number;
+    }>;
+  }
+>()("t3/workItems/ThreadWorkItemStore") {}
+
+function emptyRecord(threadId: ThreadId, updatedAt: string): ThreadWorkItemRecord {
+  return {
+    threadId,
+    jiraIssueKeys: [],
+    githubPullRequests: [],
+    sources: [],
+    updatedAt,
+  };
+}
+
+function resolveKey(
+  records: ReadonlyMap<string, ThreadWorkItemRecord>,
+  match: (record: ThreadWorkItemRecord) => boolean,
+): WorkItemLookupResult {
+  const matches = new Set<string>();
+  for (const record of records.values()) {
+    if (!match(record)) continue;
+    matches.add(record.threadId);
+  }
+  if (matches.size === 0) return { _tag: "unlinked" };
+  if (matches.size > 1) {
+    return { _tag: "ambiguous", threadIds: [...matches] as ThreadId[] };
+  }
+  const [only] = matches;
+  return { _tag: "linked", threadId: only as ThreadId };
+}
+
+export const make = Effect.gen(function* () {
+  const config = yield* ServerConfig;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const filePath = path.join(config.stateDir, "thread-work-items.json");
+
+  const initial = yield* fileSystem.readFileString(filePath).pipe(
+    Effect.map((raw) => {
+      try {
+        const decoded = decodeFile(raw);
+        return decoded.records.map((record): ThreadWorkItemRecord => ({
+          threadId: record.threadId as ThreadId,
+          jiraIssueKeys: mergeOrderedUnique([], record.jiraIssueKeys, normalizeJiraIssueKey),
+          githubPullRequests: mergeOrderedUnique(
+            [],
+            record.githubPullRequests,
+            normalizeGitHubPullRequestRef,
+          ),
+          sources: record.sources ?? [],
+          updatedAt: record.updatedAt,
+        }));
+      } catch {
+        return [];
+      }
+    }),
+    Effect.orElseSucceed((): ThreadWorkItemRecord[] => []),
+  );
+
+  const state = yield* Ref.make(
+    new Map(initial.map((record) => [record.threadId, record] as const)),
+  );
+  const lock = yield* Semaphore.make(1);
+
+  const persist = (records: ReadonlyMap<string, ThreadWorkItemRecord>) => {
+    const retained = [...records.values()].sort((left, right) =>
+      right.updatedAt.localeCompare(left.updatedAt),
+    );
+    return writeFileStringAtomically({
+      filePath,
+      contents: `${JSON.stringify({ version: 1, records: retained }, null, 2)}\n`,
+    }).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+      Effect.orDie,
+    );
+  };
+
+  return ThreadWorkItemStore.of({
+    getByThreadId: Effect.fn("ThreadWorkItemStore.getByThreadId")((threadId) =>
+      Ref.get(state).pipe(Effect.map((records) => records.get(threadId) ?? null)),
+    ),
+
+    list: Effect.fn("ThreadWorkItemStore.list")(() =>
+      Ref.get(state).pipe(Effect.map((records) => [...records.values()])),
+    ),
+
+    appendForThread: Effect.fn("ThreadWorkItemStore.appendForThread")((input) =>
+      lock.withPermit(
+        Effect.gen(function* () {
+          const now = DateTime.formatIso(yield* DateTime.now);
+          const next = yield* Ref.updateAndGet(state, (records) => {
+            const existing = records.get(input.threadId) ?? emptyRecord(input.threadId, now);
+            const jiraIssueKeys = mergeOrderedUnique(
+              existing.jiraIssueKeys,
+              input.jiraIssueKeys,
+              normalizeJiraIssueKey,
+            );
+            const githubPullRequests = mergeOrderedUnique(
+              existing.githubPullRequests,
+              input.githubPullRequests,
+              normalizeGitHubPullRequestRef,
+            );
+            const sources = mergeOrderedUnique(existing.sources, [input.source], (raw) => {
+              const value = raw.trim().toLowerCase();
+              return value.length > 0 ? value : null;
+            });
+            const updated: ThreadWorkItemRecord = {
+              threadId: input.threadId,
+              jiraIssueKeys,
+              githubPullRequests,
+              sources,
+              updatedAt: now,
+            };
+            const copy = new Map(records);
+            copy.set(input.threadId, updated);
+            return copy;
+          });
+          yield* persist(next);
+          return next.get(input.threadId)!;
+        }),
+      ),
+    ),
+
+    resolveJiraIssue: Effect.fn("ThreadWorkItemStore.resolveJiraIssue")((issueKey) =>
+      Ref.get(state).pipe(
+        Effect.map((records) => {
+          const normalized = normalizeJiraIssueKey(issueKey);
+          if (normalized === null) return { _tag: "unlinked" as const };
+          return resolveKey(
+            records,
+            (record) =>
+              hasExternalWorkItemSource(record.sources) &&
+              record.jiraIssueKeys.includes(normalized),
+          );
+        }),
+      ),
+    ),
+
+    resolveGitHubPullRequest: Effect.fn("ThreadWorkItemStore.resolveGitHubPullRequest")((prRef) =>
+      Ref.get(state).pipe(
+        Effect.map((records) => {
+          const normalized = normalizeGitHubPullRequestRef(prRef);
+          if (normalized === null) return { _tag: "unlinked" as const };
+          return resolveKey(
+            records,
+            (record) =>
+              hasExternalWorkItemSource(record.sources) &&
+              record.githubPullRequests.includes(normalized),
+          );
+        }),
+      ),
+    ),
+
+    importDiscordLinksJson: Effect.fn("ThreadWorkItemStore.importDiscordLinksJson")((linksJson) =>
+      lock.withPermit(
+        Effect.gen(function* () {
+          const links = parseDiscordLinksOrNull(linksJson);
+          if (links === null) {
+            return {
+              threadsTouched: 0,
+              jiraKeysAdded: 0,
+              jiraKeysRemoved: 0,
+              prsAdded: 0,
+              prsRemoved: 0,
+            };
+          }
+
+          let threadsTouched = 0;
+          let jiraKeysRemoved = 0;
+          let prsRemoved = 0;
+
+          const next = yield* Ref.updateAndGet(state, (records) => {
+            const copy = new Map(records);
+            for (const [threadId, existing] of copy) {
+              if (hasExternalWorkItemSource(existing.sources)) continue;
+              if (existing.jiraIssueKeys.length === 0 && existing.githubPullRequests.length === 0) {
+                continue;
+              }
+              jiraKeysRemoved += existing.jiraIssueKeys.length;
+              prsRemoved += existing.githubPullRequests.length;
+              threadsTouched += 1;
+              copy.delete(threadId);
+            }
+            return copy;
+          });
+
+          if (threadsTouched > 0) yield* persist(next);
+          return {
+            threadsTouched,
+            jiraKeysAdded: 0,
+            jiraKeysRemoved,
+            prsAdded: 0,
+            prsRemoved,
+          };
+        }),
+      ),
+    ),
+  });
+});
+
+export const layer = Layer.effect(ThreadWorkItemStore, make);
+
+/** Pure helper for tests / Discord fallback without the Effect store. */
+export function resolveJiraIssueFromRecords(
+  records: ReadonlyArray<Pick<ThreadWorkItemRecord, "threadId" | "jiraIssueKeys">>,
+  issueKey: string,
+): WorkItemLookupResult {
+  const normalized = normalizeJiraIssueKey(issueKey);
+  if (normalized === null) return { _tag: "unlinked" };
+  const map = new Map(
+    records.map((record) => [
+      record.threadId,
+      {
+        threadId: record.threadId,
+        jiraIssueKeys: record.jiraIssueKeys,
+        githubPullRequests: [] as string[],
+        sources: [] as string[],
+        updatedAt: "",
+      } satisfies ThreadWorkItemRecord,
+    ]),
+  );
+  return resolveKey(map, (record) => record.jiraIssueKeys.includes(normalized));
+}
