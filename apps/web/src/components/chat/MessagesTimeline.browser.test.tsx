@@ -387,10 +387,15 @@ describe("MessagesTimeline messages", () => {
       expect(row.bottom).toBeGreaterThan(view.top);
     };
 
-    // Range updates can mount the end before the initial middle rows are recycled.
     await vi.waitFor(() => {
       expect(screen.text()).toContain("Turn 118:");
-      expect(screen.text()).not.toContain("Turn 60:");
+      // LegendList can retain an unused offscreen container until it needs recycling.
+      const middle = screen.container.querySelector('[data-message-id="turn-60"]');
+      if (middle) {
+        const row = middle.getBoundingClientRect();
+        const view = viewport.getBoundingClientRect();
+        expect(row.bottom <= view.top || row.top >= view.bottom).toBe(true);
+      }
     });
     // Wrapping follows DOM order, so the ends must also sit first and last.
     await vi.waitFor(() => {
