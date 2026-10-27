@@ -7,8 +7,13 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import {
   SCANNER_GROUP_CHAT_PROJECT,
   botWasAdded,
+  groupChatMirrorsFile,
   groupChatSourceKey,
   groupChatSpeaksInTeams,
+  readGroupChatMirror,
+  rememberGroupChatMirror,
+  SCANNER_GROUP_CHAT_MIRROR,
+  teamsChannelThreadId,
   loadGroupChatRulesFromFileSync,
   planTeamsGroupChat,
   type GroupChatRule,
@@ -174,6 +179,30 @@ describe("planTeamsGroupChat", () => {
     if (plan.kind !== "turn") return;
     expect(plan.chat.projectShortName).toBe("macs-scanner");
     expect(plan.chat.title).toBe("Alfa Omega Configurator");
+    expect(plan.chat.mirror).toEqual(SCANNER_GROUP_CHAT_MIRROR);
+  });
+
+  it("copies scanner chats into the Scanner channel and lets a rule choose another", () => {
+    const builtin = planTeamsGroupChat({ ...base, title: "MAKO Scanner" });
+    expect(builtin.kind).toBe("turn");
+    if (builtin.kind !== "turn") return;
+    expect(builtin.chat.mirror).toEqual(SCANNER_GROUP_CHAT_MIRROR);
+    const other = {
+      tenantId: "11111111-1111-4111-8111-111111111111",
+      teamId: "22222222-2222-4222-8222-222222222222",
+      channelId: "19:other@thread.tacv2",
+    };
+    const pinned = planTeamsGroupChat({
+      ...base,
+      title: "MAKO Scanner",
+      rules: [{ titleIncludes: "MAKO Scanner", projectShortName: "macs-scanner", mirror: other }],
+    });
+    expect(pinned.kind).toBe("turn");
+    if (pinned.kind !== "turn") return;
+    expect(pinned.chat.mirror).toEqual(other);
+    expect(teamsChannelThreadId(other, { id: other.channelId, activityId: "root" })).toBe(
+      `${other.channelId};messageid=root`,
+    );
   });
 
   it("keeps one source key per chat", () => {
@@ -217,6 +246,32 @@ describe("loadGroupChatRulesFromFileSync", () => {
       "utf8",
     );
     expect(() => loadGroupChatRulesFromFileSync(filePath)).toThrow(/passive: false/u);
+
+    await NodeFSP.writeFile(
+      filePath,
+      JSON.stringify({
+        groupChats: [
+          {
+            titleIncludes: "MAKO Scanner",
+            projectShortName: "macs-scanner",
+            mirrorTenantId: "77e3cbed-2705-4d62-8421-efde364a4eeb",
+            mirrorTeamId: "1523eb08-b152-4a1d-91e1-8658cf950273",
+            mirrorChannelId: "19:ff57061cd9894df08d0d0230c76947af@thread.tacv2",
+          },
+        ],
+      }),
+      "utf8",
+    );
+    expect(loadGroupChatRulesFromFileSync(filePath)[0]?.mirror).toEqual(SCANNER_GROUP_CHAT_MIRROR);
+    const mirrors = groupChatMirrorsFile(dir);
+    await rememberGroupChatMirror(
+      mirrors,
+      "native/tenant/group/19:chat@thread.v2",
+      "19:channel;messageid=1",
+    );
+    expect(readGroupChatMirror(mirrors, "native/tenant/group/19:chat@thread.v2")).toBe(
+      "19:channel;messageid=1",
+    );
   });
 
   it("returns no extra rules for a channel array file", async () => {
