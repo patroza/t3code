@@ -782,15 +782,22 @@ it.effect("registers annotated tools and preserves authenticated request context
       expect(snapshotTool?.tool.annotations?.idempotentHint).toBe(false);
       expect(snapshotTool?.tool.annotations?.openWorldHint).toBe(true);
 
-      const clickTool = server.tools.find(({ tool }) => tool.name === "preview_click");
-      expect(clickTool?.tool.annotations?.readOnlyHint).toBe(false);
-      expect(clickTool?.tool.annotations?.destructiveHint).toBe(true);
-      expect(clickTool?.tool.annotations?.openWorldHint).toBe(true);
-      expect(clickTool?.tool.outputSchema).toMatchObject({
-        type: "object",
-        additionalProperties: true,
+      const actTool = server.tools.find(({ tool }) => tool.name === "preview_act");
+      expect(actTool?.tool.annotations?.readOnlyHint).toBe(false);
+      expect(actTool?.tool.annotations?.destructiveHint).toBe(true);
+      expect(actTool?.tool.annotations?.openWorldHint).toBe(true);
+      expect(actTool?.tool.outputSchema).toMatchObject({
+        anyOf: [
+          {
+            type: "object",
+            additionalProperties: true,
+            properties: { selected: { type: "array", items: { type: "string" } } },
+            required: ["selected"],
+          },
+          { type: "object", additionalProperties: true },
+        ],
       });
-      expect(clickTool?.tool.outputSchema).not.toHaveProperty("description");
+      expect(actTool?.tool.outputSchema).not.toHaveProperty("description");
 
       const navigateTool = server.tools.find(({ tool }) => tool.name === "preview_navigate");
       expect(navigateTool?.tool.annotations?.destructiveHint).toBe(false);
@@ -809,7 +816,7 @@ it.effect("registers annotated tools and preserves authenticated request context
       });
 
       const malformed = yield* server
-        .callTool({ name: "preview_click", arguments: { selector: "" } })
+        .callTool({ name: "preview_act", arguments: { action: "click", selector: "" } })
         .pipe(
           Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
           Effect.provideService(McpSchema.McpServerClient, client),
@@ -854,10 +861,10 @@ it.effect("registers annotated tools and preserves authenticated request context
       });
 
       const actionRequests = [
-        { name: "preview_click", arguments: { x: 10, y: 10 } },
-        { name: "preview_type", arguments: { text: "Hello" } },
-        { name: "preview_press", arguments: { key: "Enter" } },
-        { name: "preview_scroll", arguments: { deltaY: 100 } },
+        { name: "preview_act", arguments: { action: "click", x: 10, y: 10 } },
+        { name: "preview_act", arguments: { action: "type", text: "Hello" } },
+        { name: "preview_act", arguments: { action: "press", key: "Enter" } },
+        { name: "preview_act", arguments: { action: "scroll", deltaY: 100 } },
         { name: "preview_wait_for", arguments: { text: "Example" } },
       ];
       for (const request of actionRequests) {

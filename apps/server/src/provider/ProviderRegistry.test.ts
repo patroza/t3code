@@ -2402,6 +2402,7 @@ it.layer(
               "claudeAgent",
               "codex",
               "cursor",
+              "fx",
               "grok",
               "kimi",
               "muse",
