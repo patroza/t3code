@@ -9,3 +9,7 @@ Before zipping this directory:
 
 The app sends activities to the Azure Bot messaging endpoint configured separately as
 `https://<PUBLIC_HOST>/api/messages`.
+
+Group chats are in scope. MAKO, Easy Life, and Empasa scanner or scanning chats map to
+the scanner project. The bot stays silent in those chats. Each chat gets one T3 thread
+and one Discord thread in the alerts channel, and later messages continue that thread.

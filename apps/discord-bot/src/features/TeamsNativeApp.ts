@@ -1,5 +1,6 @@
 // @effect-diagnostics anyUnknownInErrorContext:off globalErrorInEffectCatch:off globalErrorInEffectFailure:off globalPromise:off missingEffectContext:off tryCatchInEffectGen:off preferSchemaOverJson:off
 import { App } from "@microsoft/teams.apps";
+import type * as Context from "effect/Context";
 import { ProviderUserInputAnswers } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -14,6 +15,13 @@ import { ProjectAliasStore } from "../projectAliases.ts";
 import { ThreadLinkStore } from "../store/ThreadLinkStore.ts";
 import { T3Session } from "../t3/T3Session.ts";
 import { loadTeamsChannelConfigsFromFileSync, type TeamsChannelConfig } from "../teams/config.ts";
+import {
+  botWasAdded,
+  groupChatSourceKey,
+  isTeamsGroupChat,
+  loadGroupChatRulesFromFileSync,
+} from "../teams/groupChats.ts";
+import { ingestTeamsGroupChat } from "./TeamsGroupChatObserver.ts";
 import {
   makeTeamsChannelDescriptionReader,
   teamsDescriptionProject,
@@ -152,12 +160,17 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
     config.teamsChannelsPath === undefined
       ? []
       : loadTeamsChannelConfigsFromFileSync(config.teamsChannelsPath);
+  const groupChatRules =
+    config.teamsChannelsPath === undefined
+      ? []
+      : loadGroupChatRulesFromFileSync(config.teamsChannelsPath);
   const identityMap = yield* IdentityMapStore;
   const t3 = yield* T3Session;
   const links = yield* ThreadLinkStore;
   const services = yield* Effect.context<
     ProjectAliasStore | T3Session | ThreadLinkStore | BridgeHub | ThreadWarmCacheStore
   >();
+  const runtime = services as Context.Context<never>;
   const run = Effect.runPromiseWith(services);
   const receipts = yield* TeamsSeenStore.pipe(
     Effect.provide(teamsSeenLayer(config.dataDir, "teams-native-receipts.json")),
@@ -280,9 +293,99 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
     };
   });
 
+  app.on("conversationUpdate", async ({ activity }) => {
+    if (
+      !botWasAdded({
+        recipientId: activity.recipient?.id,
+        memberIds: (activity.membersAdded ?? []).map((member) => member.id),
+      })
+    ) {
+      return;
+    }
+    const location = coordinates(activity);
+    if (
+      !isTeamsGroupChat({
+        conversationType: activity.conversation.conversationType,
+        isGroup: activity.conversation.isGroup,
+        teamId: location.teamId,
+      })
+    ) {
+      return;
+    }
+    await run(
+      Effect.gen(function* () {
+        const sourceKey = groupChatSourceKey(location.tenantId, location.conversationId);
+        const claimed = yield* intakeLock.withPermit(
+          Effect.gen(function* () {
+            if (yield* receipts.hasSeen(sourceKey, "joined")) return false;
+            yield* receipts.markSeen(sourceKey, "joined");
+            return true;
+          }),
+        );
+        if (!claimed) return;
+        yield* ingestTeamsGroupChat(config, groupChatRules, identityMap.list(), runtime, {
+          event: "join",
+          tenantId: location.tenantId,
+          conversationId: location.conversationId,
+          conversationType: activity.conversation.conversationType,
+          isGroup: activity.conversation.isGroup,
+          teamId: location.teamId,
+          title: activity.conversation.name ?? activity.topicName,
+          text: "",
+          fromBot: false,
+          mentionedBot: false,
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.logError("Passive Teams group chat join failed", { error: String(error) }),
+          ),
+        );
+      }),
+    );
+  });
+
   registerTeamsMessageEvents(app, async ({ activity, api, send, reply }) => {
     await run(
       Effect.gen(function* () {
+        const location = coordinates(activity);
+        if (
+          isTeamsGroupChat({
+            conversationType: activity.conversation.conversationType,
+            isGroup: activity.conversation.isGroup,
+            teamId: location.teamId,
+          })
+        ) {
+          const sourceKey = groupChatSourceKey(location.tenantId, location.conversationId);
+          const claimed = yield* intakeLock.withPermit(
+            Effect.gen(function* () {
+              if (yield* receipts.hasSeen(sourceKey, activity.id)) return false;
+              yield* receipts.markSeen(sourceKey, activity.id);
+              return true;
+            }),
+          );
+          if (!claimed) return;
+          yield* ingestTeamsGroupChat(config, groupChatRules, identityMap.list(), runtime, {
+            event: "message",
+            tenantId: location.tenantId,
+            conversationId: location.conversationId,
+            conversationType: activity.conversation.conversationType,
+            isGroup: activity.conversation.isGroup,
+            teamId: location.teamId,
+            title: activity.conversation.name,
+            text: activity.text ?? "",
+            messageId: activity.id,
+            author: activity.from?.name,
+            authorAadObjectId: activity.from?.aadObjectId,
+            authorUserId: activity.from?.id,
+            fromBot: activity.from?.id !== undefined && activity.from.id === activity.recipient?.id,
+            mentionedBot: mentionsTeamsRecipient(activity),
+          }).pipe(
+            Effect.catch((error) =>
+              Effect.logError("Passive Teams group chat failed", { error: String(error) }),
+            ),
+          );
+          return;
+        }
+
         const access = teamsActorAccess(identityMap.list(), activity.from);
         if (!access.allowed) {
           yield* Effect.logWarning("Rejected native Teams interaction from unmapped identity", {
@@ -294,7 +397,6 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
           return;
         }
 
-        const location = coordinates(activity);
         if (location.teamId && !mentionsTeamsRecipient(activity)) return;
         const sourceKey = sourceConversationKey(location);
         const claimed = yield* intakeLock.withPermit(

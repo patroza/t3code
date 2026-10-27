@@ -18,5 +18,13 @@
       "respondToMentions": true,
       "teamsIncomingWebhookUrl": "https://example.webhook.office.com/webhookb2/..."
     }
+  ],
+  "groupChats": [
+    {
+      "conversationId": "19:examplegroupchat@thread.v2",
+      "titleIncludes": "MAKO Scanner",
+      "projectShortName": "macs-scanner",
+      "passive": true
+    }
   ]
 }
