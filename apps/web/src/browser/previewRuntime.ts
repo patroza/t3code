@@ -4,12 +4,19 @@ import type { EnvironmentId, PreviewRuntime, PreviewSessionSnapshot } from "@t3t
 import { isElectron } from "~/env";
 import { isPreviewSupportedInRuntime } from "~/previewStateStore";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
-import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
+import {
+  primaryEnvironmentIdAtom,
+  primaryEnvironmentNativeBrowserAtom,
+} from "~/state/primaryEnvironment";
 import {
   readEnvironmentSupportsServerBrowser,
   useEnvironmentSupportsServerBrowser,
 } from "~/state/entities";
 
+/**
+ * Reused local servers stream shared tabs; remote tabs default to this desktop’s browser.
+ * Users can move tabs to the environment when only it can reach the page.
+ */
 export function previewRuntimeFor(environmentId: EnvironmentId): PreviewRuntime | undefined {
   if (!readEnvironmentSupportsServerBrowser(environmentId)) return undefined;
   if (
@@ -41,13 +48,20 @@ export function usePreviewAvailable(environmentId: EnvironmentId | null): boolea
   return isPreviewSupportedInRuntime() || serverBrowser;
 }
 
+/**
+ * Whether this client draws a server tab with its own `<webview>`. Primary
+ * environments can reuse an independent server without a desktop browser
+ * channel; those must stream just like remote environments.
+ */
 export function rendersServerTabNatively(
   environmentId: EnvironmentId,
   primaryEnvironmentId: EnvironmentId | null,
   snapshot: Pick<PreviewSessionSnapshot, "runtime"> | null | undefined,
+  nativeServerBrowser = false,
 ): boolean {
   return (
     isElectron &&
+    nativeServerBrowser &&
     snapshot?.runtime === "server" &&
     primaryEnvironmentId !== null &&
     environmentId === primaryEnvironmentId
@@ -58,5 +72,10 @@ export function useRendersServerTabNatively(
   environmentId: EnvironmentId,
   snapshot: Pick<PreviewSessionSnapshot, "runtime"> | null | undefined,
 ): boolean {
-  return rendersServerTabNatively(environmentId, useAtomValue(primaryEnvironmentIdAtom), snapshot);
+  return rendersServerTabNatively(
+    environmentId,
+    useAtomValue(primaryEnvironmentIdAtom),
+    snapshot,
+    useAtomValue(primaryEnvironmentNativeBrowserAtom),
+  );
 }

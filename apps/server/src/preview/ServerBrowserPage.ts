@@ -414,7 +414,7 @@ const pngSize = (base64: string) => {
  * A page's display ratio and CSS viewport, read in an isolated world since page script can
  * reassign `devicePixelRatio`, `innerWidth`, and `innerHeight` in its own, and its page zoom.
  */
-const readPageMetrics = async (cdp: CDPSession) => {
+export const readPageMetrics = async (cdp: CDPSession) => {
   const { frameTree } = await cdp.send("Page.getFrameTree");
   const { executionContextId } = await cdp.send("Page.createIsolatedWorld", {
     frameId: frameTree.frame.id,
@@ -450,11 +450,26 @@ export const captureViewport = async (
   cdp: CDPSession,
   options: { readonly format: "png" | "jpeg"; readonly quality?: number },
 ) => {
-  const { data } = await cdp.send("Page.captureScreenshot", {
+  const parameters = {
     format: options.format,
     ...(options.quality === undefined ? {} : { quality: options.quality }),
-  });
-  return data;
+  };
+  const capture = () => cdp.send("Page.captureScreenshot", parameters);
+  try {
+    return (await capture()).data;
+  } catch (error) {
+    if (
+      !(error instanceof Error) ||
+      !error.message.endsWith(
+        "Protocol error (Page.captureScreenshot): Unable to capture screenshot",
+      )
+    ) {
+      throw error;
+    }
+    // Retry this transient Chromium capture error once; persistent failures still propagate.
+    await new Promise((resolve) => setTimeout(resolve, WAIT_POLL_MS));
+    return (await capture()).data;
+  }
 };
 
 /** Runs in the page's own isolated world, as the server has no image library. */

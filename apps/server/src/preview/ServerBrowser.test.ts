@@ -15,7 +15,9 @@ import {
   type PreviewAutomationSnapshot,
   type PreviewAutomationStatus,
 } from "@t3tools/contracts";
+
 import * as Effect from "effect/Effect";
+
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -23,7 +25,9 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
+
 import * as Stream from "effect/Stream";
+
 import type { BrowserContext, Page } from "playwright-core";
 import { beforeEach, expect, vi } from "vite-plus/test";
 
@@ -34,6 +38,7 @@ import * as DesktopChannel from "./DesktopBrowserChannel.ts";
 import * as Manager from "./Manager.ts";
 import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
+
 import * as PreviewBrowser from "./PreviewBrowser.ts";
 
 vi.mock("./ServerBrowserContexts.ts", () => ({
@@ -45,6 +50,7 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
     }
     async contextFor(profileId: string, isolationKey?: string) {
       contextRequests.push({ profileId, isolated: isolationKey !== undefined });
+      contextRequested.resolve();
       if (contextFailure) throw contextFailure;
       await contextGate?.promise;
       const context = makeContext(this.onClose);
@@ -57,6 +63,7 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
     async connectDesktopPage(endpoint: string) {
       const context = makeContext();
       desktopConnections.push({ endpoint, context });
+      desktopConnected.resolve();
       return { browser: { close: async () => {} }, page: context.page as unknown as Page };
     }
     async close() {
@@ -262,6 +269,12 @@ const contexts: ReturnType<typeof makeContext>[] = [];
 const encoderStreams: Array<{ frameRate: number | undefined; bitsPerSecond: number }> = [];
 const contextRequests: Array<{ profileId: string; isolated: boolean }> = [];
 let contextGate: PromiseWithResolvers<void> | null = null;
+let contextRequested = Promise.withResolvers<void>();
+let desktopConnected = Promise.withResolvers<void>();
+let desktopReleased = Promise.withResolvers<void>();
+let detachSubscribed = Promise.withResolvers<void>();
+let attachSubscribed = Promise.withResolvers<void>();
+let desktopAttachmentReceived = Promise.withResolvers<void>();
 let pageCopy = "";
 let keyCopy = "";
 let focusedFrame: ReturnType<typeof makeFrame> | null = null;
@@ -317,6 +330,7 @@ const dependencies = Layer.mergeAll(
           const onDetach = (key: { threadId: string; tabId: string }) =>
             Queue.offerUnsafe(queue, key);
           desktopDetaches.on("detach", onDetach);
+          detachSubscribed.resolve();
           return onDetach;
         }),
         (onDetach) => Effect.sync(() => desktopDetaches.off("detach", onDetach)),
@@ -328,15 +342,19 @@ const dependencies = Layer.mergeAll(
           const onAttach = (key: { threadId: string; tabId: string }) =>
             Queue.offerUnsafe(queue, key);
           desktopDetaches.on("attach", onAttach);
+          attachSubscribed.resolve();
           return onAttach;
         }),
         (onAttach) => Effect.sync(() => desktopDetaches.off("attach", onAttach)),
       ),
-    ),
+    ).pipe(Stream.tap(() => Effect.sync(() => desktopAttachmentReceived.resolve()))),
     isAttached: (key) => Effect.sync(() => desktopRenders(key.tabId)),
     endpoint: (key) =>
       Effect.acquireRelease(Effect.succeed(`ws://desktop/${key.tabId}`), () =>
-        Effect.sync(() => releasedDesktopTabs.push(key.tabId)),
+        Effect.sync(() => {
+          releasedDesktopTabs.push(key.tabId);
+          desktopReleased.resolve();
+        }),
       ),
     pointer: () => Effect.void,
     turn: (threadId, active) => Effect.sync(() => desktopTurns.emit("turn", threadId, active)),
@@ -373,6 +391,12 @@ beforeEach(() => {
   encoderStreams.length = 0;
   contextRequests.length = 0;
   contextGate = null;
+  contextRequested = Promise.withResolvers<void>();
+  desktopConnected = Promise.withResolvers<void>();
+  desktopReleased = Promise.withResolvers<void>();
+  detachSubscribed = Promise.withResolvers<void>();
+  attachSubscribed = Promise.withResolvers<void>();
+  desktopAttachmentReceived = Promise.withResolvers<void>();
   contextFailure = null;
   initialNavigation = null;
   pageCopy = "";
@@ -1279,4 +1303,201 @@ it.live(
         });
       }),
     ).pipe(Effect.provide(layer)),
+);
+
+it.live("an agent tab keeps throwaway storage when no client reported profiles", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* ready;
+      expect(contextRequests).toEqual([{ profileId: "default", isolated: true }]);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.live("a desktop page that comes back reconnects without waiting for a viewer", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const manager = yield* Manager.PreviewManager;
+      yield* ServerBrowser.ServerBrowser;
+      yield* Effect.yieldNow;
+      desktopRendersNext = true;
+      const opened = yield* manager.open({ threadId: scope.thread.threadId, runtime: "server" });
+      yield* Effect.promise(() => desktopConnected.promise);
+      yield* Effect.promise(() => detachSubscribed.promise);
+      desktopConnected = Promise.withResolvers<void>();
+      desktopDetaches.emit("detach", { threadId: scope.thread.threadId, tabId: opened.tabId });
+      yield* Effect.promise(() => desktopReleased.promise);
+      desktopDetaches.emit("attach", { threadId: scope.thread.threadId, tabId: opened.tabId });
+      yield* Effect.promise(() => desktopConnected.promise);
+      expect(desktopConnections).toHaveLength(2);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.live("a late desktop attachment replaces the fallback page and reconnects its viewers", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { browser, broker, tabId } = yield* ready;
+      const manager = yield* Manager.PreviewManager;
+      const fallback = contexts[0]!.page;
+      yield* Effect.promise(() => fallback.goto("https://example.com/login"));
+      const viewer = yield* browser.attachViewer(viewerInput(tabId, false));
+      yield* Effect.promise(() => attachSubscribed.promise);
+      desktopTabs.add(tabId);
+      desktopDetaches.emit("attach", { threadId: scope.thread.threadId, tabId });
+      const ended = yield* Stream.fromQueue(viewer.output).pipe(
+        Stream.filter((item) => item._tag === "reconnect" || item._tag === "gone"),
+        Stream.runHead,
+      );
+      expect(ended).toEqual(Option.some({ _tag: "reconnect" }));
+      yield* Effect.promise(() => desktopConnected.promise);
+      const desktop = desktopConnections[0]!.context.page;
+      yield* Effect.promise(() => desktop.goto("https://example.com/account"));
+      const status = yield* broker.invoke<PreviewAutomationStatus>({
+        scope,
+        operation: "status",
+        input: {},
+        tabId,
+      });
+      expect(status.url).toBe("https://example.com/account");
+      expect(fallback.isClosed()).toBe(true);
+      expect(desktop.close).not.toHaveBeenCalled();
+      expect((yield* manager.list({ threadId: scope.thread.threadId })).sessions).toHaveLength(1);
+      yield* browser.attachViewer(viewerInput(tabId, false));
+      expect(desktopConnections).toHaveLength(1);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.live("a desktop attachment during fallback creation waits and adopts the desktop page", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const manager = yield* Manager.PreviewManager;
+      yield* ServerBrowser.ServerBrowser;
+      yield* Effect.yieldNow;
+      contextGate = Promise.withResolvers<void>();
+      const opened = yield* manager.open({ threadId: scope.thread.threadId, runtime: "server" });
+      yield* Effect.promise(() => contextRequested.promise);
+      yield* Effect.promise(() => attachSubscribed.promise);
+      desktopTabs.add(opened.tabId);
+      desktopDetaches.emit("attach", { threadId: scope.thread.threadId, tabId: opened.tabId });
+      yield* Effect.promise(() => desktopAttachmentReceived.promise);
+      contextGate.resolve();
+      yield* Effect.promise(() => desktopConnected.promise);
+      expect(contexts[0]!.page.isClosed()).toBe(true);
+      expect(desktopConnections).toHaveLength(1);
+      expect((yield* manager.list({ threadId: scope.thread.threadId })).sessions).toHaveLength(1);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+// Native capture uses the current viewport; shrinking happens afterward in an isolated world.
+it.live.each([
+  {
+    name: "desktop at display ratio 1.5",
+    desktop: true,
+    page: { ratio: 1.5, width: 1280, height: 800, zoom: 1 },
+    scrollY: 0,
+    size: { width: 1280, height: 800 },
+  },
+  {
+    name: "desktop resized to a phone",
+    desktop: true,
+    page: { ratio: 1, width: 390, height: 844, zoom: 1 },
+    scrollY: 0,
+    size: { width: 390, height: 844 },
+  },
+  {
+    name: "desktop zoom changes during a scrolled snapshot",
+    desktop: true,
+    page: { ratio: 3, width: 640, height: 400, zoom: 2 },
+    scrollY: 100,
+    size: { width: 1280, height: 800 },
+  },
+  {
+    name: "headless",
+    desktop: false,
+    page: { ratio: 2, width: 1280, height: 800, zoom: 1 },
+    scrollY: 0,
+    size: { width: 640, height: 400 },
+  },
+])("snapshot captures the page's own viewport: $name", ({ desktop, page, scrollY, size }) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      desktopRendersNext = desktop;
+      const { browser, broker, tabId } = yield* ready;
+      yield* browser.attachViewer(viewerInput(tabId, false));
+      const context = desktop ? desktopConnections[0]!.context : contexts[0]!;
+      const display = desktop ? page.ratio / page.zoom : 1;
+      let zoom = 1;
+      const captures: unknown[] = [];
+      const shrinks: Array<{ width: number; height: number; contextId: number }> = [];
+      let metricsReads = 0;
+      for (const session of context.sessions) {
+        const send = session.send.getMockImplementation()!;
+        session.send.mockImplementation(async (method, input) => {
+          if (
+            method === "Runtime.evaluate" &&
+            String((input as { expression?: string })?.expression).includes("devicePixelRatio")
+          ) {
+            metricsReads += 1;
+            const value = {
+              ratio: page.ratio * (zoom / page.zoom),
+              width: page.width * (page.zoom / zoom),
+              height: page.height * (page.zoom / zoom),
+            };
+            // Desktop zoom applies after this renderer read, before the next layout reply.
+            zoom = page.zoom;
+            return { result: { value } };
+          }
+          if (method === "Page.getLayoutMetrics") {
+            return { cssVisualViewport: { pageX: 0, pageY: scrollY, zoom } };
+          }
+          if (method === "Page.captureScreenshot") {
+            captures.push(input);
+            const header = Buffer.alloc(24);
+            header.write("IHDR", 12);
+            header.writeUInt32BE(Math.round(page.width * page.zoom * display), 16);
+            header.writeUInt32BE(Math.round(page.height * page.zoom * display), 20);
+            return { data: header.toString("base64") };
+          }
+          if (method === "Runtime.callFunctionOn") {
+            const resize = input as {
+              functionDeclaration: string;
+              executionContextId: number;
+              awaitPromise: boolean;
+              returnByValue: boolean;
+              arguments: [{ value: string }, { value: number }, { value: number }];
+            };
+            expect(resize.functionDeclaration).toContain("createImageBitmap");
+            expect(resize.awaitPromise).toBe(true);
+            expect(resize.returnByValue).toBe(true);
+            const width = resize.arguments[1].value;
+            const height = resize.arguments[2].value;
+            shrinks.push({ width, height, contextId: resize.executionContextId });
+            const header = Buffer.alloc(24);
+            header.write("IHDR", 12);
+            header.writeUInt32BE(width, 16);
+            header.writeUInt32BE(height, 20);
+            return { result: { value: header.toString("base64") } };
+          }
+          return send(method, input);
+        });
+      }
+      const result = yield* broker.invoke<PreviewAutomationSnapshot>({
+        scope,
+        tabId,
+        operation: "snapshot",
+        input: {},
+      });
+      const png = Buffer.from(result.screenshot.data, "base64");
+      expect(result.screenshot).toMatchObject(size);
+      expect({ width: png.readUInt32BE(16), height: png.readUInt32BE(20) }).toEqual(size);
+      expect(captures).toEqual([{ format: "png" }]);
+      expect(shrinks).toEqual(
+        desktop && page.width * page.zoom * display <= 1280 ? [] : [{ ...size, contextId: 7 }],
+      );
+      if (!desktop) expect(metricsReads).toBe(0);
+    }),
+  ).pipe(Effect.provide(layer)),
 );

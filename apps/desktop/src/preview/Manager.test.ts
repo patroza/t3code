@@ -1,5 +1,6 @@
 import { it as effectIt } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { DesktopBrowserEvent } from "@t3tools/contracts";
 import type {
   DesktopPreviewRecordingInputEvent,
   PreviewAnnotationPayload,
@@ -14,6 +15,7 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
@@ -122,6 +124,7 @@ const {
   createFromPath,
   fromId,
   getFocusedWebContents,
+  getFocusedWindow,
   mkdir,
   previewSession,
   showItemInFolder,
@@ -130,6 +133,7 @@ const {
   writeClipboard,
 } = vi.hoisted(() => ({
   browserWindowConstructor: vi.fn(),
+  getFocusedWindow: vi.fn<() => Electron.BrowserWindow | null>(() => null),
   clipboardItemConstructor: vi.fn(),
   createFromPath: vi.fn((): { readonly isEmpty: () => boolean; readonly toPNG: () => Buffer } => ({
     isEmpty: () => false,
@@ -146,7 +150,7 @@ const {
 }));
 
 vi.mock("electron", () => ({
-  BrowserWindow: browserWindowConstructor,
+  BrowserWindow: Object.assign(browserWindowConstructor, { getFocusedWindow }),
   // oxlint-disable-next-line typescript/no-extraneous-class -- This constructor-only mock implements the browser ClipboardItem API.
   ClipboardItem: class {
     constructor(data: Record<string, unknown>) {
@@ -204,7 +208,7 @@ const layerFileSystem = FileSystem.layerNoop({
     }),
 });
 
-const managerLayer = (platform: NodeJS.Platform = "darwin") =>
+const managerLayer = (platform: NodeJS.Platform = "darwin", webAuthnAvailable = true) =>
   PreviewManager.layer.pipe(
     Layer.provideMerge(
       Layer.succeed(DesktopRendererHistory.DesktopRendererHistory, {
@@ -218,6 +222,7 @@ const managerLayer = (platform: NodeJS.Platform = "darwin") =>
     Layer.provideMerge(
       Layer.mock(PreviewPasskeys.PreviewPasskeys)({
         bridgeEnabled: false,
+        webAuthnAvailable,
         installSessionHandlers: () => {},
         attachGuest: () => () => {},
       }),
@@ -234,11 +239,12 @@ const withManager = <A>(
     manager: PreviewManager.PreviewManager["Service"],
   ) => Effect.Effect<A, PreviewManager.PreviewManagerError, Scope.Scope>,
   platform: NodeJS.Platform = "darwin",
+  webAuthnAvailable = true,
 ) =>
   Effect.gen(function* () {
     const manager = yield* PreviewManager.PreviewManager;
     return yield* use(manager);
-  }).pipe(Effect.provide(managerLayer(platform)), Effect.scoped);
+  }).pipe(Effect.provide(managerLayer(platform, webAuthnAvailable)), Effect.scoped);
 
 interface TestCapturedPreviewImage {
   readonly toJPEG: () => Buffer;
@@ -405,6 +411,7 @@ const makeFaviconWebContents = (options?: {
   });
   const off = vi.fn();
   const debuggerOff = vi.fn();
+  const setWindowOpenHandler = vi.fn<Electron.WebContents["setWindowOpenHandler"]>();
   const webContents = {
     id: options?.id ?? 42,
     isDestroyed: () => destroyed,
@@ -431,7 +438,7 @@ const makeFaviconWebContents = (options?: {
     isFocused: vi.fn(() => true),
     focusedFrame: {} as object | null,
     setIgnoreMenuShortcuts: vi.fn(),
-    setWindowOpenHandler: vi.fn(),
+    setWindowOpenHandler,
     executeJavaScriptInIsolatedWorld,
     debugger: {
       isAttached: () => false,
@@ -449,6 +456,7 @@ const makeFaviconWebContents = (options?: {
     loadURL,
     off,
     reload,
+    setWindowOpenHandler,
     setDestroyed: (value: boolean) => {
       destroyed = value;
     },
@@ -532,12 +540,46 @@ const makeTestPictureInPictureWindow = (loadURL: () => Promise<void> = async () 
   return { pictureInPictureWindow, send, webContentsListeners };
 };
 
+effectIt.effect.each([false, true])(
+  "keeps OAuth popup authentication aligned with native capability (%s)",
+  (available) =>
+    withManager(
+      (manager) =>
+        Effect.gen(function* () {
+          const preview = makeFaviconWebContents();
+          fromId.mockReturnValue(preview.webContents);
+          yield* manager.createTab("auth_popup");
+          yield* manager.registerWebview("auth_popup", 42);
+          const handler = preview.setWindowOpenHandler.mock.calls[0]![0];
+          const decision = handler({
+            url: "https://auth.test/oauth",
+            disposition: "new-window",
+          } as Electron.HandlerDetails);
+          expect(decision).toEqual({
+            action: "allow",
+            overrideBrowserWindowOptions: {
+              webPreferences: {
+                contextIsolation: true,
+                nodeIntegration: false,
+                sandbox: true,
+                ...(available ? {} : { disableBlinkFeatures: "WebAuth" }),
+              },
+            },
+          });
+        }),
+      "linux",
+      available,
+    ),
+);
+
 describe("PreviewManager", () => {
   beforeEach(() => {
     browserWindowConstructor.mockReset();
     fromId.mockClear();
     getFocusedWebContents.mockReset();
     getFocusedWebContents.mockReturnValue(null);
+    getFocusedWindow.mockReset();
+    getFocusedWindow.mockReturnValue({} as Electron.BrowserWindow);
     mkdir.mockClear();
     previewSession.on.mockClear();
     writeFile.mockClear();
@@ -1711,6 +1753,84 @@ describe("PreviewManager", () => {
       yield* manager.closeTab("tab_1");
       expect(yield* nextType).toBe("detached");
     }).pipe(Effect.provide(managerLayer()), Effect.scoped),
+  );
+
+  effectIt.effect.each(["before-create", "before-attach", "after-attach"] as const)(
+    "keeps the server page connected when navigating %s",
+    (phase) =>
+      Effect.gen(function* () {
+        const host = yield* DesktopBrowserHost.DesktopBrowserHost;
+        const manager = yield* PreviewManager.PreviewManager;
+        const serverTab = { threadId: "thread-1", tabId: "server-tab-1" };
+        const events = yield* Queue.unbounded<DesktopBrowserEvent>();
+        const decode = Schema.decodeUnknownEffect(Schema.fromJsonString(DesktopBrowserEvent));
+        yield* host.events.pipe(
+          Stream.runForEach((line) =>
+            decode(new TextDecoder().decode(line)).pipe(
+              Effect.flatMap((event) => Queue.offer(events, event)),
+            ),
+          ),
+          Effect.forkScoped,
+        );
+        const nextAttached = Stream.fromQueue(events).pipe(
+          Stream.filter((event) => event.type === "attached"),
+          Stream.runHead,
+        );
+        const capturePage = vi.fn(async () => ({
+          toPNG: () => Buffer.from("png"),
+          toJPEG: () => Buffer.from("jpeg"),
+          getSize: () => ({ width: 100, height: 80 }),
+        }));
+        const makePage = (id: number) =>
+          Object.assign(makeTestPreviewWebContents(capturePage, id), {
+            getURL: () => "about:blank",
+            loadURL: vi.fn(async () => undefined),
+            isDevToolsOpened: () => false,
+            getUserAgent: () => "Electron",
+          });
+        fromId.mockReturnValue(makePage(42));
+        if (phase === "before-create") yield* manager.navigate("tab_1", "https://example.com");
+        yield* manager.createTab("tab_1", { serverTab });
+        if (phase === "before-attach") yield* manager.navigate("tab_1", "https://example.com");
+        yield* manager.registerWebview("tab_1", 42);
+        expect(yield* nextAttached).toEqual(Option.some({ type: "attached", ...serverTab }));
+        if (phase === "after-attach") {
+          yield* manager.navigate("tab_1", "https://example.com");
+          fromId.mockReturnValue(makePage(43));
+          yield* manager.registerWebview("tab_1", 43);
+          expect(yield* nextAttached).toEqual(Option.some({ type: "attached", ...serverTab }));
+        }
+      }).pipe(Effect.provide(managerLayer()), Effect.scoped),
+  );
+
+  effectIt.effect("stops capture retries when the tab swaps during the retry delay", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const capturePage = vi.fn(async () => ({
+          toPNG: () => Buffer.from("png"),
+          toJPEG: () => Buffer.from("jpeg"),
+          getSize: () => ({ width: 100, height: 80 }),
+        }));
+        fromId.mockReturnValue(makeTestPreviewWebContents(capturePage, 42));
+        yield* manager.createTab("tab_1");
+        yield* manager.registerWebview("tab_1", 42);
+
+        capturePage.mockRejectedValueOnce(new Error("UnknownVizError"));
+        const fiber = yield* Effect.exit(manager.captureScreenshot("tab_1")).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* TestClock.adjust(60);
+        expect(capturePage).toHaveBeenCalledTimes(1);
+        fromId.mockReturnValue(makeTestPreviewWebContents(capturePage, 43));
+        yield* manager.registerWebview("tab_1", 43);
+        yield* TestClock.adjust(1_000);
+        const exit = yield* Fiber.join(fiber);
+
+        expect(Exit.isFailure(exit)).toBe(true);
+        expect(capturePage).toHaveBeenCalledTimes(1);
+        expect(writeFile).not.toHaveBeenCalled();
+      }),
+    ),
   );
 
   effectIt.effect(

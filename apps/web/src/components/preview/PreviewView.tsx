@@ -38,7 +38,7 @@ import {
   updatePreviewServerSnapshot,
   useThreadPreviewState,
 } from "~/previewStateStore";
-import { resolveDiscoveredServerUrl } from "~/browser/browserTargetResolver";
+import { resolveDiscoveredServerUrl, resolveNavigableUrl } from "~/browser/browserTargetResolver";
 import { useEnvironmentSupportsServerBrowser } from "~/state/entities";
 import {
   useEnvironment,
@@ -261,7 +261,11 @@ export function PreviewView({
   const handleSubmitUrl = async (next: string) => {
     try {
       const resolved = resolveAddressBarInput(next, resolveSearchUrlTemplate(getClientSettings()));
-      if (await navigateToResolvedUrl(resolved)) {
+      if (
+        await navigateToResolvedUrl(
+          await resolveNavigableUrl(threadRef.environmentId, { kind: "url", url: resolved }),
+        )
+      ) {
         recordVisitForThread(threadRef, resolved);
       }
     } catch {}

@@ -59,6 +59,7 @@ import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts"
 import { MENU_ACTION_CHANNEL, PREVIEW_PICTURE_IN_PICTURE_FRAME_CHANNEL } from "../ipc/channels.ts";
 import * as DesktopBrowserHost from "./DesktopBrowserHost.ts";
 import * as PreviewPasskeys from "./Passkeys.ts";
+import { disableWebAuthn } from "./WebAuthnPolicy.ts";
 import * as BrowserSession from "./BrowserSession.ts";
 import {
   ANNOTATION_CAPTURED_CHANNEL,
@@ -1560,7 +1561,9 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.setWindowOpenHandler((details) => {
           const action = previewWindowOpenAction(details);
           if (action === "popup") {
-            return { action: "allow", overrideBrowserWindowOptions: POPUP_WINDOW_OPTIONS };
+            const webPreferences = { ...POPUP_WINDOW_OPTIONS.webPreferences };
+            if (!passkeys.webAuthnAvailable) disableWebAuthn(webPreferences);
+            return { action: "allow", overrideBrowserWindowOptions: { webPreferences } };
           }
           if (action === "deny") return { action: "deny" };
           if (action === "new-tab") {
@@ -1639,7 +1642,16 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         ReadonlyMap<string, PreviewTabState>,
       ] => {
         const existing = tabs.get(tabId);
-        if (existing) return [{ state: existing, created: false }, tabs] as const;
+        if (existing) {
+          if (!defaults?.serverTab || existing.serverTab)
+            return [{ state: existing, created: false }, tabs] as const;
+          // Navigation can create the tab before its host supplies the server key.
+          const state = { ...existing, serverTab: defaults.serverTab };
+          return [
+            { state, created: false },
+            replaceMap(tabs, (copy) => copy.set(tabId, state)),
+          ] as const;
+        }
         const initial: PreviewTabState = {
           tabId,
           webContentsId: null,
@@ -1945,6 +1957,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         zoomFactor: current?.zoomFactor ?? DEFAULT_ZOOM_FACTOR,
         pictureInPicture: current?.pictureInPicture ?? false,
         colorScheme: current?.colorScheme ?? "system",
+        ...(current?.serverTab === undefined ? {} : { serverTab: current.serverTab }),
         // Keep audibility until Chromium replaces the document; clearing it here can lose the final transition.
         audioMuted: current?.audioMuted ?? false,
         audible: current?.audible ?? false,

@@ -68,4 +68,45 @@ describe("browserSurfaceStore", () => {
       visible: true,
     });
   });
+
+  it("removes a surface entry when its current lease is released", () => {
+    const tabId = "released-browser-surface";
+    const lease = acquireBrowserSurface(tabId);
+    lease.present({ x: 10, y: 20, width: 900, height: 640 }, true);
+
+    lease.release();
+    // A stale present() from the released lease must not resurrect the entry.
+    lease.present({ x: 0, y: 0, width: 1, height: 1 }, true);
+
+    expect(useBrowserSurfaceStore.getState().byTabId[tabId]).toBeUndefined();
+  });
+
+  it("keeps the requested layer with the active surface lease", () => {
+    const tabId = "layered-browser-surface";
+    const lease = acquireBrowserSurface(tabId);
+    lease.present({ x: 10, y: 20, width: 320, height: 200 }, true, 12, 48);
+
+    expect(useBrowserSurfaceStore.getState().byTabId[tabId]).toMatchObject({
+      visible: true,
+      zIndex: 48,
+    });
+  });
+
+  it("clears fitted presentation state when its lease is released", () => {
+    const tabId = "released-fitted-browser-surface";
+    const fittedLease = acquireBrowserSurface(tabId, true);
+    useBrowserSurfaceStore.getState().presentContent(tabId, {
+      x: 0,
+      y: 0,
+      width: 1_280,
+      height: 800,
+      scale: 1,
+      scrollLeft: 0,
+      scrollTop: 0,
+    });
+
+    fittedLease.release();
+
+    expect(useBrowserSurfaceStore.getState().byTabId[tabId]).toBeUndefined();
+  });
 });

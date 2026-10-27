@@ -7,17 +7,20 @@ import {
   FILL_PREVIEW_VIEWPORT,
   ThreadId,
 } from "@t3tools/contracts";
-import { type ComponentProps } from "react";
+import { Profiler, type ComponentProps } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
 import "~/index.css";
-import { act, render } from "../../../test/render";
+import { act, fakeTimers, render } from "../../../test/render";
 
 import type { PreviewableServer } from "./useDiscoveredLocalServers";
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(async (_tabId: string, _url: string): Promise<void> => undefined),
+  resolveNavigableUrl: vi.fn(
+    async (_environmentId: unknown, target: { kind: string; url?: string }) => target.url ?? "",
+  ),
   rememberPreviewUrl: vi.fn(),
   readPreparedConnection: vi.fn(() => ({ httpBaseUrl: "http://172.25.85.75:3773" })),
   readEnvironmentScope: vi.fn((_environmentId?: unknown, _scope?: unknown) => true),
@@ -73,6 +76,10 @@ vi.mock(import("./previewBridge"), async (original) => ({
       close: mocks.closePictureInPicture,
     },
   } as never,
+}));
+vi.mock(import("~/browser/browserTargetResolver"), async (original) => ({
+  ...(await original()),
+  resolveNavigableUrl: mocks.resolveNavigableUrl,
 }));
 vi.mock(import("~/browserHistoryStore"), async (original) => ({
   ...(await original()),
@@ -156,6 +163,8 @@ vi.mock(import("~/browser/previewRuntime"), async (original) => ({
 
 vi.mock(import("~/browser/browserViewportActions"), { spy: true });
 
+import { useBrowserSurfaceStore } from "~/browser/browserSurfaceStore";
+import { commitBrowserViewportChange } from "~/browser/browserViewportActions";
 import { useComposerDraftStore } from "~/composerDraftStore";
 import { useBrowserPointerStore } from "~/browser/browserPointerStore";
 import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
@@ -195,6 +204,17 @@ function annotation(id: string, screenshot: unknown = null) {
   };
 }
 
+async function submitAddress(text: string) {
+  const input = page.getByPlaceholder("Search or enter URL");
+  await userEvent.click(input);
+  await userEvent.fill(input, text);
+  await userEvent.keyboard("{Enter}");
+}
+
+function hasCursor() {
+  return document.querySelector("svg.lucide-mouse-pointer2") !== null;
+}
+
 // The mocked modules and stores are shared by the whole file, so every test starts by
 // resetting them.
 function setup() {
@@ -219,6 +239,274 @@ function setup() {
 }
 
 describe("PreviewView", () => {
+  it("shows the cursor in a replacement browser while the old instance still records", async () => {
+    setup();
+    using _cleanup = {
+      [Symbol.dispose]() {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      },
+    };
+    await using screen = await render(null);
+    mocks.recordingTabIds.add(TEST_RUNTIME_TAB_ID);
+    mocks.recordingRuntimeTabId = TEST_RUNTIME_TAB_ID;
+    const replacementTabId = previewRuntimeTabId(TEST_THREAD_REF, "replacement-server", "tab-1");
+    useBrowserPointerStore.setState({
+      byTabId: Object.fromEntries(
+        [TEST_RUNTIME_TAB_ID, replacementTabId].map((tabId) => [
+          tabId,
+          { tabId, phase: "move", x: 10, y: 10, sequence: 1, createdAt: "2026-07-27T00:00:00Z" },
+        ]),
+      ),
+    });
+    await screen.rerender(view());
+    expect(hasCursor()).toBe(false);
+    mocks.serverEpoch = "replacement-server";
+    await screen.rerender(view());
+    expect(hasCursor()).toBe(true);
+    expect(mocks.recordingTabIds.has(TEST_RUNTIME_TAB_ID)).toBe(true);
+  });
+
+  it.each([false, true])(
+    "aligns the cursor and responsive viewport after host zoom changes (native server tab: %s)",
+    async (nativeServerTab) => {
+      setup();
+      using _cleanup = {
+        [Symbol.dispose]() {
+          vi.useRealTimers();
+          vi.unstubAllGlobals();
+        },
+      };
+      await using screen = await render(null);
+      mocks.nativeServerTab = nativeServerTab;
+      let windowZoom = 1;
+      vi.stubGlobal("desktopBridge", {
+        getWindowZoomFactor: () => windowZoom,
+        getLocalEnvironmentBootstraps: () => [],
+      });
+      const commit = vi.mocked(commitBrowserViewportChange).mockResolvedValueOnce(undefined);
+      try {
+        await screen.rerender(view());
+        await act(() => {
+          const surfaces = useBrowserSurfaceStore.getState();
+          const slot = document.querySelector<HTMLElement>("[data-browser-surface-slot]")!;
+          slot.style.width = "1020px";
+          slot.style.height = "798px";
+          surfaces.presentContent(TEST_RUNTIME_TAB_ID, {
+            x: 20,
+            y: 40,
+            width: 500,
+            height: 375,
+            scale: 0.5,
+            scrollLeft: 7,
+            scrollTop: 11,
+          });
+          useBrowserPointerStore.setState({
+            byTabId: {
+              [TEST_RUNTIME_TAB_ID]: {
+                tabId: TEST_RUNTIME_TAB_ID,
+                phase: "move",
+                x: 100,
+                y: 200,
+                sequence: 1,
+                createdAt: "2026-07-27T00:00:00Z",
+              },
+            },
+          });
+          windowZoom = 1.25;
+          window.dispatchEvent(new Event("resize"));
+        });
+        const cursor = document.querySelector("[data-agent-browser-cursor]");
+        expect(cursor).not.toBeNull();
+        const position = new DOMMatrixReadOnly(getComputedStyle(cursor!).transform);
+        expect(position.e).toBe(53);
+        expect(position.f).toBe(109);
+
+        await userEvent.click(page.getByRole("button", { name: "Preview menu" }));
+        await userEvent.click(page.getByRole("menuitem", { name: "Show device toolbar" }));
+        expect(commit).toHaveBeenCalledExactlyOnceWith(
+          { runtimeTabId: TEST_RUNTIME_TAB_ID, threadRef: TEST_THREAD_REF, tabId: "tab-1" },
+          {
+            _tag: "freeform",
+            width: 1250,
+            height: 938,
+          },
+        );
+      } finally {
+        commit.mockReset();
+        await act(() => useBrowserSurfaceStore.setState({ activityByTabId: {}, byTabId: {} }));
+      }
+    },
+  );
+
+  it("does not rerender while loading time passes", async () => {
+    setup();
+    using _cleanup = {
+      [Symbol.dispose]() {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      },
+    };
+    await using screen = await render(null);
+    using _timers = fakeTimers();
+    mocks.loading = true;
+    const onRender = vi.fn();
+    await screen.rerender(
+      <Profiler id="preview" onRender={onRender}>
+        {view()}
+      </Profiler>,
+    );
+    const initialRenderCount = onRender.mock.calls.length;
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(onRender).toHaveBeenCalledTimes(initialRenderCount);
+  });
+
+  it.each([
+    [
+      "https://localhost:8000/dashboard?mode=test#top",
+      "https://localhost:8000/dashboard?mode=test#top",
+    ],
+    ["localhost:5173/app", "http://localhost:5173/app"],
+  ])(
+    "resolves the typed localhost URL %s through its environment while recording the entered address",
+    async (submitted, expected) => {
+      setup();
+      using _cleanup = {
+        [Symbol.dispose]() {
+          vi.useRealTimers();
+          vi.unstubAllGlobals();
+        },
+      };
+      await using screen = await render(null);
+      const entered = new URL(expected);
+      const reachable = new URL(
+        entered.pathname + entered.search + entered.hash,
+        "https://reachable.example.test",
+      ).toString();
+      mocks.resolveNavigableUrl.mockResolvedValueOnce(reachable);
+      await screen.rerender(view());
+      await submitAddress(submitted);
+      await vi.waitFor(() =>
+        expect(mocks.navigate).toHaveBeenCalledWith(TEST_RUNTIME_TAB_ID, reachable),
+      );
+      expect(mocks.resolveNavigableUrl).toHaveBeenCalledWith(TEST_THREAD_REF.environmentId, {
+        kind: "url",
+        url: expected,
+      });
+      expect(mocks.rememberPreviewUrl).toHaveBeenCalledWith(TEST_THREAD_REF, reachable);
+      expect(mocks.recordVisitForThread).toHaveBeenCalledWith(TEST_THREAD_REF, expected);
+    },
+  );
+
+  it("maps an empty-state localhost server onto the WSL host", async () => {
+    setup();
+    using _cleanup = {
+      [Symbol.dispose]() {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      },
+    };
+    await using screen = await render(null);
+    mocks.showEmptyState = true;
+    mocks.servers = [
+      {
+        host: "localhost",
+        port: 5173,
+        url: "http://localhost:5173/app?mode=test#top",
+        requestedUrl: "http://localhost:5173/app?mode=test#top",
+        processName: "vite",
+        pid: 1,
+        terminal: null,
+        source: "scanner",
+      } as unknown as PreviewableServer,
+    ];
+    await screen.rerender(view());
+    await userEvent.click(page.getByRole("button", { name: /vite/ }));
+
+    await vi.waitFor(() =>
+      expect(mocks.navigate).toHaveBeenCalledWith(
+        TEST_RUNTIME_TAB_ID,
+        "http://172.25.85.75:5173/app?mode=test#top",
+      ),
+    );
+    expect(mocks.rememberPreviewUrl).toHaveBeenCalledWith(
+      TEST_THREAD_REF,
+      "http://172.25.85.75:5173/app?mode=test#top",
+    );
+    // History keys off the requested loopback URL, which stays stable across hosts.
+    await vi.waitFor(() =>
+      expect(mocks.recordVisitForThread).toHaveBeenCalledWith(
+        TEST_THREAD_REF,
+        "http://localhost:5173/app?mode=test#top",
+      ),
+    );
+  });
+
+  it("opens and closes a thread-scoped floating preview for the active tab", async () => {
+    setup();
+    using _cleanup = {
+      [Symbol.dispose]() {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      },
+    };
+    await using screen = await render(null);
+    await screen.rerender(view());
+    await userEvent.click(page.getByRole("button", { name: "Float preview over chat" }));
+    expect(usePreviewMiniPlayerStore.getState().byThreadKey).toMatchObject({
+      "environment-1:thread-1": { source: { kind: "browser", tabId: "tab-1" } },
+    });
+    const closeButton = page.getByRole("button", { name: "Close floating preview" });
+    await expect.element(closeButton).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(closeButton);
+    expect(usePreviewMiniPlayerStore.getState().byThreadKey).toEqual({});
+  });
+
+  it("keeps the native preview window as a secondary menu action", async () => {
+    setup();
+    using _cleanup = {
+      [Symbol.dispose]() {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      },
+    };
+    await using screen = await render(null);
+    await screen.rerender(view());
+    await userEvent.click(page.getByRole("button", { name: "Preview menu" }));
+    await userEvent.click(page.getByRole("menuitem", { name: "Open separate preview window" }));
+    await vi.waitFor(() =>
+      expect(mocks.openPictureInPicture).toHaveBeenCalledWith(TEST_RUNTIME_TAB_ID),
+    );
+    await vi.waitFor(() => expect(document.querySelector('[role="menu"]')).toBeNull());
+
+    mocks.pictureInPicture = true;
+    await screen.rerender(view());
+    await userEvent.click(page.getByRole("button", { name: "Preview menu" }));
+    await userEvent.click(page.getByRole("menuitem", { name: "Close separate preview window" }));
+    await vi.waitFor(() =>
+      expect(mocks.closePictureInPicture).toHaveBeenCalledWith(TEST_RUNTIME_TAB_ID),
+    );
+  });
+
+  it("forwards Cmd/Ctrl+Enter annotations to the composer send path", async () => {
+    setup();
+    using _cleanup = {
+      [Symbol.dispose]() {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      },
+    };
+    await using screen = await render(null);
+    const picked = annotation("annotation-1");
+    const onSendAnnotation = vi.fn();
+    mocks.pickElement.mockResolvedValue({ annotation: picked, submission: "send" });
+    await screen.rerender(view(onSendAnnotation));
+    await userEvent.click(page.getByRole("button", { name: "Annotate preview" }));
+
+    await vi.waitFor(() => expect(onSendAnnotation).toHaveBeenCalledWith(picked, null));
+    expect(mocks.addPreviewAnnotation).toHaveBeenCalledWith(TEST_THREAD_REF, picked);
+  });
+
   it("retains the annotation locally when its own environment loses access during capture", async () => {
     setup();
     const picked = annotation("annotation-revoked");
@@ -252,6 +540,26 @@ describe("PreviewView", () => {
     await userEvent.click(page.getByRole("button", { name: "Annotate preview" }));
     await vi.waitFor(() => expect(onSendAnnotation).toHaveBeenCalledWith(picked, null));
     expect(mocks.setAnnotationSendEnabled).toHaveBeenLastCalledWith(TEST_RUNTIME_TAB_ID, true);
+  });
+
+  it("does not reopen a cancelled picker after the permission update finishes", async () => {
+    setup();
+    let finishUpdate: (() => void) | undefined;
+    mocks.setAnnotationSendEnabled.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishUpdate = resolve;
+        }),
+    );
+    await using _screen = await render(view());
+    await userEvent.click(page.getByRole("button", { name: "Annotate preview" }));
+    expect(finishUpdate).toBeDefined();
+    expect(mocks.pickElement).not.toHaveBeenCalled();
+    await userEvent.click(page.getByRole("button", { name: "Cancel annotation" }));
+    expect(mocks.cancelPickElement).toHaveBeenCalledWith(TEST_RUNTIME_TAB_ID);
+    await act(() => finishUpdate!());
+    expect(mocks.pickElement).not.toHaveBeenCalled();
+    expect(mocks.addPreviewAnnotation).not.toHaveBeenCalled();
   });
 
   it("still sends annotation text when the picked element's crop is malformed", async () => {
