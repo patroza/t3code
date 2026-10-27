@@ -6,6 +6,7 @@ import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
 import { CommandPalette } from "./CommandPalette";
 import { useComposerHandleContext } from "../composerHandleContext";
 import { openCommandPalette } from "../commandPaletteBus";
+import { installCommandPaletteCommands } from "../shortcuts/commandPaletteCommands";
 import { primaryServerKeybindingsAtom } from "../state/server";
 
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
@@ -22,7 +23,8 @@ vi.mock("@effect/atom-react", async (importOriginal) => {
       atom === primaryServerKeybindingsAtom ? DEFAULT_RESOLVED_KEYBINDINGS : [],
   };
 });
-vi.mock("../hooks/useTheme", () => ({
+vi.mock("../hooks/useTheme", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../hooks/useTheme")>()),
   useRenderedAppearance: () => "light",
   useTheme: () => ({ theme: "default", resolvedTheme: "light", appearanceMode: "light" }),
 }));
@@ -98,6 +100,11 @@ async function setup() {
   resources.use(fakeTimers());
 
   const screen = resources.use(await renderScreen(<></>, { container }));
+  resources.defer(
+    installCommandPaletteCommands(screen.router!, {
+      keybindings: () => DEFAULT_RESOLVED_KEYBINDINGS,
+    }),
+  );
 
   async function flushFocus() {
     await act(() => vi.advanceTimersByTimeAsync(0));

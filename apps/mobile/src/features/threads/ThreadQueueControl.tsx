@@ -1,6 +1,9 @@
 import { type StaticScreenProps, useNavigation } from "@react-navigation/native";
 import { useAtomValue } from "@effect/atom-react";
-import { makeQueuedRunsAtom } from "@t3tools/client-runtime/queued-run-edit";
+import {
+  makeQueuedRunsAtom,
+  queuedRunEditBlockedReason,
+} from "@t3tools/client-runtime/queued-run-edit";
 import type { ChatAttachment, EnvironmentId, RunId, ThreadId } from "@t3tools/contracts";
 import { Atom, AsyncResult } from "effect/reactivity";
 import { settlePromise } from "@t3tools/client-runtime/state/runtime";
@@ -76,6 +79,10 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
   const workflow = useThreadQueueWorkflow(target);
   const threadKey = scopedThreadKey(target.environmentId, target.threadId);
   const editing = useQueuedRunEdit(threadKey);
+  const pendingRequests = useAtomValue(environmentThreadDetails.pendingRequestsAtom(target));
+  const editBlockedReason = queuedRunEditBlockedReason({
+    openQuestionCount: pendingRequests?.userInputs.length ?? 0,
+  });
   const reorder = useAtomCommand(threadEnvironment.reorderQueuedRun, "reorder queued message");
   const promote = useAtomCommand(threadEnvironment.promoteQueuedRun, "promote queued message");
   const cancel = useAtomCommand(threadEnvironment.cancelQueuedRun, "remove queued message");
@@ -134,6 +141,7 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
         navigation.goBack();
         return;
       }
+      if (editBlockedReason !== null) return;
       const entry = queuedRuns[index]!;
       busyRef.current = true;
       setBusyRunId(runId);
@@ -237,6 +245,9 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
           />
         </View>
       ) : null}
+      {editBlockedReason !== null && queuedRuns.length > 0 ? (
+        <Text className="py-3 text-sm text-foreground-muted">{editBlockedReason}</Text>
+      ) : null}
       {queuedRuns.length === 0 ? (
         <Text className="pt-6 text-center text-sm text-foreground-muted">
           No messages waiting in this queue.
@@ -256,6 +267,7 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
           canPromoteToSteer: workflow?.canPromoteToSteer ?? false,
           canSendNow: workflow?.canSendNow ?? false,
           canReorder: workflow?.canReorder ?? false,
+          editBlocked: editBlockedReason !== null,
           index,
           isEditing: editing?.runId === run.id,
           isGuestMessage: context?.guest !== undefined,
@@ -399,7 +411,7 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
                       accessibilityHint={
                         controls.canEdit
                           ? "Opens this message in the composer for editing"
-                          : undefined
+                          : (editBlockedReason ?? undefined)
                       }
                       disabled={!controls.canEdit}
                       onPress={() => void act(run.id, "edit")}

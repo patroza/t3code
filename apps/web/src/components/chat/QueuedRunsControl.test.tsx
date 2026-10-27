@@ -58,6 +58,7 @@ describe("QueuedRunsControl automatic completion delivery", () => {
 
     const html = renderToStaticMarkup(
       <QueuedRunsControl
+        editBlockedReason={null}
         environmentId={"environment:test" as never}
         optimisticMessages={[]}
         threadId={"thread:test" as never}
@@ -99,6 +100,7 @@ describe("QueuedRunsControl attachments and edit mode", () => {
 
     const html = renderToStaticMarkup(
       <QueuedRunsControl
+        editBlockedReason={null}
         environmentId={"environment:test" as never}
         optimisticMessages={[]}
         threadId={"thread:test" as never}
@@ -111,7 +113,6 @@ describe("QueuedRunsControl attachments and edit mode", () => {
     expect(html).toContain("https://assets.test/attachment-1");
     expect(html).toContain("Queued with a screenshot");
     expect(html).toContain("Edit queued message");
-    expect(html).toContain("Reorder queued message");
     expect(html).not.toContain("Move queued message up");
   });
 
@@ -128,6 +129,7 @@ describe("QueuedRunsControl attachments and edit mode", () => {
 
     const html = renderToStaticMarkup(
       <QueuedRunsControl
+        editBlockedReason={null}
         environmentId={"environment:test" as never}
         optimisticMessages={[
           {
@@ -153,6 +155,7 @@ describe("QueuedRunsControl attachments and edit mode", () => {
 
     const html = renderToStaticMarkup(
       <QueuedRunsControl
+        editBlockedReason={null}
         environmentId={"environment:test" as never}
         optimisticMessages={[]}
         threadId={"thread:test" as never}

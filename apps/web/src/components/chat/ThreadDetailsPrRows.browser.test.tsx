@@ -47,6 +47,8 @@ vi.mock(import("./ChatCanvasContext"), async (original) => ({
     container: { width: 1800, height: 500 },
     lane: { padding: 48, minChatWidth: 640 },
     layout: { frame: null },
+    preferredDetailsCard: { x: 1508, y: 12, right: 12, width: 280, height: 476 },
+    detailsCardPlacement: { x: 1508, y: 12, right: 12, width: 280, height: 476 },
   })) as never,
 }));
 vi.mock(import("../../hooks/useT3ProjectFileScripts"), async (original) => ({
@@ -259,7 +261,6 @@ it("keeps workspace controls after expanding and collapsing 70 linked pull reque
       isServerThread
       anchor={{ current: null }}
       handle={PopoverCreateHandle()}
-      onPresentationChange={vi.fn()}
       activeProjectName={undefined}
       activeProjectScripts={undefined}
       preferredScriptId={null}
