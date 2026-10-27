@@ -54,9 +54,10 @@ const awaitHolder = (condition: string) =>
   `i=0; until ${condition}; do i=$((i + 1)); [ "$i" -lt 500 ] || exit 1; sleep 0.01; done`;
 
 // Use runtime-entry argv[0] for /proc detection; an open pipe keeps it alive only while this script runs.
+// Use bash rather than cat: a coreutils multicall exits when argv[0] is not its applet name.
 const holdRuntimeBusy = (entry: string) =>
   [
-    `exec 7> >(exec -a ${entry} cat >/dev/null 2>&1)`,
+    `exec 7> >(exec -a ${entry} bash -c 'cat >/dev/null')`,
     awaitHolder(`grep -qF -- ${entry} /proc/[0-9]*/cmdline 2>/dev/null`),
   ].join("\n");
 

@@ -101,6 +101,8 @@ function layerDesktopWindow(
     zoomMain: () => Effect.void,
     runMainContentsCommand: () => Effect.void,
     syncAppearance: Effect.void,
+    navigateToThread: () => Effect.void,
+    navigateToProject: () => Effect.void,
   });
 }
 

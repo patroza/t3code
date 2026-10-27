@@ -1,8 +1,12 @@
+// @effect-diagnostics nodeBuiltinImport:off
 import * as NodeOS from "node:os";
 
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
 import { currentDesktopBootstrapToken } from "@t3tools/shared/desktopBootstrapToken";
 import * as Clock from "effect/Clock";
+import { LOCAL_BOOTSTRAP_CREDENTIAL_FILE } from "@t3tools/shared/serverRuntime";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -23,6 +27,7 @@ import * as DesktopServerExposure from "./DesktopServerExposure.ts";
 import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
+import { readLiveExistingBackend } from "./DesktopExistingBackend.ts";
 import * as DesktopWslServerTree from "../wsl/DesktopWslServerTree.ts";
 
 export class DesktopBackendObservabilitySettingsReadError extends Schema.TaggedError<DesktopBackendObservabilitySettingsReadError>()(
@@ -240,6 +245,29 @@ interface SharedBootstrapInput {
   readonly bootstrapSecret: string;
   readonly observabilitySettings: BackendObservabilitySettings;
 }
+
+function readLocalBootstrapCredential(path: string): string | undefined {
+  try {
+    const token = NodeFS.readFileSync(path, "utf8").trim();
+    return token.length > 0 ? token : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function installLocalBootstrapCredential(path: string, token: string): string {
+  NodeFS.mkdirSync(NodePath.dirname(path), { recursive: true });
+  try {
+    NodeFS.writeFileSync(path, `${token}\n`, { mode: 0o600, flag: "wx" });
+    return token;
+  } catch {
+    return NodeFS.readFileSync(path, "utf8").trim();
+  }
+}
+
+// What the launch runs inside the distro. The staged runtime is the release's
+// self-contained `t3` executable (Node inside); the mounted server tree is a
+// script that needs the distro's own Node.
 
 type WslPreflightRuntime =
   | {
@@ -495,6 +523,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
     const backendExposure = yield* serverExposure.backendConfig;
+    const existingBackend = readLiveExistingBackend(environment.stateDir);
 
     const bootstrap = {
       mode: "desktop" as const,
@@ -537,9 +566,12 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       extendEnv: true,
       bootstrap,
       bootstrapDelivery: "fd3",
-      httpBaseUrl: backendExposure.httpBaseUrl,
+      httpBaseUrl: existingBackend
+        ? new URL(existingBackend.httpBaseUrl)
+        : backendExposure.httpBaseUrl,
       captureOutput: true,
       preflightFailure: Option.none(),
+      ...(existingBackend ? { reuseExisting: true } : {}),
     } satisfies DesktopBackendManager.DesktopBackendStartConfig;
   },
 );
@@ -728,13 +760,14 @@ export const make = Effect.gen(function* () {
   const getOrCreateBootstrapSecret = SynchronizedRef.modifyEffect(secretRef, (current) =>
     Option.match(current, {
       onSome: (secret) => Effect.succeed([secret, current] as const),
-      onNone: () =>
-        crypto.randomBytes(32).pipe(
-          Effect.map((bytes) => {
-            const secret = Hex.encode(bytes);
-            return [secret, Option.some(secret)] as const;
-          }),
-        ),
+      onNone: Effect.fnUntraced(function* () {
+        const credentialPath = NodePath.join(environment.stateDir, LOCAL_BOOTSTRAP_CREDENTIAL_FILE);
+        const persisted = readLocalBootstrapCredential(credentialPath);
+        if (persisted !== undefined) return [persisted, Option.some(persisted)] as const;
+        const token = Hex.encode(yield* crypto.randomBytes(32));
+        const installed = installLocalBootstrapCredential(credentialPath, token);
+        return [installed, Option.some(installed)] as const;
+      }),
     }),
   );
 

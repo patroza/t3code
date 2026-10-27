@@ -15,6 +15,73 @@ import {
   writeDevelopmentLauncherScript,
 } from "./electron-launcher.mjs";
 
+describe("Electron host runtime repair", () => {
+  it.each([
+    ["linux", "x64", "electron"],
+    ["win32", "arm64", "electron.exe"],
+  ])("installs the %s/%s host runtime while packaging another target", (platform, arch, binary) => {
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-electron-host-"));
+    const packagePath = NodePath.join(directory, "package.json");
+    NodeFS.writeFileSync(packagePath, JSON.stringify({ version: "44.9.3" }));
+    const source = NodeFS.readFileSync(
+      new URL("./ensure-electron-runtime.mjs", import.meta.url),
+      "utf8",
+    );
+    const environment = {
+      ELECTRON_INSTALL_PLATFORM: "darwin",
+      ELECTRON_INSTALL_ARCH: "x64",
+      npm_config_platform: "darwin",
+      npm_config_arch: "x64",
+      ELECTRON_OVERRIDE_DIST_PATH: NodePath.join(directory, "packaging-target"),
+    };
+    let installs = 0;
+    try {
+      const executable = NodeVM.runInNewContext(
+        `${source
+          .replace(/^import\s[\s\S]*?;\n/gm, "")
+          .replaceAll("import.meta.url", JSON.stringify(import.meta.url))
+          .replace("export function ensureElectronRuntime", "function ensureElectronRuntime")}
+const firstRuntime = ensureElectronRuntime();
+if (ensureElectronRuntime() !== firstRuntime) throw new Error("Runtime changed between projects");
+firstRuntime;`,
+        {
+          NodeFS,
+          NodeOS: { platform: () => platform, arch: () => arch },
+          NodePath,
+          NodeModule: { createRequire: () => ({ resolve: () => packagePath }) },
+          NodeChildProcess: {
+            spawnSync: (_command, args, options) => {
+              installs += 1;
+              assert.equal(args[0], NodePath.join(directory, "install.js"));
+              // Model Electron's installer: ambient target settings select the artifact and dist.
+              const target =
+                options.env.ELECTRON_INSTALL_PLATFORM || options.env.npm_config_platform;
+              const targetArch = options.env.ELECTRON_INSTALL_ARCH || options.env.npm_config_arch;
+              const destination = options.env.ELECTRON_OVERRIDE_DIST_PATH;
+              const targetBinary = target === "win32" ? "electron.exe" : "electron";
+              NodeFS.mkdirSync(destination, { recursive: true });
+              NodeFS.writeFileSync(
+                NodePath.join(destination, targetBinary),
+                `${target}/${targetArch}`,
+              );
+              return { status: 0 };
+            },
+          },
+          process: { env: environment, execPath: "node", argv: [] },
+        },
+      );
+      assert.equal(installs, 1, "both projects share one completed runtime installation");
+      assert.equal(executable, NodePath.join(directory, "dist", binary));
+      assert.equal(NodeFS.readFileSync(executable, "utf8"), `${platform}/${arch}`);
+      assert.equal(NodeFS.readFileSync(NodePath.join(directory, "path.txt"), "utf8"), binary);
+      assert.isFalse(NodeFS.existsSync(environment.ELECTRON_OVERRIDE_DIST_PATH));
+      assert.equal(environment.ELECTRON_INSTALL_PLATFORM, "darwin");
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("electron development launcher", () => {
   it("uses captured values only as fallbacks for a live runner environment", () => {
     const environmentScript = makeDevelopmentEnvironmentScript({

@@ -373,6 +373,224 @@ describe("DesktopBackendManager", () => {
     ),
   );
 
+  it.effect("drains trailing child output before persisting an unexpected exit", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const persistedOutput = yield* Deferred.make<ReadonlyArray<string>>();
+        const outputDrainStarted = yield* Deferred.make<void>();
+        const outputChunks = yield* Ref.make<Array<string>>([]);
+        const layerSpawner = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Effect.succeed(
+              makeProcess({
+                stdout: Stream.fromEffect(
+                  Deferred.succeed(outputDrainStarted, void 0).pipe(
+                    Effect.andThen(Effect.sleep(Duration.seconds(1))),
+                    Effect.as(new TextEncoder().encode("trailing output\n")),
+                  ),
+                ),
+                exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
+              }),
+            ),
+          ),
+        );
+        const instance = yield* makeTestInstance({
+          spawnerLayer: layerSpawner,
+          httpClientLayer: layerHttpClient(() => Effect.never),
+          backendOutputLog: {
+            writeOutputChunk: (_streamName, chunk) =>
+              Ref.update(outputChunks, (current) => [...current, new TextDecoder().decode(chunk)]),
+            persistFailure: () =>
+              Ref.get(outputChunks).pipe(
+                Effect.flatMap((chunks) => Deferred.succeed(persistedOutput, chunks)),
+                Effect.asVoid,
+              ),
+          },
+        });
+
+        yield* instance.start;
+        yield* Deferred.await(outputDrainStarted);
+        yield* TestClock.adjust(Duration.seconds(1));
+
+        assert.deepEqual(yield* Deferred.await(persistedOutput), ["trailing output\n"]);
+      }).pipe(Effect.provide(TestClock.layer())),
+    ),
+  );
+
+  it.effect("retries HTTP readiness before reporting the backend ready", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const requestUrls: Array<string> = [];
+        const prunedRuntimes: Array<[string | null, string]> = [];
+        const statuses = [503, 200];
+        let readyCount = 0;
+        const firstRequest = yield* Deferred.make<void>();
+        const backendReady = yield* Deferred.make<void>();
+        const processExit = yield* Deferred.make<void>();
+        const pruneComplete = yield* Deferred.make<void>();
+        const exited = yield* Queue.unbounded<void>();
+
+        const layerSpawner = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Effect.succeed(
+              makeProcess({
+                exitCode: Deferred.await(processExit).pipe(
+                  Effect.as(ChildProcessSpawner.ExitCode(0)),
+                ),
+              }),
+            ),
+          ),
+        );
+
+        const instance = yield* makeTestInstance({
+          spawnerLayer: layerSpawner,
+          config: {
+            ...baseConfig,
+            runningDistro: "Ubuntu",
+            wslRuntimeId: "1.2.3-x64",
+          },
+          pruneRuntimes: (distro, runtimeId) =>
+            Effect.sync(() => {
+              prunedRuntimes.push([distro, runtimeId]);
+            }).pipe(Effect.andThen(Deferred.succeed(pruneComplete, void 0)), Effect.asVoid),
+          httpClientLayer: layerHttpClient((request) =>
+            Effect.gen(function* () {
+              const status = statuses.shift();
+              assert.isDefined(status);
+              requestUrls.push(request.url);
+              yield* Deferred.succeed(firstRequest, void 0);
+              return responseForRequest(request, status);
+            }),
+          ),
+          onReady: Effect.sync(() => {
+            readyCount += 1;
+          }).pipe(Effect.andThen(Deferred.succeed(backendReady, void 0)), Effect.asVoid),
+          backendOutputLog: {
+            persistFailure: () => Queue.offer(exited, void 0).pipe(Effect.asVoid),
+          },
+        });
+
+        yield* instance.start;
+        yield* Deferred.await(firstRequest);
+
+        assert.equal(readyCount, 0);
+        assert.deepEqual(prunedRuntimes, []);
+        assert.deepEqual(requestUrls, ["http://127.0.0.1:3773/.well-known/t3/environment"]);
+
+        yield* TestClock.adjust(Duration.millis(100));
+        yield* Deferred.await(backendReady);
+        yield* Deferred.await(pruneComplete);
+        yield* Deferred.succeed(processExit, void 0);
+        yield* Queue.take(exited);
+
+        assert.equal(readyCount, 1);
+        assert.deepEqual(prunedRuntimes, [["Ubuntu", "1.2.3-x64"]]);
+        assert.deepEqual(requestUrls, [
+          "http://127.0.0.1:3773/.well-known/t3/environment",
+          "http://127.0.0.1:3773/.well-known/t3/environment",
+        ]);
+      }).pipe(Effect.provide(TestClock.layer())),
+    ),
+  );
+
+  it.effect("reuses a healthy existing backend without spawning or owning it", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let spawnCount = 0;
+        const ready = yield* Deferred.make<void>();
+        const spawnerLayer = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() => {
+            spawnCount += 1;
+            return Effect.never;
+          }),
+        );
+        const instance = yield* makeTestInstance({
+          config: { ...baseConfig, reuseExisting: true },
+          spawnerLayer,
+          onReady: Deferred.succeed(ready, undefined).pipe(Effect.asVoid),
+        });
+
+        yield* instance.start;
+        yield* Deferred.await(ready);
+        assert.equal(spawnCount, 0);
+        assert.equal((yield* instance.snapshot).ready, true);
+
+        yield* instance.stop();
+        assert.equal(spawnCount, 0);
+      }),
+    ),
+  );
+
+  it.effect(
+    "re-probes readiness after the first budget expires while the backend is still alive",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const requestUrls: Array<string> = [];
+          let requestCount = 0;
+          let readyCount = 0;
+          let readinessTimeoutCount = 0;
+          const firstProbe = yield* Deferred.make<void>();
+          const childExit = yield* Deferred.make<void>();
+
+          const layerSpawner = Layer.succeed(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make(() =>
+              Effect.succeed(
+                makeProcess({
+                  exitCode: Deferred.await(childExit).pipe(
+                    Effect.as(ChildProcessSpawner.ExitCode(0)),
+                  ),
+                }),
+              ),
+            ),
+          );
+
+          const layerHttp = layerHttpClient((request) =>
+            Effect.gen(function* () {
+              requestCount += 1;
+              requestUrls.push(request.url);
+              yield* Deferred.succeed(firstProbe, void 0);
+              return responseForRequest(request, requestCount <= 2 ? 503 : 200);
+            }),
+          );
+
+          const runFiber = yield* DesktopBackendManager.runBackendProcess({
+            ...baseConfig,
+            desktopTelemetryStream: Stream.empty,
+            readinessTimeout: Duration.millis(50),
+            onReady: () =>
+              Effect.sync(() => {
+                readyCount += 1;
+              }),
+            onReadinessFailure: () =>
+              Effect.sync(() => {
+                readinessTimeoutCount += 1;
+              }),
+          }).pipe(Effect.provide(Layer.merge(layerSpawner, layerHttp)), Effect.forkChild);
+
+          yield* Deferred.await(firstProbe);
+          assert.equal(readyCount, 0);
+          assert.equal(readinessTimeoutCount, 0);
+
+          yield* TestClock.adjust(Duration.millis(50));
+          assert.equal(readinessTimeoutCount, 1);
+          assert.equal(readyCount, 0);
+
+          yield* TestClock.adjust(Duration.millis(100));
+          assert.equal(readinessTimeoutCount, 2);
+          assert.equal(readyCount, 1);
+          assert.equal(requestUrls.length, 3);
+
+          yield* Deferred.succeed(childExit, void 0);
+          assert.equal((yield* Fiber.join(runFiber)).code.pipe(Option.getOrUndefined), 0);
+        }).pipe(Effect.provide(TestClock.layer())),
+      ),
+  );
+
   it.effect("starts the configured backend and closes the scoped process on stop", () =>
     Effect.scoped(
       Effect.gen(function* () {

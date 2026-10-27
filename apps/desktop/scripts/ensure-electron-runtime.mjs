@@ -124,7 +124,17 @@ function installFromElectronCache(electronDir) {
   const result = NodeChildProcess.spawnSync(
     process.execPath,
     [NodePath.join(electronDir, "install.js")],
-    { stdio: ["ignore", "inherit", "inherit"] },
+    {
+      stdio: ["ignore", "inherit", "inherit"],
+      // Packaging can target another OS/architecture; this runtime launches on the host.
+      env: {
+        ...process.env,
+        ELECTRON_INSTALL_PLATFORM: hostPlatform,
+        ELECTRON_INSTALL_ARCH: hostArch,
+        npm_config_arch: hostArch,
+        ELECTRON_OVERRIDE_DIST_PATH: NodePath.join(electronDir, "dist"),
+      },
+    },
   );
   if (result.status === 0) {
     return true;
@@ -143,10 +153,10 @@ function downloadElectronRuntime(electronDir, version) {
     runChecked("curl", [
       "-fsSL",
       "--retry",
-      "3",
+      "4",
       "--retry-all-errors",
       "--connect-timeout",
-      "30",
+      "15",
       "--max-time",
       "300",
       `https://github.com/electron/electron/releases/download/v${version}/electron-v${version}-${hostPlatform}-${hostArch}.zip`,

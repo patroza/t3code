@@ -91,6 +91,8 @@ const layerDesktopWindow = (selectedAction: Deferred.Deferred<string>) =>
     runMainContentsCommand: (command) =>
       Deferred.succeed(selectedAction, `main-${command}`).pipe(Effect.asVoid),
     syncAppearance: Effect.void,
+    navigateToThread: () => Effect.void,
+    navigateToProject: () => Effect.void,
   } satisfies DesktopWindow.DesktopWindow["Service"]);
 
 const layerElectronMenu = (

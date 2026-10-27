@@ -178,6 +178,62 @@ describe("DesktopLinuxUrlHandler", () => {
     assert.include(entry, "Icon=/home/al ice/icons/T3\\\\x.png");
   });
 
+  it("leaves safe executable paths unquoted for generic xdg-open compatibility", () => {
+    const entry = DesktopLinuxUrlHandler.renderUrlHandlerDesktopEntry({
+      displayName: "T3 Code (Alpha)",
+      execTarget: "/home/alice/Applications/T3-Code.AppImage",
+      scheme: "t3code",
+    });
+
+    assert.include(entry, "Exec=/home/alice/Applications/T3-Code.AppImage %U");
+  });
+
+  it.each([
+    {
+      execTarget: "/opt/T3(beta)/t3code.AppImage",
+      execLine: 'Exec="/opt/T3(beta)/t3code.AppImage" %U',
+    },
+    {
+      execTarget: "/opt/t3%20code/t3code.AppImage",
+      execLine: "Exec=/opt/t3%%20code/t3code.AppImage %U",
+    },
+  ])("renders the handler Exec line for $execTarget", ({ execTarget, execLine }) => {
+    const entry = DesktopLinuxUrlHandler.renderUrlHandlerDesktopEntry({
+      displayName: "T3 Code",
+      execTarget,
+      scheme: "t3code",
+    });
+
+    assert.include(entry.split("\n"), execLine);
+  });
+
+  it("carries structured context on registration errors", () => {
+    const writeError = new DesktopLinuxUrlHandler.DesktopLinuxUrlHandlerRegistrationError({
+      step: "write-desktop-entry",
+      scheme: "t3code",
+      desktopEntryPath: "/home/alice/.local/share/applications/com.t3tools.T3Code.desktop",
+      cause: new Error("boom"),
+    });
+    assert.equal(
+      writeError.message,
+      "Failed to register the t3code:// URL handler (step: write-desktop-entry).",
+    );
+    assert.equal(
+      writeError.desktopEntryPath,
+      "/home/alice/.local/share/applications/com.t3tools.T3Code.desktop",
+    );
+
+    const exitError = new DesktopLinuxUrlHandler.DesktopLinuxUrlHandlerRegistrationError({
+      step: "set-default-handler",
+      scheme: "t3code",
+      exitCode: 4,
+    });
+    assert.equal(
+      exitError.message,
+      "Failed to register the t3code:// URL handler (step: set-default-handler, xdg-mime exit code 4).",
+    );
+  });
+
   it.effect(
     "writes the handler entry, refreshes the MIME cache, and claims the scheme default",
     () => {

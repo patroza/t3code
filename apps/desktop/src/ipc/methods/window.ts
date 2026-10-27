@@ -138,6 +138,11 @@ export const getLocalEnvironmentBootstraps = DesktopIpc.makeSyncIpcMethod({
         runningDistro,
         httpBaseUrl: httpBaseUrl.href,
         wsBaseUrl: toWebSocketBaseUrl(httpBaseUrl),
+        nativeServerBrowser:
+          config.value.reuseExisting !== true &&
+          config.value.bootstrapDelivery === "fd3" &&
+          bootstrap.desktopBrowserFd !== undefined &&
+          bootstrap.desktopBrowserControlFd !== undefined,
         // Use the current window's derived token; the launch config's token may be stale.
         ...(bootstrap.desktopBootstrapSecret
           ? { bootstrapToken: yield* configuration.currentBootstrapToken }
