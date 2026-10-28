@@ -65,6 +65,7 @@ describe("environmentBootstrap", () => {
       vi.stubGlobal("window", {
         location: new URL("http://127.0.0.1:3774/"),
         desktopBridge: {
+          getLocalEnvironmentEnabled: () => true,
           getLocalEnvironmentBootstraps: () => [
             {
               id: "primary",

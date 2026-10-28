@@ -32,6 +32,12 @@ vi.mock("../../assets/assetUrls", () => ({
     resources.map((resource) => `https://assets.test/${resource.attachmentId}`),
 }));
 
+// Queue visibility is independent of the folded-message renderer and its browser-only workers.
+vi.mock("./TimelineUserMessageRow", () => ({
+  FoldedMessageHeader: () => null,
+  useScheduledTaskTitle: () => null,
+}));
+
 import { QueuedRunsControl } from "./QueuedRunsControl";
 
 describe("QueuedRunsControl automatic completion delivery", () => {
@@ -76,13 +82,13 @@ describe("QueuedRunsControl automatic completion delivery", () => {
 });
 
 describe("QueuedRunsControl attachments and edit mode", () => {
-  const workflowWithAttachment = () => ({
+  const workflowWithAttachment = (queueEditId?: string) => ({
     activeRun: { id: "run:active" },
     canPromoteToSteer: true,
     canReorder: true,
     queuedRuns: [
       {
-        run: { id: "run:queued", userMessageId: "message:queued" },
+        run: { id: "run:queued", userMessageId: "message:queued", queueEditId },
         text: "Queued with a screenshot",
         attachments: [
           {
@@ -97,29 +103,33 @@ describe("QueuedRunsControl attachments and edit mode", () => {
     ],
   });
 
-  it("renders an attachment thumbnail on the queued row", () => {
-    state.projection = { projection: { messages: [] } };
-    state.workflow = workflowWithAttachment();
+  it.each([false, true])(
+    "renders an attachment thumbnail and remote edit status (held: %s)",
+    (heldForEdit) => {
+      state.projection = { projection: { messages: [] } };
+      state.workflow = workflowWithAttachment(heldForEdit ? "edit:other" : undefined);
 
-    const html = renderToStaticMarkup(
-      <QueuedRunsControl
-        editBlockedReason={null}
-        environmentId={"environment:test" as never}
-        optimisticMessages={[]}
-        threadId={"thread:test" as never}
-        editingRunId={null}
-        onEditQueuedRun={() => undefined}
-        timestampFormat="locale"
-        onOpenThread={() => undefined}
-        onCancelEdit={() => undefined}
-      />,
-    );
+      const html = renderToStaticMarkup(
+        <QueuedRunsControl
+          editBlockedReason={null}
+          environmentId={"environment:test" as never}
+          optimisticMessages={[]}
+          threadId={"thread:test" as never}
+          editingRunId={null}
+          onEditQueuedRun={() => undefined}
+          timestampFormat="locale"
+          onOpenThread={() => undefined}
+          onCancelEdit={() => undefined}
+        />,
+      );
 
-    expect(html).toContain("https://assets.test/attachment-1");
-    expect(html).toContain("Queued with a screenshot");
-    expect(html).toContain("Edit queued message");
-    expect(html).not.toContain("Move queued message up");
-  });
+      expect(html).toContain("https://assets.test/attachment-1");
+      expect(html).toContain("Queued with a screenshot");
+      expect(html.includes(">Editing<")).toBe(heldForEdit);
+      expect(html).toContain("Edit queued message");
+      expect(html).not.toContain("Move queued message up");
+    },
+  );
 
   it("drops the optimistic pending row once the projection holds its message", () => {
     state.projection = {

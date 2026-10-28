@@ -202,7 +202,7 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(sidebarV2).toContain("usageDotFillClass");
     expect(sidebarV2).toContain("statusDotClassName");
     expect(sidebarV2).toContain("AiUsageStats");
-    expect(sidebarV2).toContain('aria-label": "provider usage status"');
+    expect(sidebarV2).toContain('role: "img", "aria-label": "provider usage status"');
   });
 
   it("Sidebar V2 grouping changes ordering and headers without changing its row surface", () => {
@@ -214,7 +214,7 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(filters).toContain("sidebar-thread-grouping-${value}");
     expect(filters).toContain('data-testid="sidebar-thread-grouping"');
     expect(filters).toContain('aria-label="Thread ordering"');
-    expect(sidebarV2).toContain('"Filter threads"');
+    expect(sidebarV2).toContain('"Filter threads by project"');
     expect(filters).toContain('["project", "recency"] as const');
     expect(sidebarV2).toContain('threadGrouping !== "recency"');
     expect(sidebarV2).toContain("orderActiveThreads: orderForThreadGrouping");
@@ -272,7 +272,8 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(gate).toContain("requestIdentityClaimGate");
     expect(gate).toContain("isIdentityClaimRequiredMessage");
     // Multi-env: claim gate must not only target primary (smart-without-map + t3vm).
-    expect(gate).toContain("forceClaimEnvironmentId");
+    expect(gate).toContain("forceClaimState");
+    expect(gate).toContain("add(force.environmentId)");
     expect(gate).toContain("orderedEnvironmentIds");
     const stack = readSrc("components/identity/ParticipantStack.tsx");
     expect(stack).toContain('data-testid="participant-stack"');
@@ -363,10 +364,10 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(prompt).toContain("<NewThreadLinkView");
     expect(sidebar).toContain("subscribeToProjectReveal(");
     expect(sidebar).toMatch(
-      /const setPersistedProjectScopeKey = useUiStateStore\(\s*\(store\) => store\.setSidebarProjectScopeKey/,
+      /const setPersistedProjectScopeKeys = useUiStateStore\(\s*\(store\) => store\.setSidebarProjectScopeKeys/,
     );
     expect(sidebar).toMatch(
-      /subscribeToProjectReveal\([\s\S]*?setPersistedProjectScopeKey\(projectGroup\.projectKey\)/,
+      /subscribeToProjectReveal\([\s\S]*?setPersistedProjectScopeKeys\(\[projectGroup\.projectKey\]\)/,
     );
   });
 

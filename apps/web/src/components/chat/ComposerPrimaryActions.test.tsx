@@ -37,7 +37,8 @@ vi.mock("~/hooks/useSettings", () => ({
 }));
 vi.mock("../SidebarStageBackdrop", () => ({
   StageBackdropButtonArt: ({ variant }: { variant: string }) => `stage-${variant}`,
-  useSidebarStageBackdropVariant: (enabled = true) => (enabled ? stageArtworkState.variant : null),
+  useSidebarStageBackdropVariant: (mode: string) =>
+    mode === "artwork" ? stageArtworkState.variant : null,
 }));
 
 import {

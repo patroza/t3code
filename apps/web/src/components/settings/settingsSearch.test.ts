@@ -76,13 +76,17 @@ describe("searchSettings", () => {
       "network-access",
       "project-defaults",
       "environment-identification",
+      "linked-environments-beta",
       "continue-threads-after-server-update",
       "new-threads",
       "worktree-submodules",
       "start-from-origin",
       "project-actions",
+      "linked-environments",
       "keybinding-composer.previousWorktree",
       "keybinding-composer.workspace",
+      "keybinding-workspace.focusNext",
+      "keybinding-workspace.focusPrevious",
     ]);
     expect(searchSettings("deploy").map((item) => item.id)).toContain(
       "continue-threads-after-server-update",

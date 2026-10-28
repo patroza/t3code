@@ -207,7 +207,14 @@ function SidebarProviderStack(props: {
     />
   );
   if (stack.length === 1) {
-    return <span className="inline-flex shrink-0 items-center">{current}</span>;
+    return (
+      <span
+        className="inline-flex shrink-0 items-center"
+        {...(props.usageDotClass ? { role: "img", "aria-label": "provider usage status" } : {})}
+      >
+        {current}
+      </span>
+    );
   }
   return (
     <span className="inline-flex shrink-0 items-center gap-1.5">
@@ -225,7 +232,12 @@ function SidebarProviderStack(props: {
           />
         );
       })}
-      <span className="relative z-10 inline-flex items-center">{current}</span>
+      <span
+        className="relative z-10 inline-flex items-center"
+        {...(props.usageDotClass ? { role: "img", "aria-label": "provider usage status" } : {})}
+      >
+        {current}
+      </span>
     </span>
   );
 }

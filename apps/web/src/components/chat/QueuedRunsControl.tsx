@@ -397,6 +397,7 @@ export function QueuedRunsControl({
                   </>
                 ) : (
                   <>
+                    {item.heldForEdit ? <span className="shrink-0 text-xs">Editing</span> : null}
                     <Tooltip>
                       {/* The span keeps the tooltip, and its reason, on a disabled button. */}
                       <TooltipTrigger render={<span className="flex shrink-0" />}>
