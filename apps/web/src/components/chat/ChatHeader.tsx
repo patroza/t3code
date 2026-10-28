@@ -26,6 +26,7 @@ import { createPortal } from "react-dom";
 import GitActionsControl from "../GitActionsControl";
 import { isTrailingDoubleClick } from "../Sidebar.logic";
 import { type DraftId } from "~/composerDraftStore";
+import { Badge } from "../ui/badge";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
 import { AiUsageStats } from "./AiUsageStats";
@@ -71,6 +72,7 @@ interface ChatHeaderProps {
   activeThreadId: ThreadId;
   draftId?: DraftId;
   activeThreadTitle: string;
+  activeThreadLinkOrigin?: string | null | undefined;
   isServerThread: boolean;
   activeProject: EnvironmentProject | null;
   openInCwd: string | null;
@@ -137,6 +139,7 @@ export const ChatHeader = memo(function ChatHeader({
   activeThreadId,
   draftId,
   activeThreadTitle,
+  activeThreadLinkOrigin,
   isServerThread,
   activeProject,
   openInCwd,
@@ -162,6 +165,7 @@ export const ChatHeader = memo(function ChatHeader({
   const { active: panelAnimationsActive, durationMs: panelAnimationDurationMs } =
     usePanelAnimationSettings();
   const headerActionsRef = useRef<HTMLDivElement | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- observes header action geometry and synchronizes responsive DOM fades
   useEffect(() => {
     const actions = headerActionsRef.current;
     const container = actions?.parentElement;
@@ -177,6 +181,7 @@ export const ChatHeader = memo(function ChatHeader({
   const isMobile = useMediaQuery("max-md");
   // Side panels can leave a desktop header narrower than a phone.
   const [isNarrowHeader, setIsNarrowHeader] = useState(false);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to header container ResizeObserver geometry for responsive actions
   useEffect(() => {
     const container = headerActionsRef.current?.parentElement;
     if (!container) return;
@@ -253,7 +258,7 @@ export const ChatHeader = memo(function ChatHeader({
       ? renaming.title
       : null;
   const isRenamingTitle = renamingTitle !== null;
-  // oxlint-disable-next-line t3code/react-effect-budget -- Breadcrumb overflow tracks DOM geometry through ResizeObserver.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- measures the breadcrumb list DOM via ResizeObserver, a frame and font loads to collapse the parent title
   useEffect(() => {
     const list = breadcrumbContainerRef.current?.querySelector("ol");
     if (!list || !parentThreadLink) return;
@@ -343,7 +348,7 @@ export const ChatHeader = memo(function ChatHeader({
     clearTimeout(titleMenuTimerRef.current);
     titleMenuTimerRef.current = null;
   };
-  // oxlint-disable-next-line t3code/react-effect-budget -- A pending native timer must be cancelled when the thread changes or unmounts.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- clears the pending title-menu timer when the thread switches or the header unmounts
   useEffect(
     () => () => {
       if (titleMenuTimerRef.current === null) return;
@@ -590,6 +595,16 @@ export const ChatHeader = memo(function ChatHeader({
               <TooltipPopup side="top">{activeThreadTitle}</TooltipPopup>
             </Tooltip>
           )}
+          {renamingTitle === null && activeThreadLinkOrigin ? (
+            <Tooltip>
+              <TooltipTrigger render={<Badge variant="info" size="sm" />}>
+                From {activeThreadLinkOrigin}
+              </TooltipTrigger>
+              <TooltipPopup side="top">
+                Started by an agent on {activeThreadLinkOrigin} through a linked environment.
+              </TooltipPopup>
+            </Tooltip>
+          ) : null}
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
       {headerDotClass && headerUsage ? (

@@ -137,7 +137,7 @@ it.each([
     await render({ effectiveEnvModeOverride: envMode });
     const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
     await act(async () => {
-      container.querySelector('[aria-label="Run context"]')!.dispatchEvent(event);
+      container.querySelector('[aria-label^="Run context:"]')!.dispatchEvent(event);
     });
     expect(event.defaultPrevented).toBe(copiedPath !== null);
     if (copiedPath === null) {

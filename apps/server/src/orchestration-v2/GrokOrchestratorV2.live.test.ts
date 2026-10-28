@@ -1,3 +1,4 @@
+import * as PortScanner from "../preview/PortScanner.ts";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
@@ -122,6 +123,7 @@ const layerProviderInstanceRegistry = ProviderInstanceRegistryHydration.layer.pi
 );
 
 const layerLive = RuntimeLayer.layer.pipe(
+  Layer.provide(Layer.mock(PortScanner.PortDiscovery)({ trackAgent: () => () => undefined })),
   Layer.provide(
     Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({ get: () => Effect.succeed(null) }),
   ),
@@ -132,6 +134,7 @@ const layerLive = RuntimeLayer.layer.pipe(
   Layer.provide(layerServerConfig),
   Layer.provide(layerServerSettings),
   Layer.provide(layerProviderInstanceRegistry),
+  Layer.provide(Layer.mock(PortScanner.PortDiscovery)({ trackAgent: () => () => undefined })),
   Layer.provide(ResetCreditCoordinator.layer),
   Layer.provide(layerBackgroundPolicy),
   Layer.provide(layerPlatformTest),

@@ -240,7 +240,6 @@ describe("buildInitialGrokProviderSnapshot", () => {
       expect(snapshot.version).toBeNull();
       expect(snapshot.message).toContain("Checking Grok");
       // Grok ACP accepts session/set_model mid-session.
-      expect(snapshot.requiresNewThreadForModelChange).toBeUndefined();
       expect(snapshot.supportsConversationRollback).toBe(false);
     }),
   );

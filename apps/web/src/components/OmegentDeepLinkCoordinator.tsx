@@ -30,12 +30,12 @@ export function OmegentDeepLinkCoordinator() {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const handledThreadIdRef = useRef<string | null>(null);
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- Capture browser URL intent before sibling landing effects replace it.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Capture browser URL intent before sibling landing effects replace it.
   useLayoutEffect(() => {
     captureDeepLinkFromWindowLocation();
   }, []);
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- Route external URL intent when the environment catalog becomes available.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Route external URL intent when the environment catalog becomes available.
   useEffect(() => {
     const fromUrl = parseOmegentDeepLink(new URL(window.location.href));
     const pending = peekPendingDeepLink();

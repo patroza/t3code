@@ -10,7 +10,8 @@ export {
   THREAD_SORT_OPTIONS,
   type OwnershipFilter,
 } from "./home-list-filter-options";
-import { useAtomSet } from "@effect/atom-react";
+import { RegistryContext, useAtomSet, useAtomValue } from "@effect/atom-react";
+import { Atom } from "effect/reactivity";
 import type {
   EnvironmentId,
   SidebarProjectGroupingMode,
@@ -147,8 +148,16 @@ export function HomeListOptionsProvider({
   readonly storedOwnershipRelation?: OwnershipRelation;
   readonly onStoreOwnershipRelation?: (relation: OwnershipRelation) => void;
 }>) {
-  const [options, setOptions] = useState<HomeListOptions>(() =>
-    defaultHomeListOptions(savedFilters),
+  const registry = useContext(RegistryContext);
+  const [optionsAtom] = useState(() => Atom.make(defaultHomeListOptions(savedFilters)));
+  const options = useAtomValue(optionsAtom);
+  const setOptions = useCallback(
+    (update: SetStateAction<HomeListOptions>) => {
+      const current = registry.get(optionsAtom);
+      const next = typeof update === "function" ? update(current) : update;
+      registry.set(optionsAtom, next);
+    },
+    [registry, optionsAtom],
   );
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const saved = useRef(savedFilters);
@@ -189,6 +198,7 @@ export function HomeListOptionsProvider({
     relation?: OwnershipRelation;
   }>({});
   // Synchronize the rendered options to device persistence after hydration, never a stale default.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- keeps device storage in step with hydrated list options and releases stale preference defaults
   useEffect(() => {
     if (
       (saved.current?.environmentId ?? null) !== environmentId ||
@@ -252,7 +262,7 @@ export function HomeListOptionsProvider({
 
   const value = useMemo(
     () => ({ options, setOptions, projectGroupingMode }),
-    [options, projectGroupingMode],
+    [options, setOptions, projectGroupingMode],
   );
   return createElement(HomeListOptionsContext, { value }, children);
 }

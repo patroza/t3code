@@ -22,6 +22,13 @@ import * as GitHubCredentials from "./GitHubCredentials.ts";
 import * as GitHubQuota from "./GitHubQuota.ts";
 import { parseGitHubAuthStatus } from "./gitHubAuthStatus.ts";
 import * as GitHubSourceControlProvider from "./GitHubSourceControlProvider.ts";
+import * as GitHubAppSignIn from "./GitHubAppSignIn.ts";
+
+const appSignedOut = Layer.mock(GitHubAppSignIn.GitHubAppSignIn)({
+  enabled: false,
+  token: () => Effect.succeedNone,
+  invalidate: () => Effect.void,
+});
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
@@ -187,6 +194,8 @@ function harness(input: {
       }),
     fetchRemoteTrackingBranch: (args) => record("fetchRemoteTrackingBranch", undefined)(args),
     setBranchUpstream: (args) => record("setBranchUpstream", undefined)(args),
+    createBranch: (args) => record("createBranch", undefined)(args),
+    writeConfigValue: (args) => record("writeConfigValue", undefined)(args),
     switchRef: (args) => record("switchRef", { refName: args.refName })(args) as never,
     listLocalBranchNames: () =>
       input.gitFailure === undefined
@@ -226,22 +235,28 @@ function harness(input: {
       Layer.mergeAll(
         Layer.succeed(GitHubCredentials.GitHubCredentials, {
           get: credential,
+          saved: () => Effect.succeedNone,
+          fingerprint: (host, token) => Effect.succeed(`${host}:${token}`),
           invalidate: () => Effect.void,
         }),
         GitHubQuota.layer,
         SourceControlRateLimit.layer,
+        appSignedOut,
       ),
     ),
   );
   const layer = Layer.mergeAll(
     host,
-    Layer.mock(GitHubRest.GitHubRest)({
-      credential: (host, target) =>
-        credential(host, target).pipe(
-          Effect.map(({ token, fingerprint }) => ({ token, fingerprint })),
-        ),
-      ...input.api,
-    }),
+    appSignedOut,
+    Layer.unwrap(
+      Effect.gen(function* () {
+        const requests = yield* GitHubRequestPolicy.GitHubRequestPolicy;
+        return Layer.mock(GitHubRest.GitHubRest)({
+          credential: requests.credential,
+          ...input.api,
+        });
+      }),
+    ).pipe(Layer.provide(policy)),
     policy,
     Layer.succeed(HttpClient.HttpClient, graphQlHttp(graphql, graphqlCalls)),
     NodeServices.layer,
@@ -571,6 +586,19 @@ describe("GitHubSourceControlProvider.checkoutChangeRequest", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("records the branch base for gh through the host's config write", () => {
+    const { layer, git } = harness({
+      remotes: remotesOutput(["origin", "git@github.com:acme/web.git"]),
+    });
+    return Effect.gen(function* () {
+      const gh = yield* GitHubSourceControlProvider.make;
+      yield* gh.recordBranchBase!({ cwd: "/repo", branch: "feature", baseBranch: "main" });
+      assert.deepStrictEqual(git, [
+        ["writeConfigValue", { cwd: "/repo", key: "branch.feature.gh-merge-base", value: "main" }],
+      ]);
+    }).pipe(Effect.provide(layer));
+  });
+
   it("names the local branch the way gh pr checkout does", () => {
     const name = (headRefName: string, isCrossRepository: boolean) =>
       GitHubSourceControlProvider.pullRequestCheckoutBranchName({
@@ -861,6 +889,7 @@ it("reports every gh login and leads with the account Settings pin", () => {
   const auth = GitHubSourceControlProvider.parseGitHubAuth(multiAccountStatus(), {
     hosts: { "github.com": { account: "work", enabled: true } },
     tokens: {},
+    signIns: {},
   });
   assert.deepStrictEqual(auth.account, Option.some("work"));
   assert.deepStrictEqual(auth.accounts, [
@@ -874,6 +903,7 @@ it("reports unauthenticated when Settings turn off every signed-in host", () => 
   const auth = GitHubSourceControlProvider.parseGitHubAuth(multiAccountStatus(), {
     hosts: { "github.com": { enabled: false } },
     tokens: {},
+    signIns: {},
   });
   assert.strictEqual(auth.status, "unauthenticated");
   assert.deepStrictEqual(
@@ -893,7 +923,7 @@ it("names the environment token that overrides the Settings choice", () => {
         tokenSource: "GH_TOKEN",
       },
     ]),
-    { hosts: { "github.com": { account: "work", enabled: true } }, tokens: {} },
+    { hosts: { "github.com": { account: "work", enabled: true } }, tokens: {}, signIns: {} },
   );
   assert.deepStrictEqual(auth.account, Option.some("bot"));
   assert.deepStrictEqual(
@@ -994,6 +1024,11 @@ it.live.each([
         ["github.com", "repos/team/explicit"],
       ],
     );
+    assert.deepStrictEqual(git.find(([name]) => name === "createBranch")?.[1], {
+      cwd: "/repo",
+      branch: "feature",
+      startPoint: "refs/remotes/enterprise/feature",
+    });
     assert.deepStrictEqual(git.find(([name]) => name === "fetchRemoteTrackingBranch")?.[1], {
       cwd: "/repo",
       remoteName: "enterprise",

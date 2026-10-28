@@ -24,6 +24,14 @@ import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSour
 import * as GitHubPullRequestApi from "./GitHubPullRequestApi.ts";
 import * as GitHubPullRequestProvider from "./GitHubPullRequestProvider.ts";
 import { KnownWorkflowRuns } from "./gitHubConditionalChecks.ts";
+import * as GitHubAppAccess from "./GitHubAppAccess.ts";
+import * as GitHubAppSignIn from "./GitHubAppSignIn.ts";
+
+const appSignedOut = Layer.mock(GitHubAppSignIn.GitHubAppSignIn)({
+  enabled: false,
+  token: () => Effect.succeedNone,
+  invalidate: () => Effect.void,
+});
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
@@ -118,6 +126,8 @@ const mockApi = Layer.succeed(
     rest: (input) => mockedExecute({ kind: "rest", ...input }),
     credential: (host, target) =>
       target === undefined ? mockedCredential(host) : mockedCredential(host, target),
+
+    appCredential: () => Effect.succeedNone,
   }),
 );
 
@@ -185,8 +195,10 @@ const mockHttp = Layer.succeed(
 
 const layer = it.layer(
   GitHubPullRequestApi.layer.pipe(
+    Layer.provideMerge(GitHubAppAccess.layer),
     Layer.provideMerge(mockApi),
     Layer.provideMerge(GitHubRequestPolicy.layer),
+    Layer.provideMerge(appSignedOut),
     Layer.provideMerge(GitHubQuota.layer),
     Layer.provideMerge(SourceControlRateLimit.layer),
     Layer.provideMerge(mockHttp),
@@ -197,6 +209,9 @@ const layer = it.layer(
             target === undefined ? mockedCredential(host) : mockedCredential(host, target),
             (held) => ({ ...held, host, source: "gh" as const }),
           ),
+
+        saved: () => Effect.succeedNone,
+        fingerprint: (host, token) => Effect.succeed(`${host}:${token}`),
         invalidate: () => Effect.void,
       }),
     ),
@@ -644,6 +659,8 @@ it.effect(
               source: "gh" as const,
               fingerprint: `${host}:${activeToken.length}${activeToken.at(-1)}`,
             })),
+          saved: () => Effect.succeedNone,
+          fingerprint: (host, token) => Effect.succeed(`${host}:${token}`),
           invalidate: () => Effect.void,
         }),
       );
@@ -669,8 +686,9 @@ it.effect(
       );
       const cli = yield* GitHubPullRequestApi.make.pipe(
         Effect.provide(
-          GitHubRest.layer.pipe(
-            Layer.provideMerge(Layer.mergeAll(credentials, http)),
+          GitHubAppAccess.layer.pipe(
+            Layer.provideMerge(GitHubRest.layer),
+            Layer.provideMerge(Layer.mergeAll(credentials, http, appSignedOut)),
             Layer.provideMerge(GitHubQuota.layer),
             Layer.provideMerge(SourceControlRateLimit.layer),
             Layer.merge(TestSourceControlHost.layer()),
@@ -719,12 +737,13 @@ layer("GitHubPullRequestApi.layer", (it) => {
     "loads a private PR and verifies the installation bot with repository credentials",
     () =>
       Effect.gen(function* () {
-        mockedCredential.mockImplementation((host) =>
-          Effect.succeed({
-            token: Redacted.make("ghs_scanner-installation"),
-            fingerprint: `${host}:scanner`,
-          }),
-        );
+        mockedCredential.mockImplementation((host, target) => {
+          const scoped = target?.cwd === "/scanner" && target.repository === "organization/scanner";
+          return Effect.succeed({
+            token: Redacted.make(scoped ? "ghs_scanner-installation" : "unscoped-token"),
+            fingerprint: `${host}:${scoped ? "scanner" : "unscoped"}`,
+          });
+        });
         mockedExecute.mockImplementation((call) => {
           if (call.kind === "rest")
             return Effect.fail(
@@ -760,7 +779,10 @@ layer("GitHubPullRequestApi.layer", (it) => {
         const identity = yield* cli.getRoutingIdentity(input);
         expect(identity).toEqual({ accountId: "123", viewer: "review-app[bot]" });
         expect((yield* cli.getPullRequestDetail(input)).number).toBe(2375);
-        expect(mockedCredential).toHaveBeenCalledWith("github.com", input);
+        expect(mockedCredential).toHaveBeenCalledWith(
+          "github.com",
+          expect.objectContaining({ cwd: input.cwd, repository: input.repository, personal: true }),
+        );
         expect(
           mockedExecute.mock.calls.some(([call]) => call.kind === "rest" && call.path === "user"),
         ).toBe(false);
@@ -3123,51 +3145,6 @@ layer("GitHubPullRequestApi.layer", (it) => {
       );
 
       assert.strictEqual(error, diffRefused);
-    }),
-  );
-
-  it.effect("skips the avatar lookup when a listing named nobody", () =>
-    Effect.gen(function* () {
-      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
-
-      const avatars = yield* cli.listActorAvatars({
-        cwd: "/w",
-        repository: "acme/web",
-        host: "github.com",
-        ids: [],
-      });
-
-      assert.strictEqual(avatars.size, 0);
-      assert.strictEqual(mockedExecute.mock.calls.length, 0);
-    }),
-  );
-
-  it.effect("looks up avatars by node id in one GraphQL read", () =>
-    Effect.gen(function* () {
-      mockedExecute.mockReturnValueOnce(
-        Effect.succeed(
-          output(
-            encodeJson({
-              data: {
-                nodes: [
-                  { __typename: "User", login: "octocat", avatarUrl: "https://avatars/octocat" },
-                ],
-              },
-            }),
-          ),
-        ),
-      );
-      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
-
-      const avatars = yield* cli.listActorAvatars({
-        cwd: "/w",
-        repository: "acme/web",
-        host: "github.com",
-        ids: ["MDQ6VXNlcjE="],
-      });
-
-      expect(varsAt(0)).toEqual({ ids: ["MDQ6VXNlcjE="] });
-      expect(avatars.get("octocat")).toBe("https://avatars/octocat");
     }),
   );
 

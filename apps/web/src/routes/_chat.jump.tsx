@@ -30,7 +30,7 @@ function ProjectJumpRoute() {
   const target = (() => resolveProjectJumpTarget(search.project ?? "", projects, threads))();
   const handledKey = `${search.project ?? ""}:${action}`;
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- Navigate only after the external environment catalog has bootstrapped.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Navigate only after the external environment catalog has bootstrapped.
   useEffect(() => {
     if (!bootstrapped || target === null || handledKeyRef.current === handledKey) return;
     handledKeyRef.current = handledKey;

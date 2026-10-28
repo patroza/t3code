@@ -449,7 +449,6 @@ const makeSplashScenario = (
           }),
           Layer.mock(PreviewManager.PreviewManager)({
             subscribeStateChanges: () => Effect.void,
-            subscribeRecordingFrames: () => Effect.void,
             subscribeRecordingInputs: () => Effect.void,
             subscribePointerEvents: () => Effect.void,
             subscribeOpenLinks: () => Effect.void,

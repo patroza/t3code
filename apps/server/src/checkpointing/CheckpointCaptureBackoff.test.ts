@@ -1,11 +1,10 @@
 import { it } from "@effect/vitest";
-import { ThreadId, VcsProcessTimeoutError } from "@t3tools/contracts";
+import { CheckpointRef, ThreadId, VcsProcessTimeoutError } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { describe, expect } from "vite-plus/test";
 
 import * as CheckpointStore from "./CheckpointStore.ts";
-import { checkpointRefForThreadTurn } from "./Utils.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import type * as VcsDriver from "../vcs/VcsDriver.ts";
 
@@ -73,7 +72,7 @@ describe("checkpoint capture backoff", () => {
         store
           .captureCheckpoint({
             cwd: CWD,
-            checkpointRef: checkpointRefForThreadTurn(THREAD_ID, turn),
+            checkpointRef: CheckpointRef.make(`refs/t3/checkpoints/${THREAD_ID}/turn/${turn}`),
           })
           .pipe(Effect.flip);
 
@@ -122,7 +121,7 @@ describe("checkpoint capture backoff", () => {
         store
           .captureCheckpoint({
             cwd: CWD,
-            checkpointRef: checkpointRefForThreadTurn(THREAD_ID, turn),
+            checkpointRef: CheckpointRef.make(`refs/t3/checkpoints/${THREAD_ID}/turn/${turn}`),
           })
           .pipe(Effect.flip);
 
@@ -145,7 +144,7 @@ describe("checkpoint capture backoff", () => {
       const capture = (turn: number) =>
         store.captureCheckpoint({
           cwd: CWD,
-          checkpointRef: checkpointRefForThreadTurn(THREAD_ID, turn),
+          checkpointRef: CheckpointRef.make(`refs/t3/checkpoints/${THREAD_ID}/turn/${turn}`),
         });
 
       // Two failures stay under the threshold, and the success that follows

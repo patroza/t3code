@@ -52,7 +52,7 @@ vi.mock("../hooks/useTheme", () => ({
 }));
 vi.mock("../editorPreferences", () => ({ useOpenInPreferredEditor: () => vi.fn() }));
 vi.mock("../fileContextMenu", () => ({ useFileContextMenuHandler: () => vi.fn() }));
-vi.mock("../lib/checkpointDiffState", () => ({
+vi.mock("../state/queries", () => ({
   useCheckpointDiff: () => {
     const diff = useAtomValue(checkpointAtom);
     return { data: diff === null ? null : { diff }, isPending: diff === null, error: null };

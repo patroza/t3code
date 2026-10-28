@@ -85,7 +85,7 @@ export function useThreadPr(
   const cwd = thread.worktreePath ?? projectCwd ?? null;
   const supportsLinks = useAtomValue(
     serverEnvironment.configValueAtom(thread.environmentId),
-    (config) => config?.environment.capabilities.threadPullRequests === true,
+    (config) => config !== null,
   );
   const { linkedPresentation, pullRequestRef } = useMemo(
     () =>
@@ -95,7 +95,7 @@ export function useThreadPr(
           linkedPullRequest: thread.linkedPullRequest,
           branchPullRequest: thread.branchPullRequest,
         },
-        { threadPullRequests: supportsLinks },
+        supportsLinks,
       ),
     [thread.pullRequests, thread.linkedPullRequest, thread.branchPullRequest, supportsLinks],
   );
@@ -160,6 +160,7 @@ export function useThreadPr(
     return presentThreadPr(status.pr, status.sourceControlProvider);
   }, [cwd, gitStatus.data, pullRequestRef, thread.branch]);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- keeps the bounded PR snapshot registry in step with live query results across row virtualization
   useEffect(() => {
     if (live === undefined) return;
     appAtomRegistry.modify(threadPrSnapshotsAtom, (current) => {

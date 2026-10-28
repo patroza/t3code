@@ -4,7 +4,7 @@ import { Tool } from "effect/ai";
 
 import { advertisedJsonSchema } from "./advertisedJsonSchema.ts";
 
-it("drops JSON noise, merges tagged unions, and keeps null where it is required", () => {
+it.each([false, true])("compacts JSON while preserving strict=%s validation", (strict) => {
   const Every = Schema.Struct({ ms: Schema.Int });
   const tool = Tool.make("example", {
     parameters: Schema.Struct({
@@ -21,15 +21,21 @@ it("drops JSON noise, merges tagged unions, and keeps null where it is required"
         ),
       ),
     }),
-  });
+  }).annotate(Tool.Strict, strict);
 
+  const strictProperties = strict ? { additionalProperties: false } : {};
   expect(advertisedJsonSchema(tool)).toEqual({
     type: "object",
     properties: {
       threadId: { type: "string" },
       beforeRunId: { anyOf: [{ type: "string" }, { type: "null" }] },
       limit: { type: "integer" },
-      every: { type: "object", properties: { ms: { type: "integer" } }, required: ["ms"] },
+      every: {
+        type: "object",
+        properties: { ms: { type: "integer" } },
+        required: ["ms"],
+        ...strictProperties,
+      },
       target: {
         type: "object",
         properties: {
@@ -38,8 +44,10 @@ it("drops JSON noise, merges tagged unions, and keeps null where it is required"
           number: { type: "integer" },
         },
         required: ["kind"],
+        ...strictProperties,
       },
     },
     required: ["beforeRunId", "every"],
+    ...strictProperties,
   });
 });

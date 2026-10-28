@@ -141,7 +141,6 @@ export class ProviderUploadFeedbackError extends Schema.TaggedError<ProviderUplo
     return `Failed to upload feedback for thread ${this.threadId}.`;
   }
 }
-
 const ProviderEventKind = Schema.Literals(["session", "notification", "request", "error"]);
 
 export const ProviderEvent = Schema.Struct({
