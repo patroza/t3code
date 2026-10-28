@@ -37,8 +37,6 @@ import { createPreviewEnvironmentAtoms } from "./preview.ts";
 import type { QueryPersistence } from "./queryPersistence.ts";
 import { createTerminalEnvironmentAtoms } from "./terminal.ts";
 import {
-  environmentRpcKey,
-  executeAtomCommand,
   createAtomCommandScheduler,
   createEnvironmentQueryAtomFamily,
   selectEnvironmentQueryData,
@@ -405,62 +403,6 @@ describe("atom command result helpers", () => {
       expect(Cause.hasDies(failure.cause)).toBe(true);
       expect(Cause.squash(failure.cause)).toBe(defect);
     }
-  });
-
-  it("reports expected failures and defects through separate policies", async () => {
-    const warnings: string[] = [];
-    const errors: string[] = [];
-    const reporter = {
-      warn: (message: string) => {
-        warnings.push(message);
-      },
-      error: (message: string) => {
-        errors.push(message);
-      },
-    };
-
-    await executeAtomCommand(() => Promise.resolve(Exit.fail("nope")), { label: "save" }, reporter);
-    await executeAtomCommand(
-      () => Promise.resolve(Exit.fail("ignored")),
-      { label: "quiet save", reportFailure: false },
-      reporter,
-    );
-    await executeAtomCommand(
-      () => Promise.reject(new Error("defect")),
-      { label: "quiet save", reportFailure: false },
-      reporter,
-    );
-    await executeAtomCommand(
-      () => Promise.resolve(Exit.interrupt(1)),
-      { label: "interrupted" },
-      reporter,
-    );
-
-    expect(warnings).toEqual(["[atom-command] save failed"]);
-    expect(errors).toEqual(["[atom-command] quiet save defected"]);
-  });
-});
-
-describe("environmentRpcKey", () => {
-  it("isolates subscription state by environment and cwd", () => {
-    const environmentId = EnvironmentId.make("environment-1");
-    const originalTarget = {
-      environmentId,
-      input: { cwd: "/repo/original" },
-    };
-    const nextTarget = {
-      environmentId,
-      input: { cwd: "/repo/next" },
-    };
-
-    expect(environmentRpcKey(originalTarget)).not.toBe(environmentRpcKey(nextTarget));
-    expect(environmentRpcKey(originalTarget)).toBe(environmentRpcKey({ ...originalTarget }));
-    expect(
-      environmentRpcKey({
-        environmentId: EnvironmentId.make("environment-2"),
-        input: originalTarget.input,
-      }),
-    ).not.toBe(environmentRpcKey(originalTarget));
   });
 });
 

@@ -784,7 +784,7 @@ it.effect.each([createDuringCloneCommand, sendDuringCloneCommand])(
   (command) =>
     Effect.gen(function* () {
       let dispatched = false;
-      const layerTest = threadManagementLayer.pipe(
+      const layerTest = ThreadManagementService.layer.pipe(
         Layer.provide(ServerSettings.layerTest()),
         Layer.provide(layerReceiptsTest),
         Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
@@ -837,7 +837,7 @@ it.effect("refuses service sends used by MCP and schedules while the project is 
       visibleTurnItems: [],
       updatedAt: NOW,
     };
-    const layerTest = threadManagementLayer.pipe(
+    const layerTest = ThreadManagementService.layer.pipe(
       Layer.provide(ServerSettings.layerTest()),
       Layer.provide(layerReceiptsTest),
       Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),

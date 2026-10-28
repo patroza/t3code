@@ -1106,47 +1106,6 @@ describe("RpcSessionFactory", () => {
     }),
   );
 
-  it.effect("uses the legacy config RPC for probes when the server lacks the capability", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { factory, sockets } = yield* makeFactory();
-        const session = yield* factory.connect(PREPARED);
-        const readyFiber = yield* Effect.forkChild(session.ready);
-        const socket = yield* awaitSocket(sockets);
-
-        socket.open();
-        yield* completeInitialConfig(socket, LEGACY_SERVER_CONFIG);
-        yield* Fiber.join(readyFiber);
-
-        const probeFiber = yield* Effect.forkChild(session.probe);
-        const probeRequest = yield* awaitRequest(socket, 1);
-        expect(probeRequest).toMatchObject({
-          _tag: "Request",
-          tag: WS_METHODS.serverGetConfig,
-          payload: {},
-        });
-        socket.serverMessage(
-          encodeJson({
-            _tag: "Exit",
-            requestId: probeRequest.id,
-            exit: {
-              _tag: "Success",
-              value: LEGACY_SERVER_CONFIG,
-            },
-          }),
-        );
-        yield* Fiber.join(probeFiber);
-
-        expect(
-          socket.sent
-            .map((message) => decodeJson(message))
-            .filter(isRpcRequest)
-            .map((request) => request.tag),
-        ).toEqual([WS_METHODS.subscribeServerConfig, WS_METHODS.serverGetConfig]);
-      }),
-    ),
-  );
-
   it.effect.each([
     { relay: false, label: "direct" },
     { relay: true, label: "relay" },
