@@ -3894,22 +3894,31 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }
       worktreePath = path.join(parentDir, repoName, sanitizedBranch);
     }
-    if (input.newRefName) {
-      // Kept apart from the checkout so the shared-config lock only covers the tracking write.
-      yield* createBranchAt(
-        "GitVcsDriver.createWorktree.createBranch",
-        { cwd: input.cwd, branch: input.newRefName, startPoint: input.refName },
-        "git worktree add failed",
-      );
-    }
-    const args = ["worktree", "add", "--", worktreePath, input.newRefName ?? input.refName];
-    const progress = options?.progress;
-    const onCheckoutProgress = progress?.onCheckoutProgress;
     const repository = yield* probeGitRepository(path.resolve(input.cwd), (probeArgs) =>
       executeGit("GitVcsDriver.createWorktree.probe", input.cwd, probeArgs, {
         allowNonZeroExit: true,
       }),
     );
+    if (input.newRefName) {
+      // Kept apart from the checkout so the shared-config lock only covers the tracking write.
+      const createWorktreeBranch = createBranchAt(
+        "GitVcsDriver.createWorktree.createBranch",
+        { cwd: input.cwd, branch: input.newRefName, startPoint: input.refName },
+        "git worktree add failed",
+      );
+      // Branch creation needs the same explicit bare source as the checkout below.
+      yield* repository?.gitDir
+        ? createWorktreeBranch.pipe(
+            Effect.provideService(ExplicitGitDirectory, {
+              cwd: input.cwd,
+              gitDir: repository.gitDir,
+            }),
+          )
+        : createWorktreeBranch;
+    }
+    const args = ["worktree", "add", "--", worktreePath, input.newRefName ?? input.refName];
+    const progress = options?.progress;
+    const onCheckoutProgress = progress?.onCheckoutProgress;
 
     const readCheckoutWorkers = readConfigValue(input.cwd, "checkout.workers");
     const checkoutWorkers =
