@@ -248,7 +248,15 @@ function harness(input: {
   const layer = Layer.mergeAll(
     host,
     appSignedOut,
-    Layer.mock(GitHubRest.GitHubRest)(input.api ?? {}),
+    Layer.unwrap(
+      Effect.gen(function* () {
+        const requests = yield* GitHubRequestPolicy.GitHubRequestPolicy;
+        return Layer.mock(GitHubRest.GitHubRest)({
+          credential: requests.credential,
+          ...input.api,
+        });
+      }),
+    ).pipe(Layer.provide(policy)),
     policy,
     Layer.succeed(HttpClient.HttpClient, graphQlHttp(graphql, graphqlCalls)),
     NodeServices.layer,

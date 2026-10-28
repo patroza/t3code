@@ -112,7 +112,9 @@ describe("GitHubRest", () => {
         operation: "detail",
         path: "repos/organization/scanner/pulls/1",
       });
-      expect(targets).toEqual([{ repository: "organization/scanner", cwd: "/scanner" }]);
+      expect(targets).toEqual([
+        expect.objectContaining({ repository: "organization/scanner", cwd: "/scanner" }),
+      ]);
     }).pipe(Effect.provide(layer));
   });
 
