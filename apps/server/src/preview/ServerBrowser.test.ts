@@ -1355,63 +1355,6 @@ it.live("a desktop page that comes back reconnects without waiting for a viewer"
   ).pipe(Effect.provide(layer)),
 );
 
-it.live("a late desktop attachment replaces the fallback page and reconnects its viewers", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const { browser, broker, tabId } = yield* ready;
-      const manager = yield* Manager.PreviewManager;
-      const fallback = contexts[0]!.page;
-      yield* Effect.promise(() => fallback.goto("https://example.com/login"));
-      const viewer = yield* browser.attachViewer(viewerInput(tabId, false));
-      yield* Effect.promise(() => attachSubscribed.promise);
-      desktopTabs.add(tabId);
-      desktopDetaches.emit("attach", { threadId: scope.thread.threadId, tabId });
-      const ended = yield* Stream.fromQueue(viewer.output).pipe(
-        Stream.filter((item) => item._tag === "reconnect" || item._tag === "gone"),
-        Stream.runHead,
-      );
-      expect(ended).toEqual(Option.some({ _tag: "reconnect" }));
-      yield* Effect.promise(() => desktopConnected.promise);
-      const desktop = desktopConnections[0]!.context.page;
-      yield* Effect.promise(() => desktop.goto("https://example.com/account"));
-      const status = yield* broker.invoke<PreviewAutomationStatus>({
-        scope,
-        operation: "status",
-        input: {},
-        tabId,
-      });
-      expect(status.url).toBe("https://example.com/account");
-      expect(fallback.isClosed()).toBe(true);
-      expect(desktop.close).not.toHaveBeenCalled();
-      expect((yield* manager.list({ threadId: scope.thread.threadId })).sessions).toHaveLength(1);
-      yield* browser.attachViewer(viewerInput(tabId, false));
-      expect(desktopConnections).toHaveLength(1);
-    }),
-  ).pipe(Effect.provide(layer)),
-);
-
-it.live("a desktop attachment during fallback creation waits and adopts the desktop page", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const manager = yield* Manager.PreviewManager;
-      yield* ServerBrowser.ServerBrowser;
-      yield* Effect.yieldNow;
-      contextGate = Promise.withResolvers<void>();
-      const opened = yield* manager.open({ threadId: scope.thread.threadId, runtime: "server" });
-      yield* Effect.promise(() => contextRequested.promise);
-      yield* Effect.promise(() => attachSubscribed.promise);
-      desktopTabs.add(opened.tabId);
-      desktopDetaches.emit("attach", { threadId: scope.thread.threadId, tabId: opened.tabId });
-      yield* Effect.promise(() => desktopAttachmentReceived.promise);
-      contextGate.resolve();
-      yield* Effect.promise(() => desktopConnected.promise);
-      expect(contexts[0]!.page.isClosed()).toBe(true);
-      expect(desktopConnections).toHaveLength(1);
-      expect((yield* manager.list({ threadId: scope.thread.threadId })).sessions).toHaveLength(1);
-    }),
-  ).pipe(Effect.provide(layer)),
-);
-
 // Native capture uses the current viewport; shrinking happens afterward in an isolated world.
 it.live.each([
   {

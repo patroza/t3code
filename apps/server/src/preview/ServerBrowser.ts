@@ -661,8 +661,8 @@ const make = Effect.gen(function* () {
     tabs.delete(key);
     tab.closing = true;
     clearAbortedNavigation(tab);
-    // A surviving session reconnects, including when a desktop replaces a fallback page.
-    const end = !closeSession && sessionOpen(tab) ? "reconnect" : "gone";
+    // A desktop page outlives the connection unless its session closed with it.
+    const end = tab.desktop && !closeSession && sessionOpen(tab) ? "reconnect" : "gone";
     for (const viewer of tab.viewers) viewer.push({ _tag: end });
     void tab.control.close().catch(constVoid);
     if (tab.desktop) void tab.desktop.close().catch(constVoid);
@@ -2471,19 +2471,12 @@ const make = Effect.gen(function* () {
   yield* desktopChannel.attached.pipe(
     Stream.runForEach((key) =>
       Effect.gen(function* () {
-        const id = tabKey(key.threadId, key.tabId);
-        yield* Effect.promise(() => pendingTabs.get(id)?.catch(constVoid) ?? Promise.resolve());
-        if (!(yield* desktopChannel.isAttached(key))) return;
-        const existing = tabs.get(id);
-        if (existing?.desktop) return;
+        if (tabs.has(tabKey(key.threadId, key.tabId))) return;
         const { sessions } = yield* manager.list({ threadId: ThreadId.make(key.threadId) });
         const snapshot = sessions.find(
           (session) => session.tabId === key.tabId && session.runtime === "server",
         );
-        if (snapshot) {
-          if (existing) dropTab(existing, false);
-          yield* Effect.promise(() => ensureTab(snapshot).catch(constVoid));
-        }
+        if (snapshot) yield* Effect.promise(() => ensureTab(snapshot).catch(constVoid));
       }).pipe(Effect.ignore),
     ),
     Effect.forkScoped,
