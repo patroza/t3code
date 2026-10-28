@@ -218,10 +218,14 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
     Layer.provideMerge(ModelManifest.layerTest),
     Layer.provideMerge(ResetCreditCoordinator.layerTest),
   );
-  const layerBase = ProviderHostLive.layer.pipe(Layer.provideMerge(layerBaseDeps));
+  const layerBase = ProviderHostLive.layer.pipe(
+    Layer.provide(Layer.mock(PortScanner.PortDiscovery)({ trackAgent: () => () => undefined })),
+    Layer.provideMerge(layerBaseDeps),
+  );
   const layerTest = ProviderOrchestrationAdapterInfrastructure.layer.pipe(
     Layer.provide(PortScanner.layerTest),
     Layer.provideMerge(layerBase),
+    Layer.provide(Layer.mock(PortScanner.PortDiscovery)({ trackAgent: () => () => undefined })),
   );
 
   it.live("treats an explicit in-config enabled:false as disabling despite the envelope", () =>
@@ -722,9 +726,13 @@ describe("ProviderInstanceRegistry — all drivers slice", () => {
     Layer.provideMerge(ModelManifest.layerTest),
     Layer.provideMerge(ResetCreditCoordinator.layerTest),
   );
-  const layerBase = ProviderHostLive.layer.pipe(Layer.provideMerge(layerBaseDeps));
+  const layerBase = ProviderHostLive.layer.pipe(
+    Layer.provide(Layer.mock(PortScanner.PortDiscovery)({ trackAgent: () => () => undefined })),
+    Layer.provideMerge(layerBaseDeps),
+  );
   const layerTest = ProviderOrchestrationAdapterInfrastructure.layer.pipe(
     Layer.provideMerge(layerBase),
+    Layer.provide(Layer.mock(PortScanner.PortDiscovery)({ trackAgent: () => () => undefined })),
   );
 
   it.live("boots one instance of every shipped driver from a single config map", () =>

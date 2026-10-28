@@ -148,7 +148,9 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
   it.effect("ships configurable thread navigation defaults", () =>
     Effect.sync(() => {
       const defaultsByCommand = new Map(
-        Keybindings.DEFAULT_KEYBINDINGS.map((binding) => [binding.command, binding.key] as const),
+        SharedKeybindings.DEFAULT_KEYBINDINGS.map(
+          (binding) => [binding.command, binding.key] as const,
+        ),
       );
 
       assert.equal(defaultsByCommand.get("thread.previous"), "mod+shift+[");

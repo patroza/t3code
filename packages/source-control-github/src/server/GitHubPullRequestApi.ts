@@ -945,8 +945,8 @@ export const make = Effect.gen(function* () {
       // A pinned credential is never handed on to another, so pick one that reaches the repository.
       const { token, fingerprint: key } =
         input.repository === undefined
-          ? yield* api.credential(host)
-          : yield* appAccess.credentialFor(host, input.repository);
+          ? yield* api.credential(host, input)
+          : yield* appAccess.credentialFor(host, input.repository, input);
       const credential = { host, token, credentialFingerprint: key };
       return yield* Effect.acquireUseRelease(
         Effect.sync(() => {

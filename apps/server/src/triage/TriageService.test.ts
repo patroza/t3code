@@ -131,6 +131,7 @@ it.effect("still starts triage when the source lookup fails", () =>
     const { triage } = yield* makeTriage(() =>
       Effect.fail(
         new GitCommandError({
+          failureKind: "unknown",
           operation: "TriageService.resolveSourceRef",
           command: "git ls-remote",
           cwd: "/",

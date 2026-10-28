@@ -539,7 +539,7 @@ it.effect("classifies projection infrastructure failures separately from a missi
     Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
     Layer.provide(
       Layer.mock(Orchestrator.OrchestratorV2)({
-        getThreadProjection: () => Effect.fail(projectionError),
+        getThreadRecords: () => Effect.fail(projectionError),
       }),
     ),
     Layer.provide(ServerSettings.layerTest()),
@@ -548,7 +548,7 @@ it.effect("classifies projection infrastructure failures separately from a missi
 
   return Effect.gen(function* () {
     const service = yield* ThreadManagementService.ThreadManagementService;
-    const error = yield* Effect.flip(service.getProjectThread({ projectId, threadId }));
+    const error = yield* Effect.flip(service.getProjectThreadRecords({ projectId, threadId }, []));
 
     expect(error).toBeInstanceOf(ThreadManagementService.ThreadManagementProjectionLoadError);
     expect(error).toMatchObject({
@@ -575,7 +575,7 @@ it.effect("uses thread-not-found only after a projection loads outside the proje
     Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
     Layer.provide(
       Layer.mock(Orchestrator.OrchestratorV2)({
-        getThreadProjection: () => Effect.succeed(projection),
+        getThreadRecords: () => Effect.succeed(projection),
       }),
     ),
     Layer.provide(ServerSettings.layerTest()),
@@ -584,7 +584,7 @@ it.effect("uses thread-not-found only after a projection loads outside the proje
 
   return Effect.gen(function* () {
     const service = yield* ThreadManagementService.ThreadManagementService;
-    const error = yield* Effect.flip(service.getProjectThread({ projectId, threadId }));
+    const error = yield* Effect.flip(service.getProjectThreadRecords({ projectId, threadId }, []));
 
     expect(error).toBeInstanceOf(ThreadManagementService.ThreadManagementThreadNotFoundError);
     expect(error).toMatchObject({ projectId, threadId });
@@ -784,7 +784,7 @@ it.effect.each([createDuringCloneCommand, sendDuringCloneCommand])(
   (command) =>
     Effect.gen(function* () {
       let dispatched = false;
-      const layerTest = ThreadManagementService.layer.pipe(
+      const layerTest = threadManagementLayer.pipe(
         Layer.provide(ServerSettings.layerTest()),
         Layer.provide(layerReceiptsTest),
         Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
@@ -837,7 +837,7 @@ it.effect("refuses service sends used by MCP and schedules while the project is 
       visibleTurnItems: [],
       updatedAt: NOW,
     };
-    const layerTest = ThreadManagementService.layer.pipe(
+    const layerTest = threadManagementLayer.pipe(
       Layer.provide(ServerSettings.layerTest()),
       Layer.provide(layerReceiptsTest),
       Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
@@ -1020,7 +1020,7 @@ it.effect("waitForThread can wait past an ended run for the thread's delegated w
     let subagents = [{ status: "running" }];
     const stored = (sequence: number, event: object) =>
       ({ sequence, event: { threadId, ...event } }) as unknown as OrchestrationV2StoredEvent;
-    const layerTest = ThreadManagementService.layer.pipe(
+    const layerTest = threadManagementLayer.pipe(
       Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
       Layer.provide(
         Layer.mock(Orchestrator.OrchestratorV2)({
@@ -1098,7 +1098,7 @@ it.effect("waitForThread settles delegated work on a thread rolled back past its
       startedAt: DateTime.makeUnsafe(0),
       completedAt: DateTime.makeUnsafe(1_000),
     } as unknown as OrchestrationV2Run;
-    const layerTest = ThreadManagementService.layer.pipe(
+    const layerTest = threadManagementLayer.pipe(
       Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
       Layer.provide(
         Layer.mock(Orchestrator.OrchestratorV2)({

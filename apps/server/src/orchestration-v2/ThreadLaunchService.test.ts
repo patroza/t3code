@@ -2583,6 +2583,7 @@ it.effect.each(
               ),
       });
       const layerService = OrchestratorMcpService.layer.pipe(
+        Layer.provide(Layer.mock(RemoteDelegation.RemoteDelegation)({})),
         Layer.provide(NodeCrypto.layer),
         Layer.provide(harness.layer),
         Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({ resolveCommit })),
@@ -2655,7 +2656,7 @@ it.effect.each(
         }
         const delegated = yield* service.delegateTask(scope, input);
         yield* Deferred.await(setupEntered);
-        const child = yield* threads.getThreadProjection(delegated.childThreadId);
+        const child = yield* threads.getThreadProjection(localChild(delegated.childThreadId));
         assert.equal(child.thread.lineage.parentThreadId, parentThreadId);
         assert.equal(child.thread.worktreePath, "/repo-worktrees/feature");
         assert.equal(child.runs[0]?.status, cancelAsync ? "starting" : "preparing");
@@ -2674,12 +2675,17 @@ it.effect.each(
         assert.equal(parent.thread.worktreePath, parentWorktree);
         assert.equal(parent.thread.branch, "parent-feature");
         if (cancelSetup) {
-          const afterSequence = yield* threads.getThreadEventSequence(delegated.childThreadId);
+          const afterSequence = yield* threads.getThreadEventSequence(
+            localChild(delegated.childThreadId),
+          );
           yield* service.cancelTask(scope, { taskId: delegated.taskId });
           yield* Deferred.await(terminalClosed);
           if (!cancelAsync) {
             yield* threads
-              .streamStoredEventsFrom({ threadId: delegated.childThreadId, afterSequence })
+              .streamStoredEventsFrom({
+                threadId: localChild(delegated.childThreadId),
+                afterSequence,
+              })
               .pipe(
                 Stream.filter(
                   (stored) =>
@@ -2691,7 +2697,7 @@ it.effect.each(
           }
           assert.equal(harness.closeTerminal.mock.calls.length, 1);
           assert.equal(harness.removeWorktree.mock.calls.length, cancelAsync ? 0 : 1);
-          const cancelled = yield* threads.getThreadProjection(delegated.childThreadId);
+          const cancelled = yield* threads.getThreadProjection(localChild(delegated.childThreadId));
           assert.equal(cancelled.runs[0]?.status, "interrupted");
           if (cancelAsync) {
             assert.equal(cancelled.thread.worktreePath, "/repo-worktrees/feature");
@@ -2704,7 +2710,10 @@ it.effect.each(
         }
         yield* Deferred.succeed(allowSetup, undefined);
         yield* threads
-          .streamStoredEventsFrom({ threadId: delegated.childThreadId, eventType: "run.updated" })
+          .streamStoredEventsFrom({
+            threadId: localChild(delegated.childThreadId),
+            eventType: "run.updated",
+          })
           .pipe(
             Stream.filter(
               (stored) =>
@@ -2713,7 +2722,7 @@ it.effect.each(
             ),
             Stream.runHead,
           );
-        const prepared = yield* threads.getThreadProjection(delegated.childThreadId);
+        const prepared = yield* threads.getThreadProjection(localChild(delegated.childThreadId));
         if (failSetup) {
           assert.isEmpty(prepared.checkpointScopes);
         } else {
@@ -2722,3 +2731,9 @@ it.effect.each(
       }).pipe(Effect.provide(Layer.merge(harness.layer, layerService)));
     }),
 );
+
+/** Local delegation must yield a child thread before assertions inspect it. */
+const localChild = (id: ThreadId | null): ThreadId => {
+  if (id === null) throw new Error("expected a local delegated child");
+  return id;
+};

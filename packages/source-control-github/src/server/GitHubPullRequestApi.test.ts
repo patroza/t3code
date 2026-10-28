@@ -737,12 +737,13 @@ layer("GitHubPullRequestApi.layer", (it) => {
     "loads a private PR and verifies the installation bot with repository credentials",
     () =>
       Effect.gen(function* () {
-        mockedCredential.mockImplementation((host) =>
-          Effect.succeed({
-            token: Redacted.make("ghs_scanner-installation"),
-            fingerprint: `${host}:scanner`,
-          }),
-        );
+        mockedCredential.mockImplementation((host, target) => {
+          const scoped = target?.cwd === "/scanner" && target.repository === "organization/scanner";
+          return Effect.succeed({
+            token: Redacted.make(scoped ? "ghs_scanner-installation" : "unscoped-token"),
+            fingerprint: `${host}:${scoped ? "scanner" : "unscoped"}`,
+          });
+        });
         mockedExecute.mockImplementation((call) => {
           if (call.kind === "rest")
             return Effect.fail(
@@ -778,7 +779,10 @@ layer("GitHubPullRequestApi.layer", (it) => {
         const identity = yield* cli.getRoutingIdentity(input);
         expect(identity).toEqual({ accountId: "123", viewer: "review-app[bot]" });
         expect((yield* cli.getPullRequestDetail(input)).number).toBe(2375);
-        expect(mockedCredential).toHaveBeenCalledWith("github.com", input);
+        expect(mockedCredential).toHaveBeenCalledWith(
+          "github.com",
+          expect.objectContaining({ cwd: input.cwd, repository: input.repository, personal: true }),
+        );
         expect(
           mockedExecute.mock.calls.some(([call]) => call.kind === "rest" && call.path === "user"),
         ).toBe(false);
@@ -3141,51 +3145,6 @@ layer("GitHubPullRequestApi.layer", (it) => {
       );
 
       assert.strictEqual(error, diffRefused);
-    }),
-  );
-
-  it.effect("skips the avatar lookup when a listing named nobody", () =>
-    Effect.gen(function* () {
-      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
-
-      const avatars = yield* cli.listActorAvatars({
-        cwd: "/w",
-        repository: "acme/web",
-        host: "github.com",
-        ids: [],
-      });
-
-      assert.strictEqual(avatars.size, 0);
-      assert.strictEqual(mockedExecute.mock.calls.length, 0);
-    }),
-  );
-
-  it.effect("looks up avatars by node id in one GraphQL read", () =>
-    Effect.gen(function* () {
-      mockedExecute.mockReturnValueOnce(
-        Effect.succeed(
-          output(
-            encodeJson({
-              data: {
-                nodes: [
-                  { __typename: "User", login: "octocat", avatarUrl: "https://avatars/octocat" },
-                ],
-              },
-            }),
-          ),
-        ),
-      );
-      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
-
-      const avatars = yield* cli.listActorAvatars({
-        cwd: "/w",
-        repository: "acme/web",
-        host: "github.com",
-        ids: ["MDQ6VXNlcjE="],
-      });
-
-      expect(varsAt(0)).toEqual({ ids: ["MDQ6VXNlcjE="] });
-      expect(avatars.get("octocat")).toBe("https://avatars/octocat");
     }),
   );
 

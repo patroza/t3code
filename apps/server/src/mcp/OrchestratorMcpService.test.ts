@@ -1783,6 +1783,11 @@ describe("OrchestratorMcpService provider resolution", () => {
                 get: () => Effect.succeed(null),
               }),
             ),
+            Layer.provide(
+              Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({
+                get: () => Effect.succeed(null),
+              }),
+            ),
             Layer.provideMerge(layerOrchestrator),
             Layer.provide(
               LegacyV1ThreadImporter.layer.pipe(
@@ -2801,6 +2806,11 @@ describe("OrchestratorMcpService thread stop", () => {
           { databaseLayer: layerDatabase, runEffectWorker: false },
         );
         const layerThreads = ThreadManagementService.layer.pipe(
+          Layer.provide(
+            Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({
+              get: () => Effect.succeed(null),
+            }),
+          ),
           Layer.provideMerge(layerOrchestrator),
           Layer.provide(ServerSettings.layerTest()),
           Layer.provide(CommandReceiptStore.layer.pipe(Layer.provide(layerDatabase))),
