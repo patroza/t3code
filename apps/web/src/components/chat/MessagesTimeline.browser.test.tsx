@@ -1186,8 +1186,8 @@ describe("MessagesTimeline history and thread links", () => {
       ),
     );
     expect(screen.text()).toContain("Context handoff");
-    expect(screen.text()).toContain("GPT 5.6 Sol");
-    expect(screen.text()).toContain("Claude Fable 5");
+    expect(screen.text()).toContain("5.6 Sol");
+    expect(screen.text()).toContain("Fable 5");
     expect(screen.text()).not.toContain("Full conversation context");
 
     await screen.rerender(
@@ -1208,8 +1208,8 @@ describe("MessagesTimeline history and thread links", () => {
         ] as never,
       }),
     );
-    expect(screen.text()).toContain("GPT 5.6 Sol");
-    expect(screen.text()).toContain("Claude Fable 5");
+    expect(screen.text()).toContain("5.6 Sol");
+    expect(screen.text()).toContain("Fable 5");
 
     await screen.rerender(show(handoff({})));
     expect(screen.text()).toContain("Codex Personal");

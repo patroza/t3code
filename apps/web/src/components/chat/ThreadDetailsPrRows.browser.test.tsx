@@ -284,7 +284,7 @@ it("keeps workspace controls after expanding and collapsing 70 linked pull reque
       onDeleteProjectScript={vi.fn()}
     />,
   );
-  const runContext = page.getByRole("button", { name: "Run context" });
+  const runContext = page.getByRole("button", { name: /^Run context:/ });
   const editor = page.getByRole("group", { name: "Open in editor" });
   await expect.element(runContext).toBeVisible();
   await expect.element(editor).toBeVisible();
