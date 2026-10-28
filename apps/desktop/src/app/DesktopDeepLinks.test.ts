@@ -266,7 +266,6 @@ describe("DesktopDeepLinks service delivery", () => {
       {
         get: Ref.get(catalogJsonRef),
         set: () => Effect.succeed(true),
-        clear: Effect.void,
       } satisfies DesktopConnectionCatalogStore.DesktopConnectionCatalogStore["Service"],
     );
 
