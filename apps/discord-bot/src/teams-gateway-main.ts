@@ -18,6 +18,7 @@ import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import { ProviderUserInputAnswers } from "@t3tools/contracts";
 import { DiscordBotConfig } from "./config.ts";
+import { makeDiscordRestLayer } from "./discord/DiscordLive.ts";
 import { resolveProjectFromShortName, startOrContinueT3Turn } from "./features/LinkedTurnRouter.ts";
 import { bridgeThreadToPlatform, runBridge } from "./features/ResponseBridge.ts";
 import { layer as bridgeHubLayer } from "./features/BridgeHub.ts";
@@ -28,8 +29,10 @@ import { IdentityMapStore, layerFromOptionalPath as identityMapLayer } from "./i
 import { layerFromOptionalPath as aliasesLayer } from "./projectAliases.ts";
 import { ThreadLinkStore, layer as linksLayer } from "./store/ThreadLinkStore.ts";
 import { T3Session, layer as sessionLayer } from "./t3/T3Session.ts";
+import { botWasAdded } from "./teams/groupChats.ts";
 import { readGatewayConfig, readPrivateCredential } from "./teams/gatewayConfig.ts";
-import { registerTeamsMessageEvents } from "./teams/messageEvents.ts";
+import { ingestTeamsGroupChat, teamsChannelPoster } from "./features/TeamsGroupChatObserver.ts";
+import { mentionsTeamsRecipient, registerTeamsMessageEvents } from "./teams/messageEvents.ts";
 import { TeamsGatewayDispatcher } from "./teams/gatewayDispatcher.ts";
 import { LoopbackTeamsAdapter, RedactedTeamsLogger } from "./teams/gatewayHttp.ts";
 import {
@@ -53,6 +56,10 @@ const program = Effect.gen(function* () {
     );
   }
   const initial = readGatewayConfig(configPath);
+  const discordRestLayer =
+    initial.discord === undefined
+      ? undefined
+      : makeDiscordRestLayer(readPrivateCredential(initial.discord.tokenFile));
   // Explicit config provider prevents another tenant's credentials/defaults leaking from host env.
   const defaults = yield* DiscordBotConfig.pipe(
     Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnvRecord({}))),
@@ -77,19 +84,23 @@ const program = Effect.gen(function* () {
         t3DefaultModel: workspace.defaultModel ?? defaults.t3DefaultModel,
         teamsEnabled: false,
         teamsNativeEnabled: false,
+        ...(initial.discord === undefined
+          ? {}
+          : { alertsChannelId: initial.discord.alertsChannelId }),
       };
       NodeFS.mkdirSync(config.dataDir, { recursive: true, mode: 0o700 });
       if (NodeFS.statSync(config.dataDir).mode & 0o077)
         return yield* Effect.die(new Error("Workspace state must be private"));
+      const services = Layer.mergeAll(
+        bridgeHubLayer(runBridge),
+        warmCacheLayer(config.dataDir),
+        sessionLayer(config),
+        linksLayer(config.dataDir),
+        aliasesLayer(config.projectAliasesPath),
+        identityMapLayer(config.identityMapPath),
+      );
       const runtime = ManagedRuntime.make(
-        Layer.mergeAll(
-          bridgeHubLayer(runBridge),
-          warmCacheLayer(config.dataDir),
-          sessionLayer(config),
-          linksLayer(config.dataDir),
-          aliasesLayer(config.projectAliasesPath),
-          identityMapLayer(config.identityMapPath),
-        ),
+        discordRestLayer === undefined ? services : Layer.mergeAll(services, discordRestLayer),
       );
       yield* Effect.addFinalizer(() => runtime.disposeEffect);
       const identities = yield* Effect.promise(() => runtime.runPromise(IdentityMapStore));
@@ -253,6 +264,82 @@ const program = Effect.gen(function* () {
     };
   });
 
+  const observeGroupChat = async (
+    activity: GatewayActivity,
+    api: Parameters<typeof teamsChannelPoster>[0],
+    event: "message" | "join",
+  ): Promise<boolean> => {
+    const decision = policy.acceptGroupChat(activity);
+    if (decision.kind === "not-group") return false;
+    const quiet =
+      (decision.kind === "silent" && decision.reason === "unmapped" && event !== "join") ||
+      (decision.kind === "reject" && decision.reason === "duplicate");
+    if (!quiet) {
+      Effect.runSyncWith(gatewayContext)(
+        Effect.logInfo("Teams group chat intake", {
+          kind: decision.kind,
+          reason: "reason" in decision ? decision.reason : undefined,
+          workspaceId: decision.kind === "handle" ? decision.workspaceId : undefined,
+        }),
+      );
+    }
+    if (decision.kind !== "handle") return true;
+    const workspace = workspaces.get(decision.workspaceId);
+    if (workspace === undefined) return true;
+    const handled = decision;
+    await workspace.runtime
+      .runPromise(
+        Effect.gen(function* () {
+          const runtime = yield* Effect.context<never>();
+          yield* ingestTeamsGroupChat(
+            workspace.config,
+            handled.rules,
+            workspace.identities.list(),
+            runtime,
+            {
+              event,
+              tenantId: activity.channelData?.tenant?.id ?? activity.conversation.tenantId ?? "",
+              conversationId: activity.conversation.id,
+              ...(activity.conversation.conversationType === undefined
+                ? {}
+                : { conversationType: activity.conversation.conversationType }),
+              ...(activity.conversation.isGroup === undefined
+                ? {}
+                : { isGroup: activity.conversation.isGroup }),
+              ...(activity.channelData?.team?.id === undefined
+                ? {}
+                : { teamId: activity.channelData.team.id }),
+              ...(activity.conversation.name === undefined
+                ? {}
+                : { title: activity.conversation.name }),
+              text: activity.text ?? "",
+              messageId: activity.id,
+              ...(activity.from?.name === undefined ? {} : { author: activity.from.name }),
+              ...(activity.from?.aadObjectId === undefined
+                ? {}
+                : { authorAadObjectId: activity.from.aadObjectId }),
+              ...(activity.from?.id === undefined ? {} : { authorUserId: activity.from.id }),
+              fromBot: false,
+              mentionedBot: mentionsTeamsRecipient(activity),
+            },
+            teamsChannelPoster(api),
+            {
+              builtinScanner: handled.builtinScanner,
+              ...(handled.builtinMirror === undefined
+                ? {}
+                : { builtinMirror: handled.builtinMirror }),
+            },
+          );
+        }),
+      )
+      .catch((error: unknown) => {
+        Effect.runSyncWith(gatewayContext)(
+          Effect.logError("Passive Teams group chat failed", { error: String(error) }),
+        );
+      });
+    return true;
+  };
+
   registerTeamsMessageEvents(app, async ({ activity, send, reply, api }, edited) => {
     // Structural SDK activity type narrows to the fields read by the independent policy.
     const intake = edited
@@ -262,6 +349,7 @@ const program = Effect.gen(function* () {
           channelData: { ...activity.channelData, eventType: "editMessage" },
         }
       : activity;
+    if (await observeGroupChat(intake as GatewayActivity, api, "message")) return;
     const outcome = dispatcher.receive(intake as GatewayActivity, async (decision) => {
       const { lease } = decision;
       const workspace = active(lease);
@@ -411,10 +499,21 @@ const program = Effect.gen(function* () {
     Effect.runSyncWith(gatewayContext)(Effect.logInfo("Teams intake:", outcome));
     // Acknowledge immediately; T3 work and Teams delivery continue on the host queue.
   });
+  app.on("conversationUpdate", async ({ activity, api }) => {
+    if (
+      !botWasAdded({
+        recipientId: activity.recipient?.id,
+        memberIds: (activity.membersAdded ?? []).map((member) => member.id),
+      })
+    ) {
+      return;
+    }
+    await observeGroupChat(activity as GatewayActivity, api, "join");
+  });
   app.on("install.remove", async ({ activity }) => {
     policy.revoke(activity as GatewayActivity);
   });
-  // Personal/group chats and message-action project overrides have no binding in v1.
+  // Personal chats and message-action project overrides have no binding. Group chats are observed above.
   app.on("message.ext.open", async () => ({
     task: {
       type: "message" as const,

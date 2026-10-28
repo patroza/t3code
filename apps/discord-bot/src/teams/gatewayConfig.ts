@@ -4,7 +4,17 @@ import * as NodePath from "node:path";
 import * as Schema from "effect/Schema";
 import { TeamsFileDestination, validateTeamsFileDestination } from "./channelFiles.ts";
 import { validateTeamsDescriptionPolicy } from "./channelDescription.ts";
+import { groupChatWorkspaceTarget } from "./groupChats.ts";
 
+const GatewayGroupChatRule = Schema.Struct({
+  conversationId: Schema.optional(Schema.String),
+  titleIncludes: Schema.optional(Schema.String),
+  projectShortName: Schema.String,
+  mirrorTenantId: Schema.optional(Schema.String),
+  mirrorTeamId: Schema.optional(Schema.String),
+  mirrorChannelId: Schema.optional(Schema.String),
+  passive: Schema.optional(Schema.Boolean),
+});
 const Workspace = Schema.Struct({
   enabled: Schema.Boolean,
   webOrigin: Schema.String,
@@ -17,6 +27,11 @@ const Workspace = Schema.Struct({
   defaultBaseBranch: Schema.optional(Schema.String),
   defaultInstanceId: Schema.optional(Schema.String),
   defaultModel: Schema.optional(Schema.String),
+  scannerGroupChats: Schema.optional(Schema.Boolean),
+  scannerMirrorTenantId: Schema.optional(Schema.String),
+  scannerMirrorTeamId: Schema.optional(Schema.String),
+  scannerMirrorChannelId: Schema.optional(Schema.String),
+  groupChats: Schema.optional(Schema.Array(GatewayGroupChatRule)),
 });
 const Binding = Schema.Struct({
   id: Schema.String,
@@ -42,6 +57,12 @@ const GatewayConfig = Schema.Struct({
   identity: Schema.Struct({ entraClientId: Schema.String, homeTenantId: Schema.String }),
   ingress: Schema.Struct({ dispatcherListen: Schema.String }),
   workspaces: Schema.Record(Schema.String, Workspace),
+  discord: Schema.optional(
+    Schema.Struct({
+      tokenFile: Schema.String,
+      alertsChannelId: Schema.String,
+    }),
+  ),
   bindings: Schema.Array(Binding),
   messageIntake: Schema.Struct({
     ambient: Schema.Literal("context-only"),
@@ -257,6 +278,27 @@ export function parseGatewayConfig(value: unknown): TeamsGatewayConfig {
     }
   }
   if (scopes.size === 0) throw new Error("Gateway requires at least one enabled channel binding");
+  let groupChatRouting = false;
+  let scannerWorkspaces = 0;
+  for (const [id, workspace] of Object.entries(config.workspaces)) {
+    const target = groupChatWorkspaceTarget(id, workspace);
+    if (!workspace.enabled) continue;
+    if (target.scannerGroupChats) scannerWorkspaces += 1;
+    if (target.scannerGroupChats || target.rules.length > 0) groupChatRouting = true;
+  }
+  if (scannerWorkspaces > 1) {
+    throw new Error("Only one workspace may enable scannerGroupChats");
+  }
+  if (config.discord !== undefined) {
+    if (!NodePath.isAbsolute(config.discord.tokenFile)) {
+      throw new Error("discord.tokenFile must be an absolute path");
+    }
+    if (!/^\d{15,22}$/u.test(config.discord.alertsChannelId)) {
+      throw new Error("discord.alertsChannelId must be a Discord channel id");
+    }
+  } else if (groupChatRouting) {
+    throw new Error("Group chat routing requires discord.tokenFile and discord.alertsChannelId");
+  }
   return config;
 }
 

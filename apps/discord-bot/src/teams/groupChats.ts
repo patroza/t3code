@@ -128,12 +128,19 @@ export function groupChatSpeaksInTeams(): false {
   return false;
 }
 
+function conversationIdMatches(ruleId: string, conversationId: string): boolean {
+  const ruleChat = ruleId.split(";messageid=")[0] ?? ruleId;
+  const activityChat = conversationId.split(";messageid=")[0] ?? conversationId;
+  return ruleChat === activityChat;
+}
+
 function ruleMatches(
   rule: GroupChatRule,
   conversationId: string,
   title: string | undefined,
 ): boolean {
-  const idOk = rule.conversationId === undefined || rule.conversationId === conversationId;
+  const idOk =
+    rule.conversationId === undefined || conversationIdMatches(rule.conversationId, conversationId);
   const needle =
     rule.titleIncludes === undefined ? undefined : normalizeGroupChatTitle(rule.titleIncludes);
   const titleOk =
@@ -147,6 +154,9 @@ export function resolveGroupChat(input: {
   readonly title: string | undefined;
   readonly conversationId: string;
   readonly rules: ReadonlyArray<GroupChatRule>;
+  /** Omitted means the native listener, which keeps the scanner names. */
+  readonly builtinScanner?: boolean;
+  readonly builtinMirror?: GroupChatMirror;
 }): ResolvedGroupChat | null {
   const title = input.title?.trim();
   const displayTitle = title !== undefined && title.length > 0 ? title : undefined;
@@ -159,15 +169,102 @@ export function resolveGroupChat(input: {
       mirror: mirrorFor(rule.projectShortName, rule.mirror),
     };
   }
-  if (displayTitle !== undefined && matchesBuiltinScannerGroupChat(displayTitle)) {
+  if (
+    input.builtinScanner !== false &&
+    displayTitle !== undefined &&
+    matchesBuiltinScannerGroupChat(displayTitle)
+  ) {
     return {
       projectShortName: SCANNER_GROUP_CHAT_PROJECT,
       passive: true,
       title: displayTitle,
-      mirror: SCANNER_GROUP_CHAT_MIRROR,
+      mirror: input.builtinMirror ?? SCANNER_GROUP_CHAT_MIRROR,
     };
   }
   return null;
+}
+
+export interface GroupChatWorkspaceTarget {
+  readonly id: string;
+  readonly rules: ReadonlyArray<GroupChatRule>;
+  readonly scannerGroupChats: boolean;
+  readonly builtinMirror?: GroupChatMirror;
+}
+
+export function groupChatWorkspaceTarget(
+  id: string,
+  workspace: {
+    readonly scannerGroupChats?: boolean | undefined;
+    readonly scannerMirrorTenantId?: string | undefined;
+    readonly scannerMirrorTeamId?: string | undefined;
+    readonly scannerMirrorChannelId?: string | undefined;
+    readonly groupChats?: ReadonlyArray<unknown> | undefined;
+  },
+): GroupChatWorkspaceTarget {
+  const rules = (workspace.groupChats ?? []).map((entry, index) =>
+    parseGroupChatRule(entry, index),
+  );
+  const builtinMirror = mirrorFromParts(
+    optionalTrimmed(workspace.scannerMirrorTenantId),
+    optionalTrimmed(workspace.scannerMirrorTeamId),
+    optionalTrimmed(workspace.scannerMirrorChannelId),
+    "scannerGroupChats must set scannerMirrorTenantId, scannerMirrorTeamId, and scannerMirrorChannelId together.",
+  );
+  if (builtinMirror !== undefined && workspace.scannerGroupChats !== true) {
+    throw new Error("scannerMirror requires scannerGroupChats");
+  }
+  return {
+    id,
+    rules,
+    scannerGroupChats: workspace.scannerGroupChats === true,
+    ...(builtinMirror === undefined ? {} : { builtinMirror }),
+  };
+}
+
+/**
+ * A conversation id pin wins over another workspace's scanner names.
+ * Title rules and the scanner names are ambiguous when more than one workspace matches.
+ */
+export function routeGroupChat(input: {
+  readonly title: string | undefined;
+  readonly conversationId: string;
+  readonly workspaces: ReadonlyArray<GroupChatWorkspaceTarget>;
+}):
+  | { readonly kind: "none" }
+  | { readonly kind: "ambiguous" }
+  | { readonly kind: "match"; readonly workspaceId: string } {
+  const pins = routedWorkspaces(input, true);
+  if (pins.length === 1) return { kind: "match", workspaceId: pins[0]! };
+  if (pins.length > 1) return { kind: "ambiguous" };
+  const titled = routedWorkspaces(input, false);
+  if (titled.length === 1) return { kind: "match", workspaceId: titled[0]! };
+  if (titled.length > 1) return { kind: "ambiguous" };
+  return { kind: "none" };
+}
+
+function routedWorkspaces(
+  input: {
+    readonly title: string | undefined;
+    readonly conversationId: string;
+    readonly workspaces: ReadonlyArray<GroupChatWorkspaceTarget>;
+  },
+  pinsOnly: boolean,
+): Array<string> {
+  const ids: Array<string> = [];
+  for (const workspace of input.workspaces) {
+    const rules = workspace.rules.filter((rule) =>
+      pinsOnly ? rule.conversationId !== undefined : rule.conversationId === undefined,
+    );
+    const chat = resolveGroupChat({
+      title: input.title,
+      conversationId: input.conversationId,
+      rules,
+      builtinScanner: pinsOnly ? false : workspace.scannerGroupChats,
+      ...(workspace.builtinMirror === undefined ? {} : { builtinMirror: workspace.builtinMirror }),
+    });
+    if (chat !== null) ids.push(workspace.id);
+  }
+  return ids;
 }
 
 function mirrorFor(
@@ -326,6 +423,8 @@ export function planTeamsGroupChat(input: {
   readonly conversationId: string;
   readonly title: string | undefined;
   readonly rules: ReadonlyArray<GroupChatRule>;
+  readonly builtinScanner?: boolean;
+  readonly builtinMirror?: GroupChatMirror;
   readonly event: GroupChatEvent;
   readonly text: string;
   readonly fromBot: boolean;
@@ -348,6 +447,8 @@ export function planTeamsGroupChat(input: {
     title: input.title,
     conversationId: input.conversationId,
     rules: input.rules,
+    ...(input.builtinScanner === undefined ? {} : { builtinScanner: input.builtinScanner }),
+    ...(input.builtinMirror === undefined ? {} : { builtinMirror: input.builtinMirror }),
   });
   if (chat === null) return { kind: "unmapped" };
   const sourceKey = groupChatSourceKey(input.tenantId, input.conversationId);
@@ -444,13 +545,12 @@ function optionalTrimmed(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
-function parseGroupChatMirror(
-  value: Record<string, unknown>,
-  index: number,
+function mirrorFromParts(
+  tenantId: string | undefined,
+  teamId: string | undefined,
+  channelId: string | undefined,
+  message: string,
 ): GroupChatMirror | undefined {
-  const tenantId = optionalTrimmed(value.mirrorTenantId);
-  const teamId = optionalTrimmed(value.mirrorTeamId);
-  const channelId = optionalTrimmed(value.mirrorChannelId);
   if (tenantId === undefined && teamId === undefined && channelId === undefined) return undefined;
   if (
     tenantId === undefined ||
@@ -460,15 +560,25 @@ function parseGroupChatMirror(
     !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu.test(teamId) ||
     !MIRROR_CHANNEL_ID.test(channelId)
   ) {
-    throw new Error(
-      `Teams group chat rule #${index + 1} must set mirrorTenantId, mirrorTeamId, and mirrorChannelId together.`,
-    );
+    throw new Error(message);
   }
   return {
     tenantId: tenantId.toLowerCase(),
     teamId: teamId.toLowerCase(),
     channelId,
   };
+}
+
+function parseGroupChatMirror(
+  value: Record<string, unknown>,
+  index: number,
+): GroupChatMirror | undefined {
+  return mirrorFromParts(
+    optionalTrimmed(value.mirrorTenantId),
+    optionalTrimmed(value.mirrorTeamId),
+    optionalTrimmed(value.mirrorChannelId),
+    `Teams group chat rule #${index + 1} must set mirrorTenantId, mirrorTeamId, and mirrorChannelId together.`,
+  );
 }
 
 export function loadGroupChatRulesFromFileSync(filePath: string): ReadonlyArray<GroupChatRule> {

@@ -10,7 +10,10 @@ Before zipping this directory:
 The app sends activities to the Azure Bot messaging endpoint configured separately as
 `https://<PUBLIC_HOST>/api/messages`.
 
-Group chats are in scope. MAKO, Easy Life, and Empasa scanner or scanning chats map to
-the scanner project. The bot stays silent in those chats. Each chat gets one T3 thread,
-one Discord thread in the alerts channel, and one thread in the Scanner team channel.
-Later messages continue those threads.
+The installed app for every team is `gateway-manifest.json`. That package is the one
+added to a group chat. This `manifest.json` remains the legacy single-instance package.
+
+Group chats stay silent. MAKO, Easy Life, and Empasa scanner or scanning chats map to
+the scanner project when that workspace sets `scannerGroupChats`. Each mapped chat gets
+one T3 thread, one Discord thread in the alerts channel, and one thread in the mirror
+channel. Later messages continue those threads.

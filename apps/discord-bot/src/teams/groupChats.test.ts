@@ -16,6 +16,8 @@ import {
   teamsChannelThreadId,
   loadGroupChatRulesFromFileSync,
   planTeamsGroupChat,
+  resolveGroupChat,
+  routeGroupChat,
   type GroupChatRule,
 } from "./groupChats.ts";
 
@@ -272,6 +274,69 @@ describe("loadGroupChatRulesFromFileSync", () => {
     expect(readGroupChatMirror(mirrors, "native/tenant/group/19:chat@thread.v2")).toBe(
       "19:channel;messageid=1",
     );
+  });
+
+  it("can turn the builtin scanner names off", () => {
+    expect(planTeamsGroupChat({ ...base, title: "MAKO Scanner", builtinScanner: false }).kind).toBe(
+      "unmapped",
+    );
+  });
+
+  it("lets one workspace own the scanner names and a pin override another", () => {
+    const other = {
+      tenantId: "11111111-1111-4111-8111-111111111111",
+      teamId: "22222222-2222-4222-8222-222222222222",
+      channelId: "19:ihd@thread.tacv2",
+    };
+    expect(
+      routeGroupChat({
+        title: "MAKO Scanner",
+        conversationId: "19:mako@thread.v2",
+        workspaces: [
+          { id: "omega", rules: [], scannerGroupChats: true },
+          { id: "ihd", rules: [], scannerGroupChats: false },
+        ],
+      }),
+    ).toEqual({ kind: "match", workspaceId: "omega" });
+    expect(
+      routeGroupChat({
+        title: "Alfa Omega Configurator",
+        conversationId: "19:alfa@thread.v2",
+        workspaces: [{ id: "omega", rules: [], scannerGroupChats: true }],
+      }).kind,
+    ).toBe("none");
+    expect(
+      routeGroupChat({
+        title: "MAKO Scanner",
+        conversationId: "19:mako@thread.v2",
+        workspaces: [
+          { id: "omega", rules: [], scannerGroupChats: true },
+          { id: "ihd", rules: [], scannerGroupChats: true },
+        ],
+      }).kind,
+    ).toBe("ambiguous");
+    expect(
+      routeGroupChat({
+        title: "Alfa Omega Configurator",
+        conversationId: "19:pinned@thread.v2;messageid=5",
+        workspaces: [
+          { id: "omega", rules: [], scannerGroupChats: true },
+          {
+            id: "ihd",
+            scannerGroupChats: false,
+            rules: [{ conversationId: "19:pinned@thread.v2", projectShortName: "ihd-app" }],
+          },
+        ],
+      }),
+    ).toEqual({ kind: "match", workspaceId: "ihd" });
+    expect(
+      resolveGroupChat({
+        title: "MAKO Scanner",
+        conversationId: "19:mako@thread.v2",
+        rules: [],
+        builtinMirror: other,
+      })?.mirror,
+    ).toEqual(other);
   });
 
   it("returns no extra rules for a channel array file", async () => {
