@@ -186,6 +186,7 @@ export default mergeConfig(
               // Mocks `node:fs/promises` and spies on playwright. Under
               // isolate:false the real mkdir runs against `/test` and fails.
               "src/preview/ServerBrowserContexts.test.ts",
+              "src/preview/PortScanner.test.ts",
             ],
           },
         },
@@ -196,6 +197,9 @@ export default mergeConfig(
             hookTimeout: serverTestTimeout,
             testTimeout: serverTestTimeout,
             include: [
+              // The process-group spy must bind before PortScanner is imported. Shared workers
+              // can otherwise retain a real signal function from an earlier provider test.
+              "src/preview/PortScanner.test.ts",
               // Muse history discovery mocks the SDK initializer. Provider imports
               // in another file otherwise retain the real binding and hide history.
               "src/usage/UsageService.test.ts",
