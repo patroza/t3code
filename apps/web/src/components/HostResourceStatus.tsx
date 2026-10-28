@@ -78,7 +78,7 @@ export function HostResourceStatus(props: {
       if (document.visibilityState === "visible") refresh();
     }, 1_000);
   };
-  // oxlint-disable-next-line t3code/react-effect-budget -- Release the hover-started refresh interval when this status surface unmounts.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Release the hover-started refresh interval when this status surface unmounts.
   useEffect(() => stopLiveRefresh, [stopLiveRefresh]);
   if (!props.connected) return null;
 

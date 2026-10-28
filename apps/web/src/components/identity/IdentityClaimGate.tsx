@@ -8,7 +8,7 @@ import {
   type EnvironmentId,
   type IdentityPersonPublic,
 } from "@t3tools/contracts";
-import { useEffect, useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import { identityEnvironment } from "../../state/identity";
@@ -23,41 +23,32 @@ import { IdentityAvatar } from "./IdentityAvatar";
  * the environment that rejected the operate (critical for multi-env: primary
  * smart has no map while secondary t3vm requires claim).
  */
-let forceClaimOpen = false;
-let forceClaimEnvironmentId: EnvironmentId | null = null;
+let forceClaimState: { readonly open: boolean; readonly environmentId: EnvironmentId | null } = {
+  open: false,
+  environmentId: null,
+};
 const forceClaimListeners = new Set<() => void>();
+const subscribeForceClaim = (listener: () => void) => {
+  forceClaimListeners.add(listener);
+  return () => {
+    forceClaimListeners.delete(listener);
+  };
+};
+const getForceClaimState = () => forceClaimState;
 
 export function requestIdentityClaimGate(environmentId?: EnvironmentId | null): void {
-  forceClaimOpen = true;
-  forceClaimEnvironmentId = environmentId ?? null;
+  forceClaimState = { open: true, environmentId: environmentId ?? null };
   for (const listener of forceClaimListeners) {
     listener();
   }
 }
 
-function useForceClaimState(): {
-  readonly open: boolean;
-  readonly environmentId: EnvironmentId | null;
-} {
-  const [state, setState] = useState({
-    open: forceClaimOpen,
-    environmentId: forceClaimEnvironmentId,
-  });
-  // oxlint-disable-next-line t3code/react-effect-budget -- Subscribe to imperative claim requests and release the listener on unmount.
-  useEffect(() => {
-    const listener = () =>
-      setState({ open: forceClaimOpen, environmentId: forceClaimEnvironmentId });
-    forceClaimListeners.add(listener);
-    return () => {
-      forceClaimListeners.delete(listener);
-    };
-  }, []);
-  return state;
+function useForceClaimState() {
+  return useSyncExternalStore(subscribeForceClaim, getForceClaimState);
 }
 
 function clearForceClaimOpen(): void {
-  forceClaimOpen = false;
-  forceClaimEnvironmentId = null;
+  forceClaimState = { open: false, environmentId: null };
   for (const listener of forceClaimListeners) {
     listener();
   }

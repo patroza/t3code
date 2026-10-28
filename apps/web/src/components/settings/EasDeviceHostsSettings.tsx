@@ -232,6 +232,7 @@ function EasDeviceHostEditor(props: {
   };
 
   const checkOnOpen = useEffectEvent(() => void requestCheck());
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Starts the EAS credential probe for this mounted editor; the token is an unsaved draft and results are invalidated on token edits.
   useEffect(() => {
     checkOnOpen();
   }, []);
