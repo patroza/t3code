@@ -76,7 +76,8 @@
         "T3CODE_MOBILE_EAS_PROJECT_ID": "731ac55d-f006-4a63-95ef-091c2146caeb",
         "T3CODE_MOBILE_EXPO_OWNER": "omegent",
         "T3CODE_MOBILE_IOS_BUNDLE_IDENTIFIER": "dev.patroza.t3code",
-        "T3CODE_MOBILE_IOS_TEAM_ID": "8B9VRZFRAA"
+        "T3CODE_MOBILE_IOS_TEAM_ID": "8B9VRZFRAA",
+        "SOURCEMAP_FILE": "/tmp/t3code-ios-main.jsbundle.map"
       },
       "channel": "production",
       "environment": "production",

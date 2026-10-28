@@ -1,4 +1,4 @@
-import { VcsUnsupportedOperationError, type CheckpointRef } from "@t3tools/contracts";
+import { type CheckpointRef } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -82,17 +82,9 @@ export const make = Effect.gen(function* () {
   const captureBackoff = makeCaptureBackoff<CheckpointStoreError>();
 
   const resolveCheckpoints = Effect.fn("CheckpointStore.resolveCheckpoints")(function* (
-    operation: string,
     cwd: string,
   ) {
     const handle = yield* vcsRegistry.resolve({ cwd });
-    if (!handle.driver.checkpoints) {
-      return yield* new VcsUnsupportedOperationError({
-        operation,
-        kind: handle.kind,
-        detail: `${handle.kind} driver does not implement checkpoint operations.`,
-      });
-    }
     return handle.driver.checkpoints satisfies VcsCheckpointOps;
   });
 
@@ -121,7 +113,7 @@ export const make = Effect.gen(function* () {
     // before the capture runs still replaces this caller's reservation with a
     // real outcome, rather than leaving the workspace held until it lapses.
     return yield* Effect.gen(function* () {
-      const checkpoints = yield* resolveCheckpoints("CheckpointStore.captureCheckpoint", input.cwd);
+      const checkpoints = yield* resolveCheckpoints(input.cwd);
       return yield* checkpoints.captureCheckpoint(input);
     }).pipe(
       Effect.tap(() => Effect.sync(() => captureBackoff.recordSuccess(input.cwd))),
@@ -143,38 +135,35 @@ export const make = Effect.gen(function* () {
   const hasCheckpointRef: CheckpointStore["Service"]["hasCheckpointRef"] = Effect.fn(
     "hasCheckpointRef",
   )(function* (input) {
-    const checkpoints = yield* resolveCheckpoints("CheckpointStore.hasCheckpointRef", input.cwd);
+    const checkpoints = yield* resolveCheckpoints(input.cwd);
     return yield* checkpoints.hasCheckpointRef(input);
   });
 
   const restoreCheckpoint: CheckpointStore["Service"]["restoreCheckpoint"] = Effect.fn(
     "restoreCheckpoint",
   )(function* (input) {
-    const checkpoints = yield* resolveCheckpoints("CheckpointStore.restoreCheckpoint", input.cwd);
+    const checkpoints = yield* resolveCheckpoints(input.cwd);
     return yield* checkpoints.restoreCheckpoint(input);
   });
 
   const diffCheckpoints: CheckpointStore["Service"]["diffCheckpoints"] = Effect.fn(
     "diffCheckpoints",
   )(function* (input) {
-    const checkpoints = yield* resolveCheckpoints("CheckpointStore.diffCheckpoints", input.cwd);
+    const checkpoints = yield* resolveCheckpoints(input.cwd);
     return yield* checkpoints.diffCheckpoints(input);
   });
 
   const listAuthoredPaths: CheckpointStore["Service"]["listAuthoredPaths"] = Effect.fn(
     "listAuthoredPaths",
   )(function* (input) {
-    const checkpoints = yield* resolveCheckpoints("CheckpointStore.listAuthoredPaths", input.cwd);
+    const checkpoints = yield* resolveCheckpoints(input.cwd);
     return yield* checkpoints.listAuthoredPaths(input);
   });
 
   const deleteCheckpointRefs: CheckpointStore["Service"]["deleteCheckpointRefs"] = Effect.fn(
     "deleteCheckpointRefs",
   )(function* (input) {
-    const checkpoints = yield* resolveCheckpoints(
-      "CheckpointStore.deleteCheckpointRefs",
-      input.cwd,
-    );
+    const checkpoints = yield* resolveCheckpoints(input.cwd);
     return yield* checkpoints.deleteCheckpointRefs(input);
   });
 

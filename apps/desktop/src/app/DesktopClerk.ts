@@ -13,6 +13,7 @@ import { receiveCodexAuthCallback, CodexAuthCallbackError } from "./CodexAuthCal
 import * as ElectronShell from "../electron/ElectronShell.ts";
 import { providerAuthReturnUrl } from "@t3tools/shared/providerAuthReturnUrl";
 import { promptLinkAppPath } from "@t3tools/shared/promptLinks";
+import { readPairingAppLink } from "@t3tools/shared/remote";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { clerkFrontendApiHostnameFromPublishableKey } from "@t3tools/shared/relayAuth";
 import * as ElectronApp from "../electron/ElectronApp.ts";
@@ -120,6 +121,15 @@ export const make = Effect.gen(function* () {
   yield* electronApp.on("second-instance", (_event: unknown, argv: readonly string[]) => {
     handleSecondInstance(argv);
   });
+  // macOS hands a launch link to open-url, which can fire before configure runs.
+  const pendingOpenUrls: Array<string> = [];
+  let handleOpenUrl = (url: string) => {
+    pendingOpenUrls.push(url);
+    return true;
+  };
+  yield* electronApp.on("open-url", (event: { preventDefault: () => void }, url: string) => {
+    if (handleOpenUrl(url)) event.preventDefault();
+  });
 
   yield* Effect.acquireRelease(
     Effect.try({
@@ -197,7 +207,8 @@ export const make = Effect.gen(function* () {
         return true;
       };
       const openAppLink = (value: string | undefined) => {
-        if (!value || promptLinkAppPath(value) === null) return false;
+        if (!value || (promptLinkAppPath(value) === null && readPairingAppLink(value) === null))
+          return false;
         void runPromise(webLinks.receive(value));
         return true;
       };
@@ -208,27 +219,24 @@ export const make = Effect.gen(function* () {
         void runPromise(webLinks.receive(url));
         return true;
       };
+      handleOpenUrl = (url) =>
+        startProviderAuthHandoff(url) ||
+        resumeProviderAuth(url) ||
+        openWebLink(url) ||
+        openAppLink(url) ||
+        (() => {
+          const isDesktopDeepLink =
+            Option.isSome(DesktopDeepLinks.parseDesktopThreadDeepLink(url)) ||
+            Option.isSome(DesktopDeepLinks.parseDesktopProjectDeepLink(url));
+          if (!isDesktopDeepLink) return false;
+          void runPromise(deepLinks.handleUrl(url));
+          return true;
+        })();
+      for (const url of pendingOpenUrls.splice(0)) handleOpenUrl(url);
       yield* electronApp.on("open-file", (event: { preventDefault: () => void }, path: string) => {
         if (!DesktopWebLinks.isWebPageFile(path)) return;
         event.preventDefault();
         void runPromise(webLinks.receive(NodeURL.pathToFileURL(path).href));
-      });
-      yield* electronApp.on("open-url", (event: { preventDefault?: () => void }, url: string) => {
-        if (
-          startProviderAuthHandoff(url) ||
-          resumeProviderAuth(url) ||
-          openWebLink(url) ||
-          openAppLink(url)
-        ) {
-          event.preventDefault?.();
-          return;
-        }
-        const isDesktopDeepLink =
-          Option.isSome(DesktopDeepLinks.parseDesktopThreadDeepLink(url)) ||
-          Option.isSome(DesktopDeepLinks.parseDesktopProjectDeepLink(url));
-        if (!isDesktopDeepLink) return;
-        event.preventDefault?.();
-        void runPromise(deepLinks.handleUrl(url));
       });
       handleSecondInstance = (argv) => {
         if (

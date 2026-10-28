@@ -73,7 +73,7 @@ function IdentityClaimGateBody(props: {
 
   const needsClaim = identityClaimRequired(snapshotQuery.data, claimQuery.data);
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- Advance the parent candidate only after both remote identity queries settle.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Advance the parent candidate only after both remote identity queries settle.
   useEffect(() => {
     if (snapshotQuery.isPending || claimQuery.isPending) {
       return;

@@ -12,6 +12,7 @@ vi.mock("@t3tools/client-runtime/state/thread-workflows", () => ({
 
 vi.mock("../../state/entities", () => ({
   useThreadProjection: () => state.projection,
+  useQuietThreadShell: () => null,
 }));
 
 vi.mock("../../state/threads", () => ({
@@ -64,6 +65,8 @@ describe("QueuedRunsControl automatic completion delivery", () => {
         threadId={"thread:test" as never}
         editingRunId={null}
         onEditQueuedRun={() => undefined}
+        timestampFormat="locale"
+        onOpenThread={() => undefined}
         onCancelEdit={() => undefined}
       />,
     );
@@ -106,6 +109,8 @@ describe("QueuedRunsControl attachments and edit mode", () => {
         threadId={"thread:test" as never}
         editingRunId={null}
         onEditQueuedRun={() => undefined}
+        timestampFormat="locale"
+        onOpenThread={() => undefined}
         onCancelEdit={() => undefined}
       />,
     );
@@ -142,6 +147,8 @@ describe("QueuedRunsControl attachments and edit mode", () => {
         threadId={"thread:test" as never}
         editingRunId={null}
         onEditQueuedRun={() => undefined}
+        timestampFormat="locale"
+        onOpenThread={() => undefined}
         onCancelEdit={() => undefined}
       />,
     );
@@ -161,6 +168,8 @@ describe("QueuedRunsControl attachments and edit mode", () => {
         threadId={"thread:test" as never}
         editingRunId={"run:queued" as never}
         onEditQueuedRun={() => undefined}
+        timestampFormat="locale"
+        onOpenThread={() => undefined}
         onCancelEdit={() => undefined}
       />,
     );

@@ -4,6 +4,8 @@ import {
   makeQueuedRunsAtom,
   queuedRunEditBlockedReason,
 } from "@t3tools/client-runtime/queued-run-edit";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
 import type { ChatAttachment, EnvironmentId, RunId, ThreadId } from "@t3tools/contracts";
 import { Atom, AsyncResult } from "effect/reactivity";
 import { settlePromise } from "@t3tools/client-runtime/state/runtime";
@@ -29,6 +31,9 @@ import { scopedThreadKey } from "../../lib/scopedEntities";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { NativeStackScreenOptions, nativeHeaderScrollEdgeEffects } from "../../native/StackHeader";
 import { useAssetUrl } from "../../state/assets";
+import { useQuietThreadShell } from "../../state/entities";
+import { useEnvironmentQuery } from "../../state/query";
+import { serverEnvironment } from "../../state/server";
 import { assetImageSource } from "../../lib/assetImageSource";
 import { beginQueuedRunEdit, useQueuedRunEdit } from "../../state/queued-run-edit";
 import { environmentThreadDetails, threadEnvironment } from "../../state/threads";
@@ -70,6 +75,62 @@ export function useThreadQueuedCount(target: QueueTarget | null) {
   );
 }
 
+type QueuedRunMessage = NonNullable<
+  NonNullable<ReturnType<typeof useThreadQueueWorkflow>>["queuedRuns"][number]["message"]
+>;
+
+/** Who sent a queued message, as its sent form shows it in the thread. */
+function QueuedRunSender(props: {
+  readonly environmentId: EnvironmentId;
+  readonly message: QueuedRunMessage;
+}) {
+  const { attribution, scheduledTaskId } = resolveUserMessagePresentation(props.message);
+  const senderThreadId = attribution === "agent" ? props.message.senderThreadId : undefined;
+  const senderShell = useQuietThreadShell(
+    senderThreadId ? scopeThreadRef(props.environmentId, senderThreadId) : null,
+  );
+  const tasks = useEnvironmentQuery(
+    scheduledTaskId
+      ? serverEnvironment.scheduledTasksLive({ environmentId: props.environmentId, input: {} })
+      : null,
+  );
+  const sender =
+    attribution === "automation"
+      ? {
+          icon: "calendar.badge.clock" as const,
+          label:
+            tasks.data?.tasks.find((task) => task.id === scheduledTaskId)?.title ?? "Automation",
+        }
+      : attribution === "agent"
+        ? {
+            icon: "bubble.left.and.bubble.right" as const,
+            label: senderShell?.title.trim() || "Agent",
+          }
+        : attribution === "t3code"
+          ? { icon: null, label: "Sent by T3 Code" }
+          : null;
+  if (sender === null) return null;
+  return (
+    <View className="flex-row items-center gap-1">
+      {sender.icon ? (
+        <SymbolView
+          name={sender.icon}
+          size={11}
+          weight="medium"
+          tintColorClassName="accent-foreground-muted"
+          type="monochrome"
+        />
+      ) : null}
+      <Text
+        numberOfLines={1}
+        className="min-w-0 shrink font-t3-medium text-2xs text-foreground-muted"
+      >
+        {sender.label}
+      </Text>
+    </View>
+  );
+}
+
 export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
   const { layout } = useAdaptiveWorkspaceLayout();
   const target = route.params;
@@ -105,6 +166,7 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
   const dragRows = visibleDrag?.rows ?? null;
 
   const hadQueuedRuns = useRef(queuedRuns.length > 0);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- pops the navigator once the server-side queue empties after it had runs
   useEffect(() => {
     if (queuedRuns.length > 0) {
       hadQueuedRuns.current = true;
@@ -253,7 +315,7 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
           No messages waiting in this queue.
         </Text>
       ) : null}
-      {queuedRuns.map(({ run, text, attachments, context }, index) => {
+      {queuedRuns.map(({ run, text, attachments, context, message }, index) => {
         const layout = dragRows?.find((row) => row.id === run.id);
         const offset =
           sourceLayout?.y !== undefined &&
@@ -421,21 +483,26 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
                         environmentId={target.environmentId}
                         attachments={attachments}
                       />
-                      <Text
-                        className={
-                          controls.isEditing
-                            ? "min-w-0 flex-1 text-sm text-foreground-muted"
-                            : "min-w-0 flex-1 text-sm text-foreground"
-                        }
-                        numberOfLines={1}
-                      >
-                        {context?.guest === undefined ? null : (
-                          <Text className="font-t3-medium text-adaptive-fuchsia-600-300">
-                            {`${context.guest.name}  `}
-                          </Text>
-                        )}
-                        {title}
-                      </Text>
+                      <View className="min-w-0 flex-1 gap-1">
+                        {message ? (
+                          <QueuedRunSender environmentId={target.environmentId} message={message} />
+                        ) : null}
+                        <Text
+                          className={
+                            controls.isEditing
+                              ? "min-w-0 flex-1 text-sm text-foreground-muted"
+                              : "min-w-0 flex-1 text-sm text-foreground"
+                          }
+                          numberOfLines={1}
+                        >
+                          {context?.guest === undefined ? null : (
+                            <Text className="font-t3-medium text-adaptive-fuchsia-600-300">
+                              {`${context.guest.name}  `}
+                            </Text>
+                          )}
+                          {title}
+                        </Text>
+                      </View>
                       {controls.isEditing || run.queueEditId != null ? (
                         <Text className="shrink-0 text-2xs uppercase tracking-wide text-primary">
                           Editing

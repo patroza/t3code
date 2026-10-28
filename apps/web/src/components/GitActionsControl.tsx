@@ -88,10 +88,10 @@ import {
   MenuItem,
   MenuItemLabel,
   MenuPopup,
+  MenuTrigger,
   MenuSub,
   MenuSubTrigger,
   MenuSubPopup,
-  MenuTrigger,
 } from "~/components/ui/menu";
 import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
 import { ScrollArea } from "~/components/ui/scroll-area";
@@ -105,7 +105,7 @@ import {
   useSourceControlPublishRepositoryAction,
   useVcsInitAction,
   useVcsPullAction,
-} from "~/lib/sourceControlActions";
+} from "../state/sourceControlActions";
 import { useThreadProjection, useQuietThreadShell } from "~/state/entities";
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
 import { useEnvironmentQuery } from "~/state/query";
@@ -1178,6 +1178,7 @@ export default function GitActionsControl({
     activeDraftThread?.envMode === "worktree" &&
     activeDraftThread.worktreePath === null;
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- keeps remote thread branch metadata synchronized with the live repository subscription
   useEffect(() => {
     if (
       isGitActionRunning ||
@@ -1252,6 +1253,7 @@ export default function GitActionsControl({
       })
     : null;
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- owns the interval that updates the imperative Git progress toast while mounted
   useEffect(() => {
     const interval = window.setInterval(() => {
       if (!activeGitActionProgressRef.current) {

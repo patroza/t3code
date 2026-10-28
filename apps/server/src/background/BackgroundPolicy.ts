@@ -1,3 +1,8 @@
+import { subscribeBeforeSnapshot } from "../utils/subscribeBeforeSnapshot.ts";
+import * as Stream from "effect/Stream";
+import * as Semaphore from "effect/Semaphore";
+import * as Scope from "effect/Scope";
+import * as PubSub from "effect/PubSub";
 import {
   type AuthSessionId,
   type BackgroundPolicySnapshot,
@@ -16,14 +21,9 @@ import * as DateTime from "effect/DateTime";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
-import * as Scope from "effect/Scope";
-import * as Semaphore from "effect/Semaphore";
-import * as Stream from "effect/Stream";
 
 import * as ServerSettings from "../serverSettings.ts";
-import { subscribeBeforeSnapshot } from "../utils/subscribeBeforeSnapshot.ts";
 import * as HostPowerMonitor from "./HostPowerMonitor.ts";
 
 export class BackgroundPolicy extends Context.Service<

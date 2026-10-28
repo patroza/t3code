@@ -14,7 +14,7 @@ function rejectUnavailable(): Promise<never> {
   return Promise.reject(unavailableLocalBackendError());
 }
 
-function createBrowserLocalApi(): LocalApi {
+export function createLocalApi(): LocalApi {
   return {
     dialogs: {
       pickFolder: async (options) => {
@@ -39,7 +39,7 @@ function createBrowserLocalApi(): LocalApi {
         window.open(url, "_blank", "noopener,noreferrer");
       },
       openSystemSettings: async (pane) => {
-        if (!window.desktopBridge?.openSystemSettings) {
+        if (!window.desktopBridge) {
           throw new Error("Unable to open System Settings.");
         }
         const opened = await window.desktopBridge.openSystemSettings(pane);
@@ -94,10 +94,6 @@ function createBrowserLocalApi(): LocalApi {
       signalProcess: () => rejectUnavailable(),
     },
   };
-}
-
-export function createLocalApi(): LocalApi {
-  return createBrowserLocalApi();
 }
 
 export function readLocalApi(): LocalApi | undefined {

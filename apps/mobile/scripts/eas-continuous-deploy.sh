@@ -152,7 +152,7 @@ publish_update() {
   fi
   if [[ -n "$runtime_override" ]]; then
     echo "Publishing OTA for platform=$platform runtimeVersion=$runtime_override (override)"
-    MOBILE_RUNTIME_VERSION_OVERRIDE="$runtime_override" eas update \
+    MOBILE_RUNTIME_VERSION_OVERRIDE="$runtime_override" eas update --emit-metadata \
       --channel "$CHANNEL" \
       --platform "$platform" \
       --message "$msg" \
@@ -161,7 +161,7 @@ publish_update() {
   else
     echo "Publishing OTA for platform=$platform (fingerprint policy)"
     unset MOBILE_RUNTIME_VERSION_OVERRIDE || true
-    eas update \
+    eas update --emit-metadata \
       --channel "$CHANNEL" \
       --platform "$platform" \
       --message "$msg" \

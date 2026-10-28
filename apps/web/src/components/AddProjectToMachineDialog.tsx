@@ -27,7 +27,7 @@ import { useLogicalProjectEnvironments } from "../hooks/useLogicalProjectEnviron
 import {
   deriveLogicalProjectKeyFromSettings,
   selectProjectGroupingSettings,
-} from "../logicalProject";
+} from "@t3tools/client-runtime/state/project-grouping";
 import {
   COPYABLE_FILE_MAX_BYTES,
   addProjectToMachine,

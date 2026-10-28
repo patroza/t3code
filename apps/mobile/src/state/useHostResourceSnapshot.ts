@@ -11,7 +11,7 @@ export function useHostResourceSnapshot(environmentId: EnvironmentId, connected:
     connected ? serverEnvironment.hostResourceSnapshot({ environmentId, input: {} }) : null,
   );
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- Poll host metrics while connected and release the interval when its destination changes.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Poll host metrics while connected and release the interval when its destination changes.
   useEffect(() => {
     if (!connected) return;
     const interval = setInterval(query.refresh, HOST_RESOURCE_POLL_INTERVAL_MS);

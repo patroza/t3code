@@ -2,6 +2,7 @@ import { useEnvironmentProviders } from "~/state/environments";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
 import { ProviderDriverKind } from "@t3tools/contracts";
+import { attachSidebarTree, SIDEBAR_TREE_PROPS } from "../lib/sidebarTree";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
 import { resolveThreadCurrentPullRequestLink } from "@t3tools/client-runtime/thread-pull-requests";
 import { Spinner } from "~/components/ui/spinner";
@@ -128,6 +129,7 @@ import {
   readThreadShell,
   useProjects,
   useServerConfigs,
+  useDelegatedUnderParent,
   useThreadShells,
   useThreadShellsForProjectRefs,
   waitForProjectRemoval,
@@ -179,6 +181,8 @@ import { readUnloadedThreadCount } from "../state/olderSettledShelf";
 import { useEnvironment, useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { buildThreadRouteParams, resolveActiveThreadRouteRef } from "../threadRoutes";
 import { stackedThreadToast, toastManager } from "./ui/toast";
+import { copyThreadReference } from "../lib/copyThreadReference";
+import { threadChipCopyTarget } from "@t3tools/client-runtime/thread-reference";
 import { RelativeTime } from "./RelativeTime";
 import { Kbd } from "./ui/kbd";
 import {
@@ -248,6 +252,7 @@ import {
   isContextMenuPointerDown,
   isSidebarNestedLinkClick,
   isTrailingDoubleClick,
+  filterSidebarV2VisibleThreads,
   resolveProjectStatusIndicator,
   resolveSidebarProjectBadgeColorIndex,
   resolveSidebarProjectBadgeLabel,
@@ -268,8 +273,10 @@ import {
   useThreadJumpHintsVisible,
   ThreadStatusPill,
 } from "./Sidebar.logic";
-import { sortThreads } from "../lib/threadSort";
-import { resolveSettledThreadTimestamp } from "@t3tools/client-runtime/state/thread-sort";
+import {
+  sortThreads,
+  resolveSettledThreadTimestamp,
+} from "@t3tools/client-runtime/state/thread-sort";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
@@ -347,7 +354,7 @@ import {
   deriveProjectGroupingOverrideKey,
   getProjectOrderKey,
   selectProjectGroupingSettings,
-} from "../logicalProject";
+} from "@t3tools/client-runtime/state/project-grouping";
 import type { SidebarThreadSummary } from "../types";
 import {
   buildPhysicalToLogicalProjectKeyMap,
@@ -385,6 +392,7 @@ function useModifierRevealHeld(enabled: boolean): boolean {
 
   if (!enabled && held) setHeld(false);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to global modifier-key and blur events while shortcut reveal is enabled
   useEffect(() => {
     if (!enabled) return;
 
@@ -502,6 +510,7 @@ function buildThreadJumpLabelMap(input: {
 }
 
 interface SidebarThreadRowProps {
+  navigationParent?: string | undefined;
   thread: SidebarThreadSummary;
   orderedProjectThreadKeys: readonly string[];
   isActive: boolean;
@@ -689,6 +698,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   // merged/closed PRs (matches Sidebar V2 row reporting).
   const onChangeRequestState = useContext(SidebarChangeRequestStateContext);
   const prState = pr?.state ?? null;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- keeps the sidebar PR-state registry in step with the row-owned remote VCS subscription
   useEffect(() => {
     onChangeRequestState(threadKey, prState);
   }, [onChangeRequestState, prState, threadKey]);
@@ -728,6 +738,16 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     startThreadRename(threadKey, thread.title);
   };
   const handleRowKeyDown = (event: React.KeyboardEvent) => {
+    if (event.target !== event.currentTarget) return;
+    if (
+      event.key === "F2" &&
+      renamingThreadKey !== threadKey &&
+      readEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope)
+    ) {
+      event.preventDefault();
+      startThreadRename(threadKey, thread.title);
+      return;
+    }
     if (event.key !== "Enter" && event.key !== " ") return;
     event.preventDefault();
     navigateToThread(threadRef);
@@ -864,8 +884,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     >
       <div
         ref={isActive ? (node) => revealActiveRow(node, threadKey) : undefined}
-        role="button"
-        tabIndex={0}
+        role="treeitem"
+        tabIndex={-1}
+        data-sidebar-row={threadKey}
+        data-sidebar-parent={props.navigationParent}
+        aria-current={isActive ? "page" : undefined}
         data-active={isActive}
         data-slot="sidebar-menu-sub-button"
         data-sidebar="menu-sub-button"
@@ -1221,6 +1244,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
 
   return (
     <SidebarMenuSub
+      role="presentation"
       ref={attachThreadListAutoAnimateRef}
       className="mx-0.5 my-0 w-full translate-x-0 overflow-hidden empty:hidden sm:mx-1"
     >
@@ -1241,6 +1265,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
             <SidebarThreadRow
               key={threadKey}
               thread={thread}
+              navigationParent={projectExpanded ? `project:${projectKey}` : undefined}
               orderedProjectThreadKeys={orderedProjectThreadKeys}
               isActive={activeRouteThreadKey === threadKey}
               openPullRequestsInRightPanel={openPullRequestsInRightPanel}
@@ -1273,6 +1298,10 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
         <SidebarMenuSubItem className="w-full">
           <SidebarMenuSubButton
             render={showMoreButtonRender}
+            role="treeitem"
+            tabIndex={-1}
+            data-sidebar-row={`project:${projectKey}:more`}
+            data-sidebar-parent={`project:${projectKey}`}
             data-thread-selection-safe
             size="sm"
             onClick={() => {
@@ -1290,6 +1319,10 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
         <SidebarMenuSubItem className="w-full">
           <SidebarMenuSubButton
             render={showLessButtonRender}
+            role="treeitem"
+            tabIndex={-1}
+            data-sidebar-row={`project:${projectKey}:less`}
+            data-sidebar-parent={`project:${projectKey}`}
             data-thread-selection-safe
             size="sm"
             onClick={() => {
@@ -1427,6 +1460,7 @@ function useProjectThreads(
   })();
 
   const threadSortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
+  const delegatedUnderParent = useDelegatedUnderParent();
   const threadLastVisitedAts = useUiStateStore(
     useShallow((state) =>
       projectThreads.map(
@@ -1461,7 +1495,7 @@ function useProjectThreads(
       });
     };
     const visibleProjectThreads = sortThreads(
-      projectThreads.filter(
+      filterSidebarV2VisibleThreads(projectThreads, null, delegatedUnderParent).filter(
         (thread) =>
           thread.archivedAt === null &&
           matchesEnvironmentFilter(thread.environmentId, selectedEnvironmentIds),
@@ -1714,9 +1748,12 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const handleProjectButtonClick = (event: React.MouseEvent<HTMLButtonElement>) => {
     if (suppressProjectClickForContextMenuRef.current) {
       suppressProjectClickForContextMenuRef.current = false;
-      event.preventDefault();
-      event.stopPropagation();
-      return;
+      // A keyboard-made click (detail 0) never follows a context menu.
+      if (event.detail !== 0) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
     }
     if (dragInProgressRef.current) {
       event.preventDefault();
@@ -2509,6 +2546,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             : []),
           { id: "mark-unread", label: "Mark unread" },
           { id: "copy-path", label: "Copy Path" },
+          { id: "copy-thread", label: "Copy Thread" },
           { id: "copy-thread-id", label: "Copy Thread ID" },
           { id: "project-settings", label: "Project settings" },
           {
@@ -2606,6 +2644,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         copyPathToClipboard(threadWorkspacePath, { path: threadWorkspacePath });
         return;
       }
+      if (clicked === "copy-thread") {
+        void copyThreadReference(threadChipCopyTarget(threadRef, thread.title));
+        return;
+      }
       if (clicked === "copy-thread-id") {
         copyThreadIdToClipboard(thread.id, { threadId: thread.id });
         return;
@@ -2647,6 +2689,11 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           className={isManualProjectSorting ? "cursor-grab active:cursor-grabbing" : undefined}
           {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.attributes : {})}
           {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.listeners : {})}
+          role="treeitem"
+          tabIndex={-1}
+          data-sidebar-row={`project:${project.projectKey}`}
+          aria-expanded={projectExpanded}
+          aria-label={project.displayName}
           onPointerDownCapture={handleProjectButtonPointerDownCapture}
           onClick={handleProjectButtonClick}
           onKeyDown={handleProjectButtonKeyDown}
@@ -2726,6 +2773,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                 <button
                   type="button"
                   aria-label={`Create new thread in ${project.displayName}`}
+                  data-sidebar-action-for={`project:${project.projectKey}`}
                   data-testid="new-thread-button"
                   className={SIDEBAR_ICON_ACTION_BUTTON_CLASS}
                   onClick={handleCreateThreadClick}
@@ -3336,6 +3384,7 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
   // Report PR state for partition; settled history keeps last reported value.
   const onChangeRequestState = useContext(SidebarChangeRequestStateContext);
   const prState = pr?.state ?? null;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- keeps the sidebar PR-state registry in step with the row-owned remote VCS subscription
   useEffect(() => {
     if (props.isSettled) return;
     onChangeRequestState(threadKey, prState);
@@ -4485,6 +4534,14 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     (showFlatOrRecencyList &&
       settledRecencyHeadersEnabled !== DEFAULT_SIDEBAR_V2_SETTLED_RECENCY_HEADERS);
 
+  const attachTreeRef = (node: HTMLUListElement | null) => {
+    attachProjectListAutoAnimateRef(node);
+    const dispose = attachSidebarTree(node);
+    return () => {
+      dispose?.();
+      attachProjectListAutoAnimateRef(null);
+    };
+  };
   const handleProjectSortOrderChange = (sortOrder: SidebarProjectSortOrder) => {
     updateClientSettings({ sidebarProjectSortOrder: sortOrder });
   };
@@ -5000,7 +5057,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
               onDragEnd={handleProjectDragEnd}
               onDragCancel={handleProjectDragCancel}
             >
-              <SidebarMenu>
+              <SidebarMenu {...SIDEBAR_TREE_PROPS} ref={attachTreeRef}>
                 <SortableContext
                   items={sortedProjects.map((project) => project.projectKey)}
                   strategy={verticalListSortingStrategy}
@@ -5708,6 +5765,7 @@ export default function LegacySidebar({ routeReveal }: { routeReveal: SidebarRou
     mountRevealOwed.current = false;
     activeRow.scrollIntoView({ block: "nearest" });
   });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- scrolls the active route row DOM into view after its row is rendered
   useEffect(revealRouteRow, [revealRouteRow, routeThreadKey, routeRowRendered]);
 
   const orderedSidebarThreadKeys = visibleSidebarThreadKeys;
@@ -5773,7 +5831,7 @@ export default function LegacySidebar({ routeReveal }: { routeReveal: SidebarRou
     event.stopPropagation();
     navigateToThread(scopeThreadRef(targetThread.environmentId, targetThread.id));
   });
-  // oxlint-disable-next-line t3code/react-effect-budget -- The sidebar owns this global shortcut listener and its cleanup.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to window keydown for thread navigation shortcuts for the sidebar's lifetime
   useEffect(() => {
     const handleWindowKeyDown = (event: globalThis.KeyboardEvent) => onWindowKeyDown(event);
     window.addEventListener("keydown", handleWindowKeyDown);
@@ -5782,7 +5840,7 @@ export default function LegacySidebar({ routeReveal }: { routeReveal: SidebarRou
     };
   }, []);
   // A window listener whose lifetime is the sidebar's: no element owns outside clicks.
-  // oxlint-disable-next-line t3code/react-effect-budget -- Outside clicks are global DOM events, scoped to the mounted sidebar.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- window mousedown listener that clears thread selection on outside clicks for the sidebar's lifetime
   useEffect(() => {
     window.addEventListener("mousedown", clearThreadSelectionOnOutsideMouseDown);
     return () => window.removeEventListener("mousedown", clearThreadSelectionOnOutsideMouseDown);
@@ -5915,7 +5973,7 @@ export default function LegacySidebar({ routeReveal }: { routeReveal: SidebarRou
     });
   };
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- Project reveal events must subscribe for this sidebar lifetime and clean up.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Project reveal events must subscribe for this sidebar lifetime and clean up.
   useEffect(
     () =>
       subscribeToProjectReveal(({ environmentId, projectId }) => {

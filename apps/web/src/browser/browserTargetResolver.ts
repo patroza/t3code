@@ -21,12 +21,7 @@ import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
 import { isElectron } from "~/env";
 import { readPreparedConnection } from "~/state/session";
 
-export {
-  normalizeHostname,
-  isLocalLoopbackHost,
-  isPrivateNetworkHost,
-  isPublicFaviconHost,
-} from "@t3tools/shared/hostClassification";
+export { normalizeHostname, isLocalLoopbackHost } from "@t3tools/shared/hostClassification";
 
 const readEnvironmentUrl = (environmentId: EnvironmentId): URL => {
   const connection = readPreparedConnection(environmentId);
