@@ -582,9 +582,7 @@ function botManagedRoleIdFrom(
 }
 
 export function getContinuedConversationModelChangeError(input: {
-  readonly providers: ReadonlyArray<
-    Pick<ServerProvider, "driver" | "instanceId" | "requiresNewThreadForModelChange">
-  >;
+  readonly providers: ReadonlyArray<Pick<ServerProvider, "driver" | "instanceId">>;
   readonly currentModelSelection: ModelSelection;
   readonly nextModelSelection: ModelSelection;
 }): string | null {
@@ -608,13 +606,6 @@ export function getContinuedConversationModelChangeError(input: {
     currentProvider.driver !== nextProvider.driver
   ) {
     return "This Discord conversation can only switch models within the same provider. Start a new Discord thread to switch providers.";
-  }
-
-  if (
-    currentProvider?.requiresNewThreadForModelChange === true ||
-    nextProvider?.requiresNewThreadForModelChange === true
-  ) {
-    return "This provider does not allow switching models after the conversation has started. Start a new Discord thread to use that model.";
   }
 
   return null;

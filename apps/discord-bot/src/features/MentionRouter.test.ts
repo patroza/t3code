@@ -434,7 +434,6 @@ describe("getContinuedConversationModelChangeError", () => {
     {
       driver: ProviderDriverKind.make("grok"),
       instanceId: ProviderInstanceId.make("grok"),
-      requiresNewThreadForModelChange: true,
     },
   ];
 
@@ -470,7 +469,7 @@ describe("getContinuedConversationModelChangeError", () => {
     ).toContain("within the same provider");
   });
 
-  it("rejects Grok model switches mid-conversation", () => {
+  it("allows Grok model switches mid-conversation", () => {
     expect(
       getContinuedConversationModelChangeError({
         providers,
@@ -483,6 +482,6 @@ describe("getContinuedConversationModelChangeError", () => {
           model: "grok-other",
         },
       }),
-    ).toContain("does not allow switching models");
+    ).toBeNull();
   });
 });
