@@ -1376,7 +1376,6 @@ describe("EnvironmentThreads", () => {
               status: "cached",
               error: Option.none(),
               history: { ...EMPTY_THREAD_HISTORY_META, historyCursor: null, expanded: true },
-              sequence: CACHED_SNAPSHOT_SEQUENCE,
             },
             sequence: CACHED_SNAPSHOT_SEQUENCE,
             persisted: true,

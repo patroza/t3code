@@ -466,6 +466,7 @@ export const make = Effect.gen(function* () {
       if (result.exitCode === 1) return null;
       return yield* new GitCommandError({
         operation: "GitWorkflowService.currentBranch",
+        failureKind: "unknown",
         command: "git symbolic-ref",
         cwd,
         argumentCount: 3,
