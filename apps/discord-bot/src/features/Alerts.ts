@@ -1,7 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off missingEffectContext:off anyUnknownInErrorContext:off
 /**
- * Guest ops alerts cover host resources, runaway processes (alert only), long turns, real session errors,
- * and fatal/bridge failures. Long-turn alerts use 0.25h × 2ⁿ milestones; recovery text is not a session error.
+ * Guest ops alerts: sustained host CPU/memory pressure (with top processes as context), clear runaway
+ * processes, long turns, session errors, fatal/bridge failures. Persistent conditions re-page on the
+ * 15m × 2ⁿ ladder and post a recovery when they clear; recovery text is not a session error.
  */
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
@@ -21,7 +22,6 @@ import {
   type DiscordUploadFile,
 } from "../presentation/discordFiles.ts";
 
-const POLL_MS = 60 * 1000;
 const POLL = "60 seconds";
 const COOLDOWN_MS = 10 * 60 * 1000;
 /** Fatal errors use a shorter cooldown so distinct keys still surface quickly. */
@@ -39,21 +39,37 @@ const SESSION_ERROR_ALERT_MAX = 5;
 /** Leave headroom below Discord's 2,000-character message-content limit. */
 const DISCORD_ALERT_MESSAGE_LIMIT = 1900;
 
-const LOAD_RATIO = 0.75;
-const CPU_PERCENT_ALERT = 85;
-const MEM_AVAILABLE_MIN_MB = 1024;
+/** Host CPU pressure: cpu% ≥ this, or load1 ≥ nproc × HOST_LOAD_RATIO (and ≥ 2). */
+export const HOST_CPU_PERCENT_ALERT = 85;
+export const HOST_LOAD_RATIO = 1.0;
+/** Host CPU pressure must hold this long (consecutive polls) before paging. */
+export const HOST_CPU_SUSTAINED_FOR_MS = 5 * 60 * 1000;
+/** Memory pressure: MemAvailable below max(this, HOST_MEM_AVAILABLE_MIN_PERCENT of total)… */
+export const HOST_MEM_AVAILABLE_MIN_MB = 1024;
+export const HOST_MEM_AVAILABLE_MIN_PERCENT = 10;
+/** …or PSI memory (when /proc/pressure/memory exists): some avg60 ≥ X or full avg60 ≥ Y. */
+export const HOST_MEM_PSI_SOME_AVG60 = 20;
+export const HOST_MEM_PSI_FULL_AVG60 = 5;
+/** Memory pressure is more urgent than CPU; shorter sustain window. */
+export const HOST_MEM_SUSTAINED_FOR_MS = 2 * 60 * 1000;
+/** How many processes to list per ranking (CPU / RSS) as context in host alerts. */
+const HOST_ALERT_TOP_N = 5;
 const DISK_FREE_MIN_PERCENT = 10;
 const DISK_FREE_MIN_GB = 2;
 /** Alert when a legacy stdio Sentry MCP process exceeds this RSS. */
 const SENTRY_RSS_ALERT_MB = 512;
 const SENTRY_COUNT_ALERT = 2;
 /**
- * Require five hot samples (baseline plus four 60s intervals) before alerting.
- * Measure CPU rate between ticks, not cumulative CPU time, so old idle processes stay quiet.
+ * Default per-process alerts are runaways only (CPU rate between ticks, not cumulative):
+ * ≥ 90% of a core for ≥ 30 min, or RSS ≥ 50% of total RAM for ≥ 5 min.
+ * Modest usage is covered by host pressure; tighter ceilings are opt-in via the rules file.
  */
-const DEFAULT_PROCESS_CPU_PERCENT = 50; // percent of a single core, averaged over the tick gap
-const DEFAULT_PROCESS_RSS_ALERT_MB = 768;
-const DEFAULT_PROCESS_SUSTAINED_FOR_MS = 4 * POLL_MS;
+export const DEFAULT_PROCESS_CPU_PERCENT = 90; // percent of a single core, averaged over the tick gap
+export const DEFAULT_PROCESS_CPU_SUSTAINED_FOR_MS = 30 * 60 * 1000;
+export const DEFAULT_PROCESS_RSS_FRACTION_OF_TOTAL = 0.5;
+export const DEFAULT_PROCESS_RSS_SUSTAINED_FOR_MS = 5 * 60 * 1000;
+/** RSS samples kept per process for trend reporting (one per poll ⇒ ~15 min). */
+const RSS_HISTORY_SAMPLES = 15;
 /**
  * First long-turn page threshold and base of the doubling milestone ladder.
  * Pages at 0.25h, 0.5h, 1h, 2h, 4h, … (15m × 2ⁿ) while the turn stays `running`,
@@ -97,6 +113,22 @@ export interface ProcSustainState {
   readonly wasHot: boolean;
   /** When the current hot streak began, for reporting how long it has lasted. */
   readonly hotSinceMs: number;
+  /** Recent RSS samples (oldest first, capped) for trend reporting. */
+  readonly rssHistory?: ReadonlyArray<{ readonly atMs: number; readonly rssMb: number }>;
+  /** Start of the current hot streak per rule id (only rules currently hot). */
+  readonly hotSinceByRule?: Readonly<Record<string, number>>;
+}
+
+/** Per-tick per-process sample with derived CPU rate and RSS trend (for host-alert context). */
+export interface ProcSample {
+  readonly pid: number;
+  readonly rssMb: number;
+  /** Average CPU over the last tick gap (percent of one core), or null on first sight. */
+  readonly cpuPercent: number | null;
+  /** RSS change across the retained history window. */
+  readonly rssTrendMb: number;
+  readonly rssTrendSpanMs: number;
+  readonly label: string;
 }
 
 /** A process that has been hot (high CPU rate or RSS) for long enough to alert. */
@@ -111,44 +143,69 @@ export interface SustainedHotProcess {
   readonly sustainedForMs: number;
   /** How long it has been continuously hot. */
   readonly sustainedMs: number;
+  /** RSS change across the retained history window. */
+  readonly rssTrendMb: number;
+  readonly rssTrendSpanMs: number;
   readonly label: string;
 }
 
-interface ResolvedProcessAlertRule {
+export interface ResolvedProcessAlertRule {
   readonly id: string;
   readonly rssMbThreshold: number | null;
   readonly cpuPercentThreshold: number | null;
   readonly sustainedForMs: number;
 }
 
-const DEFAULT_PROCESS_ALERT_RULE: ResolvedProcessAlertRule = {
-  id: "default",
-  rssMbThreshold: DEFAULT_PROCESS_RSS_ALERT_MB,
-  cpuPercentThreshold: DEFAULT_PROCESS_CPU_PERCENT,
-  sustainedForMs: DEFAULT_PROCESS_SUSTAINED_FOR_MS,
-};
+/**
+ * Default runaway rules (CPU and RSS are separate rules so each has its own sustain window).
+ * `memTotalMb` ≤ 0 (unknown) disables the RSS runaway rule.
+ */
+export function defaultRunawayProcessRules(
+  memTotalMb: number,
+): ReadonlyArray<ResolvedProcessAlertRule> {
+  const rules: ResolvedProcessAlertRule[] = [
+    {
+      id: "runaway-cpu",
+      rssMbThreshold: null,
+      cpuPercentThreshold: DEFAULT_PROCESS_CPU_PERCENT,
+      sustainedForMs: DEFAULT_PROCESS_CPU_SUSTAINED_FOR_MS,
+    },
+  ];
+  if (memTotalMb > 0) {
+    rules.push({
+      id: "runaway-rss",
+      rssMbThreshold: memTotalMb * DEFAULT_PROCESS_RSS_FRACTION_OF_TOTAL,
+      cpuPercentThreshold: null,
+      sustainedForMs: DEFAULT_PROCESS_RSS_SUSTAINED_FOR_MS,
+    });
+  }
+  return rules;
+}
 
 /**
- * Advance the per-process hotness tracker by one tick.
- *
- * Pure so the streak/rate logic is testable without /proc. Only pids present in
- * `procs` survive into the returned state, which prunes exited processes; a pid
- * whose CPU counter went backwards is treated as reused and its streak resets.
+ * Advance the per-process hotness tracker by one tick (pure). Exited pids are pruned; a pid whose
+ * CPU counter went backwards is treated as reused. Each rule keeps its own streak
+ * (`hotSinceByRule`); a process is reported once, for the first rule hot long enough.
  */
 export function trackSustainedHotProcesses(input: {
   readonly prev: ReadonlyMap<number, ProcSustainState>;
   readonly procs: ReadonlyArray<ProcInfo>;
   readonly nowMs: number;
-  readonly resolveRule: (proc: ProcInfo) => ResolvedProcessAlertRule;
+  readonly resolveRule?: (proc: ProcInfo) => ResolvedProcessAlertRule;
+  readonly resolveRules?: (proc: ProcInfo) => ReadonlyArray<ResolvedProcessAlertRule>;
 }): {
   readonly next: Map<number, ProcSustainState>;
   readonly hot: ReadonlyArray<SustainedHotProcess>;
+  readonly samples: ReadonlyArray<ProcSample>;
 } {
   const next = new Map<number, ProcSustainState>();
   const hot: SustainedHotProcess[] = [];
+  const samples: ProcSample[] = [];
+  const rulesFor = (proc: ProcInfo): ReadonlyArray<ResolvedProcessAlertRule> =>
+    input.resolveRules?.(proc) ?? (input.resolveRule ? [input.resolveRule(proc)] : []);
 
   for (const proc of input.procs) {
-    const rule = input.resolveRule(proc);
+    const rules = rulesFor(proc);
     const prior = input.prev.get(proc.pid);
     // A counter that went backwards means the pid was reused; ignore the prior.
     const reused = prior !== undefined && proc.cpuSeconds < prior.cpuSeconds;
@@ -160,37 +217,412 @@ export function trackSustainedHotProcesses(input: {
         ? (Math.max(0, proc.cpuSeconds - previous.cpuSeconds) / (elapsedMs / 1_000)) * 100
         : null;
 
-    const isHot =
-      (rule.cpuPercentThreshold !== null &&
-        cpuPercent !== null &&
-        cpuPercent >= rule.cpuPercentThreshold) ||
-      (rule.rssMbThreshold !== null && proc.rssMb >= rule.rssMbThreshold);
-    const hotSinceMs = isHot ? (previous?.wasHot ? previous.hotSinceMs : input.nowMs) : input.nowMs;
+    const rssHistory = [
+      ...(previous?.rssHistory ?? []),
+      { atMs: input.nowMs, rssMb: proc.rssMb },
+    ].slice(-RSS_HISTORY_SAMPLES);
+    const oldest = rssHistory[0]!;
+    const rssTrendMb = proc.rssMb - oldest.rssMb;
+    const rssTrendSpanMs = input.nowMs - oldest.atMs;
+
+    const hotSinceByRule: Record<string, number> = {};
+    let reported: SustainedHotProcess | null = null;
+    for (const rule of rules) {
+      const isHot =
+        (rule.cpuPercentThreshold !== null &&
+          cpuPercent !== null &&
+          cpuPercent >= rule.cpuPercentThreshold) ||
+        (rule.rssMbThreshold !== null && proc.rssMb >= rule.rssMbThreshold);
+      if (!isHot) continue;
+      const since =
+        previous?.hotSinceByRule?.[rule.id] ??
+        (previous?.wasHot && rules.length === 1 ? previous.hotSinceMs : input.nowMs);
+      hotSinceByRule[rule.id] = since;
+      if (reported === null && input.nowMs - since >= rule.sustainedForMs) {
+        reported = {
+          pid: proc.pid,
+          rssMb: proc.rssMb,
+          cpuPercent: cpuPercent ?? 0,
+          ruleId: rule.id,
+          rssMbThreshold: rule.rssMbThreshold,
+          cpuPercentThreshold: rule.cpuPercentThreshold,
+          sustainedForMs: rule.sustainedForMs,
+          sustainedMs: input.nowMs - since,
+          rssTrendMb,
+          rssTrendSpanMs,
+          label: proc.label,
+        };
+      }
+    }
+    const sinceValues = Object.values(hotSinceByRule);
+    const isHot = sinceValues.length > 0;
 
     next.set(proc.pid, {
       cpuSeconds: proc.cpuSeconds,
       sampledAtMs: input.nowMs,
       wasHot: isHot,
-      hotSinceMs,
+      hotSinceMs: isHot ? Math.min(...sinceValues) : input.nowMs,
+      rssHistory,
+      hotSinceByRule,
     });
 
-    if (isHot && input.nowMs - hotSinceMs >= rule.sustainedForMs) {
-      hot.push({
-        pid: proc.pid,
-        rssMb: proc.rssMb,
-        cpuPercent: cpuPercent ?? 0,
-        ruleId: rule.id,
-        rssMbThreshold: rule.rssMbThreshold,
-        cpuPercentThreshold: rule.cpuPercentThreshold,
-        sustainedForMs: rule.sustainedForMs,
-        sustainedMs: input.nowMs - hotSinceMs,
-        label: proc.label,
-      });
-    }
+    if (reported !== null) hot.push(reported);
+    samples.push({
+      pid: proc.pid,
+      rssMb: proc.rssMb,
+      cpuPercent,
+      rssTrendMb,
+      rssTrendSpanMs,
+      label: proc.label,
+    });
   }
 
   hot.sort((a, b) => b.cpuPercent - a.cpuPercent || b.rssMb - a.rssMb);
-  return { next, hot: hot.slice(0, 8) };
+  return { next, hot: hot.slice(0, 8), samples };
+}
+
+/** Top-N processes by CPU rate and by RSS, for host-alert context. */
+export function topProcesses(
+  samples: ReadonlyArray<ProcSample>,
+  n: number = HOST_ALERT_TOP_N,
+): { readonly byCpu: ReadonlyArray<ProcSample>; readonly byRss: ReadonlyArray<ProcSample> } {
+  const byCpu = samples
+    .filter((p) => p.cpuPercent !== null && p.cpuPercent >= 1)
+    .toSorted((a, b) => (b.cpuPercent ?? 0) - (a.cpuPercent ?? 0))
+    .slice(0, n);
+  const byRss = samples.toSorted((a, b) => b.rssMb - a.rssMb).slice(0, n);
+  return { byCpu, byRss };
+}
+
+/** `flat over 14m`, `+212 MiB over 14m`, `-80 MiB over 14m`; `new` with no history. */
+export function formatRssTrend(deltaMb: number, spanMs: number): string {
+  if (spanMs < 60_000) return "trend n/a";
+  const minutes = Math.round(spanMs / 60_000);
+  if (Math.abs(deltaMb) < 16) return `flat over ${minutes}m`;
+  const sign = deltaMb > 0 ? "+" : "-";
+  return `${sign}${Math.abs(deltaMb).toFixed(0)} MiB over ${minutes}m`;
+}
+
+export function formatProcSampleLine(p: ProcSample): string {
+  const cpu = p.cpuPercent === null ? "?" : p.cpuPercent.toFixed(0);
+  return (
+    `• ${p.label} (pid ${p.pid}) cpu≈${cpu}% rss=${p.rssMb.toFixed(0)}MiB ` +
+    `(${formatRssTrend(p.rssTrendMb, p.rssTrendSpanMs)})`
+  );
+}
+
+const INTERPRETERS = new Set([
+  "python",
+  "python2",
+  "python3",
+  "node",
+  "bun",
+  "deno",
+  "ruby",
+  "perl",
+  "php",
+  "bash",
+  "sh",
+  "zsh",
+  "java",
+  "tsx",
+  "uv",
+  "uvx",
+  "npx",
+  "pnpm",
+]);
+/** Interpreter flags that consume the following token. */
+const FLAGS_WITH_VALUE = new Set([
+  "--import",
+  "--require",
+  "-r",
+  "--loader",
+  "--experimental-loader",
+  "-X",
+  "-W",
+  "-cp",
+  "-classpath",
+  "--max-old-space-size",
+]);
+const MAX_LABEL_LENGTH = 60;
+
+function basename(token: string): string {
+  const parts = token.split("/");
+  return parts[parts.length - 1] || token;
+}
+
+function truncateLabel(label: string): string {
+  return label.length > MAX_LABEL_LENGTH ? `${label.slice(0, MAX_LABEL_LENGTH - 1)}…` : label;
+}
+
+/**
+ * Human-readable process name from a /proc cmdline (+ optional systemd unit).
+ * - Interpreters show the script / module: `python3 anonymize_openmage_dump.py`, `python3 -m http.server`.
+ * - Other binaries show their basename: `mariadbd`.
+ * - A non-generic systemd unit is appended: `mariadbd [mysql.service]`.
+ */
+export function formatProcessLabel(cmd: string, unit?: string | null): string {
+  if (cmd.includes("shared-sentry-mcp-proxy")) return "shared-sentry-mcp-proxy";
+  if (cmd.includes("@sentry/mcp-server") || /\bsentry-mcp\b/.test(cmd)) return "sentry-mcp";
+  const tokens = cmd.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return "?";
+  const exe = basename(tokens[0]!);
+  const interpreter = exe.replace(/[\d.]+$/u, "");
+  let label = exe;
+  if (INTERPRETERS.has(exe) || INTERPRETERS.has(interpreter)) {
+    for (let i = 1; i < tokens.length; i++) {
+      const token = tokens[i]!;
+      if (token === "-m" && tokens[i + 1] !== undefined) {
+        label = `${exe} -m ${tokens[i + 1]}`;
+        break;
+      }
+      if (token === "-c" || token === "-e") {
+        label = `${exe} ${token} …`;
+        break;
+      }
+      if (token.startsWith("-")) {
+        if (FLAGS_WITH_VALUE.has(token)) i++;
+        continue;
+      }
+      label = `${exe} ${basename(token)}`;
+      break;
+    }
+  }
+  const unitName = unit?.trim();
+  if (
+    unitName &&
+    !unitName.startsWith("session-") &&
+    !unitName.startsWith("user@") &&
+    unitName !== "init.scope"
+  ) {
+    label = `${label} [${unitName}]`;
+  }
+  return truncateLabel(label);
+}
+
+export interface HostPressureSample {
+  readonly cpuPercent: number | null;
+  readonly load1: number;
+  readonly nproc: number;
+  readonly memTotalMb: number;
+  readonly memAvailableMb: number;
+  readonly memPsi: { readonly someAvg60: number; readonly fullAvg60: number } | null;
+}
+
+export interface HostPressureState {
+  readonly cpuHotSinceMs: number | null;
+  readonly memHotSinceMs: number | null;
+}
+
+export const INITIAL_HOST_PRESSURE_STATE: HostPressureState = {
+  cpuHotSinceMs: null,
+  memHotSinceMs: null,
+};
+
+export type HostPressureCondition = "host-cpu" | "host-mem";
+
+/** Memory available floor in MiB for a given total: max(1 GiB, 10% of total). */
+export function hostMemAvailableFloorMb(memTotalMb: number): number {
+  return Math.max(HOST_MEM_AVAILABLE_MIN_MB, (memTotalMb * HOST_MEM_AVAILABLE_MIN_PERCENT) / 100);
+}
+
+export function isHostCpuPressure(sample: HostPressureSample): boolean {
+  const cpuHot = sample.cpuPercent !== null && sample.cpuPercent >= HOST_CPU_PERCENT_ALERT;
+  const loadHot = sample.load1 >= 2 && sample.load1 >= sample.nproc * HOST_LOAD_RATIO;
+  return cpuHot || loadHot;
+}
+
+export function isHostMemPressure(sample: HostPressureSample): boolean {
+  const lowAvailable =
+    sample.memTotalMb > 0 &&
+    sample.memAvailableMb > 0 &&
+    sample.memAvailableMb < hostMemAvailableFloorMb(sample.memTotalMb);
+  const psi =
+    sample.memPsi !== null &&
+    (sample.memPsi.someAvg60 >= HOST_MEM_PSI_SOME_AVG60 ||
+      sample.memPsi.fullAvg60 >= HOST_MEM_PSI_FULL_AVG60);
+  return lowAvailable || psi;
+}
+
+/**
+ * Advance host-pressure streaks by one sample. Returns conditions that have held for their
+ * sustain window, with the time each streak began (for ladder / recovery bookkeeping).
+ */
+export function trackHostPressure(input: {
+  readonly prev: HostPressureState;
+  readonly sample: HostPressureSample;
+  readonly nowMs: number;
+}): {
+  readonly next: HostPressureState;
+  readonly active: ReadonlyArray<{ readonly key: HostPressureCondition; readonly sinceMs: number }>;
+} {
+  const cpuHotSinceMs = isHostCpuPressure(input.sample)
+    ? (input.prev.cpuHotSinceMs ?? input.nowMs)
+    : null;
+  const memHotSinceMs = isHostMemPressure(input.sample)
+    ? (input.prev.memHotSinceMs ?? input.nowMs)
+    : null;
+  const active: Array<{ key: HostPressureCondition; sinceMs: number }> = [];
+  if (cpuHotSinceMs !== null && input.nowMs - cpuHotSinceMs >= HOST_CPU_SUSTAINED_FOR_MS) {
+    active.push({ key: "host-cpu", sinceMs: cpuHotSinceMs });
+  }
+  if (memHotSinceMs !== null && input.nowMs - memHotSinceMs >= HOST_MEM_SUSTAINED_FOR_MS) {
+    active.push({ key: "host-mem", sinceMs: memHotSinceMs });
+  }
+  return { next: { cpuHotSinceMs, memHotSinceMs }, active };
+}
+
+/** Ladder bookkeeping for a persistent, previously paged condition. */
+export interface ConditionLadderEntry {
+  readonly sinceMs: number;
+  /** 0 = initial page; afterwards the 15m × 2ⁿ milestone (by condition age) last paged. */
+  readonly lastMilestoneMs: number;
+  /** Extra context remembered for the recovery message. */
+  readonly title: string;
+}
+
+/**
+ * Pages/recoveries for persistent conditions: a new condition pages at once (milestone 0), then
+ * only when its age crosses the next 15m × 2ⁿ milestone (same ladder as long turns). A paged
+ * condition that is no longer active (or restarted its streak) is reported as recovered.
+ */
+export function advanceConditionLadder(input: {
+  readonly prev: ReadonlyMap<string, ConditionLadderEntry>;
+  readonly active: ReadonlyArray<{
+    readonly key: string;
+    readonly sinceMs: number;
+    readonly title: string;
+  }>;
+  readonly nowMs: number;
+  readonly baseMs?: number;
+}): {
+  readonly next: Map<string, ConditionLadderEntry>;
+  readonly pages: ReadonlyArray<{
+    readonly key: string;
+    readonly milestoneMs: number;
+    readonly ageMs: number;
+  }>;
+  readonly recovered: ReadonlyArray<{
+    readonly key: string;
+    readonly title: string;
+    readonly durationMs: number;
+  }>;
+} {
+  const baseMs = input.baseMs ?? TURN_RUNNING_MIN_MS;
+  const next = new Map<string, ConditionLadderEntry>();
+  const pages: Array<{ key: string; milestoneMs: number; ageMs: number }> = [];
+  for (const condition of input.active) {
+    const prior = input.prev.get(condition.key);
+    // A different streak start means the condition cleared and came back between ticks.
+    const previous = prior !== undefined && prior.sinceMs === condition.sinceMs ? prior : undefined;
+    const ageMs = Math.max(0, input.nowMs - condition.sinceMs);
+    if (previous === undefined) {
+      pages.push({ key: condition.key, milestoneMs: 0, ageMs });
+      next.set(condition.key, {
+        sinceMs: condition.sinceMs,
+        lastMilestoneMs: 0,
+        title: condition.title,
+      });
+      continue;
+    }
+    const decision = shouldAlertLongRunningTurn(
+      ageMs,
+      previous.lastMilestoneMs > 0 ? previous.lastMilestoneMs : undefined,
+      baseMs,
+    );
+    if (decision.alert) {
+      pages.push({ key: condition.key, milestoneMs: decision.milestoneMs, ageMs });
+      next.set(condition.key, {
+        ...previous,
+        lastMilestoneMs: decision.milestoneMs,
+        title: condition.title,
+      });
+    } else {
+      next.set(condition.key, { ...previous, title: condition.title });
+    }
+  }
+  const recovered: Array<{ key: string; title: string; durationMs: number }> = [];
+  for (const [key, entry] of input.prev) {
+    const current = next.get(key);
+    if (current === undefined || current.sinceMs !== entry.sinceMs) {
+      recovered.push({
+        key,
+        title: entry.title,
+        durationMs: Math.max(0, input.nowMs - entry.sinceMs),
+      });
+    }
+  }
+  return { next, pages, recovered };
+}
+
+/** `5m`, `2h 10m` */
+export function formatDurationShort(ms: number): string {
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
+}
+
+export function recoveredAlertContent(title: string, durationMs: number): string {
+  return `✅ **Recovered:** ${title} (lasted ~${formatDurationShort(durationMs)})`;
+}
+
+/** Ladder suffix for a page: initial vs milestone re-page. */
+function ladderNote(milestoneMs: number): string {
+  if (milestoneMs === 0) {
+    return `_Re-pages at 15m, 30m, 1h, 2h… while it persists; posts recovery when it clears._`;
+  }
+  return `_Still ongoing · milestone ${formatLongRunningTurnMilestone(milestoneMs)} (next ~${formatLongRunningTurnMilestone(nextLongRunningTurnMilestoneMs(milestoneMs))})._`;
+}
+
+export function hostPressureAlertContent(input: {
+  readonly key: HostPressureCondition;
+  readonly sample: HostPressureSample;
+  readonly ageMs: number;
+  readonly milestoneMs: number;
+  readonly procSamples: ReadonlyArray<ProcSample>;
+}): string {
+  const s = input.sample;
+  const top = topProcesses(input.procSamples);
+  const memLine =
+    `mem avail=${s.memAvailableMb.toFixed(0)}/${s.memTotalMb.toFixed(0)} MiB` +
+    (s.memTotalMb > 0 ? ` (${((s.memAvailableMb / s.memTotalMb) * 100).toFixed(0)}% free)` : "") +
+    (s.memPsi !== null
+      ? ` · psi some60=${s.memPsi.someAvg60.toFixed(1)} full60=${s.memPsi.fullAvg60.toFixed(1)}`
+      : "");
+  const cpuLine = `cpu≈${s.cpuPercent?.toFixed(0) ?? "?"}% · load1=${s.load1.toFixed(2)} on ${s.nproc} CPUs`;
+  const lines =
+    input.key === "host-cpu"
+      ? [
+          `**Host CPU pressure** for ${formatDurationShort(input.ageMs)}`,
+          cpuLine,
+          `_alert: cpu ≥${HOST_CPU_PERCENT_ALERT}% or load1 ≥ ${HOST_LOAD_RATIO}×nproc, sustained ≥${formatDurationShort(HOST_CPU_SUSTAINED_FOR_MS)}_`,
+          memLine,
+        ]
+      : [
+          `**Host memory pressure** for ${formatDurationShort(input.ageMs)}`,
+          memLine,
+          `_alert: avail < ${hostMemAvailableFloorMb(s.memTotalMb).toFixed(0)} MiB or PSI some60 ≥${HOST_MEM_PSI_SOME_AVG60} / full60 ≥${HOST_MEM_PSI_FULL_AVG60}, sustained ≥${formatDurationShort(HOST_MEM_SUSTAINED_FOR_MS)}_`,
+          cpuLine,
+        ];
+  const cpuBlock = top.byCpu.length > 0 ? ["Top CPU:", ...top.byCpu.map(formatProcSampleLine)] : [];
+  const rssBlock = top.byRss.length > 0 ? ["Top RSS:", ...top.byRss.map(formatProcSampleLine)] : [];
+  const blocks = input.key === "host-cpu" ? [...cpuBlock, ...rssBlock] : [...rssBlock, ...cpuBlock];
+  return [...lines, ...blocks, ladderNote(input.milestoneMs)].join("\n");
+}
+
+export function runawayProcessAlertContent(p: SustainedHotProcess, milestoneMs: number): string {
+  const parts: string[] = [];
+  if (p.rssMbThreshold !== null) parts.push(`RSS≥${p.rssMbThreshold.toFixed(0)}MiB`);
+  if (p.cpuPercentThreshold !== null)
+    parts.push(`CPU≥${p.cpuPercentThreshold.toFixed(0)}% of a core`);
+  return [
+    `**Runaway process: ${p.label}** (pid ${p.pid})`,
+    `cpu≈${p.cpuPercent.toFixed(0)}% rss=${p.rssMb.toFixed(0)}MiB (${formatRssTrend(p.rssTrendMb, p.rssTrendSpanMs)}) for ${formatDurationShort(p.sustainedMs)}`,
+    `_rule=${p.ruleId}; ${parts.join(" or ")} sustained ≥${formatDurationShort(p.sustainedForMs)}. Not auto-killed._`,
+    ladderNote(milestoneMs),
+  ].join("\n");
 }
 
 export interface DiskInfo {
@@ -207,6 +639,10 @@ export interface HostSnapshot {
   readonly cpuPercent: number | null;
   readonly memTotalMb: number;
   readonly memAvailableMb: number;
+  /** PSI memory averages (null when /proc/pressure is unavailable). */
+  readonly memPsi: { readonly someAvg60: number; readonly fullAvg60: number } | null;
+  /** All processes this tick with derived CPU rate / RSS trend (for top-N context). */
+  readonly procSamples: ReadonlyArray<ProcSample>;
   readonly disks: ReadonlyArray<DiskInfo>;
   readonly runaways: ReadonlyArray<ProcInfo>;
   readonly fatProcesses: ReadonlyArray<SustainedHotProcess>;
@@ -369,6 +805,25 @@ function readMemMb(): { total: number; available: number } {
   return { total: get("MemTotal"), available: get("MemAvailable") };
 }
 
+/** PSI memory averages from /proc/pressure/memory, or null when unsupported. */
+export function parseMemPsi(raw: string): { someAvg60: number; fullAvg60: number } | null {
+  const read = (kind: string) => {
+    const match = new RegExp(`^${kind}\\b.*?\\bavg60=([\\d.]+)`, "m").exec(raw);
+    return match ? Number(match[1]) : null;
+  };
+  const some = read("some");
+  if (some === null) return null;
+  return { someAvg60: some, fullAvg60: read("full") ?? 0 };
+}
+
+function readMemPsi(): { someAvg60: number; fullAvg60: number } | null {
+  try {
+    return parseMemPsi(NodeFS.readFileSync("/proc/pressure/memory", "utf8"));
+  } catch {
+    return null;
+  }
+}
+
 /** Sample total jiffies from /proc/stat (all cpus line). */
 function readCpuJiffies(): { idle: number; total: number } | null {
   try {
@@ -428,6 +883,21 @@ function readRssMb(pid: number): number {
   }
 }
 
+let clkTck: number | null = null;
+function clockTicks(): number {
+  if (clkTck === null) {
+    try {
+      clkTck =
+        Number(
+          NodeChildProcess.execFileSync("getconf", ["CLK_TCK"], { encoding: "utf8" }).trim(),
+        ) || 100;
+    } catch {
+      clkTck = 100;
+    }
+  }
+  return clkTck;
+}
+
 /** utime + stime from /proc/pid/stat (clock ticks → seconds). */
 function readCpuSeconds(pid: number): number {
   try {
@@ -438,10 +908,7 @@ function readCpuSeconds(pid: number): number {
     const fields = stat.slice(idx + 2).split(/\s+/);
     const utime = Number(fields[11] ?? 0); // 14th field overall, 12th after state
     const stime = Number(fields[12] ?? 0);
-    const ticks =
-      Number(NodeChildProcess.execFileSync("getconf", ["CLK_TCK"], { encoding: "utf8" }).trim()) ||
-      100;
-    return (utime + stime) / ticks;
+    return (utime + stime) / clockTicks();
   } catch {
     try {
       // fields: after ") " → state ppid ... utime is index 11 (0-based) in the remainder
@@ -463,11 +930,26 @@ function readCmdline(pid: number): string {
   }
 }
 
-function shortCmd(cmd: string): string {
-  if (cmd.includes("shared-sentry-mcp-proxy")) return "shared-sentry-mcp-proxy";
-  if (cmd.includes("@sentry/mcp-server") || /\bsentry-mcp\b/.test(cmd)) return "sentry-mcp";
-  const base = cmd.split(/\s+/).find((p) => p.includes("/")) ?? cmd;
-  return base.slice(-80);
+/** systemd unit (or docker/libpod scope) from /proc/pid/cgroup; cheap single read. */
+function readUnit(pid: number): string | null {
+  try {
+    const raw = NodeFS.readFileSync(`/proc/${pid}/cgroup`, "utf8");
+    const path =
+      raw
+        .split("\n")
+        .find((line) => line.startsWith("0::"))
+        ?.slice(3) ?? "";
+    const segments = path.split("/").filter(Boolean);
+    for (let i = segments.length - 1; i >= 0; i--) {
+      const seg = segments[i]!;
+      const container = /^(?:docker|libpod)-([0-9a-f]{12})[0-9a-f]*\.scope$/u.exec(seg);
+      if (container) return `container ${container[1]}`;
+      if (seg.endsWith(".service")) return seg;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 function listProcesses(): ReadonlyArray<ProcInfo> {
@@ -483,7 +965,7 @@ function listProcesses(): ReadonlyArray<ProcInfo> {
       rssMb: readRssMb(pid),
       cpuSeconds: readCpuSeconds(pid),
       cmd,
-      label: shortCmd(cmd),
+      label: formatProcessLabel(cmd, readUnit(pid)),
     });
   }
   return out;
@@ -502,7 +984,11 @@ function listFatProcesses(
   procs: ReadonlyArray<ProcInfo>,
   nowMs: number,
   rules: ReadonlyArray<AlertProcessRule>,
-): ReadonlyArray<SustainedHotProcess> {
+  memTotalMb: number,
+): {
+  readonly hot: ReadonlyArray<SustainedHotProcess>;
+  readonly samples: ReadonlyArray<ProcSample>;
+} {
   // Generic sustained high RSS / CPU alerts (never auto-kill). Our own long-lived
   // services are excluded — they are expected to run hot and are handled by
   // dedicated checks, not this generic catch-all.
@@ -515,30 +1001,38 @@ function listFatProcesses(
     cmd.includes("cloud-hypervisor") ||
     cmd.includes("virtiofsd");
 
-  const resolveRule = (proc: ProcInfo): ResolvedProcessAlertRule => {
+  const defaults = defaultRunawayProcessRules(memTotalMb);
+  // Opt-in rules from the rules file act as explicit per-process ceilings and replace the
+  // default runaway rules for matching processes. Self-skipped services still contribute
+  // samples (host-alert context) but never per-process pages.
+  const resolveRules = (proc: ProcInfo): ReadonlyArray<ResolvedProcessAlertRule> => {
     const normalizedCmd = proc.cmd.toLowerCase();
     const normalizedLabel = proc.label.toLowerCase();
     const custom = rules.find((rule) => {
       const match = rule.match.toLowerCase();
       return normalizedCmd.includes(match) || normalizedLabel.includes(match);
     });
-    if (custom === undefined) return DEFAULT_PROCESS_ALERT_RULE;
-    return {
-      id: custom.id,
-      rssMbThreshold: custom.rssMbThreshold ?? null,
-      cpuPercentThreshold: custom.cpuPercentThreshold ?? null,
-      sustainedForMs: custom.sustainedForMs,
-    };
+    if (custom !== undefined) {
+      return [
+        {
+          id: custom.id,
+          rssMbThreshold: custom.rssMbThreshold ?? null,
+          cpuPercentThreshold: custom.cpuPercentThreshold ?? null,
+          sustainedForMs: custom.sustainedForMs,
+        },
+      ];
+    }
+    return skip(proc.cmd) ? [] : defaults;
   };
 
-  const { next, hot } = trackSustainedHotProcesses({
+  const { next, hot, samples } = trackSustainedHotProcesses({
     prev: sustainState,
-    procs: procs.filter((p) => !skip(p.cmd)),
+    procs,
     nowMs,
-    resolveRule,
+    resolveRules,
   });
   sustainState = next;
-  return hot;
+  return { hot, samples };
 }
 
 function querySqliteJson(dbPath: string, scriptBody: string, extraArgs: string[] = []): unknown {
@@ -709,6 +1203,7 @@ export function collectHostSnapshot(input: {
   const procs = listProcesses();
   const disks = DISK_PATHS.map(readDisk).filter((d): d is DiskInfo => d !== null);
   const db = input.stateSqlitePath ?? "";
+  const fat = listFatProcesses(procs, input.nowMs, input.alertProcessRules, mem.total);
   return {
     load1: load.load1,
     load5: load.load5,
@@ -716,9 +1211,11 @@ export function collectHostSnapshot(input: {
     cpuPercent: sampleCpuPercent(),
     memTotalMb: mem.total,
     memAvailableMb: mem.available,
+    memPsi: readMemPsi(),
+    procSamples: fat.samples,
     disks,
     runaways: listRunaways(procs),
-    fatProcesses: listFatProcesses(procs, input.nowMs, input.alertProcessRules),
+    fatProcesses: fat.hot,
     longTurns: listLongRunningTurns(db, TURN_RUNNING_MIN_MS),
     sessionErrors: listSessionErrors(db),
     failedUnits: listFailedSystemdUnits(),
@@ -886,6 +1383,9 @@ export const runAlertWatchdog = Effect.fn("Alerts.runAlertWatchdog")(function* (
   const lastSent = new Map<string, number>();
   /** Highest long-turn milestone already posted per `turnId` (0.25h × 2ⁿ ladder). */
   const lastTurnMilestones = new Map<string, number>();
+  /** Host pressure streaks and ladder state for persistent resource conditions. */
+  let hostPressure = INITIAL_HOST_PRESSURE_STATE;
+  let resourceLadder: ReadonlyMap<string, ConditionLadderEntry> = new Map();
 
   const postAlert: Poster = Effect.fn("Alerts.postAlert")(function* (
     key,
@@ -948,55 +1448,58 @@ export const runAlertWatchdog = Effect.fn("Alerts.runAlertWatchdog")(function* (
         nowMs,
         alertProcessRules,
       });
-      const loadLimit = snap.nproc * LOAD_RATIO;
-
-      if (snap.load1 >= loadLimit && snap.load1 >= 2) {
-        yield* postAlert(
-          "load",
-          [
-            "**High load**",
-            `load1=${snap.load1.toFixed(2)} load5=${snap.load5.toFixed(2)}`,
-            `threshold≈${loadLimit.toFixed(2)} on ${snap.nproc} CPUs`,
-            `cpu≈${snap.cpuPercent?.toFixed(0) ?? "?"}%; mem avail=${snap.memAvailableMb.toFixed(0)} MiB`,
-          ].join("\n"),
-        );
+      const runaways = snap.runaways;
+      const hostSample: HostPressureSample = snap;
+      const host = trackHostPressure({ prev: hostPressure, sample: hostSample, nowMs });
+      hostPressure = host.next;
+      const runawayProcs = snap.fatProcesses.filter((p) => !runaways.some((k) => k.pid === p.pid));
+      const hostTitles: Record<HostPressureCondition, string> = {
+        "host-cpu": "Host CPU pressure",
+        "host-mem": "Host memory pressure",
+      };
+      const ladder = advanceConditionLadder({
+        prev: resourceLadder,
+        active: [
+          ...host.active.map((c) => ({ ...c, title: hostTitles[c.key] })),
+          ...runawayProcs.map((p) => ({
+            key: `proc:${p.pid}:${p.ruleId}`,
+            sinceMs: nowMs - p.sustainedMs,
+            title: `Runaway process ${p.label} (pid ${p.pid})`,
+          })),
+        ],
+        nowMs,
+      });
+      resourceLadder = ladder.next;
+      // Cooldown 0: cadence is the 15m × 2ⁿ ladder, not wall-clock spacing.
+      for (const page of ladder.pages) {
+        if (page.key === "host-cpu" || page.key === "host-mem") {
+          yield* postAlert(
+            `${page.key}:${page.milestoneMs}:${nowMs}`,
+            hostPressureAlertContent({
+              key: page.key,
+              sample: hostSample,
+              ageMs: page.ageMs,
+              milestoneMs: page.milestoneMs,
+              procSamples: snap.procSamples,
+            }),
+            0,
+          );
+          continue;
+        }
+        const proc = runawayProcs.find((p) => page.key === `proc:${p.pid}:${p.ruleId}`);
+        if (proc !== undefined) {
+          yield* postAlert(
+            `${page.key}:${page.milestoneMs}:${nowMs}`,
+            runawayProcessAlertContent(proc, page.milestoneMs),
+            0,
+          );
+        }
       }
-
-      if (snap.cpuPercent !== null && snap.cpuPercent >= CPU_PERCENT_ALERT) {
+      for (const rec of ladder.recovered) {
         yield* postAlert(
-          "cpu",
-          [
-            "**High CPU**",
-            `cpu≈${snap.cpuPercent.toFixed(0)}% (alert ≥${CPU_PERCENT_ALERT}%)`,
-            `load1=${snap.load1.toFixed(2)} nproc=${snap.nproc}`,
-            snap.fatProcesses.length > 0
-              ? `sustained:\n${snap.fatProcesses
-                  .slice(0, 5)
-                  .map(
-                    (p) =>
-                      `• pid=${p.pid} rss=${p.rssMb.toFixed(0)}MiB cpu≈${p.cpuPercent.toFixed(0)}% ${p.label}`,
-                  )
-                  .join("\n")}`
-              : "",
-          ]
-            .filter(Boolean)
-            .join("\n"),
-        );
-      }
-
-      if (snap.memAvailableMb > 0 && snap.memAvailableMb < MEM_AVAILABLE_MIN_MB) {
-        yield* postAlert(
-          "mem",
-          [
-            "**Low memory**",
-            `available=${snap.memAvailableMb.toFixed(0)} MiB (min ${MEM_AVAILABLE_MIN_MB})`,
-            `total=${snap.memTotalMb.toFixed(0)} MiB`,
-            snap.runaways.length > 0
-              ? `runaways: ${snap.runaways.map((s) => `pid=${s.pid} ${s.rssMb.toFixed(0)}MiB`).join(", ")}`
-              : "",
-          ]
-            .filter(Boolean)
-            .join("\n"),
+          `recovered:${rec.key}:${nowMs}`,
+          recoveredAlertContent(rec.title, rec.durationMs),
+          0,
         );
       }
 
@@ -1014,7 +1517,6 @@ export const runAlertWatchdog = Effect.fn("Alerts.runAlertWatchdog")(function* (
         }
       }
 
-      const runaways = snap.runaways;
       if (runaways.length >= SENTRY_COUNT_ALERT) {
         yield* postAlert(
           "runaway-count",
@@ -1042,29 +1544,6 @@ export const runAlertWatchdog = Effect.fn("Alerts.runAlertWatchdog")(function* (
             ].join("\n"),
           );
         }
-      }
-
-      const fatNonRunaway = snap.fatProcesses.filter((p) => !runaways.some((k) => k.pid === p.pid));
-      if (fatNonRunaway.length > 0) {
-        yield* postAlert(
-          "stuck-proc",
-          [
-            "**Sustained high RSS / CPU process(es)**",
-            ...fatNonRunaway.map(
-              (p) =>
-                `• pid=${p.pid} rss=${p.rssMb.toFixed(0)}MiB cpu≈${p.cpuPercent.toFixed(0)}% ` +
-                `for ${Math.round(p.sustainedMs / 60_000)}m ${p.label}`,
-            ),
-            ...fatNonRunaway.map((p) => {
-              const parts = [];
-              if (p.rssMbThreshold !== null) parts.push(`RSS≥${p.rssMbThreshold.toFixed(0)}MiB`);
-              if (p.cpuPercentThreshold !== null) {
-                parts.push(`CPU≥${p.cpuPercentThreshold.toFixed(0)}% of a core`);
-              }
-              return `_rule=${p.ruleId}; sustained ≥${Math.round(p.sustainedForMs / 60_000)}m; ${parts.join(" or ")}._`;
-            }),
-          ].join("\n"),
-        );
       }
 
       const longTurnIds = new Set(snap.longTurns.map((t) => t.turnId));
