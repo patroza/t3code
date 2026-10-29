@@ -38,6 +38,9 @@ import {
   hostPressureAlertContent,
   INITIAL_HOST_PRESSURE_STATE,
   parseMemPsi,
+  parseProcStat,
+  escapeDiscordText,
+  runawayProcessAlertContent,
   recoveredAlertContent,
   topProcesses,
   trackHostPressure,
@@ -111,6 +114,7 @@ const proc = (over: Partial<ProcInfo> & { pid: number }): ProcInfo => ({
   cpuSeconds: over.cpuSeconds ?? 0,
   cmd: over.cmd ?? `/bin/proc-${over.pid}`,
   label: over.label ?? `proc-${over.pid}`,
+  ...(over.startTicks !== undefined ? { startTicks: over.startTicks } : {}),
 });
 
 /** Replay a fixed per-tick behaviour and return the final tick's hot list. */
@@ -473,6 +477,54 @@ describe("trackSustainedHotProcesses", () => {
     expect(run([...busy, reused]).hot).toEqual([]);
   });
 
+  it("detects pid reuse via start time even when the CPU counter is higher", () => {
+    const busy = Array.from({ length: 4 }, (_unused, i) => [
+      proc({ pid: 900, cpuSeconds: i * 60, startTicks: 1 }),
+    ]);
+    const reused = [proc({ pid: 900, cpuSeconds: 10_000, startTicks: 2 })];
+    const r = run([...busy, reused]);
+    expect(r.hot).toEqual([]);
+    expect(r.state.get(900)!.hotSinceByRule).toEqual({});
+  });
+
+  it("restarts the streak after a sample gap instead of crediting the gap", () => {
+    let state: ReadonlyMap<number, ProcSustainState> = new Map();
+    const rule = () => ({
+      id: "r",
+      rssMbThreshold: 500,
+      cpuPercentThreshold: null,
+      sustainedForMs: SUSTAINED_FOR_MS,
+    });
+    const a = trackSustainedHotProcesses({
+      prev: state,
+      procs: [proc({ pid: 1, rssMb: 900 })],
+      nowMs: 0,
+      resolveRule: rule,
+    });
+    state = a.next;
+    const b = trackSustainedHotProcesses({
+      prev: state,
+      procs: [proc({ pid: 1, rssMb: 900 })],
+      nowMs: 60 * TICK_MS,
+      resolveRule: rule,
+    });
+    expect(b.hot).toEqual([]);
+  });
+
+  it("keeps an alerting process alive through a short cool spell (no recovery flap)", () => {
+    // 100% from tick 1 (alerts at tick 5 after the 4m window), one 40% tick, then hot again.
+    const cpu = [0, 60, 120, 180, 240, 300, 324, 384];
+    const hotPerTick = cpu.map(
+      (_c, i) => run(cpu.slice(0, i + 1).map((c) => [proc({ pid: 5, cpuSeconds: c })])).hot.length,
+    );
+    expect(hotPerTick).toEqual([0, 0, 0, 0, 0, 1, 1, 1]);
+    // But a long cool spell (≥ 3m) clears it.
+    const cleared = [0, 60, 120, 180, 240, 300, 301, 302, 303, 304].map((c) => [
+      proc({ pid: 5, cpuSeconds: c }),
+    ]);
+    expect(run(cleared).hot).toEqual([]);
+  });
+
   it("prunes state for processes that have exited", () => {
     const { state } = run([[proc({ pid: 900 })], [proc({ pid: 901 })]]);
     expect(state.has(900)).toBe(false);
@@ -513,6 +565,24 @@ describe("default runaway process rules", () => {
     expect(hot).toHaveLength(1);
     expect(hot[0]!.ruleId).toBe("runaway-cpu");
     expect(replay(ticks.slice(0, 31)).hot).toEqual([]);
+  });
+
+  it("pages for a fast memory leak well below half of RAM (rss-growth)", () => {
+    // 16 GiB box: +300 MiB/min from 2 GiB → +3.6 GiB over 12m while still < 50% RAM.
+    const ticks = Array.from({ length: 13 }, (_unused, i) => [
+      proc({ pid: 8, rssMb: 2_000 + i * 300, cpuSeconds: i * 5 }),
+    ]);
+    const result = replay(ticks);
+    expect(result.hot.map((h) => h.ruleId)).toEqual(["rss-growth"]);
+    expect(runawayProcessAlertContent(result.hot[0]!, 0)).toContain(
+      "**Process memory growing fast: ",
+    );
+    // Slow growth (+50 MiB/min) and a large flat process stay quiet for hours.
+    const slow = Array.from({ length: 120 }, (_unused, i) => [
+      proc({ pid: 9, rssMb: 1_000 + i * 50, cpuSeconds: i }),
+      proc({ pid: 10, rssMb: 6_000, cpuSeconds: i * 6 }),
+    ]);
+    expect(replay(slow).hot).toEqual([]);
   });
 
   it("pages when one process holds over half of RAM for 5 minutes, with RSS trend", () => {
@@ -571,6 +641,73 @@ describe("formatProcessLabel", () => {
   });
 });
 
+describe("formatProcessLabel edge cases", () => {
+  it("handles env prefixes, launchers, empty and odd cmdlines", () => {
+    expect(formatProcessLabel("/usr/bin/env PYTHONUNBUFFERED=1 python3 -u job.py")).toBe(
+      "python3 job.py",
+    );
+    expect(formatProcessLabel("env -i FOO=1 /usr/bin/mariadbd")).toBe("mariadbd");
+    expect(formatProcessLabel("uv run scripts/etl.py")).toBe("uv etl.py");
+    expect(formatProcessLabel("pnpm exec vite build")).toBe("pnpm vite");
+    expect(formatProcessLabel("node --max-old-space-size 4096 --inspect dist/server.js")).toBe(
+      "node server.js",
+    );
+    expect(formatProcessLabel("node --max-old-space-size=4096 dist/server.js")).toBe(
+      "node server.js",
+    );
+    expect(formatProcessLabel("")).toBe("?");
+    expect(formatProcessLabel("   ")).toBe("?");
+    expect(formatProcessLabel("python3")).toBe("python3");
+    expect(formatProcessLabel("/")).toBe("/");
+  });
+});
+
+describe("escapeDiscordText", () => {
+  it("neutralizes mentions, markdown and newlines from process names", () => {
+    const evil = "node `x` **@everyone** <@123> _a_ ~~b~~ ||c||\n> quote";
+    const out = escapeDiscordText(evil);
+    expect(out).not.toContain("@everyone");
+    expect(out).not.toContain("<@123>");
+    expect(out).not.toMatch(/(^|[^\\])`/u);
+    expect(out).not.toContain("\n");
+    expect(out).toContain("\\*\\*");
+  });
+
+  it("is applied to labels in alert bodies", () => {
+    const content = hostPressureAlertContent({
+      key: "host-cpu",
+      sample: sample({ cpuPercent: 99 }),
+      ageMs: 6 * TICK_MS,
+      milestoneMs: 0,
+      procSamples: [
+        {
+          pid: 1,
+          rssMb: 10,
+          cpuPercent: 99,
+          rssTrendMb: 0,
+          rssTrendSpanMs: 0,
+          label: "python3 @everyone`.py",
+        },
+      ],
+    });
+    expect(content).not.toContain("@everyone");
+    expect(content).toContain("python3 @\u200beveryone\\`.py");
+  });
+});
+
+describe("parseProcStat", () => {
+  it("parses comm with spaces/parens, cpu seconds and start time", () => {
+    const stat =
+      "1234 (weird ) name) S 1 1 1 0 -1 4194560 100 0 0 0 250 50 0 0 20 0 1 0 98765 1000 10 18446744073709551615";
+    expect(parseProcStat(stat, 100)).toEqual({
+      comm: "weird ) name",
+      cpuSeconds: 3,
+      startTicks: 98765,
+    });
+    expect(parseProcStat("garbage", 100)).toBeNull();
+  });
+});
+
 describe("parseMemPsi", () => {
   it("parses some/full avg60", () => {
     expect(
@@ -612,9 +749,53 @@ describe("trackHostPressure", () => {
     expect(replay(Array.from({ length: 6 }, () => loaded)).map((a) => a.key)).toEqual(["host-cpu"]);
   });
 
-  it("resets the streak when pressure dips", () => {
+  it("keeps the streak through a short dip but resets after the clear grace", () => {
     const hot = sample({ cpuPercent: 95 });
-    expect(replay([hot, hot, hot, sample(), hot, hot, hot])).toEqual([]);
+    const cool = sample();
+    // One cool tick inside the 3m grace doesn't restart the 5m sustain window.
+    expect(replay([hot, hot, hot, cool, hot, hot, hot])).toEqual([{ key: "host-cpu", sinceMs: 0 }]);
+    // Three cool ticks (≥ 3m) clear it; the next streak starts fresh.
+    expect(replay([hot, hot, hot, cool, cool, cool, cool, hot, hot, hot])).toEqual([]);
+  });
+
+  it("hysteresis: an active condition hovering around the threshold does not flap", () => {
+    let state: HostPressureState = INITIAL_HOST_PRESSURE_STATE;
+    const seen: Array<ReadonlyArray<string>> = [];
+    for (let i = 0; i < 30; i++) {
+      // 6 hot minutes, then alternate hot/cool every minute.
+      const s = i < 6 || i % 2 === 0 ? sample({ cpuPercent: 90 }) : sample({ cpuPercent: 80 });
+      const r = trackHostPressure({ prev: state, sample: s, nowMs: i * TICK_MS });
+      state = r.next;
+      seen.push(r.active.map((a) => a.key));
+    }
+    expect(seen.slice(5).every((keys) => keys.length === 1 && keys[0] === "host-cpu")).toBe(true);
+    expect(state.cpuHotSinceMs).toBe(0);
+    // A not-yet-active streak cooling inside the grace is not reported as active.
+    const r = trackHostPressure({
+      prev: INITIAL_HOST_PRESSURE_STATE,
+      sample: sample({ cpuPercent: 95 }),
+      nowMs: 0,
+    });
+    expect(
+      trackHostPressure({ prev: r.next, sample: sample(), nowMs: 10 * TICK_MS }).active,
+    ).toEqual([]);
+  });
+
+  it("resets streaks across a sample gap (suspend / clock jump)", () => {
+    const hot = sample({ cpuPercent: 95, memAvailableMb: 100 });
+    const a = trackHostPressure({ prev: INITIAL_HOST_PRESSURE_STATE, sample: hot, nowMs: 0 });
+    // 1h later (VM suspended): must not instantly count as a 1h-old streak.
+    const b = trackHostPressure({ prev: a.next, sample: hot, nowMs: 60 * TICK_MS });
+    expect(b.active).toEqual([]);
+    expect(b.next.cpuHotSinceMs).toBe(60 * TICK_MS);
+    // Clock moved backwards: also reset.
+    const c = trackHostPressure({ prev: b.next, sample: hot, nowMs: 30 * TICK_MS });
+    expect(c.next.memHotSinceMs).toBe(30 * TICK_MS);
+  });
+
+  it("ignores NaN / zero readings instead of paging", () => {
+    const weird = sample({ cpuPercent: null, load1: Number.NaN, memTotalMb: 0, memAvailableMb: 0 });
+    expect(replay(Array.from({ length: 10 }, () => weird))).toEqual([]);
   });
 
   it("fires host-mem on low available memory or PSI after 2 minutes", () => {
@@ -663,6 +844,28 @@ describe("advanceConditionLadder", () => {
     expect(recoveredAlertContent("Host CPU pressure", 131 * MIN)).toBe(
       "✅ **Recovered:** Host CPU pressure (lasted ~2h 11m)",
     );
+  });
+
+  it("does not double-page when the initial page lands past a rung (30m runaway)", () => {
+    const since = 0;
+    const r1 = advanceConditionLadder({
+      prev: new Map(),
+      active: [{ key: "proc:1:runaway-cpu", sinceMs: since, title: "x" }],
+      nowMs: 30 * MIN,
+    });
+    expect(r1.pages).toHaveLength(1);
+    const pagedAt: number[] = [];
+    let state = r1.next;
+    for (let minute = 31; minute <= 130; minute++) {
+      const r = advanceConditionLadder({
+        prev: state,
+        active: [{ key: "proc:1:runaway-cpu", sinceMs: since, title: "x" }],
+        nowMs: minute * MIN,
+      });
+      state = r.next;
+      if (r.pages.length > 0) pagedAt.push(minute);
+    }
+    expect(pagedAt).toEqual([60, 120]);
   });
 
   it("treats a new streak start as recovery plus a fresh page", () => {

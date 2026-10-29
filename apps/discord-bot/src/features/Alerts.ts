@@ -38,6 +38,8 @@ const SESSION_ERROR_FATAL_COOLDOWN_MS = SESSION_ERROR_MAX_AGE_MS;
 const SESSION_ERROR_ALERT_MAX = 5;
 /** Leave headroom below Discord's 2,000-character message-content limit. */
 const DISCORD_ALERT_MESSAGE_LIMIT = 1900;
+/** lastSent entries older than the longest cooldown are dead weight. */
+const LAST_SENT_RETENTION_MS = 6 * 60 * 60 * 1000;
 
 /** Host CPU pressure: cpu% ≥ this, or load1 ≥ nproc × HOST_LOAD_RATIO (and ≥ 2). */
 export const HOST_CPU_PERCENT_ALERT = 85;
@@ -68,6 +70,24 @@ export const DEFAULT_PROCESS_CPU_PERCENT = 90; // percent of a single core, aver
 export const DEFAULT_PROCESS_CPU_SUSTAINED_FOR_MS = 30 * 60 * 1000;
 export const DEFAULT_PROCESS_RSS_FRACTION_OF_TOTAL = 0.5;
 export const DEFAULT_PROCESS_RSS_SUSTAINED_FOR_MS = 5 * 60 * 1000;
+/**
+ * Leak detection: RSS grew by ≥ max(DEFAULT_PROCESS_RSS_GROWTH_MIN_MB, fraction × total) across the
+ * retained history window (≥ RSS_GROWTH_MIN_SPAN_MS). Flat-but-large batch jobs stay quiet.
+ */
+export const DEFAULT_PROCESS_RSS_GROWTH_MIN_MB = 2048;
+export const DEFAULT_PROCESS_RSS_GROWTH_FRACTION_OF_TOTAL = 0.2;
+const RSS_GROWTH_MIN_SPAN_MS = 10 * 60 * 1000;
+/**
+ * Hysteresis: an already-alerting condition (host or per-process) only clears after it has been
+ * below threshold for this long, so values hovering around a threshold don't page/recover in a loop.
+ * A single cool tick also no longer resets a streak that has not paged yet.
+ */
+export const PRESSURE_CLEAR_AFTER_MS = 3 * 60 * 1000;
+/**
+ * Samples further apart than this (suspend/resume, wall-clock jump, stalled tick) reset streaks:
+ * the gap says nothing about what happened in between.
+ */
+export const MAX_SAMPLE_GAP_MS = 5 * 60 * 1000;
 /** RSS samples kept per process for trend reporting (one per poll ⇒ ~15 min). */
 const RSS_HISTORY_SAMPLES = 15;
 /**
@@ -104,6 +124,8 @@ export interface ProcInfo {
   readonly cpuSeconds: number;
   readonly cmd: string;
   readonly label: string;
+  /** /proc/pid/stat starttime (clock ticks since boot); disambiguates pid reuse. */
+  readonly startTicks?: number;
 }
 
 /** Per-process tracker state carried between ticks to derive a CPU rate. */
@@ -117,6 +139,11 @@ export interface ProcSustainState {
   readonly rssHistory?: ReadonlyArray<{ readonly atMs: number; readonly rssMb: number }>;
   /** Start of the current hot streak per rule id (only rules currently hot). */
   readonly hotSinceByRule?: Readonly<Record<string, number>>;
+  /** Per rule: when it went cool while its streak is kept alive by the clear grace. */
+  readonly coolSinceByRule?: Readonly<Record<string, number>>;
+  /** Rules that have already been reported (kept alive through the clear grace). */
+  readonly reportedRules?: ReadonlyArray<string>;
+  readonly startTicks?: number;
 }
 
 /** Per-tick per-process sample with derived CPU rate and RSS trend (for host-alert context). */
@@ -154,6 +181,8 @@ export interface ResolvedProcessAlertRule {
   readonly rssMbThreshold: number | null;
   readonly cpuPercentThreshold: number | null;
   readonly sustainedForMs: number;
+  /** RSS growth across the history window that counts as hot (leak detection). */
+  readonly rssGrowthMbThreshold?: number | null;
 }
 
 /**
@@ -177,6 +206,16 @@ export function defaultRunawayProcessRules(
       rssMbThreshold: memTotalMb * DEFAULT_PROCESS_RSS_FRACTION_OF_TOTAL,
       cpuPercentThreshold: null,
       sustainedForMs: DEFAULT_PROCESS_RSS_SUSTAINED_FOR_MS,
+    });
+    rules.push({
+      id: "rss-growth",
+      rssMbThreshold: null,
+      cpuPercentThreshold: null,
+      rssGrowthMbThreshold: Math.max(
+        DEFAULT_PROCESS_RSS_GROWTH_MIN_MB,
+        memTotalMb * DEFAULT_PROCESS_RSS_GROWTH_FRACTION_OF_TOTAL,
+      ),
+      sustainedForMs: 0,
     });
   }
   return rules;
@@ -207,9 +246,17 @@ export function trackSustainedHotProcesses(input: {
   for (const proc of input.procs) {
     const rules = rulesFor(proc);
     const prior = input.prev.get(proc.pid);
-    // A counter that went backwards means the pid was reused; ignore the prior.
-    const reused = prior !== undefined && proc.cpuSeconds < prior.cpuSeconds;
-    const previous = reused ? undefined : prior;
+    // Pid reuse: different start time, or a CPU counter that went backwards.
+    const reused =
+      prior !== undefined &&
+      (proc.cpuSeconds < prior.cpuSeconds ||
+        (proc.startTicks !== undefined &&
+          prior.startTicks !== undefined &&
+          proc.startTicks !== prior.startTicks));
+    const gapMs = prior !== undefined ? input.nowMs - prior.sampledAtMs : 0;
+    // Clock jump / suspend / stalled tick: the prior sample can't vouch for the interval.
+    const stale = prior !== undefined && (gapMs <= 0 || gapMs > MAX_SAMPLE_GAP_MS);
+    const previous = reused || stale ? undefined : prior;
 
     const elapsedMs = previous ? input.nowMs - previous.sampledAtMs : 0;
     const cpuPercent =
@@ -226,19 +273,42 @@ export function trackSustainedHotProcesses(input: {
     const rssTrendSpanMs = input.nowMs - oldest.atMs;
 
     const hotSinceByRule: Record<string, number> = {};
+    const coolSinceByRule: Record<string, number> = {};
+    const reportedRules: string[] = [];
+    const priorReported = new Set(previous?.reportedRules ?? []);
     let reported: SustainedHotProcess | null = null;
     for (const rule of rules) {
+      const growthThreshold = rule.rssGrowthMbThreshold ?? null;
       const isHot =
         (rule.cpuPercentThreshold !== null &&
           cpuPercent !== null &&
           cpuPercent >= rule.cpuPercentThreshold) ||
-        (rule.rssMbThreshold !== null && proc.rssMb >= rule.rssMbThreshold);
-      if (!isHot) continue;
-      const since =
+        (rule.rssMbThreshold !== null && proc.rssMb >= rule.rssMbThreshold) ||
+        (growthThreshold !== null &&
+          rssTrendSpanMs >= RSS_GROWTH_MIN_SPAN_MS &&
+          rssTrendMb >= growthThreshold);
+      const priorSince =
         previous?.hotSinceByRule?.[rule.id] ??
-        (previous?.wasHot && rules.length === 1 ? previous.hotSinceMs : input.nowMs);
+        (previous?.wasHot && rules.length === 1 && previous.hotSinceByRule === undefined
+          ? previous.hotSinceMs
+          : undefined);
+      let since: number;
+      if (isHot) {
+        since = priorSince ?? input.nowMs;
+      } else {
+        // Hysteresis: keep the streak through a short cool spell instead of resetting it.
+        if (priorSince === undefined) continue;
+        const coolSince = previous?.coolSinceByRule?.[rule.id] ?? input.nowMs;
+        if (input.nowMs - coolSince >= PRESSURE_CLEAR_AFTER_MS) continue;
+        coolSinceByRule[rule.id] = coolSince;
+        since = priorSince;
+      }
       hotSinceByRule[rule.id] = since;
-      if (reported === null && input.nowMs - since >= rule.sustainedForMs) {
+      const sustained = input.nowMs - since >= rule.sustainedForMs;
+      // A cool tick never starts a new page; it only keeps an already-reported one alive.
+      const report = sustained && (isHot || priorReported.has(rule.id));
+      if (report) reportedRules.push(rule.id);
+      if (report && reported === null) {
         reported = {
           pid: proc.pid,
           rssMb: proc.rssMb,
@@ -264,6 +334,9 @@ export function trackSustainedHotProcesses(input: {
       hotSinceMs: isHot ? Math.min(...sinceValues) : input.nowMs,
       rssHistory,
       hotSinceByRule,
+      coolSinceByRule,
+      reportedRules,
+      ...(proc.startTicks !== undefined ? { startTicks: proc.startTicks } : {}),
     });
 
     if (reported !== null) hot.push(reported);
@@ -303,10 +376,21 @@ export function formatRssTrend(deltaMb: number, spanMs: number): string {
   return `${sign}${Math.abs(deltaMb).toFixed(0)} MiB over ${minutes}m`;
 }
 
+/**
+ * Neutralize Discord markdown and mentions in untrusted text (process names come from cmdlines any
+ * local user controls). Mentions are also disabled at send time via `allowed_mentions`.
+ */
+export function escapeDiscordText(text: string): string {
+  return text
+    .replace(/[\\`*_~|>]/gu, "\\$&")
+    .replace(/@/gu, "@\u200b")
+    .replace(/[\r\n]+/gu, " ");
+}
+
 export function formatProcSampleLine(p: ProcSample): string {
   const cpu = p.cpuPercent === null ? "?" : p.cpuPercent.toFixed(0);
   return (
-    `• ${p.label} (pid ${p.pid}) cpu≈${cpu}% rss=${p.rssMb.toFixed(0)}MiB ` +
+    `• ${escapeDiscordText(p.label)} (pid ${p.pid}) cpu≈${cpu}% rss=${p.rssMb.toFixed(0)}MiB ` +
     `(${formatRssTrend(p.rssTrendMb, p.rssTrendSpanMs)})`
   );
 }
@@ -345,6 +429,8 @@ const FLAGS_WITH_VALUE = new Set([
   "--max-old-space-size",
 ]);
 const MAX_LABEL_LENGTH = 60;
+const LAUNCHERS = new Set(["uv", "uvx", "npx", "pnpm", "bun", "deno", "tsx"]);
+const LAUNCHER_SUBCOMMANDS = new Set(["run", "exec", "x", "dlx", "tool"]);
 
 function basename(token: string): string {
   const parts = token.split("/");
@@ -364,7 +450,18 @@ function truncateLabel(label: string): string {
 export function formatProcessLabel(cmd: string, unit?: string | null): string {
   if (cmd.includes("shared-sentry-mcp-proxy")) return "shared-sentry-mcp-proxy";
   if (cmd.includes("@sentry/mcp-server") || /\bsentry-mcp\b/.test(cmd)) return "sentry-mcp";
-  const tokens = cmd.trim().split(/\s+/).filter(Boolean);
+  let tokens = cmd.trim().split(/\s+/).filter(Boolean);
+  // `env [-i] [-u NAME] KEY=VAL … cmd` → cmd
+  if (tokens.length > 0 && basename(tokens[0]!) === "env") {
+    let i = 1;
+    while (i < tokens.length) {
+      const t = tokens[i]!;
+      if (t === "-u" || t === "--unset" || t === "-C" || t === "--chdir") i += 2;
+      else if (t.startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=/u.test(t)) i += 1;
+      else break;
+    }
+    if (i < tokens.length) tokens = tokens.slice(i);
+  }
   if (tokens.length === 0) return "?";
   const exe = basename(tokens[0]!);
   const interpreter = exe.replace(/[\d.]+$/u, "");
@@ -384,6 +481,8 @@ export function formatProcessLabel(cmd: string, unit?: string | null): string {
         if (FLAGS_WITH_VALUE.has(token)) i++;
         continue;
       }
+      // Launcher subcommands (`uv run x.py`, `pnpm exec vite`, `npx tsx a.ts`) → show the target.
+      if (LAUNCHER_SUBCOMMANDS.has(token) && LAUNCHERS.has(exe) && i + 1 < tokens.length) continue;
       label = `${exe} ${basename(token)}`;
       break;
     }
@@ -412,11 +511,23 @@ export interface HostPressureSample {
 export interface HostPressureState {
   readonly cpuHotSinceMs: number | null;
   readonly memHotSinceMs: number | null;
+  /** When the condition went cool while its streak is held by the clear grace. */
+  readonly cpuCoolSinceMs?: number | null;
+  readonly memCoolSinceMs?: number | null;
+  /** Whether the condition was reported active last tick (only then does grace keep it active). */
+  readonly cpuActive?: boolean;
+  readonly memActive?: boolean;
+  readonly lastSampleMs?: number | null;
 }
 
 export const INITIAL_HOST_PRESSURE_STATE: HostPressureState = {
   cpuHotSinceMs: null,
   memHotSinceMs: null,
+  cpuCoolSinceMs: null,
+  memCoolSinceMs: null,
+  cpuActive: false,
+  memActive: false,
+  lastSampleMs: null,
 };
 
 export type HostPressureCondition = "host-cpu" | "host-mem";
@@ -456,20 +567,61 @@ export function trackHostPressure(input: {
   readonly next: HostPressureState;
   readonly active: ReadonlyArray<{ readonly key: HostPressureCondition; readonly sinceMs: number }>;
 } {
-  const cpuHotSinceMs = isHostCpuPressure(input.sample)
-    ? (input.prev.cpuHotSinceMs ?? input.nowMs)
-    : null;
-  const memHotSinceMs = isHostMemPressure(input.sample)
-    ? (input.prev.memHotSinceMs ?? input.nowMs)
-    : null;
+  const lastMs = input.prev.lastSampleMs ?? null;
+  const gapMs = lastMs === null ? 0 : input.nowMs - lastMs;
+  // Suspend / clock jump: don't let a stale streak instantly satisfy the sustain window.
+  const prev =
+    lastMs !== null && (gapMs <= 0 || gapMs > MAX_SAMPLE_GAP_MS)
+      ? INITIAL_HOST_PRESSURE_STATE
+      : input.prev;
+  const step = (
+    hot: boolean,
+    since: number | null,
+    coolSince: number | null,
+    wasActive: boolean,
+    sustainMs: number,
+  ) => {
+    if (hot) {
+      const s = since ?? input.nowMs;
+      return { since: s, coolSince: null, active: input.nowMs - s >= sustainMs };
+    }
+    if (since === null) return { since: null, coolSince: null, active: false };
+    const cool = coolSince ?? input.nowMs;
+    if (input.nowMs - cool >= PRESSURE_CLEAR_AFTER_MS) {
+      return { since: null, coolSince: null, active: false };
+    }
+    // Within the clear grace: keep the streak; stay active only if it already was.
+    return { since, coolSince: cool, active: wasActive };
+  };
+  const cpu = step(
+    isHostCpuPressure(input.sample),
+    prev.cpuHotSinceMs,
+    prev.cpuCoolSinceMs ?? null,
+    prev.cpuActive ?? false,
+    HOST_CPU_SUSTAINED_FOR_MS,
+  );
+  const mem = step(
+    isHostMemPressure(input.sample),
+    prev.memHotSinceMs,
+    prev.memCoolSinceMs ?? null,
+    prev.memActive ?? false,
+    HOST_MEM_SUSTAINED_FOR_MS,
+  );
   const active: Array<{ key: HostPressureCondition; sinceMs: number }> = [];
-  if (cpuHotSinceMs !== null && input.nowMs - cpuHotSinceMs >= HOST_CPU_SUSTAINED_FOR_MS) {
-    active.push({ key: "host-cpu", sinceMs: cpuHotSinceMs });
-  }
-  if (memHotSinceMs !== null && input.nowMs - memHotSinceMs >= HOST_MEM_SUSTAINED_FOR_MS) {
-    active.push({ key: "host-mem", sinceMs: memHotSinceMs });
-  }
-  return { next: { cpuHotSinceMs, memHotSinceMs }, active };
+  if (cpu.active && cpu.since !== null) active.push({ key: "host-cpu", sinceMs: cpu.since });
+  if (mem.active && mem.since !== null) active.push({ key: "host-mem", sinceMs: mem.since });
+  return {
+    next: {
+      cpuHotSinceMs: cpu.since,
+      memHotSinceMs: mem.since,
+      cpuCoolSinceMs: cpu.coolSince,
+      memCoolSinceMs: mem.coolSince,
+      cpuActive: cpu.active,
+      memActive: mem.active,
+      lastSampleMs: input.nowMs,
+    },
+    active,
+  };
 }
 
 /** Ladder bookkeeping for a persistent, previously paged condition. */
@@ -518,9 +670,11 @@ export function advanceConditionLadder(input: {
     const ageMs = Math.max(0, input.nowMs - condition.sinceMs);
     if (previous === undefined) {
       pages.push({ key: condition.key, milestoneMs: 0, ageMs });
+      // A condition whose sustain window is already past a rung (e.g. 30m runaway CPU) must not
+      // re-page for that same rung on the next tick.
       next.set(condition.key, {
         sinceMs: condition.sinceMs,
-        lastMilestoneMs: 0,
+        lastMilestoneMs: longRunningTurnMilestoneMs(ageMs, baseMs) ?? 0,
         title: condition.title,
       });
       continue;
@@ -617,8 +771,11 @@ export function runawayProcessAlertContent(p: SustainedHotProcess, milestoneMs: 
   if (p.rssMbThreshold !== null) parts.push(`RSS≥${p.rssMbThreshold.toFixed(0)}MiB`);
   if (p.cpuPercentThreshold !== null)
     parts.push(`CPU≥${p.cpuPercentThreshold.toFixed(0)}% of a core`);
+  if (parts.length === 0) parts.push("RSS growing fast (possible leak)");
   return [
-    `**Runaway process: ${p.label}** (pid ${p.pid})`,
+    p.ruleId === "rss-growth"
+      ? `**Process memory growing fast: ${escapeDiscordText(p.label)}** (pid ${p.pid})`
+      : `**Runaway process: ${escapeDiscordText(p.label)}** (pid ${p.pid})`,
     `cpu≈${p.cpuPercent.toFixed(0)}% rss=${p.rssMb.toFixed(0)}MiB (${formatRssTrend(p.rssTrendMb, p.rssTrendSpanMs)}) for ${formatDurationShort(p.sustainedMs)}`,
     `_rule=${p.ruleId}; ${parts.join(" or ")} sustained ≥${formatDurationShort(p.sustainedForMs)}. Not auto-killed._`,
     ladderNote(milestoneMs),
@@ -883,14 +1040,15 @@ function readRssMb(pid: number): number {
   }
 }
 
+// CLK_TCK is fixed for the life of the process: resolve it once (one getconf), not per pid.
 let clkTck: number | null = null;
 function clockTicks(): number {
   if (clkTck === null) {
     try {
-      clkTck =
-        Number(
-          NodeChildProcess.execFileSync("getconf", ["CLK_TCK"], { encoding: "utf8" }).trim(),
-        ) || 100;
+      const value = Number(
+        NodeChildProcess.execFileSync("getconf", ["CLK_TCK"], { encoding: "utf8" }).trim(),
+      );
+      clkTck = Number.isFinite(value) && value > 0 ? value : 100;
     } catch {
       clkTck = 100;
     }
@@ -898,27 +1056,35 @@ function clockTicks(): number {
   return clkTck;
 }
 
-/** utime + stime from /proc/pid/stat (clock ticks → seconds). */
-function readCpuSeconds(pid: number): number {
+/**
+ * Parse /proc/pid/stat: comm, utime+stime (seconds) and starttime (ticks). comm can contain
+ * spaces/parens, so split after the last `) `.
+ */
+export function parseProcStat(
+  stat: string,
+  ticksPerSecond: number,
+): { readonly comm: string; readonly cpuSeconds: number; readonly startTicks: number } | null {
+  const open = stat.indexOf("(");
+  const idx = stat.lastIndexOf(") ");
+  if (open < 0 || idx < 0) return null;
+  // Fields after comm: state(0) ppid(1) … utime(11) stime(12) … starttime(19).
+  const fields = stat.slice(idx + 2).split(/\s+/);
+  const utime = Number(fields[11]);
+  const stime = Number(fields[12]);
+  const start = Number(fields[19]);
+  const cpu = (utime + stime) / ticksPerSecond;
+  return {
+    comm: stat.slice(open + 1, idx),
+    cpuSeconds: Number.isFinite(cpu) ? cpu : 0,
+    startTicks: Number.isFinite(start) ? start : 0,
+  };
+}
+
+function readStat(pid: number): ReturnType<typeof parseProcStat> {
   try {
-    const stat = NodeFS.readFileSync(`/proc/${pid}/stat`, "utf8");
-    // comm can contain spaces/parens — split after last ") "
-    const idx = stat.lastIndexOf(") ");
-    if (idx < 0) return 0;
-    const fields = stat.slice(idx + 2).split(/\s+/);
-    const utime = Number(fields[11] ?? 0); // 14th field overall, 12th after state
-    const stime = Number(fields[12] ?? 0);
-    return (utime + stime) / clockTicks();
+    return parseProcStat(NodeFS.readFileSync(`/proc/${pid}/stat`, "utf8"), clockTicks());
   } catch {
-    try {
-      // fields: after ") " → state ppid ... utime is index 11 (0-based) in the remainder
-      const stat = NodeFS.readFileSync(`/proc/${pid}/stat`, "utf8");
-      const idx = stat.lastIndexOf(") ");
-      const fields = stat.slice(idx + 2).split(/\s+/);
-      return (Number(fields[11] ?? 0) + Number(fields[12] ?? 0)) / 100;
-    } catch {
-      return 0;
-    }
+    return null;
   }
 }
 
@@ -958,14 +1124,18 @@ function listProcesses(): ReadonlyArray<ProcInfo> {
     if (!/^\d+$/.test(ent)) continue;
     const pid = Number(ent);
     if (pid === process.pid) continue;
-    const cmd = readCmdline(pid);
-    if (cmd === "") continue;
+    const stat = readStat(pid);
+    if (stat === null) continue; // exited between readdir and read
+    const cmdline = readCmdline(pid);
+    // Kernel threads (and zombies) have no cmdline; show `[comm]` like ps so kswapd etc. are visible.
+    const cmd = cmdline === "" ? `[${stat.comm}]` : cmdline;
     out.push({
       pid,
       rssMb: readRssMb(pid),
-      cpuSeconds: readCpuSeconds(pid),
+      cpuSeconds: stat.cpuSeconds,
+      startTicks: stat.startTicks,
       cmd,
-      label: formatProcessLabel(cmd, readUnit(pid)),
+      label: cmdline === "" ? `[${stat.comm}]` : formatProcessLabel(cmd, readUnit(pid)),
     });
   }
   return out;
@@ -1394,16 +1564,22 @@ export const runAlertWatchdog = Effect.fn("Alerts.runAlertWatchdog")(function* (
     files = [],
   ) {
     const now = yield* Clock.currentTimeMillis;
-    const prev = lastSent.get(key) ?? 0;
-    if (now - prev < cooldownMs) return;
-    lastSent.set(key, now);
+    // Cooldown 0 = cadence handled by the caller (ladder); don't record, or unique keys leak.
+    if (cooldownMs > 0) {
+      const prev = lastSent.get(key) ?? 0;
+      if (now - prev < cooldownMs) return;
+      lastSent.set(key, now);
+      for (const [k, at] of lastSent) {
+        if (now - at > LAST_SENT_RETENTION_MS) lastSent.delete(k);
+      }
+    }
     const body =
       content.length > DISCORD_ALERT_MESSAGE_LIMIT
         ? `${content.slice(0, DISCORD_ALERT_MESSAGE_LIMIT)}…`
         : content;
     yield* Effect.gen(function* () {
       if (files.length === 0) {
-        yield* rest.createMessage(channelId, { content: body });
+        yield* rest.createMessage(channelId, { content: body, allowed_mentions: { parse: [] } });
       } else {
         yield* Effect.tryPromise({
           try: () =>
@@ -1413,6 +1589,7 @@ export const runAlertWatchdog = Effect.fn("Alerts.runAlertWatchdog")(function* (
               channelId,
               content: body,
               files,
+              allowedMentions: { parse: [] },
             }),
           catch: (cause) =>
             cause instanceof DiscordUploadError
@@ -1464,7 +1641,7 @@ export const runAlertWatchdog = Effect.fn("Alerts.runAlertWatchdog")(function* (
           ...runawayProcs.map((p) => ({
             key: `proc:${p.pid}:${p.ruleId}`,
             sinceMs: nowMs - p.sustainedMs,
-            title: `Runaway process ${p.label} (pid ${p.pid})`,
+            title: `Runaway process ${escapeDiscordText(p.label)} (pid ${p.pid})`,
           })),
         ],
         nowMs,
@@ -1474,7 +1651,7 @@ export const runAlertWatchdog = Effect.fn("Alerts.runAlertWatchdog")(function* (
       for (const page of ladder.pages) {
         if (page.key === "host-cpu" || page.key === "host-mem") {
           yield* postAlert(
-            `${page.key}:${page.milestoneMs}:${nowMs}`,
+            page.key,
             hostPressureAlertContent({
               key: page.key,
               sample: hostSample,
@@ -1488,16 +1665,12 @@ export const runAlertWatchdog = Effect.fn("Alerts.runAlertWatchdog")(function* (
         }
         const proc = runawayProcs.find((p) => page.key === `proc:${p.pid}:${p.ruleId}`);
         if (proc !== undefined) {
-          yield* postAlert(
-            `${page.key}:${page.milestoneMs}:${nowMs}`,
-            runawayProcessAlertContent(proc, page.milestoneMs),
-            0,
-          );
+          yield* postAlert(page.key, runawayProcessAlertContent(proc, page.milestoneMs), 0);
         }
       }
       for (const rec of ladder.recovered) {
         yield* postAlert(
-          `recovered:${rec.key}:${nowMs}`,
+          `recovered:${rec.key}`,
           recoveredAlertContent(rec.title, rec.durationMs),
           0,
         );
@@ -1524,7 +1697,7 @@ export const runAlertWatchdog = Effect.fn("Alerts.runAlertWatchdog")(function* (
             `**Legacy Sentry MCP stdio process(es)** (${runaways.length})`,
             ...runaways.map(
               (s) =>
-                `• pid=${s.pid} rss=${s.rssMb.toFixed(0)} MiB cpuTime=${s.cpuSeconds.toFixed(0)}s ${s.label}`,
+                `• pid=${s.pid} rss=${s.rssMb.toFixed(0)} MiB cpuTime=${s.cpuSeconds.toFixed(0)}s ${escapeDiscordText(s.label)}`,
             ),
             "_Not auto-killed. Prefer shared proxy `shared-sentry-mcp-proxy` + `/etc/shared-mcp-setup`._",
           ].join("\n"),
@@ -1538,7 +1711,7 @@ export const runAlertWatchdog = Effect.fn("Alerts.runAlertWatchdog")(function* (
               "**Legacy Sentry MCP high RSS**",
               ...fat.map(
                 (s) =>
-                  `• pid=${s.pid} rss=${s.rssMb.toFixed(0)} MiB (alert ≥${SENTRY_RSS_ALERT_MB}) ${s.label}`,
+                  `• pid=${s.pid} rss=${s.rssMb.toFixed(0)} MiB (alert ≥${SENTRY_RSS_ALERT_MB}) ${escapeDiscordText(s.label)}`,
               ),
               "_Not auto-killed. Check agent MCP config points at http://127.0.0.1:7391/mcp._",
             ].join("\n"),
