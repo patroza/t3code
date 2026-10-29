@@ -12,8 +12,18 @@ function readSrc(relativePath: string): string {
 }
 
 describe("fork surface existence (anti stack-drop)", () => {
+  it("keeps provider visibility and project preview controls in the live sidebar", () => {
+    const controls = readSrc("components/sidebar/SidebarThreadFilters.tsx");
+    expect(controls).toContain('data-testid="sidebar-hide-provider-icons"');
+    expect(controls).toContain('aria-label="Visible thread count"');
+    expect(readSrc("components/Sidebar.tsx")).toContain("sidebarThreadPreviewCount");
+    expect(readSrc("components/Sidebar.tsx")).toContain(
+      "hideProviderIcons={hideProviderIcons && !revealProviderIcons}",
+    );
+  });
+
   it("keeps the EAS account check available in device host settings", () => {
-    expect(readSrc("components/settings/EasDeviceHostsSettings.tsx")).toContain(
+    expect(readSrc("components/settings/EasDeviceHostEditor.tsx")).toContain(
       'data-testid="eas-device-account-check"',
     );
   });
@@ -35,7 +45,7 @@ describe("fork surface existence (anti stack-drop)", () => {
     const traits = readSrc("components/chat/TraitsPicker.tsx");
     expect(traits).toContain('icon={speedIcon === "ultrafast" ? UltrafastIcon : ZapIcon}');
     expect(traits).toContain("{fastModeIcon ?? (");
-    expect(traits).toContain("aria-label={accessibleLabel}");
+    expect(traits).toContain("aria-label={triggerDescription}");
     expect(readSrc("components/Icons.tsx")).toContain("export const UltrafastIcon");
   });
   it("keeps branch reuse available in the shared worktree picker", () => {
@@ -45,21 +55,12 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(readSrc("components/BranchToolbarBranchSelector.tsx")).toContain("reuseBaseControl=");
     expect(readSrc("components/ChatView.tsx")).toContain("onReuseBaseBranchChange");
   });
-  it("classic sidebar keeps the collapsible Settled shelf chrome", () => {
-    const sidebar = readSrc("components/LegacySidebar.tsx");
-    expect(sidebar).toContain('data-testid="sidebar-v1-settled-shelf-toggle"');
-    expect(sidebar).toContain("Hide settled");
-    expect(sidebar).toContain('data-testid="sidebar-v1-settled-recency-headers"');
-    expect(sidebar).toContain("sidebar-v1-settled-recency-");
-    // Settled recent rows use V2-like slim history chrome without list VCS.
-    expect(sidebar).toContain("recent-thread-settled-");
-    expect(sidebar).toContain("Un-settle thread");
-    expect(sidebar).toContain("!props.isSettled");
-    // Hide-settled must use row-lifted PR state (merged/closed auto-settle),
-    // same as Sidebar V2 — never hard-code changeRequestState: null here.
-    expect(sidebar).toContain("changeRequestStateByKey");
-    expect(sidebar).toContain("SidebarChangeRequestStateContext");
-    expect(sidebar).not.toContain("changeRequestState: null");
+  it("project folders keep the shared collapsible Settled shelf", () => {
+    const sidebar = readSrc("components/Sidebar.tsx");
+    expect(sidebar).toContain('marker: "settled-header"');
+    expect(sidebar).toContain("settledShelfExpanded");
+    expect(sidebar).toContain("sidebar-${section}-recency-${group.id}");
+    expect(sidebar).toContain("useOlderSettledShelf");
   });
 
   it("Sidebar V2 keeps Settled shelf labeling and new-thread affordance", () => {
@@ -102,7 +103,7 @@ describe("fork surface existence (anti stack-drop)", () => {
   });
 
   it("classic sidebar marks composer draft threads", () => {
-    const sidebar = readSrc("components/LegacySidebar.tsx");
+    const sidebar = readSrc("components/sidebar/SidebarThreadRow.tsx");
     expect(sidebar).toContain("ComposerDraftDot");
     expect(sidebar).toContain("hasComposerDraftMessage");
   });
@@ -186,12 +187,12 @@ describe("fork surface existence (anti stack-drop)", () => {
   });
 
   it("classic sidebar thread rows keep provider usage dots + stats", () => {
-    const sidebar = readSrc("components/LegacySidebar.tsx");
+    const sidebar = readSrc("components/sidebar/SidebarThreadRow.tsx");
     expect(sidebar).toContain("useAiUsageSnapshot");
     expect(sidebar).toContain("resolveDriverUsage");
     expect(sidebar).toContain("usageDotFillClass");
     expect(sidebar).toContain("AiUsageStats");
-    expect(sidebar).toContain("hasUsageMarker");
+    expect(sidebar).toContain("usageDotClass");
   });
 
   it("Sidebar V2 thread rows keep provider usage dots + stats", () => {
@@ -220,7 +221,8 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(sidebarV2).toContain("orderActiveThreads: orderForThreadGrouping");
     expect(sidebarV2).toContain("input.orderActiveThreads(sortThreadsForSidebar(active))");
     expect(sidebarV2).toContain("sidebar-${section}-recency-${group.id}");
-    expect(sidebarV2).toContain('const rowVariant = isCard ? "card" : "slim"');
+    expect(sidebarV2).toContain("const rowVariant = folderRow");
+    expect(sidebarV2).toContain("folderRowsMultiline");
     expect(webGrouping).toContain('project: "Group by default"');
     expect(mobileGrouping).toContain('project: "Group by default"');
     expect(orderingContract).toContain("Do not make `project` group V2 rows by project");
@@ -298,7 +300,10 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(stack).toContain(
       "<SourceChannelGlyph channel={props.channel ?? lead.firstChannel} overlay",
     );
-    const sidebarV1 = readSrc("components/LegacySidebar.tsx");
+    const sidebarV1 = [
+      readSrc("components/Sidebar.tsx"),
+      readSrc("components/sidebar/SidebarThreadRow.tsx"),
+    ].join("\n");
     const sidebarV2 = [
       readSrc("components/Sidebar.tsx"),
       readSrc("components/sidebar/SidebarThreadRow.tsx"),
