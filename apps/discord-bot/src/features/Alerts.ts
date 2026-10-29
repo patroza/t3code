@@ -72,11 +72,13 @@ export const DEFAULT_PROCESS_RSS_FRACTION_OF_TOTAL = 0.5;
 export const DEFAULT_PROCESS_RSS_SUSTAINED_FOR_MS = 5 * 60 * 1000;
 /**
  * Leak detection: RSS grew by ≥ max(DEFAULT_PROCESS_RSS_GROWTH_MIN_MB, fraction × total) across the
- * retained history window (≥ RSS_GROWTH_MIN_SPAN_MS). Flat-but-large batch jobs stay quiet.
+ * retained history window (≥ RSS_GROWTH_MIN_SPAN_MS), with both halves of the window moving by
+ * ≥ RSS_GROWTH_RECENT_FRACTION of that bar. A one-shot allocation that then sits flat stays quiet.
  */
 export const DEFAULT_PROCESS_RSS_GROWTH_MIN_MB = 2048;
 export const DEFAULT_PROCESS_RSS_GROWTH_FRACTION_OF_TOTAL = 0.2;
 const RSS_GROWTH_MIN_SPAN_MS = 10 * 60 * 1000;
+const RSS_GROWTH_RECENT_FRACTION = 0.25;
 /**
  * Hysteresis: an already-alerting condition (host or per-process) only clears after it has been
  * below threshold for this long, so values hovering around a threshold don't page/recover in a loop.
@@ -224,7 +226,7 @@ export function defaultRunawayProcessRules(
 /**
  * Advance the per-process hotness tracker by one tick (pure). Exited pids are pruned; a pid whose
  * CPU counter went backwards is treated as reused. Each rule keeps its own streak
- * (`hotSinceByRule`); a process is reported once, for the first rule hot long enough.
+ * (`hotSinceByRule`) and is reported on its own, so a second rule starting does not drop the first.
  */
 export function trackSustainedHotProcesses(input: {
   readonly prev: ReadonlyMap<number, ProcSustainState>;
@@ -271,22 +273,28 @@ export function trackSustainedHotProcesses(input: {
     const oldest = rssHistory[0]!;
     const rssTrendMb = proc.rssMb - oldest.rssMb;
     const rssTrendSpanMs = input.nowMs - oldest.atMs;
+    const growthHalves = rssGrowthHalvesMb(rssHistory, input.nowMs);
 
     const hotSinceByRule: Record<string, number> = {};
     const coolSinceByRule: Record<string, number> = {};
     const reportedRules: string[] = [];
     const priorReported = new Set(previous?.reportedRules ?? []);
-    let reported: SustainedHotProcess | null = null;
     for (const rule of rules) {
       const growthThreshold = rule.rssGrowthMbThreshold ?? null;
+      const growthFloor =
+        growthThreshold === null ? 0 : growthThreshold * RSS_GROWTH_RECENT_FRACTION;
+      const growing =
+        growthThreshold !== null &&
+        rssTrendSpanMs >= RSS_GROWTH_MIN_SPAN_MS &&
+        rssTrendMb >= growthThreshold &&
+        growthHalves.earlyMb >= growthFloor &&
+        growthHalves.recentMb >= growthFloor;
       const isHot =
         (rule.cpuPercentThreshold !== null &&
           cpuPercent !== null &&
           cpuPercent >= rule.cpuPercentThreshold) ||
         (rule.rssMbThreshold !== null && proc.rssMb >= rule.rssMbThreshold) ||
-        (growthThreshold !== null &&
-          rssTrendSpanMs >= RSS_GROWTH_MIN_SPAN_MS &&
-          rssTrendMb >= growthThreshold);
+        growing;
       const priorSince =
         previous?.hotSinceByRule?.[rule.id] ??
         (previous?.wasHot && rules.length === 1 && previous.hotSinceByRule === undefined
@@ -307,22 +315,21 @@ export function trackSustainedHotProcesses(input: {
       const sustained = input.nowMs - since >= rule.sustainedForMs;
       // A cool tick never starts a new page; it only keeps an already-reported one alive.
       const report = sustained && (isHot || priorReported.has(rule.id));
-      if (report) reportedRules.push(rule.id);
-      if (report && reported === null) {
-        reported = {
-          pid: proc.pid,
-          rssMb: proc.rssMb,
-          cpuPercent: cpuPercent ?? 0,
-          ruleId: rule.id,
-          rssMbThreshold: rule.rssMbThreshold,
-          cpuPercentThreshold: rule.cpuPercentThreshold,
-          sustainedForMs: rule.sustainedForMs,
-          sustainedMs: input.nowMs - since,
-          rssTrendMb,
-          rssTrendSpanMs,
-          label: proc.label,
-        };
-      }
+      if (!report) continue;
+      reportedRules.push(rule.id);
+      hot.push({
+        pid: proc.pid,
+        rssMb: proc.rssMb,
+        cpuPercent: cpuPercent ?? 0,
+        ruleId: rule.id,
+        rssMbThreshold: rule.rssMbThreshold,
+        cpuPercentThreshold: rule.cpuPercentThreshold,
+        sustainedForMs: rule.sustainedForMs,
+        sustainedMs: input.nowMs - since,
+        rssTrendMb,
+        rssTrendSpanMs,
+        label: proc.label,
+      });
     }
     const sinceValues = Object.values(hotSinceByRule);
     const isHot = sinceValues.length > 0;
@@ -339,7 +346,6 @@ export function trackSustainedHotProcesses(input: {
       ...(proc.startTicks !== undefined ? { startTicks: proc.startTicks } : {}),
     });
 
-    if (reported !== null) hot.push(reported);
     samples.push({
       pid: proc.pid,
       rssMb: proc.rssMb,
@@ -351,7 +357,42 @@ export function trackSustainedHotProcesses(input: {
   }
 
   hot.sort((a, b) => b.cpuPercent - a.cpuPercent || b.rssMb - a.rssMb);
-  return { next, hot: hot.slice(0, 8), samples };
+  return { next, hot: capHotProcesses(hot, MAX_HOT_PROCESSES), samples };
+}
+
+const MAX_HOT_PROCESSES = 8;
+
+/** Keep every rule of a process that made the cut, so a sibling rule is not a false recovery. */
+function capHotProcesses(
+  hot: ReadonlyArray<SustainedHotProcess>,
+  maxProcesses: number,
+): SustainedHotProcess[] {
+  const capped: SustainedHotProcess[] = [];
+  const kept = new Set<number>();
+  for (const entry of hot) {
+    if (!kept.has(entry.pid)) {
+      if (kept.size >= maxProcesses) continue;
+      kept.add(entry.pid);
+    }
+    capped.push(entry);
+  }
+  return capped;
+}
+
+function rssGrowthHalvesMb(
+  history: ReadonlyArray<{ readonly atMs: number; readonly rssMb: number }>,
+  nowMs: number,
+): { readonly earlyMb: number; readonly recentMb: number } {
+  const oldest = history[0];
+  const newest = history[history.length - 1];
+  if (oldest === undefined || newest === undefined) return { earlyMb: 0, recentMb: 0 };
+  const midAt = oldest.atMs + (nowMs - oldest.atMs) / 2;
+  let mid = oldest;
+  for (const sample of history) {
+    if (sample.atMs <= midAt) mid = sample;
+    else break;
+  }
+  return { earlyMb: mid.rssMb - oldest.rssMb, recentMb: newest.rssMb - mid.rssMb };
 }
 
 /** Top-N processes by CPU rate and by RSS, for host-alert context. */
@@ -382,7 +423,7 @@ export function formatRssTrend(deltaMb: number, spanMs: number): string {
  */
 export function escapeDiscordText(text: string): string {
   return text
-    .replace(/[\\`*_~|>]/gu, "\\$&")
+    .replace(/[\\`*_~|>()[\]]/gu, "\\$&")
     .replace(/@/gu, "@\u200b")
     .replace(/[\r\n]+/gu, " ");
 }
@@ -669,12 +710,13 @@ export function advanceConditionLadder(input: {
     const previous = prior !== undefined && prior.sinceMs === condition.sinceMs ? prior : undefined;
     const ageMs = Math.max(0, input.nowMs - condition.sinceMs);
     if (previous === undefined) {
-      pages.push({ key: condition.key, milestoneMs: 0, ageMs });
-      // A condition whose sustain window is already past a rung (e.g. 30m runaway CPU) must not
-      // re-page for that same rung on the next tick.
+      // A condition whose sustain window is already past a rung (e.g. 30m runaway CPU) pages once,
+      // at that rung, so the note's "next" matches the ladder and the rung is not repeated.
+      const passedMs = longRunningTurnMilestoneMs(ageMs, baseMs) ?? 0;
+      pages.push({ key: condition.key, milestoneMs: passedMs, ageMs });
       next.set(condition.key, {
         sinceMs: condition.sinceMs,
-        lastMilestoneMs: longRunningTurnMilestoneMs(ageMs, baseMs) ?? 0,
+        lastMilestoneMs: passedMs,
         title: condition.title,
       });
       continue;
@@ -772,14 +814,25 @@ export function runawayProcessAlertContent(p: SustainedHotProcess, milestoneMs: 
   if (p.cpuPercentThreshold !== null)
     parts.push(`CPU≥${p.cpuPercentThreshold.toFixed(0)}% of a core`);
   if (parts.length === 0) parts.push("RSS growing fast (possible leak)");
+  const requirement =
+    p.sustainedForMs > 0
+      ? `sustained ≥${formatDurationShort(p.sustainedForMs)}`
+      : `over ≥${formatDurationShort(RSS_GROWTH_MIN_SPAN_MS)}`;
   return [
-    p.ruleId === "rss-growth"
-      ? `**Process memory growing fast: ${escapeDiscordText(p.label)}** (pid ${p.pid})`
-      : `**Runaway process: ${escapeDiscordText(p.label)}** (pid ${p.pid})`,
+    `**${processConditionTitle(p)}**`,
     `cpu≈${p.cpuPercent.toFixed(0)}% rss=${p.rssMb.toFixed(0)}MiB (${formatRssTrend(p.rssTrendMb, p.rssTrendSpanMs)}) for ${formatDurationShort(p.sustainedMs)}`,
-    `_rule=${p.ruleId}; ${parts.join(" or ")} sustained ≥${formatDurationShort(p.sustainedForMs)}. Not auto-killed._`,
+    `_rule=${p.ruleId}; ${parts.join(" or ")} ${requirement}. Not auto-killed._`,
     ladderNote(milestoneMs),
   ].join("\n");
+}
+
+export function processConditionTitle(
+  p: Pick<SustainedHotProcess, "ruleId" | "label" | "pid">,
+): string {
+  const name = `${escapeDiscordText(p.label)} (pid ${p.pid})`;
+  return p.ruleId === "rss-growth"
+    ? `Process memory growing fast: ${name}`
+    : `Runaway process: ${name}`;
 }
 
 export interface DiskInfo {
@@ -1066,17 +1119,18 @@ export function parseProcStat(
 ): { readonly comm: string; readonly cpuSeconds: number; readonly startTicks: number } | null {
   const open = stat.indexOf("(");
   const idx = stat.lastIndexOf(") ");
-  if (open < 0 || idx < 0) return null;
+  if (open < 0 || idx < open) return null;
   // Fields after comm: state(0) ppid(1) … utime(11) stime(12) … starttime(19).
   const fields = stat.slice(idx + 2).split(/\s+/);
+  if (fields.length < 20 || !(ticksPerSecond > 0)) return null;
   const utime = Number(fields[11]);
   const stime = Number(fields[12]);
   const start = Number(fields[19]);
-  const cpu = (utime + stime) / ticksPerSecond;
+  if (!Number.isFinite(utime) || !Number.isFinite(stime) || !Number.isFinite(start)) return null;
   return {
     comm: stat.slice(open + 1, idx),
-    cpuSeconds: Number.isFinite(cpu) ? cpu : 0,
-    startTicks: Number.isFinite(start) ? start : 0,
+    cpuSeconds: (utime + stime) / ticksPerSecond,
+    startTicks: start,
   };
 }
 
@@ -1641,7 +1695,7 @@ export const runAlertWatchdog = Effect.fn("Alerts.runAlertWatchdog")(function* (
           ...runawayProcs.map((p) => ({
             key: `proc:${p.pid}:${p.ruleId}`,
             sinceMs: nowMs - p.sustainedMs,
-            title: `Runaway process ${escapeDiscordText(p.label)} (pid ${p.pid})`,
+            title: processConditionTitle(p),
           })),
         ],
         nowMs,
