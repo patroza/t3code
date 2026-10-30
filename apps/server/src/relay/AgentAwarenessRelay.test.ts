@@ -191,6 +191,8 @@ const makeTestRelay = Effect.fnUntraced(function* (
         return { schemaVersion: 2, snapshotSequence: 1, threads: [], archivedThreads: [] };
       }),
     listActiveSubagentThreadIds: unused,
+    countThreads: unused,
+    listActiveShellIndex: () => Effect.succeed([]),
     listOlderSettledThreads: unused,
     readShellSnapshot: unused,
     ensureLegacyTranscript: unused,
@@ -218,6 +220,7 @@ const makeTestRelay = Effect.fnUntraced(function* (
     settleThread: unused,
     interruptThread: unused,
     stopWorkflow: () => Effect.die("unused stopWorkflow"),
+    forceStopThread: () => Effect.die("unused forceStopThread"),
     awaitBackgroundTasks: unused,
     stopDelegatedTasks: unused,
     getThreadEventSequence: unused,

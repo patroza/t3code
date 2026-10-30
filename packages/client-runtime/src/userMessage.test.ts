@@ -6,6 +6,8 @@ import {
   resolveUserMessagePresentation,
   userMessageSenderCaption,
 } from "./userMessage.ts";
+import { GuestMessageId } from "@t3tools/contracts";
+import { ATTACHMENT_ONLY_BOOTSTRAP_PROMPT } from "@t3tools/shared/composerContextReferences";
 
 const patrickDesktop = {
   personId: "patroza",
@@ -144,7 +146,6 @@ describe("indexUserMessageSources", () => {
     expect(sources.has("assistant")).toBe(false);
   });
 });
-import { GuestMessageId } from "@t3tools/contracts";
 
 describe("resolveUserMessagePresentation", () => {
   const legacyText = "[Triggered by schedule task: Daily audit]\n\nCheck for crashes.\n";
@@ -157,6 +158,19 @@ describe("resolveUserMessagePresentation", () => {
     ]) {
       expect(resolveUserMessagePresentation({ ...message, text: legacyText })).toEqual({
         text: legacyText,
+        attribution: null,
+        scheduledTaskId: undefined,
+      });
+    }
+  });
+
+  it("hides the prompt that stands in for an attachment-only message", () => {
+    for (const text of [
+      ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
+      `Ultrathink:\n${ATTACHMENT_ONLY_BOOTSTRAP_PROMPT}`,
+    ]) {
+      expect(resolveUserMessagePresentation({ role: "user", text })).toEqual({
+        text: "",
         attribution: null,
         scheduledTaskId: undefined,
       });

@@ -378,6 +378,7 @@ jobs:
               --environment production \
               --platform ${{ inputs.platform }} \
               --message "$OTA_MESSAGE" \
+              --emit-metadata \
               --non-interactive
           fi
       # Lets the relay symbolicate crash stacks from the updates published

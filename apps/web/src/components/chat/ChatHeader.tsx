@@ -5,6 +5,7 @@ import {
   type ProjectScript,
   type ProviderDriverKind,
   type ResolvedKeybindingsConfig,
+  type ScopedThreadRef,
   type ThreadId,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
@@ -98,6 +99,7 @@ interface ChatHeaderProps {
     input: NewProjectScriptInput,
   ) => Promise<ProjectScriptActionResult>;
   onDeleteProjectScript: (scriptId: string) => Promise<ProjectScriptActionResult>;
+  onFindInThread?: ((threadRef: ScopedThreadRef) => void) | undefined;
 }
 
 export function resolveRenameCommit(input: {
@@ -161,6 +163,7 @@ export const ChatHeader = memo(function ChatHeader({
   onAddProjectScript,
   onUpdateProjectScript,
   onDeleteProjectScript,
+  onFindInThread,
 }: ChatHeaderProps) {
   const { active: panelAnimationsActive, durationMs: panelAnimationDurationMs } =
     usePanelAnimationSettings();
@@ -339,6 +342,7 @@ export const ChatHeader = memo(function ChatHeader({
     threadRef: isServerThread ? activeThreadRef : null,
     projectCwd: activeProjectCwd,
     onStartRename: startRename,
+    onFind: onFindInThread,
     canShareWithGuest,
   });
   const titleButtonRef = useRef<HTMLButtonElement | null>(null);

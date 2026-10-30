@@ -937,13 +937,16 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           binaryPath: options.settings.binaryPath,
           directory: cwd,
           serverUrl: options.settings.serverUrl,
+          ...(options.settings.serverPassword
+            ? { serverPassword: options.settings.serverPassword }
+            : {}),
           environment: yield* resolveCurrentProviderEnvironment(cwd, options.environment),
         });
         const client = runtime.createOpenCodeSdkClient({
           baseUrl: connection.url,
           directory: cwd,
-          ...(connection.external && options.settings.serverPassword
-            ? { serverPassword: options.settings.serverPassword }
+          ...(connection.serverPassword !== undefined
+            ? { serverPassword: connection.serverPassword }
             : {}),
         });
 
