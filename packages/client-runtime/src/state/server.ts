@@ -811,8 +811,9 @@ export function createServerEnvironmentAtoms<R, E>(
     }
     let previousProviders: ServerConfig["providers"] | undefined;
     return Atom.make((get): ServerConfig | null => {
-      const projection = Option.getOrNull(
-        AsyncResult.value(get(configProjection({ environmentId, input: {} }))),
+      const projection = AsyncResult.getOrElse(
+        get(configProjection({ environmentId, input: {} })),
+        () => null,
       );
       const config = resolveServerConfigValue(
         projection,
@@ -986,6 +987,17 @@ export function createServerEnvironmentAtoms<R, E>(
             return updateResult;
           }),
         );
+
+        // A track switch's desktop host already on its track's newest build only saved the
+        // track; nothing restarts.
+        if (
+          result.method === "desktop-app" &&
+          result.desktopUpdateToken === undefined &&
+          result.targetVersion === fromVersion
+        ) {
+          atomRegistry.set(stateAtom, IDLE_SERVER_UPDATE_STATE);
+          return result;
+        }
 
         yield* nudgeReconnectDuringUpdateRestart({
           stateChanges: environmentRegistry.stateChanges(target.environmentId),
@@ -1549,16 +1561,6 @@ export function createServerEnvironmentAtoms<R, E>(
     answerSecretRequest: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:secrets:answer-request",
       tag: WS_METHODS.secretsAnswerRequest,
-      concurrency: {
-        mode: "singleFlight",
-        key: ({ environmentId, input }) =>
-          JSON.stringify([environmentId, input.threadId, input.turnItemId]),
-      },
-    }),
-    // Like a secret card's answer: off the config lane, one per card at a time.
-    answerLinkRequest: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:peer-links:answer-request",
-      tag: WS_METHODS.peerLinksAnswerRequest,
       concurrency: {
         mode: "singleFlight",
         key: ({ environmentId, input }) =>

@@ -291,3 +291,8 @@ export function resolveThreadOutboxFailureAction(input: {
   }
   return "restore";
 }
+
+export type AcknowledgedThreadMessage = QueuedThreadMessage & {
+  /** The server sequence that committed the message; older servers do not report it. */
+  readonly sequence?: number;
+};

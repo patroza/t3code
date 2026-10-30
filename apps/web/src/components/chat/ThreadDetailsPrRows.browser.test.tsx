@@ -257,6 +257,7 @@ it("keeps workspace controls after expanding and collapsing 70 linked pull reque
     <ThreadDetailsPanel
       {...threadRef}
       projectId={ProjectId.make("project")}
+      usage={{ providerInstanceId: null, providers: [], sources: [], contextWindow: null }}
       worktreePath={null}
       isServerThread
       anchor={{ current: null }}

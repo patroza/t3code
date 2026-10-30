@@ -1,3 +1,15 @@
+import { useClientSettings, updateClientSettings } from "../../hooks/useSettings";
+import {
+  MIN_SIDEBAR_THREAD_PREVIEW_COUNT,
+  MAX_SIDEBAR_THREAD_PREVIEW_COUNT,
+} from "@t3tools/contracts/settings";
+import {
+  NumberField,
+  NumberFieldGroup,
+  NumberFieldInput,
+  NumberFieldIncrement,
+  NumberFieldDecrement,
+} from "../ui/number-field";
 import type { EnvironmentId } from "@t3tools/contracts";
 import {
   isOwnershipRelation,
@@ -32,6 +44,8 @@ export function SidebarThreadFilters(props: {
   readonly onClearEnvironments: () => void;
   readonly onToggleEnvironment: (value: EnvironmentId) => void;
 }) {
+  const previewCount = useClientSettings((settings) => settings.sidebarThreadPreviewCount);
+  const hideProviderIcons = useClientSettings((settings) => settings.sidebarHideProviderIcons);
   return (
     <div
       className="max-h-60 shrink-0 overflow-y-auto border-b border-border p-2"
@@ -121,6 +135,42 @@ export function SidebarThreadFilters(props: {
           </SelectPopup>
         </Select>
       </div>
+      <label className="mt-2 flex items-center gap-2 text-xs">
+        Visible threads per closed project
+        <NumberField
+          aria-label="Visible thread count"
+          size="sm"
+          min={MIN_SIDEBAR_THREAD_PREVIEW_COUNT}
+          max={MAX_SIDEBAR_THREAD_PREVIEW_COUNT}
+          step={1}
+          value={previewCount}
+          onValueChange={(value) => {
+            if (value !== null)
+              void updateClientSettings({
+                sidebarThreadPreviewCount: Math.max(
+                  MIN_SIDEBAR_THREAD_PREVIEW_COUNT,
+                  Math.min(MAX_SIDEBAR_THREAD_PREVIEW_COUNT, Math.trunc(value)),
+                ),
+              });
+          }}
+        >
+          <NumberFieldGroup>
+            <NumberFieldDecrement aria-label="Decrease visible thread count" />
+            <NumberFieldInput aria-label="Visible thread count" />
+            <NumberFieldIncrement aria-label="Increase visible thread count" />
+          </NumberFieldGroup>
+        </NumberField>
+      </label>
+      <label className="mt-2 flex items-center gap-2 text-xs">
+        <Checkbox
+          checked={hideProviderIcons}
+          onCheckedChange={(checked) => {
+            void updateClientSettings({ sidebarHideProviderIcons: Boolean(checked) });
+          }}
+          data-testid="sidebar-hide-provider-icons"
+        />
+        Hide provider icons (hold Control or Command to reveal)
+      </label>
       <label className="mt-2 flex items-center gap-2 text-xs">
         <Checkbox
           checked={props.settledShelfExpanded}

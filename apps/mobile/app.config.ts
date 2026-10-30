@@ -240,7 +240,7 @@ const config: ExpoConfig = {
   slug: "t3-code",
   platforms: ["ios", "android"],
   scheme: variant.scheme,
-  version: repoEnv.T3CODE_MOBILE_VERSION ?? "2.1.0",
+  version: repoEnv.T3CODE_MOBILE_VERSION ?? "2.2.0",
   runtimeVersion: (() => {
     const override = process.env.MOBILE_RUNTIME_VERSION_OVERRIDE?.trim();
     if (override) return override;

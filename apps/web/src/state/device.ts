@@ -4,8 +4,14 @@ import {
   type DeviceHubAccess,
   resolveDeviceHubAccess,
 } from "@t3tools/client-runtime/state/deviceHubAccess";
+import { createEnvironmentRpcQueryAtomFamily } from "@t3tools/client-runtime/state/runtime";
 import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
-import { type DeviceDetail, type DeviceServiceState, type EnvironmentId } from "@t3tools/contracts";
+import {
+  WS_METHODS,
+  type DeviceDetail,
+  type DeviceServiceState,
+  type EnvironmentId,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
@@ -151,4 +157,15 @@ export const deviceHostProbeAtom = Atom.family((environmentId: EnvironmentId) =>
 
 export const NO_DEVICE_PROBE_ATOM = Atom.make(AsyncResult.initial<void, never>()).pipe(
   Atom.withLabel("device-host-probe:none"),
+);
+
+/** Who a Simlock token is, checked as the host editor's URL and token fields change. */
+export const deviceSimlockIdentityCheck = createEnvironmentRpcQueryAtomFamily(
+  connectionAtomRuntime,
+  {
+    label: "environment-data:device:simlock-identity-check",
+    tag: WS_METHODS.deviceSimlockIdentity,
+    staleTimeMs: 0,
+    idleTtlMs: 0,
+  },
 );
