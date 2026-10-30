@@ -22,6 +22,7 @@ vi.mock("../hooks/useThreadRouteTarget", () => ({
 }));
 vi.mock("../state/entities", () => ({
   useQuietThreadShell: () => thread,
+  useQuietThreadVisibleTurnItems: () => [],
   useThreadCheckpointSummaries: () => turns,
   useProject: () => null,
 }));
@@ -30,6 +31,7 @@ vi.mock("../state/server", () => ({ serverEnvironment: { configValueAtom: () => 
 vi.mock("../state/vcs", () => ({ vcsEnvironment: { status: () => null, listRefs: () => null } }));
 vi.mock("../state/review", () => ({
   reviewEnvironment: {
+    branchCommits: () => null,
     diffPreview: () => previewAtom,
     diffFilePatch: ({ input }: { input: { request: { file: { path: string } } } }) =>
       patchAtoms(input.request.file.path),
@@ -50,9 +52,11 @@ vi.mock("../hooks/useTheme", () => ({
   subscribeRenderedAppearance: () => () => {},
   useTheme: () => ({ resolvedTheme: "dark" }),
 }));
+vi.mock("../browser/useOpenLink", () => ({ useOpenLink: () => vi.fn() }));
 vi.mock("../editorPreferences", () => ({ useOpenInPreferredEditor: () => vi.fn() }));
 vi.mock("../fileContextMenu", () => ({ useFileContextMenuHandler: () => vi.fn() }));
 vi.mock("../state/queries", () => ({
+  useTurnItemDetail: () => ({ data: null, isPending: false, error: null }),
   useCheckpointDiff: () => {
     const diff = useAtomValue(checkpointAtom);
     return { data: diff === null ? null : { diff }, isPending: diff === null, error: null };
