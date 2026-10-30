@@ -82,6 +82,26 @@ describe("pickLatestFinishedRuntime", () => {
     expect(pickLatestFinishedRuntime(raw)).toBe("a79f66c8");
   });
 
+  it("uses the fingerprint when EAS omits the runtime version", () => {
+    expect(
+      pickLatestFinishedRuntime(
+        JSON.stringify([
+          { id: "native-build", runtimeVersion: null, fingerprint: { hash: "native-fingerprint" } },
+        ]),
+      ),
+    ).toBe("native-fingerprint");
+  });
+
+  it("prefers an explicit runtime over its fingerprint", () => {
+    expect(
+      pickLatestFinishedRuntime(
+        JSON.stringify([
+          { runtimeVersion: "custom-runtime", fingerprint: { hash: "native-fingerprint" } },
+        ]),
+      ),
+    ).toBe("custom-runtime");
+  });
+
   it("returns undefined when no build is listed", () => {
     expect(pickLatestFinishedRuntime("[]")).toBeUndefined();
     expect(pickLatestFinishedRuntime("")).toBeUndefined();

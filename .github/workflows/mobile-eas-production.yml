@@ -199,6 +199,7 @@ jobs:
         working-directory: apps/mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          RELEASE_PLATFORM: ${{ inputs.platform }}
         run: |
           eas env:pull production --non-interactive
           # EAS commands skip dotenv, and the Android fingerprint hashes this
@@ -206,6 +207,7 @@ jobs:
           node --input-type=module <<'NODE'
           import { appendFileSync, readFileSync } from "node:fs";
           import { parseEnv } from "node:util";
+          if (process.env.RELEASE_PLATFORM === "ios") process.exit(0);
           const env = parseEnv(readFileSync(".env.local", "utf8"));
           const googleServicesFile = env.T3CODE_ANDROID_GOOGLE_SERVICES_FILE;
           if (!googleServicesFile) {
