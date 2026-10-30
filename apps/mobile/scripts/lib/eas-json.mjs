@@ -88,7 +88,7 @@ export function pickBuildStatus(raw) {
 export function pickLatestFinishedRuntime(raw) {
   const builds = extractJson(raw);
   if (!Array.isArray(builds)) return undefined;
-  const runtime = builds[0]?.runtimeVersion;
+  const runtime = builds[0]?.runtimeVersion || builds[0]?.fingerprint?.hash;
   return runtime ? String(runtime) : undefined;
 }
 
