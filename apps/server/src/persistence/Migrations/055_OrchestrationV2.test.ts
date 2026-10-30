@@ -15,7 +15,7 @@ layer("055_OrchestrationV2", (it) => {
     Effect.sync(() => {
       assert.deepStrictEqual(
         migrationEntries.map(([id]) => id),
-        Array.from({ length: 72 }, (_, index) => index + 1),
+        Array.from({ length: 73 }, (_, index) => index + 1),
       );
     }),
   );
@@ -46,6 +46,7 @@ layer("055_OrchestrationV2", (it) => {
         [70, "PeerLinks"],
         [71, "PeerLinkFence"],
         [72, "WaitingLinkRequestIndex"],
+        [73, "ActiveTurnItemIndexes"],
         [1, "ProjectionQueuedMessages"],
         [2, "SessionIdentityClaims"],
         [3, "ProjectionThreadSourceAttribution"],
@@ -87,6 +88,7 @@ layer("055_OrchestrationV2", (it) => {
         { migration_id: 70, name: "PeerLinks" },
         { migration_id: 71, name: "PeerLinkFence" },
         { migration_id: 72, name: "WaitingLinkRequestIndex" },
+        { migration_id: 73, name: "ActiveTurnItemIndexes" },
       ]);
 
       const tables = yield* sql<{ readonly name: string }>`

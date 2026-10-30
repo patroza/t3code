@@ -3329,11 +3329,10 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
             insertions: base === initialBranch ? 3 : 2,
             deletions: 0,
           });
-          // Status reads origin directly so external changes are visible. Branch totals
-          // only add another default-ref lookup when the configured base is missing.
+          // Status and branch totals share the default-ref lookup within one read.
           assert.lengthOf(
             commands.filter((args) => args.join(" ") === "symbolic-ref refs/remotes/origin/HEAD"),
-            base === initialBranch ? 1 : 2,
+            1,
           );
         }
       }),

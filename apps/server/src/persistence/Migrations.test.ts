@@ -129,18 +129,28 @@ describe("runMigrations", () => {
 });
 
 // The npm launcher reads the highest migration id from these file names.
-it.effect("registers every migration file", () =>
+it.effect("registers every upstream migration file", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const dir = path.join(import.meta.dirname, "Migrations");
     const files = (yield* fs.readDirectory(dir)).flatMap((name) => {
       const match = /^(\d+)_(\w+)\.ts$/.exec(name);
-      return match ? [[Number(match[1]), match[2]] as const] : [];
+      if (!match?.[1] || !match[2]) return [];
+      return [[Number(match[1]), match[2]] as const];
     });
+    // Historical fork files retain their names but run through the separate fork ledger.
+    const forkNames = new Set<string>(forkMigrationManifest.map(([, name]) => name));
     assert.deepStrictEqual(
-      files.toSorted(([a], [b]) => a - b),
+      files.filter(([, name]) => !forkNames.has(name)).toSorted(([a], [b]) => a - b),
       migrationManifest,
+    );
+    assert.deepStrictEqual(
+      files
+        .filter(([, name]) => forkNames.has(name))
+        .map(([, name]) => name)
+        .toSorted(),
+      [...forkNames].toSorted(),
     );
   }).pipe(Effect.provide(NodeServices.layer)),
 );
