@@ -37,9 +37,12 @@ export async function createMessageWithAttachments(input: {
   readonly channelId: string;
   readonly content: string;
   readonly files: ReadonlyArray<DiscordUploadFile>;
+  /** Discord `allowed_mentions`; pass `{ parse: [] }` for untrusted content. */
+  readonly allowedMentions?: { readonly parse: ReadonlyArray<"users" | "roles" | "everyone"> };
 }): Promise<{ readonly id: string }> {
   const base = input.baseUrl.replace(/\/+$/, "");
   const json = await sendDiscordMultipart({
+    ...(input.allowedMentions !== undefined ? { allowedMentions: input.allowedMentions } : {}),
     url: `${base}/channels/${input.channelId}/messages`,
     botToken: input.botToken,
     method: "POST",
@@ -85,16 +88,19 @@ async function sendDiscordMultipart(input: {
   readonly flags: number;
   readonly files: ReadonlyArray<DiscordUploadFile>;
   readonly failure: string;
+  readonly allowedMentions?: { readonly parse: ReadonlyArray<"users" | "roles" | "everyone"> };
 }): Promise<{ readonly id: string }> {
   const form = new FormData();
   const payload: {
     content: string;
     flags: number;
     attachments?: ReadonlyArray<{ id: number; filename: string }>;
+    allowed_mentions?: { readonly parse: ReadonlyArray<"users" | "roles" | "everyone"> };
   } = {
     content: input.content,
     // Suppress link embeds; attachments (files[]) are separate and unaffected.
     flags: input.flags,
+    ...(input.allowedMentions !== undefined ? { allowed_mentions: input.allowedMentions } : {}),
   };
 
   if (input.files.length > 0) {
