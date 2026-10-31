@@ -1049,7 +1049,7 @@ describe("AssetAccess", () => {
         const content = name.endsWith("png") ? "image bytes" : "body { color: red; }";
         yield* fileSystem.writeFileString(path.join(outside, name), content);
         const asset = yield* resolveAsset(token, name);
-        if (asset?.kind !== "file" || !asset.file)
+        if (asset?.kind !== "file" || !("file" in asset) || !asset.file)
           throw new Error("Expected an opened sibling asset");
         const response = HttpServerResponse.toWeb(yield* assetFileResponse(asset));
         expect(yield* Effect.promise(() => response.text())).toBe(content);
@@ -1123,7 +1123,8 @@ describe("AssetAccess", () => {
         });
         const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
         const asset = yield* resolveAsset(suffix.slice(0, suffix.indexOf("/")), "report.css");
-        if (asset?.kind !== "file" || !asset.file) throw new Error("Expected an opened stylesheet");
+        if (asset?.kind !== "file" || !("file" in asset) || !asset.file)
+          throw new Error("Expected an opened stylesheet");
         yield* fs.rename(css, saved);
         yield* fs.symlink(secret, css);
         const response = HttpServerResponse.toWeb(yield* assetFileResponse(asset));
