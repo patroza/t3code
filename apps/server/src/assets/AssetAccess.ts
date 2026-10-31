@@ -575,6 +575,17 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       break;
     }
     case "workspace-file": {
+      // Reject untrusted network shares before any filesystem access.
+      if (
+        isNetworkPath(input.resource.path) &&
+        (input.workspaceRoot === undefined ||
+          !isWithinRoot(path, path.resolve(input.resource.path), path.resolve(input.workspaceRoot)))
+      ) {
+        return yield* new AssetWorkspaceAssetNotFoundError({
+          resource: input.resource,
+          checkedPath: input.resource.path,
+        });
+      }
       if (!input.workspaceRoot) {
         return yield* new AssetWorkspaceContextNotFoundError({
           resource: input.resource,
@@ -1051,11 +1062,24 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
   ) {
     return null;
   }
+  // A signed directory must not acquire a new boundary after a symlink swap.
+  const fileSystem = yield* FileSystem.FileSystem;
+  const currentRoot = yield* fileSystem
+    .realPath(claims.workspaceRoot)
+    .pipe(Effect.orElseSucceed(() => null));
+  if (currentRoot !== claims.workspaceRoot) {
+    return null;
+  }
   const joinedRelativePath =
     claims.baseRelativePath === "." ? decodedPath : path.join(claims.baseRelativePath, decodedPath);
   const workspaceFile = yield* resolveCanonicalWorkspaceFileForRequest({
     workspaceRoot: claims.workspaceRoot,
     relativePath: joinedRelativePath,
   });
-  return workspaceFile ? ({ kind: "file", path: workspaceFile } satisfies ResolvedAsset) : null;
+  if (!workspaceFile || !isWithinRoot(path, workspaceFile, claims.workspaceRoot)) {
+    return null;
+  }
+  // Serve the checked descriptor, never reopen the validated pathname later.
+  const file = yield* openMediaFile(workspaceFile).pipe(Effect.orElseSucceed(() => null));
+  return file ? ({ kind: "file", path: workspaceFile, file } satisfies ResolvedAsset) : null;
 });

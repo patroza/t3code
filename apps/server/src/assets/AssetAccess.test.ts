@@ -644,6 +644,31 @@ describe("AssetAccess", () => {
       }).pipe(Effect.provide(layerTest)),
   );
 
+  it.effect("rejects network HTML paths before filesystem resolution", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const resolved: string[] = [];
+      const recordingFileSystem = FileSystem.FileSystem.of({
+        ...fs,
+        realPath: (requestedPath) => {
+          resolved.push(requestedPath);
+          return fs.realPath(requestedPath);
+        },
+      });
+      for (const path of [
+        "//attacker.test/share/report.html",
+        "\\\\attacker.test\\share\\report.html",
+      ]) {
+        const result = yield* issueAssetUrl({
+          resource: { _tag: "workspace-file", threadId: ThreadId.make("thread-1"), path },
+          workspaceRoot: "/local/project",
+        }).pipe(Effect.provideService(FileSystem.FileSystem, recordingFileSystem), Effect.result);
+        expect(result._tag).toBe("Failure");
+      }
+      expect(resolved).toEqual([]);
+    }).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect.skipIf(!symlinksSupported)(
     "binds media URLs to the canonical target and rejects symlink substitution",
     () =>
@@ -921,11 +946,11 @@ describe("AssetAccess", () => {
       const separatorIndex = suffix.indexOf("/");
       const token = suffix.slice(0, separatorIndex);
 
-      expect(yield* resolveAsset(token, "report.html")).toEqual({
+      expect(yield* resolveAsset(token, "report.html")).toMatchObject({
         kind: "file",
         path: canonicalHtmlPath,
       });
-      expect(yield* resolveAsset(token, "report.css")).toEqual({
+      expect(yield* resolveAsset(token, "report.css")).toMatchObject({
         kind: "file",
         path: canonicalCssPath,
       });
@@ -940,10 +965,12 @@ describe("AssetAccess", () => {
         ]) {
           const url = yield* issueAssetUrl({ resource, workspaceRoot: root });
           const suffix = url.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
-          expect(yield* resolveAsset(suffix.slice(0, suffix.indexOf("/")), fontName)).toEqual({
-            kind: "file",
-            path: canonicalFontPath,
-          });
+          expect(yield* resolveAsset(suffix.slice(0, suffix.indexOf("/")), fontName)).toMatchObject(
+            {
+              kind: "file",
+              path: canonicalFontPath,
+            },
+          );
         }
       }
       expect(yield* resolveAsset(token, "../secret.txt")).toBeNull();
@@ -1014,12 +1041,94 @@ describe("AssetAccess", () => {
       const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
       const separatorIndex = suffix.indexOf("/");
       const token = suffix.slice(0, separatorIndex);
-      expect(yield* resolveAsset(token, "report.html")).toEqual({
+      expect(yield* resolveAsset(token, "report.html")).toMatchObject({
         kind: "file",
         path: canonicalHtmlPath,
       });
-      expect(yield* resolveAsset(token, "../secret.html")).toBeNull();
+      for (const name of ["sibling.png", "report.css"]) {
+        const content = name.endsWith("png") ? "image bytes" : "body { color: red; }";
+        yield* fileSystem.writeFileString(path.join(outside, name), content);
+        const asset = yield* resolveAsset(token, name);
+        if (asset?.kind !== "file" || !asset.file)
+          throw new Error("Expected an opened sibling asset");
+        const response = HttpServerResponse.toWeb(yield* assetFileResponse(asset));
+        expect(yield* Effect.promise(() => response.text())).toBe(content);
+      }
+      for (const name of [
+        "../secret.html",
+        "%2e%2e/secret.html",
+        "%252e%252e/secret.html",
+        "%2freport.html",
+        "C:/report.html",
+        "/report.html",
+        "nested/../report.html",
+        ".env",
+        ".hidden/image.png",
+        "private.zip",
+      ]) {
+        expect(yield* resolveAsset(token, name)).toBeNull();
+      }
     }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect.skipIf(!symlinksSupported)("rejects HTML sibling escapes and directory rebinding", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-html-root-binding-" });
+      const root = path.join(directory, "public");
+      const saved = path.join(directory, "saved");
+      const privateRoot = path.join(directory, "private");
+      yield* fs.makeDirectory(root);
+      yield* fs.makeDirectory(privateRoot);
+      yield* fs.writeFileString(path.join(root, "report.html"), "public HTML");
+      yield* fs.writeFileString(path.join(privateRoot, "report.html"), "private HTML");
+      yield* fs.writeFileString(path.join(privateRoot, "secret.png"), "private image");
+      const result = yield* issueAssetUrl({
+        resource: {
+          _tag: "workspace-file",
+          threadId: ThreadId.make("thread-1"),
+          path: path.join(root, "report.html"),
+        },
+        workspaceRoot: root,
+      });
+      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+      const token = suffix.slice(0, suffix.indexOf("/"));
+      yield* fs.symlink(path.join(privateRoot, "secret.png"), path.join(root, "escape.png"));
+      expect(yield* resolveAsset(token, "escape.png")).toBeNull();
+      yield* fs.rename(root, saved);
+      yield* fs.symlink(privateRoot, root);
+      expect(yield* resolveAsset(token, "report.html")).toBeNull();
+      expect(yield* resolveAsset(token, "secret.png")).toBeNull();
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect.skipIf(!symlinksSupported)(
+    "keeps HTML sibling responses bound to their opened file",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-html-open-file-" });
+        const html = path.join(root, "report.html");
+        const css = path.join(root, "report.css");
+        const saved = path.join(root, "saved.css");
+        const secret = path.join(root, "secret.txt");
+        yield* fs.writeFileString(html, "public HTML");
+        yield* fs.writeFileString(css, "public stylesheet");
+        yield* fs.writeFileString(secret, "private information");
+        const result = yield* issueAssetUrl({
+          resource: { _tag: "workspace-file", threadId: ThreadId.make("thread-1"), path: html },
+          workspaceRoot: root,
+        });
+        const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+        const asset = yield* resolveAsset(suffix.slice(0, suffix.indexOf("/")), "report.css");
+        if (asset?.kind !== "file" || !asset.file) throw new Error("Expected an opened stylesheet");
+        yield* fs.rename(css, saved);
+        yield* fs.symlink(secret, css);
+        const response = HttpServerResponse.toWeb(yield* assetFileResponse(asset));
+        expect(yield* Effect.promise(() => response.text())).toBe("public stylesheet");
+      }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("serves absolute Codex-style generated_images png paths outside the project", () =>
