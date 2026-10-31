@@ -161,6 +161,7 @@ const layerTools = Layer.mergeAll(
         }),
     }),
   ),
+  Layer.provide(Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({})),
   Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
   Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
   Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),

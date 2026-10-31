@@ -7,7 +7,7 @@ import {
 import type { EnvironmentId, PullRequestSummary } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import { Atom } from "effect/reactivity";
-import { useCallback, useEffect, useMemo } from "react";
+import { use, useCallback, useEffect, useMemo } from "react";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { appAtomRegistry } from "./atom-registry";
 
@@ -15,6 +15,7 @@ import { connectionAtomRuntime } from "../connection/runtime";
 import { serverEnvironment } from "./server";
 import { useEnvironmentQuery } from "./query";
 import { vcsEnvironment } from "./vcs";
+import { ThreadPrDemandContext } from "./thread-pr-demand";
 import {
   rememberBounded,
   resolveThreadPrSource,
@@ -83,6 +84,7 @@ export function useThreadPr(
   projectCwd?: string | null,
 ): ThreadPrPresentation | null {
   const cwd = thread.worktreePath ?? projectCwd ?? null;
+  const demand = use(ThreadPrDemandContext);
   const supportsLinks = useAtomValue(
     serverEnvironment.configValueAtom(thread.environmentId),
     (config) => config !== null,
@@ -112,7 +114,7 @@ export function useThreadPr(
   const branchSnapshot =
     snapshotEntry?.identity === snapshotIdentity ? snapshotEntry.presentation : null;
   const gitStatus = useEnvironmentQuery(
-    pullRequestRef === null && thread.branch !== null && cwd !== null
+    demand && pullRequestRef === null && thread.branch !== null && cwd !== null
       ? vcsEnvironment.listStatus({
           environmentId: thread.environmentId,
           input: { cwd },
@@ -126,7 +128,7 @@ export function useThreadPr(
     key === null ? undefined : current.get(key),
   );
   const pullRequestSummary = useEnvironmentQuery(
-    pullRequestRef === null
+    pullRequestRef === null || !demand
       ? null
       : pullRequestSummaryAtom({
           environmentId: thread.environmentId,
