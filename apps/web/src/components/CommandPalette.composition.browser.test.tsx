@@ -35,6 +35,13 @@ vi.mock("../hooks/useHandleNewThread", () => ({
   }),
   useNewThreadHandler: () => async () => undefined,
 }));
+vi.mock("../lib/archivedThreadsState", async (original) => {
+  const state = { snapshots: [] };
+  return {
+    ...(await original<typeof import("../lib/archivedThreadsState")>()),
+    useArchivedThreadSnapshots: () => state,
+  };
+});
 vi.mock("../hooks/useOpenPanelPullRequestUrl", () => ({ useOpenPanelPullRequestUrl: () => null }));
 vi.mock("../connection/useDesktopLocalBootstraps", () => ({ useDesktopLocalBootstraps: () => [] }));
 vi.mock("../state/use-atom-command", () => ({
