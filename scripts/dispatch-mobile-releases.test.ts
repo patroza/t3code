@@ -41,28 +41,30 @@ fi
   }
 }
 describe("mobile release dispatch", () => {
-  it("skips disabled production and still dispatches development", () => {
+  it("skips a disabled TestFlight release without dispatching another build", () => {
     const result = run("disabled");
     expect(result.status).toBe(0);
     expect(result.calls).not.toContain("workflow run mobile-eas-production.yml");
-    expect(result.calls).toContain("workflow run mobile-eas-development.yml");
+    expect(result.calls).not.toContain("mobile-eas-development.yml");
     expect(result.stdout).toContain("disabled_manually");
   });
-  it("dispatches both active workflows with the exact source", () => {
+  it("dispatches only the iOS TestFlight workflow with the exact source", () => {
     const result = run("active");
     expect(result.status).toBe(0);
     expect(result.calls).toContain("workflow run mobile-eas-production.yml");
-    expect(result.calls).toContain("workflow run mobile-eas-development.yml");
+    expect(result.calls).not.toContain("mobile-eas-development.yml");
     expect(result.calls).toContain("sha=exact-sha");
     expect(result.calls).toContain("mode=auto");
+    expect(result.calls).toContain("platform=ios");
+    expect(result.calls.match(/workflow run/g)).toHaveLength(1);
   });
   it.each(["lookup-failed", "dispatch-failed"])(
-    "reports %s while still trying development",
+    "reports %s without dispatching another build",
     (scenario) => {
       const result = run(scenario);
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("ERROR:");
-      expect(result.calls).toContain("workflow run mobile-eas-development.yml");
+      expect(result.calls).not.toContain("mobile-eas-development.yml");
     },
   );
 });

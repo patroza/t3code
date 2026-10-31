@@ -1,11 +1,20 @@
+import { registerAssemblyExtensions } from "@t3tools/client-runtime/assembly-highlighting";
 import {
   getSharedHighlighter,
+  setCustomExtension,
   type DiffsHighlighter,
   type HighlighterTypes,
   type SupportedLanguages,
 } from "@pierre/diffs";
 
 import { DIFF_THEME_NAMES } from "./diffRendering";
+
+registerAssemblyExtensions(setCustomExtension);
+
+// Highlights has no lexer for these dialects, so they use their base language's.
+setCustomExtension("luau", "lua");
+setCustomExtension("xsl", "xml");
+setCustomExtension("xslt", "xml");
 
 /**
  * Highlights' hand-written WASM lexers tokenize large files 10-40x faster than

@@ -787,23 +787,13 @@ export const promoteDesktopBuildArtifacts = Effect.fn("promoteDesktopBuildArtifa
   outputDir: string,
   platform: typeof BuildPlatform.Type,
   arch: typeof BuildArch.Type,
+  includeDirectories = true,
 ) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const stageEntries = yield* fs.readDirectory(stageDistDir);
-  yield* fs.makeDirectory(outputDir, { recursive: true });
-
-  const copiedArtifacts: string[] = [];
-  for (const entry of stageEntries) {
-    const from = path.join(stageDistDir, entry);
-    const stat = yield* fs.stat(from).pipe(Effect.orElseSucceed(() => null));
-    if (!stat || (stat.type !== "File" && stat.type !== "Directory")) continue;
-
-    const to = path.join(outputDir, entry);
-    yield* fs.copy(from, to);
-    copiedArtifacts.push(to);
-  }
-
+  const copiedArtifacts = yield* copyDesktopBuildArtifacts(
+    stageDistDir,
+    outputDir,
+    includeDirectories,
+  );
   if (copiedArtifacts.length === 0) {
     return yield* new DesktopBuildNoArtifactsProducedError({
       distPath: stageDistDir,
@@ -4114,6 +4104,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     options.outputDir,
     options.platform,
     options.arch,
+    options.target === "dir",
   );
 
   yield* Effect.log("[desktop-artifact] Done. Artifacts:").pipe(
@@ -4126,6 +4117,41 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 ) {
   const repoRoot = yield* RepoRoot;
   return yield* withDesktopBuildLock(repoRoot, buildDesktopArtifactUnlocked(options));
+});
+
+export const copyDesktopBuildArtifacts = Effect.fn("copyDesktopBuildArtifacts")(function* (
+  stageDistDir: string,
+  outputDir: string,
+  includeDirectories = false,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const stageEntries = yield* fs.readDirectory(stageDistDir);
+  yield* fs.makeDirectory(outputDir, { recursive: true });
+
+  const copiedArtifacts: string[] = [];
+  for (const entry of stageEntries) {
+    const from = path.join(stageDistDir, entry);
+    const stat = yield* fs.stat(from).pipe(Effect.orElseSucceed(() => null));
+    if (!stat || (stat.type !== "File" && !(includeDirectories && stat.type === "Directory")))
+      continue;
+
+    const to = path.join(outputDir, entry);
+    // Replace whatever a reused output dir already holds at this path. fs.cp refuses to
+    // overwrite a directory with a file or a file with a directory, and only merges into
+    // an existing directory, so a stale entry of either type must go first.
+    yield* fs.remove(to, { recursive: true, force: true });
+    yield* Effect.tryPromise(() =>
+      NodeFSP.cp(from, to, {
+        recursive: true,
+        force: true,
+        verbatimSymlinks: true,
+      }),
+    );
+    copiedArtifacts.push(to);
+  }
+
+  return copiedArtifacts;
 });
 
 const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
