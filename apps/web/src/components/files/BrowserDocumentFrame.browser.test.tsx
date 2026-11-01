@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import "~/index.css";
 import { render } from "../../../test/render";
 
-import { HtmlRenderDocument } from "./BrowserDocumentFrame";
+import { BrowserDocumentFrame, HtmlRenderDocument } from "./BrowserDocumentFrame";
 
 const sizeChanged = (height: number) => ({
   jsonrpc: "2.0",
@@ -140,4 +140,31 @@ it("keeps the first and last selected card rings inside the fitted renderer fram
     expect(bounds.bottom).toBeLessThanOrEqual(bounds.viewportHeight);
     expect(bounds.scrollWidth).toBeLessThanOrEqual(bounds.viewportWidth);
   }
+});
+
+it("runs HTML reports without granting access to the parent document", async () => {
+  const report = new Promise<boolean>((resolve) => {
+    window.addEventListener("message", function received(event) {
+      if (event.data?.type !== "report-parent-access") return;
+      window.removeEventListener("message", received);
+      resolve(event.data.blocked === true && event.origin === "null");
+    });
+  });
+  const src = URL.createObjectURL(
+    new Blob(
+      [
+        `<script>
+    let blocked = false;
+    try { parent.document.body; } catch { blocked = true; }
+    parent.postMessage({type: "report-parent-access", blocked}, "*");
+  </script>`,
+      ],
+      { type: "text/html" },
+    ),
+  );
+  using _url = { [Symbol.dispose]: () => URL.revokeObjectURL(src) };
+  await using _screen = await render(
+    <BrowserDocumentFrame src={src} title="Local report" pdf={false} />,
+  );
+  expect(await report).toBe(true);
 });
