@@ -37,6 +37,9 @@ const DISCORD_PUBLIC_THREAD_TYPE = 11;
 const DISCORD_THREAD_ARCHIVE_MINUTES = 1440;
 const DISCORD_THREAD_NAME_MAX = 100;
 const DISCORD_UNKNOWN_CHANNEL_CODE = 10003;
+const DISCORD_LINKS_UNREADABLE_MESSAGE =
+  "Discord link map links.json is unreadable; refusing to post or open a thread.";
+const DISCORD_TOP_LEVEL_POST_MESSAGE = "Refusing to post a top-level Discord channel message.";
 const DISCORD_MESSAGE_FLAG_SUPPRESS_EMBEDS = 1 << 2;
 const DISCORD_MESSAGE_FLAG_SUPPRESS_NOTIFICATIONS = 1 << 12;
 const SKIPPED_NOT_DISCORD_LINKED_SUMMARY =
@@ -610,10 +613,18 @@ async function writeDiscordPostThreadStore(
 
 function assertDiscordThreadDestination(threadId: string, parentChannelId: string): string {
   const destination = threadId.trim();
-  if (destination.length === 0 || destination === parentChannelId) {
-    throw new Error("Refusing to post a top-level Discord channel message.");
+  if (destination.length === 0 || destination === parentChannelId.trim()) {
+    throw new Error(DISCORD_TOP_LEVEL_POST_MESSAGE);
   }
   return destination;
+}
+
+function assertReusableDiscordPostThread(
+  record: DiscordPostThreadRecord,
+  currentChannelId: string,
+): string {
+  const destination = assertDiscordThreadDestination(record.discordThreadId, currentChannelId);
+  return assertDiscordThreadDestination(destination, record.channelId);
 }
 
 function discordThreadIdFromCreateResponse(body: unknown, parentChannelId: string): string {
@@ -994,20 +1005,32 @@ function discordPostThreadMapFailure(reason: DiscordPostThreadStoreReason): Erro
   return new Error(`Discord post thread map is ${reason}; refusing to open another thread.`);
 }
 
+function discordPostThreadStoreRecord(record: DiscordPostThreadRecord): DiscordPostThreadRecord {
+  return {
+    t3ThreadId: record.t3ThreadId,
+    discordThreadId: record.discordThreadId,
+    channelId: record.channelId,
+    guildId: record.guildId,
+    name: record.name,
+    createdAt: record.createdAt,
+  };
+}
+
 async function persistDiscordPostThreadRecord(
   dataDir: string,
   record: DiscordPostThreadRecord,
 ): Promise<boolean> {
   const existing = await readDiscordPostThreadStore(dataDir);
   if (!existing.ok) return false;
+  const stored = discordPostThreadStoreRecord(record);
   const next = [
     ...existing.threads.filter(
       (entry) =>
         !(
-          entry.t3ThreadId === record.t3ThreadId && entry.discordThreadId === record.discordThreadId
+          entry.t3ThreadId === stored.t3ThreadId && entry.discordThreadId === stored.discordThreadId
         ),
     ),
-    record,
+    stored,
   ];
   try {
     await writeDiscordPostThreadStore(dataDir, next);
@@ -1038,6 +1061,7 @@ async function saveCreatedDiscordPostThread(input: {
     try {
       await input.deleteThread(input.record.discordThreadId);
     } catch (error) {
+      discordPostThreadMemory.set(input.record.t3ThreadId, { ...input.record, persisted: false });
       throw new Error(
         `Discord post thread map could not be saved, and deleting the new thread failed: ${messageFromUnknown(error)}`,
         { cause: error },
@@ -1048,12 +1072,52 @@ async function saveCreatedDiscordPostThread(input: {
   return rememberPersistedDiscordPostThread(input.record);
 }
 
+function rememberedDiscordPostThread(t3ThreadId: string): RememberedDiscordPostThread | null {
+  return discordPostThreadMemory.get(t3ThreadId) ?? null;
+}
+
 function rememberedDiscordPostThreadId(t3ThreadId: string): string | null {
-  return discordPostThreadMemory.get(t3ThreadId)?.discordThreadId ?? null;
+  return rememberedDiscordPostThread(t3ThreadId)?.discordThreadId ?? null;
 }
 
 function clearDiscordPostThreadMemory(): void {
   discordPostThreadMemory.clear();
+}
+
+interface EnsuredDiscordPostThread {
+  readonly discordThreadId: string;
+  readonly sideStore: boolean;
+}
+
+// A links.json row can appear after the pre-lock lookup, including while the
+// repository channel is resolved and during Unknown Channel recovery.
+async function readLinkedDiscordPostThread(
+  lookupLink: (t3ThreadId: string) => Promise<ActiveDiscordLinkLookup>,
+  t3ThreadId: string,
+  channelId: string,
+): Promise<{ readonly discordThreadId: string; readonly sideStore: false } | null> {
+  const lookup = await lookupLink(t3ThreadId);
+  if (lookup.status === "unreadable") throw new Error(DISCORD_LINKS_UNREADABLE_MESSAGE);
+  if (lookup.discordThreadId === null) return null;
+  return {
+    discordThreadId: assertDiscordThreadDestination(lookup.discordThreadId, channelId),
+    sideStore: false,
+  };
+}
+
+async function retryUnpersistedDiscordPostThread(input: {
+  readonly dataDir: string;
+  readonly channelId: string;
+  readonly record: RememberedDiscordPostThread;
+}): Promise<string> {
+  const destination = assertReusableDiscordPostThread(input.record, input.channelId);
+  if (input.record.persisted) return destination;
+  const saved = await persistDiscordPostThreadRecord(input.dataDir, input.record);
+  if (!saved) {
+    throw new Error("Discord post thread map could not be saved; refusing to post.");
+  }
+  rememberPersistedDiscordPostThread(input.record);
+  return destination;
 }
 
 async function ensureDiscordPostThreadUnlocked(input: {
@@ -1062,32 +1126,55 @@ async function ensureDiscordPostThreadUnlocked(input: {
   readonly channelId: string;
   readonly guildId: string;
   readonly title: string;
-}): Promise<string> {
+  readonly dataDir?: string;
+  readonly lookupLink?: (t3ThreadId: string) => Promise<ActiveDiscordLinkLookup>;
+  readonly createThread?: (input: {
+    readonly token: string;
+    readonly channelId: string;
+    readonly name: string;
+  }) => Promise<unknown>;
+}): Promise<EnsuredDiscordPostThread> {
+  const dataDir = input.dataDir ?? discordBotDataDir();
+  const lookupLink = input.lookupLink ?? lookupActiveLinkedDiscordThread;
+  const createThread = input.createThread ?? createDiscordPublicThread;
   const remembered = discordPostThreadMemory.get(input.t3ThreadId);
   if (remembered) {
-    assertDiscordThreadDestination(remembered.discordThreadId, input.channelId);
-    return remembered.discordThreadId;
+    const linked = await readLinkedDiscordPostThread(lookupLink, input.t3ThreadId, input.channelId);
+    if (linked) return linked;
+    return {
+      discordThreadId: await retryUnpersistedDiscordPostThread({
+        dataDir,
+        channelId: input.channelId,
+        record: remembered,
+      }),
+      sideStore: true,
+    };
   }
 
-  const dataDir = discordBotDataDir();
   const store = await readDiscordPostThreadStore(dataDir);
   const plan = planStoredDiscordPostThread({ store, t3ThreadId: input.t3ThreadId });
   if (plan.action === "fail") throw discordPostThreadMapFailure(plan.reason);
   if (plan.action === "reuse") {
-    assertDiscordThreadDestination(plan.record.discordThreadId, input.channelId);
-    return rememberPersistedDiscordPostThread(plan.record);
+    const linked = await readLinkedDiscordPostThread(lookupLink, input.t3ThreadId, input.channelId);
+    if (linked) return linked;
+    const discordThreadId = assertReusableDiscordPostThread(plan.record, input.channelId);
+    rememberPersistedDiscordPostThread(plan.record);
+    return { discordThreadId, sideStore: true };
   }
+
+  const linked = await readLinkedDiscordPostThread(lookupLink, input.t3ThreadId, input.channelId);
+  if (linked) return linked;
 
   const name = discordThreadNameFromTitle(input.title);
   const created = discordThreadIdFromCreateResponse(
-    await createDiscordPublicThread({
+    await createThread({
       token: input.token,
       channelId: input.channelId,
       name,
     }),
     input.channelId,
   );
-  return saveCreatedDiscordPostThread({
+  const discordThreadId = await saveCreatedDiscordPostThread({
     dataDir,
     deleteThread: (discordThreadId) => deleteDiscordThread(input.token, discordThreadId),
     record: {
@@ -1099,6 +1186,7 @@ async function ensureDiscordPostThreadUnlocked(input: {
       createdAt: isoTimestampNow(),
     },
   });
+  return { discordThreadId, sideStore: true };
 }
 
 async function forgetDiscordPostThreadUnlocked(
@@ -1150,7 +1238,7 @@ async function deliverDiscordThreadMessage(input: {
         title: input.title,
       });
     });
-    const next = assertDiscordThreadDestination(replacement, input.parentChannelId);
+    const next = assertDiscordThreadDestination(replacement.discordThreadId, input.parentChannelId);
     const message = await createDiscordMessage({
       token: input.token,
       channelId: next,
@@ -1270,9 +1358,7 @@ const postToLinkedDiscordChannel = Effect.fn("DiscordLinkedChannelTool.post")(fu
 
   const activeLink = yield* Effect.promise(() => lookupActiveLinkedDiscordThread(threadId));
   if (activeLink.status === "unreadable") {
-    return yield* discordPostFailure(
-      "Discord link map links.json is unreadable; refusing to post or open a thread.",
-    );
+    return yield* discordPostFailure(DISCORD_LINKS_UNREADABLE_MESSAGE);
   }
   const unlinkedPostsEnabled = yield* Effect.promise(() => resolveUnlinkedDiscordPostsEnabled());
   const decision = decideDiscordPost({
@@ -1322,9 +1408,12 @@ const postToLinkedDiscordChannel = Effect.fn("DiscordLinkedChannelTool.post")(fu
   const cwd = threadShell.value.worktreePath ?? projectShell.value.workspaceRoot;
   const files = yield* Effect.promise(() => readDiscordUploadFiles(input.attachments ?? [], cwd));
   const body = buildDiscordCreateMessageBody(input, files);
-  const discordThreadId =
+  const opened =
     decision.action === "post"
-      ? decision.discordThreadId
+      ? {
+          discordThreadId: decision.discordThreadId,
+          sideStore: false,
+        }
       : yield* Effect.promise(() =>
           withDiscordPostThreadLock(() =>
             ensureDiscordPostThreadUnlocked({
@@ -1340,8 +1429,8 @@ const postToLinkedDiscordChannel = Effect.fn("DiscordLinkedChannelTool.post")(fu
     deliverDiscordThreadMessage({
       token,
       parentChannelId: linkedChannel.channelId,
-      discordThreadId,
-      sideStore: decision.action === "open-thread",
+      discordThreadId: opened.discordThreadId,
+      sideStore: opened.sideStore,
       t3ThreadId: threadId,
       guildId: linkedChannel.guildId,
       title: threadShell.value.title,
@@ -1398,8 +1487,10 @@ export const __testing = {
   activeDiscordLinkFromFile,
   persistDiscordPostThreadRecord,
   saveCreatedDiscordPostThread,
+  rememberedDiscordPostThread,
   rememberedDiscordPostThreadId,
   clearDiscordPostThreadMemory,
+  ensureDiscordPostThreadUnlocked,
   assertDiscordThreadDestination,
   discordThreadIdFromCreateResponse,
   isUnknownDiscordChannel,

@@ -603,6 +603,7 @@ describe("discord post thread side store", () => {
         ).resolves.toBe("discord-saved");
         expect(deleted).toEqual([]);
         expect(__testing.rememberedDiscordPostThreadId("t3-saved")).toBe("discord-saved");
+        expect(__testing.rememberedDiscordPostThread("t3-saved")?.persisted).toBe(true);
         expect(await __testing.readDiscordPostThreadStore(directory)).toEqual({
           ok: true,
           threads: [record],
@@ -613,7 +614,7 @@ describe("discord post thread side store", () => {
     });
   });
 
-  it("deletes a created thread and does not remember it when the map cannot be saved", async () => {
+  it("deletes a created thread when the map cannot be saved, and remembers it when that delete fails", async () => {
     await withTempDir(async (directory) => {
       const blocked = NodePath.join(directory, "not-a-directory");
       const raw = `${JSON.stringify({ version: 1, threads: [older, newer] }, null, 2)}\n`;
@@ -635,7 +636,6 @@ describe("discord post thread side store", () => {
         expect(__testing.rememberedDiscordPostThreadId("t3-created")).toBeNull();
         expect(NodeFS.readFileSync(blocked, "utf8")).toBe(raw);
 
-        deleted.length = 0;
         await expect(
           __testing.saveCreatedDiscordPostThread({
             dataDir: blocked,
@@ -643,8 +643,252 @@ describe("discord post thread side store", () => {
             deleteThread: () => Promise.reject(new Error("delete failed")),
           }),
         ).rejects.toThrow(/deleting the new thread failed/);
-        expect(__testing.rememberedDiscordPostThreadId("t3-created")).toBeNull();
+        expect(__testing.rememberedDiscordPostThread("t3-created")).toMatchObject({
+          discordThreadId: "discord-created",
+          persisted: false,
+        });
         expect(NodeFS.readFileSync(blocked, "utf8")).toBe(raw);
+      } finally {
+        __testing.clearDiscordPostThreadMemory();
+      }
+    });
+  });
+
+  function ensureThread(input: {
+    readonly directory: string;
+    readonly t3ThreadId: string;
+    readonly channelId?: string;
+    readonly lookup: (
+      t3ThreadId: string,
+    ) => Promise<
+      | { readonly status: "unreadable" }
+      | { readonly status: "ready"; readonly discordThreadId: string | null }
+    >;
+    readonly onCreate: () => void;
+  }) {
+    return __testing.ensureDiscordPostThreadUnlocked({
+      token: "test-token",
+      t3ThreadId: input.t3ThreadId,
+      channelId: input.channelId ?? "channel-now",
+      guildId: "guild-1",
+      title: "Saved title",
+      dataDir: input.directory,
+      lookupLink: input.lookup,
+      createThread: () => {
+        input.onCreate();
+        return Promise.resolve({
+          id: "discord-extra",
+          parent_id: input.channelId ?? "channel-now",
+        });
+      },
+    });
+  }
+
+  it("retries the unsaved thread instead of creating another one", async () => {
+    await withTempDir(async (directory) => {
+      const blocked = NodePath.join(directory, "not-a-directory");
+      NodeFS.writeFileSync(blocked, "blocked\n");
+      const record = { ...newer, t3ThreadId: "t3-retry", discordThreadId: "discord-retry" };
+      let created = 0;
+      __testing.clearDiscordPostThreadMemory();
+      try {
+        await expect(
+          __testing.saveCreatedDiscordPostThread({
+            dataDir: blocked,
+            record,
+            deleteThread: () => Promise.reject(new Error("delete failed")),
+          }),
+        ).rejects.toThrow(/deleting the new thread failed/);
+
+        await expect(
+          ensureThread({
+            directory: blocked,
+            t3ThreadId: "t3-retry",
+            lookup: async () => ({ status: "ready", discordThreadId: null }),
+            onCreate: () => {
+              created += 1;
+            },
+          }),
+        ).rejects.toThrow(/could not be saved; refusing to post/);
+        expect(created).toBe(0);
+        expect(__testing.rememberedDiscordPostThread("t3-retry")?.persisted).toBe(false);
+        expect(NodeFS.readFileSync(blocked, "utf8")).toBe("blocked\n");
+
+        await expect(
+          ensureThread({
+            directory,
+            t3ThreadId: "t3-retry",
+            lookup: async () => ({ status: "ready", discordThreadId: null }),
+            onCreate: () => {
+              created += 1;
+            },
+          }),
+        ).resolves.toEqual({ discordThreadId: "discord-retry", sideStore: true });
+        expect(created).toBe(0);
+        expect(__testing.rememberedDiscordPostThread("t3-retry")?.persisted).toBe(true);
+        expect(await __testing.readDiscordPostThreadStore(directory)).toEqual({
+          ok: true,
+          threads: [record],
+        });
+      } finally {
+        __testing.clearDiscordPostThreadMemory();
+      }
+    });
+  });
+
+  it("uses a links.json thread that appears before create and does not open another", async () => {
+    await withTempDir(async (directory) => {
+      let created = 0;
+      const onCreate = () => {
+        created += 1;
+      };
+      __testing.clearDiscordPostThreadMemory();
+      try {
+        await expect(
+          ensureThread({
+            directory,
+            t3ThreadId: "t3-late-link",
+            lookup: async () => ({ status: "unreadable" }),
+            onCreate,
+          }),
+        ).rejects.toThrow(/links.json is unreadable/);
+        expect(created).toBe(0);
+
+        await expect(
+          ensureThread({
+            directory,
+            t3ThreadId: "t3-late-link",
+            lookup: async () => ({ status: "ready", discordThreadId: "channel-now" }),
+            onCreate,
+          }),
+        ).rejects.toThrow(/top-level Discord channel message/);
+        expect(created).toBe(0);
+
+        await expect(
+          ensureThread({
+            directory,
+            t3ThreadId: "t3-late-link",
+            lookup: async () => ({ status: "ready", discordThreadId: "discord-live" }),
+            onCreate,
+          }),
+        ).resolves.toEqual({ discordThreadId: "discord-live", sideStore: false });
+        expect(created).toBe(0);
+        expect(await __testing.readDiscordPostThreadStore(directory)).toEqual({
+          ok: true,
+          threads: [],
+        });
+
+        await expect(
+          ensureThread({
+            directory,
+            t3ThreadId: "t3-late-link",
+            lookup: async () => ({ status: "ready", discordThreadId: null }),
+            onCreate,
+          }),
+        ).resolves.toEqual({ discordThreadId: "discord-extra", sideStore: true });
+        expect(created).toBe(1);
+      } finally {
+        __testing.clearDiscordPostThreadMemory();
+      }
+    });
+  });
+
+  it("prefers a new links.json thread over memory and refuses a thread id that is its own channel", async () => {
+    await withTempDir(async (directory) => {
+      const blocked = NodePath.join(directory, "not-a-directory");
+      const raw = "blocked\n";
+      NodeFS.writeFileSync(blocked, raw);
+      let created = 0;
+      const onCreate = () => {
+        created += 1;
+      };
+      __testing.clearDiscordPostThreadMemory();
+      try {
+        await expect(
+          __testing.saveCreatedDiscordPostThread({
+            dataDir: blocked,
+            record: { ...newer, t3ThreadId: "t3-memory-link", discordThreadId: "discord-memory" },
+            deleteThread: () => Promise.reject(new Error("delete failed")),
+          }),
+        ).rejects.toThrow(/deleting the new thread failed/);
+        await expect(
+          ensureThread({
+            directory: blocked,
+            t3ThreadId: "t3-memory-link",
+            lookup: async () => ({ status: "ready", discordThreadId: "discord-live" }),
+            onCreate,
+          }),
+        ).resolves.toEqual({ discordThreadId: "discord-live", sideStore: false });
+        expect(created).toBe(0);
+        expect(__testing.rememberedDiscordPostThread("t3-memory-link")).toMatchObject({
+          discordThreadId: "discord-memory",
+          persisted: false,
+        });
+        expect(NodeFS.readFileSync(blocked, "utf8")).toBe(raw);
+
+        __testing.clearDiscordPostThreadMemory();
+        await expect(
+          __testing.saveCreatedDiscordPostThread({
+            dataDir: blocked,
+            record: {
+              ...older,
+              t3ThreadId: "t3-memory-channel",
+              discordThreadId: "channel-old",
+              channelId: "channel-old",
+            },
+            deleteThread: () => Promise.reject(new Error("delete failed")),
+          }),
+        ).rejects.toThrow(/deleting the new thread failed/);
+        await expect(
+          ensureThread({
+            directory: blocked,
+            t3ThreadId: "t3-memory-channel",
+            channelId: "channel-now",
+            lookup: async () => ({ status: "ready", discordThreadId: null }),
+            onCreate,
+          }),
+        ).rejects.toThrow(/top-level Discord channel message/);
+        expect(created).toBe(0);
+        expect(__testing.rememberedDiscordPostThread("t3-memory-channel")).toMatchObject({
+          discordThreadId: "channel-old",
+          persisted: false,
+        });
+
+        __testing.clearDiscordPostThreadMemory();
+        await __testing.writeDiscordPostThreadStore(directory, [
+          {
+            ...older,
+            t3ThreadId: "t3-same-channel",
+            discordThreadId: "channel-old",
+            channelId: "channel-old",
+          },
+        ]);
+        await expect(
+          ensureThread({
+            directory,
+            t3ThreadId: "t3-same-channel",
+            channelId: "channel-now",
+            lookup: async () => ({ status: "ready", discordThreadId: null }),
+            onCreate,
+          }),
+        ).rejects.toThrow(/top-level Discord channel message/);
+        expect(created).toBe(0);
+        expect(__testing.rememberedDiscordPostThreadId("t3-same-channel")).toBeNull();
+
+        await __testing.writeDiscordPostThreadStore(directory, [
+          { ...newer, t3ThreadId: "t3-reused", discordThreadId: "discord-reused" },
+        ]);
+        await expect(
+          ensureThread({
+            directory,
+            t3ThreadId: "t3-reused",
+            channelId: "channel-now",
+            lookup: async () => ({ status: "ready", discordThreadId: null }),
+            onCreate,
+          }),
+        ).resolves.toEqual({ discordThreadId: "discord-reused", sideStore: true });
+        expect(created).toBe(0);
+        expect(__testing.rememberedDiscordPostThread("t3-reused")?.persisted).toBe(true);
       } finally {
         __testing.clearDiscordPostThreadMemory();
       }
