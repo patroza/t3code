@@ -104,14 +104,16 @@ export function sendPreviewDebuggerCommand(
   params: Record<string, unknown>,
   sessionId: string | undefined,
   focus: PreviewFocusSource | null,
+  send?: () => Promise<unknown>,
 ): Promise<unknown> {
   const mouseButton =
     method === "Input.dispatchMouseEvent" &&
     (params.type === "mousePressed" || params.type === "mouseReleased");
   const previouslyFocused =
     mouseButton && focus !== null ? readFocus(() => focus.getFocusedWebContents()) : null;
-  const sent =
-    sessionId === undefined
+  const sent = send
+    ? send()
+    : sessionId === undefined
       ? debuggee.sendCommand(method, params)
       : debuggee.sendCommand(method, params, sessionId);
   if (!mouseButton || focus === null) return sent;
@@ -428,10 +430,9 @@ export const make = Effect.gen(function* () {
             params,
             sessionId,
             loadElectronFocus(),
+            () => sendPageCommand(webContents, debuggee, method, params, sessionId),
           )
-        : sessionId === undefined
-          ? sendPageCommand(webContents, debuggee, method, params)
-          : debuggee.sendCommand(method, params, sessionId);
+        : sendPageCommand(webContents, debuggee, method, params, sessionId);
     const detachedOwners = new Set<string>();
     /** Viewers and recordings stream; the agent's own sessions never do. */
     const streamingOwners = new Set<string>();

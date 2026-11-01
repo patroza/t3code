@@ -8,7 +8,10 @@ import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/
 import { useActiveNewTask } from "../../state/active-new-task";
 import { ThreadUndoNotice } from "../home/ThreadUndoNotice";
 import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
-import { resolveScratchProjectScopeKey } from "@t3tools/client-runtime/state/project-grouping";
+import {
+  pickableProjectGroups,
+  resolveScratchProjectScopeKey,
+} from "@t3tools/client-runtime/state/project-grouping";
 import {
   useAppearancePreferences,
   useAndroidFloatingTabs,
@@ -260,7 +263,7 @@ function ThreadNavigationSidebarPane(
       projectGroupingMode: options.projectGroupingMode,
     }))();
   const projectFilterOptions = (() =>
-    projectScopes.map((scope) => ({
+    pickableProjectGroups(projectScopes).map((scope) => ({
       key: scope.key,
       label: scope.title,
     })))();
@@ -276,8 +279,9 @@ function ThreadNavigationSidebarPane(
         ),
       ),
     ))();
+  // An archived project’s filter reads as all projects, matching the filter menu.
   const selectedProjectScope =
-    projectScopes.find((scope) => scope.key === resolvedProjectKey) ?? null;
+    pickableProjectGroups(projectScopes).find((scope) => scope.key === resolvedProjectKey) ?? null;
   const threadSearch = useThreadSearch(
     searchEnvironmentIds,
     props.searchQuery,
