@@ -2522,6 +2522,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             (cause) =>
               new GitCommandError({
                 operation: "GitVcsDriver.commit.mergeHead",
+                failureKind: "unknown",
                 command: "git commit",
                 cwd,
                 detail: "Could not check whether a merge is in progress.",
@@ -2533,6 +2534,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         if (isMerging) {
           return yield* new GitCommandError({
             operation: "GitVcsDriver.commit",
+            failureKind: "unknown",
             command: "git commit",
             cwd,
             detail:
