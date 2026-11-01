@@ -53,6 +53,7 @@ import {
   parseRemoteNamesInGitOrder,
   parseRemoteRefWithRemoteNames,
 } from "../git/remoteRefs.ts";
+import { makeIsServerInternalPath } from "../auth/serverInternalPaths.ts";
 import * as ServerConfig from "../config.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 
@@ -725,10 +726,11 @@ const addCurrentSpanEvent =
     }),
   );
 
+// Nested Git processes share the trace file but reuse child IDs in their own sessions.
 function trace2ChildKey(record: Record<string, unknown>): string | null {
   const childId = record.child_id;
   if (typeof childId === "number" || typeof childId === "string") {
-    return String(childId);
+    return typeof record.sid === "string" ? `${record.sid}\n${childId}` : String(childId);
   }
   const hookName = record.hook_name;
   return typeof hookName === "string" && hookName.trim().length > 0 ? hookName.trim() : null;
@@ -824,6 +826,9 @@ const createTrace2Monitor = Effect.fnUntraced(function* (
     }
 
     if (event === "child_start") {
+      if (traceRecord.success.child_class !== "hook") {
+        return;
+      }
       const now = yield* DateTime.now;
       hookStartByChildKey.set(childKey, { hookName, startedAtMs: DateTime.toEpochMillis(now) });
       yield* addCurrentSpanEvent("git.hook.started", {
@@ -1025,6 +1030,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const path = yield* Path.Path;
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const { worktreesDir } = yield* ServerConfig.ServerConfig;
+  const isServerInternalPath = yield* makeIsServerInternalPath;
   const crypto = yield* Crypto.Crypto;
   const hostPlatform = yield* HostProcess.Platform;
   const serviceScope = yield* Effect.scope;
@@ -1331,16 +1337,37 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
   const resolveAvailableBranchName = Effect.fn("resolveAvailableBranchName")(function* (
     cwd: string,
-    desiredBranch: string,
+    requestedBranch: string,
   ) {
-    const isDesiredTaken = yield* branchExists(cwd, desiredBranch);
+    // A branch at a parent path (such as `t3`) blocks every ref nested under it, so no suffix
+    // would help; flatten to a sibling the way temporary worktree branches already do.
+    const segments = requestedBranch.split("/");
+    let blockedByParent = false;
+    for (let index = 1; index < segments.length && !blockedByParent; index += 1) {
+      blockedByParent = yield* branchExists(cwd, segments.slice(0, index).join("/"));
+    }
+    const desiredBranch = blockedByParent ? segments.join("-") : requestedBranch;
+    // A branch nested under the name (`t3-fix/child`) blocks it as surely as one with the name.
+    const isBranchNameTaken = (name: string) =>
+      Effect.zipWith(
+        branchExists(cwd, name),
+        runGitStdout(
+          "GitVcsDriver.branchExists",
+          cwd,
+          ["for-each-ref", "--count=1", "--format=%(refname)", `refs/heads/${name}/`],
+          true,
+        ),
+        (exists, nested) => exists || nested.trim().length > 0,
+      );
+
+    const isDesiredTaken = yield* isBranchNameTaken(desiredBranch);
     if (!isDesiredTaken) {
       return desiredBranch;
     }
 
     for (let suffix = 1; suffix <= 100; suffix += 1) {
       const candidate = `${desiredBranch}-${suffix}`;
-      const isCandidateTaken = yield* branchExists(cwd, candidate);
+      const isCandidateTaken = yield* isBranchNameTaken(candidate);
       if (!isCandidateTaken) {
         return candidate;
       }
@@ -2485,6 +2512,35 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           { env },
         );
       } else {
+        const mergeHeadPath = yield* runGitStdout("GitVcsDriver.commit.mergeHead", cwd, [
+          "rev-parse",
+          "--git-path",
+          "MERGE_HEAD",
+        ]);
+        const isMerging = yield* fileSystem.exists(path.resolve(cwd, mergeHeadPath.trim())).pipe(
+          Effect.mapError(
+            (cause) =>
+              new GitCommandError({
+                operation: "GitVcsDriver.commit.mergeHead",
+                failureKind: "unknown",
+                command: "git commit",
+                cwd,
+                detail: "Could not check whether a merge is in progress.",
+                cause,
+              }),
+          ),
+        );
+        // Like git commit --only, reject partial merges before reset can discard their ancestry.
+        if (isMerging) {
+          return yield* new GitCommandError({
+            operation: "GitVcsDriver.commit",
+            failureKind: "unknown",
+            command: "git commit",
+            cwd,
+            detail:
+              "Cannot commit selected files during a merge. Commit all files to finish the merge.",
+          });
+        }
         yield* runGit("GitVcsDriver.commit.reset", cwd, ["reset"]).pipe(
           Effect.catchTags({ GitCommandError: () => Effect.void }),
         );
@@ -2566,7 +2622,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           const stagedPatch = yield* runGitStdoutWithOptions(
             "GitVcsDriver.prepareCommitContext.stagedPatch",
             cwd,
-            ["diff", "--no-ext-diff", "--cached", "--patch", "--minimal"],
+            ["diff", "--no-ext-diff", "--no-textconv", "--cached", "--patch", "--minimal"],
             {
               env,
               maxOutputBytes: PREPARED_COMMIT_PATCH_MAX_OUTPUT_BYTES,
@@ -3005,7 +3061,15 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         runGitStdoutWithOptions(
           "GitVcsDriver.readRangeContext.diffPatch",
           cwd,
-          ["diff", "--no-ext-diff", "--patch", "--minimal", "--end-of-options", diffRange],
+          [
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--patch",
+            "--minimal",
+            "--end-of-options",
+            diffRange,
+          ],
           {
             maxOutputBytes: RANGE_DIFF_PATCH_MAX_OUTPUT_BYTES,
             appendTruncationMarker: true,
@@ -3660,6 +3724,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         "fs.realPath",
         `Diff file '${input.newPath}' resolves outside the review workspace.`,
       );
+    }
+    if (yield* isServerInternalPath(realTarget)) {
+      return yield* fileError("fs.realPath", `Diff file '${input.newPath}' is not available.`);
     }
 
     const info = yield* fileSystem
