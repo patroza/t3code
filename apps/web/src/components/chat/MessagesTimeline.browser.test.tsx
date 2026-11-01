@@ -1,8 +1,6 @@
 import { RegistryProvider } from "@effect/atom-react";
 import { AudioPreview } from "../files/AudioPreview";
-import { onTestFinished } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
-import { stubGlobal } from "../../../test/render";
 import {
   CheckpointRef,
   ComposerContextId,
@@ -10,12 +8,16 @@ import {
   IdentityUsername,
   MessageId,
   PersonId,
+  NodeId,
+  ProviderDriverKind,
+  ProviderInstanceId,
   RunAttemptId,
   RunId,
   RuntimeRequestId,
   TurnItemId,
   ScheduledTaskId,
   ThreadId,
+  type OrchestrationV2Subagent,
 } from "@t3tools/contracts";
 import {
   COMPOSER_CONTEXT_CLIPBOARD_MIME,
@@ -32,8 +34,10 @@ import {
   type ComponentProps,
   type ReactElement,
 } from "react";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it, onTestFinished, vi } from "vite-plus/test";
 import { flushSync } from "react-dom";
+import * as DateTime from "effect/DateTime";
+import { Atom } from "effect/reactivity";
 
 import { userEvent } from "vite-plus/test/browser";
 import { serverEnvironment } from "../../state/server";
@@ -43,7 +47,8 @@ import { readTimelinePosition } from "./timelineScrollAnchoring";
 import { useComposerFocusState } from "./useComposerFocusState";
 import "~/index.css";
 
-import { act, fakeTimers, render } from "../../../test/render";
+import { environmentThreadDetails } from "../../state/threads";
+import { act, fakeTimers, render, stubGlobal } from "../../../test/render";
 import { MessagesTimeline } from "./MessagesTimeline";
 import { makeStreamingTimelineFixture } from "../../test-fixtures";
 import {
@@ -58,6 +63,7 @@ import type { CitedHistory } from "./citationProcedure";
 import type { TimelineNavigation } from "./timelineViewport";
 import { useTimelineFollow } from "./useTimelineFollow";
 import { rememberTimelinePosition } from "./timelineScrollAnchoring";
+import { collectComposerContextReferences } from "@t3tools/shared/composerContextReferences";
 
 const environmentQuery = vi.hoisted(() => ({
   error: "Pull request not found",
@@ -251,6 +257,84 @@ function setup({ scheduledTasks = [] as ReadonlyArray<{ id: string; title: strin
 
 const TASK_ID = ScheduledTaskId.make("task-1");
 const AUTOMATION_PROMPT = "Triage the inbox\n\nLabel every new issue and close duplicates.";
+
+describe("MessagesTimeline work rows", () => {
+  it.each(["delegated", "legacy", "missing"] as const)(
+    "uses the reported task for %s completion notifications",
+    async (source) => {
+      setup();
+      const now = DateTime.makeUnsafe(CREATED_AT);
+      const childThreadId = ThreadId.make("shared-child");
+      const task = (
+        id: string,
+        status: OrchestrationV2Subagent["status"],
+        result: string,
+      ): OrchestrationV2Subagent => ({
+        id: NodeId.make(id),
+        threadId: ThreadId.make("thread-1"),
+        runId: null,
+        parentNodeId: NodeId.make("parent-root"),
+        origin: "app_owned",
+        createdBy: "agent",
+        driver: ProviderDriverKind.make("claudeAgent"),
+        providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+        providerThreadId: null,
+        childThreadId,
+        nativeTaskRef: null,
+        prompt: "Simplify delivery",
+        title: "Simplify delivery",
+        model: null,
+        status,
+        result,
+        startedAt: now,
+        completedAt: now,
+        updatedAt: now,
+      });
+      const tasks = [
+        task("original", "interrupted", "Old interrupted progress"),
+        task("continued", "completed", "Final implementation report"),
+        task("follow-up", "completed", "Follow-up explanation"),
+      ];
+      using _threadAtom = vi.spyOn(environmentThreadDetails, "threadAtom").mockReturnValue(
+        Atom.make({
+          projection: { subagents: tasks, turnItems: [], visibleTurnItems: [] },
+        }) as never,
+      );
+      const onOpenThread = vi.fn();
+      await using screen = await renderTimeline(
+        (source === "delegated" ? ["continued", "follow-up"] : [source]).map((id) =>
+          work(`notification-${id}`, {
+            label: "Notification fallback",
+            tone: "info",
+            itemType: "notification",
+            projectedItem: v2Item("notification", {
+              id: `notification-${id}`,
+              source:
+                source === "legacy"
+                  ? { kind: "subagent", childThreadId }
+                  : { kind: "delegated_task", childThreadId, taskIds: [NodeId.make(id)] },
+              outcome: "completed",
+              summary: "Notification fallback",
+            }),
+          }),
+        ),
+        { onOpenThread },
+      );
+      if (source === "delegated") {
+        expect(screen.text()).toContain("Final implementation report");
+        expect(screen.text()).toContain("Follow-up explanation");
+        expect(screen.text()).not.toContain("Old interrupted progress");
+        await click(screen.buttons("Open Simplify delivery")[0]!);
+        expect(onOpenThread).toHaveBeenCalledWith(childThreadId);
+      } else if (source === "legacy") {
+        expect(screen.text()).toContain("Old interrupted progress");
+      } else {
+        expect(screen.text()).toContain("Notification fallback");
+        expect(screen.text()).not.toContain("Old interrupted progress");
+      }
+    },
+  );
+});
 
 describe("MessagesTimeline messages", () => {
   it("exports context records only after selecting the chip, not its link in Mermaid source", async () => {
@@ -627,6 +711,60 @@ describe("MessagesTimeline messages", () => {
       { messageViewer },
     );
     expect(screen.container.querySelector("[data-user-message-attribution]")).toBeNull();
+  });
+
+  it("keeps each sender caption on adjacent grouped user messages", async () => {
+    await using screen = await renderTimeline(
+      [
+        message(
+          "From another person",
+          {
+            source: {
+              channel: "bot",
+              personId: PersonId.make("andrea"),
+              username: IdentityUsername.make("andrea"),
+            },
+          },
+          "other-person",
+        ),
+        message(
+          "From my other channel",
+          {
+            source: {
+              channel: "discord",
+              personId: PersonId.make("patroza"),
+              username: IdentityUsername.make("patroza"),
+            },
+          },
+          "other-channel",
+        ),
+        message(
+          "From this client",
+          {
+            source: {
+              channel: "desktop",
+              personId: PersonId.make("patroza"),
+              username: IdentityUsername.make("patroza"),
+            },
+          },
+          "this-client",
+        ),
+      ],
+      {
+        messageViewer: {
+          personId: "patroza",
+          username: "patroza",
+          channel: "desktop",
+          identityReady: true,
+        },
+      },
+    );
+    expect(
+      [...screen.container.querySelectorAll('[data-user-message-attribution="sender"]')].map(
+        (element) => element.textContent,
+      ),
+    ).toEqual(["andrea@bot", "discord"]);
+    expect(screen.text()).toContain("From this client");
   });
 
   it("shows steer intent ahead of committed user messages", async () => {
@@ -1860,6 +1998,75 @@ describe("MessagesTimeline agent messages", () => {
 });
 
 describe("MessagesTimeline attachments", () => {
+  it.each(["image", "file"] as const)(
+    "copies only matching context records for a wordless %s attachment",
+    async (kind) => {
+      const attachment = {
+        type: kind,
+        id: "media",
+        name: kind === "image" ? "photo.png" : "clip.mp4",
+        mimeType: kind === "image" ? "image/png" : "video/mp4",
+        sizeBytes: 100,
+        downloadable: false,
+      };
+      const record = {
+        version: 1 as const,
+        ...(kind === "image" ? { kind: "image" as const } : { kind: "file" as const }),
+        contextId: ComposerContextId.make("media-context"),
+        label: attachment.name,
+        attachmentId: attachment.id,
+        name: attachment.name,
+        mimeType: attachment.mimeType,
+        sizeBytes: attachment.sizeBytes,
+      };
+      await using screen = await renderTimeline([message("", { attachments: [attachment] })]);
+      expect(screen.buttons("Copy message")).toHaveLength(0);
+      await screen.rerender(
+        <MessagesTimeline
+          {...baseProps()}
+          timelineEntries={[
+            message("", {
+              attachments: [attachment],
+              context: { version: 1, records: [{ ...record, attachmentId: "other" }] },
+            }),
+          ]}
+        />,
+      );
+      expect(screen.buttons("Copy message")).toHaveLength(0);
+      await screen.rerender(
+        <MessagesTimeline
+          {...baseProps()}
+          timelineEntries={[
+            message("", {
+              attachments: [attachment],
+              context: {
+                version: 1,
+                records: [
+                  record,
+                  {
+                    ...record,
+                    contextId: ComposerContextId.make("other-context"),
+                    attachmentId: "other",
+                  },
+                ],
+              },
+            }),
+          ]}
+        />,
+      );
+      using write = vi.spyOn(navigator.clipboard, "write").mockResolvedValue();
+      await click(screen.button("Copy message"));
+      await vi.waitFor(() => expect(write).toHaveBeenCalledOnce());
+      const [item] = write.mock.calls[0]![0];
+      const text = await (await item!.getType("text/plain")).text();
+      const fragment = await (await item!.getType(COMPOSER_CONTEXT_CLIPBOARD_MIME)).text();
+      expect(
+        collectComposerContextReferences(text).map((reference) => reference.contextId),
+      ).toEqual([record.contextId]);
+      expect(decodeComposerContextFragment(fragment)?.records).toEqual([record]);
+    },
+  );
+
   it.each(["loadedmetadata", "loadeddata", "canplay"])(
     "plays audio with unknown duration after %s and updates the total later",
     async (readyEvent) => {

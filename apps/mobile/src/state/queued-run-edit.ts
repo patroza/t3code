@@ -7,6 +7,7 @@ import type {
   UploadChatAttachment,
 } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
+import { stripAttachmentOnlyBootstrapPrompt } from "@t3tools/shared/composerContextReferences";
 import {
   makeQueuedRunEditStore,
   resolveQueuedEditExit,
@@ -121,12 +122,17 @@ export function beginQueuedRunEdit(
   // The composer moves off the thread draft, so a paste or pick still running for it is dropped.
   abortComposerDraftOperations(threadKey);
   const draftKey = queuedEditDraftKey(threadKey, edit.runId);
+  const originalText = stripAttachmentOnlyBootstrapPrompt(edit.originalText);
   const draft = getComposerDraftSnapshot(draftKey);
   if (draft.text.length === 0 && draft.attachments.length === 0) {
-    setComposerDraftText(draftKey, edit.originalText);
+    setComposerDraftText(draftKey, originalText);
     setComposerDraftContext(draftKey, edit.context);
   }
-  queuedRunEdits.begin(threadKey, edit, { runs, onRunLeftQueue: exitQueuedRunEdit });
+  queuedRunEdits.begin(
+    threadKey,
+    { ...edit, originalText },
+    { runs, onRunLeftQueue: exitQueuedRunEdit },
+  );
 }
 
 export function removeQueuedRunEditAttachment(threadKey: string, attachmentId: string): void {

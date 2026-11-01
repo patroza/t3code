@@ -2,7 +2,7 @@
 set -euo pipefail
 : "${GITHUB_REPOSITORY:?}" "${RELEASE_REF:?}" "${RELEASE_SHA:?}"
 failed=0
-for workflow in mobile-eas-production.yml mobile-eas-development.yml; do
+for workflow in mobile-eas-production.yml; do
   if ! state="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow" --jq .state)"; then
     echo "ERROR: cannot read workflow state for $workflow" >&2
     failed=1
