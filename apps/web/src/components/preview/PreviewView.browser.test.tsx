@@ -278,6 +278,7 @@ describe("PreviewView", () => {
       let windowZoom = 1;
       vi.stubGlobal("desktopBridge", {
         getWindowZoomFactor: () => windowZoom,
+        onMenuAction: () => () => {},
         getLocalEnvironmentBootstraps: () => [],
       });
       const commit = vi.mocked(commitBrowserViewportChange).mockResolvedValueOnce(undefined);
