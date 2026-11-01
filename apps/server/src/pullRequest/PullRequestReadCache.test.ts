@@ -1,3 +1,5 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off - WeakRef collection needs a native JavaScript job boundary, not Effect scheduler or clock advancement.
+import * as NodeTimersPromises from "node:timers/promises";
 import * as NodeV8 from "node:v8";
 import * as NodeVM from "node:vm";
 import { assert, it } from "@effect/vitest";
@@ -123,6 +125,27 @@ it.layer(NodeServices.layer)("PR filesystem cache", (it) => {
     }),
   );
 
+  it.effect.each(["", "{", '{"pr":{"revision":42}}'])(
+    "recovers from malformed scope revisions without reusing stale entries: %j",
+    (corrupt) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pr-cache-" });
+        const original = yield* cacheLayer(directory);
+        yield* original.get("summary", Effect.succeed("stale"), ["pr"]);
+        yield* fs.writeFileString(directory + "/revisions", corrupt);
+        const recovered = yield* cacheLayer(directory);
+        let reads = 0;
+        const lookup = Effect.sync(() => String(++reads));
+        assert.strictEqual(yield* recovered.get("summary", lookup, ["pr"]), "1");
+        assert.strictEqual(yield* recovered.get("summary", lookup, ["pr"]), "1");
+        yield* recovered.invalidate("pr");
+        assert.strictEqual(yield* recovered.get("summary", lookup, ["pr"]), "2");
+        const restarted = yield* cacheLayer(directory);
+        assert.strictEqual(yield* restarted.get("summary", lookup, ["pr"]), "2");
+        assert.strictEqual(reads, 2);
+      }),
+  );
   it.effect("resumes caching after a failed scope read", () =>
     Effect.gen(function* () {
       const backing = yield* KeyValueStore.KeyValueStore;
@@ -172,7 +195,8 @@ it.layer(NodeServices.layer)("PR filesystem cache", (it) => {
       });
       for (let index = 0; index < 5; index++) yield* sweep(index);
       // WeakRef targets stay alive until the current job ends, so yield before collecting.
-      yield* Effect.yieldNow;
+      // oxlint-disable-next-line t3code/no-real-time-wait-in-tests -- WeakRef collection requires a new JavaScript job, not elapsed time or TestClock advancement.
+      yield* Effect.promise(() => NodeTimersPromises.setImmediate());
       collectGarbage();
       assert.strictEqual(sweeps.filter((sweepData) => sweepData.deref() !== undefined).length, 0);
     }).pipe(Effect.provide(KeyValueStore.layerMemory)),

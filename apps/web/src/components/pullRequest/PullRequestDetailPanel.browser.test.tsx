@@ -603,6 +603,7 @@ it("restores the selected PR tab when switching threads and remounting the right
           composerDraftTarget={ref}
           keybindings={[]}
           configuredPreviewUrls={[]}
+          sideChatParentPanel={{ openToolDiff: () => {}, runShellCommand: () => {} }}
           workspaceMutationId={null}
           getShortcutContext={shortcutContext}
           onSendAnnotation={() => {}}
