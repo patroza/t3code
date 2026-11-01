@@ -2775,7 +2775,13 @@ describe("OrchestratorMcpService provider resolution", () => {
       Effect.gen(function* () {
         const saved = yield* Ref.make<ReadonlyArray<ScheduledTask["workspaceStrategy"]>>([]);
         const gitFailure = (cwd: string, detail: string) =>
-          new GitCommandError({ operation: "GitVcsDriver.test", command: "git", cwd, detail });
+          new GitCommandError({
+            operation: "GitVcsDriver.test",
+            command: "git",
+            cwd,
+            detail,
+            failureKind: "unknown",
+          });
         const mcp = yield* OrchestratorMcpService.OrchestratorMcpService.pipe(
           Effect.provide(
             service(

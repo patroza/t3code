@@ -666,7 +666,7 @@ describe("AssetAccess", () => {
         expect(result._tag).toBe("Failure");
       }
       expect(resolved).toEqual([]);
-    }),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect.skipIf(!symlinksSupported)("does not issue URLs for server state files", () =>
