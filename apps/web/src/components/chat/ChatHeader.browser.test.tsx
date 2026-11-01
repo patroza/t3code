@@ -32,6 +32,22 @@ function header(title: string) {
         activeThreadTitle={title}
         isServerThread
         activeProject={null}
+        openInCwd={null}
+        activeProjectScripts={undefined}
+        preferredScriptId={null}
+        keybindings={[]}
+        availableEditors={[]}
+        gitCwd={null}
+        onRunProjectScript={() => {}}
+        onAddProjectScript={async () => {
+          throw new Error("Unexpected script mutation");
+        }}
+        onUpdateProjectScript={async () => {
+          throw new Error("Unexpected script mutation");
+        }}
+        onDeleteProjectScript={async () => {
+          throw new Error("Unexpected script mutation");
+        }}
         parentThreadLink={null}
         onOpenThread={() => {}}
         rightPanelOpen={false}

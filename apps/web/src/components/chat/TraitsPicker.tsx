@@ -8,7 +8,6 @@ import {
   replaceDescriptorCurrentValue,
   selectableProviderOptionChoices,
   isReasoningSelect,
-  REASONING_SELECT_DESCRIPTOR_IDS,
 } from "@t3tools/client-runtime/model-traits";
 import {
   type ModelSelection,
@@ -606,11 +605,7 @@ export const TraitsPicker = memo(function TraitsPicker({
     return null;
   }
 
-  const {
-    label: triggerLabel,
-    speedLabel,
-    otherLabels,
-  } = buildSharedTraitsTriggerDisplay({
+  const { label: triggerLabel, speedLabel } = buildSharedTraitsTriggerDisplay({
     provider,
     descriptors,
     primarySelectDescriptorId: primarySelectDescriptor?.id ?? null,
@@ -618,6 +613,15 @@ export const TraitsPicker = memo(function TraitsPicker({
     modelSelection: instanceId && model ? { instanceId, model, options: modelOptions ?? [] } : null,
     reportedModelSelection,
   });
+  const otherLabels = descriptors
+    .filter(
+      (descriptor) =>
+        !isReasoningSelect(descriptor) &&
+        descriptor.id !== "fastMode" &&
+        descriptor.id !== "serviceTier",
+    )
+    .map((descriptor) => traits.currentLabel(descriptor))
+    .filter((label): label is string => typeof label === "string" && label.length > 0);
   const speedIcon =
     speedLabel === "Ultrafast" ? "ultrafast" : speedLabel === "Fast" ? "fast" : null;
   const fastModeIcon = speedIcon ? (
@@ -637,9 +641,7 @@ export const TraitsPicker = memo(function TraitsPicker({
     ? [`Effort: ${triggerLabel}`, speedLabel, extraMenuHint].filter(Boolean).join(" · ")
     : triggerLabel;
   const effortGlyph =
-    isComposerOwned &&
-    primarySelectDescriptor &&
-    REASONING_SELECT_DESCRIPTOR_IDS.has(primarySelectDescriptor.id)
+    isComposerOwned && primarySelectDescriptor && isReasoningSelect(primarySelectDescriptor)
       ? resolveEffortGlyph(
           primarySelectDescriptor,
           ultrathinkPromptControlled
