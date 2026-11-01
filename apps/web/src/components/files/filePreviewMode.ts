@@ -57,11 +57,7 @@ export function setMarkdownTaskChecked(
   return `${markdown.slice(0, markerOffset + 1)}${checked ? "x" : " "}${markdown.slice(markerOffset + 2)}`;
 }
 
-/**
- * The server only signs `workspace-file` assets below the workspace root, so a
- * file opened from outside it, such as an absolute link in the thread, goes
- * through the host `media-file` resource the direct media viewer uses.
- */
+/** HTML previews need a directory-scoped grant for their relative assets. */
 export function workspaceAssetResource(input: {
   readonly kind: "workspace-file" | "media-file";
   readonly threadRef: ScopedThreadRef;
@@ -75,7 +71,10 @@ export function workspaceAssetResource(input: {
   const insideWorkspace =
     mediaFileReference(input.absolutePath, input.workspaceRoot).relativePath !== undefined;
   return {
-    _tag: insideWorkspace ? input.kind : "media-file",
+    _tag:
+      insideWorkspace || (input.kind === "workspace-file" && /\.html?$/i.test(input.absolutePath))
+        ? input.kind
+        : "media-file",
     threadId: input.threadRef.threadId,
     path: input.absolutePath,
   };
