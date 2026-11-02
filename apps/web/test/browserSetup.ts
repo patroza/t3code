@@ -5,6 +5,8 @@ declare module "vite-plus/test/browser" {
   interface BrowserCommands {
     /** Defined in vite.config.ts. Moves Playwright's mouse off the page. */
     resetPointer: () => Promise<void>;
+    /** Keep startup-scroll races reproducible on fast developer machines. */
+    setCpuThrottling: (rate: number) => Promise<void>;
   }
 }
 

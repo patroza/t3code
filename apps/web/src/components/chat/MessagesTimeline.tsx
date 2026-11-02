@@ -507,6 +507,10 @@ const ConversationTimeline = memo(function ConversationTimeline({
     disclosureAnchorKeyRef.current = anchorKey;
     // Commit before the disclosure child measures its expanded content.
     flushSync(() => setDisclosureToggleSettling(true));
+    // A disclosure takes over from an unfinished initial scroll, whose index can move on expansion.
+    const list = listRef.current;
+    const viewport = list?.getScrollableNode();
+    if (viewport) void list?.scrollToOffset({ offset: viewport.scrollTop, animated: false });
     // A rapid open/close can leave the measured height unchanged, so closing needs no new layout.
     if (collapsed) scheduleDisclosureSettle();
   };
