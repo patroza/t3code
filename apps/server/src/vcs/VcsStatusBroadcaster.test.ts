@@ -1494,6 +1494,7 @@ describe("VcsStatusBroadcaster", () => {
       const readLocalStatus = () => Effect.sync(() => (cachedLocal ??= local));
       const layerTest = VcsStatusBroadcaster.layer.pipe(
         Layer.provideMerge(NodeServices.layer),
+        Layer.provide(lifecycleScriptRunnerMock),
         Layer.provide(layerBackgroundPolicy(() => true)),
         Layer.provide(
           Layer.mock(GitWorkflowService.GitWorkflowService)({
