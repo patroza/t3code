@@ -7,6 +7,7 @@
     "pr:ready": "node scripts/agent-pr-ready.mjs",
     "test:agent-gate": "vp test run scripts/agent-pre-push.test.mjs",
     "dev": "node scripts/dev-runner.ts dev",
+    "profile:startup": "node scripts/profile-startup.mjs",
     "dev:share": "node scripts/dev-runner.ts dev --share",
     "dev:server": "node scripts/dev-runner.ts dev:server",
     "dev:web": "node scripts/dev-runner.ts dev:web",

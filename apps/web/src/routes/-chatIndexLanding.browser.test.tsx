@@ -28,6 +28,7 @@ vi.mock("../state/entities", () => ({
   readProject: () => (state.projectPresent ? project : null),
   useProjects: () => [{ ...project, id: ProjectId.make(state.snapshotProjectId) }],
   useThreadShells: () => [],
+  useVisibleThreadShells: () => [],
   useAllEnvironmentShellsBootstrapped: () => true,
 }));
 vi.mock("../state/environments", () => ({

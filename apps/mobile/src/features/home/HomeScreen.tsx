@@ -13,7 +13,7 @@ import { pickableProjectGroups } from "@t3tools/client-runtime/state/project-gro
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { type EnvironmentId, type SidebarProjectGroupingMode } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
-import { use, useEffect, useRef, useState, type ComponentProps } from "react";
+import { use, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import {
   Platform,
   Text,
@@ -370,11 +370,16 @@ export function HomeScreen(props: HomeScreenProps) {
     onScrollBeginDrag: handleScrollBeginDrag,
   });
 
-  const projectScopes = buildHomeProjectScopes({
-    projects: props.projects,
-    selectedEnvironmentIds: props.selectedEnvironmentIds,
-    projectGroupingMode: props.projectGroupingMode,
-  });
+  const { projects, selectedEnvironmentIds, projectGroupingMode } = props;
+  const projectScopes = useMemo(
+    () =>
+      buildHomeProjectScopes({
+        projects,
+        selectedEnvironmentIds,
+        projectGroupingMode,
+      }),
+    [projects, selectedEnvironmentIds, projectGroupingMode],
+  );
   const hasSearchQuery = props.searchQuery.trim().length > 0;
   const projectByKey = (() => {
     const map = new Map<string, EnvironmentProject>();
@@ -859,6 +864,8 @@ export function HomeScreen(props: HomeScreenProps) {
               // the list in the same frame as the bar.
               contentInsetAdjustmentBehavior="automatic"
               contentInsetStartAdjustment={Platform.OS === "ios" ? insets.top : 0}
+              // RN scrollTo clamps against raw insets and ignores the automatic bar inset.
+              scrollToOverflowEnabled
               initialScrollOffset={
                 initialScrollOffset > 0
                   ? initialScrollOffset - (Platform.OS === "ios" ? insets.top : 0)

@@ -1,3 +1,4 @@
+import { flushSync } from "react-dom";
 import type {
   MessageSenderSource,
   MessageSenderViewer,
@@ -485,14 +486,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const normalizedFindQuery = findQuery.trim();
   const findActive = findExpanded;
 
-  const disclosureCollapsedRef = useRef(false);
-  const disclosurePinsEndRef = useRef(false);
-  const pinDisclosureToEnd = () => {
-    if (!disclosurePinsEndRef.current) return;
-    const element = listRef.current?.getScrollableNode();
-    if (element) element.scrollTop = element.scrollHeight;
-  };
-
   const scheduleDisclosureSettle = () => {
     if (disclosureSettleFrameRef.current !== null) {
       cancelAnimationFrame(disclosureSettleFrameRef.current);
@@ -501,39 +494,48 @@ const ConversationTimeline = memo(function ConversationTimeline({
       cancelAnimationFrame(disclosureSettleSecondFrameRef.current);
     }
     disclosureSettleFrameRef.current = requestAnimationFrame(() => {
-      pinDisclosureToEnd();
       disclosureSettleSecondFrameRef.current = requestAnimationFrame(() => {
-        pinDisclosureToEnd();
-        disclosurePinsEndRef.current = false;
         disclosureAnchorKeyRef.current = null;
         setDisclosureToggleSettling(false);
         disclosureSettleFrameRef.current = null;
         disclosureSettleSecondFrameRef.current = null;
-        if (
-          disclosureCollapsedRef.current &&
-          resolveTimelineIsAtEnd(listRef.current?.getState()) === true
-        )
-          onToolOutputCollapsedAtEnd?.();
       });
     });
   };
 
   const suspendEndScrollMaintenanceForDisclosure = (anchorKey: string, collapsed = false) => {
-    disclosureCollapsedRef.current = collapsed;
     disclosureAnchorKeyRef.current = anchorKey;
-    disclosurePinsEndRef.current = resolveTimelineIsAtEnd(listRef.current?.getState()) === true;
-    setDisclosureToggleSettling(true);
-    scheduleDisclosureSettle();
+    // Commit before the disclosure child measures its expanded content.
+    flushSync(() => setDisclosureToggleSettling(true));
+    // A disclosure takes over from an unfinished initial scroll, whose index can move on expansion.
+    const list = listRef.current;
+    const viewport = list?.getScrollableNode();
+    if (viewport) void list?.scrollToOffset({ offset: viewport.scrollTop, animated: false });
+    // A rapid open/close can leave the measured height unchanged, so closing needs no new layout.
+    if (collapsed) scheduleDisclosureSettle();
   };
 
   const shouldRestoreVisibleContentPosition = (row: MessagesTimelineRow) => {
-    if (disclosurePinsEndRef.current) return false;
     const disclosureAnchorKey = disclosureAnchorKeyRef.current;
     return disclosureAnchorKey === null || row.id === disclosureAnchorKey;
   };
 
+  const collapseNotificationPendingRef = useRef(false);
+  const onToggleWorkEntry = useStableCallback((anchorKey: string, collapsed: boolean = false) => {
+    collapseNotificationPendingRef.current = collapsed;
+    suspendEndScrollMaintenanceForDisclosure(anchorKey, collapsed);
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Notify the parent only after the list commits its settled anchor; this is an imperative post-layout event, not derived state.
+  useLayoutEffect(() => {
+    if (disclosureToggleSettling || !collapseNotificationPendingRef.current) return;
+    collapseNotificationPendingRef.current = false;
+    if (resolveTimelineIsAtEnd(listRef.current?.getState()) === true) {
+      onToolOutputCollapsedAtEnd?.();
+    }
+  }, [disclosureToggleSettling, listRef, onToolOutputCollapsedAtEnd]);
+
   const onToggleTurnFold = (runId: RunId) => {
-    suspendEndScrollMaintenanceForDisclosure(`turn-fold:${runId}`);
+    suspendEndScrollMaintenanceForDisclosure(`turn-fold:${runId}`, expandedRunIds.has(runId));
     setExpandedRunIds((existing) => {
       const next = new Set(existing);
       if (next.has(runId)) {
@@ -544,8 +546,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
       return next;
     });
   };
-  const onToggleWorkGroup = (groupId: string, anchorKey: string) => {
-    suspendEndScrollMaintenanceForDisclosure(anchorKey, expandedWorkGroupIds.has(groupId));
+  const onToggleWorkGroup = useStableCallback((groupId: string, anchorKey: string) => {
+    onToggleWorkEntry(anchorKey, expandedWorkGroupIds.has(groupId));
     setExpandedWorkGroupIds((existing) => {
       const next = new Set(existing);
       if (next.has(groupId)) {
@@ -555,9 +557,12 @@ const ConversationTimeline = memo(function ConversationTimeline({
       }
       return next;
     });
-  };
+  });
   const onToggleAttemptFold = (attemptId: RunAttemptId) => {
-    suspendEndScrollMaintenanceForDisclosure(`attempt-fold:${attemptId}`);
+    suspendEndScrollMaintenanceForDisclosure(
+      `attempt-fold:${attemptId}`,
+      expandedAttemptIds.has(attemptId),
+    );
     setExpandedAttemptIds((existing) => {
       const next = new Set(existing);
       if (next.has(attemptId)) {
@@ -977,10 +982,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
   };
 
   const handleItemSizeChanged = () => {
-    if (disclosurePinsEndRef.current) {
-      queueMicrotask(pinDisclosureToEnd);
-      scheduleDisclosureSettle();
-    }
     scheduleMinimapRefresh();
   };
 
@@ -1004,6 +1005,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
     // The first laid-out content of a newly shown thread ends its settling; a
     // frame the previous thread scheduled laid out the previous thread's rows.
     if (laidOutData === rows) {
+      // End-follow must stay suspended until the expanded rows have actually been measured.
+      if (disclosureAnchorKeyRef.current !== null) scheduleDisclosureSettle();
       setSettlingListIdentity((current) => (current === listIdentityKey ? null : current));
     }
     handleScroll();
@@ -1080,7 +1083,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     onToggleTurnFold,
     onToggleAttemptFold,
     onToggleWorkGroup,
-    onToggleWorkEntry: suspendEndScrollMaintenanceForDisclosure,
+    onToggleWorkEntry,
     onCancelWorktreeSetup: onCancelWorktreeSetup ?? null,
     retryableWorkspacePreparationRunIds,
     onRetryWorkspacePreparation: onRetryWorkspacePreparation ?? null,

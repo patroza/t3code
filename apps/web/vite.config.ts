@@ -1,3 +1,4 @@
+import type { CDPSession, Page } from "playwright";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Vite config runs before any Effect runtime.
 import * as NodeFSP from "node:fs/promises";
 import * as NodeZlib from "node:zlib";
@@ -113,6 +114,7 @@ const isolatedUnitTestFiles = [
   // Mocks `~/state/session`; same isolate:false hazard as the favicon test —
   // it failed in one full run and passed in the next, purely on file ordering.
   "src/browserHistoryStore.test.ts",
+  "src/browserFaviconStore.test.ts",
   "src/browser/browserRecording.test.ts",
   // Mocks `~/hooks/useSettings`; under isolate:false an earlier file binds
   // the real store and getBrowserDefaults never sees the test profile list.
@@ -346,6 +348,8 @@ const isolatedUnitTestProject = {
 // Hash checkout paths to ports 61000-64999; the fixed browser port collides under strictPort.
 const browserTestApiPort = 61_000 + ((Hash.string(import.meta.dirname) >>> 0) % 4_000);
 
+const cpuThrottleSessions = new WeakMap<Page, CDPSession>();
+
 const browserTestProject = {
   extends: true,
   // Lazy views and mocked imports hide these from the initial dependency scan.
@@ -432,6 +436,16 @@ const browserTestProject = {
       instances: [{ browser: "chromium" }],
       screenshotFailures: false,
       commands: {
+        setCpuThrottling: async ({ page }, rate: number) => {
+          const session =
+            cpuThrottleSessions.get(page) ?? (await page.context().newCDPSession(page));
+          cpuThrottleSessions.set(page, session);
+          await session.send("Emulation.setCPUThrottlingRate", { rate });
+          if (rate === 1) {
+            cpuThrottleSessions.delete(page);
+            await session.detach();
+          }
+        },
         // Playwright's mouse outlives each test, so whatever mounts under its last
         // position starts hovered. test/browserSetup.ts parks it off the page before each test.
         resetPointer: async ({ page }) => {

@@ -163,6 +163,8 @@ export default mergeConfig(
               "src/htmlRender/publicProxy.test.ts",
               "src/bootstrap.test.ts",
               "src/cli/app.test.ts",
+              // Cloud config and link mocks must bind before the CLI module loads.
+              "src/cli/up.connect.test.ts",
               "src/git/GitManager.test.ts",
               "src/observability/HeapSnapshot.test.ts",
               "src/os-jank.test.ts",
@@ -217,6 +219,8 @@ export default mergeConfig(
               // real os module and the mock never applies — the CLI then
               // connects to the live Linux desktop socket.
               "src/cli/app.test.ts",
+              // Cloud config and link mocks must bind before the CLI module loads.
+              "src/cli/up.connect.test.ts",
               // Real git with per-repo gpg.program / core.hooksPath fixtures.
               // Under isolate:false a sibling can leak git env so signing never
               // fails, or `git hook run post-checkout` ignores a non-executable
