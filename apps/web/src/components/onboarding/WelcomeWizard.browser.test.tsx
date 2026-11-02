@@ -4,6 +4,7 @@ import { expect, it, vi } from "vite-plus/test";
 
 const mocks = vi.hoisted(() => ({
   importThreads: vi.fn(),
+  serverConfigs: new Map(),
   createProject: vi.fn(),
   complete: vi.fn(),
   refresh: vi.fn(),
@@ -29,6 +30,7 @@ vi.mock("../../state/use-atom-command", () => ({
 vi.mock("../../onboarding/firstRun", () => ({ completeOnboarding: mocks.complete }));
 vi.mock("../../state/entities", () => ({
   useProjects: () => mocks.projects,
+  useServerConfigs: () => mocks.serverConfigs,
   readProjects: () => mocks.projects,
   waitForProject: async () => mocks.projects[0],
   // Partial mocks leak under isolate:false. Preview reopen needs this export.
@@ -44,6 +46,7 @@ vi.mock("../../state/environments", () => {
   return {
     useEnvironments: () => ({ environments: [environment] }),
     usePrimaryEnvironment: () => environment,
+    usePrimaryEnvironmentId: () => environment.environmentId,
   };
 });
 vi.mock("../../state/server", () => ({
