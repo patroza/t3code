@@ -1,3 +1,4 @@
+import { flushSync } from "react-dom";
 import type {
   MessageSenderSource,
   MessageSenderViewer,
@@ -504,7 +505,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
 
   const suspendEndScrollMaintenanceForDisclosure = (anchorKey: string, collapsed = false) => {
     disclosureAnchorKeyRef.current = anchorKey;
-    setDisclosureToggleSettling(true);
+    // Commit before the disclosure child measures its expanded content.
+    flushSync(() => setDisclosureToggleSettling(true));
     // A rapid open/close can leave the measured height unchanged, so closing needs no new layout.
     if (collapsed) scheduleDisclosureSettle();
   };
