@@ -1443,9 +1443,12 @@ describe("VcsStatusBroadcaster", () => {
     }).pipe(Effect.provide(Layer.merge(layerTestFor(state), TestClock.layer())));
   });
 
-  it.effect("an explicit refresh reads local totals after the fetch", () => {
+  it.effect("a remote poll refreshes Changes totals when divergence counts stay the same", () => {
     const state: Parameters<typeof layerTestFor>[0] = {
-      currentLocalStatus: baseLocalStatus,
+      currentLocalStatus: {
+        ...baseLocalStatus,
+        branchChanges: { baseRef: "origin/main", insertions: 745, deletions: 24 },
+      },
       currentRemoteStatus: baseRemoteStatus,
       localStatusCalls: 0,
       remoteStatusCalls: 0,
@@ -1455,24 +1458,79 @@ describe("VcsStatusBroadcaster", () => {
 
     return Effect.gen(function* () {
       const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+      yield* broadcaster.getStatus({ cwd: "/repo" });
+      const subscribed = yield* Deferred.make<void>();
+      const polled = yield* Deferred.make<void>();
+      yield* broadcaster.streamStatus({ cwd: "/repo" }).pipe(
+        Stream.runForEach((event) => {
+          if (event._tag === "snapshot") return Deferred.succeed(subscribed, undefined);
+          if (event._tag === "remoteUpdated") return Deferred.succeed(polled, undefined);
+          return Effect.void;
+        }),
+        Effect.forkScoped,
+      );
+      yield* Deferred.await(subscribed);
+      state.currentLocalStatus = {
+        ...baseLocalStatus,
+        branchChanges: { baseRef: "origin/main", insertions: 107, deletions: 4 },
+      };
+      state.currentRemoteStatus = remoteStatusWithPr;
+      yield* TestClock.adjust("30 seconds");
+      yield* Deferred.await(polled);
+      const status = yield* broadcaster.getStatus({ cwd: "/repo" });
+      assert.deepStrictEqual(status.branchChanges, state.currentLocalStatus.branchChanges);
+    }).pipe(Effect.provide(layerTestFor(state)), Effect.scoped);
+  });
+
+  it.effect("an explicit refresh reads local totals after the fetch", () => {
+    return Effect.gen(function* () {
       const fetchStarted = yield* Deferred.make<void>();
       const finishFetch = yield* Deferred.make<void>();
-      state.beforeRemoteStatus = Deferred.succeed(fetchStarted, undefined).pipe(
-        Effect.andThen(Deferred.await(finishFetch)),
-      );
-      const refresh = yield* broadcaster.refreshStatus("/repo").pipe(Effect.forkScoped);
-      yield* Deferred.await(fetchStarted);
-
-      const fetchedLocal: VcsStatusLocalResult = {
+      let local: VcsStatusLocalResult = {
         ...baseLocalStatus,
-        branchChanges: { baseRef: "origin/main", insertions: 0, deletions: 0 },
+        branchChanges: { baseRef: "origin/main", insertions: 745, deletions: 24 },
       };
-      state.currentLocalStatus = fetchedLocal;
-      yield* Deferred.succeed(finishFetch, undefined);
-
-      const status = yield* Fiber.join(refresh);
-      assert.deepStrictEqual(status.branchChanges, fetchedLocal.branchChanges);
-    }).pipe(Effect.provide(layerTestFor(state)));
+      let cachedLocal: VcsStatusLocalResult | undefined;
+      const readLocalStatus = () => Effect.sync(() => (cachedLocal ??= local));
+      const layerTest = VcsStatusBroadcaster.layer.pipe(
+        Layer.provideMerge(NodeServices.layer),
+        Layer.provide(layerBackgroundPolicy(() => true)),
+        Layer.provide(
+          Layer.mock(GitWorkflowService.GitWorkflowService)({
+            localStatus: readLocalStatus,
+            invalidateStatus: () =>
+              Effect.sync(() => {
+                cachedLocal = undefined;
+              }),
+            invalidateLocalStatus: () =>
+              Effect.sync(() => {
+                cachedLocal = undefined;
+              }),
+            currentBranch: () => Effect.succeed(baseLocalStatus.refName),
+            invalidateRemoteStatus: () => Effect.void,
+            remoteStatus: () =>
+              Deferred.succeed(fetchStarted, undefined).pipe(
+                Effect.andThen(Deferred.await(finishFetch)),
+                Effect.as(baseRemoteStatus),
+              ),
+          }),
+        ),
+      );
+      yield* Effect.gen(function* () {
+        const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+        const refresh = yield* broadcaster.refreshStatus("/repo").pipe(Effect.forkScoped);
+        yield* Deferred.await(fetchStarted);
+        // Another reader can refill the local cache while fetch is still running.
+        yield* readLocalStatus();
+        local = {
+          ...baseLocalStatus,
+          branchChanges: { baseRef: "origin/main", insertions: 0, deletions: 0 },
+        };
+        yield* Deferred.succeed(finishFetch, undefined);
+        const status = yield* Fiber.join(refresh);
+        assert.deepStrictEqual(status.branchChanges, local.branchChanges);
+      }).pipe(Effect.provide(layerTest));
+    });
   });
 
   it("backs off remote refresh failures exponentially and honors larger configured intervals", () => {
@@ -2026,5 +2084,80 @@ describe("VcsStatusBroadcaster", () => {
       yield* Deferred.await(remoteInterrupted);
       assert.isTrue(Option.isSome(yield* Deferred.poll(remoteInterrupted)));
     }).pipe(Effect.provide(layerTest));
+  });
+  it.effect("an explicit refresh reads local totals after the fetch", () => {
+    const state: Parameters<typeof layerTestFor>[0] = {
+      currentLocalStatus: baseLocalStatus,
+      currentRemoteStatus: baseRemoteStatus,
+      localStatusCalls: 0,
+      remoteStatusCalls: 0,
+      localInvalidationCalls: 0,
+      remoteInvalidationCalls: 0,
+    };
+
+    return Effect.gen(function* () {
+      const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+      const fetchStarted = yield* Deferred.make<void>();
+      const finishFetch = yield* Deferred.make<void>();
+      state.beforeRemoteStatus = Deferred.succeed(fetchStarted, undefined).pipe(
+        Effect.andThen(Deferred.await(finishFetch)),
+      );
+      const refresh = yield* broadcaster.refreshStatus("/repo").pipe(Effect.forkScoped);
+      yield* Deferred.await(fetchStarted);
+
+      const fetchedLocal: VcsStatusLocalResult = {
+        ...baseLocalStatus,
+        branchChanges: { baseRef: "origin/main", insertions: 0, deletions: 0 },
+      };
+      state.currentLocalStatus = fetchedLocal;
+      yield* Deferred.succeed(finishFetch, undefined);
+
+      const status = yield* Fiber.join(refresh);
+      assert.deepStrictEqual(status.branchChanges, fetchedLocal.branchChanges);
+    }).pipe(Effect.provide(layerTestFor(state)));
+  });
+
+  it("backs off remote refresh failures exponentially and honors larger configured intervals", () => {
+    assert.equal(
+      Duration.toMillis(VcsStatusBroadcaster.remoteRefreshFailureDelay(1, Duration.seconds(1))),
+      30_000,
+    );
+    assert.equal(
+      Duration.toMillis(VcsStatusBroadcaster.remoteRefreshFailureDelay(2, Duration.seconds(1))),
+      60_000,
+    );
+    assert.equal(
+      Duration.toMillis(VcsStatusBroadcaster.remoteRefreshFailureDelay(3, Duration.seconds(1))),
+      120_000,
+    );
+    assert.equal(
+      Duration.toMillis(VcsStatusBroadcaster.remoteRefreshFailureDelay(1, Duration.minutes(5))),
+      300_000,
+    );
+    assert.equal(
+      Duration.toMillis(VcsStatusBroadcaster.remoteRefreshFailureDelay(20, Duration.seconds(1))),
+      900_000,
+    );
+  });
+
+  it("summarizes refresh causes without exposing nested failure details", () => {
+    const nestedCause = new Error("private nested failure detail");
+    const failure = new GitManagerError({
+      operation: "VcsStatusBroadcaster.remoteStatus",
+      cwd: "/private/user/workspace/repo",
+      detail: "private Git failure detail",
+      cause: nestedCause,
+    });
+    const cause = Cause.combine(Cause.fail(failure), Cause.die(new TypeError("private defect")));
+
+    assert.deepStrictEqual(VcsStatusBroadcaster.remoteRefreshFailureDiagnostics(cause), {
+      reasonCount: 2,
+      failureCount: 1,
+      failureTags: ["GitManagerError"],
+      failureOperations: ["VcsStatusBroadcaster.remoteStatus"],
+      defectCount: 1,
+      defectTags: ["TypeError"],
+      interruptionCount: 0,
+    });
   });
 });
