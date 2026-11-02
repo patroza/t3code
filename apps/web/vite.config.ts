@@ -113,6 +113,7 @@ const isolatedUnitTestFiles = [
   // Mocks `~/state/session`; same isolate:false hazard as the favicon test —
   // it failed in one full run and passed in the next, purely on file ordering.
   "src/browserHistoryStore.test.ts",
+  "src/browserFaviconStore.test.ts",
   "src/browser/browserRecording.test.ts",
   // Mocks `~/hooks/useSettings`; under isolate:false an earlier file binds
   // the real store and getBrowserDefaults never sees the test profile list.
