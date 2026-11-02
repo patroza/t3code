@@ -485,14 +485,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const normalizedFindQuery = findQuery.trim();
   const findActive = findExpanded;
 
+  // The list owns anchoring; this flag only notifies the composer after a collapse.
   const disclosureCollapsedRef = useRef(false);
-  const disclosurePinsEndRef = useRef(false);
-  const pinDisclosureToEnd = () => {
-    if (!disclosurePinsEndRef.current) return;
-    const element = listRef.current?.getScrollableNode();
-    if (element) element.scrollTop = element.scrollHeight;
-  };
-
   const scheduleDisclosureSettle = () => {
     if (disclosureSettleFrameRef.current !== null) {
       cancelAnimationFrame(disclosureSettleFrameRef.current);
@@ -501,10 +495,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
       cancelAnimationFrame(disclosureSettleSecondFrameRef.current);
     }
     disclosureSettleFrameRef.current = requestAnimationFrame(() => {
-      pinDisclosureToEnd();
       disclosureSettleSecondFrameRef.current = requestAnimationFrame(() => {
-        pinDisclosureToEnd();
-        disclosurePinsEndRef.current = false;
         disclosureAnchorKeyRef.current = null;
         setDisclosureToggleSettling(false);
         disclosureSettleFrameRef.current = null;
@@ -521,8 +512,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const suspendEndScrollMaintenanceForDisclosure = (anchorKey: string, collapsed = false) => {
     disclosureCollapsedRef.current = collapsed;
     disclosureAnchorKeyRef.current = anchorKey;
-    disclosurePinsEndRef.current =
-      collapsed && resolveTimelineIsAtEnd(listRef.current?.getState()) === true;
     setDisclosureToggleSettling(true);
     scheduleDisclosureSettle();
   };
@@ -977,7 +966,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
   };
 
   const handleItemSizeChanged = () => {
-    if (disclosurePinsEndRef.current) queueMicrotask(pinDisclosureToEnd);
     if (disclosureAnchorKeyRef.current !== null) {
       scheduleDisclosureSettle();
     }

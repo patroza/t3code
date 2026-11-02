@@ -324,7 +324,7 @@ describe("PreviewPortExposure", () => {
       assert.equal(error?.reason, "not-reachable");
       // Publishing a port and then leaving it behind would keep a dead route on
       // the tailnet, so the failure path has to undo its own mapping.
-      assert.deepEqual(calls.at(-1)?.args, ["serve", "--https=6545", "off"]);
+      assert.deepEqual(calls.at(-1)?.args, ["serve", "--https=6545", "--set-path=/", "off"]);
     }),
   );
 });
