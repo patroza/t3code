@@ -514,7 +514,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   };
 
   const collapseNotificationPendingRef = useRef(false);
-  const onToggleWorkEntry = useStableCallback((anchorKey: string, collapsed = false) => {
+  const onToggleWorkEntry = useStableCallback((anchorKey: string, collapsed: boolean = false) => {
     collapseNotificationPendingRef.current = collapsed;
     suspendEndScrollMaintenanceForDisclosure(anchorKey);
   });
