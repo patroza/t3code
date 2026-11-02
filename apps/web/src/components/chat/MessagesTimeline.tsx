@@ -502,9 +502,11 @@ const ConversationTimeline = memo(function ConversationTimeline({
     });
   };
 
-  const suspendEndScrollMaintenanceForDisclosure = (anchorKey: string) => {
+  const suspendEndScrollMaintenanceForDisclosure = (anchorKey: string, collapsed = false) => {
     disclosureAnchorKeyRef.current = anchorKey;
     setDisclosureToggleSettling(true);
+    // A rapid open/close can leave the measured height unchanged, so closing needs no new layout.
+    if (collapsed) scheduleDisclosureSettle();
   };
 
   const shouldRestoreVisibleContentPosition = (row: MessagesTimelineRow) => {
@@ -515,7 +517,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const collapseNotificationPendingRef = useRef(false);
   const onToggleWorkEntry = useStableCallback((anchorKey: string, collapsed: boolean = false) => {
     collapseNotificationPendingRef.current = collapsed;
-    suspendEndScrollMaintenanceForDisclosure(anchorKey);
+    suspendEndScrollMaintenanceForDisclosure(anchorKey, collapsed);
   });
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Notify the parent only after the list commits its settled anchor; this is an imperative post-layout event, not derived state.
   useLayoutEffect(() => {
@@ -527,7 +529,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   }, [disclosureToggleSettling, listRef, onToolOutputCollapsedAtEnd]);
 
   const onToggleTurnFold = (runId: RunId) => {
-    suspendEndScrollMaintenanceForDisclosure(`turn-fold:${runId}`);
+    suspendEndScrollMaintenanceForDisclosure(`turn-fold:${runId}`, expandedRunIds.has(runId));
     setExpandedRunIds((existing) => {
       const next = new Set(existing);
       if (next.has(runId)) {
@@ -551,7 +553,10 @@ const ConversationTimeline = memo(function ConversationTimeline({
     });
   });
   const onToggleAttemptFold = (attemptId: RunAttemptId) => {
-    suspendEndScrollMaintenanceForDisclosure(`attempt-fold:${attemptId}`);
+    suspendEndScrollMaintenanceForDisclosure(
+      `attempt-fold:${attemptId}`,
+      expandedAttemptIds.has(attemptId),
+    );
     setExpandedAttemptIds((existing) => {
       const next = new Set(existing);
       if (next.has(attemptId)) {
