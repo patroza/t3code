@@ -521,13 +521,13 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const suspendEndScrollMaintenanceForDisclosure = (anchorKey: string, collapsed = false) => {
     disclosureCollapsedRef.current = collapsed;
     disclosureAnchorKeyRef.current = anchorKey;
-    disclosurePinsEndRef.current = resolveTimelineIsAtEnd(listRef.current?.getState()) === true;
+    disclosurePinsEndRef.current =
+      collapsed && resolveTimelineIsAtEnd(listRef.current?.getState()) === true;
     setDisclosureToggleSettling(true);
     scheduleDisclosureSettle();
   };
 
   const shouldRestoreVisibleContentPosition = (row: MessagesTimelineRow) => {
-    if (disclosurePinsEndRef.current) return false;
     const disclosureAnchorKey = disclosureAnchorKeyRef.current;
     return disclosureAnchorKey === null || row.id === disclosureAnchorKey;
   };
