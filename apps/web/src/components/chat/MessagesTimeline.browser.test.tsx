@@ -287,7 +287,9 @@ describe("MessagesTimeline work rows", () => {
     expect(viewport.scrollTop).toBeGreaterThan(0);
     const top = heading.element().getBoundingClientRect().top;
     const height = viewport.scrollHeight;
-    await click(heading.element());
+    const headingElement = heading.element();
+    if (!(headingElement instanceof HTMLElement)) throw new Error("Expected an HTML disclosure");
+    await click(headingElement);
     await vi.waitFor(() => {
       expect(viewport.scrollHeight).toBeGreaterThan(height + 500);
       expect(heading.element().getBoundingClientRect().top).toBeCloseTo(top, 0);
