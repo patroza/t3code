@@ -505,7 +505,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const suspendEndScrollMaintenanceForDisclosure = (anchorKey: string) => {
     disclosureAnchorKeyRef.current = anchorKey;
     setDisclosureToggleSettling(true);
-    scheduleDisclosureSettle();
   };
 
   const shouldRestoreVisibleContentPosition = (row: MessagesTimelineRow) => {
@@ -972,9 +971,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
   };
 
   const handleItemSizeChanged = () => {
-    if (disclosureAnchorKeyRef.current !== null) {
-      scheduleDisclosureSettle();
-    }
     scheduleMinimapRefresh();
   };
 
@@ -998,6 +994,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
     // The first laid-out content of a newly shown thread ends its settling; a
     // frame the previous thread scheduled laid out the previous thread's rows.
     if (laidOutData === rows) {
+      // End-follow must stay suspended until the expanded rows have actually been measured.
+      if (disclosureAnchorKeyRef.current !== null) scheduleDisclosureSettle();
       setSettlingListIdentity((current) => (current === listIdentityKey ? null : current));
     }
     handleScroll();
