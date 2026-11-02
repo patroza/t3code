@@ -485,8 +485,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const normalizedFindQuery = findQuery.trim();
   const findActive = findExpanded;
 
-  // The list owns anchoring; this flag only notifies the composer after a collapse.
-  const disclosureCollapsedRef = useRef(false);
   const scheduleDisclosureSettle = () => {
     if (disclosureSettleFrameRef.current !== null) {
       cancelAnimationFrame(disclosureSettleFrameRef.current);
@@ -500,17 +498,11 @@ const ConversationTimeline = memo(function ConversationTimeline({
         setDisclosureToggleSettling(false);
         disclosureSettleFrameRef.current = null;
         disclosureSettleSecondFrameRef.current = null;
-        if (
-          disclosureCollapsedRef.current &&
-          resolveTimelineIsAtEnd(listRef.current?.getState()) === true
-        )
-          onToolOutputCollapsedAtEnd?.();
       });
     });
   };
 
-  const suspendEndScrollMaintenanceForDisclosure = (anchorKey: string, collapsed = false) => {
-    disclosureCollapsedRef.current = collapsed;
+  const suspendEndScrollMaintenanceForDisclosure = (anchorKey: string) => {
     disclosureAnchorKeyRef.current = anchorKey;
     setDisclosureToggleSettling(true);
     scheduleDisclosureSettle();
@@ -520,6 +512,20 @@ const ConversationTimeline = memo(function ConversationTimeline({
     const disclosureAnchorKey = disclosureAnchorKeyRef.current;
     return disclosureAnchorKey === null || row.id === disclosureAnchorKey;
   };
+
+  const collapseNotificationPendingRef = useRef(false);
+  const onToggleWorkEntry = useStableCallback((anchorKey: string, collapsed = false) => {
+    collapseNotificationPendingRef.current = collapsed;
+    suspendEndScrollMaintenanceForDisclosure(anchorKey);
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Notify the parent only after the list commits its settled anchor; this is an imperative post-layout event, not derived state.
+  useLayoutEffect(() => {
+    if (disclosureToggleSettling || !collapseNotificationPendingRef.current) return;
+    collapseNotificationPendingRef.current = false;
+    if (resolveTimelineIsAtEnd(listRef.current?.getState()) === true) {
+      onToolOutputCollapsedAtEnd?.();
+    }
+  }, [disclosureToggleSettling, listRef, onToolOutputCollapsedAtEnd]);
 
   const onToggleTurnFold = (runId: RunId) => {
     suspendEndScrollMaintenanceForDisclosure(`turn-fold:${runId}`);
@@ -533,8 +539,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
       return next;
     });
   };
-  const onToggleWorkGroup = (groupId: string, anchorKey: string) => {
-    suspendEndScrollMaintenanceForDisclosure(anchorKey, expandedWorkGroupIds.has(groupId));
+  const onToggleWorkGroup = useStableCallback((groupId: string, anchorKey: string) => {
+    onToggleWorkEntry(anchorKey, expandedWorkGroupIds.has(groupId));
     setExpandedWorkGroupIds((existing) => {
       const next = new Set(existing);
       if (next.has(groupId)) {
@@ -544,7 +550,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
       }
       return next;
     });
-  };
+  });
   const onToggleAttemptFold = (attemptId: RunAttemptId) => {
     suspendEndScrollMaintenanceForDisclosure(`attempt-fold:${attemptId}`);
     setExpandedAttemptIds((existing) => {
@@ -1068,7 +1074,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     onToggleTurnFold,
     onToggleAttemptFold,
     onToggleWorkGroup,
-    onToggleWorkEntry: suspendEndScrollMaintenanceForDisclosure,
+    onToggleWorkEntry,
     onCancelWorktreeSetup: onCancelWorktreeSetup ?? null,
     retryableWorkspacePreparationRunIds,
     onRetryWorkspacePreparation: onRetryWorkspacePreparation ?? null,
