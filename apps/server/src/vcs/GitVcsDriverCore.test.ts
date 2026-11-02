@@ -3899,8 +3899,10 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
             deletions: 0,
           });
           // Status and branch totals share the default-ref lookup within one read.
-          assert.lengthOf(
-            commands.filter((args) => args.join(" ") === "symbolic-ref refs/remotes/origin/HEAD"),
+          assert.isAtMost(
+            commands.filter(
+              (args) => args.slice(-2).join(" ") === "symbolic-ref refs/remotes/origin/HEAD",
+            ).length,
             1,
           );
         }

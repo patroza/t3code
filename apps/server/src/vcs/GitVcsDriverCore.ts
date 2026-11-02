@@ -136,7 +136,6 @@ const NON_REPOSITORY_PATHS_CACHE_TTL = Duration.seconds(1);
 const LIST_REFS_SNAPSHOT_CACHE_CAPACITY = 64;
 const LIST_REFS_SNAPSHOT_CACHE_TTL = Duration.minutes(2);
 const STATUS_DEFAULT_BRANCH_CACHE_TTL = Duration.minutes(5);
-const STATUS_ORIGIN_EXISTS_CACHE_TTL = Duration.minutes(5);
 const LIST_REFS_REFRESH_COALESCE_TTL = Duration.seconds(5);
 const LIST_REFS_REFRESH_FAILURE_COOLDOWN = Duration.seconds(30);
 const STATUS_UPSTREAM_REFRESH_ENV = Object.freeze({
@@ -1642,27 +1641,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }),
     },
   );
-  const primaryRemoteExistsCache = yield* Cache.makeWith(
-    (gitCommonDir: string) =>
-      Effect.gen(function* () {
-        const path = yield* Path.Path;
-        const fetchCwd =
-          path.basename(gitCommonDir) === ".git" ? path.dirname(gitCommonDir) : gitCommonDir;
-        return yield* executeGit(
-          "GitVcsDriver.statusDetails.primaryRemoteExists",
-          fetchCwd,
-          ["--git-dir", gitCommonDir, "remote"],
-          { allowNonZeroExit: true },
-        ).pipe(Effect.map((result) => result.exitCode === 0 && result.stdout.trim().length > 0));
-      }),
-    {
-      capacity: 2_048,
-      timeToLive: Exit.match({
-        onSuccess: () => STATUS_ORIGIN_EXISTS_CACHE_TTL,
-        onFailure: () => Duration.zero,
-      }),
-    },
-  );
   const invalidateStatusStaticCaches = Effect.fn("GitVcsDriverCore.invalidateStatusStaticCaches")(
     function* (cwd: string, gitCommonDir?: string | null) {
       const commonDir =
@@ -1673,7 +1651,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           : gitCommonDir;
       const cacheKey = commonDir ?? normalizeRepositoryPathsCacheKey(cwd);
       yield* Cache.invalidate(defaultBranchCache, cacheKey);
-      yield* Cache.invalidate(primaryRemoteExistsCache, cacheKey);
     },
   );
 
@@ -2289,14 +2266,11 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         statusCacheKey
           ? Cache.get(defaultBranchCache, statusCacheKey).pipe(Effect.orElseSucceed(() => null))
           : resolveDefaultBranchName(cwd, "origin").pipe(Effect.orElseSucceed(() => null)),
-        statusCacheKey
-          ? Cache.get(primaryRemoteExistsCache, statusCacheKey).pipe(
-              Effect.orElseSucceed(() => false),
-            )
-          : listRemoteNames(cwd).pipe(
-              Effect.map((remoteNames) => remoteNames.length > 0),
-              Effect.orElseSucceed(() => false),
-            ),
+        // Remotes can be added or removed by external Git commands between status reads.
+        listRemoteNames(cwd).pipe(
+          Effect.map((remoteNames) => remoteNames.length > 0),
+          Effect.orElseSucceed(() => false),
+        ),
       ],
       { concurrency: "unbounded" },
     );
