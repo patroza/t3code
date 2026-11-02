@@ -485,7 +485,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const normalizedFindQuery = findQuery.trim();
   const findActive = findExpanded;
 
-  const scheduleDisclosureSettle = useStableCallback(() => {
+  const scheduleDisclosureSettle = () => {
     if (disclosureSettleFrameRef.current !== null) {
       cancelAnimationFrame(disclosureSettleFrameRef.current);
     }
@@ -500,22 +500,18 @@ const ConversationTimeline = memo(function ConversationTimeline({
         disclosureSettleSecondFrameRef.current = null;
       });
     });
-  });
+  };
 
-  const suspendEndScrollMaintenanceForDisclosure = useStableCallback((anchorKey: string) => {
+  const suspendEndScrollMaintenanceForDisclosure = (anchorKey: string) => {
     disclosureAnchorKeyRef.current = anchorKey;
     setDisclosureToggleSettling(true);
-  });
+    scheduleDisclosureSettle();
+  };
 
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Start anchor settling after expanded rows commit; scheduling in the click handler can clear the anchor before layout.
-  useLayoutEffect(() => {
-    if (disclosureToggleSettling) scheduleDisclosureSettle();
-  }, [disclosureToggleSettling, scheduleDisclosureSettle]);
-
-  const shouldRestoreVisibleContentPosition = useStableCallback((row: MessagesTimelineRow) => {
+  const shouldRestoreVisibleContentPosition = (row: MessagesTimelineRow) => {
     const disclosureAnchorKey = disclosureAnchorKeyRef.current;
     return disclosureAnchorKey === null || row.id === disclosureAnchorKey;
-  });
+  };
 
   const collapseNotificationPendingRef = useRef(false);
   const onToggleWorkEntry = useStableCallback((anchorKey: string, collapsed: boolean = false) => {
