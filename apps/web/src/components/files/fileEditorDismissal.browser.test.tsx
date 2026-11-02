@@ -9,7 +9,10 @@ import { installFileEditorDismissal } from "./fileEditorDismissal";
 
 describe("installFileEditorDismissal", () => {
   it("keeps a text selection made outside the file while its search is open", async () => {
-    const contentReady = Promise.withResolvers<HTMLElement>();
+    let resolveContent!: (content: HTMLElement) => void;
+    const contentReady = new Promise<HTMLElement>((resolve) => {
+      resolveContent = resolve;
+    });
     let editor: Editor<"file" | "file-diff", undefined, undefined> | undefined;
     const createEditor: EditorFactory<undefined, undefined> = (...args) =>
       (editor = new Editor(...args));
@@ -23,7 +26,7 @@ describe("installFileEditorDismissal", () => {
               options={{
                 onPostRender: (node) => {
                   const content = node.shadowRoot?.querySelector<HTMLElement>("[data-content]");
-                  if (content) contentReady.resolve(content);
+                  if (content) resolveContent(content);
                 },
               }}
               edit
@@ -33,7 +36,7 @@ describe("installFileEditorDismissal", () => {
       </>,
     );
     const shadowRoot = () => screen.container.querySelector("diffs-container")?.shadowRoot;
-    const content = await contentReady.promise;
+    const content = await contentReady;
 
     editor!.setSelections([
       { start: { line: 0, character: 8 }, end: { line: 0, character: 8 }, direction: "none" },
