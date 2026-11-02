@@ -2200,9 +2200,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
       const createPayload = {
         cwd: options.cwd,
         mcpServers: sessionMcpServers(initializeResult),
-        ...(options.additionalDirectories?.length
-          ? { additionalDirectories: options.additionalDirectories }
-          : {}),
+        ...sessionSetupFields(initializeResult),
       } satisfies EffectAcpSchema.NewSessionRequest;
       const created = yield* runLoggedRequest(
         "session/new",
