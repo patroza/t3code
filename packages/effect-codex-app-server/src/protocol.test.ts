@@ -909,7 +909,13 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       yield* Deferred.await(writeStarted);
       yield* TestClock.adjust("100 millis");
       yield* Deferred.succeed(exited, exitError);
-      assert.strictEqual(yield* Fiber.join(pending).pipe(Effect.flip), exitError);
+      const failure = yield* Fiber.join(pending).pipe(
+        Effect.match({
+          onFailure: (error) => error,
+          onSuccess: () => assert.fail("Expected the pending request to fail"),
+        }),
+      );
+      assert.strictEqual(failure, exitError);
     }),
   );
 
