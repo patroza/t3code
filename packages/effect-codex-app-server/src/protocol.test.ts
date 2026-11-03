@@ -841,18 +841,29 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
         method: "stdout",
         cause: new Error("EPIPE"),
       });
+      const writeStarted = yield* Deferred.make<void>();
       const terminated = yield* Deferred.make<CodexError.CodexAppServerError>();
       const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
         stdio: Stdio.make({
           args: baseStdio.args,
           stdin: baseStdio.stdin,
-          stdout: () => Sink.forEach(() => Effect.fail(writeFailure)),
+          stdout: () =>
+            Sink.forEach(() =>
+              Deferred.succeed(writeStarted, undefined).pipe(
+                Effect.andThen(Effect.fail(writeFailure)),
+              ),
+            ),
           stderr: baseStdio.stderr,
         }),
+        terminationError: Effect.never,
         onTermination: (error) => Deferred.succeed(terminated, error).pipe(Effect.asVoid),
       });
       const pending = yield* transport.request("thread/read", {}).pipe(Effect.forkScoped);
 
+      yield* Deferred.await(writeStarted);
+      yield* TestClock.adjust("249 millis");
+      assert.isUndefined(pending.pollUnsafe());
+      yield* TestClock.adjust("1 millis");
       const failure = yield* Deferred.await(terminated);
       assert.instanceOf(failure, CodexError.CodexAppServerTransportError);
       assert.equal(failure.operation, "write-output-stream");
@@ -866,6 +877,39 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
         );
         assert.strictEqual(requestFailure, failure);
       }
+    }),
+  );
+
+  it.effect("reports a process exit that follows a failed write", () =>
+    Effect.gen(function* () {
+      const { stdio } = yield* makeInMemoryStdio();
+      const writeStarted = yield* Deferred.make<void>();
+      const exited = yield* Deferred.make<CodexError.CodexAppServerError>();
+      const exitError = new CodexError.CodexAppServerProcessExitedError({ code: 1, pid: 123 });
+      const writeFailure = PlatformError.systemError({
+        _tag: "Unknown",
+        module: "Stdio",
+        method: "stdout",
+      });
+      const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
+        stdio: Stdio.make({
+          args: stdio.args,
+          stdin: stdio.stdin,
+          stdout: () =>
+            Sink.forEach(() =>
+              Deferred.succeed(writeStarted, undefined).pipe(
+                Effect.andThen(Effect.fail(writeFailure)),
+              ),
+            ),
+          stderr: stdio.stderr,
+        }),
+        terminationError: Deferred.await(exited),
+      });
+      const pending = yield* transport.request("thread/read", {}).pipe(Effect.forkScoped);
+      yield* Deferred.await(writeStarted);
+      yield* TestClock.adjust("100 millis");
+      yield* Deferred.succeed(exited, exitError);
+      assert.strictEqual(yield* Fiber.join(pending).pipe(Effect.flip), exitError);
     }),
   );
 
