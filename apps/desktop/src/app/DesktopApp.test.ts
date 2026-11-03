@@ -1,3 +1,4 @@
+import * as DesktopDeepLinks from "./DesktopDeepLinks.ts";
 import { assert, it } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Deferred from "effect/Deferred";
@@ -120,6 +121,11 @@ it.effect(
               serverExposureMode: "local-only",
             }),
           } as unknown as DesktopAppSettings.DesktopAppSettings["Service"]),
+          Effect.provideService(DesktopDeepLinks.DesktopDeepLinks, {
+            handleArgv: () => Effect.void,
+            handleUrl: () => Effect.void,
+            start: Effect.void,
+          }),
           Effect.provideService(DesktopLifecycle.DesktopLifecycle, {
             register: Effect.void,
             relaunch: () => Effect.void,
