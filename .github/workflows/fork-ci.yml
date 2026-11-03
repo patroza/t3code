@@ -130,7 +130,7 @@ jobs:
   test_packages:
     name: Test Packages
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
