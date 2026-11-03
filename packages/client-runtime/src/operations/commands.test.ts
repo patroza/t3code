@@ -597,6 +597,6 @@ describe("V2 environment commands", () => {
         { type: "queued-run.edit", editId, text: "Revised" },
         { type: "queued-run.edit.cancel", editId },
       ]);
-    }).pipe(Effect.provide(layerTestCrypto)),
+    }).pipe(Effect.provide(layerTestRandom)),
   );
 });
