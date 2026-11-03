@@ -1702,6 +1702,8 @@ describe("MessagesTimeline scroll position", () => {
   });
 
   it("restores the composer after closing tool output only at the end", async () => {
+    await commands.setCpuThrottling(6);
+    onTestFinished(() => commands.setCpuThrottling(1));
     const props = baseProps();
     function Thread() {
       const composer = useComposerFocusState();
@@ -1734,6 +1736,12 @@ describe("MessagesTimeline scroll position", () => {
     await using screen = await renderElement(<Thread />);
     const composerState = () => screen.container.querySelector("output")!.textContent;
     const viewport = await waitForList(props);
+    await vi.waitFor(() => {
+      expect(
+        viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop,
+      ).toBeLessThanOrEqual(1);
+      expect(props.listRef.current!.getState().isAtEnd).toBe(true);
+    });
     await click(screen.button("Collapse"));
     const toggle = () => screen.button("Command output");
     await click(toggle());
@@ -1749,6 +1757,8 @@ describe("MessagesTimeline scroll position", () => {
       expect(readTimelinePosition(props.routeThreadKey)?.atEnd).toBe(false);
       expect(composerState()).toBe("collapsed");
     });
+    await userEvent.wheel(viewport, { delta: { y: 2000 } });
+    await vi.waitFor(() => expect(composerState()).toBe("resting"));
   });
 });
 
