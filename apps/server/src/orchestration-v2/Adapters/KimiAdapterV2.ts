@@ -1,7 +1,7 @@
 import { KimiSettings, ProviderDriverKind } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { resolveSelfInvocation } from "@t3tools/shared/nodeRuntime";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 import * as FileSystem from "effect/FileSystem";
@@ -25,7 +25,7 @@ import { AcpProviderCapabilitiesV2, makeAcpAdapterV2 } from "@t3tools/provider-a
 const decodeKimiSettings = Schema.decodeUnknownSync(KimiSettings);
 const DRIVER = ProviderDriverKind.make("kimi");
 export type KimiAdapterV2DriverEnv =
-  | Crypto.Crypto
+  | SecureRandom.SecureRandom
   | FileSystem.FileSystem
   | ChildProcessSpawner.ChildProcessSpawner
   | IdAllocator.IdAllocatorV2

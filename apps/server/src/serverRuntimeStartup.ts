@@ -19,7 +19,7 @@ import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as Cause from "effect/Cause";
 import * as Console from "effect/Console";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -281,8 +281,8 @@ const resolveWelcomeBase = Effect.gen(function* () {
 });
 
 const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto;
-  const randomUUID = crypto.randomUUIDv4();
+  const random = yield* SecureRandom.SecureRandom;
+  const randomUUID = random.uuidV4();
   const serverConfig = yield* ServerConfig.ServerConfig;
   const projects = yield* ProjectService.ProjectService;
   const threads = yield* ThreadManagement.ThreadManagementService;
@@ -476,7 +476,7 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
   yield* Effect.forkScoped(runWebVersionWatcher(lifecycleEvents));
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const launcher = yield* ServiceLauncherClient.ServiceLauncherClient;
 
   const commandGate = yield* makeCommandGate;
@@ -582,7 +582,9 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
       autoBootstrap: (serverConfig.autoBootstrapProjectFromCwd
         ? runStartupPhase(
             "welcome.autobootstrap",
-            resolveAutoBootstrapWelcomeTargets.pipe(Effect.provideService(Crypto.Crypto, crypto)),
+            resolveAutoBootstrapWelcomeTargets.pipe(
+              Effect.provideService(SecureRandom.SecureRandom, random),
+            ),
           )
         : Effect.succeed({})
       ).pipe(Effect.map((targets): AutoBootstrapWelcomeTargets => targets)),

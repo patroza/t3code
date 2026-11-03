@@ -20,7 +20,7 @@ import {
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -568,7 +568,7 @@ export const make = Effect.gen(function* () {
   const projectSetupScriptRunner = yield* ProjectSetupScriptRunner;
   const providerRegistry = yield* ProviderRegistry;
   const identity = yield* IdentityService.IdentityService;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   const provisionLock = yield* Semaphore.make(1);
 
   if (config.enabled) {
@@ -822,7 +822,7 @@ export const make = Effect.gen(function* () {
       readonly threadMode: GitHubThreadMode;
       readonly runSetup: boolean;
     }) {
-      const threadId = ThreadId.make(yield* crypto.randomUUIDv4());
+      const threadId = ThreadId.make(yield* crypto.uuidV4());
       const title = githubCommentThreadTitle(input.invocation, input.threadMode);
       yield* Effect.logInfo("Creating T3 thread for GitHub PR comment", {
         repository: input.invocation.repository,
@@ -838,7 +838,7 @@ export const make = Effect.gen(function* () {
         type: "thread.create",
         createdBy: "user",
         creationSource: "server",
-        commandId: CommandId.make(yield* crypto.randomUUIDv4()),
+        commandId: CommandId.make(yield* crypto.uuidV4()),
         threadId,
         projectId: input.projectId,
         title,
@@ -1438,8 +1438,8 @@ export const make = Effect.gen(function* () {
       return;
     }
 
-    const commandId = CommandId.make(yield* crypto.randomUUIDv4());
-    const messageId = MessageId.make(yield* crypto.randomUUIDv4());
+    const commandId = CommandId.make(yield* crypto.uuidV4());
+    const messageId = MessageId.make(yield* crypto.uuidV4());
     const processing: StoredGitHubDelivery = {
       ...acknowledged,
       threadId: thread.id,
