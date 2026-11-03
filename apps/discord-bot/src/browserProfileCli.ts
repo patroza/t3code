@@ -68,6 +68,7 @@ async function setup(input: ParsedArguments, dataDir: string, executablePath: st
   const release = await acquireProfileLock(paths);
   try {
     const context = await chromium.launchPersistentContext(paths.userDataDir, {
+      chromiumSandbox: true,
       executablePath,
       headless: false,
       viewport: { width: 1_440, height: 900 },
@@ -139,6 +140,7 @@ async function verify(input: ParsedArguments, dataDir: string, executablePath: s
   const release = await acquireProfileLock(paths);
   try {
     const context = await chromium.launchPersistentContext(paths.userDataDir, {
+      chromiumSandbox: true,
       executablePath,
       headless: true,
       viewport: { width: 1_440, height: 900 },

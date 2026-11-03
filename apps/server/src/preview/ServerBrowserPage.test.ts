@@ -125,7 +125,7 @@ describe("server browser element refs", () => {
 
   it("shows dotted fields as dots wherever their value appears, keeping text values and refs", async () => {
     await page.setContent(`
-      <table><tr><td>password:</td><td><input id="pw" type="password" aria-label="Password"></td></tr></table>
+      <table><tr aria-label="password: typed-pass"><td>password:</td><td><input id="pw" type="password" aria-label="Password"></td></tr></table>
       <input aria-label="Username" value="maria">
       <input type="password" aria-label='saved" [ref=e2]: x' placeholder="hint" value="saved-pass">
       <input type="password" role="combobox" aria-label="Code" value="role-pass">
