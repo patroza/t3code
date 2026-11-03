@@ -228,14 +228,14 @@ const bootstrapLegacyLedger = Effect.fn("MigrationBootstrap.bootstrapLegacyLedge
   }
 
   yield* sql`DELETE FROM ${sql(upstreamMigrationTable)}`;
-  if (Arr.isReadonlyArrayNonEmpty(copiedUpstreamRows)) {
+  if (Arr.isArrayNonEmpty(copiedUpstreamRows)) {
     yield* sql`INSERT INTO ${sql(upstreamMigrationTable)} ${sql.insert(copiedUpstreamRows)}`;
   }
   if (tail.length > 0) {
     const reconciledRows = [35, 36]
       .filter((migration_id) => migration_id > canonicalPrefix)
       .map((migration_id) => ({ migration_id, name: upstreamNames.get(migration_id)! }));
-    if (Arr.isReadonlyArrayNonEmpty(reconciledRows)) {
+    if (Arr.isArrayNonEmpty(reconciledRows)) {
       yield* sql`INSERT INTO ${sql(upstreamMigrationTable)} ${sql.insert(reconciledRows)}`;
     }
   }
