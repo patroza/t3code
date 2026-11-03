@@ -285,6 +285,7 @@ export class BrowserRuntime {
     let context: BrowserContext | null = null;
     try {
       context = await chromium.launchPersistentContext(paths.userDataDir, {
+        chromiumSandbox: true,
         executablePath: options.executablePath,
         headless: options.headless,
         viewport: { width: 1_440, height: 900 },
