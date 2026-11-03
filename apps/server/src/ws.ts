@@ -3615,9 +3615,9 @@ export const layer = Layer.unwrap(
           ),
         );
         const productHandshakeValid =
-          Option.isSome(requestUrl) &&
+          Option.isSome(url) &&
           isValidOmegentT3ProductHandshake(
-            parseProductHandshakeFromSearchParams(requestUrl.value.searchParams),
+            parseProductHandshakeFromSearchParams(url.value.searchParams),
           );
         const clientOrigin = readClientConnectionOrigin(request);
         const clientAnalyticsProps = readClientAnalyticsProps(request);

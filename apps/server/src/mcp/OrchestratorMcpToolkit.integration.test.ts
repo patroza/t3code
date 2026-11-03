@@ -780,7 +780,7 @@ describe("orchestrator MCP toolkit", () => {
             layerOrchestratorToolkit,
             McpHttpServer.layerThreadToolkit,
           ).pipe(
-            Layer.provideMerge(McpServer.McpServer.layer),
+            Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
             Layer.provideMerge(layerOrchestration),
             Layer.provide(layerRegistry),
             Layer.provide(layerProviderRegistry),
@@ -2426,7 +2426,7 @@ describe("orchestrator MCP toolkit", () => {
                 threadId: emptyThread.threadId,
                 action,
               }).pipe(Effect.flip);
-              expect(retiredAction._tag).toBe("InvalidParams");
+              expect(retiredAction).toMatchObject({ _tag: "InvalidParams" });
             }
             // Legacy metadata remains readable, but PR linking has its own toolkit now.
             const linked = {

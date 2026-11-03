@@ -936,7 +936,7 @@ it.effect("registers annotated tools and preserves authenticated request context
           Effect.provideService(McpSchema.McpServerClient, client),
           Effect.flip,
         );
-      expect(malformed._tag).toBe("InvalidParams");
+      expect(malformed).toMatchObject({ _tag: "InvalidParams" });
 
       const snapshot = yield* server
         .callTool({

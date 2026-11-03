@@ -1,3 +1,4 @@
+import * as Redacted from "effect/Redacted";
 // @effect-diagnostics nodeBuiltinImport:off - realpathSync.native resolves Windows 8.3 short names, which the Effect realPath does not.
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
@@ -387,7 +388,10 @@ it.effect("coalesces concurrent ref pages into one repository snapshot", () =>
           if (!ChildProcess.isStandardCommand(command)) {
             return yield* Effect.die("expected a standard Git command");
           }
-          yield* Ref.update(spawnedArgs, (current) => [...current, command.args]);
+          yield* Ref.update(spawnedArgs, (current) => [
+            ...current,
+            command.args.map((word) => (Redacted.isRedacted(word) ? Redacted.value(word) : word)),
+          ]);
           const isWorktreeScan =
             command.args.includes("worktree") && command.args.includes("--porcelain");
           const shouldDelay =
@@ -483,7 +487,13 @@ it.effect("coalesces concurrent ref pages into one repository snapshot", () =>
         2,
       );
     }),
-  ).pipe(Effect.provide(layerServerConfig.pipe(Layer.provideMerge(NodeServices.layer)))),
+  ).pipe(
+    Effect.provide(
+      layerServerConfig.pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
+  ),
 );
 
 it.effect.each([
@@ -1113,7 +1123,11 @@ describe("pullCurrentBranch", () => {
         assert.equal(yield* Ref.get(fixture.attempts), 1);
       }).pipe(
         Effect.scoped,
-        Effect.provide(layerServerConfig.pipe(Layer.provideMerge(NodeServices.layer))),
+        Effect.provide(
+          layerServerConfig.pipe(
+            Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          ),
+        ),
       ),
   );
 
@@ -1126,7 +1140,11 @@ describe("pullCurrentBranch", () => {
       assert.equal(yield* Ref.get(fixture.attempts), 0);
     }).pipe(
       Effect.scoped,
-      Effect.provide(layerServerConfig.pipe(Layer.provideMerge(NodeServices.layer))),
+      Effect.provide(
+        layerServerConfig.pipe(
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+        ),
+      ),
     ),
   );
 
@@ -1185,7 +1203,11 @@ describe("pullCurrentBranch", () => {
       yield* Deferred.succeed(reset.release, ChildProcessSpawner.ExitCode(0));
     }).pipe(
       Effect.scoped,
-      Effect.provide(layerServerConfig.pipe(Layer.provideMerge(NodeServices.layer))),
+      Effect.provide(
+        layerServerConfig.pipe(
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+        ),
+      ),
     ),
   );
 
@@ -1251,7 +1273,11 @@ describe("pullCurrentBranch", () => {
       yield* Queue.take(fixture.finalized);
     }).pipe(
       Effect.scoped,
-      Effect.provide(layerServerConfig.pipe(Layer.provideMerge(NodeServices.layer))),
+      Effect.provide(
+        layerServerConfig.pipe(
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+        ),
+      ),
     ),
   );
 
@@ -4140,7 +4166,9 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
             if (!ChildProcess.isStandardCommand(command)) {
               return yield* Effect.die("expected a standard Git command");
             }
-            commands.push(command.args);
+            commands.push(
+              command.args.map((word) => (Redacted.isRedacted(word) ? Redacted.value(word) : word)),
+            );
             return yield* delegate.spawn(command);
           }),
         );
@@ -4229,7 +4257,9 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
             if (!ChildProcess.isStandardCommand(command)) {
               return yield* Effect.die("expected a standard Git command");
             }
-            commands.push(command.args);
+            commands.push(
+              command.args.map((word) => (Redacted.isRedacted(word) ? Redacted.value(word) : word)),
+            );
             if (command.args.join(" ") === "symbolic-ref refs/remotes/origin/HEAD") {
               originHeadReads++;
               if (failFirstOriginHead && originHeadReads === 1) return makeNonRepositoryHandle();

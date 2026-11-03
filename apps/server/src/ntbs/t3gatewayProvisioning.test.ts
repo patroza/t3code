@@ -60,13 +60,14 @@ const createCryptoMock = (recordResult: CallRecordResult) => {
     Effect.gen(function* () {
       const counter = yield* Ref.make(0);
       const random = SecureRandom.make((size) => new Uint8Array(size));
-      const uuidV4 = ((options?: { format?: "string" | "bytes" }) =>
-        Ref.getAndUpdate(counter, (num) => num + 1).pipe(
+      const uuidV4 = ((options?: { format?: "string" | "bytes" }) => {
+        const recorded = Ref.getAndUpdate(counter, (num) => num + 1).pipe(
           Effect.flatMap((num) => recordCrypto("uuidV4", undefined, "randomUUID" + num)),
-          Effect.flatMap((id) =>
-            options?.format === "bytes" ? random.uuidV4({ format: "bytes" }) : Effect.succeed(id),
-          ),
-        )) as SecureRandom.UuidGenerator;
+        );
+        return options?.format === "bytes"
+          ? recorded.pipe(Effect.andThen(random.uuidV4({ format: "bytes" })))
+          : recorded;
+      }) as SecureRandom.UuidGenerator;
       return Layer.succeed(SecureRandom.SecureRandom, { ...random, uuidV4 });
     }),
   );

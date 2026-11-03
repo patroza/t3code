@@ -846,7 +846,7 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
 describe("ProviderInstanceRegistry — all drivers slice", () => {
   const layerInfra = OpenCodeRuntime.layer.pipe(
     Layer.provide(OpenCodeServerLedger.layerTest),
-    Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     Layer.provideMerge(DirenvEnvironment.layerNoop),
     Layer.provideMerge(
       Layer.mock(CodexManagedTokenBroker.CodexManagedTokenBroker)({

@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as PortScanner from "../preview/PortScanner.ts";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -52,6 +53,7 @@ import { GROK_MODEL_SELECTION } from "./testkit/fixtures/shared.ts";
 
 const layerPlatformTest = Layer.merge(
   NodeServices.layer,
+  NodeCrypto.layer,
   Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
     resolveLink: () => Effect.die("unused title link"),
   }),
@@ -91,6 +93,7 @@ const layerProviderInstanceRegistry = ProviderInstanceRegistryHydration.layer.pi
         Layer.provide(layerPlatformTest),
       ),
       NodeServices.layer,
+      NodeCrypto.layer,
       FetchHttpClient.layer,
       OpenCodeRuntime.layer.pipe(
         Layer.provide(OpenCodeServerLedger.layerTest),
@@ -355,7 +358,10 @@ describe.runIf(process.env.T3_GROK_LIVE_ORCHESTRATOR === "1")("Grok V2 live orch
           `${assistant}\n${commands.map((command) => command.output).join("\n")}`,
           marker,
         );
-      }).pipe(Effect.provide(Layer.mergeAll(layerLive, NodeServices.layer)), Effect.scoped),
+      }).pipe(
+        Effect.provide(Layer.mergeAll(layerLive, NodeServices.layer, NodeCrypto.layer)),
+        Effect.scoped,
+      ),
     360_000,
   );
 });
