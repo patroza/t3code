@@ -1,3 +1,4 @@
+import * as SecureRandom from "effect/crypto/SecureRandom";
 /*
 The T3 gateway module exposes the interface that the NTBS processor uses to communicate
 with T3, similar to how adapter models the interaction with the external platform.
@@ -14,7 +15,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import type * as NTBS from "./exchange.ts";
-import { Context, Crypto, Data, Effect, FileSystem, Layer, Option, Stream } from "effect";
+import { Context, Data, Effect, FileSystem, Layer, Option, Stream } from "effect";
 import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
 import { ProjectStoreV2 } from "../orchestration-v2/ProjectStore.ts";
 
@@ -69,7 +70,7 @@ type T3GatewayRequirements =
   /*
     Generates unique identifiers for the new thread, message, commands, and worktree branch.
    */
-  | Crypto.Crypto
+  | SecureRandom.SecureRandom
   /*
     Supplies the environment's current default model when the project inherits it.
   */
@@ -380,10 +381,8 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
         );
     });
 
-    const crypto = yield* Crypto.Crypto;
-    const randomUUID = crypto
-      .randomUUIDv4()
-      .pipe(orFail("retryable")("crypto.randomUUIDv4", "Failed creating a UUID v4"));
+    const crypto = yield* SecureRandom.SecureRandom;
+    const randomUUID = crypto.uuidV4();
 
     const projectScriptRunner = yield* ProjectSetupScriptRunner;
 

@@ -1,7 +1,7 @@
 import { RegistryProvider } from "@effect/atom-react";
 import { flushSync } from "react-dom";
 import { AudioPreview } from "../files/AudioPreview";
-import { commands, page } from "vite-plus/test/browser";
+import { commands, cdp, page } from "vite-plus/test/browser";
 import {
   CheckpointRef,
   ComposerContextId,
@@ -1702,6 +1702,8 @@ describe("MessagesTimeline scroll position", () => {
   });
 
   it("restores the composer after closing tool output only at the end", async () => {
+    await commands.setCpuThrottling(6);
+    onTestFinished(() => commands.setCpuThrottling(1));
     const props = baseProps();
     function Thread() {
       const composer = useComposerFocusState();
@@ -1734,6 +1736,12 @@ describe("MessagesTimeline scroll position", () => {
     await using screen = await renderElement(<Thread />);
     const composerState = () => screen.container.querySelector("output")!.textContent;
     const viewport = await waitForList(props);
+    await vi.waitFor(() => {
+      expect(
+        viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop,
+      ).toBeLessThanOrEqual(1);
+      expect(props.listRef.current!.getState().isAtEnd).toBe(true);
+    });
     await click(screen.button("Collapse"));
     const toggle = () => screen.button("Command output");
     await click(toggle());
@@ -1749,6 +1757,8 @@ describe("MessagesTimeline scroll position", () => {
       expect(readTimelinePosition(props.routeThreadKey)?.atEnd).toBe(false);
       expect(composerState()).toBe("collapsed");
     });
+    await userEvent.wheel(viewport, { delta: { y: 2000 } });
+    await vi.waitFor(() => expect(composerState()).toBe("resting"));
   });
 });
 
@@ -1787,6 +1797,76 @@ describe("MessagesTimeline send anchor", () => {
       ).toBeGreaterThan(0);
     });
     expect(onAnchorReady).not.toHaveBeenCalled();
+  });
+});
+
+function usageLimitEntries(resetAt: string) {
+  const threadId = ThreadId.make("usage-limit-thread");
+  const at = DateTime.makeUnsafe(CREATED_AT);
+  return deriveTimelineEntriesFromVisibleTurnItems({
+    visibleTurnItems: [
+      {
+        position: 0,
+        visibility: "local",
+        sourceThreadId: threadId,
+        sourceItemId: TurnItemId.make("usage-limit"),
+        item: {
+          id: TurnItemId.make("usage-limit"),
+          threadId,
+          runId: RunId.make("usage-limit-run"),
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 0,
+          title: null,
+          startedAt: at,
+          completedAt: at,
+          updatedAt: at,
+          type: "error",
+          status: "failed",
+          failure: {
+            class: "usage_limit",
+            message: "You've hit your usage limit.",
+            code: null,
+            retryable: true,
+            resetAt,
+          },
+        },
+      },
+    ],
+    optimisticMessages: [],
+  });
+}
+
+describe("MessagesTimeline usage limit notice", () => {
+  it("labels the retry time with the viewer's timezone", async () => {
+    await using screen = await renderTimeline(usageLimitEntries("2026-03-17T19:30:00.000Z"));
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    expect(screen.text()).toMatch(/Usage limit reached\. Retry after .+\./);
+    expect(screen.text()).toContain(`(${timeZone})`);
+  });
+
+  it("keeps the retry time in the named zone after the viewer's timezone changes", async () => {
+    const resetAt = "2026-07-01T19:30:00.000Z";
+    const session = cdp();
+    await session.send("Emulation.setTimezoneOverride", { timezoneId: "Europe/Madrid" });
+    try {
+      {
+        await using _madrid = await renderTimeline(usageLimitEntries(resetAt));
+      }
+      await session.send("Emulation.setTimezoneOverride", { timezoneId: "America/New_York" });
+      await using screen = await renderTimeline(usageLimitEntries(resetAt));
+      const newYorkTime = new Date(resetAt).toLocaleTimeString(undefined, {
+        hour: "numeric",
+        minute: "2-digit",
+        timeZone: "America/New_York",
+      });
+      expect(screen.text()).toContain(`${newYorkTime} (America/New_York)`);
+    } finally {
+      await session.send("Emulation.setTimezoneOverride", { timezoneId: "" });
+    }
   });
 });
 

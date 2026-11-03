@@ -1,3 +1,5 @@
+import * as Layer from "effect/Layer";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
@@ -38,5 +40,5 @@ it.effect("refuses Kimi review guide investigation before starting an ACP runtim
     });
     expect(error.detail).toContain("Kimi Code cannot investigate a checkout read-only");
     expect(runtimeStarted).toBe(false);
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );

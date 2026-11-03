@@ -8,7 +8,7 @@ import {
   ProjectSetupScriptRunner,
   ProjectSetupScriptOperationError,
 } from "../project/ProjectSetupScriptRunner.ts";
-import { Crypto } from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import {
   GitCommandError,
   ProjectId,
@@ -20,7 +20,6 @@ import {
   VcsStatusLocalResult,
 } from "@t3tools/contracts";
 import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
-import { PlatformError, SystemError } from "effect/PlatformError";
 import {
   OrchestratorDispatchError,
   OrchestratorCommandRejectedError,
@@ -55,42 +54,21 @@ type CallRecordResult = ReturnType<typeof createCallLog>["recordResult"];
 
 type CallRecord = ReturnType<typeof createCallLog>["record"];
 
-type CryptoInput = {
-  failRandomUUIDv4?: boolean;
-};
-
-const createCryptoMock = (recordResult: CallRecordResult, input?: CryptoInput) => {
-  const recordCrypto = recordResult("Crypto");
-
+const createCryptoMock = (recordResult: CallRecordResult) => {
+  const recordCrypto = recordResult("SecureRandom");
   return Layer.unwrap(
     Effect.gen(function* () {
-      const counter: Ref.Ref<number> = yield* Ref.make(0);
-
-      return Layer.mock(Crypto, {
-        "~effect/Crypto": "~effect/Crypto",
-        randomUUIDv4: () =>
-          // recordCrypto("randomUUIDv4", undefined, )
-
-          input?.failRandomUUIDv4
-            ? recordCrypto("randomUUIDv4", undefined, "noreach").pipe(
-                Effect.andThen(
-                  new PlatformError(
-                    new SystemError({
-                      _tag: "Unknown",
-                      method: "randomUUIDv4",
-                      module: "crypto something",
-                    }),
-                  ),
-                ),
-              )
-            : Ref.getAndUpdate(counter, (num) => num + 1).pipe(
-                Effect.flatMap((num) =>
-                  recordCrypto("randomUUIDv4", undefined, "randomUUID" + num),
-                ),
-              ),
-        nextDoubleUnsafe: () => 0,
-        nextIntUnsafe: () => 0,
-      });
+      const counter = yield* Ref.make(0);
+      const random = SecureRandom.make((size) => new Uint8Array(size));
+      const uuidV4 = ((options?: { format?: "string" | "bytes" }) => {
+        const recorded = Ref.getAndUpdate(counter, (num) => num + 1).pipe(
+          Effect.flatMap((num) => recordCrypto("uuidV4", undefined, "randomUUID" + num)),
+        );
+        return options?.format === "bytes"
+          ? recorded.pipe(Effect.andThen(random.uuidV4({ format: "bytes" })))
+          : recorded;
+      }) as SecureRandom.UuidGenerator;
+      return Layer.succeed(SecureRandom.SecureRandom, { ...random, uuidV4 });
     }),
   );
 };
@@ -241,7 +219,6 @@ const createT3Gateway = (input?: {
       | { missing: true };
   };
   gwfs?: GitLayerInput;
-  crypto?: CryptoInput;
   createFails?: boolean;
   createRejected?: boolean;
   recovered?: boolean;
@@ -328,7 +305,7 @@ const createT3Gateway = (input?: {
               ),
           }),
           createGitWorkflowServiceMock(recordResult, record, input?.gwfs),
-          createCryptoMock(recordResult, input?.crypto),
+          createCryptoMock(recordResult),
           Layer.mock(ProjectSetupScriptRunner, {
             runForThread: (args) =>
               record("ProjectSetupScriptRunner")("runForThread", args).pipe(
@@ -422,8 +399,8 @@ describe("T3Gateway", () => {
               method: "resolveRemoteTrackingCommit",
               input: { cwd: workspaceRoot, refName: "main", fallbackRemoteName: "origin" },
             },
-            { service: "Crypto", method: "randomUUIDv4", input: undefined },
-            { service: "Crypto", method: "randomUUIDv4", input: undefined },
+            { service: "SecureRandom", method: "uuidV4", input: undefined },
+            { service: "SecureRandom", method: "uuidV4", input: undefined },
           ]);
         }).pipe(Effect.provide(layer));
       });
@@ -614,36 +591,6 @@ describe("T3Gateway", () => {
           ]);
         }).pipe(Effect.provide(layer));
       });
-
-      it.effect("fails retryably when the exchange IDs cannot be minted", () => {
-        const { layer, calls } = createT3Gateway({
-          crypto: {
-            failRandomUUIDv4: true,
-          },
-        });
-
-        const projectId = ProjectId.make("projectId");
-
-        return Effect.gen(function* () {
-          const t3Gateway = yield* T3Gateway;
-
-          const result = yield* t3Gateway.planCoordinates(projectId, "main").pipe(Effect.flip);
-
-          expect(result._tag).toBe("RetryableError");
-
-          expect(result.method).toBe("crypto.randomUUIDv4");
-
-          const methods = calls.map((call) => call.method);
-
-          expect(methods).toEqual([
-            "listShells",
-            "remoteExists",
-            "fetchRemote",
-            "resolveRemoteTrackingCommit",
-            "randomUUIDv4",
-          ]);
-        }).pipe(Effect.provide(layer));
-      });
     });
   });
 });
@@ -675,7 +622,7 @@ it.effect(
         "listShells",
         "listRefs",
         "createWorktree",
-        "randomUUIDv4",
+        "uuidV4",
         "dispatch",
         "runForThread",
       ]);

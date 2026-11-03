@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 /**
  * Drives the real Grok adapter through the background-shell sequence recorded
  * from Grok 1.0.50. The shell's tool id is `call-<uuid>-N`, its start ACK is
@@ -48,7 +49,7 @@ const POLL_ID = "call-30daec66-87a5-4d19-b0f1-9698694ea7ba-2";
 const SESSION_ID = "root-session";
 
 const layerTest = TestProviderHost.layer({ runBackgroundWork: false }).pipe(
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   Layer.provideMerge(IdAllocator.layer),
   Layer.provideMerge(McpProviderSessions.layer),
 );

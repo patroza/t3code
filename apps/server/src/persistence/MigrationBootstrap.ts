@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import { MigrationError } from "effect/sql/Migrator";
@@ -148,9 +149,9 @@ const bootstrapLegacyLedger = Effect.fn("MigrationBootstrap.bootstrapLegacyLedge
     ORDER BY migration_id
   `;
   yield* createLedger(sql, legacyMigrationBackupTable);
-  if (legacyRows.length > 0) {
+  if (Arr.isReadonlyArrayNonEmpty(legacyRows)) {
     yield* sql`INSERT OR IGNORE INTO ${sql(legacyMigrationBackupTable)} ${sql.insert(
-      legacyRows.map(({ migration_id, name }) => ({ migration_id, name })),
+      Arr.map(legacyRows, ({ migration_id, name }) => ({ migration_id, name })),
     )}`;
   }
   if (legacyRows.length === 0) {
@@ -227,14 +228,14 @@ const bootstrapLegacyLedger = Effect.fn("MigrationBootstrap.bootstrapLegacyLedge
   }
 
   yield* sql`DELETE FROM ${sql(upstreamMigrationTable)}`;
-  if (copiedUpstreamRows.length > 0) {
+  if (Arr.isArrayNonEmpty(copiedUpstreamRows)) {
     yield* sql`INSERT INTO ${sql(upstreamMigrationTable)} ${sql.insert(copiedUpstreamRows)}`;
   }
   if (tail.length > 0) {
     const reconciledRows = [35, 36]
       .filter((migration_id) => migration_id > canonicalPrefix)
       .map((migration_id) => ({ migration_id, name: upstreamNames.get(migration_id)! }));
-    if (reconciledRows.length > 0) {
+    if (Arr.isArrayNonEmpty(reconciledRows)) {
       yield* sql`INSERT INTO ${sql(upstreamMigrationTable)} ${sql.insert(reconciledRows)}`;
     }
   }

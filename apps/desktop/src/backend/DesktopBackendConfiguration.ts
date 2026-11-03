@@ -8,7 +8,7 @@ import { LOCAL_BOOTSTRAP_CREDENTIAL_FILE } from "@t3tools/shared/serverRuntime";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
@@ -755,7 +755,7 @@ export const make = Effect.gen(function* () {
   const wslEnvironment = yield* DesktopWslEnvironment.DesktopWslEnvironment;
   const wslServerTree = yield* DesktopWslServerTree.DesktopWslServerTree;
   const settings = yield* DesktopAppSettings.DesktopAppSettings;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   // Random generation yields; serialize it so concurrent backends cannot capture distinct bootstrap secrets.
   const secretRef = yield* SynchronizedRef.make(Option.none<string>());
   const getOrCreateBootstrapSecret = SynchronizedRef.modifyEffect(secretRef, (current) =>
@@ -765,7 +765,7 @@ export const make = Effect.gen(function* () {
         const credentialPath = NodePath.join(environment.stateDir, LOCAL_BOOTSTRAP_CREDENTIAL_FILE);
         const persisted = readLocalBootstrapCredential(credentialPath);
         if (persisted !== undefined) return [persisted, Option.some(persisted)] as const;
-        const token = Hex.encode(yield* crypto.randomBytes(32));
+        const token = Hex.encode(yield* random.randomBytes(32));
         const installed = installLocalBootstrapCredential(credentialPath, token);
         return [installed, Option.some(installed)] as const;
       }),

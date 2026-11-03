@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { expect, it } from "@effect/vitest";
 import { DateTime, Effect, Layer, Schema, Stream } from "effect";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -168,6 +169,7 @@ const fixture = (status?: OrchestrationV2RunStatus, missing = false) => {
         Layer.mock(GitWorkflowService, {}),
         Layer.mock(ProjectSetupScriptRunner, {}),
         NodeServices.layer,
+        NodeCrypto.layer,
         ServerSettings.layerTest({}),
       ),
     ),

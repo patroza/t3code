@@ -520,19 +520,30 @@ const ConversationTimeline = memo(function ConversationTimeline({
     return disclosureAnchorKey === null || row.id === disclosureAnchorKey;
   };
 
-  const collapseNotificationPendingRef = useRef(false);
+  const collapseNotificationPendingRef = useRef<string | null>(null);
   const onToggleWorkEntry = useStableCallback((anchorKey: string, collapsed: boolean = false) => {
-    collapseNotificationPendingRef.current = collapsed;
+    collapseNotificationPendingRef.current = collapsed ? listIdentityKey : null;
     suspendEndScrollMaintenanceForDisclosure(anchorKey, collapsed);
   });
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Notify the parent only after the list commits its settled anchor; this is an imperative post-layout event, not derived state.
-  useLayoutEffect(() => {
-    if (disclosureToggleSettling || !collapseNotificationPendingRef.current) return;
-    collapseNotificationPendingRef.current = false;
-    if (resolveTimelineIsAtEnd(listRef.current?.getState()) === true) {
-      onToolOutputCollapsedAtEnd?.();
+  const notifyToolOutputCollapsedAtEnd = useStableCallback(() => {
+    if (collapseNotificationPendingRef.current !== listIdentityKey) {
+      collapseNotificationPendingRef.current = null;
+      return;
     }
-  }, [disclosureToggleSettling, listRef, onToolOutputCollapsedAtEnd]);
+    if (disclosureToggleSettling || resolveTimelineIsAtEnd(listRef.current?.getState()) !== true)
+      return;
+    // Size/scroll signals can lag the disclosure commit. Keep the intent until end is confirmed.
+    collapseNotificationPendingRef.current = null;
+    onToolOutputCollapsedAtEnd?.();
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Notify after layout settles; this is an imperative event, not derived state.
+  useLayoutEffect(() => {
+    if (collapseNotificationPendingRef.current !== listIdentityKey) {
+      collapseNotificationPendingRef.current = null;
+      return;
+    }
+    if (!disclosureToggleSettling) notifyToolOutputCollapsedAtEnd();
+  }, [disclosureToggleSettling, listIdentityKey, notifyToolOutputCollapsedAtEnd]);
 
   const onToggleTurnFold = (runId: RunId) => {
     suspendEndScrollMaintenanceForDisclosure(`turn-fold:${runId}`, expandedRunIds.has(runId));
@@ -1189,8 +1200,10 @@ const ConversationTimeline = memo(function ConversationTimeline({
     const stopListeningToContentSize = list
       ?.getState()
       .listen("totalSize", () => scheduleContentSizeChanged());
+    const stopListeningToEnd = list?.getState().listen("isAtEnd", notifyToolOutputCollapsedAtEnd);
     scheduleContentSizeChanged();
     return () => {
+      stopListeningToEnd?.();
       stopListeningToContentSize?.();
       stopRememberingRelease?.();
       if (contentSizeFrame !== null) cancelAnimationFrame(contentSizeFrame);

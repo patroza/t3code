@@ -1,4 +1,4 @@
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -53,7 +53,7 @@ export interface AcpTextGenerationDefinition<Settings extends AcpTextGenerationS
   ) => Effect.Effect<
     AcpSessionRuntime.AcpSessionRuntime["Service"],
     EffectAcpErrors.AcpError,
-    Crypto.Crypto | import("effect/Scope").Scope
+    SecureRandom.SecureRandom | import("effect/Scope").Scope
   >;
   readonly applyModelSelection: <E>(input: {
     readonly runtime: AcpSessionRuntime.AcpSessionRuntime["Service"];
@@ -74,7 +74,7 @@ export const makeAcpTextGeneration = Effect.fn("makeAcpTextGeneration")(function
   definition: AcpTextGenerationDefinition<Settings>,
   environment?: NodeJS.ProcessEnv,
 ) {
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const resolvedEnvironment = environment ?? process.env;
 
@@ -105,7 +105,7 @@ export const makeAcpTextGeneration = Effect.fn("makeAcpTextGeneration")(function
             cwd,
             clientInfo: { name: "t3-code-git-text", version: "0.0.0" },
           })
-          .pipe(Effect.provideService(Crypto.Crypto, crypto));
+          .pipe(Effect.provideService(SecureRandom.SecureRandom, crypto));
 
         yield* runtime.handleSessionUpdate((notification) => {
           const update = notification.update;

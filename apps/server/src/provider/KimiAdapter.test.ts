@@ -1,3 +1,5 @@
+import * as Redacted from "effect/Redacted";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { DirenvEnvironment } from "./DirenvEnvironment.ts";
 import { expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -12,18 +14,24 @@ import { KimiAdapterV2Driver } from "../orchestration-v2/Adapters/KimiAdapterV2.
 import { ProviderAdapterV2RuntimePolicy } from "@t3tools/provider-core/server/ProviderAdapter";
 const layer = Layer.mergeAll(
   NodeServices.layer,
+  NodeCrypto.layer,
   IdAllocator.layer,
-  TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer)),
+  TestProviderHost.layer().pipe(
+    Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+  ),
   McpProviderSessions.layer,
 );
 it.effect("registers Kimi as a native ACP adapter and launches its ACP command", () =>
   Effect.gen(function* () {
     const launches: Array<ReadonlyArray<string>> = [];
-    let spawnedEnvironment: NodeJS.ProcessEnv | undefined;
+    let spawnedDirenvValue: string | undefined;
     const spawner = ChildProcessSpawner.make((command) => {
       if (command._tag === "StandardCommand") {
-        launches.push(command.args);
-        spawnedEnvironment = command.options.env;
+        launches.push(
+          command.args.map((word) => (Redacted.isRedacted(word) ? Redacted.value(word) : word)),
+        );
+        const value = command.options.env?.T3_TEST_DIRENV;
+        spawnedDirenvValue = Redacted.isRedacted(value) ? Redacted.value(value) : value;
       }
       return Effect.fail(
         PlatformError.systemError({
@@ -57,7 +65,7 @@ it.effect("registers Kimi as a native ACP adapter and launches its ACP command",
       })
       .pipe(Effect.ignore);
     expect(launches.some((args) => args.includes("acp"))).toBe(true);
-    expect(spawnedEnvironment?.T3_TEST_DIRENV).toBe("project-value");
+    expect(spawnedDirenvValue).toBe("project-value");
   }).pipe(
     Effect.scoped,
     Effect.provide(layer),

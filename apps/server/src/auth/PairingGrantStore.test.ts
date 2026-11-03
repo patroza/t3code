@@ -3,11 +3,12 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
 import { AuthStandardClientScopes } from "@t3tools/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { LOCAL_BOOTSTRAP_CREDENTIAL_FILE } from "@t3tools/shared/serverRuntime";
 import { expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -75,7 +76,7 @@ const makeLocalBootstrapGrantStoreLayer = (credential: string) =>
     ),
   );
 
-it.layer(NodeServices.layer)("PairingGrantStore.layer", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("PairingGrantStore.layer", (it) => {
   it.effect("accepts lowercase one-time tokens exactly once", () =>
     Effect.gen(function* () {
       const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
@@ -92,12 +93,9 @@ it.layer(NodeServices.layer)("PairingGrantStore.layer", (it) => {
       expect(second.message).toContain("Unknown bootstrap credential");
     }).pipe(
       Effect.provide(layerPairingGrantStore()),
-      Effect.provideServiceEffect(
-        Crypto.Crypto,
-        Effect.map(Crypto.Crypto, (crypto) => ({
-          ...crypto,
-          randomBytes: (size) => Effect.succeed(new Uint8Array(size).fill(8)),
-        })),
+      Effect.provideService(
+        SecureRandom.SecureRandom,
+        SecureRandom.make((size) => new Uint8Array(size).fill(8)),
       ),
     ),
   );

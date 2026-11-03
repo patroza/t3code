@@ -87,6 +87,8 @@ const isolatedUnitTestFiles = [
   "src/state/terminalSessions.test.ts",
   // Retained action toasts use scoped server and runtime mocks.
   "src/components/GitActionsControl.lifecycle.test.ts",
+  // Star-prompt module resets and scoped atom/toast mocks must not leak into shared workers.
+  "src/components/GitHubStarPrompt.test.ts",
   // Hook mocks must bind before imports, without a preceding file’s cached theme hook.
   "src/hooks/useHtmlRenderTheme.test.ts",
   // Partial server mocks must not replace capability atoms used by browser restoration.

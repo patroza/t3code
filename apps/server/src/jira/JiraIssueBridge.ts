@@ -12,7 +12,7 @@ import { buildAgentAwarenessDeepLink } from "@t3tools/shared/agentAwareness";
 import type { IdentityMapPerson } from "@t3tools/shared/identityMap";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -245,7 +245,7 @@ const make = Effect.gen(function* () {
   const projectSetupScriptRunner = yield* ProjectSetupScriptRunner;
   const identity = yield* IdentityService.IdentityService;
   const fileSystem = yield* FileSystem.FileSystem;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   const createLock = yield* Semaphore.make(1);
   const hostedAppUrl = yield* hostedAppUrlConfig;
   const environmentId = yield* serverEnvironment.getEnvironmentId;
@@ -481,14 +481,14 @@ const make = Effect.gen(function* () {
           return null;
         }
 
-        const threadId = ThreadId.make(yield* crypto.randomUUIDv4());
+        const threadId = ThreadId.make(yield* crypto.uuidV4());
         const title =
           invocation.issueSummary?.trim() || `${invocation.issueKey} · Jira` || invocation.issueKey;
         const modelSelection =
           project.defaultModelSelection ?? getAutoBootstrapThreadModelSelection();
         const branchName = buildJiraAutoCreateBranchName(
           invocation.issueKey,
-          (yield* crypto.randomUUIDv4()).slice(0, 8),
+          (yield* crypto.uuidV4()).slice(0, 8),
         );
         const baseBranch = config.enabled ? config.baseBranch : "main";
 
@@ -540,7 +540,7 @@ const make = Effect.gen(function* () {
           type: "thread.create",
           createdBy: "user",
           creationSource: "server",
-          commandId: CommandId.make(yield* crypto.randomUUIDv4()),
+          commandId: CommandId.make(yield* crypto.uuidV4()),
           threadId,
           projectId: ProjectId.make(project.id),
           title: title.slice(0, 120),
@@ -864,8 +864,8 @@ const make = Effect.gen(function* () {
     // Always dispatch. When the thread is mid-turn, orchestration queues the
     // message (thread.message-queued) — do not short-circuit with a busy reply.
     // Response posting stays async via forkDetach(bridgeTurn) below.
-    const commandId = CommandId.make(yield* crypto.randomUUIDv4());
-    const messageId = MessageId.make(yield* crypto.randomUUIDv4());
+    const commandId = CommandId.make(yield* crypto.uuidV4());
+    const messageId = MessageId.make(yield* crypto.uuidV4());
     const processing: StoredJiraDelivery = {
       ...acknowledged,
       threadId: thread.id,
@@ -1196,8 +1196,8 @@ const make = Effect.gen(function* () {
       })
       .pipe(Effect.ignore);
 
-    const commandId = CommandId.make(yield* crypto.randomUUIDv4());
-    const messageId = MessageId.make(yield* crypto.randomUUIDv4());
+    const commandId = CommandId.make(yield* crypto.uuidV4());
+    const messageId = MessageId.make(yield* crypto.uuidV4());
     const processing: StoredJiraDelivery = {
       ...initial,
       threadId: thread.id,

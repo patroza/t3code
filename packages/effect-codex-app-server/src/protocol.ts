@@ -482,14 +482,22 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
     yield* Stream.fromQueue(outgoing).pipe(
       Stream.run(options.stdio.stdout()),
       Effect.catch((cause) =>
-        handleTermination(() =>
-          Effect.succeed(
-            new CodexError.CodexAppServerTransportError({
-              operation: "write-output-stream",
-              cause,
-            }),
-          ),
-        ),
+        handleTermination(() => {
+          const failed = new CodexError.CodexAppServerTransportError({
+            operation: "write-output-stream",
+            cause,
+          });
+          // A crashed child can close stdin before its exit status and stderr arrive.
+          // A live process with a broken writer must still fail within the same bound.
+          return options.terminationError === undefined
+            ? Effect.succeed(failed)
+            : options.terminationError.pipe(
+                Effect.timeoutOrElse({
+                  duration: EXIT_STATUS_GRACE,
+                  orElse: () => Effect.succeed(failed),
+                }),
+              );
+        }),
       ),
       Effect.forkScoped,
     );
