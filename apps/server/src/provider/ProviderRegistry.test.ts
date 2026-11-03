@@ -3046,6 +3046,7 @@ it.layer(
               "fx",
               "grok",
               "kimi",
+              "kiro",
               "muse",
               "opencode",
               "pi",
