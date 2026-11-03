@@ -71,7 +71,10 @@ const create = (config: Partial<OpenCodeSettings>, http: HttpClient.HttpClient) 
   OpenCodeDriver.create({
     instanceId: ProviderInstanceId.make("opencode-test"),
     displayName: undefined,
-    environment: [],
+    environment: [
+      { name: "OPENCODE_AUTH_CONTENT", value: "{}", sensitive: true },
+      { name: "OPENCODE_API_KEY", value: "", sensitive: true },
+    ],
     enabled: true,
     config: { ...OpenCodeDriver.defaultConfig(), ...config },
   }).pipe(Effect.provideService(HttpClient.HttpClient, http));
@@ -560,7 +563,10 @@ it.layer(layerUpdate)("OpenCodeDriver updates", (it) => {
         const instance = yield* OpenCodeDriver.create({
           instanceId: ProviderInstanceId.make("opencode-update"),
           displayName: undefined,
-          environment: [],
+          environment: [
+            { name: "OPENCODE_AUTH_CONTENT", value: "{}", sensitive: true },
+            { name: "OPENCODE_API_KEY", value: "", sensitive: true },
+          ],
           enabled: true,
           config: { ...OpenCodeDriver.defaultConfig(), binaryPath },
         }).pipe(Effect.provideService(HttpClient.HttpClient, noHttp));
