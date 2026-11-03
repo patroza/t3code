@@ -803,7 +803,7 @@ describe("orchestrator MCP toolkit", () => {
                 Layer.provide(layerOrchestration),
               ),
             ),
-            Layer.provide(NodeServices.layer),
+            Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           );
 
           yield* Effect.gen(function* () {

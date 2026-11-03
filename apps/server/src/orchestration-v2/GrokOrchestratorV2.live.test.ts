@@ -51,7 +51,7 @@ import * as RuntimeLayer from "./runtimeLayer.ts";
 import * as McpSessionRegistryTestkit from "../mcp/McpSessionRegistry.testkit.ts";
 import { GROK_MODEL_SELECTION } from "./testkit/fixtures/shared.ts";
 
-const layerPlatformTest = Layer.merge(
+const layerPlatformTest = Layer.mergeAll(
   NodeServices.layer,
   NodeCrypto.layer,
   Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
