@@ -7,7 +7,7 @@ import { migrationManifest } from "./Migrations.ts";
 describe("migration namespaces", () => {
   it("keeps upstream and fork manifests in independent ledgers", () => {
     assert.notEqual(upstreamMigrationTable, forkMigrationTable);
-    assert.deepStrictEqual(migrationManifest.slice(-27), [
+    assert.deepStrictEqual(migrationManifest.slice(-28), [
       [52, "ProjectionThreadTitleState"],
       [53, "PullRequestFilesViewed"],
       [54, "ProjectionThreadsAutoSettleDisabledAt"],
@@ -35,6 +35,7 @@ describe("migration namespaces", () => {
       [76, "ProjectionProjectsPinArchive"],
       [77, "RepairBooleanSettledOverride"],
       [78, "DropOrchestrationEventCorrelationIndex"],
+      [79, "DelegatedRecoveryIndexes"],
     ]);
     assert.deepStrictEqual(forkMigrationManifest, [
       [1, "ProjectionQueuedMessages"],

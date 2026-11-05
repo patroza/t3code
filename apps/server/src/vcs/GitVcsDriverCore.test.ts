@@ -1073,6 +1073,9 @@ describe("pullCurrentBranch", () => {
           yield* Deferred.succeed(pullRemoteRead, undefined);
           return makeSuccessfulHandle("origin\n");
         }
+        if (args[0] === "symbolic-ref") return makeSuccessfulHandle("refs/heads/main\n");
+        if (args[0] === "for-each-ref" && args.includes("--format=%(upstream:remotename)"))
+          return makeSuccessfulHandle("origin\n");
         if (args[0] === "status")
           return makeSuccessfulHandle(
             "# branch.oid before\0# branch.head main\0# branch.upstream origin/main\0# branch.ab +0 -1\0",

@@ -2287,15 +2287,15 @@ it.effect("shared intake preserves durable attachment bytes after a lost launch 
 it.effect("cancels tracked setup before provider work is released", () =>
   Effect.gen(function* () {
     const entered = yield* Deferred.make<void>();
-    const renameEntered = yield* Deferred.make<void>();
-    const renameStopped = yield* Deferred.make<void>();
+    const renamed = yield* Deferred.make<void>();
     const harness = makeHarness({
-      renameBranch: () =>
-        Deferred.succeed(renameEntered, undefined).pipe(
+      renameBranch: (input) =>
+        Deferred.succeed(renamed, undefined).pipe(Effect.as({ branch: input.newBranch })),
+      runSetup: () =>
+        Deferred.await(renamed).pipe(
+          Effect.andThen(Deferred.succeed(entered, undefined)),
           Effect.andThen(Effect.never),
-          Effect.onInterrupt(() => Deferred.succeed(renameStopped, undefined).pipe(Effect.asVoid)),
         ),
-      runSetup: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
     });
     yield* Effect.gen(function* () {
       const launches = yield* ThreadLaunch.ThreadLaunchService;
@@ -2310,11 +2310,10 @@ it.effect("cancels tracked setup before provider work is released", () =>
       });
       const launched = yield* launches.launch(input);
       yield* Deferred.await(entered);
-      yield* Deferred.await(renameEntered);
       assert.equal((yield* tracker.get(launched.threadId))?.phase, "running");
       assert.isTrue(yield* tracker.cancel(launched.threadId));
       assert.equal((yield* tracker.get(launched.threadId))?.phase, "cancelled");
-      assert.isTrue(yield* Deferred.isDone(renameStopped));
+      assert.isTrue(yield* Deferred.isDone(renamed));
       const projection = yield* threads.getThreadProjection(launched.threadId);
       assert.equal(projection.runs[0]?.status, "failed");
       assert.isNull(projection.thread.worktreePath);
