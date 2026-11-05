@@ -72,6 +72,8 @@ import {
   OrchestrationGetTurnDiffError,
   ORCHESTRATION_V2_WS_METHODS,
   ORCHESTRATION_PROTOCOL_QUERY_PARAM,
+  CLIENT_CAPABILITIES_QUERY_PARAM,
+  SETTINGS_SECRET_REFERENCES_CAPABILITY,
   ORCHESTRATION_PROTOCOL_VERSION,
   OrchestrationV2DispatchCommandError,
   OrchestrationV2GetShellSnapshotError,
@@ -707,6 +709,11 @@ function hasCompatibleOrchestrationProtocol(url: URL): boolean {
   );
 }
 
+function readSettingsClient(url: URL) {
+  const capabilities = url.searchParams.get(CLIENT_CAPABILITIES_QUERY_PARAM)?.split(",") ?? [];
+  return { secretReferences: capabilities.includes(SETTINGS_SECRET_REFERENCES_CAPABILITY) };
+}
+
 function shouldUseBoundedThreadSnapshot(input: {
   readonly acceptBoundedSnapshot?: boolean;
   readonly acceptDeferredWork?: boolean;
@@ -811,6 +818,7 @@ const canReplayPersistedRange = Effect.fnUntraced(function* (
   if (replayGap < 0 || replayGap > maxGap) {
     return false;
   }
+  if (afterSequence < (yield* applicationEvents.prunedThroughSequence)) return false;
   const stats = yield* applicationEvents.getReplayStats({
     afterSequence,
     throughSequence: headSequence,
@@ -999,7 +1007,21 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
             }),
         ),
       );
-      if (input.afterSequence > highWater) {
+      const prunedThrough = yield* applicationEvents.prunedThroughSequence.pipe(
+        Effect.mapError(
+          (cause) =>
+            new OrchestrationV2GetThreadProjectionError({
+              threadId: input.threadId,
+              message: `Failed to prepare orchestration V2 thread ${input.threadId} replay`,
+              cause,
+            }),
+        ),
+      );
+      // An idle thread's cursor sits at its own high-water: nothing was missed, so replay nothing.
+      if (
+        input.afterSequence > highWater ||
+        (input.afterSequence < highWater && input.afterSequence < prunedThrough)
+      ) {
         return yield* snapshotThenLive();
       }
       const stats = yield* applicationEvents
@@ -1040,9 +1062,25 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
         // Retained creation events may describe deleted threads; replace replay only if a snapshot exists.
         if (shell !== null) return yield* snapshotThenLive();
       }
-      const replay = coalesceLiveUpdatedEvents(
-        yield* loadReplayThrough(input.afterSequence, highWater),
-      );
+      const replayed = yield* loadReplayThrough(input.afterSequence, highWater);
+      // Pruning publishes its boundary before deleting, so a pass during the read shows up here.
+      if (
+        input.afterSequence < highWater &&
+        input.afterSequence <
+          (yield* applicationEvents.prunedThroughSequence.pipe(
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationV2GetThreadProjectionError({
+                  threadId: input.threadId,
+                  message: `Failed to prepare orchestration V2 thread ${input.threadId} replay`,
+                  cause,
+                }),
+            ),
+          ))
+      ) {
+        return yield* snapshotThenLive();
+      }
+      const replay = coalesceLiveUpdatedEvents(replayed);
       const plan = decideThreadResume({
         afterSequence: input.afterSequence,
         highWater,
@@ -1276,31 +1314,38 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
         });
       }
 
-      const highWater = yield* applicationEvents.latestApplicationSequence;
-      if (!(yield* canReplayPersistedRange(input.afterSequence, highWater, SHELL_RESUME_MAX_GAP))) {
+      const fromSnapshot = Effect.gen(function* () {
         const loaded = yield* loadSnapshot();
         return composeShellStreamWithEnrichment({
           initial: initialSnapshotItems(loaded),
           tail: completionThenLive(loaded.snapshot.snapshotSequence),
           enrichment: enrichmentRefreshes,
         });
+      });
+      const highWater = yield* applicationEvents.latestApplicationSequence;
+      if (!(yield* canReplayPersistedRange(input.afterSequence, highWater, SHELL_RESUME_MAX_GAP))) {
+        return yield* fromSnapshot;
       }
 
       subagentThreadIds = new Set(yield* threadManagement.listActiveSubagentThreadIds());
 
       const loaded = yield* loadProjectMetadataSnapshot(highWater);
-      const replay = toShellStream(
-        applicationEvents
-          .readApplicationEvents({
-            afterSequence: input.afterSequence,
-            throughSequence: highWater,
-            // A row a newer build wrote (e.g. after a downgrade) must not fail
-            // every shell resubscribe. The live tail below resumes from
-            // highWater, so a dropped row never hides later events.
-            skipUnknownEventTypes: true,
-          })
-          .pipe(Stream.filter(filterSubagentTranscript)),
-      );
+      // Read before replying: the range is budgeted above, and a prune pass during the read
+      // publishes its boundary first, so the recheck below catches deleted rows.
+      const replayed = yield* applicationEvents
+        .readApplicationEvents({
+          afterSequence: input.afterSequence,
+          throughSequence: highWater,
+          // A row a newer build wrote (e.g. after a downgrade) must not fail
+          // every shell resubscribe. The live tail below resumes from
+          // highWater, so a dropped row never hides later events.
+          skipUnknownEventTypes: true,
+        })
+        .pipe(Stream.filter(filterSubagentTranscript), Stream.runCollect);
+      if (input.afterSequence < (yield* applicationEvents.prunedThroughSequence)) {
+        return yield* fromSnapshot;
+      }
+      const replay = toShellStream(Stream.fromIterable(replayed));
       return composeShellStreamWithEnrichment({
         initial: initialEnrichmentItems(loaded),
         tail: Stream.concat(Stream.concat(replay, completionMarker), liveFrom(highWater)),
@@ -1337,6 +1382,7 @@ export const layerWsRpc = (
   productHandshakeValid: boolean,
   serverBrowser: ServerBrowser.ServerBrowser["Service"],
   reportProfiles: ServerBrowser.ProfileReporter,
+  settingsClient: { readonly secretReferences: boolean },
 ) =>
   Layer.unwrap(
     Effect.gen(function* () {
@@ -1864,6 +1910,7 @@ export const layerWsRpc = (
           : commandProviders;
         const settings = ServerSettings.redactServerSettingsForClient(
           yield* serverSettings.getSettings,
+          settingsClient,
         );
         const environment = yield* serverEnvironment.getDescriptor;
         const auth = yield* serverAuth.getDescriptor();
@@ -2524,12 +2571,12 @@ export const layerWsRpc = (
                 fresh: input.fresh,
               });
             }
+            if (input.reloadSecrets === true && input.instanceId === undefined) {
+              yield* invalidateSettingsSecrets(secretResolver, serverSettings.getSettings);
+            }
             // Await refresh; RPC scope closure would interrupt a fork before the hub answered.
             if (input.instanceId === undefined) {
               yield* usageLimitSources.refresh;
-            }
-            if (input.reloadSecrets === true && input.instanceId === undefined) {
-              yield* invalidateSettingsSecrets(secretResolver, serverSettings.getSettings);
             }
             let providers = yield* input.cwd !== undefined && input.instanceId !== undefined
               ? providerRegistry.refreshWorkspaceSnapshot({
@@ -2738,7 +2785,7 @@ export const layerWsRpc = (
             const settings = yield* providerInstanceMutation === undefined
               ? serverSettings.updateSettings(nextPatch)
               : serverSettings.updateProviderInstance(providerInstanceMutation, nextPatch);
-            return ServerSettings.redactServerSettingsForClient(settings);
+            return ServerSettings.redactServerSettingsForClient(settings, settingsClient);
           }),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) => sourceControlDiscovery.discover,
         [WS_METHODS.serverGetTraceDiagnostics]: (_input) =>
@@ -3445,7 +3492,9 @@ export const layerWsRpc = (
                     )
                   : Stream.empty;
               const settingsUpdates = settingsChanges.pipe(
-                Stream.map((settings) => ServerSettings.redactServerSettingsForClient(settings)),
+                Stream.map((settings) =>
+                  ServerSettings.redactServerSettingsForClient(settings, settingsClient),
+                ),
                 Stream.map((settings) => ({
                   version: 1 as const,
                   type: "settingsUpdated" as const,
@@ -3669,6 +3718,7 @@ export const layer = Layer.unwrap(
               productHandshakeValid,
               serverBrowser,
               reportProfiles,
+              readSettingsClient(url.value),
             ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               // Handler-context reporters see only request defects, not server-wide defects.

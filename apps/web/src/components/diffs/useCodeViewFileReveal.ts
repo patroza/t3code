@@ -3,7 +3,11 @@ import { useState } from "react";
 
 interface FileRevealHandle {
   getInstance(): object | undefined;
-  getItem(id: string): object | undefined;
+  getItem(
+    id: string,
+  ):
+    | { readonly type?: string; readonly fileDiff?: { readonly cacheKey?: string | undefined } }
+    | undefined;
   scrollTo(target: CodeViewScrollTarget): void;
 }
 
@@ -18,7 +22,14 @@ export function createCodeViewFileReveal() {
   let pending: string | null = null;
   const flush = () => {
     if (pending === null || viewer === null) return;
-    if (!viewer.getInstance() || viewer.getItem(pending) === undefined) return;
+    const item = viewer.getItem(pending);
+    if (
+      !viewer.getInstance() ||
+      item === undefined ||
+      item.fileDiff?.cacheKey?.endsWith(":pending")
+    ) {
+      return;
+    }
     viewer.scrollTo({ type: "item", id: pending, align: "start" });
     pending = null;
   };

@@ -38,7 +38,7 @@ import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { getConnectionAwareBrandHeaderOptions } from "./WorkspaceConnectionTitle";
 import { useDeviceType, useNativeColumnLayoutMetrics } from "../../native/native-layout-metrics";
 import { WorkspaceEmptyDetail } from "../layout/WorkspaceEmptyDetail";
-import { AndroidScreenHeader } from "../../components/ui/AndroidScreenHeader";
+import { AppBar } from "../../components/ui/AppBar";
 import { AndroidHomeFabLayout } from "./AndroidHomeFab";
 import { HomeScreen } from "./HomeScreen";
 import { HomeHeader } from "./HomeHeader";
@@ -244,7 +244,7 @@ export function HomeRouteScreen() {
             />
           </Toolbar>
         ) : null}
-        {Platform.OS === "android" ? <AndroidScreenHeader title="Threads" /> : null}
+        {Platform.OS === "android" ? <AppBar embedded title="Threads" /> : null}
         <WorkspaceEmptyDetail
           onAddConnection={
             Platform.OS === "android" && !catalogState.hasConnections

@@ -41,6 +41,22 @@ describe("createCodeViewFileReveal", () => {
     expect(view.scrolls).toHaveLength(1);
   });
 
+  it("waits for a visible placeholder to become a loaded patch", () => {
+    const reveal = createCodeViewFileReveal();
+    const view = viewer(["a"]);
+    let cacheKey = "a:pending";
+    reveal.attach({ ...view, getItem: () => ({ type: "diff", fileDiff: { cacheKey } }) });
+
+    reveal.request("a");
+    reveal.flush();
+    expect(view.scrolls).toEqual([]);
+
+    cacheKey = "a:loaded";
+    reveal.flush();
+    reveal.flush();
+    expect(view.scrolls).toEqual([{ type: "item", id: "a", align: "start" }]);
+  });
+
   it("applies a reveal asked before the viewer mounted once it holds the file", () => {
     const reveal = createCodeViewFileReveal();
     const view = viewer([]);

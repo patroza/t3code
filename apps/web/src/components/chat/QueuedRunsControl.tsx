@@ -291,7 +291,7 @@ export function QueuedRunsControl({
               aria-setsize={items.length}
               aria-current={isEditing ? "true" : undefined}
               className={cn(
-                "group/queued relative flex w-full flex-col items-end gap-1 transition-opacity duration-150 ease-out starting:opacity-0 motion-reduce:transition-none",
+                "group/queued relative flex w-full flex-col items-end gap-1",
                 dragState !== null && dragState.runId === item.runId && "opacity-50",
               )}
               draggable={rowDraggable}
