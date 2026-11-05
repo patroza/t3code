@@ -27,7 +27,7 @@ describe("relativeClientDirExpression", () => {
 describe("makeNodeServeEntrySource", () => {
   it("listens on PORT, answers /health, serves static files, then the fetch handler", () => {
     const source = makeNodeServeEntrySource({
-      clientDirExpression: `fileURLToPath(new URL("../shared/", import.meta.url))`,
+      clientDirExpression: `fileURLToPath(new URL("../client/", import.meta.url))`,
       handler: {
         kind: "fetch",
         imports: `import { handler } from "./index.mjs";`,
@@ -123,7 +123,7 @@ describe("makeNodeServeEntrySource", () => {
 
   it("does not map GET / onto public/index.html (SSR home stays on the handler)", () => {
     const source = makeNodeServeEntrySource({
-      clientDirExpression: `fileURLToPath(new URL("../shared/", import.meta.url))`,
+      clientDirExpression: `fileURLToPath(new URL("../client/", import.meta.url))`,
       handler: {
         kind: "node",
         imports: `import { handler } from "./index.mjs";`,
