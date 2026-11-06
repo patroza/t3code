@@ -94,6 +94,7 @@ describe("searchSettings", () => {
       "network-access",
       "project-defaults",
       "environment-identification",
+      "tool-call-visibility",
       "linked-environments-beta",
       "continue-threads-after-server-update",
       "new-threads",
