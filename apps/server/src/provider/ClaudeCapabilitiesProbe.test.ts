@@ -396,8 +396,9 @@ it.effect("reports a deleted worktree's scan as finished, not pending", () =>
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 
-it.effect("keeps the probe subprocess alive while gateway model discovery can finish", () =>
-  Effect.gen(function* () {
+it.effect("keeps the probe subprocess alive while gateway model discovery can finish", () => {
+  const hostPath = process.env.PATH;
+  return Effect.gen(function* () {
     let abortSignal: AbortSignal | undefined;
     const query = vi.spyOn(ClaudeSdk, "query").mockImplementation(({ options }) => {
       abortSignal = options?.abortController?.signal;
@@ -426,7 +427,7 @@ it.effect("keeps the probe subprocess alive while gateway model discovery can fi
     );
     const capabilities = yield* probeClaudeCapabilities(
       decodeClaudeSettings({ binaryPath: "claude" }),
-      { PATH: process.env.PATH, CLAUDE_CONFIG_DIR: configDir },
+      { PATH: hostPath, CLAUDE_CONFIG_DIR: configDir },
     );
     assert.deepEqual(
       capabilities.models?.map((model) => model.value),
@@ -435,5 +436,5 @@ it.effect("keeps the probe subprocess alive while gateway model discovery can fi
     assert.equal(abortSignal?.aborted, false);
     yield* TestClock.adjust("3 seconds");
     assert.equal(abortSignal?.aborted, true);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
+});

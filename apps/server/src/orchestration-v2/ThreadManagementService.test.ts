@@ -1541,6 +1541,7 @@ it.effect.each([
     // The notification starts after the completed run was observed, before settlement commits.
     let raced = false;
     const layerTest = ThreadManagementService.layer.pipe(
+      Layer.provide(cloneTrackerLayer),
       Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
       Layer.provide(
         Layer.mock(Orchestrator.OrchestratorV2)({

@@ -1224,8 +1224,9 @@ describe("pullCurrentBranch", () => {
 
   it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     "bounds cleanup when a Git subprocess ignores SIGTERM",
-    () =>
-      Effect.gen(function* () {
+    () => {
+      const hostPath = process.env.PATH ?? "";
+      return Effect.gen(function* () {
         const driver = yield* GitVcsDriver.GitVcsDriver;
         const directory = yield* makeTmpDir();
         const probe = yield* makeProcessProbe;
@@ -1239,7 +1240,7 @@ describe("pullCurrentBranch", () => {
             operation: "test.stalledStatusFetch",
             cwd: directory,
             args: ["fetch"],
-            env: { PATH: `${directory}:${process.env.PATH ?? ""}` },
+            env: { PATH: `${directory}:${hostPath}` },
             timeoutMs: 1_000,
             forceKillAfterMs: 100,
           })
@@ -1250,7 +1251,8 @@ describe("pullCurrentBranch", () => {
 
         yield* probe.exited;
         assert.equal((yield* Fiber.join(run)).detail, "Git command timed out.");
-      }).pipe(Effect.scoped, Effect.provide(layerTest)),
+      }).pipe(Effect.scoped, Effect.provide(layerTest));
+    },
   );
 
   it.effect("releases stalled background worker slots at their lifetime limit", () =>

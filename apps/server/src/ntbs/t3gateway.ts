@@ -645,15 +645,14 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
               */
             Effect.catch((cause) =>
               projectionSnapshotQuery.getThreadShellById(state.t3.threadId).pipe(
-                Effect.catch((lookupCause) =>
-                  Effect.fail(
+                Effect.mapError(
+                  (lookupCause) =>
                     new RetryableError({
                       method: "projectionSnapshotQuery.getThreadShellById",
                       reason:
                         "Could not determine whether thread " + state.t3.threadId + " was created",
                       cause: lookupCause,
                     }),
-                  ),
                 ),
                 Effect.map(Option.isSome),
                 Effect.flatMap((threadExists) =>

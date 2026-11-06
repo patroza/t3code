@@ -273,9 +273,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("PairingGrantStor
 
         yield* TestClock.adjust(Duration.days(5));
         const now = (yield* DateTime.now).epochMilliseconds;
-        const current = yield* bootstrapCredentials.consume(
-          currentDesktopBootstrapToken(secret, now),
+        const currentToken = yield* currentDesktopBootstrapToken(secret, now).pipe(
+          Effect.provide(NodeCrypto.layerMac),
         );
+        const current = yield* bootstrapCredentials.consume(currentToken);
         expect(current.method).toBe("desktop-bootstrap");
         expect(current.subject).toBe("desktop-bootstrap");
         expect(current.scopes).toContain("access:write");
@@ -285,14 +286,16 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("PairingGrantStor
         expect(raw.subject).toBe("local-bootstrap");
         expect(raw.scopes).toEqual(AuthStandardClientScopes);
 
-        const stale = yield* Effect.flip(
-          bootstrapCredentials.consume(currentDesktopBootstrapToken(secret, now - 2 * window)),
+        const staleToken = yield* currentDesktopBootstrapToken(secret, now - 2 * window).pipe(
+          Effect.provide(NodeCrypto.layerMac),
         );
+        const stale = yield* Effect.flip(bootstrapCredentials.consume(staleToken));
         expect(stale._tag).toBe("UnknownBootstrapCredentialError");
 
-        const otherSecret = yield* Effect.flip(
-          bootstrapCredentials.consume(currentDesktopBootstrapToken("other-secret", now)),
+        const otherToken = yield* currentDesktopBootstrapToken("other-secret", now).pipe(
+          Effect.provide(NodeCrypto.layerMac),
         );
+        const otherSecret = yield* Effect.flip(bootstrapCredentials.consume(otherToken));
         expect(otherSecret._tag).toBe("UnknownBootstrapCredentialError");
       }).pipe(
         Effect.provide(

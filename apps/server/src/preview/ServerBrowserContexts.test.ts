@@ -193,7 +193,7 @@ describe("ServerBrowserContexts", () => {
     expect(human.addInitScript).toHaveBeenCalledExactlyOnceWith(
       SERVER_BROWSER_AUTHENTICATION_SCRIPT,
     );
-    expect(browser.contexts[0]?.addInitScript).toHaveBeenCalledExactlyOnceWith(
+    expect(browser.contexts()[0]?.addInitScript).toHaveBeenCalledExactlyOnceWith(
       SERVER_BROWSER_AUTHENTICATION_SCRIPT,
     );
     await pool.close();
