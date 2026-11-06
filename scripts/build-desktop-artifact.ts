@@ -4106,7 +4106,10 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     options.outputDir,
     options.platform,
     options.arch,
-    options.target === "dir",
+    // Windows directory deploys publish the unpacked tree beside the NSIS
+    // installer. The fork swaps that tree in place, the same way Linux dir
+    // deploys rsync a new build under the running process.
+    options.target === "dir" || options.platform === "win",
   );
 
   yield* Effect.log("[desktop-artifact] Done. Artifacts:").pipe(
