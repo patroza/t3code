@@ -329,7 +329,10 @@ function shouldBroadcastDownloadProgress(
   return nextStep !== previousStep || nextPercent === 100;
 }
 
-function getAutoUpdateDisabledReason(args: {
+/** Written beside the executable by the fork's directory deploy, on Linux and Windows. */
+export const DESKTOP_DIR_DEPLOY_SHA_FILE = ".t3code-deploy-sha";
+
+export function getAutoUpdateDisabledReason(args: {
   policy: DesktopUpdatePolicy.UpdatePolicy;
   isDevelopment: boolean;
   isPackaged: boolean;
@@ -343,22 +346,20 @@ function getAutoUpdateDisabledReason(args: {
   if (args.policy.mode === "off") {
     return args.policy.message ?? "Updates are turned off on this machine.";
   }
-  if (!args.hasUpdateFeedConfig) {
-    return "Automatic updates are not available because no update feed is configured.";
-  }
   if (args.isDevelopment || !args.isPackaged) {
     return "Automatic updates are only available in packaged production builds.";
   }
   if (args.disabledByEnv) {
     return "Automatic updates are disabled by the T3CODE_DISABLE_AUTO_UPDATE setting.";
   }
+  // Directory installs do not use the network updater. The on-disk probe
+  // detects a build swapped under the running process and surfaces
+  // "Restart to update". That must win over a missing update feed: the fork's
+  // Linux and Windows directory deploys ship no app-update.yml.
+  if (args.isDirInstall && (args.platform === "linux" || args.platform === "win32")) {
+    return null;
+  }
   if (args.platform === "linux" && !args.appImage && !args.isDebPackage) {
-    if (args.isDirInstall) {
-      // Directory installs do not use the network updater. Force-enable the
-      // update UI so the local on-disk probe can detect rsync'd builds and
-      // surface "Restart to update". Skip the feed-config requirement.
-      return null;
-    }
     return "Automatic updates on Linux require the AppImage or the .deb package.";
   }
   if (!args.hasUpdateFeedConfig) {
@@ -568,6 +569,21 @@ export const make = Effect.gen(function* () {
     !isDebPackage &&
     Option.isNone(config.appImagePath) &&
     isDirBinary;
+  // The fork's Windows installer is a per-user directory, same as the Linux
+  // dir deploy. The marker distinguishes it from an NSIS install that should
+  // keep using electron-updater once a feed exists.
+  const hasWindowsDirDeployMarker =
+    environment.platform === "win32" && environment.isPackaged
+      ? yield* fileSystem
+          .exists(
+            environment.path.join(
+              environment.path.dirname(process.execPath),
+              DESKTOP_DIR_DEPLOY_SHA_FILE,
+            ),
+          )
+          .pipe(Effect.orElseSucceed(() => false))
+      : false;
+  const isDirStyleInstall = isLinuxDirStyleInstall || hasWindowsDirDeployMarker;
 
   const hasUpdateFeedConfig = Ref.get(appUpdateYmlConfigRef).pipe(
     Effect.map(
@@ -586,7 +602,7 @@ export const make = Effect.gen(function* () {
         platform: environment.platform,
         appImage: Option.getOrUndefined(config.appImagePath),
         isDebPackage,
-        isDirInstall: isLinuxDirStyleInstall,
+        isDirInstall: isDirStyleInstall,
         disabledByEnv: config.disableAutoUpdate,
         hasUpdateFeedConfig: hasFeedConfig,
       }),
@@ -1296,7 +1312,7 @@ export const make = Effect.gen(function* () {
         return;
       }
 
-      if (isLinuxDirStyleInstall) {
+      if (isDirStyleInstall) {
         yield* Ref.set(localDirModeRef, true);
         yield* logUpdaterInfo(
           "dir install mode: using on-disk build detection (no network updater)",
