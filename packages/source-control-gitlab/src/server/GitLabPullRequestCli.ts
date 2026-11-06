@@ -2315,7 +2315,6 @@ export const make = Effect.gen(function* () {
         path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}`,
         method: "PUT",
         // GitLab label names cannot contain a comma.
-        // @effect-diagnostics-next-line globalJsonInEffect:off
         stdin: JSON.stringify({
           [input.applied ? "add_labels" : "remove_labels"]: input.labels.join(","),
         }),
@@ -2608,7 +2607,6 @@ export const make = Effect.gen(function* () {
           host: input.host,
           path: `${mergeRequest}/notes`,
           method: "POST",
-          // @effect-diagnostics-next-line globalJsonInEffect:off
           stdin: JSON.stringify({ body: input.body }),
         });
       }

@@ -1,4 +1,3 @@
-// @effect-diagnostics globalJsonInEffect:off - JSON string literals embed paths safely into generated JavaScript.
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { resolveNodeExecutable } from "@t3tools/shared/nodeRuntime";
 import * as Effect from "effect/Effect";

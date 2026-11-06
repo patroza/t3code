@@ -74,7 +74,6 @@ const launchCommandId = Effect.fn("mcp.launchCommandId")(function* (
   key: string,
 ) {
   const crypto = yield* Digest.Digest;
-  // @effect-diagnostics-next-line globalJsonInEffect:off - a JSON pair keeps the caller apart from the key.
   const bytes = new TextEncoder().encode(JSON.stringify([namespace, key]));
   const digest = yield* crypto.digest(Digest.sha256, bytes).pipe(Effect.mapError(unavailable));
   return CommandId.make(`mcp:launch:${Hex.encode(digest)}`);
