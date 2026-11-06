@@ -16,10 +16,16 @@ export class TeamsGatewayDispatcher {
   receive(
     activity: GatewayActivity,
     execute: (decision: MentionDecision) => Promise<void>,
+    options?: { readonly allowEmptyText?: boolean },
   ): string {
     const decision = this.policy.accept(activity);
     if (decision.kind === "reject") return "reject:" + decision.reason;
-    if (decision.kind !== "mention" || !decision.text) return decision.kind;
+    if (
+      decision.kind !== "mention" ||
+      (decision.text.length === 0 && options?.allowEmptyText !== true)
+    ) {
+      return decision.kind;
+    }
     const id = decision.lease.binding.workspace;
     const count = this.pending.get(id) ?? 0;
     if (count >= 20) return "capacity";

@@ -156,6 +156,46 @@ describe("planTeamsGroupChat", () => {
     expect(answer.command.requestId).toBe("req-1");
   });
 
+  it("observes an empty or acknowledgement message when a screenshot is attached", () => {
+    const empty = planTeamsGroupChat({
+      ...base,
+      title: "MAKO Scanner",
+      text: "",
+      hasImages: true,
+    });
+    expect(empty.kind).toBe("turn");
+    if (empty.kind === "turn") expect(empty.wake).toBe("observe");
+    const ack = planTeamsGroupChat({
+      ...base,
+      title: "MAKO Scanner",
+      text: "ok",
+      hasImages: true,
+    });
+    expect(ack.kind).toBe("turn");
+    if (ack.kind === "turn") expect(ack.wake).toBe("observe");
+    expect(
+      planTeamsGroupChat({ ...base, title: "MAKO Scanner", text: "", hasImages: false }).kind,
+    ).toBe("ignore");
+    expect(
+      planTeamsGroupChat({
+        ...base,
+        title: "MAKO Scanner",
+        knownUser: true,
+        text: "stop",
+        hasImages: true,
+      }).kind,
+    ).toBe("command");
+    expect(
+      planTeamsGroupChat({
+        ...base,
+        title: "MAKO Scanner",
+        knownUser: false,
+        text: "stop",
+        hasImages: true,
+      }).kind,
+    ).toBe("ignore");
+  });
+
   it("opens one joined thread for a mapped chat and skips the bot's own messages", () => {
     const joined = planTeamsGroupChat({
       ...base,

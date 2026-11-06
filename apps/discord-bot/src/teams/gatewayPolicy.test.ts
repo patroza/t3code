@@ -179,6 +179,17 @@ describe("shared Teams gateway", () => {
     expect(execute.mock.calls[0]?.[0].text).toBe("Please check the order now");
     expect(execute.mock.calls[0]?.[0].context).not.toContain("Please check the order");
   });
+  it("queues a mention with no text only when image intake is allowed", async () => {
+    const dispatcher = new TeamsGatewayDispatcher(policy);
+    const execute = vi.fn(async (_decision: MentionDecision) => {});
+    expect(dispatcher.receive(activity({ text: "" }), execute)).toBe("mention");
+    expect(dispatcher.receive(activity({ text: "" }), execute, { allowEmptyText: true })).toBe(
+      "queued",
+    );
+    await dispatcher.drain();
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute.mock.calls[0]?.[0].text).toBe("");
+  });
   it("ignores edits of messages that already triggered and edits that do not mention this bot", async () => {
     const dispatcher = new TeamsGatewayDispatcher(policy);
     const execute = vi.fn(async (_decision: MentionDecision) => {});

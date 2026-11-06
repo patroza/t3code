@@ -432,6 +432,7 @@ export function planTeamsGroupChat(input: {
   readonly mentionedBot: boolean;
   readonly messageId?: string | undefined;
   readonly author?: string | undefined;
+  readonly hasImages?: boolean | undefined;
 }): GroupChatPlan {
   if (
     !isTeamsGroupChat({
@@ -481,7 +482,10 @@ export function planTeamsGroupChat(input: {
       }),
     };
   }
-  if (text.length === 0 || isAcknowledgement(text) || parseGroupChatCommand(text) !== null) {
+  if (parseGroupChatCommand(text) !== null) {
+    return { kind: "ignore", sourceKey, chat };
+  }
+  if ((text.length === 0 || isAcknowledgement(text)) && input.hasImages !== true) {
     return { kind: "ignore", sourceKey, chat };
   }
   return {

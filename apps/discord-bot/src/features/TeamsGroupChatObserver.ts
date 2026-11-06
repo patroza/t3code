@@ -1,5 +1,9 @@
 // @effect-diagnostics anyUnknownInErrorContext:off globalErrorInEffectCatch:off missingEffectContext:off
-import { ProviderUserInputAnswers, type ThreadId } from "@t3tools/contracts";
+import {
+  ProviderUserInputAnswers,
+  type ThreadId,
+  type UploadChatAttachment,
+} from "@t3tools/contracts";
 import type * as Context from "effect/Context";
 import { DiscordREST } from "dfx";
 import * as Context_ from "effect/Context";
@@ -234,6 +238,9 @@ export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* 
   options?: {
     readonly builtinScanner?: boolean;
     readonly builtinMirror?: GroupChatMirror;
+    readonly hasImages?: boolean;
+    readonly attachments?: ReadonlyArray<UploadChatAttachment>;
+    readonly attachmentNote?: string;
   },
 ) {
   const access =
@@ -262,6 +269,7 @@ export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* 
     ...(options?.builtinMirror === undefined ? {} : { builtinMirror: options.builtinMirror }),
     ...(activity.messageId === undefined ? {} : { messageId: activity.messageId }),
     ...(activity.author === undefined ? {} : { author: activity.author }),
+    ...(options?.hasImages === true ? { hasImages: true } : {}),
   });
   if (plan.kind === "not-group") return { handled: false as const };
   if (plan.kind === "skip") return { handled: true as const };
@@ -351,6 +359,8 @@ export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* 
   );
 
   const knownPerson = access?.allowed === true ? access.person : null;
+  const attachmentNote = options?.attachmentNote?.trim() ?? "";
+  const prompt = attachmentNote.length === 0 ? plan.prompt : `${plan.prompt}\n\n${attachmentNote}`;
   const t3ThreadId = yield* useRuntime(
     runtime,
     startOrContinueLinkedTurn(config, {
@@ -367,15 +377,18 @@ export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* 
       discordParentChannelId: alertsChannelId ?? existing?.channelId ?? discordThreadId,
       discordGuildId: existing?.guildId ?? "",
       projectShortName: plan.chat.projectShortName,
-      prompt: plan.prompt,
+      prompt,
       flags: {},
       stickyModelOnContinue: true,
+      ...(options?.attachments !== undefined && options.attachments.length > 0
+        ? { attachments: options.attachments }
+        : {}),
       announceLines: [
         `Linked **${plan.chat.projectShortName}**`,
         `Source: Teams group chat / ${plan.chat.title}`,
         "Omegent stays silent in that chat.",
       ],
-      promptContext: { kind: "raw", value: plan.prompt },
+      promptContext: { kind: "raw", value: prompt },
     }),
   );
   const webBase = config.publicWebUiBaseUrl ?? config.webUiBaseUrl;
