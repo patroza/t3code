@@ -3653,7 +3653,13 @@ function claudeToolResultBlocksFromUserMessage(
   if (message.type !== "user" || typeof message.message.content === "string") {
     return [];
   }
-  return message.message.content.filter(isClaudeUserToolResultContentBlock);
+  const blocks: Array<ClaudeUserToolResultContentBlock> = [];
+  for (const part of message.message.content) {
+    if (isClaudeUserToolResultContentBlock(part)) {
+      blocks.push(part);
+    }
+  }
+  return blocks;
 }
 
 function claudeToolResultEntriesFromMessage(message: SDKMessage): ReadonlyArray<{
