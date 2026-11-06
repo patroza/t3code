@@ -48,11 +48,21 @@ import {
 
 const decodeAnswers = Schema.decodeUnknownEffect(Schema.fromJsonString(ProviderUserInputAnswers));
 
+function readTeamsGatewayProcessEnv(): {
+  readonly configPath: string | undefined;
+  readonly secretPath: string | undefined;
+  readonly stateDir: string | undefined;
+} {
+  return {
+    configPath: process.env.TEAMS_GATEWAY_CONFIG,
+    secretPath: process.env.TEAMS_GATEWAY_BOT_SECRET_FILE,
+    stateDir: process.env.TEAMS_GATEWAY_STATE_DIR,
+  };
+}
+
 const program = Effect.gen(function* () {
   const gatewayContext = yield* Effect.context<never>();
-  const configPath = process.env.TEAMS_GATEWAY_CONFIG;
-  const secretPath = process.env.TEAMS_GATEWAY_BOT_SECRET_FILE;
-  const stateDir = process.env.TEAMS_GATEWAY_STATE_DIR;
+  const { configPath, secretPath, stateDir } = readTeamsGatewayProcessEnv();
   if (!configPath || !secretPath || !stateDir || !NodePath.isAbsolute(stateDir)) {
     return yield* Effect.die(
       new Error(

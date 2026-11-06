@@ -5,7 +5,7 @@
  *
  * Attachments cannot be added later via message edit.
  */
-// @effect-diagnostics globalFetch:off globalFetchInEffect:off unknownInEffectCatch:off anyUnknownInErrorContext:off preferSchemaOverJson:off globalErrorInEffectCatch:off globalErrorInEffectFailure:off missingEffectError:off
+// @effect-diagnostics globalFetch:off globalFetchInEffect:off unknownInEffectCatch:off anyUnknownInErrorContext:off preferSchemaOverJson:off globalErrorInEffectCatch:off globalErrorInEffectFailure:off missingEffectError:off extendsNativeError:off
 
 import { interactionMessageFlags, SUPPRESS_EMBEDS_FLAG } from "./suppressEmbeds.ts";
 

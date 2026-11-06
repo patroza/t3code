@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off - abortable delay uses Node's timers/promises.
+// @effect-diagnostics nodeBuiltinImport:off extendsNativeError:off - abortable delay uses Node's timers/promises. BrowserOperationTimeoutError is a thrown timeout, not an Effect tagged error.
 import * as NodeTimersPromises from "node:timers/promises";
 
 import {
