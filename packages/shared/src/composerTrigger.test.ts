@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   detectComposerTrigger,
+  parseSideChatCommand,
   parseStandaloneComposerSlashCommand,
   serializeComposerFileLink,
 } from "./composerTrigger.ts";
@@ -100,5 +101,21 @@ describe("parseStandaloneComposerSlashCommand", () => {
   it("parses /new without accepting trailing prompt text", () => {
     expect(parseStandaloneComposerSlashCommand(" /NEW ")).toBe("new");
     expect(parseStandaloneComposerSlashCommand("/new explain this")).toBeNull();
+  });
+});
+
+describe("parseSideChatCommand", () => {
+  it("reads an optional prompt after /side or /btw", () => {
+    expect(parseSideChatCommand("/side")).toEqual({ prompt: "" });
+    expect(parseSideChatCommand("  /SIDE  why does this fail?\nline two ")).toEqual({
+      prompt: "why does this fail?\nline two",
+    });
+    expect(parseSideChatCommand("/btw check @src/a.ts")).toEqual({ prompt: "check @src/a.ts" });
+  });
+
+  it("ignores other commands and inline mentions", () => {
+    expect(parseSideChatCommand("/sidebar")).toBeNull();
+    expect(parseSideChatCommand("/btwx")).toBeNull();
+    expect(parseSideChatCommand("ask /side later")).toBeNull();
   });
 });

@@ -445,8 +445,7 @@ const makeReader = Effect.fnUntraced(function* (
         if (current === reader) current = undefined;
         void reader.worker.terminate();
       }
-      // @effect-diagnostics-next-line effectSucceedWithVoid:off - The connection result distinguishes undefined from void.
-      if (pool.unavailable) return Effect.succeed(undefined);
+      if (pool.unavailable) return Effect.undefined;
       pool.unavailable = true;
       return Effect.logWarning("SQLite reader worker unavailable; reads use the main connection", {
         reason,
@@ -454,8 +453,7 @@ const makeReader = Effect.fnUntraced(function* (
     });
 
   return Effect.suspend((): Effect.Effect<Connection | undefined> => {
-    // @effect-diagnostics-next-line effectSucceedWithVoid:off - The connection result distinguishes undefined from void.
-    if (pool.unavailable) return Effect.succeed(undefined);
+    if (pool.unavailable) return Effect.undefined;
     let reader: NonNullable<typeof current>;
     try {
       reader = current ?? start();
@@ -475,8 +473,7 @@ const makeReader = Effect.fnUntraced(function* (
       (startup): Effect.Effect<Connection | undefined> =>
         // A late ready event must not hand out a worker retired by another acquire timeout.
         pool.unavailable || current !== reader
-          ? // @effect-diagnostics-next-line effectSucceedWithVoid:off - The connection result distinguishes undefined from void.
-            Effect.succeed(undefined)
+          ? Effect.undefined
           : Option.isSome(startup) && startup.value.type === "ready"
             ? Effect.succeed(reader.connection)
             : turnOff(
@@ -491,7 +488,7 @@ const makeReader = Effect.fnUntraced(function* (
 
 const CHECKPOINT_FRAMES = 1000;
 const CHECKPOINT_IDLE_MS = 100;
-const CHECKPOINT_BACKPRESSURE_FRAMES = 10 * CHECKPOINT_FRAMES;
+const CHECKPOINT_BACKPRESSURE_FRAMES = 32_768;
 
 const readSafeSqliteInteger = (value: unknown) => {
   const number = typeof value === "bigint" ? Number(value) : value;
@@ -642,7 +639,7 @@ const startCheckpointWorker = Effect.fnUntraced(function* (
   }
   const frames = writer.prepare("PRAGMA wal_checkpoint(NOOP)");
   const sizeLimit = writer.prepare("PRAGMA journal_size_limit");
-  const started = yield* Effect.try(
+  const started = Result.try(
     () =>
       new NodeWorkerThreads.Worker(checkpointWorkerSource, {
         eval: true,
@@ -653,9 +650,9 @@ const startCheckpointWorker = Effect.fnUntraced(function* (
           idleMs: CHECKPOINT_IDLE_MS,
         },
       }),
-  ).pipe(Effect.result);
+  );
   if (Result.isFailure(started)) {
-    yield* warn(String(started.failure.cause));
+    yield* warn(String(started.failure));
     return undefined;
   }
   const worker = started.success;

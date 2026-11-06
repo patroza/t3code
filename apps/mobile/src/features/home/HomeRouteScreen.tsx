@@ -1,7 +1,5 @@
-import { HOME_LIST_MODE_TITLES } from "./homeListMode";
 import { uuidv4 } from "../../lib/uuid";
 import { ThreadUndoNotice } from "./ThreadUndoNotice";
-import { Toolbar } from "../../components/ui/Toolbar";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import {
   claimPersonIdForEnvironment,
@@ -20,7 +18,7 @@ import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 import { useNavigation } from "@react-navigation/native";
 import { use, useCallback, useMemo, useState } from "react";
-import { Platform, useWindowDimensions } from "react-native";
+import { Platform } from "react-native";
 
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import {
@@ -28,37 +26,35 @@ import {
   resolveScratchProjectScopeKey,
 } from "@t3tools/client-runtime/state/project-grouping";
 
-import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { useProjects } from "../../state/entities";
 import { environmentThreadShells } from "../../state/threads";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
-import { getConnectionAwareBrandHeaderOptions } from "./WorkspaceConnectionTitle";
-import { useDeviceType, useNativeColumnLayoutMetrics } from "../../native/native-layout-metrics";
-import { WorkspaceEmptyDetail } from "../layout/WorkspaceEmptyDetail";
-import { AppBar } from "../../components/ui/AppBar";
 import { AndroidHomeFabLayout } from "./AndroidHomeFab";
 import { HomeScreen } from "./HomeScreen";
-import { HomeHeader } from "./HomeHeader";
-import { useHomeListOptions } from "./home-list-options";
+import {
+  DEFAULT_OWNERSHIP_FILTER,
+  DEFAULT_OWNERSHIP_RELATION,
+  useHomeListOptions,
+} from "./home-list-options";
+import { DEFAULT_HOME_THREAD_GROUPING } from "./homeListMode";
 import { useAtomValueWhileVisible, useHomeRouteVisible } from "./home-route-visibility";
 import { buildHomeProjectScopes } from "./homeThreadList";
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useThreadListActions } from "./useThreadListActions";
-import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
+import { useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
 import { openSettings } from "../settings/settings-navigation";
-import { useSelectWorkspaceTab } from "../workspace/useSelectWorkspaceTab";
-import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
+import { useSelectWorkspaceTab } from "../layout/workspace/useSelectWorkspaceTab";
+import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
+import { WorkspaceListEmptyDetail } from "../layout/workspace/WorkspaceListEmptyDetail";
+import { WorkspaceListHeader } from "../layout/workspace/WorkspaceListHeader";
+import { buildHomeListFilterMenuItems } from "./home-list-filter-menu";
 
 export function HomeRouteScreen() {
-  const { width: windowWidth } = useWindowDimensions();
   const nativePrimaryColumn = use(NativePrimaryColumnContext);
-  const columnMetrics = useNativeColumnLayoutMetrics();
-  const deviceType = useDeviceType();
-  const headerWidth = nativePrimaryColumn ? (columnMetrics?.width ?? windowWidth) : windowWidth;
-  const { layout, panes, primarySidebarSearchQuery, setPrimarySidebarSearchQuery, startNewTask } =
+  const { layout, primarySidebarSearchQuery, setPrimarySidebarSearchQuery, startNewTask } =
     useAdaptiveWorkspaceLayout();
   const selectDetail = useSelectWorkspaceDetail();
   const projects = useProjects();
@@ -143,7 +139,6 @@ export function HomeRouteScreen() {
     clearSelectedEnvironments,
     setOwnershipFilter,
     setOwnershipRelation,
-    setListMode,
     setThreadGrouping,
   } = useHomeListOptions(availableEnvironmentIds);
   const selectedEnvironmentIds = listOptions.selectedEnvironmentIds;
@@ -217,92 +212,56 @@ export function HomeRouteScreen() {
   )
     ? resolvedProjectKey
     : null;
+  const filterCustomized =
+    selectedEnvironmentIds.length > 0 ||
+    listOptions.ownershipFilter !== DEFAULT_OWNERSHIP_FILTER ||
+    listOptions.ownershipRelation !== DEFAULT_OWNERSHIP_RELATION ||
+    selectedProjectKey !== null ||
+    listOptions.threadGrouping !== DEFAULT_HOME_THREAD_GROUPING ||
+    hideSettledThreads !== (listOptions.threadGrouping !== "project");
 
   if (layout.usesSplitView && !nativePrimaryColumn) {
     return (
-      <>
-        <NativeStackScreenOptions
-          options={
-            Platform.OS === "android"
-              ? { headerShown: false }
-              : {
-                  title: "",
-                  headerTitle: "",
-                  unstable_headerLeftItems: () => [],
-                  headerSearchBarOptions: undefined,
-                  unstable_headerRightItems: () => [],
-                  unstable_headerToolbarItems: () => [],
-                }
-          }
-        />
-        {Platform.OS === "ios" ? (
-          <Toolbar placement="left">
-            <Toolbar.Button
-              accessibilityLabel="New task"
-              icon="square.and.pencil"
-              onPress={startNewTask}
-            />
-          </Toolbar>
-        ) : null}
-        {Platform.OS === "android" ? <AppBar embedded title="Threads" /> : null}
-        <WorkspaceEmptyDetail
-          onAddConnection={
-            Platform.OS === "android" && !catalogState.hasConnections
-              ? () => openSettings(navigation, "SettingsEnvironmentNew")
-              : undefined
-          }
-          onStartNewTask={
-            Platform.OS === "android" && panes.primarySidebarVisible ? undefined : startNewTask
-          }
-        />
-      </>
+      <WorkspaceListEmptyDetail
+        hasConnections={catalogState.hasConnections}
+        onAddConnection={() => openSettings(navigation, "SettingsEnvironmentNew")}
+        onStartNewTask={startNewTask}
+      />
     );
   }
 
   return (
-    <AndroidHomeFabLayout
-      disabled={workspace !== null && Platform.OS !== "android"}
-      onStartNewTask={startNewTask}
-    >
+    <AndroidHomeFabLayout onStartNewTask={startNewTask}>
       <>
-        {/* Screen options merge shallowly; restore the header after split view. */}
-        {workspace !== null && Platform.OS === "ios" ? null : (
-          <NativeStackScreenOptions
-            optionsVersion={headerWidth}
-            options={{
-              ...getConnectionAwareBrandHeaderOptions({
-                title: HOME_LIST_MODE_TITLES[listOptions.listMode],
-                headerWidth,
-                trailingItemCount: nativePrimaryColumn && deviceType === "pad" ? 2 : 1,
-                onOpenEnvironments: () => openSettings(navigation, "SettingsEnvironments"),
-              }),
-              headerShown: Platform.OS !== "android",
-            }}
-          />
-        )}
-        <HomeHeader
-          environments={environments}
-          projects={projectFilterOptions}
-          searchQuery={searchQuery}
-          listMode={listOptions.listMode}
-          threadGrouping={listOptions.threadGrouping}
-          selectedEnvironmentIds={selectedEnvironmentIds}
-          selectedProjectKey={selectedProjectKey}
-          ownershipFilter={listOptions.ownershipFilter}
-          ownershipRelation={listOptions.ownershipRelation}
-          hideSettledThreads={hideSettledThreads}
-          onListModeChange={setListMode}
-          onThreadGroupingChange={setThreadGrouping}
-          onClearEnvironments={clearSelectedEnvironments}
-          onToggleEnvironment={toggleSelectedEnvironmentId}
-          onProjectChange={setSelectedProjectKey}
-          onOwnershipFilterChange={setOwnershipFilter}
-          onOwnershipRelationChange={setOwnershipRelation}
-          onHideSettledThreadsChange={setHideSettledThreads}
+        <WorkspaceListHeader
+          accessibilityLabel="T3 Code, Threads"
           onOpenEnvironments={() => openSettings(navigation, "SettingsEnvironments")}
-          onOpenSettings={() => selectTab("settings")}
-          onSearchQueryChange={setSearchQuery}
-          onStartNewTask={startNewTask}
+          search={{
+            value: searchQuery,
+            onChangeText: setSearchQuery,
+            placeholder: "Search",
+            accessibilityLabel: "Search threads",
+          }}
+          filter={{
+            customized: filterCustomized,
+            items: buildHomeListFilterMenuItems({
+              environments,
+              projects: projectFilterOptions,
+              selectedEnvironmentIds,
+              selectedProjectKey,
+              ownershipFilter: listOptions.ownershipFilter,
+              ownershipRelation: listOptions.ownershipRelation,
+              threadGrouping: listOptions.threadGrouping,
+              hideSettledThreads,
+              onClearEnvironments: clearSelectedEnvironments,
+              onToggleEnvironment: toggleSelectedEnvironmentId,
+              onProjectChange: setSelectedProjectKey,
+              onOwnershipFilterChange: setOwnershipFilter,
+              onOwnershipRelationChange: setOwnershipRelation,
+              onThreadGroupingChange: setThreadGrouping,
+              onHideSettledThreadsChange: setHideSettledThreads,
+            }),
+          }}
         />
 
         <HomeScreen

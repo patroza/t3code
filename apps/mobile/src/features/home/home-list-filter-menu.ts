@@ -18,6 +18,8 @@ import {
   type OwnershipRelation,
 } from "./home-list-filter-options";
 
+import type { AppBarMenuItem } from "../../components/ui/AppBar.types";
+
 export interface HomeListFilterMenuEnvironment {
   readonly environmentId: EnvironmentId;
   readonly label: string;
@@ -28,26 +30,7 @@ export interface HomeListFilterMenuProject {
   readonly label: string;
 }
 
-type HomeListFilterMenuAction = {
-  readonly type: "action";
-  readonly title: string;
-  readonly subtitle?: string;
-  readonly state?: "on" | "off";
-  readonly onPress: () => void;
-};
-
-type HomeListFilterMenuSubmenu = {
-  readonly type: "submenu";
-  readonly title: string;
-  readonly items: HomeListFilterMenuAction[];
-};
-
-export interface HomeListFilterMenu {
-  readonly title: string;
-  readonly items: Array<HomeListFilterMenuAction | HomeListFilterMenuSubmenu>;
-}
-
-export function buildHomeListFilterMenu(props: {
+export function buildHomeListFilterMenuItems(props: {
   readonly environments: ReadonlyArray<HomeListFilterMenuEnvironment>;
   readonly projects: ReadonlyArray<HomeListFilterMenuProject>;
   readonly selectedEnvironmentIds: readonly EnvironmentId[];
@@ -77,52 +60,49 @@ export function buildHomeListFilterMenu(props: {
   /** When set, offers Group by recency / project / nothing. */
   readonly threadGrouping?: HomeThreadGrouping;
   readonly onThreadGroupingChange?: (grouping: HomeThreadGrouping) => void;
-}): HomeListFilterMenu {
-  const items: Array<HomeListFilterMenuAction | HomeListFilterMenuSubmenu> = [];
-
-  items.push({
-    type: "submenu",
-    title: "Environment",
-    items: [
-      {
-        type: "action",
-        title: "All environments",
-        subtitle: "Show threads from every environment",
-        state: isAllEnvironmentsSelected(props.selectedEnvironmentIds) ? "on" : "off",
-        onPress: () => props.onClearEnvironments(),
-      },
-      ...props.environments.map((environment) => ({
-        type: "action" as const,
-        title: environment.label,
-        // When "all" is selected every row is visually on so multi-toggle is clear;
-        // pressing one leaves "all" and keeps only that environment.
-        state: isEnvironmentSelected(props.selectedEnvironmentIds, environment.environmentId)
-          ? ("on" as const)
-          : ("off" as const),
-        onPress: () => props.onToggleEnvironment(environment.environmentId),
+}): AppBarMenuItem[] {
+  const items: AppBarMenuItem[] = [
+    {
+      id: "environment",
+      title: "Environment",
+      items: [
+        {
+          id: "environment:all",
+          title: "All environments",
+          subtitle: "Show threads from every environment",
+          selected: isAllEnvironmentsSelected(props.selectedEnvironmentIds),
+          onPress: () => props.onClearEnvironments(),
+        },
+        ...props.environments.map((environment) => ({
+          id: `environment:${environment.environmentId}`,
+          title: environment.label,
+          // When "all" is selected every row is visually on so multi-toggle is clear;
+          // pressing one leaves "all" and keeps only that environment.
+          selected: isEnvironmentSelected(props.selectedEnvironmentIds, environment.environmentId),
+          onPress: () => props.onToggleEnvironment(environment.environmentId),
+        })),
+      ],
+    },
+    {
+      id: "ownership",
+      title: "Ownership",
+      items: OWNERSHIP_FILTERS.map((value) => ({
+        id: `ownership:${value}`,
+        title: OWNERSHIP_FILTER_LABELS[value],
+        selected: props.ownershipFilter === value,
+        onPress: () => props.onOwnershipFilterChange(value),
       })),
-    ],
-  });
-
-  items.push({
-    type: "submenu",
-    title: "Ownership",
-    items: OWNERSHIP_FILTERS.map((value) => ({
-      type: "action" as const,
-      title: OWNERSHIP_FILTER_LABELS[value],
-      state: props.ownershipFilter === value ? ("on" as const) : ("off" as const),
-      onPress: () => props.onOwnershipFilterChange(value),
-    })),
-  });
+    },
+  ];
 
   if (props.ownershipFilter === "mine" || props.ownershipFilter === "theirs") {
     items.push({
-      type: "submenu",
+      id: "ownership-relation",
       title: props.ownershipFilter === "mine" ? "Mine includes" : "Theirs includes",
       items: OWNERSHIP_RELATIONS.map((value) => ({
-        type: "action" as const,
+        id: `ownership-relation:${value}`,
         title: OWNERSHIP_RELATION_LABELS[value],
-        state: props.ownershipRelation === value ? ("on" as const) : ("off" as const),
+        selected: props.ownershipRelation === value,
         onPress: () => props.onOwnershipRelationChange(value),
       })),
     });
@@ -130,20 +110,20 @@ export function buildHomeListFilterMenu(props: {
 
   if (props.projects.length > 0) {
     items.push({
-      type: "submenu",
+      id: "project",
       title: "Project",
       items: [
         {
-          type: "action",
+          id: "project:all",
           title: "All projects",
           subtitle: "Show threads from every project",
-          state: props.selectedProjectKey === null ? "on" : "off",
+          selected: props.selectedProjectKey === null,
           onPress: () => props.onProjectChange(null),
         },
         ...props.projects.map((project) => ({
-          type: "action" as const,
+          id: `project:${project.key}`,
           title: project.label,
-          state: props.selectedProjectKey === project.key ? ("on" as const) : ("off" as const),
+          selected: props.selectedProjectKey === project.key,
           onPress: () => props.onProjectChange(project.key),
         })),
       ],
@@ -151,25 +131,28 @@ export function buildHomeListFilterMenu(props: {
   }
 
   if (props.threadGrouping !== undefined && props.onThreadGroupingChange !== undefined) {
+    const onThreadGroupingChange = props.onThreadGroupingChange;
     items.push({
-      type: "submenu",
+      id: "grouping",
       title: "Group threads",
       items: HOME_THREAD_GROUPINGS.map((grouping) => ({
-        type: "action" as const,
+        id: `grouping:${grouping}`,
         title: HOME_THREAD_GROUPING_LABELS[grouping],
-        state: props.threadGrouping === grouping ? ("on" as const) : ("off" as const),
-        onPress: () => props.onThreadGroupingChange?.(grouping),
+        selected: props.threadGrouping === grouping,
+        onPress: () => onThreadGroupingChange(grouping),
       })),
     });
   }
 
   if (props.onHideSettledThreadsChange !== undefined && props.hideSettledThreads !== undefined) {
+    const hideSettledThreads = props.hideSettledThreads;
+    const onHideSettledThreadsChange = props.onHideSettledThreadsChange;
     items.push({
-      type: "action",
+      id: "hide-settled",
       title: "Hide settled",
       subtitle: "Move settled threads out of the main list",
-      state: props.hideSettledThreads ? "on" : "off",
-      onPress: () => props.onHideSettledThreadsChange?.(!props.hideSettledThreads),
+      selected: hideSettledThreads,
+      onPress: () => onHideSettledThreadsChange(!hideSettledThreads),
     });
   }
 
@@ -186,30 +169,27 @@ export function buildHomeListFilterMenu(props: {
     const onThreadSortOrderChange = props.onThreadSortOrderChange;
     items.push(
       {
-        type: "submenu",
+        id: "sort-projects",
         title: "Sort projects",
         items: PROJECT_SORT_OPTIONS.map((option) => ({
-          type: "action",
+          id: `sort-projects:${option.value}`,
           title: option.label,
-          state: projectSortOrder === option.value ? "on" : "off",
+          selected: projectSortOrder === option.value,
           onPress: () => onProjectSortOrderChange(option.value),
         })),
       },
       {
-        type: "submenu",
+        id: "sort-threads",
         title: "Sort threads",
         items: THREAD_SORT_OPTIONS.map((option) => ({
-          type: "action",
+          id: `sort-threads:${option.value}`,
           title: option.label,
-          state: threadSortOrder === option.value ? "on" : "off",
+          selected: threadSortOrder === option.value,
           onPress: () => onThreadSortOrderChange(option.value),
         })),
       },
     );
   }
 
-  return {
-    title: "Thread list options",
-    items,
-  };
+  return items;
 }

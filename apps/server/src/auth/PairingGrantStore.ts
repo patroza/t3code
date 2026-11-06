@@ -17,6 +17,7 @@ import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
+import * as Mac from "effect/crypto/Mac";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -331,13 +332,27 @@ export const make = Effect.gen(function* () {
   // Desktop secrets and local-bootstrap-credential files derive rotating renderer tokens.
   // Accept the current derived token; older clients may still send the seeded file token.
   const desktopBootstrapSecret = config.desktopBootstrapSecret;
+  const mac = yield* Mac.Mac;
   const localCredential = readLocalBootstrapCredential(config.stateDir);
-  const consumeRotatingDesktopToken = (credential: string, nowMs: number) =>
-    (desktopBootstrapSecret !== undefined &&
-      isValidDesktopBootstrapToken(desktopBootstrapSecret, credential, nowMs)) ||
-    (localCredential !== undefined &&
-      localCredential !== desktopBootstrapSecret &&
-      isValidDesktopBootstrapToken(localCredential, credential, nowMs));
+  const consumeRotatingDesktopToken = Effect.fn("PairingGrantStore.consumeRotatingDesktopToken")(
+    function* (credential: string, nowMs: number) {
+      if (
+        desktopBootstrapSecret !== undefined &&
+        (yield* isValidDesktopBootstrapToken(desktopBootstrapSecret, credential, nowMs))
+      ) {
+        return true;
+      }
+      if (
+        localCredential !== undefined &&
+        localCredential !== desktopBootstrapSecret &&
+        (yield* isValidDesktopBootstrapToken(localCredential, credential, nowMs))
+      ) {
+        return true;
+      }
+      return false;
+    },
+    Effect.provideService(Mac.Mac, mac),
+  );
 
   if (config.desktopBootstrapToken && desktopBootstrapSecret === undefined) {
     const now = yield* DateTime.now;
@@ -473,7 +488,7 @@ export const make = Effect.gen(function* () {
   const consume: PairingGrantStore["Service"]["consume"] = Effect.fn("PairingGrantStore.consume")(
     function* (credential, input) {
       const now = yield* DateTime.now;
-      if (consumeRotatingDesktopToken(credential, now.epochMilliseconds)) {
+      if (yield* consumeRotatingDesktopToken(credential, now.epochMilliseconds)) {
         return {
           method: "desktop-bootstrap",
           scopes: AuthStandardClientScopes,

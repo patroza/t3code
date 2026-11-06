@@ -4,6 +4,10 @@ import {
   WsSubscribeServerConfigRpc,
   WS_METHODS,
 } from "@t3tools/contracts";
+import {
+  joinSocketFrameParts,
+  SOCKET_FRAME_PARTS_QUERY_PARAM,
+} from "@t3tools/shared/socketFrameParts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -200,6 +204,7 @@ export interface RpcSessionOptions {
   readonly environmentThemes?: boolean;
   readonly usageLimitSources?: boolean;
   readonly usageLimitsCommand?: boolean;
+  readonly providerCatalogsOnDemand?: boolean;
 }
 
 export class RpcSessionFactory extends Context.Service<
@@ -320,6 +325,7 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
     ...(options.environmentThemes === true ? { environmentThemes: true } : {}),
     ...(options.usageLimitSources === true ? { usageLimitSources: true } : {}),
     ...(options.usageLimitsCommand === true ? { usageLimitsCommand: true } : {}),
+    ...(options.providerCatalogsOnDemand === true ? { providerCatalogsOnDemand: true } : {}),
   };
   // Config state merges the snapshots it fetches back in, so no subscriber needs them broadcast.
   const onDemandSnapshots = (input: ServerConfigSubscriptionInput) => ({
@@ -392,31 +398,56 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
       });
       return socket;
     };
+    const socketUrl = new URL(connection.socketUrl);
+    socketUrl.searchParams.set(SOCKET_FRAME_PARTS_QUERY_PARAM, "1");
+    const layerSocket = Layer.effect(
+      Socket.Socket,
+      Effect.gen(function* () {
+        const socket = yield* Effect.service(Socket.Socket);
+        return captureSocketFailures(joinSocketFrameParts(socket), causeSink);
+      }),
+    ).pipe(
+      Layer.provide(
+        Socket.layerWebSocket(socketUrl.toString(), {
+          openTimeout: SOCKET_OPEN_TIMEOUT,
+        }),
+      ),
+      Layer.provide(Layer.succeed(Socket.WebSocketConstructor, countingWebSocketConstructor)),
+    );
     const layerProtocol = Layer.effect(
       RpcClient.Protocol,
-      Effect.gen(function* () {
-        const rawSocket = yield* Socket.makeWebSocket(connection.socketUrl, {
-          openTimeout: SOCKET_OPEN_TIMEOUT,
-        }).pipe(Effect.provideService(Socket.WebSocketConstructor, countingWebSocketConstructor));
-        const socket = captureSocketFailures(rawSocket, causeSink);
-        return yield* RpcClient.makeProtocolSocket({
-          pingTimeout: PING_TIMEOUT,
-          retryTransientErrors: false,
-          retryPolicy: Schedule.recurs(0),
-          onPingTimeout: Ref.set(pingTimedOut, true).pipe(
-            Effect.andThen(
-              Effect.sync(() => {
-                causeSink.causeMessage = "ping timeout";
-                causeSink.reason = "timeout";
-              }),
-            ),
+      RpcClient.makeProtocolSocket({
+        pingTimeout: PING_TIMEOUT,
+        retryTransientErrors: false,
+        retryPolicy: Schedule.recurs(0),
+        onPingTimeout: Ref.set(pingTimedOut, true).pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              causeSink.causeMessage = "ping timeout";
+              causeSink.reason = "timeout";
+            }),
           ),
-        }).pipe(
-          Effect.provideService(Socket.Socket, socket),
-          Effect.provide(RpcSerialization.layerJson),
-          Effect.provideService(RpcClient.ConnectionHooks, hooks),
-        );
-      }),
+        ),
+      }).pipe(
+        // Teardown sends an interrupt per open stream, and a write to a closed
+        // socket waits out the client's 1s interrupt timeout before reconnecting.
+        // Requests still go through, so they fail with the protocol error.
+        Effect.map((protocol) => ({
+          ...protocol,
+          send: (clientId, request, transferables) =>
+            request._tag !== "Request" && Deferred.isDoneUnsafe(disconnected)
+              ? Effect.void
+              : protocol.send(clientId, request, transferables),
+        })),
+      ),
+    ).pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          layerSocket,
+          RpcSerialization.layerJson,
+          Layer.succeed(RpcClient.ConnectionHooks, hooks),
+        ),
+      ),
     );
     const protocolContext = yield* Layer.build(layerProtocol).pipe(
       Effect.withSpan("environment.websocket.connect"),

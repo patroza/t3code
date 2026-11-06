@@ -11,7 +11,7 @@ import * as ServerConfig from "../config.ts";
 
 const makeRuntimeSqliteLayer = NodeSqliteClient.layer;
 
-export const WAL_SIZE_LIMIT_BYTES = 32 * 1024 * 1024;
+export const WAL_SIZE_LIMIT_BYTES = 128 * 1024 * 1024;
 
 const layerSetup = Layer.effectDiscard(
   Effect.gen(function* () {

@@ -18,7 +18,8 @@ describe("mobile surface existence (anti stack-drop)", () => {
   it("keeps the conversation feed inside an explicit flex host", () => {
     const route = readSrc("features/threads/ThreadRouteScreen.tsx");
     const host = readSrc("features/threads/ThreadScreenHost.tsx");
-    expect(route).toContain("<ThreadScreenHost>");
+    expect(route).toContain("<ThreadScreenHost");
+    expect(route).toContain('Platform.OS === "android" ? "flex-1 bg-thread-canvas" : "flex-1"');
     expect(route).toContain("<ThreadScreenBinding");
     expect(host).toContain('testID="thread-conversation-surface"');
     expect(host).toMatch(/testID="thread-conversation-surface"[\s\S]*?style=\{\{\s*flex: 1\s*\}\}/);
@@ -76,33 +77,20 @@ describe("mobile surface existence (anti stack-drop)", () => {
       NodePath.join(root, "features/threads/ThreadNavigationSidebar.tsx"),
       "utf8",
     );
-    const homeHeader = NodeFS.readFileSync(
-      NodePath.join(root, "features/home/HomeHeader.tsx"),
-      "utf8",
-    );
+    const filterMenu = readSrc("features/home/home-list-filter-menu.ts");
 
-    // Native header slot (iOS split) and the custom large title (Android split).
-    expect(sidebar).toMatch(
-      /getConnectionAwareBrandHeaderOptions\(\{[\s\S]*?title: HOME_LIST_MODE_TITLES\[options\.listMode\]/,
-    );
-    expect(sidebar).toMatch(
-      /<WorkspaceConnectionTitle[\s\S]*?\{HOME_LIST_MODE_TITLES\[options\.listMode\]\}/,
-    );
-    // The workspace now owns the iOS title and keeps the fork's selected list mode.
-    const workspace = readSrc("features/workspace/WorkspaceRootScreen.tsx");
+    // The workspace owns the iOS title and keeps the fork's selected list mode.
+    const workspace = readSrc("features/layout/workspace/WorkspaceRootScreen.tsx");
     expect(workspace).toContain("HOME_LIST_MODE_TITLES[listMode]");
-    expect(readSrc("features/home/HomeRouteScreen.tsx")).toContain(
-      "title: HOME_LIST_MODE_TITLES[listOptions.listMode]",
-    );
     expect(workspace).toMatch(/<WorkspaceConnectionTitle[\s\S]*?\{props.title\}/);
-    expect(homeHeader).toContain('accessibilityLabel="Thread list options"');
-    expect(homeHeader).toContain("HOME_LIST_MODES.map");
-    expect(homeHeader).toContain("HOME_THREAD_GROUPINGS.map");
-    expect(homeHeader).toContain("Hide settled");
-    expect(homeHeader).not.toContain("headerSearchBarOptions");
+    expect(filterMenu).toContain("HOME_THREAD_GROUPINGS.map");
+    expect(filterMenu).toContain("Hide settled");
+    expect(readSrc("features/home/HomeRouteScreen.tsx")).toContain("hideSettledThreads");
+    expect(sidebar).toContain("hideSettledThreads");
+    expect(sidebar).toContain("buildHomeListFilterMenuItems");
     // No surface may render the deleted in-list status pill again.
     expect(sidebar).not.toContain("WorkspaceConnectionStatus");
-    expect(homeHeader).not.toContain("WorkspaceConnectionStatus");
+    expect(workspace).not.toContain("WorkspaceConnectionStatus");
   });
 
   it("keeps selectable markdown connected to the native GFM renderer", () => {
@@ -132,7 +120,7 @@ describe("mobile surface existence (anti stack-drop)", () => {
   });
 
   it("keeps the iOS settings cog and ownership chip on the thread list", () => {
-    const toolbar = readSrc("features/workspace/WorkspaceToolbar.ios.tsx");
+    const toolbar = readSrc("features/layout/workspace/WorkspaceToolbar.ios.tsx");
     const filters = readSrc("features/home/ThreadListFilters.tsx");
     const ownership = readSrc("features/home/thread-list-ownership-filter.ts");
     expect(toolbar).toContain('accessibilityLabel="Open settings"');

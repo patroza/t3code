@@ -1,9 +1,17 @@
 import { DEFAULT_OWNERSHIP_RELATION } from "@t3tools/client-runtime/state/identity";
+import type { EnvironmentId } from "@t3tools/contracts";
 import { Pressable, ScrollView } from "react-native";
 import { SymbolView } from "../../components/ui/AppSymbol";
-import { ListFilterMenu } from "../workspace/ListFilterMenu";
-import type { HomeHeaderProps } from "./HomeHeader.types";
-import { DEFAULT_OWNERSHIP_FILTER } from "./home-list-filter-options";
+import { ListFilterMenu } from "../layout/workspace/ListFilterMenu";
+import type {
+  HomeListFilterMenuEnvironment,
+  HomeListFilterMenuProject,
+} from "./home-list-filter-menu";
+import {
+  DEFAULT_OWNERSHIP_FILTER,
+  type OwnershipFilter,
+  type OwnershipRelation,
+} from "./home-list-options";
 import {
   ownershipFilterChipLabel,
   ownershipFilterIsCustom,
@@ -11,25 +19,21 @@ import {
   selectOwnershipFilterMenuAction,
 } from "./thread-list-ownership-filter";
 
-export function ThreadListFilters(
-  props: Pick<
-    HomeHeaderProps,
-    | "environments"
-    | "projects"
-    | "selectedEnvironmentIds"
-    | "selectedProjectKey"
-    | "ownershipFilter"
-    | "ownershipRelation"
-    | "onToggleEnvironment"
-    | "onClearEnvironments"
-    | "onProjectChange"
-    | "onOwnershipFilterChange"
-    | "onOwnershipRelationChange"
-  > & {
-    /** List padding the scroller bleeds through so pills start where row content does. */
-    readonly gutter: number;
-  },
-) {
+export function ThreadListFilters(props: {
+  readonly environments: ReadonlyArray<HomeListFilterMenuEnvironment>;
+  readonly projects: ReadonlyArray<HomeListFilterMenuProject>;
+  readonly selectedEnvironmentIds: readonly EnvironmentId[];
+  readonly selectedProjectKey: string | null;
+  readonly ownershipFilter: OwnershipFilter;
+  readonly ownershipRelation: OwnershipRelation;
+  readonly onToggleEnvironment: (environmentId: EnvironmentId) => void;
+  readonly onClearEnvironments: () => void;
+  readonly onProjectChange: (projectKey: string | null) => void;
+  readonly onOwnershipFilterChange: (filter: OwnershipFilter) => void;
+  readonly onOwnershipRelationChange: (relation: OwnershipRelation) => void;
+  /** List padding the scroller bleeds through so pills start where row content does. */
+  readonly gutter: number;
+}) {
   const selectedEnvironment = props.environments.find(
     (environment) =>
       props.selectedEnvironmentIds.length === 1 &&

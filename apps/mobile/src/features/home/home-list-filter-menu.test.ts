@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { buildHomeListFilterMenu } from "./home-list-filter-menu";
+import type { AppBarMenuItem } from "../../components/ui/AppBar.types";
+import { buildHomeListFilterMenuItems } from "./home-list-filter-menu";
 
 function baseProps(
-  overrides: Partial<Parameters<typeof buildHomeListFilterMenu>[0]> = {},
-): Parameters<typeof buildHomeListFilterMenu>[0] {
+  overrides: Partial<Parameters<typeof buildHomeListFilterMenuItems>[0]> = {},
+): Parameters<typeof buildHomeListFilterMenuItems>[0] {
   return {
     environments: [],
     projects: [],
@@ -25,10 +26,16 @@ function baseProps(
   };
 }
 
-describe("buildHomeListFilterMenu", () => {
+function submenu(items: ReadonlyArray<AppBarMenuItem>, title: string) {
+  const item = items.find((entry) => "items" in entry && entry.title === title);
+  if (!item || !("items" in item)) throw new Error(`Expected ${title} submenu`);
+  return item;
+}
+
+describe("buildHomeListFilterMenuItems", () => {
   it("adds a project scope submenu that selects and clears the same scope as the chips", () => {
     const onProjectChange = vi.fn();
-    const menu = buildHomeListFilterMenu(
+    const items = buildHomeListFilterMenuItems(
       baseProps({
         projects: [
           { key: "environment-1:project-1", label: "Codething" },
@@ -39,22 +46,21 @@ describe("buildHomeListFilterMenu", () => {
       }),
     );
 
-    const projectMenu = menu.items.find(
-      (item) => item.type === "submenu" && item.title === "Project",
-    );
-    expect(menu.items.some((item) => item.title === "Settings")).toBe(false);
-    expect(projectMenu).toMatchObject({
-      type: "submenu",
-      items: [
-        { title: "All projects", state: "off" },
-        { title: "Codething", state: "on" },
-        { title: "Website", state: "off" },
-      ],
-    });
-    if (projectMenu?.type !== "submenu") throw new Error("Expected project submenu");
+    const projectMenu = submenu(items, "Project");
+    expect(items.some((item) => item.title === "Settings")).toBe(false);
+    expect(projectMenu.items).toMatchObject([
+      { title: "All projects", selected: false },
+      { title: "Codething", selected: true },
+      { title: "Website", selected: false },
+    ]);
 
-    projectMenu.items[0]?.onPress();
-    projectMenu.items[2]?.onPress();
+    const allProjects = projectMenu.items[0];
+    const website = projectMenu.items[2];
+    if (!allProjects || !("onPress" in allProjects) || !website || !("onPress" in website)) {
+      throw new Error("Expected project actions");
+    }
+    allProjects.onPress();
+    website.onPress();
     expect(onProjectChange).toHaveBeenNthCalledWith(1, null);
     expect(onProjectChange).toHaveBeenNthCalledWith(2, "environment-1:project-2");
   });
@@ -62,7 +68,7 @@ describe("buildHomeListFilterMenu", () => {
   it("supports multi-select environment toggles", () => {
     const onToggleEnvironment = vi.fn();
     const onClearEnvironments = vi.fn();
-    const menu = buildHomeListFilterMenu(
+    const items = buildHomeListFilterMenuItems(
       baseProps({
         environments: [
           { environmentId: "env-1" as never, label: "Smart" },
@@ -74,52 +80,47 @@ describe("buildHomeListFilterMenu", () => {
       }),
     );
 
-    const environmentMenu = menu.items.find(
-      (item) => item.type === "submenu" && item.title === "Environment",
-    );
-    expect(environmentMenu).toMatchObject({
-      type: "submenu",
-      items: [
-        { title: "All environments", state: "off" },
-        { title: "Smart", state: "on" },
-        { title: "t3vm", state: "off" },
-      ],
-    });
-    if (environmentMenu?.type !== "submenu") throw new Error("Expected environment submenu");
-    environmentMenu.items[0]?.onPress();
-    environmentMenu.items[2]?.onPress();
+    const environmentMenu = submenu(items, "Environment");
+    expect(environmentMenu.items).toMatchObject([
+      { title: "All environments", selected: false },
+      { title: "Smart", selected: true },
+      { title: "t3vm", selected: false },
+    ]);
+    const allEnvironments = environmentMenu.items[0];
+    const t3vm = environmentMenu.items[2];
+    if (!allEnvironments || !("onPress" in allEnvironments) || !t3vm || !("onPress" in t3vm)) {
+      throw new Error("Expected environment actions");
+    }
+    allEnvironments.onPress();
+    t3vm.onPress();
     expect(onClearEnvironments).toHaveBeenCalledOnce();
     expect(onToggleEnvironment).toHaveBeenCalledWith("env-2");
   });
 
   it("offers Anyone, Mine, and Theirs ownership filters", () => {
     const onOwnershipFilterChange = vi.fn();
-    const menu = buildHomeListFilterMenu(
+    const items = buildHomeListFilterMenuItems(
       baseProps({
         ownershipFilter: "mine",
         onOwnershipFilterChange,
       }),
     );
 
-    const ownershipMenu = menu.items.find(
-      (item) => item.type === "submenu" && item.title === "Ownership",
-    );
-    expect(ownershipMenu).toMatchObject({
-      type: "submenu",
-      items: [
-        { title: "Anyone", state: "off" },
-        { title: "Mine", state: "on" },
-        { title: "Theirs", state: "off" },
-      ],
-    });
-    if (ownershipMenu?.type !== "submenu") throw new Error("Expected ownership submenu");
-    ownershipMenu.items[2]?.onPress();
+    const ownershipMenu = submenu(items, "Ownership");
+    expect(ownershipMenu.items).toMatchObject([
+      { title: "Anyone", selected: false },
+      { title: "Mine", selected: true },
+      { title: "Theirs", selected: false },
+    ]);
+    const theirs = ownershipMenu.items[2];
+    if (!theirs || !("onPress" in theirs)) throw new Error("Expected ownership action");
+    theirs.onPress();
     expect(onOwnershipFilterChange).toHaveBeenCalledWith("theirs");
   });
 
   it("offers created / participated / both sub-filters when Mine or Theirs is selected", () => {
     const onOwnershipRelationChange = vi.fn();
-    const menu = buildHomeListFilterMenu(
+    const items = buildHomeListFilterMenuItems(
       baseProps({
         ownershipFilter: "mine",
         ownershipRelation: "created",
@@ -127,24 +128,20 @@ describe("buildHomeListFilterMenu", () => {
       }),
     );
 
-    const relationMenu = menu.items.find(
-      (item) => item.type === "submenu" && item.title === "Mine includes",
-    );
-    expect(relationMenu).toMatchObject({
-      type: "submenu",
-      items: [
-        { title: "Created or participated", state: "off" },
-        { title: "Created", state: "on" },
-        { title: "Participated", state: "off" },
-      ],
-    });
-    if (relationMenu?.type !== "submenu") throw new Error("Expected relation submenu");
-    relationMenu.items[2]?.onPress();
+    const relationMenu = submenu(items, "Mine includes");
+    expect(relationMenu.items).toMatchObject([
+      { title: "Created or participated", selected: false },
+      { title: "Created", selected: true },
+      { title: "Participated", selected: false },
+    ]);
+    const participated = relationMenu.items[2];
+    if (!participated || !("onPress" in participated)) {
+      throw new Error("Expected relation action");
+    }
+    participated.onPress();
     expect(onOwnershipRelationChange).toHaveBeenCalledWith("participated");
 
-    const anyoneMenu = buildHomeListFilterMenu(baseProps({ ownershipFilter: "any" }));
-    expect(
-      anyoneMenu.items.some((item) => item.type === "submenu" && item.title === "Mine includes"),
-    ).toBe(false);
+    const anyoneItems = buildHomeListFilterMenuItems(baseProps({ ownershipFilter: "any" }));
+    expect(anyoneItems.some((item) => item.title === "Mine includes")).toBe(false);
   });
 });
