@@ -1811,6 +1811,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
       assert.deepEqual(strictSecretReferencePaths(ServerSettings.ast), [
         "easDeviceHosts.[].accessToken",
         "simlockDeviceHosts.[].agentToken",
+        "providers.antigravity.apiKey",
         "usageLimitSources.*.managementKey",
       ]);
     }),

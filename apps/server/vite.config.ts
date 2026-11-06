@@ -204,6 +204,13 @@ export default mergeConfig(
               // Mocks `node:fs/promises` and spies on playwright. Under
               // isolate:false the real mkdir runs against `/test` and fails.
               "src/preview/ServerBrowserContexts.test.ts",
+              // Mocks `node:net`. Under isolate:false the real Socket is already
+              // bound, so a fake desktop fd throws ERR_INVALID_FD_TYPE.
+              "src/preview/DesktopBrowserChannel.test.ts",
+              // Mocks `node:worker_threads` to observe the checkpoint worker.
+              // Under isolate:false that worker is the real one and the test's
+              // recorded list stays empty.
+              "src/persistence/Sqlite.test.ts",
               "src/preview/PortScanner.test.ts",
             ],
           },
@@ -274,6 +281,11 @@ export default mergeConfig(
               // Mocks `node:fs/promises` and spies on playwright. Under
               // isolate:false the real mkdir runs against `/test` and fails.
               "src/preview/ServerBrowserContexts.test.ts",
+              // Mocks `node:net` before DesktopBrowserChannel binds the real Socket.
+              "src/preview/DesktopBrowserChannel.test.ts",
+              // Mocks `node:worker_threads` before the sqlite client constructs
+              // its checkpoint worker.
+              "src/persistence/Sqlite.test.ts",
             ],
           },
         },
