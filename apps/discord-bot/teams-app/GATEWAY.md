@@ -61,8 +61,11 @@ and message actions stay disabled.
 The team owner must accept the new channel-reading permission during app upgrade.
 Tenant consent/distribution policy may require administrator involvement. RSC grants
 team-wide message delivery; channel and actor restrictions are enforced by the gateway.
-The initial implementation supports commercial Teams service URLs, no attachment
-processing or history backfill, and bounded queues of 20 mentions per workspace.
+The gateway supports commercial Teams service URLs and bounded queues of 20 mentions
+per workspace. It does not backfill history. A mention, and a mapped group-chat turn,
+can include up to eight screenshots from that message. Other files are named in the
+prompt and are not uploaded. Screenshots already require the channel and chat read
+permissions above; no extra Graph permission is required.
 
 ## Channel description tags
 

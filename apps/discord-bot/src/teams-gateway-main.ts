@@ -34,6 +34,11 @@ import { readGatewayConfig, readPrivateCredential } from "./teams/gatewayConfig.
 import { ingestTeamsGroupChat, teamsChannelPoster } from "./features/TeamsGroupChatObserver.ts";
 import { mentionsTeamsRecipient, registerTeamsMessageEvents } from "./teams/messageEvents.ts";
 import { TeamsGatewayDispatcher } from "./teams/gatewayDispatcher.ts";
+import {
+  loadTeamsTurnImages,
+  type TeamsActivityAttachment,
+  type TeamsTurnImageLoad,
+} from "./teams/inboundImages.ts";
 import { LoopbackTeamsAdapter, RedactedTeamsLogger } from "./teams/gatewayHttp.ts";
 import {
   TeamsGatewayPolicy,
@@ -131,6 +136,7 @@ const program = Effect.gen(function* () {
   );
   let running = true;
   const dispatcher = new TeamsGatewayDispatcher(policy);
+  const teamsTokenCache = new Map<string, { token: string; expiresAt: number }>();
   const app = new App({
     clientId: initial.identity.entraClientId,
     clientSecret: readPrivateCredential(secretPath),
@@ -265,7 +271,10 @@ const program = Effect.gen(function* () {
   });
 
   const observeGroupChat = async (
-    activity: GatewayActivity,
+    activity: GatewayActivity & {
+      readonly replyToId?: string;
+      readonly attachments?: ReadonlyArray<TeamsActivityAttachment>;
+    },
     api: Parameters<typeof teamsChannelPoster>[0],
     event: "message" | "join",
   ): Promise<boolean> => {
@@ -287,6 +296,36 @@ const program = Effect.gen(function* () {
     const workspace = workspaces.get(decision.workspaceId);
     if (workspace === undefined) return true;
     const handled = decision;
+    let images: TeamsTurnImageLoad = { uploads: [], note: "", warnings: [] };
+    if (event === "message") {
+      try {
+        images = await loadTeamsTurnImages({
+          tenantId:
+            activity.channelData?.tenant?.id ??
+            activity.conversation.tenantId ??
+            initial.identity.homeTenantId,
+          clientId: initial.identity.entraClientId,
+          clientSecret: readPrivateCredential(secretPath),
+          messageId: activity.id,
+          ...(activity.replyToId === undefined ? {} : { replyToId: activity.replyToId }),
+          ...(activity.text === undefined ? {} : { plainText: activity.text }),
+          location: { kind: "chat", conversationId: activity.conversation.id },
+          ...(activity.attachments === undefined ? {} : { attachments: activity.attachments }),
+          tokenCache: teamsTokenCache,
+        });
+      } catch (error) {
+        images = {
+          uploads: [],
+          note: "",
+          warnings: [`Teams attachment intake failed: ${String(error)}`],
+        };
+      }
+      for (const warning of images.warnings) {
+        Effect.runSyncWith(gatewayContext)(
+          Effect.logWarning("Teams attachment was not opened", { warning }),
+        );
+      }
+    }
     await workspace.runtime
       .runPromise(
         Effect.gen(function* () {
@@ -328,6 +367,9 @@ const program = Effect.gen(function* () {
               ...(handled.builtinMirror === undefined
                 ? {}
                 : { builtinMirror: handled.builtinMirror }),
+              ...(images.uploads.length > 0 || images.note.length > 0 ? { hasImages: true } : {}),
+              ...(images.uploads.length > 0 ? { attachments: images.uploads } : {}),
+              ...(images.note.length > 0 ? { attachmentNote: images.note } : {}),
             },
           );
         }),
@@ -350,152 +392,202 @@ const program = Effect.gen(function* () {
         }
       : activity;
     if (await observeGroupChat(intake as GatewayActivity, api, "message")) return;
-    const outcome = dispatcher.receive(intake as GatewayActivity, async (decision) => {
-      const { lease } = decision;
-      const workspace = active(lease);
-      references.remember(
-        lease,
-        activity.serviceUrl ?? "",
-        lease.conversationId.split(";messageid=")[1] ?? activity.replyToId ?? activity.id,
-      );
-      const deliver = async (text: string, first = false) => {
-        active(lease);
-        return first ? reply(text) : send(text);
-      };
-      const processMessage = Effect.gen(function* () {
-        active(lease);
-        const t3 = yield* T3Session;
-        const links = yield* ThreadLinkStore;
-        yield* t3.waitUntilReady({ timeoutMs: 15000 });
-        active(lease);
-        const topic = yield* Effect.tryPromise(() => channelTopic(lease));
-        const projectShortName = teamsDescriptionProject(topic, lease.binding)!;
-        const { project } = yield* resolveProjectFromShortName(projectShortName);
-        if (
-          projectShortName === lease.binding.projectShortName &&
-          project.id !== lease.binding.projectId
-        )
-          return yield* Effect.fail("Teams project binding mismatch" as const);
-        const sourceKey =
-          "native/" +
-          [
-            lease.binding.tenantId,
-            lease.binding.teamId,
-            lease.binding.channelId,
-            lease.conversationId,
-          ].join("/");
-        const existing = yield* links.getBySourceThread("teams", sourceKey);
-        if (existing !== null && existing.projectId !== project.id)
-          return yield* Effect.fail("Existing Teams link belongs to another project" as const);
-        if (existing !== null) {
-          const snapshot = yield* t3.fetchThreadDetail(existing.t3ThreadId);
-          if (snapshot !== null && snapshot.thread.projectId !== project.id)
-            return yield* Effect.fail("Linked thread belongs to another project" as const);
-          // Adopt the last answer delivered by the legacy poller before starting the first shared turn.
+    const outcome = dispatcher.receive(
+      intake as GatewayActivity,
+      async (decision) => {
+        const { lease } = decision;
+        const workspace = active(lease);
+        references.remember(
+          lease,
+          activity.serviceUrl ?? "",
+          lease.conversationId.split(";messageid=")[1] ?? activity.replyToId ?? activity.id,
+        );
+        const deliver = async (text: string, first = false) => {
+          active(lease);
+          return first ? reply(text) : send(text);
+        };
+        const processMessage = Effect.gen(function* () {
+          active(lease);
+          const t3 = yield* T3Session;
+          const links = yield* ThreadLinkStore;
+          yield* t3.waitUntilReady({ timeoutMs: 15000 });
+          active(lease);
+          const topic = yield* Effect.tryPromise(() => channelTopic(lease));
+          const projectShortName = teamsDescriptionProject(topic, lease.binding)!;
+          const { project } = yield* resolveProjectFromShortName(projectShortName);
           if (
-            snapshot?.thread.latestTurn?.state === "completed" &&
-            existing.lastFinalizedAssistantId === null
-          ) {
-            yield* links.updateBridgeHints(lease.conversationId, {
-              lastSeenTurnId: snapshot.thread.latestTurn.turnId,
-              lastFinalizedAssistantId: snapshot.thread.latestTurn.assistantMessageId,
-            });
+            projectShortName === lease.binding.projectShortName &&
+            project.id !== lease.binding.projectId
+          )
+            return yield* Effect.fail("Teams project binding mismatch" as const);
+          const sourceKey =
+            "native/" +
+            [
+              lease.binding.tenantId,
+              lease.binding.teamId,
+              lease.binding.channelId,
+              lease.conversationId,
+            ].join("/");
+          const existing = yield* links.getBySourceThread("teams", sourceKey);
+          if (existing !== null && existing.projectId !== project.id)
+            return yield* Effect.fail("Existing Teams link belongs to another project" as const);
+          if (existing !== null) {
+            const snapshot = yield* t3.fetchThreadDetail(existing.t3ThreadId);
+            if (snapshot !== null && snapshot.thread.projectId !== project.id)
+              return yield* Effect.fail("Linked thread belongs to another project" as const);
+            // Adopt the last answer delivered by the legacy poller before starting the first shared turn.
+            if (
+              snapshot?.thread.latestTurn?.state === "completed" &&
+              existing.lastFinalizedAssistantId === null
+            ) {
+              yield* links.updateBridgeHints(lease.conversationId, {
+                lastSeenTurnId: snapshot.thread.latestTurn.turnId,
+                lastFinalizedAssistantId: snapshot.thread.latestTurn.assistantMessageId,
+              });
+            }
           }
-        }
-        active(lease);
-        const prompt = decision.text;
-        if (/^(?:\/?stop|cancel)$/iu.test(prompt)) {
-          if (existing !== null) yield* t3.interrupt(existing.t3ThreadId);
-          yield* Effect.promise(() =>
-            deliver(
-              existing === null ? "There is no linked T3 thread." : "Stopped the active T3 turn.",
-              true,
-            ),
-          );
-          return;
-        }
-        const approval = /^(?:\/?)(approve|deny)\s+(\S+)$/iu.exec(prompt);
-        if (approval !== null) {
-          if (existing !== null)
-            yield* t3.respondToApproval(
-              existing.t3ThreadId,
-              approval[2]!,
-              approval[1]!.toLowerCase() === "approve" ? "accept" : "decline",
+          active(lease);
+          const prompt = decision.text;
+          if (/^(?:\/?stop|cancel)$/iu.test(prompt)) {
+            if (existing !== null) yield* t3.interrupt(existing.t3ThreadId);
+            yield* Effect.promise(() =>
+              deliver(
+                existing === null ? "There is no linked T3 thread." : "Stopped the active T3 turn.",
+                true,
+              ),
             );
-          yield* Effect.promise(() =>
-            deliver(
-              existing === null
-                ? "There is no linked T3 thread."
-                : "Submitted the approval decision.",
-              true,
-            ),
-          );
-          return;
-        }
-        const answer = /^(?:\/?)answer\s+(\S+)\s+(.+)$/isu.exec(prompt);
-        if (answer !== null) {
-          if (existing === null) {
-            yield* Effect.promise(() => deliver("There is no linked T3 thread.", true));
             return;
           }
-          const answers = yield* decodeAnswers(answer[2]!);
-          active(lease);
-          yield* t3.respondToUserInput(existing.t3ThreadId, answer[1]!, answers);
-          yield* Effect.promise(() => deliver("Submitted the requested input.", true));
-          return;
-        }
-        const enriched = [decision.context, "Authorized Teams request:\n" + prompt]
-          .filter(Boolean)
-          .join("\n\n");
-        const turn = yield* startOrContinueT3Turn(workspace.config, {
-          source: { sourceKind: "teams", sourceThreadId: sourceKey },
-          sourceActor: { platformId: lease.actorId },
-          externalConversationId: lease.conversationId,
-          externalParentId: lease.binding.teamId + "/" + lease.binding.channelId,
-          externalTenantId: lease.binding.tenantId,
-          projectShortName,
-          channelTopic: topic,
-          prompt: enriched,
-          flags: {},
-          stickyModelOnContinue: true,
-          promptContext: { kind: "raw", value: enriched },
-        });
-        const transport = makeTeamsResponseTransport({
-          config: workspace.config,
-          clientId: initial.identity.entraClientId,
-          tenantId: lease.binding.tenantId,
-          clientSecret: readPrivateCredential(secretPath),
-          teamId: lease.binding.teamId,
-          channelId: lease.binding.channelId,
-          fileDestination: lease.binding.fileDestination,
-          includeProgressHistory: lease.binding.includeProgressHistory,
-          getChannelTopic: () => channelTopic(lease),
-          conversationId: lease.conversationId,
-          rootMessageId:
-            lease.conversationId.split(";messageid=")[1] ?? activity.replyToId ?? activity.id,
-          assertActive: () => {
+          const approval = /^(?:\/?)(approve|deny)\s+(\S+)$/iu.exec(prompt);
+          if (approval !== null) {
+            if (existing !== null)
+              yield* t3.respondToApproval(
+                existing.t3ThreadId,
+                approval[2]!,
+                approval[1]!.toLowerCase() === "approve" ? "accept" : "decline",
+              );
+            yield* Effect.promise(() =>
+              deliver(
+                existing === null
+                  ? "There is no linked T3 thread."
+                  : "Submitted the approval decision.",
+                true,
+              ),
+            );
+            return;
+          }
+          const answer = /^(?:\/?)answer\s+(\S+)\s+(.+)$/isu.exec(prompt);
+          if (answer !== null) {
+            if (existing === null) {
+              yield* Effect.promise(() => deliver("There is no linked T3 thread.", true));
+              return;
+            }
+            const answers = yield* decodeAnswers(answer[2]!);
             active(lease);
-          },
-          send: (wire) => send(wire),
-          deleteMessage: (id) => api.conversations.deleteActivity(lease.conversationId, id),
-        });
-        yield* bridgeThreadToPlatform({
-          conversationId: lease.conversationId,
-          threadId: turn.threadId,
-          sentUserMessageIds: [turn.messageId],
-        }).pipe(Effect.provideService(BotResponseTransport, transport));
-      });
-      await workspace.runtime.runPromise(processMessage).catch(async () => {
-        try {
-          await deliver(
-            "T3 could not process this request. Please submit a new mention or contact an operator.",
-            true,
+            yield* t3.respondToUserInput(existing.t3ThreadId, answer[1]!, answers);
+            yield* Effect.promise(() => deliver("Submitted the requested input.", true));
+            return;
+          }
+          const images = yield* Effect.tryPromise({
+            try: () =>
+              loadTeamsTurnImages({
+                tenantId: lease.binding.tenantId,
+                clientId: initial.identity.entraClientId,
+                clientSecret: readPrivateCredential(secretPath),
+                messageId: activity.id,
+                ...(activity.replyToId === undefined ? {} : { replyToId: activity.replyToId }),
+                ...(activity.text === undefined ? {} : { plainText: activity.text }),
+                location: {
+                  // Activity team.id is a conversation id. The binding stores the Entra group id.
+                  kind: "channel",
+                  teamId: lease.binding.teamId,
+                  channelId: lease.binding.channelId,
+                },
+                ...(activity.attachments === undefined
+                  ? {}
+                  : { attachments: activity.attachments }),
+                tokenCache: teamsTokenCache,
+              }),
+            catch: (cause) => String(cause),
+          }).pipe(
+            Effect.catch((cause) =>
+              Effect.succeed({
+                uploads: [],
+                note: "",
+                warnings: [`Teams attachment intake failed: ${cause}`],
+              } satisfies TeamsTurnImageLoad),
+            ),
           );
-        } catch {
-          /* revoked: no reply */
-        }
-      });
-    });
+          for (const warning of images.warnings) {
+            yield* Effect.logWarning("Teams attachment was not opened", { warning });
+          }
+          const requestText =
+            prompt ||
+            (images.uploads.length > 0
+              ? "Look at the attached screenshot."
+              : images.note.length > 0
+                ? "Look at the attached files."
+                : "");
+          if (requestText.length === 0) return;
+          const enriched = [
+            decision.context,
+            "Authorized Teams request:\n" + requestText,
+            images.note,
+          ]
+            .filter((part) => part.trim().length > 0)
+            .join("\n\n");
+          const turn = yield* startOrContinueT3Turn(workspace.config, {
+            source: { sourceKind: "teams", sourceThreadId: sourceKey },
+            sourceActor: { platformId: lease.actorId },
+            externalConversationId: lease.conversationId,
+            externalParentId: lease.binding.teamId + "/" + lease.binding.channelId,
+            externalTenantId: lease.binding.tenantId,
+            projectShortName,
+            channelTopic: topic,
+            prompt: enriched,
+            flags: {},
+            stickyModelOnContinue: true,
+            ...(images.uploads.length > 0 ? { attachments: images.uploads } : {}),
+            promptContext: { kind: "raw", value: enriched },
+          });
+          const transport = makeTeamsResponseTransport({
+            config: workspace.config,
+            clientId: initial.identity.entraClientId,
+            tenantId: lease.binding.tenantId,
+            clientSecret: readPrivateCredential(secretPath),
+            teamId: lease.binding.teamId,
+            channelId: lease.binding.channelId,
+            fileDestination: lease.binding.fileDestination,
+            includeProgressHistory: lease.binding.includeProgressHistory,
+            getChannelTopic: () => channelTopic(lease),
+            conversationId: lease.conversationId,
+            rootMessageId:
+              lease.conversationId.split(";messageid=")[1] ?? activity.replyToId ?? activity.id,
+            assertActive: () => {
+              active(lease);
+            },
+            send: (wire) => send(wire),
+            deleteMessage: (id) => api.conversations.deleteActivity(lease.conversationId, id),
+          });
+          yield* bridgeThreadToPlatform({
+            conversationId: lease.conversationId,
+            threadId: turn.threadId,
+            sentUserMessageIds: [turn.messageId],
+          }).pipe(Effect.provideService(BotResponseTransport, transport));
+        });
+        await workspace.runtime.runPromise(processMessage).catch(async () => {
+          try {
+            await deliver(
+              "T3 could not process this request. Please submit a new mention or contact an operator.",
+              true,
+            );
+          } catch {
+            /* revoked: no reply */
+          }
+        });
+      },
+      { allowEmptyText: true },
+    );
     Effect.runSyncWith(gatewayContext)(Effect.logInfo("Teams intake:", outcome));
     // Acknowledge immediately; T3 work and Teams delivery continue on the host queue.
   });
