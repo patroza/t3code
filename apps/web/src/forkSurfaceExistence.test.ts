@@ -144,7 +144,7 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(composer).toContain(
       "!readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)",
     );
-    expect(composer).toContain("sendDisabledReason={sendDisabledReason}");
+    expect(composer).toContain("sendDisabledReason={voiceSendDisabledReason}");
     const footer = readSrc("components/chat/ComposerFooterControls.tsx");
     expect(footer).toContain("sendDisabledReason={props.sendDisabledReason}");
     expect(composer).not.toContain("sendDisabledReason={null}");

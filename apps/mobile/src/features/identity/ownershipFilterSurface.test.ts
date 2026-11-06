@@ -8,12 +8,12 @@ function readSource(relativePath: string): string {
 
 describe("mobile ownership filter surface", () => {
   it("keeps ownership controls wired in both phone and sidebar thread lists", () => {
-    const homeHeader = readSource("../home/HomeHeader.android.tsx");
+    const filterMenu = readSource("../home/home-list-filter-menu.ts");
     const homeRoute = readSource("../home/HomeRouteScreen.tsx");
     const sidebar = readSource("../threads/ThreadNavigationSidebar.tsx");
     const preferences = readSource("../../persistence/mobile-preferences.ts");
     const layout = readSource("../layout/AdaptiveWorkspaceLayout.tsx");
-    const workspaceToolbar = readSource("../workspace/WorkspaceToolbar.ios.tsx");
+    const workspaceToolbar = readSource("../layout/workspace/WorkspaceToolbar.ios.tsx");
     const threadListFilters = readSource("../home/ThreadListFilters.tsx");
 
     // iOS keeps Mine/Theirs beside the environment and project chips;
@@ -27,9 +27,9 @@ describe("mobile ownership filter surface", () => {
     expect(threadListFilters).toContain("onOwnershipFilterChange");
     expect(threadListFilters).toContain("onOwnershipRelationChange");
 
-    expect(homeHeader).toMatch(/title:\s*"Ownership"|title="Ownership"/);
-    expect(homeHeader).toContain("onOwnershipFilterChange");
-    expect(homeHeader).toContain("onOwnershipRelationChange");
+    expect(filterMenu).toMatch(/title:\s*"Ownership"|title="Ownership"/);
+    expect(filterMenu).toContain("onOwnershipFilterChange");
+    expect(filterMenu).toContain("onOwnershipRelationChange");
     expect(homeRoute).toContain("ownershipFilteredThreads");
     expect(homeRoute).toContain("relation: listOptions.ownershipRelation");
     expect(sidebar).toContain("threadMatchesMine");

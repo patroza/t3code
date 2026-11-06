@@ -1,4 +1,4 @@
-// @effect-diagnostics globalDate:off nodeBuiltinImport:off
+// @effect-diagnostics globalDate:off nodeBuiltinImport:off extendsNativeError:off
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";

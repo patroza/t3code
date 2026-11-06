@@ -1,7 +1,7 @@
 import * as Redacted from "effect/Redacted";
 // @effect-diagnostics nodeBuiltinImport:off - realpathSync.native resolves Windows 8.3 short names, which the Effect realPath does not.
 import * as NodeFS from "node:fs";
-import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -272,6 +272,14 @@ const git = (
     });
     return result.stdout.trim();
   });
+
+// Git blocks file submodule transports (CVE-2022-39253) despite repo config; local fixtures need env permission.
+const withGitFileProtocol = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.flatMap(HostProcess.Environment, (env) =>
+    effect.pipe(
+      Effect.provideService(HostProcess.Environment, { ...env, GIT_ALLOW_PROTOCOL: "file" }),
+    ),
+  );
 
 const initRepoWithCommit = (
   cwd: string,
@@ -1216,8 +1224,9 @@ describe("pullCurrentBranch", () => {
 
   it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     "bounds cleanup when a Git subprocess ignores SIGTERM",
-    () =>
-      Effect.gen(function* () {
+    () => {
+      const hostPath = process.env.PATH ?? "";
+      return Effect.gen(function* () {
         const driver = yield* GitVcsDriver.GitVcsDriver;
         const directory = yield* makeTmpDir();
         const probe = yield* makeProcessProbe;
@@ -1231,7 +1240,7 @@ describe("pullCurrentBranch", () => {
             operation: "test.stalledStatusFetch",
             cwd: directory,
             args: ["fetch"],
-            env: { PATH: `${directory}:${process.env.PATH ?? ""}` },
+            env: { PATH: `${directory}:${hostPath}` },
             timeoutMs: 1_000,
             forceKillAfterMs: 100,
           })
@@ -1242,7 +1251,8 @@ describe("pullCurrentBranch", () => {
 
         yield* probe.exited;
         assert.equal((yield* Fiber.join(run)).detail, "Git command timed out.");
-      }).pipe(Effect.scoped, Effect.provide(layerTest)),
+      }).pipe(Effect.scoped, Effect.provide(layerTest));
+    },
   );
 
   it.effect("releases stalled background worker slots at their lifetime limit", () =>
@@ -2580,7 +2590,11 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         const upstream = yield* makeTmpDir();
         yield* initRepoWithCommit(upstream);
         const driver = yield* GitVcsDriver.GitVcsDriver;
-        const emptyTree = yield* git(upstream, ["hash-object", "-t", "tree", NodeOS.devNull]);
+        // Git for Windows rejects the null device as a path, so use an empty file.
+        const emptyDir = yield* makeTmpDir("git-vcs-driver-empty-");
+        yield* writeTextFile(emptyDir, "empty", "");
+        const emptyFile = NodePath.join(emptyDir, "empty");
+        const emptyTree = yield* git(upstream, ["hash-object", "-t", "tree", emptyFile]);
         const root = yield* git(upstream, ["rev-parse", "HEAD"]);
         const rootSource = (yield* driver.getReviewDiffPreview({ cwd: upstream, commitSha: root }))
           .sources[0]!;
@@ -2600,7 +2614,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         const sha = yield* git(upstream, ["rev-parse", "HEAD"]);
         const cwd = yield* makeTmpDir();
         yield* git(upstream, ["clone", "--depth=1", NodeURL.pathToFileURL(upstream).href, cwd], {
-          GIT_CONFIG_GLOBAL: NodeOS.devNull,
+          GIT_CONFIG_GLOBAL: emptyFile,
           GIT_CONFIG_NOSYSTEM: "1",
         });
         assert.equal(yield* git(cwd, ["rev-parse", "--is-shallow-repository"]), "true");
@@ -4618,30 +4632,12 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         const sshWrapperPath = yield* pathService.fromFileUrl(
           new URL("./testing/GitVcsDriverCore.fixture.sh", import.meta.url),
         );
-        const envKeys = [
-          "GCM_INTERACTIVE",
-          "GIT_ASKPASS",
-          "GIT_SSH",
-          "GIT_TERMINAL_PROMPT",
-          "SSH_ASKPASS",
-          "SSH_ASKPASS_REQUIRE",
-          "T3_TEST_SSH_ASKPASS_LOG",
-        ] as const;
-        const previousEnv = new Map(envKeys.map((key) => [key, process.env[key]]));
 
         yield* git(cwd, ["remote", "add", "origin", "ssh://example.invalid/repo.git"]);
         yield* git(cwd, ["update-ref", `refs/remotes/origin/${initialBranch}`, "HEAD"]);
         yield* git(cwd, ["branch", "--set-upstream-to", `origin/${initialBranch}`]);
 
         yield* Effect.gen(function* () {
-          process.env.GIT_SSH = sshWrapperPath;
-          process.env.GCM_INTERACTIVE = "always";
-          process.env.GIT_ASKPASS = "git-askpass";
-          process.env.GIT_TERMINAL_PROMPT = "1";
-          process.env.SSH_ASKPASS = "ssh-askpass";
-          process.env.SSH_ASKPASS_REQUIRE = "force";
-          process.env.T3_TEST_SSH_ASKPASS_LOG = sshLogPath;
-
           yield* (yield* GitVcsDriver.GitVcsDriver).statusDetails(cwd);
 
           assert.deepEqual((yield* fileSystem.readFileString(sshLogPath)).trim().split(/\r?\n/), [
@@ -4652,18 +4648,16 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
             "SSH_ASKPASS_REQUIRE=never",
           ]);
         }).pipe(
-          Effect.ensuring(
-            Effect.sync(() => {
-              for (const key of envKeys) {
-                const previous = previousEnv.get(key);
-                if (previous === undefined) {
-                  delete process.env[key];
-                } else {
-                  process.env[key] = previous;
-                }
-              }
-            }),
-          ),
+          Effect.provideService(HostProcess.Environment, {
+            ...(yield* HostProcess.Environment),
+            GIT_SSH: sshWrapperPath,
+            GCM_INTERACTIVE: "always",
+            GIT_ASKPASS: "git-askpass",
+            GIT_TERMINAL_PROMPT: "1",
+            SSH_ASKPASS: "ssh-askpass",
+            SSH_ASKPASS_REQUIRE: "force",
+            T3_TEST_SSH_ASKPASS_LOG: sshLogPath,
+          }),
         );
       }),
     );
@@ -5066,7 +5060,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const driver = yield* GitVcsDriver.GitVcsDriver;
-        const serverLocale = process.env.LC_ALL ?? "unset";
+        const serverLocale = (yield* HostProcess.Environment).LC_ALL ?? "unset";
         const seenLocale = path.join(yield* makeTmpDir("git-hook-locale-"), "lc-all");
         yield* writeTextFile(
           cwd,
@@ -5345,19 +5339,6 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         const fileSystem = yield* FileSystem.FileSystem;
         const pathService = yield* Path.Path;
 
-        // Git blocks file submodule transports (CVE-2022-39253) despite repo config; local fixtures need env permission.
-        const previousAllowedProtocol = process.env.GIT_ALLOW_PROTOCOL;
-        process.env.GIT_ALLOW_PROTOCOL = "file";
-        yield* Effect.addFinalizer(() =>
-          Effect.sync(() => {
-            if (previousAllowedProtocol === undefined) {
-              delete process.env.GIT_ALLOW_PROTOCOL;
-            } else {
-              process.env.GIT_ALLOW_PROTOCOL = previousAllowedProtocol;
-            }
-          }),
-        );
-
         const submoduleRepo = yield* makeTmpDir("git-submodule-");
         yield* initRepoWithCommit(submoduleRepo);
         yield* writeTextFile(submoduleRepo, ".gitattributes", "* text eol=lf\n");
@@ -5443,7 +5424,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           "",
         );
         if (progress) assert.isNotEmpty(yield* Ref.get(lines));
-      }),
+      }).pipe(withGitFileProtocol),
     );
 
     it.effect("still creates the worktree when submodule checkout fails", () =>
@@ -5572,18 +5553,6 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         const fileSystem = yield* FileSystem.FileSystem;
         const pathService = yield* Path.Path;
 
-        const previousAllowedProtocol = process.env.GIT_ALLOW_PROTOCOL;
-        process.env.GIT_ALLOW_PROTOCOL = "file";
-        yield* Effect.addFinalizer(() =>
-          Effect.sync(() => {
-            if (previousAllowedProtocol === undefined) {
-              delete process.env.GIT_ALLOW_PROTOCOL;
-            } else {
-              process.env.GIT_ALLOW_PROTOCOL = previousAllowedProtocol;
-            }
-          }),
-        );
-
         const nestedRepo = yield* makeTmpDir("git-nested-");
         yield* initRepoWithCommit(nestedRepo);
         yield* writeTextFile(nestedRepo, "NESTED.md", "# nested\n");
@@ -5654,7 +5623,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           inner: false,
           nested: false,
         });
-      }),
+      }).pipe(withGitFileProtocol),
     );
 
     it.effect("still creates the worktree when the base-ref config stays locked", () =>

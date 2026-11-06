@@ -87,7 +87,6 @@ layer("b18 desktop migration namespace repair", (it) => {
         readonly name: string;
       }>`SELECT migration_id, name FROM ${sql(upstreamMigrationTable)} ORDER BY migration_id`;
       assert.deepStrictEqual(upstreamMigrations.slice(-28), [
-        { migration_id: 52, name: "ProjectionThreadTitleState" },
         { migration_id: 53, name: "PullRequestFilesViewed" },
         { migration_id: 54, name: "ProjectionThreadsAutoSettleDisabledAt" },
         { migration_id: 55, name: "OrchestrationV2" },
@@ -115,6 +114,7 @@ layer("b18 desktop migration namespace repair", (it) => {
         { migration_id: 77, name: "RepairBooleanSettledOverride" },
         { migration_id: 78, name: "DropOrchestrationEventCorrelationIndex" },
         { migration_id: 79, name: "DelegatedRecoveryIndexes" },
+        { migration_id: 80, name: "ScheduledTaskThreadMode" },
       ]);
 
       const forkMigrations = yield* sql<{

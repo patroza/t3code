@@ -11,6 +11,7 @@ import { quoteRemoteArg, remoteDeviceEnvironment, remoteDeviceScript } from "./s
 import { AGENT_DEVICE_VERSION, DEVICE_HUB_VERSION } from "./DeviceToolchain.ts";
 
 const exec = NodeUtil.promisify(NodeChildProcess.execFile);
+const hostProcessEnv = process.env;
 
 it.effect("finds Android Studio Java for a non-interactive SSH session", () =>
   Effect.gen(function* () {
@@ -246,7 +247,7 @@ else { const child=spawn(process.execPath,[path.join(path.dirname(process.argv[1
             originalScript.replace(AGENT_DEVICE_VERSION, "999.0.0"),
           );
           await exec(process.execPath, [upgradedStop], {
-            env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}` },
+            env: { ...hostProcessEnv, HOME: home, PATH: `${bin}:${hostProcessEnv.PATH}` },
           });
           const daemon = JSON.parse(
             await NodeFSP.readFile(NodePath.join(root, "hosts/one/daemon.json"), "utf8"),

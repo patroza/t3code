@@ -27,7 +27,10 @@ vi.mock("../state/entities", () => ({
   useProject: () => null,
 }));
 vi.mock("../state/filesystem", () => ({ useFilesystemReadAccess: () => ({ canReadFiles: true }) }));
-vi.mock("../state/server", () => ({ serverEnvironment: { configValueAtom: () => configAtom } }));
+vi.mock("../state/server", () => ({
+  serverEnvironment: { configValueAtom: () => configAtom },
+  primaryServerKeybindingsAtom: Atom.make([]),
+}));
 vi.mock("../state/vcs", () => ({ vcsEnvironment: { status: () => null, listRefs: () => null } }));
 vi.mock("../state/review", () => ({
   reviewEnvironment: {
@@ -43,6 +46,8 @@ vi.mock("../hooks/useSettings", () => ({
     ...DEFAULT_CLIENT_SETTINGS,
     diffFilesCollapsed: useAtomValue(collapsedAtom),
   }),
+  useClientSettingsHydrated: () => true,
+  useEnvironmentSettings: () => undefined,
   updateClientSettings: vi.fn(),
   subscribeClientSettings: () => () => {},
 }));
@@ -56,6 +61,12 @@ vi.mock("../browser/useOpenLink", () => ({ useOpenLink: () => vi.fn() }));
 vi.mock("../editorPreferences", () => ({ useOpenInPreferredEditor: () => vi.fn() }));
 vi.mock("../fileContextMenu", () => ({ useFileContextMenuHandler: () => vi.fn() }));
 vi.mock("../state/queries", () => ({
+  useDebouncedValue: <A,>(value: A) => value,
+  useThreadSearch: () => ({ data: null, isPending: false, error: null }),
+  usePaginatedBranches: () => ({ data: null, isPending: false, error: null }),
+  useProjectPathSearch: () => ({ data: null, isPending: false, error: null }),
+  useComposerPathSearch: () => ({ data: null, isPending: false, error: null }),
+  useProjectContentSearch: () => ({ data: null, isPending: false, error: null }),
   useTurnItemDetail: () => ({ data: null, isPending: false, error: null }),
   useCheckpointDiff: () => {
     const diff = useAtomValue(checkpointAtom);

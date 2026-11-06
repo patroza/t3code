@@ -77,6 +77,7 @@ import * as ThreadSearch from "../orchestration-v2/ThreadSearch.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import { checkpointWorkspace } from "@t3tools/provider-testing/replayWorkspace";
 import * as ProviderReplayHarness from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
 import {
@@ -800,6 +801,7 @@ describe("orchestrator MCP toolkit", () => {
             Layer.provideMerge(
               SecretRequests.layer.pipe(
                 Layer.provide(layerMemorySecretStore),
+                Layer.provide(Layer.mock(SecretResolver.SecretResolver)({})),
                 Layer.provide(layerOrchestration),
               ),
             ),
@@ -4516,6 +4518,7 @@ describe("orchestrator MCP toolkit", () => {
           Layer.provideMerge(
             SecretRequests.layer.pipe(
               Layer.provide(layerMemorySecretStore),
+              Layer.provide(Layer.mock(SecretResolver.SecretResolver)({})),
               Layer.provide(layerOrchestration),
             ),
           ),

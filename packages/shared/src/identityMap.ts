@@ -42,15 +42,13 @@ export type IdentityMapPerson = {
   readonly teams?: IdentityMapTeamsRef | undefined;
 };
 
-export class IdentityMapParseError extends Error {
-  readonly _tag = "IdentityMapParseError";
-  readonly pathLabel: string;
-  constructor(pathLabel: string, message: string) {
-    super(message);
-    this.name = "IdentityMapParseError";
-    this.pathLabel = pathLabel;
-  }
-}
+export class IdentityMapParseError extends Schema.TaggedError<IdentityMapParseError>()(
+  "IdentityMapParseError",
+  {
+    pathLabel: Schema.String,
+    message: Schema.String,
+  },
+) {}
 
 const HANDLE_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 const HANDLE_MAX = 128;
@@ -72,10 +70,10 @@ function normalizeHandle(value: string, field: string, label: string): string {
     normalized.length > HANDLE_MAX ||
     !HANDLE_PATTERN.test(normalized)
   ) {
-    throw new IdentityMapParseError(
-      label,
-      `${field} must be a non-empty handle (max ${HANDLE_MAX}, pattern ${HANDLE_PATTERN}): got ${JSON.stringify(value)}`,
-    );
+    throw new IdentityMapParseError({
+      pathLabel: label,
+      message: `${field} must be a non-empty handle (max ${HANDLE_MAX}, pattern ${HANDLE_PATTERN}): got ${JSON.stringify(value)}`,
+    });
   }
   return normalized;
 }
@@ -108,10 +106,10 @@ function parseTeamsRef(
     asNonEmptyString(raw.teamsAadObjectId) ??
     asNonEmptyString(raw.teams_aad_object_id);
   if (explicitAad !== undefined && normalizeTeamsAadObjectId(explicitAad) === null) {
-    throw new IdentityMapParseError(
-      indexLabel,
-      "teams.aadObjectId must be an Azure AD object id (GUID)",
-    );
+    throw new IdentityMapParseError({
+      pathLabel: indexLabel,
+      message: "teams.aadObjectId must be an Azure AD object id (GUID)",
+    });
   }
   let aadObjectId = normalizeTeamsAadObjectId(explicitAad) ?? undefined;
   const userIdRaw =
@@ -150,7 +148,10 @@ function normalizeLogin(value: unknown): string | undefined {
 
 function parsePerson(raw: unknown, indexLabel: string, keyHint?: string): IdentityMapPerson {
   if (!isRecord(raw)) {
-    throw new IdentityMapParseError(indexLabel, "person entry must be an object");
+    throw new IdentityMapParseError({
+      pathLabel: indexLabel,
+      message: "person entry must be an object",
+    });
   }
 
   const discordNested = isRecord(raw.discord) ? raw.discord : undefined;
@@ -162,7 +163,10 @@ function parsePerson(raw: unknown, indexLabel: string, keyHint?: string): Identi
     asNonEmptyString(raw.userName) ??
     (keyHint !== undefined && !/^\d+$/u.test(keyHint) ? keyHint : undefined);
   if (usernameRaw === undefined) {
-    throw new IdentityMapParseError(indexLabel, 'missing required "username"');
+    throw new IdentityMapParseError({
+      pathLabel: indexLabel,
+      message: 'missing required "username"',
+    });
   }
   const username = normalizeHandle(usernameRaw, "username", indexLabel);
 
@@ -255,7 +259,10 @@ function parsePerson(raw: unknown, indexLabel: string, keyHint?: string): Identi
 export function parseIdentityMapDocument(document: unknown): ReadonlyArray<IdentityMapPerson> {
   if (document === null || document === undefined) return [];
   if (!isRecord(document)) {
-    throw new IdentityMapParseError("root", "Identity map root must be an object.");
+    throw new IdentityMapParseError({
+      pathLabel: "root",
+      message: "Identity map root must be an object.",
+    });
   }
 
   const peopleNode = document.people;
@@ -278,10 +285,16 @@ export function parseIdentityMapDocument(document: unknown): ReadonlyArray<Ident
   const personIds = new Set<string>();
   for (const person of people) {
     if (usernames.has(person.username)) {
-      throw new IdentityMapParseError(person.username, `duplicate username "${person.username}"`);
+      throw new IdentityMapParseError({
+        pathLabel: person.username,
+        message: `duplicate username "${person.username}"`,
+      });
     }
     if (personIds.has(person.personId)) {
-      throw new IdentityMapParseError(person.personId, `duplicate personId "${person.personId}"`);
+      throw new IdentityMapParseError({
+        pathLabel: person.personId,
+        message: `duplicate personId "${person.personId}"`,
+      });
     }
     usernames.add(person.username);
     personIds.add(person.personId);

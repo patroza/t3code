@@ -11,7 +11,10 @@ import { extractJsonObject } from "@t3tools/shared/schemaJson";
 
 import { TextGenerationError } from "@t3tools/contracts";
 import * as TextGeneration from "./TextGeneration.ts";
-import { investigationUnsupported } from "@t3tools/provider-core/server/textGenerationOperations";
+import {
+  investigationUnsupported,
+  TranscriptionPostProcessingOutput,
+} from "@t3tools/provider-core/server/textGenerationOperations";
 import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
@@ -90,7 +93,8 @@ export const makeAcpTextGeneration = Effect.fn("makeAcpTextGeneration")(function
         | "generateCommitMessage"
         | "generatePrContent"
         | "generateBranchName"
-        | "generateThreadTitle";
+        | "generateThreadTitle"
+        | "generateTranscriptionPostProcessing";
       cwd: string;
       prompt: string;
       outputSchemaJson: S;
@@ -302,11 +306,23 @@ export const makeAcpTextGeneration = Effect.fn("makeAcpTextGeneration")(function
   const generateReviewGuide: TextGeneration.TextGeneration["Service"]["generateReviewGuide"] = () =>
     Effect.fail(investigationUnsupported("generateReviewGuide", definition.providerName));
 
+  const generateTranscriptionPostProcessing: TextGeneration.TextGeneration["Service"]["generateTranscriptionPostProcessing"] =
+    Effect.fn("AcpTextGeneration.generateTranscriptionPostProcessing")(function* (input) {
+      return yield* runAcpJson({
+        operation: "generateTranscriptionPostProcessing",
+        cwd: input.cwd,
+        prompt: input.prompt,
+        outputSchemaJson: TranscriptionPostProcessingOutput,
+        modelSelection: input.modelSelection,
+      });
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
     generateReviewGuide,
+    generateTranscriptionPostProcessing,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

@@ -12,6 +12,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import {
   AuthSessionId,
   type AuthClientMetadataDeviceType,
@@ -103,6 +104,12 @@ export function readIdentityMapPeopleFromEnv(): ReadonlyArray<IdentityMapPerson>
   return loadPeopleFromEnv();
 }
 
+const isIdentityMapParseError = Schema.is(IdentityMapParseError);
+
+function identityMapPathLabel(): string {
+  return process.env.T3_IDENTITY_MAP_PATH ?? "";
+}
+
 function loadPeopleFromEnv(): ReadonlyArray<IdentityMapPerson> {
   const configured = process.env.T3_IDENTITY_MAP_PATH?.trim();
   if (configured === undefined || configured.length === 0) {
@@ -124,12 +131,11 @@ function loadPeopleFromEnv(): ReadonlyArray<IdentityMapPerson> {
     }
     return people;
   } catch (cause) {
-    const message =
-      cause instanceof IdentityMapParseError
+    const message = isIdentityMapParseError(cause)
+      ? cause.message
+      : cause instanceof Error
         ? cause.message
-        : cause instanceof Error
-          ? cause.message
-          : String(cause);
+        : String(cause);
     console.error(`[identity] failed to load map at ${configured}: ${message}`);
     return [];
   }
@@ -378,7 +384,7 @@ export const make: Effect.Effect<IdentityService["Service"]> = Effect.gen(functi
   const people = (yield* source.current).people;
   if (people.length > 0) {
     yield* Effect.logInfo("Identity map loaded", {
-      path: process.env.T3_IDENTITY_MAP_PATH ?? "",
+      path: identityMapPathLabel(),
       people: people.length,
       reloadTtlMs: IDENTITY_MAP_RELOAD_TTL_MS,
     });
@@ -403,7 +409,7 @@ export const layerPersisted = Layer.effect(
     const people = (yield* source.current).people;
     if (people.length > 0) {
       yield* Effect.logInfo("Identity map loaded", {
-        path: process.env.T3_IDENTITY_MAP_PATH ?? "",
+        path: identityMapPathLabel(),
         people: people.length,
         reloadTtlMs: IDENTITY_MAP_RELOAD_TTL_MS,
       });

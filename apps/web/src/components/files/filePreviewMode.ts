@@ -58,6 +58,11 @@ export function setMarkdownTaskChecked(
 }
 
 /** HTML previews need a directory-scoped grant for their relative assets. */
+/**
+ * The server only signs `workspace-file` assets below the workspace root, so a
+ * file opened from outside it, such as an absolute link in the thread, goes
+ * through the host `media-file` resource the direct media viewer uses.
+ */
 export function workspaceAssetResource(input: {
   readonly kind: "workspace-file" | "media-file";
   readonly threadRef: ScopedThreadRef;

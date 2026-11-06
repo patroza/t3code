@@ -16,7 +16,11 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
 import { readSourceControlHostSettings } from "@t3tools/source-control-core/shared/definition";
-import { settingsSecretLiteral, type ServerSettings } from "@t3tools/contracts";
+import {
+  requireSettingsSecretLiteral,
+  type ServerSettings,
+  type SettingsSecretUnresolvedError,
+} from "@t3tools/contracts";
 
 import * as GitHubClient from "../shared/definition.ts";
 
@@ -87,7 +91,8 @@ export type GitHubCredentialUnavailableError =
   | GitHubCliMissingError
   | GitHubNotSignedInError
   | GitHubHostDisabledError
-  | GitHubCliFailedError;
+  | GitHubCliFailedError
+  | SettingsSecretUnresolvedError;
 
 export class GitHubCredentials extends Context.Service<
   GitHubCredentials,
@@ -101,7 +106,7 @@ export class GitHubCredentials extends Context.Service<
       host: string,
     ) => Effect.Effect<
       Option.Option<GitHubCredential>,
-      GitHubHostDisabledError | GitHubNotSignedInError
+      GitHubHostDisabledError | GitHubNotSignedInError | SettingsSecretUnresolvedError
     >;
     readonly fingerprint: (host: string, token: string) => Effect.Effect<string>;
     readonly invalidate: (host: string, target?: GitHubCredentialTarget) => Effect.Effect<void>;
@@ -233,10 +238,15 @@ export const make = Effect.gen(function* () {
 
   const savedToken = (host: string) =>
     sourceControlHost.settings.getWithSecrets(GitHubClient.definition.kind).pipe(
-      Effect.map(
-        (settings) => settingsSecretLiteral(readSettings(settings).tokens[host]).trim() || null,
+      Effect.map((settings) => ({
+        token: readSettings(settings).tokens[host],
+        secretProviders: settings.secretProviders,
+      })),
+      Effect.orElseSucceed(() => ({ token: undefined, secretProviders: {} })),
+      Effect.flatMap(({ token, secretProviders }) =>
+        requireSettingsSecretLiteral(token, secretProviders),
       ),
-      Effect.orElseSucceed(() => null),
+      Effect.map((token) => token.trim() || null),
     );
 
   // Installation credentials may cover one repository. Never reuse a token minted for a

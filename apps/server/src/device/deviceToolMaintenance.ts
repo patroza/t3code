@@ -1,4 +1,3 @@
-// @effect-diagnostics preferSchemaOverJson:off - JSON string literals safely embed paths and arguments in generated JavaScript.
 import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";

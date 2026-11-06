@@ -123,7 +123,11 @@ export function QueuedRunsControl({
   const queued = workflow?.queuedRuns ?? [];
   const activeRun = workflow?.activeRun ?? null;
   const canReorder = workflow?.canReorder === true;
-  const canSend = workflow?.canSendNow === true || workflow?.canPromoteToSteer === true;
+  // A fresh message starts its own turn: it may skip compaction, but not steer into a turn.
+  const canSendRun = (freshContext: boolean) =>
+    workflow?.canSendNow === true ||
+    (workflow?.canPromoteToSteer === true &&
+      (!freshContext || workflow.promoteSkipsCompaction === true));
   const queuedImageUrlById = new Map(
     queuedImageAttachmentUrls.flatMap((url, index) => {
       const resource = queuedImageAttachmentResources[index];
@@ -140,6 +144,7 @@ export function QueuedRunsControl({
       runId: run.id,
       messageId: run.userMessageId,
       heldForEdit: run.queueEditId != null,
+      freshContext: run.freshContext === true,
       serverIndex,
       text,
       // A guest's message keeps the guest's words; the owner can cancel it, not rewrite it.
@@ -160,6 +165,7 @@ export function QueuedRunsControl({
       runId: null,
       messageId: null,
       heldForEdit: false,
+      freshContext: false,
       serverIndex: null,
       text: message.text,
       editable: true,
@@ -195,7 +201,10 @@ export function QueuedRunsControl({
   };
 
   const sendQueuedMessage = async (queuedRunId: RunId) => {
-    if (!canSend || steerInFlightRef.current) return;
+    const freshContext = queued.some(
+      ({ run }) => run.id === queuedRunId && run.freshContext === true,
+    );
+    if (!canSendRun(freshContext) || steerInFlightRef.current) return;
     steerInFlightRef.current = true;
     setBusyRunId(queuedRunId);
     if (workflow?.canSendNow) {
@@ -216,7 +225,8 @@ export function QueuedRunsControl({
   useImperativeHandle(ref, () => ({
     steerNext(repeat) {
       const next = queued[0];
-      if (!next || next.run.queueEditId != null || !canSend) return false;
+      if (!next || next.run.queueEditId != null || !canSendRun(next.run.freshContext === true))
+        return false;
       if (!repeat && busyRunId === null) void sendQueuedMessage(next.run.id);
       return true;
     },
@@ -443,7 +453,7 @@ export function QueuedRunsControl({
                           disabled={
                             item.runId === null ||
                             busyRunId !== null ||
-                            !canSend ||
+                            !canSendRun(item.freshContext) ||
                             item.heldForEdit
                           }
                           onClick={() => {

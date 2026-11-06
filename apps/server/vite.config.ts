@@ -1,4 +1,6 @@
 import "vite-plus/test/config";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- tsdown needs the asset path when it reads this config.
+import * as NodePath from "node:path";
 import { defineConfig, mergeConfig } from "vite-plus";
 
 import baseConfig from "../../vite.config.ts";
@@ -32,10 +34,14 @@ if (!TELEMETRY_CHANNELS.includes(telemetryChannel)) {
 }
 
 // tsdown SEA needs one chunk (sourcemaps count) and Node >=25.7, so package separately.
+// "bundle" emits the embedded CLI. "1" builds dist-exe/t3 from the bootstrap.
 // TEMPORARY one-time Node fix. Remove when fixed: https://github.com/nodejs/node/issues/67048
-// "1" builds dist-exe/t3 here; "bundle" stops at bin.mjs for scripts/cli.ts to inject (linux-arm64).
+// "bootstrap" stops at bin.mjs for scripts/cli.ts to inject (linux-arm64).
 const packMode = process.env.T3CODE_PACK_EXE;
-const packExecutable = packMode === "1" || packMode === "bundle";
+const packBootstrap = packMode === "1" || packMode === "bootstrap";
+const packExecutable = packBootstrap || packMode === "bundle";
+const cliAssetDir = process.env.T3CODE_CLI_ASSET_DIR ?? "";
+if (packExecutable && !cliAssetDir) throw new Error("Build the executable with build:exe.");
 // TEMPORARY one-time Node fix. Remove when fixed: https://github.com/nodejs/node/issues/67048
 // No linux-arm64: --build-sea output cannot load on 16/64 KiB page kernels, so it builds natively.
 const SEA_TARGETS = {
@@ -86,15 +92,19 @@ export default mergeConfig(
     },
     pack: {
       // SEA embeds one entry; expose the history worker as a hidden subcommand.
-      entry: packExecutable ? ["src/bin.ts"] : ["src/bin.ts", "src/claude-history-worker.ts"],
-      outDir: packExecutable ? "dist-exe" : "dist",
+      entry: packBootstrap
+        ? ["src/bin.ts"]
+        : packExecutable
+          ? ["src/binMain.ts"]
+          : ["src/bin.ts", "src/claude-history-worker.ts"],
+      outDir: packBootstrap ? "dist-exe" : packExecutable ? cliAssetDir : "dist",
       sourcemap: !packExecutable,
       // Never wipe dist/ wholesale during the default pack: deploy builds the
       // server while a live process is still serving dist/client. The exe pack
       // writes to dist-exe and can clean. cli.ts selectively removes non-client
       // artifacts before pack instead.
       clean: packExecutable,
-      // SEA must keep dynamic imports inside its one module.
+      // SEA can only resolve built-ins; keep dynamic imports inside each emitted module.
       ...(packExecutable ? { outputOptions: { codeSplitting: false } } : {}),
       ...(packExecutable
         ? {
@@ -103,14 +113,20 @@ export default mergeConfig(
               outDir: "dist-exe",
               ...(packExecutableTargets ? { targets: packExecutableTargets } : {}),
               // Node SEA useCodeCache breaks import(), which the server needs.
-              seaConfig: { useCodeCache: false },
+              seaConfig: {
+                useCodeCache: false,
+                // The bootstrap loads the embedded CLI with require(esm).
+                execArgv: ["--require-module"],
+                assets: { "binMain.mjs": NodePath.join(cliAssetDir, "binMain.mjs") },
+              },
             },
           }
         : {}),
       deps: {
         // alwaysBundle=false has no opinion; neverBundle must retain transitive native acceleration.
         alwaysBundle: shouldBundleCliDependency,
-        neverBundle: (id: string) => isExternalCliDependency(id),
+        neverBundle: (id: string) =>
+          (packBootstrap && id === "./binMain.ts") || isExternalCliDependency(id),
         onlyBundle: false,
       },
       banner: {
@@ -188,6 +204,13 @@ export default mergeConfig(
               // Mocks `node:fs/promises` and spies on playwright. Under
               // isolate:false the real mkdir runs against `/test` and fails.
               "src/preview/ServerBrowserContexts.test.ts",
+              // Mocks `node:net`. Under isolate:false the real Socket is already
+              // bound, so a fake desktop fd throws ERR_INVALID_FD_TYPE.
+              "src/preview/DesktopBrowserChannel.test.ts",
+              // Mocks `node:worker_threads` to observe the checkpoint worker.
+              // Under isolate:false that worker is the real one and the test's
+              // recorded list stays empty.
+              "src/persistence/Sqlite.test.ts",
               "src/preview/PortScanner.test.ts",
             ],
           },
@@ -258,6 +281,11 @@ export default mergeConfig(
               // Mocks `node:fs/promises` and spies on playwright. Under
               // isolate:false the real mkdir runs against `/test` and fails.
               "src/preview/ServerBrowserContexts.test.ts",
+              // Mocks `node:net` before DesktopBrowserChannel binds the real Socket.
+              "src/preview/DesktopBrowserChannel.test.ts",
+              // Mocks `node:worker_threads` before the sqlite client constructs
+              // its checkpoint worker.
+              "src/persistence/Sqlite.test.ts",
             ],
           },
         },

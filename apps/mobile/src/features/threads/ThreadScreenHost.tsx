@@ -49,15 +49,18 @@ function ThreadScreenOutlet() {
 
 // Controllers can change from draft to live without replacing the native screen,
 // the keyboard host, or the editor. Publish before paint to avoid an intermediate frame.
-export function ThreadScreenHost({ children }: { readonly children: ReactNode }) {
+export function ThreadScreenHost(props: {
+  readonly children: ReactNode;
+  readonly className?: string;
+}) {
   const [store] = useState(createThreadScreenStore);
   return (
     <ThreadScreenContext.Provider value={store}>
-      {children}
+      {props.children}
       <View
         testID="thread-conversation-surface"
         style={{ flex: 1 }}
-        className="flex-1 bg-screen android:bg-header"
+        className={props.className ?? "flex-1 bg-screen android:bg-header"}
       >
         <ThreadScreenOutlet />
       </View>

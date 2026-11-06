@@ -39,7 +39,6 @@ layer("fork migration namespace for a repaired database", (it) => {
         SELECT migration_id, name FROM ${sql(legacyMigrationBackupTable)} ORDER BY migration_id
       `;
       assert.deepStrictEqual(upstream.slice(-28), [
-        { migration_id: 52, name: "ProjectionThreadTitleState" },
         { migration_id: 53, name: "PullRequestFilesViewed" },
         { migration_id: 54, name: "ProjectionThreadsAutoSettleDisabledAt" },
         { migration_id: 55, name: "OrchestrationV2" },
@@ -67,6 +66,7 @@ layer("fork migration namespace for a repaired database", (it) => {
         { migration_id: 77, name: "RepairBooleanSettledOverride" },
         { migration_id: 78, name: "DropOrchestrationEventCorrelationIndex" },
         { migration_id: 79, name: "DelegatedRecoveryIndexes" },
+        { migration_id: 80, name: "ScheduledTaskThreadMode" },
       ]);
       assert.deepStrictEqual(fork, [
         { migration_id: 1, name: "ProjectionQueuedMessages" },

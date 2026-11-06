@@ -30,9 +30,15 @@ const {
   checkoutState,
   hostCommand,
   queries,
+  updateCommand,
 } = vi.hoisted(() => ({
   hostCommand: vi.fn(),
   queries: { diff: undefined as unknown },
+  updateCommand: {
+    permissionAtom: ((_environmentId: unknown): unknown => {
+      throw new Error("permissionAtom was not installed");
+    }) as (environmentId: unknown) => unknown,
+  },
   newThread: vi.fn(),
   prepareThread: vi.fn(),
   refresh: vi.fn(),
@@ -65,7 +71,8 @@ vi.mock(import("~/state/sourceControlActions"), async (original) => ({
 }));
 vi.mock(import("~/state/use-atom-command"), async (original) => ({
   ...(await original()),
-  useAtomCommand: ((command: unknown) => (command === "update" ? update : hostCommand)) as never,
+  useAtomCommand: ((command: unknown) =>
+    command === updateCommand ? update : hostCommand) as never,
 }));
 vi.mock(import("~/state/pullRequests"), async (original) => {
   const actual = await original();
@@ -73,6 +80,7 @@ vi.mock(import("~/state/pullRequests"), async (original) => {
   const cannotWriteGuides = Atom.make(false);
   const diff = Atom.make(null);
   queries.diff = diff;
+  updateCommand.permissionAtom = () => cannotWriteGuides;
   return {
     ...actual,
     pullRequestEnvironment: {
@@ -80,7 +88,7 @@ vi.mock(import("~/state/pullRequests"), async (original) => {
       detail: (() => "detail") as never,
       diff: (() => diff) as never,
       activity: (() => "activity") as never,
-      update: "update" as never,
+      update: updateCommand as never,
       reviewGuide: (() => "review-guide") as never,
       generateReviewGuide: {
         ...actual.pullRequestEnvironment.generateReviewGuide,

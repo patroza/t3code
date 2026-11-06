@@ -9,7 +9,6 @@ const IMAGE_MIME_KEYS = ["mimeType", "mime_type", "media_type", "type"] as const
 const IMAGE_BODY_KEYS = new Set(["data", "blob", "base64"]);
 const MAX_DEPTH = 32;
 const MIN_BODY_LENGTH = 64;
-const BASE64_BODY = /^[A-Za-z0-9+/_-]+={0,2}$/;
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -30,8 +29,32 @@ function isImageBody(record: UnknownRecord, key: string | undefined): boolean {
   );
 }
 
+function isBase64Char(code: number): boolean {
+  return (
+    (code >= 0x41 && code <= 0x5a) ||
+    (code >= 0x61 && code <= 0x7a) ||
+    (code >= 0x30 && code <= 0x39) ||
+    code === 0x2b ||
+    code === 0x2f ||
+    code === 0x5f ||
+    code === 0x2d
+  );
+}
+
+// A regexp overflows V8's stack on a body near the 10 MiB image limit.
 function isBase64Body(value: unknown): value is string {
-  return typeof value === "string" && value.length >= MIN_BODY_LENGTH && BASE64_BODY.test(value);
+  if (typeof value !== "string" || value.length < MIN_BODY_LENGTH) return false;
+  let padding = 0;
+  for (let index = value.length - 1; index >= 0 && value.charCodeAt(index) === 0x3d; index -= 1) {
+    padding += 1;
+    if (padding > 2) return false;
+  }
+  const end = value.length - padding;
+  if (end === 0) return false;
+  for (let index = 0; index < end; index += 1) {
+    if (!isBase64Char(value.charCodeAt(index))) return false;
+  }
+  return true;
 }
 
 function base64DecodedLength(encoded: string): number {

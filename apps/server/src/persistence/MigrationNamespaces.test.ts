@@ -8,7 +8,6 @@ describe("migration namespaces", () => {
   it("keeps upstream and fork manifests in independent ledgers", () => {
     assert.notEqual(upstreamMigrationTable, forkMigrationTable);
     assert.deepStrictEqual(migrationManifest.slice(-28), [
-      [52, "ProjectionThreadTitleState"],
       [53, "PullRequestFilesViewed"],
       [54, "ProjectionThreadsAutoSettleDisabledAt"],
       [55, "OrchestrationV2"],
@@ -36,6 +35,7 @@ describe("migration namespaces", () => {
       [77, "RepairBooleanSettledOverride"],
       [78, "DropOrchestrationEventCorrelationIndex"],
       [79, "DelegatedRecoveryIndexes"],
+      [80, "ScheduledTaskThreadMode"],
     ]);
     assert.deepStrictEqual(forkMigrationManifest, [
       [1, "ProjectionQueuedMessages"],
