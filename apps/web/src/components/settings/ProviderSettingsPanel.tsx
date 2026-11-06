@@ -805,15 +805,18 @@ export function EnvironmentProviderSettings({
       typeof buildProviderInstanceUpdatePatch
     >[0]["textGenerationModelSelection"],
   ) => {
-    const { providerInstances: _providerInstances, ...patch } = buildProviderInstanceUpdatePatch({
+    const updatePatch = buildProviderInstanceUpdatePatch({
       settings,
       instanceId,
       instance: next,
       textGenerationModelSelection,
     });
+    const textGenerationPatch = updatePatch.textGenerationModelSelection;
     const result = await persistProviderInstance(
       { operation: "upsert", instanceId, instance: next },
-      patch,
+      textGenerationPatch === undefined
+        ? {}
+        : { textGenerationModelSelection: textGenerationPatch },
     );
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
       const error = squashAtomCommandFailure(result);

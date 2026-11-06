@@ -72,6 +72,7 @@ import {
 } from "./ConnectionsSettings.logic";
 import { IdentityUsername } from "@t3tools/contracts";
 import { useEnvironmentQuery } from "~/state/query";
+import { usePrimaryEnvironmentId } from "~/state/environments";
 import { identityEnvironment } from "~/state/identity";
 function AccessScopeSummary({
   scopes,
