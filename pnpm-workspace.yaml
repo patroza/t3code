@@ -208,6 +208,16 @@ overrides:
   "ws@^8": "catalog:"
   vite: "catalog:"
   vite-plus: "catalog:"
+  # The catalog compiler is @tsc-rs/typescript@0.8.0, so it does not satisfy
+  # Vite+'s typescript peer range. pnpm then auto-installs typescript 6 and
+  # `vp run test` loads a second Vitest. Typecheck does not go through Vite+.
+  "@voidzero-dev/vite-plus-core>typescript": "-"
+  "@volar/typescript>typescript": "-"
+  "@volar/language-service>typescript": "-"
+  "@volar/kit>typescript": "-"
+  "@volar/language-server>typescript": "-"
+  "volar-service-typescript>typescript": "-"
+  "volar-service-typescript-twoslash-queries>typescript": "-"
   yaml: "catalog:"
 
 packageExtensions:
