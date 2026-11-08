@@ -1,3 +1,8 @@
+import * as AiUsageMonitor from "./aiUsage/AiUsageMonitor.ts";
+import * as HostResourceProbe from "./diagnostics/HostResourceProbe.ts";
+import * as IdentityService from "./identity/IdentityService.ts";
+import * as PortExposure from "./preview/PortExposure.ts";
+import * as WorktreeLifecycle from "./orchestration-v2/WorktreeLifecycleService.ts";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -764,6 +769,11 @@ it.effect("shell snapshots omit idle children and older settled threads only on 
 
 // Build the production RPC layer; unrelated capabilities fail if this test calls them.
 const layerUnusedConfigRpcServices = Layer.mergeAll(
+  Layer.mock(AiUsageMonitor.AiUsageMonitor)({}),
+  Layer.mock(HostResourceProbe.HostResourceProbe)({}),
+  Layer.mock(IdentityService.IdentityService)({}),
+  Layer.mock(PortExposure.PreviewPortExposure)({}),
+  Layer.mock(WorktreeLifecycle.WorktreeLifecycle)({}),
   Layer.mock(DocumentText.DocumentText)({}),
   Layer.mock(ServerSecretStore.ServerSecretStore)({}),
   Layer.mock(WorkspacePaths.WorkspacePaths)({}),
@@ -994,6 +1004,9 @@ it.effect.each([
               scopes: [],
             },
             {},
+            {},
+            yield* PreviewAutomationBroker.PreviewAutomationBroker,
+            true,
             yield* ServerBrowser.ServerBrowser,
             () => Effect.void,
             { secretReferences: true },
@@ -1236,6 +1249,9 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
             scopes: [],
           },
           {},
+          {},
+          yield* PreviewAutomationBroker.PreviewAutomationBroker,
+          true,
           yield* ServerBrowser.ServerBrowser,
           () => Effect.void,
           { secretReferences: true },
@@ -1398,6 +1414,9 @@ it.effect("a publish whose push fails still refreshes the new remote", () =>
             scopes: [AuthSourceControlWriteScope],
           },
           {},
+          {},
+          yield* PreviewAutomationBroker.PreviewAutomationBroker,
+          true,
           yield* ServerBrowser.ServerBrowser,
           () => Effect.void,
           { secretReferences: true },

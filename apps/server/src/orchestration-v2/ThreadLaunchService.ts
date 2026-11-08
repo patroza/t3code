@@ -19,6 +19,7 @@ import {
   type RunId,
   type RuntimeMode,
   type ScheduledTaskId,
+  type SourceRef,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -69,6 +70,7 @@ export type ThreadLaunchWorkspaceStrategy =
     };
 
 export interface ThreadLaunchInitialMessage {
+  readonly source?: import("@t3tools/contracts").SourceRef;
   readonly messageId?: MessageId;
   readonly scheduledTaskId?: ScheduledTaskId;
   readonly senderThreadId?: ThreadId;
@@ -99,6 +101,7 @@ export interface ThreadLaunchInput {
   };
   readonly createdBy: OrchestrationV2Actor;
   readonly creationSource: OrchestrationV2CreationSource;
+  readonly originSource?: SourceRef;
   /** The linked environment this launch is for, if one asked for it. */
   readonly linkOrigin?: OrchestrationV2LinkOrigin;
   /** The parent there, when that environment's agent delegated this as a task. */
@@ -313,6 +316,7 @@ const make = Effect.gen(function* () {
     let createdBranch: string | null = null;
     let setupTerminalId: string | null = null;
     let workspaceRecorded = false;
+    let stopBranchRename: Effect.Effect<void> = Effect.void;
     let runReleased = false;
     // Stop background renames before forgetting worktrees; completed renames record them again.
     let branchRename: Fiber.Fiber<unknown> | null = null;
@@ -568,6 +572,7 @@ const make = Effect.gen(function* () {
           ),
           Effect.forkIn(preparationScope),
         );
+        stopBranchRename = Fiber.interrupt(branchRename).pipe(Effect.asVoid);
       }
 
       if (runId !== null && worktreePath !== null) {
@@ -691,7 +696,8 @@ const make = Effect.gen(function* () {
             createdWorktreePath &&
             ((cancelled && !runReleased) || !workspaceRecorded)
           ) {
-            if (branchRename !== null) yield* Fiber.interrupt(branchRename);
+            // Join the rename before cleanup so it cannot restore deleted workspace metadata.
+            yield* stopBranchRename;
             const removedPath = createdWorktreePath;
             const removedBranch = createdBranch;
             // Forget worktrees only after removal succeeds; failed removals must not reuse partially written checkouts.
@@ -950,6 +956,7 @@ const make = Effect.gen(function* () {
                   : { delegatedFrom: input.delegatedFrom }),
                 createdBy: input.createdBy,
                 creationSource: input.creationSource,
+                ...(input.originSource === undefined ? {} : { originSource: input.originSource }),
               });
         const claimed = yield* claimDispatch.pipe(
           Effect.mapError(
@@ -985,6 +992,9 @@ const make = Effect.gen(function* () {
               threadId,
               messageId,
               text: input.initialMessage.text,
+              ...(input.initialMessage.source === undefined
+                ? {}
+                : { source: input.initialMessage.source }),
               ...(input.initialMessage.scheduledTaskId === undefined
                 ? {}
                 : { scheduledTaskId: input.initialMessage.scheduledTaskId }),

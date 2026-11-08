@@ -41,7 +41,10 @@ import {
   handoffTokenCapConfig,
   handoffBudget,
   attachmentTokenAllowance,
+  completedCompactionRunOrdinal,
   contextUsageForHandoff,
+  countsTowardNativeContextEstimate,
+  handoffAlreadyInNativeSession,
   historicalMessage,
   latestNativeContextUsage,
 } from "@t3tools/provider-core/server/handoffBudget";
@@ -914,6 +917,23 @@ export const layer: Layer.Layer<
             handoff.delivery?.nativeThreadId === loadedProviderThread.nativeThreadRef?.nativeId &&
             handoff.delivery?.status !== "pending",
         );
+        const compactionRunOrdinal = sameNativeThread
+          ? completedCompactionRunOrdinal({
+              runs: projection.runs,
+              providerThreadId: providerThread.id,
+              compactUserMessageIds: new Set(
+                projection.messages.flatMap((message) =>
+                  message.attachments.length === 0 &&
+                  message.text.trim().toLowerCase() === "/compact"
+                    ? [message.id]
+                    : [],
+                ),
+              ),
+            })
+          : undefined;
+        const runOrdinalById = new Map(
+          projection.runs.map((source) => [source.id, source.ordinal]),
+        );
         const deliveredItemIds = new Set(
           settledHandoffs.flatMap((handoff) => handoff.delivery?.itemIds ?? []),
         );
@@ -968,7 +988,15 @@ export const layer: Layer.Layer<
                     (legacyInputRunIds.has(item.runId) &&
                       !coveredItemIds.has(item.id) &&
                       !legacyRecoveredRunIds.has(item.runId)));
-                if (item.runId === run.id || (!acceptedNatively && !deliveredItemIds.has(item.id)))
+                if (
+                  !countsTowardNativeContextEstimate({
+                    compactionRunOrdinal,
+                    itemRunOrdinal:
+                      item.runId === null ? undefined : runOrdinalById.get(item.runId),
+                  }) ||
+                  item.runId === run.id ||
+                  (!acceptedNatively && !deliveredItemIds.has(item.id))
+                )
                   return sum;
                 const historical = historicalMessage(item);
                 const nativeAttachments =
@@ -996,6 +1024,7 @@ export const layer: Layer.Layer<
           (source) =>
             !resumeFellBack &&
             source.ordinal < run.ordinal &&
+            (compactionRunOrdinal === undefined || source.ordinal > compactionRunOrdinal) &&
             source.providerThreadId === providerThread.id &&
             (source.status === "failed" || source.status === "interrupted") &&
             !deliveredAttemptIds.has(source.activeAttemptId),
@@ -1553,6 +1582,21 @@ export const layer: Layer.Layer<
       }
       const routableSubagents = projection.subagents.filter((subagent) =>
         RunExecutionService.canRouteRelatedSubagent(subagent.status),
+      );
+      effectiveHandoffs = effectiveHandoffs.filter(
+        (handoff) =>
+          !handoffAlreadyInNativeSession({
+            handoff,
+            nativeThreadId: runningProviderThread.nativeThreadRef?.nativeId,
+            sameNativeThread,
+            delivered: projection.contextHandoffs.filter(
+              (delivered) =>
+                delivered.toProviderThreadId === providerThread.id &&
+                delivered.delivery?.nativeThreadId ===
+                  runningProviderThread.nativeThreadRef?.nativeId &&
+                delivered.delivery?.status !== "pending",
+            ),
+          }),
       );
       const persistHandoff = Effect.fn("ProviderTurnStartService.persist")(function* (
         handoff: OrchestrationV2ContextHandoff,

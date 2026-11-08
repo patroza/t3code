@@ -10,8 +10,8 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionId,
-  ProviderThreadId,
   ProviderTurnId,
+  ProviderThreadId,
   RuntimeRequestId,
   ScheduledTaskId,
   ThreadId,
@@ -21,6 +21,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
@@ -38,6 +39,7 @@ import * as EffectWorker from "./EffectWorker.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
+import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
@@ -53,6 +55,9 @@ const adapter = {
 } as ProviderAdapter.ProviderAdapterV2["Service"];
 const layerDatabase = SqlitePersistence.layerMemory;
 const layerTest = ThreadManagementService.layer.pipe(
+  Layer.provide(
+    Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({ get: () => Effect.succeed(null) }),
+  ),
   Layer.provideMerge(
     Layer.mergeAll(
       layerDatabase,
@@ -649,6 +654,81 @@ it.effect("a repeated Stop that changes nothing still stops the delegated tasks"
       ["stop-again:first", "stop-again:second"],
     );
   }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect.each([1, 2, 8])(
+  "Stop visits each descendant once with %s historical tasks per child",
+  (tasksPerChild) =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
+      const rootThreadId = ThreadId.make("thread:stop-history");
+      yield* createWatchingThread(rootThreadId, 30);
+      yield* send(rootThreadId, "work", "start_immediately");
+      const descendants: Array<ThreadId> = [];
+      let parentThreadId = rootThreadId;
+      for (let depth = 0; depth < 3; depth++) {
+        const childThreadId = yield* delegate(parentThreadId, `history child ${depth}`);
+        const task = (yield* orchestrator.getThreadProjection(parentThreadId)).subagents[0]!;
+        // Published tasks and later follow-ups all retain the same child thread.
+        for (let history = 1; history < tasksPerChild; history++) {
+          const taskId = NodeId.make(`node:stop-history:${depth}:${history}`);
+          yield* projections.apply({
+            id: EventId.make(`event:stop-history:${depth}:${history}`),
+            type: "subagent.updated",
+            threadId: parentThreadId,
+            runId: task.runId!,
+            nodeId: taskId,
+            occurredAt: yield* DateTime.now,
+            payload: { ...task, id: taskId, status: "completed" },
+          });
+        }
+        descendants.push(childThreadId);
+        parentThreadId = childThreadId;
+      }
+
+      const stopped: Array<ThreadId> = [];
+      const read: Array<ThreadId> = [];
+      const measuredOrchestrator = Orchestrator.OrchestratorV2.of({
+        ...orchestrator,
+        dispatch: (command) =>
+          Effect.sync(() => {
+            if (command.type === "thread.stop") stopped.push(command.threadId);
+          }).pipe(Effect.andThen(orchestrator.dispatch(command))),
+        getThreadRecords: (threadId, fields, filter) =>
+          Effect.sync(() => read.push(threadId)).pipe(
+            Effect.andThen(orchestrator.getThreadRecords(threadId, fields, filter)),
+          ),
+      });
+      const commandId = CommandId.make("stop-history");
+      yield* Effect.gen(function* () {
+        const threads = yield* ThreadManagementService.ThreadManagementService;
+        yield* threads.stopDelegatedTasks({ threadId: rootThreadId, commandId });
+      }).pipe(
+        Effect.provide(
+          Layer.fresh(ThreadManagementService.layer).pipe(
+            Layer.provide(
+              Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({
+                get: () => Effect.succeed(null),
+              }),
+            ),
+            Layer.provide(Layer.succeed(Orchestrator.OrchestratorV2, measuredOrchestrator)),
+          ),
+        ),
+      );
+
+      // Check real persisted state and receipts before asserting traversal cost.
+      for (const threadId of descendants) {
+        assert.deepEqual((yield* threadState(threadId)).runs, ["interrupted"]);
+        const receipt = yield* receipts.getByCommandId(
+          CommandId.make(`${commandId}:stop:${threadId}`),
+        );
+        assert.isTrue(Option.isSome(receipt));
+      }
+      assert.deepEqual(stopped, descendants);
+      assert.deepEqual(read, [rootThreadId, ...descendants]);
+    }).pipe(Effect.provide(layerTest)),
 );
 
 it.effect.each(["thread.stop", "run.interrupt"] as const)(

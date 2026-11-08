@@ -1,3 +1,4 @@
+import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as DocumentText from "../provider/DocumentText.ts";
 import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -50,7 +51,6 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import * as ProviderReplayHarness from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
-import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
@@ -561,6 +561,9 @@ const makeLaptop = (
       ),
     );
     const layerThreads = ThreadManagement.layer.pipe(
+      Layer.provide(
+        Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({ get: () => Effect.succeed(null) }),
+      ),
       Layer.provide(CommandReceiptStore.layer.pipe(Layer.provide(layerDatabase))),
       Layer.provideMerge(Layer.merge(layerOrchestrator, ServerSettings.layerTest())),
     );

@@ -24,6 +24,7 @@ import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
@@ -486,9 +487,12 @@ it.effect.each(deliveries)(
         Effect.provide(
           Layer.mergeAll(
             IdAllocator.layer,
-            McpProviderSessions.layer,
             NodeServices.layer,
             NodeCrypto.layer,
+            McpProviderSessions.layer,
+            Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({
+              get: () => Effect.succeed(null),
+            }),
           ),
         ),
       ),

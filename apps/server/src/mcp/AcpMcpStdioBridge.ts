@@ -1,5 +1,4 @@
 // Relay JSON-RPC verbatim; schema decoding would reject foreign payloads.
-// @effect-diagnostics globalJsonInEffect:off
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";

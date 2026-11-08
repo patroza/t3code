@@ -3,6 +3,9 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import { reconcileV2PreviewMigration } from "./reconcileV2PreviewMigration.ts";
 
+import { forkMigrationTable, makeForkMigrationLoader } from "./ForkMigrations.ts";
+import { bootstrapMigrationNamespaces, upstreamMigrationTable } from "./MigrationBootstrap.ts";
+
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
 import Migration0002 from "./Migrations/002_OrchestrationCommandReceipts.ts";
 import Migration0003 from "./Migrations/003_CheckpointDiffBlobs.ts";
@@ -84,7 +87,7 @@ import Migration0078 from "./Migrations/078_DropOrchestrationEventCorrelationInd
 import Migration0079 from "./Migrations/079_DelegatedRecoveryIndexes.ts";
 import Migration0080 from "./Migrations/080_ScheduledTaskThreadMode.ts";
 
-const migrationEntries = [
+export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
   [2, "OrchestrationCommandReceipts", Migration0002],
   [3, "CheckpointDiffBlobs", Migration0003],
@@ -170,7 +173,7 @@ const migrationEntries = [
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
 
-const makeMigrationLoader = (throughId?: number) =>
+export const makeMigrationLoader = (throughId?: number) =>
   Migrator.fromRecord(
     Object.fromEntries(
       migrationEntries
@@ -226,13 +229,19 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
   const includesV2 =
     toMigrationInclusive === undefined || toMigrationInclusive >= FIRST_V2_MIGRATION_ID;
   const previewMigrations = includesV2 ? yield* reconcileV2PreviewMigration() : [];
+  yield* bootstrapMigrationNamespaces();
   if (includesV2) {
     yield* assertV2MigrationsCanRun(toMigrationInclusive);
   }
-  const executedMigrations = [
-    ...previewMigrations,
-    ...(yield* run({ loader: makeMigrationLoader(toMigrationInclusive) })),
-  ];
+  const upstreamMigrations = yield* run({
+    loader: makeMigrationLoader(toMigrationInclusive),
+    table: upstreamMigrationTable,
+  });
+  const forkMigrations =
+    toMigrationInclusive === undefined
+      ? yield* run({ loader: makeForkMigrationLoader(), table: forkMigrationTable })
+      : [];
+  const executedMigrations = [...previewMigrations, ...upstreamMigrations, ...forkMigrations];
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
   yield* migrations.length === 0
     ? Effect.logDebug("Database schema is current")

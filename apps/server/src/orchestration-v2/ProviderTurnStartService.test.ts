@@ -1198,6 +1198,7 @@ effectIt.effect(
         Effect.fail(
           new GitCommandError({
             operation: "worktree-add",
+            failureKind: "unknown",
             command: "git worktree add",
             cwd: "/tmp/native-account-project",
             detail: "fatal: private git diagnostic",

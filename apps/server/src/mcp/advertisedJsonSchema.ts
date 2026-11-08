@@ -1,4 +1,5 @@
 import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
 import { Tool } from "effect/ai";
 
 type Json = unknown;
@@ -64,7 +65,14 @@ const mergeTaggedObjects = (branches: ReadonlyArray<Json>): JsonObject | undefin
   const requiredByAll = first.filter(
     (name) => name !== tag && others.every((required) => required.includes(name)),
   );
-  return { type: "object", properties, required: [tag, ...requiredByAll] };
+  return {
+    type: "object",
+    properties,
+    required: [tag, ...requiredByAll],
+    ...(objects.every((object) => object.additionalProperties === false)
+      ? { additionalProperties: false }
+      : {}),
+  };
 };
 
 const compact = (schema: Json, optional: boolean): Json => {
@@ -102,5 +110,18 @@ const compact = (schema: Json, optional: boolean): Json => {
  * the `null` branch of optional properties. A tagged union of objects becomes one object.
  * Decoding still uses the full schema, so each tag's own required fields still apply.
  */
-export const advertisedJsonSchema = (tool: Tool.Any) =>
-  compact(Tool.getJsonSchema(tool), false) as ReturnType<typeof Tool.getJsonSchema>;
+export const advertisedJsonSchema = (tool: Tool.Any) => {
+  if (Tool.getStrictMode(tool) !== true) {
+    return compact(Tool.getJsonSchema(tool), false) as ReturnType<typeof Tool.getJsonSchema>;
+  }
+  // Match McpServer's strict decoder when replacing its advertised codec schema.
+  const document = Schema.toJsonSchemaDocument(tool.parametersSchema, {
+    onExcessProperty: "error",
+  });
+  return compact(
+    Object.keys(document.definitions).length === 0
+      ? document.schema
+      : { ...document.schema, $defs: document.definitions },
+    false,
+  ) as ReturnType<typeof Tool.getJsonSchema>;
+};

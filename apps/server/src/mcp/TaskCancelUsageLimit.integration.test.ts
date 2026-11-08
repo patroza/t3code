@@ -1,3 +1,4 @@
+import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -174,6 +175,11 @@ it.effect.each([
         );
         const layerTest = Layer.merge(
           OrchestratorMcpService.layer.pipe(
+            Layer.provide(
+              Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({
+                get: () => Effect.succeed(null),
+              }),
+            ),
             Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
             Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
           ),
@@ -183,6 +189,9 @@ it.effect.each([
           Layer.provide(
             Layer.mergeAll(
               layerAdapters,
+              Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({
+                get: () => Effect.succeed(null),
+              }),
               Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
               Layer.mock(ProjectService.ProjectService)({}),
               Layer.mock(SecretRequests.SecretRequests)({}),

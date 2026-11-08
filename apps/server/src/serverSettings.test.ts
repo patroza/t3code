@@ -915,6 +915,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
           providers: {
             codex: { binaryPath: "/opt/guard/bin/codex" },
             claudeAgent: { enabled: false },
+            kimi: { binaryPath: "/opt/guard/bin/kimi", customModels: ["kimi-custom"] },
             cursor: { enabled: false },
             grok: { enabled: false },
             opencode: { enabled: false },
@@ -934,6 +935,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
           enabled: false,
           config: {},
         },
+        [ProviderInstanceId.make("kimi")]: {
+          driver: ProviderDriverKind.make("kimi"),
+          config: { binaryPath: "/opt/guard/bin/kimi", customModels: ["kimi-custom"] },
+        },
       });
 
       const persisted = JSON.parse(yield* fileSystem.readFileString(serverConfig.settingsPath));
@@ -942,6 +947,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
       assert.deepEqual(persisted.providerInstances.codex, {
         driver: "codex",
         config: { binaryPath: "/opt/guard/bin/codex" },
+      });
+      assert.deepEqual(persisted.providerInstances.kimi, {
+        driver: "kimi",
+        config: { binaryPath: "/opt/guard/bin/kimi", customModels: ["kimi-custom"] },
       });
     }).pipe(Effect.provide(layerServerSettings())),
   );
@@ -1819,6 +1828,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
         "cloudSpeechCredentials.openrouter",
         "easDeviceHosts.[].accessToken",
         "simlockDeviceHosts.[].agentToken",
+        "providers.antigravity.apiKey",
         "usageLimitSources.*.managementKey",
       ]);
     }),

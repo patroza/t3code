@@ -1,3 +1,4 @@
+import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -119,6 +120,9 @@ const layerTest = Layer.mergeAll(
   RuntimeLayer.layerEventSink,
   ThreadCommandExecutor.layer,
 ).pipe(
+  Layer.provide(
+    Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({ get: () => Effect.succeed(null) }),
+  ),
   Layer.provideMerge(RuntimeLayer.layerProjectService),
   Layer.provide(
     Layer.mock(WorkspacePaths.WorkspacePaths)({

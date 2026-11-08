@@ -59,6 +59,7 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import { buildUnavailableProviderSnapshot } from "../provider/unavailableProviderSnapshot.ts";
+import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -2097,6 +2098,16 @@ describe("OrchestratorMcpService provider resolution", () => {
             },
           });
           const layerThreads = ThreadManagementService.layer.pipe(
+            Layer.provide(
+              Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({
+                get: () => Effect.succeed(null),
+              }),
+            ),
+            Layer.provide(
+              Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({
+                get: () => Effect.succeed(null),
+              }),
+            ),
             Layer.provideMerge(layerOrchestrator),
             Layer.provide(
               LegacyV1ThreadImporter.layer.pipe(
@@ -2988,7 +2999,13 @@ describe("OrchestratorMcpService provider resolution", () => {
       Effect.gen(function* () {
         const saved = yield* Ref.make<ReadonlyArray<ScheduledTask["workspaceStrategy"]>>([]);
         const gitFailure = (cwd: string, detail: string) =>
-          new GitCommandError({ operation: "GitVcsDriver.test", command: "git", cwd, detail });
+          new GitCommandError({
+            operation: "GitVcsDriver.test",
+            command: "git",
+            cwd,
+            detail,
+            failureKind: "unknown",
+          });
         const mcp = yield* OrchestratorMcpService.OrchestratorMcpService.pipe(
           Effect.provide(
             service(
@@ -3662,6 +3679,11 @@ describe("OrchestratorMcpService thread stop", () => {
           { databaseLayer: layerDatabase, runEffectWorker: false },
         );
         const layerThreads = ThreadManagementService.layer.pipe(
+          Layer.provide(
+            Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({
+              get: () => Effect.succeed(null),
+            }),
+          ),
           Layer.provideMerge(layerOrchestrator),
           Layer.provide(ServerSettings.layerTest()),
           Layer.provide(CommandReceiptStore.layer.pipe(Layer.provide(layerDatabase))),

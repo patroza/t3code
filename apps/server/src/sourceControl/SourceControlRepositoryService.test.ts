@@ -177,6 +177,14 @@ it.effect("clones a looked-up repository after creating missing parent directori
           cwd: parent,
           args: ["clone", "--progress", "--", CLONE_URLS.url, "t3code"],
         },
+        {
+          cwd: destinationPath,
+          args: ["config", "core.hooksPath", ".githooks"],
+        },
+        {
+          cwd: destinationPath,
+          args: ["checkout", "--force", "HEAD"],
+        },
       ]);
     }).pipe(
       Effect.provide(
@@ -186,8 +194,27 @@ it.effect("clones a looked-up repository after creating missing parent directori
               Effect.gen(function* () {
                 assert.isTrue(yield* fs.exists(parent).pipe(Effect.orDie));
                 cloneCalls.push({ cwd: input.cwd, args: input.args });
+                if (input.args[0] === "clone") {
+                  yield* fs.makeDirectory(`${destinationPath}/.githooks`, { recursive: true });
+                  yield* fs.writeFileString(
+                    `${destinationPath}/.githooks/post-checkout`,
+                    "#!/bin/sh\n",
+                  );
+                }
                 return processOutput();
-              }),
+              }).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new GitCommandError({
+                      operation: input.operation,
+                      command: `git ${input.args.join(" ")}`,
+                      cwd: input.cwd,
+                      failureKind: "unknown",
+                      detail: "Could not create the clone fixture.",
+                      cause,
+                    }),
+                ),
+              ),
           },
         }),
       ),
@@ -273,6 +300,7 @@ it.effect("reports clone progress from git's stderr and keeps its error text on 
                   cwd: input.cwd,
                   detail: "Git command exited with a non-zero status.",
                   exitCode: 128,
+                  failureKind: "unknown",
                 });
               }),
           },
@@ -315,6 +343,7 @@ function rejectingSsh(
           command: "git",
           cwd: input.cwd,
           reason,
+          failureKind: "unknown",
           detail: "Git command exited with a non-zero status.",
         });
       }),
@@ -439,6 +468,7 @@ it.effect.each([
               );
               return yield* new GitCommandError({
                 operation: input.operation,
+                failureKind: "unknown",
                 command: "git",
                 cwd: input.cwd,
                 detail: "Git command exited with a non-zero status.",
@@ -616,6 +646,7 @@ function failingPush(reason?: GitCommandError["reason"]) {
     pushCurrentBranch: (cwd: string) =>
       Effect.fail(
         new GitCommandError({
+          failureKind: "unknown",
           operation: "GitVcsDriver.pushCurrentBranch.pushWithRequestedRemote",
           command: "git",
           cwd,
@@ -747,6 +778,7 @@ it.effect("publish succeeds with status remote_added when the local repo has no 
                     operation: input.operation,
                     command: "git rev-parse --verify HEAD",
                     cwd: input.cwd,
+                    failureKind: "unknown",
                     detail: "fatal: Needed a single revision",
                   }),
                 )

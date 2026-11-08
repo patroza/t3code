@@ -14,6 +14,7 @@ import { acpMcpBridgeCommand, acpMcpCallCommand } from "./cli/acpMcpBridge.ts";
 import { authCommand } from "./cli/auth.ts";
 import { environmentCommand } from "./cli/environment.ts";
 import { appCommand } from "./cli/app.ts";
+import { backfillGrokCommand } from "./cli/backfillGrok.ts";
 import { browserCommand } from "./cli/browser.ts";
 import { pairCommand } from "./cli/pair.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
@@ -33,9 +34,15 @@ import { servicePreflightCommand } from "./cli/servicePreflight.ts";
 import { themeCommand } from "./cli/theme.ts";
 import { traceCommand } from "./cli/trace.ts";
 import { triageCommand } from "./cli/triage.ts";
+import * as IdentityService from "./identity/IdentityService.ts";
 import { connectCommand, statusCommand, upCommand } from "./cli/up.ts";
 
-const layerCliRuntime = Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, NetService.layer);
+const layerCliRuntime = Layer.mergeAll(
+  NodeServices.layer,
+  NodeCrypto.layer,
+  NetService.layer,
+  IdentityService.layer,
+);
 
 const connectPublicConfigMissingMessage =
   "T3 Connect commands are unavailable: this build is missing T3 Connect public configuration.";
@@ -84,6 +91,7 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
       environmentCommand,
       browserCommand,
       projectCommand,
+      backfillGrokCommand,
       threadCommand,
       upCommand,
       statusCommand,

@@ -1,3 +1,4 @@
+import { resolveCurrentProviderEnvironment } from "../../provider/DirenvEnvironment.ts";
 import * as DocumentText from "../../provider/DocumentText.ts";
 import {
   compactDynamicToolOutput,
@@ -3652,7 +3653,13 @@ function claudeToolResultBlocksFromUserMessage(
   if (message.type !== "user" || typeof message.message.content === "string") {
     return [];
   }
-  return message.message.content.filter(isClaudeUserToolResultContentBlock);
+  const blocks: Array<ClaudeUserToolResultContentBlock> = [];
+  for (const part of message.message.content) {
+    if (isClaudeUserToolResultContentBlock(part)) {
+      blocks.push(part);
+    }
+  }
+  return blocks;
 }
 
 function claudeToolResultEntriesFromMessage(message: SDKMessage): ReadonlyArray<{
@@ -10928,7 +10935,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               ? {}
               : { sdkSettings: claudeSdkLaunchArgSettings(launchArgSettings) }),
             environment: claudeQueryEnvironment(
-              adapterOptions.environment,
+              yield* resolveCurrentProviderEnvironment(
+                turnInput.runtimePolicy.cwd ?? process.cwd(),
+                adapterOptions.environment,
+              ),
               turnInput.appThread,
               turnInput.appThread.lineage.relationshipToParent === "subagent"
                 ? yield* resolveSubagentPromptCacheTtl(turnInput.runtimePolicy.cwd)

@@ -86,10 +86,7 @@ export function withOutputWindow(
         } else if (response._tag === "Chunk") {
           const window = windowFor(clientId, String(response.requestId));
           if (window) {
-            window.sizes.push(
-              // @effect-diagnostics-next-line globalJsonInEffect:off
-              window.bytes ? Buffer.byteLength(JSON.stringify(response)) : 0,
-            );
+            window.sizes.push(window.bytes ? Buffer.byteLength(JSON.stringify(response)) : 0);
             if (!isFull(window.sizes)) {
               return send.pipe(
                 Effect.andThen(() =>
