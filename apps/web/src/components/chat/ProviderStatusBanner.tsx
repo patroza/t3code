@@ -9,6 +9,7 @@ import { InfoIcon, XIcon } from "lucide-react";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "../ui/alert";
 import { Button, InlineButton } from "../ui/button";
 import { formatProviderDriverKindLabel } from "../../providerModels";
+import { ErrorDetailText } from "../ui/errorDetailText";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -152,7 +153,9 @@ export const ProviderStatusBanner = memo(function ProviderStatusBanner({
         <AlertDescription>
           <div className="flex flex-col gap-2">
             <Tooltip>
-              <TooltipTrigger render={<div className="line-clamp-3" />}>{message}</TooltipTrigger>
+              <TooltipTrigger render={<div className="line-clamp-3" />}>
+                <ErrorDetailText showCopy={status.status === "error"} text={message} />
+              </TooltipTrigger>
               <TooltipPopup side="top" className="whitespace-pre-wrap">
                 {message}
               </TooltipPopup>

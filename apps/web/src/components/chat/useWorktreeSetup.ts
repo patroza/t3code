@@ -1,3 +1,4 @@
+import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { ThreadStructure } from "@t3tools/client-runtime/state/shell";
 import type {
   EnvironmentId,
@@ -73,13 +74,16 @@ export function useWorktreeSetup(input: {
       : null,
   );
   const latestSnapshot = snapshotQuery.data;
+  // A newer snapshot replaces the held one; a late older one for the same
+  // thread does not. Switching routes drops it.
+  const routeThreadKey = scopedThreadKey(routeThreadRef);
   const [heldFor, setHeldFor] = useState<{
-    readonly routeThreadRef: ScopedThreadRef;
+    readonly routeThreadKey: string;
     readonly latestSnapshot: WorktreeSetupSnapshot | null | undefined;
-  }>({ routeThreadRef, latestSnapshot: null });
-  if (heldFor.routeThreadRef !== routeThreadRef || heldFor.latestSnapshot !== latestSnapshot) {
-    const routeChanged = heldFor.routeThreadRef !== routeThreadRef;
-    setHeldFor({ routeThreadRef, latestSnapshot });
+  }>({ routeThreadKey, latestSnapshot: null });
+  if (heldFor.routeThreadKey !== routeThreadKey || heldFor.latestSnapshot !== latestSnapshot) {
+    const routeChanged = heldFor.routeThreadKey !== routeThreadKey;
+    setHeldFor({ routeThreadKey, latestSnapshot });
     if (routeChanged) {
       setHeldSnapshot(null);
     } else if (latestSnapshot) {

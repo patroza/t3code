@@ -8,7 +8,10 @@ import {
   type ServerProviderSkill,
   ThreadId,
 } from "@t3tools/contracts";
-import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
+import {
+  resolveUserMessagePresentation,
+  userMessageSenderCaption,
+} from "@t3tools/client-runtime/user-message";
 import { Link } from "@tanstack/react-router";
 import { useQuietThreadShell } from "../../state/entities";
 import { useEnvironmentQuery } from "../../state/query";
@@ -426,6 +429,12 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   const { onImageExpand, onFileOpen } = ctx;
   const coarsePointer = useMediaQuery({ pointer: "coarse" });
   const senderThreadId = row.message.senderThreadId;
+  const senderCaption = userMessageSenderCaption({
+    createdBy: row.message.createdBy,
+    source: row.message.source ?? ctx.messageSourceById?.get(row.message.id),
+    originSource: ctx.originSource,
+    viewer: ctx.messageViewer,
+  });
   const resources = selectMessageImageResources(row.message.attachments);
   const previewUrls = useAssetUrls(ctx.activeThreadEnvironmentId, resources);
   const [projectPreviews] = useState(createMessageAttachmentPreviewProjector);
@@ -834,6 +843,23 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           data-user-message-attribution="t3code"
         >
           Sent by T3 Code
+        </p>
+      ) : senderCaption ? (
+        <p
+          className="me-1 text-2xs text-muted-foreground/70"
+          data-user-message-attribution="sender"
+        >
+          {senderThreadId ? (
+            <InlineButton
+              onClick={() => ctx.onOpenThread(senderThreadId)}
+              tone="muted"
+              aria-label="Open sending thread"
+            >
+              {senderCaption}
+            </InlineButton>
+          ) : (
+            senderCaption
+          )}
         </p>
       ) : null}
       {/* The row's heading already names the guest for screen readers. */}

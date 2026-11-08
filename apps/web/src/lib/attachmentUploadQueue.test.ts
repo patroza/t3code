@@ -22,7 +22,8 @@ const mocks = vi.hoisted(() => ({
   readPreparedConnection: vi.fn(),
 }));
 
-vi.mock("@t3tools/client-runtime/state/runtime", () => ({
+vi.mock("@t3tools/client-runtime/state/runtime", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   executeAtomQuery: mocks.executeAtomQuery,
   runAtomCommand: mocks.runAtomCommand,
   squashAtomCommandFailure: (result: { readonly error: unknown }) => result.error,

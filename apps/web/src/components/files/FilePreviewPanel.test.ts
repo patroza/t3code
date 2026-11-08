@@ -107,6 +107,30 @@ describe("workspaceAssetResource", () => {
     absolutePath: "/repo/docs/index.html",
   };
 
+  it("preserves directory grants only for outside HTML previews", () => {
+    for (const extension of ["html", "htm", "HTML"]) {
+      expect(
+        workspaceAssetResource({
+          ...input,
+          absolutePath: `/tmp/report/index.${extension}`,
+          draft: false,
+        }),
+      ).toEqual({
+        _tag: "workspace-file",
+        threadId: input.threadRef.threadId,
+        path: `/tmp/report/index.${extension}`,
+      });
+    }
+    expect(
+      workspaceAssetResource({
+        ...input,
+        kind: "media-file",
+        absolutePath: "/tmp/report/index.html",
+        draft: false,
+      })._tag,
+    ).toBe("media-file");
+  });
+
   // regression: #21067 images outside the workspace load through the host media resource
   it("serves a file outside the workspace as host media and keeps workspace files on workspace access", () => {
     expect(

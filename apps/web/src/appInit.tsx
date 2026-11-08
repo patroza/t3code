@@ -66,6 +66,9 @@ function startClientAppearance(): void {
     const settings = getClientSettings();
     const previous = applied;
     applied = settings;
+    if (previous?.redesignEnabled !== settings.redesignEnabled) {
+      root.toggleAttribute("data-redesign", settings.redesignEnabled);
+    }
     const separateFonts = readLocalStorageValue(
       TYPOGRAPHY_ADVANCED_STORAGE_KEY,
       false,

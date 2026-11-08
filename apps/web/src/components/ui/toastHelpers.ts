@@ -41,6 +41,8 @@ export function stackedThreadToast(
   }
   if (priority !== undefined) {
     payload.priority = priority;
+  } else if (type === "error") {
+    payload.priority = "high";
   }
   if (actionProps !== undefined) {
     payload.actionProps = actionProps;

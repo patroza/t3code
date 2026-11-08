@@ -24,10 +24,12 @@ import {
   ADD_TO_MACHINE_LABEL_CLASS,
   type EnvMode,
   type EnvironmentOption,
+  type WorkspaceTarget,
   resolveContextStripLabelsCompact,
   resolveCurrentWorkspaceLabel,
   resolveEnvModeLabel,
   resolveLockedWorkspaceLabel,
+  resolveWorkspaceTarget,
   resolvePreviousWorktreeLabel,
   resolvePreviousWorktreeSeed,
   shouldShowEnvironmentIndicator,
@@ -86,12 +88,16 @@ interface BranchToolbarProps {
   isServerThread: boolean;
   showGitControls: boolean;
   draftId?: DraftId;
-  onEnvModeChange: (mode: EnvMode) => void;
-  envMode: EnvMode;
+  onWorkspaceTargetChange?: (target: WorkspaceTarget) => void;
+  onEnvModeChange?: (mode: EnvMode) => void;
+  effectiveEnvModeOverride?: EnvMode;
+  envMode?: EnvMode;
   activeThreadBranchOverride?: string | null;
   onActiveThreadBranchOverrideChange?: (branch: string | null) => void;
   startFromOrigin: boolean;
   onStartFromOriginChange: (startFromOrigin: boolean) => void;
+  reuseBaseBranch?: boolean;
+  onReuseBaseBranchChange?: (reuseBaseBranch: boolean) => void;
   autoEnvironmentLabel?: string | undefined;
   onAutoEnvironment?: (() => void) | undefined;
   envLocked: boolean;
@@ -152,9 +158,9 @@ interface RunContextSelectorProps {
   showEnvironmentPicker: boolean;
   showEnvironmentIndicator: boolean;
   onEnvironmentChange: ((environmentId: EnvironmentId) => void) | undefined;
-  effectiveEnvMode: EnvMode;
+  workspaceTarget: WorkspaceTarget;
   activeWorktreePath: string | null;
-  onEnvModeChange: (mode: EnvMode) => void;
+  onWorkspaceTargetChange: (target: WorkspaceTarget) => void;
   previousWorktreeLabel: string | null;
   previousWorktreeBranch: string | null;
   onUsePreviousWorktree: () => void;
@@ -175,9 +181,9 @@ const RunContextSelector = memo(function RunContextSelector({
   showEnvironmentPicker,
   showEnvironmentIndicator,
   onEnvironmentChange,
-  effectiveEnvMode,
+  workspaceTarget,
   activeWorktreePath,
-  onEnvModeChange,
+  onWorkspaceTargetChange,
   previousWorktreeLabel,
   previousWorktreeBranch,
   onUsePreviousWorktree,
@@ -188,22 +194,27 @@ const RunContextSelector = memo(function RunContextSelector({
   const activeEnvironment =
     availableEnvironments?.find((env) => env.environmentId === environmentId) ?? null;
   const WorkspaceIcon =
-    effectiveEnvMode === "worktree"
+    workspaceTarget === "worktree"
       ? FolderGit2Icon
-      : activeWorktreePath
+      : workspaceTarget === "current-worktree"
         ? FolderGitIcon
         : FolderIcon;
   const workspaceLabel = forceNewWorktree
     ? resolveEnvModeLabel("worktree")
     : envModeLocked
-      ? resolveLockedWorkspaceLabel(activeWorktreePath, effectiveEnvMode)
-      : effectiveEnvMode === "worktree"
+      ? resolveLockedWorkspaceLabel(
+          activeWorktreePath,
+          workspaceTarget === "local" ? "local" : "worktree",
+        )
+      : workspaceTarget === "worktree"
         ? resolveEnvModeLabel("worktree")
-        : resolveCurrentWorkspaceLabel(activeWorktreePath);
+        : workspaceTarget === "current-worktree"
+          ? resolveCurrentWorkspaceLabel(activeWorktreePath)
+          : resolveEnvModeLabel("local");
   const isPanel = displayMode === "panel";
   const isLocked = envLocked || (envModeLocked && (!isPanel || !showEnvironmentPicker));
   const workspacePath =
-    forceNewWorktree || (effectiveEnvMode === "worktree" && !activeWorktreePath)
+    forceNewWorktree || (workspaceTarget === "worktree" && !activeWorktreePath)
       ? null
       : (activeWorktreePath ?? workspaceRoot);
   const handleContextMenu = (event: ReactMouseEvent) => {
@@ -394,25 +405,29 @@ const RunContextSelector = memo(function RunContextSelector({
         <MenuGroup>
           <MenuGroupLabel>Workspace</MenuGroupLabel>
           <MenuRadioGroup
-            value={effectiveEnvMode}
+            value={workspaceTarget}
             onValueChange={(value) => {
               if (value === "previous-worktree") {
                 onUsePreviousWorktree();
                 return;
               }
-              onEnvModeChange(value as EnvMode);
+              onWorkspaceTargetChange(value as WorkspaceTarget);
             }}
           >
             <MenuRadioItem disabled={envModeLocked || forceNewWorktree} value="local" closeOnClick>
               <span className="flex min-w-0 items-center gap-1.5">
-                {activeWorktreePath ? (
-                  <FolderGitIcon className="size-3" />
-                ) : (
-                  <FolderIcon className="size-3" />
-                )}
-                <MiddleTruncate value={resolveCurrentWorkspaceLabel(activeWorktreePath)} />
+                <FolderIcon className="size-3" />
+                <span className="min-w-0 truncate">{resolveEnvModeLabel("local")}</span>
               </span>
             </MenuRadioItem>
+            {activeWorktreePath ? (
+              <MenuRadioItem disabled={envModeLocked} value="current-worktree" closeOnClick>
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <FolderGitIcon className="size-3" />
+                  <MiddleTruncate value={resolveCurrentWorkspaceLabel(activeWorktreePath)} />
+                </span>
+              </MenuRadioItem>
+            ) : null}
             <MenuRadioItem disabled={envModeLocked} value="worktree" closeOnClick>
               <span className="flex min-w-0 items-center gap-1.5">
                 <FolderGit2Icon className="size-3" />
@@ -604,12 +619,16 @@ export const BranchToolbar = memo(function BranchToolbar({
   isServerThread,
   showGitControls,
   draftId,
-  onEnvModeChange,
+  onEnvModeChange = () => {},
+  onWorkspaceTargetChange: requestedWorkspaceTargetChange,
+  effectiveEnvModeOverride,
   envMode,
   activeThreadBranchOverride,
   onActiveThreadBranchOverrideChange,
   startFromOrigin,
   onStartFromOriginChange,
+  reuseBaseBranch = false,
+  onReuseBaseBranchChange = () => {},
   autoEnvironmentLabel,
   onAutoEnvironment,
   envLocked,
@@ -619,6 +638,9 @@ export const BranchToolbar = memo(function BranchToolbar({
   onEnvironmentChange,
   trailing,
 }: BranchToolbarProps) {
+  const onWorkspaceTargetChange =
+    requestedWorkspaceTargetChange ??
+    ((target: WorkspaceTarget) => onEnvModeChange(target === "local" ? "local" : "worktree"));
   const branchSelectorRef = useRef<BranchToolbarBranchSelectorHandle>(null);
   const threadRef = scopeThreadRef(environmentId, threadId);
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
@@ -626,8 +648,11 @@ export const BranchToolbar = memo(function BranchToolbar({
   const activeProjectRef = scopeProjectRef(environmentId, projectId);
   const activeProject = useProject(activeProjectRef);
   const activeWorktreePath = forceNewWorktree ? null : worktreePath;
-  const effectiveEnvMode = forceNewWorktree ? "worktree" : envMode;
+  const effectiveEnvMode = forceNewWorktree
+    ? "worktree"
+    : (effectiveEnvModeOverride ?? envMode ?? (activeWorktreePath ? "worktree" : "local"));
   const envModeLocked = envLocked || (isServerThread && activeWorktreePath !== null);
+  const workspaceTarget = resolveWorkspaceTarget({ effectiveEnvMode, activeWorktreePath });
 
   const canUsePreviousWorktree = !isServerThread && !envModeLocked && !forceNewWorktree;
   const projectRefsForWorktreeLookup = canUsePreviousWorktree ? [activeProjectRef] : [];
@@ -705,9 +730,9 @@ export const BranchToolbar = memo(function BranchToolbar({
             showEnvironmentPicker={showEnvironmentPicker}
             showEnvironmentIndicator={activeEnvironmentOption !== null}
             onEnvironmentChange={onEnvironmentChange}
-            effectiveEnvMode={effectiveEnvMode}
+            workspaceTarget={workspaceTarget}
+            onWorkspaceTargetChange={onWorkspaceTargetChange}
             activeWorktreePath={activeWorktreePath}
-            onEnvModeChange={onEnvModeChange}
             previousWorktreeLabel={previousWorktreeLabel}
             previousWorktreeBranch={previousWorktreeSeed?.branch ?? null}
             onUsePreviousWorktree={onUsePreviousWorktree}
@@ -728,6 +753,8 @@ export const BranchToolbar = memo(function BranchToolbar({
             {...(onActiveThreadBranchOverrideChange ? { onActiveThreadBranchOverrideChange } : {})}
             startFromOrigin={startFromOrigin}
             onStartFromOriginChange={onStartFromOriginChange}
+            reuseBaseBranch={reuseBaseBranch}
+            onReuseBaseBranchChange={onReuseBaseBranchChange}
             {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}
             {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}
           />
@@ -755,9 +782,9 @@ export const BranchToolbar = memo(function BranchToolbar({
             showEnvironmentPicker={showEnvironmentPicker}
             showEnvironmentIndicator={showEnvironmentIndicator}
             onEnvironmentChange={onEnvironmentChange}
-            effectiveEnvMode={effectiveEnvMode}
+            workspaceTarget={workspaceTarget}
             activeWorktreePath={activeWorktreePath}
-            onEnvModeChange={onEnvModeChange}
+            onWorkspaceTargetChange={onWorkspaceTargetChange}
             previousWorktreeLabel={previousWorktreeLabel}
             previousWorktreeBranch={previousWorktreeSeed?.branch ?? null}
             onUsePreviousWorktree={onUsePreviousWorktree}
@@ -799,8 +826,10 @@ export const BranchToolbar = memo(function BranchToolbar({
               forceNewWorktree={forceNewWorktree}
               envLocked={envModeLocked}
               effectiveEnvMode={effectiveEnvMode}
+              workspaceTarget={workspaceTarget}
+              onWorkspaceTargetChange={onWorkspaceTargetChange}
               activeWorktreePath={activeWorktreePath}
-              onEnvModeChange={onEnvModeChange}
+              onEnvModeChange={(mode) => onWorkspaceTargetChange(mode)}
               previousWorktreeLabel={previousWorktreeLabel}
               previousWorktreeBranch={previousWorktreeSeed?.branch ?? null}
               onUsePreviousWorktree={onUsePreviousWorktree}
@@ -823,6 +852,8 @@ export const BranchToolbar = memo(function BranchToolbar({
           {...(onActiveThreadBranchOverrideChange ? { onActiveThreadBranchOverrideChange } : {})}
           startFromOrigin={startFromOrigin}
           onStartFromOriginChange={onStartFromOriginChange}
+          reuseBaseBranch={reuseBaseBranch}
+          onReuseBaseBranchChange={onReuseBaseBranchChange}
           {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}
           {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}
         />

@@ -58,9 +58,12 @@ const emptyPreviewStateAtom = Atom.make<ThreadPreviewState>(EMPTY_THREAD_PREVIEW
   Atom.withLabel("preview:empty-thread"),
 );
 
+// Active preview sessions stay observed; idle thread atoms expire and rehydrate from the next snapshot.
+const PREVIEW_STATE_IDLE_TTL_MS = 5 * 60_000;
+
 export const previewStateAtom = Atom.family((threadKey: string) =>
   Atom.make<ThreadPreviewState>(EMPTY_THREAD_PREVIEW_STATE).pipe(
-    Atom.keepAlive,
+    Atom.setIdleTTL(PREVIEW_STATE_IDLE_TTL_MS),
     Atom.withLabel(`preview:thread:${threadKey}`),
   ),
 );
@@ -85,12 +88,7 @@ const activePreviewSessionsAtom = Atom.make((get) => {
   return byThreadKey;
 }).pipe(Atom.withLabel("preview:active-sessions"));
 
-/**
- * Every thread whose preview state has been written. Panel tabs and the mini
- * player follow those threads' states from a store this one cannot import
- * (rightPanelStore -> closedViewStore -> lib/utils -> composerDraftStore ->
- * previewStateStore is a cycle), so they subscribe through this index.
- */
+/** Index for panel and mini-player subscriptions; importing their stores here creates a cycle. */
 export const previewThreadRefsAtom = Atom.make<ReadonlyMap<string, ScopedThreadRef>>(
   new Map(),
 ).pipe(Atom.keepAlive, Atom.withLabel("preview:thread-refs"));
@@ -502,6 +500,12 @@ export function rememberPreviewUrl(ref: ScopedThreadRef, url: string): void {
     ...current,
     recentlySeenUrls: dedupeRecentUrls(current.recentlySeenUrls, url),
   }));
+}
+
+export function removePreviewThread(ref: ScopedThreadRef): void {
+  const threadKey = scopedThreadKey(ref);
+  appAtomRegistry.set(previewStateAtom(threadKey), EMPTY_THREAD_PREVIEW_STATE);
+  syncActivePreviewThread(threadKey, EMPTY_THREAD_PREVIEW_STATE);
 }
 
 export function isPreviewSupportedInRuntime(): boolean {

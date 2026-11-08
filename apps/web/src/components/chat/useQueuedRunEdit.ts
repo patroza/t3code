@@ -1,3 +1,4 @@
+import { queuedRunEditOwnership } from "@t3tools/client-runtime/state/threads";
 import { useAtomValue } from "@effect/atom-react";
 import {
   makeQueuedRunEditStore,
@@ -6,6 +7,7 @@ import {
 import type { ThreadStructure } from "@t3tools/client-runtime/state/shell";
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+  type CommandId,
   type ChatAttachment,
   type EnvironmentContextRecord,
   type EnvironmentId,
@@ -23,11 +25,12 @@ import {
   stripAttachmentOnlyBootstrapPrompt,
 } from "@t3tools/shared/composerContextReferences";
 import { Atom } from "effect/reactivity";
-import type { RefObject } from "react";
+import { useRef, type RefObject } from "react";
 import { useAssetUrls } from "../../assets/assetUrls";
 import {
   DraftId,
   useComposerDraftStore,
+  composerDraftHasUserContent,
   type ComposerFileAttachment,
   type ComposerImageAttachment,
   type ComposerThreadTarget,
@@ -58,6 +61,8 @@ import { prepareQueuedEditAttachments, recoverQueuedMessageEdit } from "./queued
 import type { EditQueuedRunRequest } from "./QueuedRunsControl";
 
 interface EditingQueuedRun {
+  readonly editId: CommandId;
+  readonly sequence: number;
   readonly threadId: ThreadId;
   readonly runId: RunId;
   readonly messageId: MessageId;
@@ -149,6 +154,7 @@ async function submitQueuedRunEdit(input: {
       input: {
         threadId: editing.threadId,
         runId: editing.runId,
+        editId: editing.editId,
         text: restoreAttachmentOnlyBootstrapPrompt(editText, uploads.length > 0),
         edit: {
           messageId: editing.messageId,
@@ -176,6 +182,18 @@ function useEditQueuedRunCommand() {
   return useAtomCommand(threadEnvironment.editQueuedRun, { reportFailure: false });
 }
 
+async function withEditAcquisition(
+  pending: { current: boolean },
+  acquire: () => Promise<void>,
+): Promise<void> {
+  pending.current = true;
+  try {
+    await acquire();
+  } finally {
+    pending.current = false;
+  }
+}
+
 /** Edits preserve the thread draft; attachment removals stay local until save. */
 export function useQueuedRunEdit(input: {
   readonly environmentId: EnvironmentId;
@@ -196,6 +214,9 @@ export function useQueuedRunEdit(input: {
     composerRef,
   } = input;
   const editQueuedRunCommand = useEditQueuedRunCommand();
+  const beginEditCommand = useAtomCommand(threadEnvironment.beginQueuedRunEdit);
+  const cancelEditCommand = useAtomCommand(threadEnvironment.cancelQueuedRunEdit);
+  const acquisitionInFlightRef = useRef(false);
   const editKey = scopedThreadKey(routeThreadRef);
   const storedEdit = useAtomValue(queuedRunEdits.atom)[editKey] ?? null;
   const editing = activeThreadId === null ? null : storedEdit;
@@ -226,18 +247,34 @@ export function useQueuedRunEdit(input: {
       .getState()
       .clearComposerContent(queuedEditDraftTarget(routeThreadRef, runId));
 
-  const beginEdit = useStableCallback((request: EditQueuedRunRequest) => {
-    if (activeThreadId === null) return;
-    if (editing !== null && editing.runId !== request.runId) clearEditDraft(editing.runId);
-    const target = queuedEditDraftTarget(routeThreadRef, request.runId);
-    const text = stripAttachmentOnlyBootstrapPrompt(request.text);
-    const store = useComposerDraftStore.getState();
-    store.clearComposerContent(target);
-    store.setPrompt(target, text);
-    const threadRef = { environmentId, threadId: activeThreadId };
-    queuedRunEdits.begin(
-      editKey,
-      {
+  const beginEdit = useStableCallback(async (request: EditQueuedRunRequest) => {
+    if (activeThreadId === null || acquisitionInFlightRef.current || isSaving) return;
+    if (editing !== null) {
+      if (editing.runId !== request.runId) {
+        toastManager.add({ type: "info", title: "Save or cancel your current queued edit first." });
+      }
+      focusComposerSoon();
+      return;
+    }
+    await withEditAcquisition(acquisitionInFlightRef, async () => {
+      const result = await beginEditCommand({
+        environmentId,
+        input: {
+          threadId: activeThreadId,
+          runId: request.runId,
+          previousEditId:
+            serverProjection?.runs.find((run) => run.id === request.runId)?.queueEditId ?? null,
+        },
+      });
+      if (result._tag !== "Success") return;
+      const target = queuedEditDraftTarget(routeThreadRef, request.runId);
+      const text = stripAttachmentOnlyBootstrapPrompt(request.text);
+      const store = useComposerDraftStore.getState();
+      if (!composerDraftHasUserContent(store.getComposerDraft(target)))
+        store.setPrompt(target, text);
+      const threadRef = { environmentId, threadId: activeThreadId };
+      const acquired: EditingQueuedRun = {
+        ...result.value,
         threadId: activeThreadId,
         runId: request.runId,
         messageId: request.messageId,
@@ -245,16 +282,19 @@ export function useQueuedRunEdit(input: {
         existingAttachments: request.attachments,
         context: serverProjection?.messages.find((message) => message.id === request.messageId)
           ?.context,
-      },
-      {
+      };
+      queuedRunEdits.begin(editKey, acquired, {
         runs: makeQueuedRunsAtom({
           threadId: activeThreadId,
           snapshot: threadEnvironment.snapshotAtom(environmentId),
           detailStatus: environmentThreadDetails.statusAtom(threadRef),
-          runs: Atom.make(
-            (get) =>
-              get(environmentThreadDetails.quietThreadAtom(threadRef))?.projection.runs ?? null,
-          ),
+          runs: Atom.make((get) => {
+            const state = get(environmentThreadDetails.stateAtom(threadRef));
+            if (queuedRunEditOwnership(state, acquired) === "lost") return [];
+            return (
+              get(environmentThreadDetails.quietThreadAtom(threadRef))?.projection.runs ?? null
+            );
+          }),
         }),
         // The run started or was cancelled from another client. A changed
         // edit moves into the thread's own draft when that draft is empty;
@@ -274,7 +314,7 @@ export function useQueuedRunEdit(input: {
           toastManager.add(
             stackedThreadToast({
               type: recovery === "kept" ? "info" : "warning",
-              title: "Queued message is no longer queued",
+              title: "Queued message edit ended",
               description:
                 recovery === "kept"
                   ? `Your unsaved edit${where} was kept in the composer.`
@@ -282,15 +322,26 @@ export function useQueuedRunEdit(input: {
             }),
           );
         },
-      },
-    );
-    focusComposerSoon();
+      });
+      focusComposerSoon();
+    });
   });
-  const cancelEdit = useStableCallback(() => {
-    if (editing === null) return;
-    clearEditDraft(editing.runId);
-    queuedRunEdits.end(editKey);
-    focusComposerSoon();
+  const cancelEdit = useStableCallback(async () => {
+    if (editing === null || acquisitionInFlightRef.current || isSaving) return;
+    await withEditAcquisition(acquisitionInFlightRef, async () => {
+      const state = appAtomRegistry.get(environmentThreadDetails.stateAtom(routeThreadRef));
+      const result =
+        queuedRunEditOwnership(state, editing) === "lost"
+          ? null
+          : await cancelEditCommand({
+              environmentId,
+              input: { threadId: editing.threadId, runId: editing.runId, editId: editing.editId },
+            });
+      if (result !== null && result._tag !== "Success") return;
+      clearEditDraft(editing.runId);
+      queuedRunEdits.end(editKey);
+      focusComposerSoon();
+    });
   });
   const removeEditingAttachment = useStableCallback((attachmentId: string) => {
     queuedRunEdits.update(editKey, (current) => ({
@@ -305,7 +356,7 @@ export function useQueuedRunEdit(input: {
     content: QueuedRunEditContent,
     setThreadError: (threadId: ThreadId, error: string | null) => void,
   ) => {
-    if (editing === null || isSaving) return;
+    if (editing === null || isSaving || acquisitionInFlightRef.current) return;
     const newAttachments = [...content.images, ...content.files];
     if (
       editing.existingAttachments.length + newAttachments.length >

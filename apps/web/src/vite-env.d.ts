@@ -26,6 +26,7 @@ interface ImportMeta {
 declare global {
   interface Window {
     desktopBridge?: DesktopBridge;
+    nativeApi?: import("@t3tools/contracts").LocalApi;
     /** Dev builds only, from DevReplayHost. Agents call these from the browser console. */
     t3dev?: {
       readonly replayScenarios: () => ReadonlyArray<string>;

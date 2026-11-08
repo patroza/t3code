@@ -1,5 +1,5 @@
 import { EnvironmentId } from "@t3tools/contracts";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { toastManager } from "./ui/toast";
 
@@ -81,7 +81,13 @@ async function startSession() {
 const click = (props: unknown) => (props as { onClick: () => unknown }).onClick();
 
 describe("recordPromptSent", () => {
-  vi.useFakeTimers();
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
 
   it("asks only after the focused page is idle", async () => {
     setup({ sent: 5 });
@@ -105,7 +111,6 @@ describe("recordPromptSent", () => {
     page.events.dispatchEvent(new Event("pointerdown"));
     await vi.advanceTimersByTimeAsync(IDLE_MS);
     expect(add).toHaveBeenCalledOnce();
-    vi.unstubAllGlobals();
   });
 
   it("asks after five prompts, once per session, and never again once closed", async () => {
@@ -126,14 +131,12 @@ describe("recordPromptSent", () => {
     session = await startSession();
     for (let sent = 0; sent < 10; sent++) await session.send();
     expect(add).toHaveBeenCalledTimes(2);
-    vi.unstubAllGlobals();
   });
 
   it("never asks when a dismissal could not be saved", async () => {
     setup({ sent: 5, writable: false });
     await (await startSession()).send();
     expect(add).not.toHaveBeenCalled();
-    vi.unstubAllGlobals();
   });
 
   it("never asks once the environment's GitHub account starred the repo", async () => {
@@ -142,7 +145,6 @@ describe("recordPromptSent", () => {
     starred.value = false;
     await (await startSession()).send();
     expect(add).not.toHaveBeenCalled();
-    vi.unstubAllGlobals();
   });
 
   it("skips an unavailable server check without permanently dismissing", async () => {
@@ -154,7 +156,6 @@ describe("recordPromptSent", () => {
     starred.failed = false;
     await (await startSession()).send();
     expect(add).toHaveBeenCalledOnce();
-    vi.unstubAllGlobals();
   });
 
   it("never asks when another tab dismisses it during the star check", async () => {
@@ -162,7 +163,6 @@ describe("recordPromptSent", () => {
     starred.duringCheck = () => store.set("t3code:github-star-prompt:dismissed", "true");
     await (await startSession()).send();
     expect(add).not.toHaveBeenCalled();
-    vi.unstubAllGlobals();
   });
   it("stars on click, opens GitHub when starring fails, and asks for a click once the click expired", async () => {
     const store = setup({ sent: 5 });
@@ -194,6 +194,5 @@ describe("recordPromptSent", () => {
     expect(openExternal).not.toHaveBeenCalled();
     click(typeof fallback === "object" ? fallback.actionProps : undefined);
     expect(openExternal).toHaveBeenCalledOnce();
-    vi.unstubAllGlobals();
   });
 });

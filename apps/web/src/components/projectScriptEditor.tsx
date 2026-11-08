@@ -83,6 +83,9 @@ export interface NewProjectScriptInput {
   command: string;
   icon: ProjectScriptIcon;
   runOnWorktreeCreate: boolean;
+  runOnWorktreeRemove: boolean;
+  runOnPrMerged: boolean;
+  /** Setup scripts only: hold the agent until the script exits. */
   waitForSetup: boolean;
   runOnSettle: boolean;
   stopOnSettle?: boolean;
@@ -99,6 +102,8 @@ export const EMPTY_PROJECT_SCRIPT_INPUT: NewProjectScriptInput = {
   command: "",
   icon: "play",
   runOnWorktreeCreate: false,
+  runOnWorktreeRemove: false,
+  runOnPrMerged: false,
   waitForSetup: false,
   runOnSettle: false,
   stopOnSettle: false,
@@ -124,6 +129,8 @@ export function editorRequestForScript(
       command: script.command,
       icon: script.icon,
       runOnWorktreeCreate: script.runOnWorktreeCreate,
+      runOnWorktreeRemove: script.runOnWorktreeRemove === true,
+      runOnPrMerged: script.runOnPrMerged === true,
       waitForSetup: script.runOnWorktreeCreate && script.async === false,
       runOnSettle: script.runOnSettle ?? false,
       stopOnSettle: script.stopOnSettle ?? false,
@@ -180,6 +187,7 @@ export function ProjectScriptEditorDialog({
   }
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useComposerMenuState(!canEditActions);
   const [deleteName, setDeleteName] = useState("");
+  const [deleteRequest, setDeleteRequest] = useState<ProjectScriptEditorRequest | null>(null);
 
   return (
     <>
@@ -203,6 +211,7 @@ export function ProjectScriptEditorDialog({
               onSubmit={onSubmit}
               onRequestDelete={(name) => {
                 setDeleteName(name);
+                setDeleteRequest(shown.request);
                 setDeleteConfirmOpen(true);
               }}
               onClose={onClose}
@@ -211,7 +220,10 @@ export function ProjectScriptEditorDialog({
         </DialogPopup>
       </Dialog>
 
-      <AlertDialog open={deleteConfirmOpen && canEditActions} onOpenChange={setDeleteConfirmOpen}>
+      <AlertDialog
+        open={deleteConfirmOpen && canEditActions && deleteRequest === request}
+        onOpenChange={setDeleteConfirmOpen}
+      >
         <AlertDialogPopup>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete action "{deleteName}"?</AlertDialogTitle>
@@ -276,6 +288,10 @@ function ProjectScriptEditorForm({
   const [runOnWorktreeCreate, setRunOnWorktreeCreate] = useState(
     request.initial.runOnWorktreeCreate,
   );
+  const [runOnWorktreeRemove, setRunOnWorktreeRemove] = useState(
+    request.initial.runOnWorktreeRemove,
+  );
+  const [runOnPrMerged, setRunOnPrMerged] = useState(request.initial.runOnPrMerged);
   const [waitForSetup, setWaitForSetup] = useState(request.initial.waitForSetup);
   const [runOnSettle, setRunOnSettle] = useState(request.initial.runOnSettle);
   const [stopOnSettle, setStopOnSettle] = useState(request.initial.stopOnSettle ?? false);
@@ -361,6 +377,8 @@ function ProjectScriptEditorForm({
         command: trimmedCommand,
         icon,
         runOnWorktreeCreate,
+        runOnWorktreeRemove,
+        runOnPrMerged,
         waitForSetup: runOnWorktreeCreate && waitForSetup,
         runOnSettle,
         stopOnSettle,
@@ -505,6 +523,20 @@ function ProjectScriptEditorForm({
               <Switch
                 checked={runOnWorktreeCreate}
                 onCheckedChange={(checked) => setRunOnWorktreeCreate(Boolean(checked))}
+              />
+            </label>
+            <label className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-sm dark:border-transparent dark:bg-white/[0.035]">
+              <span>Run automatically before worktree removal (waits for exit)</span>
+              <Switch
+                checked={runOnWorktreeRemove}
+                onCheckedChange={(checked) => setRunOnWorktreeRemove(Boolean(checked))}
+              />
+            </label>
+            <label className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-sm dark:border-transparent dark:bg-white/[0.035]">
+              <span>Run automatically when the PR/MR merges</span>
+              <Switch
+                checked={runOnPrMerged}
+                onCheckedChange={(checked) => setRunOnPrMerged(Boolean(checked))}
               />
             </label>
             <label

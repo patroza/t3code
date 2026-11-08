@@ -1,3 +1,4 @@
+import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { useRef } from "react";
 
 import { APP_VERSION } from "../../branding";
@@ -8,6 +9,8 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 export function AboutVersionTitle() {
+  const updateState = useDesktopUpdateState();
+  const version = updateState?.currentVersion ?? APP_VERSION;
   const copyButtonRef = useRef<HTMLButtonElement>(null);
   const { copyToClipboard } = useCopyToClipboard<void>({
     target: "version",
@@ -33,10 +36,10 @@ export function AboutVersionTitle() {
               <InlineButton
                 ref={copyButtonRef}
                 tone="muted"
-                aria-label={`Copy version ${APP_VERSION}`}
-                onClick={() => copyToClipboard(APP_VERSION, undefined)}
+                aria-label={`Copy version ${version}`}
+                onClick={() => copyToClipboard(version, undefined)}
               >
-                {APP_VERSION}
+                {version}
               </InlineButton>
             }
           />

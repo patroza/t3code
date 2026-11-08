@@ -1,3 +1,8 @@
+import { flushSync } from "react-dom";
+import type {
+  MessageSenderSource,
+  MessageSenderViewer,
+} from "@t3tools/client-runtime/user-message";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import type { ToolCallDiffTarget } from "../../diffPanelStore";
@@ -257,6 +262,12 @@ interface MessagesTimelineProps {
   onOpenToolDiff?: (target: ToolCallDiffTarget) => void;
   onOpenTurnDiff?: (runId: RunId, filePath?: string) => void;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
+  /** This client's claim and source channel. Same person and channel stays unlabeled. */
+  messageViewer?: MessageSenderViewer | undefined;
+  /** Thread origin, used when an agent message has no sender of its own. */
+  originSource?: MessageSenderSource | null | undefined;
+  /** Conversation-message senders, for history whose turn item has no source. */
+  messageSourceById?: ReadonlyMap<string, MessageSenderSource> | undefined;
   renderHtmlRender?: TimelineRowSharedState["renderHtmlRender"];
   turnItemSource?: TimelineRowSharedState["turnItemSource"];
   /**
@@ -300,6 +311,7 @@ interface MessagesTimelineProps {
   contentInsetEndAdjustment: number;
   onIsAtEndChange: (isAtEnd: boolean) => void;
   /** Disable while reading history to prevent LegendList re-pinning near the bottom. */
+  onToolOutputCollapsedAtEnd?: () => void;
   liveFollowEnabled: boolean;
   /** Receives the list's viewport when it mounts; the returned cleanup runs when it goes away. */
   onViewportAttach?: (viewport: TimelineViewport) => () => void;
@@ -370,6 +382,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
   onOpenToolDiff,
   onOpenTurnDiff,
   onOpenThread,
+  messageViewer,
+  originSource,
+  messageSourceById,
   renderHtmlRender,
   turnItemSource,
   parentThreadLink = null,
@@ -398,6 +413,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   onAnchorSizeChanged,
   contentInsetEndAdjustment,
   onIsAtEndChange,
+  onToolOutputCollapsedAtEnd,
   liveFollowEnabled,
   onViewportAttach,
   onFooterGrow,
@@ -489,10 +505,16 @@ const ConversationTimeline = memo(function ConversationTimeline({
     });
   };
 
-  const suspendEndScrollMaintenanceForDisclosure = (anchorKey: string) => {
+  const suspendEndScrollMaintenanceForDisclosure = (anchorKey: string, collapsed = false) => {
     disclosureAnchorKeyRef.current = anchorKey;
-    setDisclosureToggleSettling(true);
-    scheduleDisclosureSettle();
+    // Commit before the disclosure child measures its expanded content.
+    flushSync(() => setDisclosureToggleSettling(true));
+    // A disclosure takes over from an unfinished initial scroll, whose index can move on expansion.
+    const list = listRef.current;
+    const viewport = list?.getScrollableNode();
+    if (viewport) void list?.scrollToOffset({ offset: viewport.scrollTop, animated: false });
+    // A rapid open/close can leave the measured height unchanged, so closing needs no new layout.
+    if (collapsed) scheduleDisclosureSettle();
   };
 
   const shouldRestoreVisibleContentPosition = (row: MessagesTimelineRow) => {
@@ -500,8 +522,33 @@ const ConversationTimeline = memo(function ConversationTimeline({
     return disclosureAnchorKey === null || row.id === disclosureAnchorKey;
   };
 
+  const collapseNotificationPendingRef = useRef<string | null>(null);
+  const onToggleWorkEntry = useStableCallback((anchorKey: string, collapsed: boolean = false) => {
+    collapseNotificationPendingRef.current = collapsed ? listIdentityKey : null;
+    suspendEndScrollMaintenanceForDisclosure(anchorKey, collapsed);
+  });
+  const notifyToolOutputCollapsedAtEnd = useStableCallback(() => {
+    if (collapseNotificationPendingRef.current !== listIdentityKey) {
+      collapseNotificationPendingRef.current = null;
+      return;
+    }
+    if (disclosureToggleSettling || resolveTimelineIsAtEnd(listRef.current?.getState()) !== true)
+      return;
+    // Size/scroll signals can lag the disclosure commit. Keep the intent until end is confirmed.
+    collapseNotificationPendingRef.current = null;
+    onToolOutputCollapsedAtEnd?.();
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Notify after layout settles; this is an imperative event, not derived state.
+  useLayoutEffect(() => {
+    if (collapseNotificationPendingRef.current !== listIdentityKey) {
+      collapseNotificationPendingRef.current = null;
+      return;
+    }
+    if (!disclosureToggleSettling) notifyToolOutputCollapsedAtEnd();
+  }, [disclosureToggleSettling, listIdentityKey, notifyToolOutputCollapsedAtEnd]);
+
   const onToggleTurnFold = (runId: RunId) => {
-    suspendEndScrollMaintenanceForDisclosure(`turn-fold:${runId}`);
+    suspendEndScrollMaintenanceForDisclosure(`turn-fold:${runId}`, expandedRunIds.has(runId));
     setExpandedRunIds((existing) => {
       const next = new Set(existing);
       if (next.has(runId)) {
@@ -512,8 +559,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
       return next;
     });
   };
-  const onToggleWorkGroup = (groupId: string, anchorKey: string) => {
-    suspendEndScrollMaintenanceForDisclosure(anchorKey);
+  const onToggleWorkGroup = useStableCallback((groupId: string, anchorKey: string) => {
+    onToggleWorkEntry(anchorKey, expandedWorkGroupIds.has(groupId));
     setExpandedWorkGroupIds((existing) => {
       const next = new Set(existing);
       if (next.has(groupId)) {
@@ -523,9 +570,12 @@ const ConversationTimeline = memo(function ConversationTimeline({
       }
       return next;
     });
-  };
+  });
   const onToggleAttemptFold = (attemptId: RunAttemptId) => {
-    suspendEndScrollMaintenanceForDisclosure(`attempt-fold:${attemptId}`);
+    suspendEndScrollMaintenanceForDisclosure(
+      `attempt-fold:${attemptId}`,
+      expandedAttemptIds.has(attemptId),
+    );
     setExpandedAttemptIds((existing) => {
       const next = new Set(existing);
       if (next.has(attemptId)) {
@@ -955,9 +1005,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
   };
 
   const handleItemSizeChanged = () => {
-    if (disclosureAnchorKeyRef.current !== null) {
-      scheduleDisclosureSettle();
-    }
     scheduleMinimapRefresh();
   };
 
@@ -981,6 +1028,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
     // The first laid-out content of a newly shown thread ends its settling; a
     // frame the previous thread scheduled laid out the previous thread's rows.
     if (laidOutData === rows) {
+      // End-follow must stay suspended until the expanded rows have actually been measured.
+      if (disclosureAnchorKeyRef.current !== null) scheduleDisclosureSettle();
       setSettlingListIdentity((current) => (current === listIdentityKey ? null : current));
     }
     handleScroll();
@@ -1047,6 +1096,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
     onOpenToolDiff,
     onOpenTurnDiff,
     onOpenThread,
+    messageViewer,
+    originSource,
+    messageSourceById,
     renderHtmlRender,
     turnItemSource,
     workflowOpening,
@@ -1054,7 +1106,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     onToggleTurnFold,
     onToggleAttemptFold,
     onToggleWorkGroup,
-    onToggleWorkEntry: suspendEndScrollMaintenanceForDisclosure,
+    onToggleWorkEntry,
     onCancelWorktreeSetup: onCancelWorktreeSetup ?? null,
     retryableWorkspacePreparationRunIds,
     onRetryWorkspacePreparation: onRetryWorkspacePreparation ?? null,
@@ -1162,8 +1214,10 @@ const ConversationTimeline = memo(function ConversationTimeline({
     const stopListeningToContentSize = list
       ?.getState()
       .listen("totalSize", () => scheduleContentSizeChanged());
+    const stopListeningToEnd = list?.getState().listen("isAtEnd", notifyToolOutputCollapsedAtEnd);
     scheduleContentSizeChanged();
     return () => {
+      stopListeningToEnd?.();
       stopListeningToContentSize?.();
       stopRememberingRelease?.();
       if (contentSizeFrame !== null) cancelAnimationFrame(contentSizeFrame);

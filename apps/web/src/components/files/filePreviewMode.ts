@@ -40,6 +40,24 @@ export function shouldShowFileExplorer(input: {
   return input.explorerOpen || input.relativePath === null;
 }
 
+export function setMarkdownTaskChecked(
+  markdown: string,
+  markerOffset: number,
+  checked: boolean,
+): string {
+  if (
+    markerOffset < 0 ||
+    markdown[markerOffset] !== "[" ||
+    !/[ xX]/.test(markdown[markerOffset + 1] ?? "") ||
+    markdown[markerOffset + 2] !== "]"
+  ) {
+    return markdown;
+  }
+
+  return `${markdown.slice(0, markerOffset + 1)}${checked ? "x" : " "}${markdown.slice(markerOffset + 2)}`;
+}
+
+/** HTML previews need a directory-scoped grant for their relative assets. */
 /**
  * The server only signs `workspace-file` assets below the workspace root, so a
  * file opened from outside it, such as an absolute link in the thread, goes
@@ -58,7 +76,10 @@ export function workspaceAssetResource(input: {
   const insideWorkspace =
     mediaFileReference(input.absolutePath, input.workspaceRoot).relativePath !== undefined;
   return {
-    _tag: insideWorkspace ? input.kind : "media-file",
+    _tag:
+      insideWorkspace || (input.kind === "workspace-file" && /\.html?$/i.test(input.absolutePath))
+        ? input.kind
+        : "media-file",
     threadId: input.threadRef.threadId,
     path: input.absolutePath,
   };

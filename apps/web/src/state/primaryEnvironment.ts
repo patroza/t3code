@@ -13,6 +13,15 @@ export const primaryEnvironmentIdAtom = Atom.make((get) => {
   return null;
 }).pipe(Atom.withLabel("web-primary-environment-id"));
 
+export const primaryEnvironmentNativeBrowserAtom = Atom.make((get) => {
+  for (const entry of get(environmentCatalog.catalogValueAtom).entries.values()) {
+    if (entry.target._tag === "PrimaryConnectionTarget") {
+      return entry.target.nativeServerBrowser === true;
+    }
+  }
+  return false;
+}).pipe(Atom.withLabel("web-primary-environment-native-browser"));
+
 const hostEnvironmentIdAtom = Atom.make<string | null>(null).pipe(
   Atom.keepAlive,
   Atom.withLabel("web-host-environment-id"),

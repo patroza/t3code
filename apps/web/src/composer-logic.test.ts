@@ -1,3 +1,4 @@
+import { parseStandaloneComposerSlashCommand } from "./composer-logic";
 import { filterComposerPullRequestMatches } from "@t3tools/shared/composerPullRequestMatches";
 import { EnvironmentId, MessageId, ThreadId, type AssistantCitation } from "@t3tools/contracts";
 import {
@@ -508,6 +509,24 @@ describe("assistant citation cursor offsets", () => {
 
     expect(result).toEqual({ text: `(),${citationSource}!`, cursor: 1 });
     expect(collapseExpandedComposerCursor(result.text, result.text.length)).toBe("(),□!".length);
+  });
+});
+
+describe("parseStandaloneComposerSlashCommand", () => {
+  it("parses standalone /new command", () => {
+    expect(parseStandaloneComposerSlashCommand(" /NEW ")).toBe("new");
+  });
+
+  it("parses standalone /plan command", () => {
+    expect(parseStandaloneComposerSlashCommand(" /plan ")).toBe("plan");
+  });
+
+  it("parses standalone /default command", () => {
+    expect(parseStandaloneComposerSlashCommand("/default")).toBe("default");
+  });
+
+  it("ignores slash commands with extra message text", () => {
+    expect(parseStandaloneComposerSlashCommand("/new explain this")).toBeNull();
   });
 });
 

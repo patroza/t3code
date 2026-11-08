@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { useId, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useId, useRef, useState } from "react";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
 import {
@@ -11,7 +11,7 @@ import {
 } from "@t3tools/contracts";
 import { XIcon } from "lucide-react";
 
-import { deviceEasAccountCheck, deviceEnvironment } from "../../state/device";
+import { deviceEnvironment } from "../../state/device";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import {
@@ -57,6 +57,7 @@ export function EasDeviceHostEditor(props: {
   onClose: () => void;
 }) {
   const check = useAtomCommand(deviceEnvironment.easAccount, { reportFailure: false });
+  const canCheck = useAtomValue(deviceEnvironment.easAccount.permissionAtom(props.environmentId));
   const [draft, setDraft] = useState(props.host);
   const tokenId = useId();
   const secretSources = useSecretSources(props.environmentId);
@@ -66,26 +67,9 @@ export function EasDeviceHostEditor(props: {
   const [token, setToken] = useState<
     { kind: "saved" } | { kind: "new"; value: SettingsSecretValue } | { kind: "cleared" }
   >(props.host.accessToken ? { kind: "saved" } : { kind: "cleared" });
-  // Checking on open names the saved project and shows a rejected credential
-  // before anything is changed. A manual check or a token edit replaces it.
-  const openCheck = useAtomValue(
-    deviceEasAccountCheck({
-      environmentId: props.environmentId,
-      input: props.host.accessToken
-        ? props.isNew
-          ? {}
-          : { hostId: props.host.id }
-        : { accessToken: "" },
-    }),
+  const [account, setAccount] = useState<AccountCheck>(() =>
+    canCheck ? { status: "checking" } : { status: "idle" },
   );
-  const [checked, setAccount] = useState<AccountCheck | null>(null);
-  const account: AccountCheck =
-    checked ??
-    (openCheck._tag === "Initial" || openCheck.waiting
-      ? { status: "checking" }
-      : openCheck._tag === "Success"
-        ? { status: "signed-in", account: openCheck.value }
-        : { status: "failed", error: failureMessage(openCheck.cause) });
   const next: EasDeviceHostConfig = {
     ...draft,
     label: draft.label.trim(),
@@ -111,6 +95,7 @@ export function EasDeviceHostEditor(props: {
     setAccount({ status: "idle" });
   };
   const requestCheck = async () => {
+    if (!canCheck) return;
     const run = ++latestCheck.current;
     const result = await check({
       environmentId: props.environmentId,
@@ -133,9 +118,16 @@ export function EasDeviceHostEditor(props: {
     );
   };
   const checkAccount = () => {
+    if (!canCheck) return;
     setAccount({ status: "checking" });
     void requestCheck();
   };
+
+  const checkOnOpen = useEffectEvent(() => void requestCheck());
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Probe the saved credential when this editor opens; edits invalidate the result.
+  useEffect(() => {
+    checkOnOpen();
+  }, []);
 
   const limit = (
     field: "maxSessionMinutes" | "idleMinutes" | "maxConcurrentSessions",
@@ -269,7 +261,8 @@ export function EasDeviceHostEditor(props: {
                 type="button"
                 size="sm"
                 variant="outline"
-                disabled={props.busy || !tokenValid || account.status === "checking"}
+                data-testid="eas-device-account-check"
+                disabled={!canCheck || !tokenValid || props.busy || account.status === "checking"}
                 onClick={() => void checkAccount()}
               >
                 {account.status === "checking" ? <Spinner size="xs" /> : null} Check account
