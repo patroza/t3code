@@ -17,6 +17,7 @@ import {
   use,
   useEffect,
   useEffectEvent,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -38,6 +39,7 @@ import {
   projectScriptTerminalInput,
   resolveProjectScripts,
 } from "@t3tools/shared/projectScripts";
+import { Platform } from "react-native";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { useConnectionsReady } from "../../state/workspace";
 import { useEnvironmentShellReadiness } from "../../state/shell";
@@ -78,6 +80,7 @@ import {
   resolvePreferredThreadWorktreePath,
   stagePendingTerminalLaunch,
 } from "../terminal/terminalLaunchContext";
+import { indexUserMessageSources } from "@t3tools/client-runtime/user-message";
 import type { ThreadDetailScreenProps } from "./ThreadDetailScreen";
 import { ThreadScreenBinding, ThreadScreenFallback, ThreadScreenHost } from "./ThreadScreenHost";
 import { draftRouteIdentity } from "./thread-route-state";
@@ -221,7 +224,7 @@ function UnavailableThreadDraftRedirect(props: { readonly environmentId: Environ
 
 export function ThreadRouteScreen(props: ThreadRouteScreenProps) {
   return (
-    <ThreadScreenHost>
+    <ThreadScreenHost className={Platform.OS === "android" ? "flex-1 bg-thread-canvas" : "flex-1"}>
       {props.route.params?.draft ? (
         <NewTaskDraftRouteScreen
           key={draftRouteIdentity(props.route.params.draft)}
@@ -368,6 +371,10 @@ function ThreadRouteContent(
   );
   const selectedThreadDetailState = props.selectedThreadDetailState;
   const selectedThreadDetail = Option.getOrNull(selectedThreadDetailState.data);
+  const userMessageSources = useMemo(
+    () => indexUserMessageSources(selectedThreadDetail?.messages),
+    [selectedThreadDetail?.messages],
+  );
   const { selectedThreadCwd } = useSelectedThreadWorktree();
   const startSideChat = useStartSideChat();
   const composer = useThreadComposerState({ startSideChat });
@@ -982,6 +989,7 @@ function ThreadRouteContent(
           feedbackSubmissions={composer.feedbackSubmissions}
           onDismissFeedback={composer.dismissFeedback}
           selectedThreadFeed={composer.selectedThreadFeed}
+          messageSourceById={userMessageSources}
           pendingHandoff={composer.pendingHandoff}
           activityRun={composer.selectedThreadActivityRun}
           activeWorkStartedAt={

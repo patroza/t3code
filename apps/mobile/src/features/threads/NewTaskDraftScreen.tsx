@@ -60,6 +60,7 @@ import {
   getComposerDraftSnapshot,
   updateComposerDraftSettings,
   scheduleUnusedComposerAttachmentCleanup,
+  type ComposerDraftWorkspaceSelection,
 } from "../../state/use-composer-drafts";
 import { useEnvironmentServerConfig, useProjects } from "../../state/entities";
 import { useProjectClone } from "../../state/projectClones";
@@ -148,6 +149,7 @@ export function NewTaskDraftScreen(props: {
     readonly worktreePath?: string | null;
     readonly cloning?: boolean;
   };
+  readonly initialWorkspaceSelection?: ComposerDraftWorkspaceSelection;
   readonly draftId?: string;
   readonly incomingShareId?: string;
 }) {
@@ -500,9 +502,26 @@ export function NewTaskDraftScreen(props: {
     setProject,
   ]);
 
+  const appliedInitialWorkspaceSelectionRef = useRef<ComposerDraftWorkspaceSelection | undefined>(
+    undefined,
+  );
   const { loadBranches } = flow;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- requests the selected project's branch list from the server once per project
   useEffect(() => {
+    const selection = props.initialWorkspaceSelection;
+    const initialEnvironmentId = props.initialProjectRef?.environmentId;
+    const initialProjectId = props.initialProjectRef?.projectId;
+    if (
+      selection &&
+      flow.draftKey &&
+      selectedProject &&
+      selectedProject.environmentId === initialEnvironmentId &&
+      selectedProject.id === initialProjectId &&
+      appliedInitialWorkspaceSelectionRef.current !== selection
+    ) {
+      appliedInitialWorkspaceSelectionRef.current = selection;
+      updateComposerDraftSettings(flow.draftKey, { workspaceSelection: selection });
+    }
     if (!selectedProject) {
       loadedBranchesProjectKeyRef.current = null;
       return;
@@ -513,7 +532,14 @@ export function NewTaskDraftScreen(props: {
     }
     loadedBranchesProjectKeyRef.current = projectKey;
     loadBranches();
-  }, [loadBranches, selectedProject]);
+  }, [
+    loadBranches,
+    selectedProject,
+    flow.draftKey,
+    props.initialProjectRef?.environmentId,
+    props.initialProjectRef?.projectId,
+    props.initialWorkspaceSelection,
+  ]);
 
   const selectedEnvironmentLabel =
     flow.environments.find(

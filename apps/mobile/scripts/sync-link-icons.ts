@@ -70,7 +70,7 @@ for (const definition of sourceControlClients.definitions) {
 NodeFS.writeFileSync(
   generatedModulePath,
   `import type { ImageSourcePropType } from "react-native";\n\nexport const SOURCE_CONTROL_LINK_ICON_SOURCES: Readonly<Record<string, ImageSourcePropType>> = {\n${kinds
-    .toSorted()
+    .sort()
     .map(
       (kind) =>
         `  ${/^\w+$/u.test(kind) ? kind : `"${kind}"`}: require("../../assets/link-icons/${kind}.png"),`,

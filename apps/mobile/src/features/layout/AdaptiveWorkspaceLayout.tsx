@@ -10,10 +10,11 @@ import { threadSelectionDeferral } from "./deferred-navigation";
 import { uuidv4 } from "../../lib/uuid";
 import { useToolbarLayout } from "../../components/ui/useToolbarLayout";
 import { EnvironmentId, ThreadId, type SidebarProjectGroupingMode } from "@t3tools/contracts";
-import { useAtomValue } from "@effect/atom-react";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { NavigationContext, NavigationRouteContext, useNavigation } from "@react-navigation/native";
 import {
   use,
+  useCallback,
   useDeferredValue,
   useEffect,
   useEffectEvent,
@@ -54,12 +55,12 @@ import {
   isWorkspaceListPath,
   nativeInspectorColumnWidth,
 } from "../../lib/layout";
+import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import type { ThreadListFilters } from "../../persistence/mobile-preferences";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { useProjects } from "../../state/entities";
 import { environmentThreadShells } from "../../state/threads";
 import { withKnownPullRequestSummary } from "../../state/use-thread-pr";
-import { mobilePreferencesAtom } from "../../state/preferences";
 import {
   DEFAULT_MOBILE_PROJECT_GROUPING_SETTINGS,
   resolveMobileProjectGroupingSettings,
@@ -68,9 +69,24 @@ import {
   parseActiveThreadPath,
   useHardwareKeyboardCommand,
 } from "../keyboard/hardwareKeyboardCommands";
+import {
+  resolveOwnershipFilter,
+  resolveOwnershipRelation,
+} from "../../persistence/mobile-preferences";
 import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
 import { useEnabledNavigationTabs } from "./workspace/navigation-tabs";
 import { FLOATING_TABS, floatingTabsMetrics } from "./workspace/floating-workspace-tabs";
+import {
+  HomeListOptionsProvider,
+  resolveProjectGroupingMode,
+  type OwnershipFilter,
+  type OwnershipRelation,
+} from "../home/home-list-options";
+import {
+  DEFAULT_HOME_THREAD_GROUPING,
+  resolveHomeThreadGrouping,
+  type HomeThreadGrouping,
+} from "../home/homeListMode";
 import {
   AndroidWorkspaceNavigation,
   FloatingWorkspaceTabs,
@@ -83,7 +99,6 @@ import {
 } from "./workspace/workspace-detail-selection";
 import { startOpeningDetail } from "./workspace/useSelectWorkspaceDetail";
 import { useWorkspaceTabs } from "./workspace/WorkspaceTabsContext";
-import { HomeListOptionsProvider } from "../home/home-list-options";
 import { newTaskDestination } from "../threads/new-task-project-selection";
 import { RenderErrorBoundary, RenderFailureView } from "../../components/RenderErrorBoundary";
 import { PaneContext } from "../../components/ui/Pane";
@@ -198,20 +213,73 @@ export function AdaptiveWorkspaceLayout(props: {
   readonly workspaceRouteName: string | undefined;
 }) {
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const storeEnvironmentIds = useCallback(
+    (ids: readonly EnvironmentId[]) => {
+      savePreferences({ selectedEnvironmentIds: [...ids] });
+    },
+    [savePreferences],
+  );
+  const storeThreadGrouping = useCallback(
+    (grouping: HomeThreadGrouping) => {
+      savePreferences({ threadGrouping: grouping });
+    },
+    [savePreferences],
+  );
+  const storeOwnershipFilter = useCallback(
+    (filter: OwnershipFilter) => {
+      savePreferences({ ownershipFilter: filter });
+    },
+    [savePreferences],
+  );
+  const storeOwnershipRelation = useCallback(
+    (relation: OwnershipRelation) => {
+      savePreferences({ ownershipRelation: relation });
+    },
+    [savePreferences],
+  );
+
   if (!AsyncResult.isSuccess(preferencesResult)) {
     return AsyncResult.isFailure(preferencesResult) ? (
       <AdaptiveWorkspaceLayoutContent
         {...props}
         projectGroupingMode={DEFAULT_MOBILE_PROJECT_GROUPING_SETTINGS.sidebarProjectGroupingMode}
+        storedEnvironmentIds={[]}
+        onStoreEnvironmentIds={storeEnvironmentIds}
+        storedThreadGrouping={DEFAULT_HOME_THREAD_GROUPING}
+        onStoreThreadGrouping={storeThreadGrouping}
+        storedOwnershipFilter="any"
+        onStoreOwnershipFilter={storeOwnershipFilter}
+        storedOwnershipRelation="both"
+        onStoreOwnershipRelation={storeOwnershipRelation}
       />
     ) : null;
   }
-  const groupingSettings = resolveMobileProjectGroupingSettings(preferencesResult.value);
+
+  const storedEnvironmentIds = (preferencesResult.value.selectedEnvironmentIds ??
+    (preferencesResult.value.threadListFilters?.environmentId
+      ? [preferencesResult.value.threadListFilters.environmentId]
+      : [])) as readonly EnvironmentId[];
+  const storedThreadGrouping = resolveHomeThreadGrouping(preferencesResult.value.threadGrouping);
+  const storedOwnershipFilter = resolveOwnershipFilter(preferencesResult.value);
+  const storedOwnershipRelation = resolveOwnershipRelation(preferencesResult.value);
+
   return (
     <AdaptiveWorkspaceLayoutContent
       {...props}
-      projectGroupingMode={groupingSettings.sidebarProjectGroupingMode}
+      projectGroupingMode={
+        resolveMobileProjectGroupingSettings(preferencesResult.value).sidebarProjectGroupingMode ??
+        resolveProjectGroupingMode(preferencesResult.value.projectGroupingEnabled)
+      }
       savedThreadListFilters={preferencesResult.value.threadListFilters}
+      storedEnvironmentIds={storedEnvironmentIds}
+      onStoreEnvironmentIds={storeEnvironmentIds}
+      storedThreadGrouping={storedThreadGrouping}
+      onStoreThreadGrouping={storeThreadGrouping}
+      storedOwnershipFilter={storedOwnershipFilter}
+      onStoreOwnershipFilter={storeOwnershipFilter}
+      storedOwnershipRelation={storedOwnershipRelation}
+      onStoreOwnershipRelation={storeOwnershipRelation}
     />
   );
 }
@@ -224,6 +292,14 @@ function AdaptiveWorkspaceLayoutContent(
     readonly workspaceRouteName: string | undefined;
   } & {
     readonly projectGroupingMode: SidebarProjectGroupingMode;
+    readonly storedEnvironmentIds: readonly EnvironmentId[];
+    readonly onStoreEnvironmentIds: (ids: readonly EnvironmentId[]) => void;
+    readonly storedThreadGrouping: HomeThreadGrouping;
+    readonly onStoreThreadGrouping: (grouping: HomeThreadGrouping) => void;
+    readonly storedOwnershipFilter: OwnershipFilter;
+    readonly onStoreOwnershipFilter: (filter: OwnershipFilter) => void;
+    readonly storedOwnershipRelation: OwnershipRelation;
+    readonly onStoreOwnershipRelation: (relation: OwnershipRelation) => void;
     readonly savedThreadListFilters?: ThreadListFilters | undefined;
   },
 ) {
@@ -1026,6 +1102,14 @@ function AdaptiveWorkspaceLayoutContent(
       <HomeListOptionsProvider
         projectGroupingMode={projectGroupingMode}
         savedFilters={props.savedThreadListFilters}
+        storedEnvironmentIds={props.storedEnvironmentIds}
+        onStoreEnvironmentIds={props.onStoreEnvironmentIds}
+        storedThreadGrouping={props.storedThreadGrouping}
+        onStoreThreadGrouping={props.onStoreThreadGrouping}
+        storedOwnershipFilter={props.storedOwnershipFilter}
+        onStoreOwnershipFilter={props.onStoreOwnershipFilter}
+        storedOwnershipRelation={props.storedOwnershipRelation}
+        onStoreOwnershipRelation={props.onStoreOwnershipRelation}
       >
         <AdaptiveWorkspaceContext value={contextValue}>
           <NativeWorkspaceInspectorContext
@@ -1253,6 +1337,14 @@ function AdaptiveWorkspaceLayoutContent(
   return (
     <HomeListOptionsProvider
       projectGroupingMode={projectGroupingMode}
+      storedEnvironmentIds={props.storedEnvironmentIds}
+      onStoreEnvironmentIds={props.onStoreEnvironmentIds}
+      storedThreadGrouping={props.storedThreadGrouping}
+      onStoreThreadGrouping={props.onStoreThreadGrouping}
+      storedOwnershipFilter={props.storedOwnershipFilter}
+      onStoreOwnershipFilter={props.onStoreOwnershipFilter}
+      storedOwnershipRelation={props.storedOwnershipRelation}
+      onStoreOwnershipRelation={props.onStoreOwnershipRelation}
       savedFilters={props.savedThreadListFilters}
     >
       <AdaptiveWorkspaceContext.Provider value={contextValue}>

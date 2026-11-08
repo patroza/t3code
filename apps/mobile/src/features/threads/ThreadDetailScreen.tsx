@@ -25,6 +25,10 @@ import {
 import type { WorktreeSetupCardProps } from "./worktree-setup-card";
 import type { ComposerTextPaste } from "../../native/T3ComposerEditor.types";
 import { type EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
+import { type MessageSenderSource } from "@t3tools/client-runtime/user-message";
+import { sourceChannelFromDeviceType } from "@t3tools/shared/sourceAttribution";
+import { authClientMetadata } from "../../lib/authClientMetadata";
+import { identityEnvironment } from "../../state/identity";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import type { HandoffEndpoints } from "@t3tools/client-runtime/handoff";
 import { queuedRunEditBlockedReason } from "@t3tools/client-runtime/queued-run-edit";
@@ -79,6 +83,7 @@ import type { FollowUpBehavior } from "../../lib/followUpBehavior";
 import type { ActiveTurnComposerAction } from "@t3tools/client-runtime/state/composer-dispatch";
 import * as Haptics from "expo-haptics";
 import {
+  useMemo,
   useCallback,
   useEffect,
   useEffectEvent,
@@ -236,6 +241,8 @@ export interface ThreadDetailScreenProps {
   readonly feedbackSubmissions: ReadonlyArray<CodexFeedbackSubmission>;
   readonly onDismissFeedback: (id: MessageId) => void;
   readonly selectedThreadFeed: ReadonlyArray<ThreadFeedEntry>;
+  /** Conversation-message senders, for history whose turn item has no source. */
+  readonly messageSourceById?: ReadonlyMap<string, MessageSenderSource>;
   readonly pendingHandoff?: HandoffEndpoints | null;
   readonly activityRun: ThreadFeedLatestRun | null;
   readonly activeWorkStartedAt: string | null;
@@ -327,6 +334,8 @@ const USER_INPUT_TOGGLE_TIMING = {
   duration: USER_INPUT_TOGGLE_DURATION_MS,
   easing: Easing.out(Easing.cubic),
 };
+
+const EMPTY_SESSION_CLAIM_INPUT = {} as const;
 
 // A scheduled wake can happen without a newer server update, so the tracker
 // is told when one takes effect. The shell's updatedAt ticks while a run
@@ -477,6 +486,23 @@ function ThreadDetailBody(
   const windowMetrics = useNativeLayoutMetrics();
   const nativeMetrics = usesNativeWorkspaceColumns ? columnMetrics : screenMetrics;
   const controlInsets = deriveBottomControlInsets(nativeMetrics);
+  const agentLabel = `${props.selectedThread.modelSelection.instanceId} agent`;
+  const sessionClaimTarget = useMemo(
+    () => ({ environmentId: props.environmentId, input: EMPTY_SESSION_CLAIM_INPUT }),
+    [props.environmentId],
+  );
+  const sessionClaimQuery = useEnvironmentQuery(
+    identityEnvironment.sessionClaim(sessionClaimTarget),
+  );
+  const messageViewer = useMemo(
+    () => ({
+      personId: sessionClaimQuery.data?.claim?.personId,
+      username: sessionClaimQuery.data?.claim?.username,
+      channel: sourceChannelFromDeviceType(authClientMetadata().deviceType),
+      identityReady: sessionClaimQuery.data !== null && sessionClaimQuery.error === null,
+    }),
+    [sessionClaimQuery.data, sessionClaimQuery.error],
+  );
   const selectedThreadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
   const childThreadInputs = useChildThreadInputs({
     environmentId: props.environmentId,
@@ -1508,6 +1534,10 @@ function ThreadDetailBody(
                   isProviderSubagent || pendingMessageEditBlocked ? null : handleEditPendingMessage
                 }
                 contentPresentation={props.contentPresentation}
+                agentLabel={agentLabel}
+                messageViewer={messageViewer}
+                originSource={props.selectedThread.originSource}
+                messageSourceById={props.messageSourceById}
                 threadTitle={props.selectedThread.title}
                 latestRun={props.activityRun}
                 activeWorkStartedAt={props.activeWorkStartedAt}

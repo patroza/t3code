@@ -4,6 +4,7 @@ import { collectComposerInlineTokens } from "@t3tools/shared/composerInlineToken
 import { composerContextEditorTokens, composerSkillLabels } from "../lib/composerContext";
 import { requireNativeView } from "expo";
 import { TextInputWrapper } from "expo-paste-input";
+import { useNativePaste } from "../lib/useNativePaste";
 import {
   useCallback,
   useEffect,
@@ -25,7 +26,6 @@ import {
 } from "../lib/composerChipPresentation";
 import { contextChipIconUri } from "../lib/contextChipIconSource";
 import { MOBILE_TYPOGRAPHY } from "../lib/typography";
-import { useNativePaste } from "../lib/useNativePaste";
 import { FONT_FAMILIES } from "../lib/fontFamilies";
 import { useAppearancePreferences } from "../features/settings/appearance/AppearancePreferencesProvider";
 import { useUniwindTheme } from "../lib/useUniwindTheme";

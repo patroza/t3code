@@ -9,6 +9,18 @@ const files = new Map<
   { base64: string; deleted: boolean; text?: string; mimeType?: string }
 >();
 
+const clipboard = vi.hoisted(() => ({
+  hasImageAsync: vi.fn(),
+  getImageAsync: vi.fn(),
+  hasStringAsync: vi.fn(),
+  getStringAsync: vi.fn(),
+}));
+
+vi.mock("expo-clipboard", () => clipboard);
+
+const requestMediaLibraryPermissionsAsync = vi.fn();
+const launchImageLibraryAsync = vi.fn();
+/** A native image renderer that reports the source size the test gives it. */
 const manipulator = vi.hoisted(() => {
   const state = { sourceSize: { width: 0, height: 0 }, renderedBase64: "cmVuZGVyZWQ=" };
   const manipulate = vi.fn((source: string | { width: number; height: number }) => {
@@ -55,15 +67,17 @@ vi.mock("expo-file-system", () => ({
       return files.has(this.uri) && files.get(this.uri)?.deleted === false;
     }
 
-    get type(): string {
-      return files.get(this.uri)?.mimeType ?? "";
+    get size(): number {
+      const entry = files.get(this.uri);
+      if (!entry || entry.deleted) return 0;
+      if (entry.text !== undefined) return new TextEncoder().encode(entry.text).byteLength;
+      if (!entry.base64) return 0;
+      const padding = entry.base64.endsWith("==") ? 2 : entry.base64.endsWith("=") ? 1 : 0;
+      return Math.floor((entry.base64.length * 3) / 4) - padding;
     }
 
-    get size(): number | null {
-      const entry = files.get(this.uri);
-      return entry && !entry.deleted
-        ? Math.floor((entry.base64.replace(/=+$/, "").length * 3) / 4)
-        : null;
+    get type(): string {
+      return files.get(this.uri)?.mimeType ?? "";
     }
 
     async copy(destination: { readonly uri: string }): Promise<void> {
@@ -115,11 +129,182 @@ vi.mock("expo-file-system", () => ({
   Paths: { document: "file:///documents" },
 }));
 
+vi.mock("expo-image-picker", () => ({
+  requestMediaLibraryPermissionsAsync,
+  launchImageLibraryAsync,
+}));
+
 vi.mock("./uuid", () => ({
   uuidv4: () => "attachment-id",
 }));
 
-import { convertPastedImagesToAttachments, persistComposerAttachmentFile } from "./composerImages";
+import {
+  convertPastedImagesToAttachments,
+  persistComposerAttachmentFile,
+  pasteComposerClipboard,
+  pickComposerImages,
+} from "./composerImages";
+
+describe("pickComposerImages", () => {
+  beforeEach(() => {
+    files.clear();
+    requestMediaLibraryPermissionsAsync.mockReset();
+    launchImageLibraryAsync.mockReset();
+  });
+
+  it("opens the system image library without requesting media-library permission", async () => {
+    files.set("file:///tmp/photo.png", { base64: "aGVsbG8=", deleted: false });
+    launchImageLibraryAsync.mockResolvedValue({
+      canceled: false,
+      assets: [
+        {
+          uri: "file:///tmp/photo.png",
+          fileName: "photo.png",
+          mimeType: "image/png",
+          fileSize: 5,
+        },
+      ],
+    });
+
+    const result = await pickComposerImages({ existingCount: 0 });
+
+    expect(requestMediaLibraryPermissionsAsync).not.toHaveBeenCalled();
+    expect(launchImageLibraryAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaTypes: ["images"],
+        allowsMultipleSelection: true,
+        base64: false,
+      }),
+    );
+    expect(result).toEqual({
+      images: [
+        expect.objectContaining({
+          id: "attachment-id",
+          type: "image",
+          name: "photo.png",
+          mimeType: "image/png",
+          sizeBytes: 5,
+          dataUrl: "data:image/png;base64,aGVsbG8=",
+          previewUri: "file:///tmp/photo.png",
+        }),
+      ],
+      error: null,
+    });
+  });
+
+  it("returns no images when the user cancels the picker", async () => {
+    launchImageLibraryAsync.mockResolvedValue({
+      canceled: true,
+      assets: null,
+    });
+
+    await expect(pickComposerImages({ existingCount: 0 })).resolves.toEqual({
+      images: [],
+      error: null,
+    });
+    expect(requestMediaLibraryPermissionsAsync).not.toHaveBeenCalled();
+  });
+
+  it("returns a structured error when the image library fails to open", async () => {
+    launchImageLibraryAsync.mockRejectedValue(new Error("picker unavailable"));
+
+    await expect(pickComposerImages({ existingCount: 0 })).resolves.toEqual({
+      images: [],
+      error: "picker unavailable",
+    });
+    expect(requestMediaLibraryPermissionsAsync).not.toHaveBeenCalled();
+  });
+
+  it("rejects picks when the attachment limit is already full", async () => {
+    await expect(
+      pickComposerImages({ existingCount: PROVIDER_SEND_TURN_MAX_ATTACHMENTS }),
+    ).resolves.toEqual({
+      images: [],
+      error: `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} attachments per message.`,
+    });
+    expect(launchImageLibraryAsync).not.toHaveBeenCalled();
+  });
+});
+
+describe("composer clipboard paste", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clipboard.hasImageAsync.mockResolvedValue(false);
+    clipboard.hasStringAsync.mockResolvedValue(true);
+    clipboard.getStringAsync.mockResolvedValue("clipboard text");
+    clipboard.getImageAsync.mockResolvedValue({ data: "data:image/png;base64,aGVsbG8=" });
+  });
+
+  it("returns only the image when the clipboard contains both image and text", async () => {
+    clipboard.hasImageAsync.mockResolvedValue(true);
+    const result = await pasteComposerClipboard({ existingCount: 0 });
+    expect(result).toEqual({
+      images: [expect.objectContaining({ type: "image", name: "pasted-image.png" })],
+      text: null,
+      error: null,
+    });
+    expect(clipboard.getStringAsync).not.toHaveBeenCalled();
+  });
+
+  it("does not paste alternate text when the image cannot fit", async () => {
+    clipboard.hasImageAsync.mockResolvedValue(true);
+    expect(
+      await pasteComposerClipboard({ existingCount: PROVIDER_SEND_TURN_MAX_ATTACHMENTS }),
+    ).toEqual({ images: [], text: null, error: expect.stringContaining("up to") });
+    expect(clipboard.getStringAsync).not.toHaveBeenCalled();
+  });
+});
+
+describe("oversized pasted images", () => {
+  const u32 = (n: number) => [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff];
+  const pngDataUrl = (width: number, height: number) =>
+    `data:image/png;base64,${Buffer.from([
+      0x89,
+      0x50,
+      0x4e,
+      0x47,
+      0x0d,
+      0x0a,
+      0x1a,
+      0x0a,
+      ...u32(13),
+      0x49,
+      0x48,
+      0x44,
+      0x52,
+      ...u32(width),
+      ...u32(height),
+      8,
+      6,
+      0,
+      0,
+      0,
+    ]).toString("base64")}`;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clipboard.hasImageAsync.mockResolvedValue(true);
+  });
+
+  it("scales a clipboard screenshot over 2000px to 2000px and keeps it a PNG", async () => {
+    manipulator.state.sourceSize = { width: 3024, height: 1964 };
+    const pasted = pngDataUrl(3024, 1964);
+    clipboard.getImageAsync.mockResolvedValue({ data: pasted });
+
+    const result = await pasteComposerClipboard({ existingCount: 0 });
+
+    expect(manipulator.manipulate).toHaveBeenCalledWith(pasted);
+    const resize = manipulator.manipulate.mock.results.at(-1)?.value.resize;
+    expect(resize).toHaveBeenCalledWith({ width: 2000, height: 1299 });
+    expect(result.images).toEqual([
+      expect.objectContaining({
+        mimeType: "image/png",
+        dataUrl: "data:image/png;base64,cmVuZGVyZWQ=",
+        previewUri: "data:image/png;base64,cmVuZGVyZWQ=",
+      }),
+    ]);
+  });
+});
 
 describe("native pasted image cleanup", () => {
   beforeEach(() => {

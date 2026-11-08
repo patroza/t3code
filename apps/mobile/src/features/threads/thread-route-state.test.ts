@@ -114,3 +114,18 @@ it("starts a fresh controller for repeated new-task requests in the same project
     draftRouteIdentity({ ...project, requestId: "second" }),
   );
 });
+
+it("distinguishes workspace picker modes and normalizes their link parameters", () => {
+  const draft = { environmentId: "env", projectId: "project", branch: "main" };
+  expect(draftRouteIdentity({ ...draft, workspaceMode: "local" })).not.toBe(
+    draftRouteIdentity({ ...draft, workspaceMode: "worktree" }),
+  );
+  expect(
+    draftRouteIdentity({
+      ...draft,
+      workspaceMode: ["worktree"],
+      branch: ["main"],
+      worktreePath: ["/repo"],
+    }),
+  ).toBe(draftRouteIdentity({ ...draft, workspaceMode: "worktree", worktreePath: "/repo" }));
+});

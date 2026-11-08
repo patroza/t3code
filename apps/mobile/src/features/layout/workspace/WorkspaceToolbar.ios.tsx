@@ -16,6 +16,7 @@ import {
 } from "../../../native/v5-workspace-context";
 import { useHardwareKeyboardCommand } from "../../keyboard/hardwareKeyboardCommands";
 import { useAdaptiveWorkspaceLayout } from "../AdaptiveWorkspaceLayout";
+import { useSelectWorkspaceTab } from "./useSelectWorkspaceTab";
 import { useWorkspaceTabs } from "./WorkspaceTabsContext";
 import { shouldRestoreNativeSearch } from "./workspace-tabs-state";
 import { useFloatingWorkspaceTabs, useSidebarWorkspaceTabs } from "./useSystemWorkspaceTabBar";
@@ -31,6 +32,7 @@ export function WorkspaceToolbar(props: {
   readonly onNewTask: () => void;
   readonly sidebar?: boolean;
 }) {
+  const selectTab = useSelectWorkspaceTab();
   const workspace = useWorkspaceTabs()!;
   const activeNewTask = useActiveNewTask();
   const deviceType = useDeviceType();
@@ -190,6 +192,11 @@ export function WorkspaceToolbar(props: {
         </Toolbar>
       ) : (
         <Toolbar placement="right">
+          <Toolbar.Button
+            accessibilityLabel="Open settings"
+            icon="gearshape"
+            onPress={() => selectTab("settings")}
+          />
           {searchButton}
           {nativeToolbarCompose && foldedSearch ? <Toolbar.Spacer width={8} /> : null}
           {composeButton}

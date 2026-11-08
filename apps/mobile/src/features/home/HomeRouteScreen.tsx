@@ -1,11 +1,23 @@
 import { uuidv4 } from "../../lib/uuid";
 import { ThreadUndoNotice } from "./ThreadUndoNotice";
-import { use } from "react";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
+import {
+  claimPersonIdForEnvironment,
+  threadMatchesMine,
+} from "@t3tools/client-runtime/state/identity";
+import { AsyncResult } from "effect/reactivity";
+import {
+  resolveHideSettledOnProjects,
+  resolveHideSettledOnRecent,
+} from "../../persistence/mobile-preferences";
+import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
+import { prefetchEnvironmentThread, warmSelectedEnvironmentThread } from "../../state/threads";
+import { identityClaimPersonIdByEnvironmentAtom } from "../../state/identity";
 import { NativePrimaryColumnContext } from "../../native/v5-workspace-context";
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 import { useNavigation } from "@react-navigation/native";
-import { useMemo, useState } from "react";
+import { use, useCallback, useMemo, useState } from "react";
 import { Platform } from "react-native";
 
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
@@ -22,7 +34,12 @@ import { useSavedRemoteConnections } from "../../state/use-remote-environment-re
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { AndroidHomeFabLayout } from "./AndroidHomeFab";
 import { HomeScreen } from "./HomeScreen";
-import { useHomeListOptions } from "./home-list-options";
+import {
+  DEFAULT_OWNERSHIP_FILTER,
+  DEFAULT_OWNERSHIP_RELATION,
+  useHomeListOptions,
+} from "./home-list-options";
+import { DEFAULT_HOME_THREAD_GROUPING } from "./homeListMode";
 import { useAtomValueWhileVisible, useHomeRouteVisible } from "./home-route-visibility";
 import { buildHomeProjectScopes } from "./homeThreadList";
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
@@ -117,39 +134,91 @@ export function HomeRouteScreen() {
   );
   const {
     options: listOptions,
-    setSelectedEnvironmentId,
     setSelectedProjectKey,
+    toggleSelectedEnvironmentId,
+    clearSelectedEnvironments,
+    setOwnershipFilter,
+    setOwnershipRelation,
+    setThreadGrouping,
   } = useHomeListOptions(availableEnvironmentIds);
-  const selectedEnvironmentId = listOptions.selectedEnvironmentId;
-  // A legacy per-environment scratch key resolves here on every render; the stored
-  // value is only rewritten when the user picks a filter.
-  const resolvedProjectKey = resolveScratchProjectScopeKey(
-    listOptions.selectedProjectKey,
-    projects,
-    {
-      sidebarProjectGroupingMode: listOptions.projectGroupingMode,
-      sidebarProjectGroupingOverrides: {},
-    },
+  const selectedEnvironmentIds = listOptions.selectedEnvironmentIds;
+  const claimPersonIdByEnvironment = useAtomValue(identityClaimPersonIdByEnvironmentAtom);
+  const ownershipFilteredThreads = useMemo(
+    () =>
+      threads.filter((thread) =>
+        threadMatchesMine({
+          claimPersonId: claimPersonIdForEnvironment(
+            claimPersonIdByEnvironment,
+            thread.environmentId,
+          ),
+          originPersonId: thread.originSource?.personId ?? null,
+          participantPersonIds: (thread.participantSummaries ?? []).map(
+            (participant) => participant.personId,
+          ),
+          mode: listOptions.ownershipFilter,
+          relation: listOptions.ownershipRelation,
+        }),
+      ),
+    [
+      claimPersonIdByEnvironment,
+      listOptions.ownershipFilter,
+      listOptions.ownershipRelation,
+      threads,
+    ],
   );
+  const preferencesResult = useAtomValue(mobilePreferencesAtom);
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  // Recency/none default to hide settled; default/project grouping defaults to show.
+  const hideSettledOnRecent = AsyncResult.isSuccess(preferencesResult)
+    ? resolveHideSettledOnRecent(preferencesResult.value)
+    : true;
+  const hideSettledOnProjects = AsyncResult.isSuccess(preferencesResult)
+    ? resolveHideSettledOnProjects(preferencesResult.value)
+    : false;
+  const hideSettledThreads =
+    listOptions.threadGrouping === "project" ? hideSettledOnProjects : hideSettledOnRecent;
+  const setHideSettledThreads = useCallback(
+    (hide: boolean) => {
+      if (listOptions.threadGrouping === "project") {
+        savePreferences({ hideSettledOnProjects: hide });
+        return;
+      }
+      savePreferences({ hideSettledOnRecent: hide });
+    },
+    [listOptions.threadGrouping, savePreferences],
+  );
+  const projectScopeKey = listOptions.selectedProjectKey;
+  const resolvedProjectKey = resolveScratchProjectScopeKey(projectScopeKey, projects, {
+    sidebarProjectGroupingMode: listOptions.projectGroupingMode,
+    sidebarProjectGroupingOverrides: {},
+  });
+
   const projectFilterOptions = useMemo(
     () =>
       pickableProjectGroups(
         buildHomeProjectScopes({
           projects,
-          environmentId: selectedEnvironmentId,
+          selectedEnvironmentIds,
           projectGroupingMode: listOptions.projectGroupingMode,
         }),
       ).map((scope) => ({
         key: scope.key,
         label: scope.title,
       })),
-    [listOptions.projectGroupingMode, projects, selectedEnvironmentId],
+    [listOptions.projectGroupingMode, projects, selectedEnvironmentIds],
   );
   const selectedProjectKey = projectFilterOptions.some(
     (project) => project.key === resolvedProjectKey,
   )
     ? resolvedProjectKey
     : null;
+  const filterCustomized =
+    selectedEnvironmentIds.length > 0 ||
+    listOptions.ownershipFilter !== DEFAULT_OWNERSHIP_FILTER ||
+    listOptions.ownershipRelation !== DEFAULT_OWNERSHIP_RELATION ||
+    selectedProjectKey !== null ||
+    listOptions.threadGrouping !== DEFAULT_HOME_THREAD_GROUPING ||
+    hideSettledThreads !== (listOptions.threadGrouping !== "project");
 
   if (layout.usesSplitView && !nativePrimaryColumn) {
     return (
@@ -174,14 +243,23 @@ export function HomeRouteScreen() {
             accessibilityLabel: "Search threads",
           }}
           filter={{
-            customized: selectedEnvironmentId !== null || selectedProjectKey !== null,
+            customized: filterCustomized,
             items: buildHomeListFilterMenuItems({
               environments,
               projects: projectFilterOptions,
-              selectedEnvironmentId,
+              selectedEnvironmentIds,
               selectedProjectKey,
-              onEnvironmentChange: setSelectedEnvironmentId,
+              ownershipFilter: listOptions.ownershipFilter,
+              ownershipRelation: listOptions.ownershipRelation,
+              threadGrouping: listOptions.threadGrouping,
+              hideSettledThreads,
+              onClearEnvironments: clearSelectedEnvironments,
+              onToggleEnvironment: toggleSelectedEnvironmentId,
               onProjectChange: setSelectedProjectKey,
+              onOwnershipFilterChange: setOwnershipFilter,
+              onOwnershipRelationChange: setOwnershipRelation,
+              onThreadGroupingChange: setThreadGrouping,
+              onHideSettledThreadsChange: setHideSettledThreads,
             }),
           }}
         />
@@ -189,6 +267,8 @@ export function HomeRouteScreen() {
         <HomeScreen
           catalogState={catalogState}
           environments={environments}
+          listMode={listOptions.listMode}
+          threadGrouping={listOptions.threadGrouping}
           onAddConnection={() => openSettings(navigation, "SettingsEnvironmentNew")}
           onArchiveThread={archiveThread}
           onDeleteThread={confirmDeleteThread}
@@ -198,15 +278,24 @@ export function HomeRouteScreen() {
           onUnsettleThread={unsettleThread}
           onPinThread={pinThread}
           onUnpinThread={unpinThread}
+          onClearEnvironments={clearSelectedEnvironments}
+          onToggleEnvironment={toggleSelectedEnvironmentId}
           onSetThreadAutoSettle={setThreadAutoSettle}
           onMoveThread={moveThread}
           onRenameThread={renameThread}
           onRegenerateThreadTitle={regenerateThreadTitle}
-          onEnvironmentChange={setSelectedEnvironmentId}
           onProjectChange={setSelectedProjectKey}
           onOpenSettings={() => selectTab("settings")}
           onSearchQueryChange={setSearchQuery}
-          onSelectThread={handleSelectThread}
+          onSelectThread={(thread) => {
+            // Settled threads are live shells: opening one is plain
+            // navigation, and sending a message un-settles server-side.
+            // Warm detail (SQLite/HTTP) before the route mounts so open
+            // latency overlaps the stack transition.
+            prefetchEnvironmentThread(thread.environmentId, thread.id);
+            warmSelectedEnvironmentThread(thread.environmentId, thread.id);
+            handleSelectThread(thread);
+          }}
           onSelectPendingTask={openPendingTask}
           onDeletePendingTask={confirmDeletePendingTask}
           onNewThreadOnBranch={handleNewThreadOnBranch}
@@ -227,9 +316,13 @@ export function HomeRouteScreen() {
           projectSortOrder={listOptions.projectSortOrder}
           savedConnectionsById={savedConnectionsById}
           searchQuery={searchQuery}
-          selectedEnvironmentId={selectedEnvironmentId}
+          selectedEnvironmentIds={selectedEnvironmentIds}
           selectedProjectKey={selectedProjectKey}
-          threads={threads}
+          ownershipFilter={listOptions.ownershipFilter}
+          ownershipRelation={listOptions.ownershipRelation}
+          onOwnershipFilterChange={setOwnershipFilter}
+          onOwnershipRelationChange={setOwnershipRelation}
+          threads={ownershipFilteredThreads}
         />
         <ThreadUndoNotice visible={visible} />
       </>

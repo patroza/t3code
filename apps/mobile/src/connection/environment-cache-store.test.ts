@@ -474,7 +474,7 @@ describe("mobile SQLite environment cache store", () => {
       for (const turnItems of [
         [{ ...local }, original.projection.turnItems[1]!],
         [{ ...local, message: "Newer than the visible row." }, original.projection.turnItems[1]!],
-        original.projection.turnItems.toReversed(),
+        original.projection.turnItems.slice().reverse(),
       ]) {
         const snapshot = { ...original, projection: { ...original.projection, turnItems } };
         yield* store.saveThread(ENVIRONMENT_ID, snapshot);

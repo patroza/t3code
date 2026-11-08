@@ -1,9 +1,11 @@
+import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
 import { useSidebarWorkspaceTabs } from "../layout/workspace/useSystemWorkspaceTabBar";
 import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
 import type { ComposerTextPaste } from "../../native/T3ComposerEditor.types";
 import { useDeviceType } from "../../native/native-layout-metrics";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
+import { uuidv4 } from "../../lib/uuid";
 import {
   useAppearancePreferences,
   useAndroidFloatingTabs,
@@ -22,6 +24,7 @@ import {
   type MessageId,
   type ModelSelection,
   type ProviderInteractionMode,
+  type ProviderDriverKind,
   type ServerConfig as T3ServerConfig,
   type UsageLimitsReport,
 } from "@t3tools/contracts";
@@ -32,7 +35,7 @@ import {
 } from "@t3tools/shared/usageLimits";
 import { StackActions, useFocusEffect, useNavigation } from "@react-navigation/native";
 import type { ReactNode } from "react";
-import { useEffect, useEffectEvent, useRef, useState, type RefObject } from "react";
+import { useEffect, useMemo, useEffectEvent, useRef, useState, type RefObject } from "react";
 import { I18nManager, Keyboard, Platform, View, type ViewStyle } from "react-native";
 import { composerImageGallery } from "../../lib/composerImageGallery";
 import { filePreviewGallery } from "../../lib/filePreviewGallery";
@@ -82,6 +85,9 @@ import { GlassSurface } from "../../components/ui/GlassSurface";
 import { ComposerEditor, type ComposerEditorHandle } from "../../components/ComposerEditor";
 import { fileRoutePathSegments } from "../files/filePath";
 import { ComposerActionButton, ComposerToolbarRow } from "../../components/ComposerToolbar";
+import { resolveDriverUsage } from "@t3tools/client-runtime/state/aiUsagePresentation";
+import { useAiUsageSnapshot } from "../../state/useAiUsageSnapshot";
+import { parseStandaloneComposerSlashCommand } from "@t3tools/shared/composerTrigger";
 import { ComposerModelControl } from "../../components/ComposerModelControl";
 import {
   composerStripAttachments,
@@ -587,6 +593,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
   const isExpanded = isFocused || settingsSheetPresentation.keepsComposerExpanded;
   const { layout, setComposerEditing } = useAdaptiveWorkspaceLayout();
   const floatingSidebarComposer = useAndroidFloatingTabs() && layout.usesSplitView;
+  const selectDetail = useSelectWorkspaceDetail();
   const sidebarWorkspaceTabs = useSidebarWorkspaceTabs();
   const deviceType = useDeviceType();
   const usesLargeControls = sidebarWorkspaceTabs === "picker" || deviceType === "pad";
@@ -680,6 +687,25 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
       if (openUsageLimits()) onChangeDraftMessage("");
       return;
     }
+    if (
+      parseStandaloneComposerSlashCommand(draftMessage) === "new" &&
+      draftAttachments.length === 0
+    ) {
+      onChangeDraftMessage("");
+      selectDetail({
+        name: "Thread",
+        params: {
+          draft: {
+            requestId: uuidv4(),
+            environmentId: String(props.environmentId),
+            projectId: String(props.selectedThread.projectId),
+            branch: props.selectedThread.branch,
+            worktreePath: props.selectedThread.worktreePath,
+          },
+        },
+      });
+      return;
+    }
     const threadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
     if (inFlightThreadIdsRef.current.has(threadKey)) return;
     inFlightThreadIdsRef.current.add(threadKey);
@@ -727,6 +753,18 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
         option.selection.instanceId === currentModelSelection.instanceId &&
         option.selection.model === currentModelSelection.model,
     ) ?? null;
+  const aiUsageSnapshot = useAiUsageSnapshot(props.environmentId);
+  const threadUsage = useMemo(
+    () =>
+      currentModelOption
+        ? resolveDriverUsage(
+            aiUsageSnapshot,
+            currentModelOption.providerDriver as ProviderDriverKind,
+            currentModelSelection.model,
+          )
+        : null,
+    [aiUsageSnapshot, currentModelOption, currentModelSelection.model],
+  );
   const openSettings = () => {
     settingsSheetPresentation.open();
   };
@@ -802,6 +840,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
       <ComposerModelControl
         size={usesLargeControls ? "large" : "regular"}
         modelOption={currentModelOption}
+        usageMarker={threadUsage?.marker ?? null}
         selection={currentModelSelection}
         provider={selectedProviderStatus?.driver}
         reportedSelection={props.reportedModelSelection}
