@@ -1,0 +1,70 @@
+# Keep EAS project archives small. Mobile only needs the monorepo packages it
+# resolves through pnpm — not vendored agent reference trees or desktop shells.
+
+# Vendored reference repos (agents only; never imported by app code)
+.repos/
+
+# Desktop / electron / native host tooling
+# pnpm's frozen workspace lockfile requires every importer manifest, even
+# when the workspace's implementation is not part of the mobile build.
+apps/desktop/*
+!apps/desktop/package.json
+apps/vscode/*
+!apps/vscode/package.json
+apps/discord-bot/*
+!apps/discord-bot/package.json
+/native/*
+!/native/libghostty-vt
+/native/libghostty-vt/*
+!/native/libghostty-vt/LICENSE
+release/
+release-mock/
+dist-electron/
+.electron-runtime/
+
+# Infra, docs, agent metadata
+docs/
+.agents/
+.grok/
+.github/
+.claude/
+.cursor/
+.vscode/
+infra/*
+!infra/relay
+infra/relay/*
+!infra/relay/package.json
+!infra/task-cache
+infra/task-cache/*
+!infra/task-cache/package.json
+artifacts/
+.showcase/
+apps/mobile/.showcase/
+
+# Tests and snapshots (not needed for EAS bundle)
+**/__screenshots__/
+**/*.test.ts
+**/*.test.tsx
+**/*.spec.ts
+**/*.spec.tsx
+**/test-results/
+**/playwright-report/
+**/.vitest-*/
+
+# Local / generated
+node_modules/
+.t3/
+.turbo/
+.alchemy/
+.dir-deploy-n
+.logs/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# Git / IDE noise
+.git/
+.idea/
+*.tsbuildinfo

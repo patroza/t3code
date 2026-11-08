@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "candidates": [
+    {
+      "upstreamPr": 4018,
+      "sourceSha": "de8fd65934768173819b93adcd6b92af3e8c7fc3",
+      "status": "superseded",
+      "purpose": "Bound server thread history and lazily page older web activity",
+      "supersededBy": "upstream #5493 (6b73b3def): user-anchored turn-window pagination",
+      "note": "Client usage removed in the 6b73b3def sync merge. The server getThreadActivities RPC is retained only for deployed mobile clients; remove it once fleet mobile builds predate it no longer."
+    },
+    {
+      "upstreamPr": 3510,
+      "sourceSha": "034f4936d7a1435887bb62ac3f2db61f08928cbf",
+      "status": "partially-superseded",
+      "purpose": "Page mobile history and bound stale subscription catch-up",
+      "supersededBy": "upstream #5493 (6b73b3def): mobile paging replaced by loadEarlier turn windows",
+      "note": "The mobile scroll-up paging half was removed in the 6b73b3def sync merge. The server bounded-replay half in OrchestrationEngine remains active."
+    },
+    {
+      "upstreamPr": 4176,
+      "sourceSha": "56b6615afdfe3804a466e33cbab9056b8981f217",
+      "status": "active",
+      "purpose": "Bound long-lived orchestration, browser, preview, and VCS in-memory state"
+    },
+    {
+      "upstreamPr": 4506,
+      "sourceSha": "f7eaa00b99e67a9c1caf09e2fe6ff1f536f66b91",
+      "status": "active",
+      "purpose": "Show answered provider questions in the web thread timeline"
+    },
+    {
+      "upstreamPr": 4245,
+      "sourceSha": "6be48eb238cf310a60cc9571240601e774c7d381",
+      "status": "active",
+      "purpose": "Queue follow-up messages server-side during active turns with explicit steer controls"
+    },
+    {
+      "upstreamPr": 4379,
+      "sourceSha": "a27510d060645809ae1472bba4dbb248dc624e25",
+      "status": "active",
+      "purpose": "Refresh open workspace file previews when disk contents change"
+    },
+    {
+      "upstreamPr": 5344,
+      "sourceSha": "783fd023c69f7ebc9c0ae657ce124cce77d94587",
+      "status": "active",
+      "purpose": "Batch live thread stream items so large-thread sync publishes client state once per batch"
+    }
+  ]
+}

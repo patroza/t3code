@@ -46,7 +46,6 @@
           "unknownInEffectCatch": "error",
           "strictBooleanExpressions": "off",
           "lazyEffect": "off",
-          "globalJsonInEffect": "error",
           "schemaSyncInEffect": "error",
           "cryptoRandomUUID": "error",
           "cryptoRandomUUIDInEffect": "error",
@@ -71,34 +70,21 @@
           "catchTagToCatchReason": "error",
           "effectMapFlatten": "error",
           "effectMapVoid": "error",
-          "effectSleepZeroToYieldNow": "error",
-          "effectSucceedWithUndefined": "error",
-          "errorPayloadShadowsName": "error",
-          "failCauseToConstructor": "error",
-          "flatMapIdentityToFlatten": "error",
           "flatMapToMap": "error",
-          "flatMapToTap": "error",
-          "manualMetricTapToTrack": "error",
-          "mapConstToAs": "error",
-          "mapSomeCatchNoSuchElement": "error",
-          "matchBooleanToIsSuccess": "error",
           "matchEffectToMapBoth": "error",
           "matchEffectToMatch": "error",
-          "matchToResultOrOption": "error",
           "multipleCatchTag": "error",
           "preferUnsafeConstructor": "error",
           "redundantOrDie": "error",
           "redundantSchemaTagIdentifier": "error",
-          "resultMatchToFromResult": "error",
           "runOfExitToRunExit": "error",
-          "suspendFailToFailSync": "error",
           "syncToSucceed": "error",
           "timeoutCatchTagToTimeoutOrElse": "error",
           "unnecessaryPipe": "error",
           "unnecessaryTypeofType": "error",
-          "effectTryWithoutCatch": "error",
+          // This tsc-rs build does not implement every upstream rule name. Unknown
+          // error-severity rules make `tsc` fail, so those names are omitted.
           "processEnvInEffect": "error",
-          "preferSchemaTaggedError": "error",
           "extendsNativeError": "error",
           "schemaNumber": "off"
         },
@@ -107,7 +93,6 @@
             "include": ["**/*.test.ts", "**/*.test.tsx"],
             "options": {
               "diagnosticSeverity": {
-                "globalJsonInEffect": "off",
                 "effectFnOpportunity": "off"
               }
             }

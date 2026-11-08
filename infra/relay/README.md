@@ -172,6 +172,6 @@ and hosted web builds.
 
 See:
 
-- [T3 Connect setup](../../docs/operations/connect-setup.md) for Clerk keys, JWT templates, and sign-up restrictions.
+- [T3 Connect setup](../../docs/operations/connect-setup.md) for Clerk keys, JWT templates, and waitlist setup.
 - [Relay Observability](../../docs/operations/relay-observability.md) for deployment tracing and diagnostics.
 - [T3 Connect architecture](../../docs/internals/t3-connect.md) for environment linking and trust boundaries.
