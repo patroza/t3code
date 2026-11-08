@@ -159,7 +159,8 @@ const credentialFromCreateResult = (
 };
 
 const credentialFromGetResult = (data: Extract<GetCredentialResult, { success: true }>["data"]) => {
-  const userHandle = data.userHandle.length > 0 ? data.userHandle : null;
+  const userHandle =
+    data.userHandle !== null && data.userHandle.length > 0 ? data.userHandle : null;
   const { prf, largeBlob } = data.extensions ?? {};
   const extensionResults: AuthenticationExtensionsClientOutputs = {
     ...(prf ? { prf: prfOutputs(prf) } : {}),

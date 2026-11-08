@@ -146,7 +146,7 @@ describe("server browser element refs", () => {
 
   it("shows dotted fields as dots wherever their value appears, keeping text values and refs", async () => {
     await page.setContent(`
-      <table><tr><td>password:</td><td><input id="pw" type="password" aria-label="Password"></td></tr></table>
+      <table><tr aria-label="password: typed-pass"><td>password:</td><td><input id="pw" type="password" aria-label="Password"></td></tr></table>
       <input aria-label="Username" value="maria">
       <input type="password" aria-label='saved" [ref=e2]: x' placeholder="hint" value="saved-pass">
       <input type="password" role="combobox" aria-label="Code" value="role-pass">
@@ -417,6 +417,110 @@ describe("server browser drag", () => {
   });
 });
 
+describe("server browser viewport capture", () => {
+  const options = { format: "png" } as const;
+  const unavailable = () =>
+    new Error(
+      "cdpSession.send: Protocol error (Page.captureScreenshot): Unable to capture screenshot",
+    );
+
+  it("recovers from a transient screenshot protocol error", async () => {
+    let attempts = 0;
+    const cdp = {
+      send: async () => {
+        if (++attempts === 1) throw unavailable();
+        return { data: "captured-image" };
+      },
+    } as unknown as CDPSession;
+
+    expect(await ServerBrowserPage.captureViewport(cdp, options)).toBe("captured-image");
+    expect(attempts).toBe(2);
+  });
+
+  it("reports a persistent capture failure after one retry", async () => {
+    let attempts = 0;
+    const error = unavailable();
+    const cdp = {
+      send: async () => {
+        attempts++;
+        throw error;
+      },
+    } as unknown as CDPSession;
+
+    await expect(ServerBrowserPage.captureViewport(cdp, options)).rejects.toBe(error);
+    expect(attempts).toBe(2);
+  });
+
+  it("reports other protocol errors without retrying", async () => {
+    let attempts = 0;
+    const error = new Error("cdpSession.send: Target page, context or browser has been closed");
+    const cdp = {
+      send: async () => {
+        attempts++;
+        throw error;
+      },
+    } as unknown as CDPSession;
+
+    await expect(ServerBrowserPage.captureViewport(cdp, options)).rejects.toBe(error);
+    expect(attempts).toBe(1);
+  });
+});
+
+it("captures the native display viewport after page script reassigns the globals", async () => {
+  // Context deviceScaleFactor changes DPR but does not scale raw CDP captures.
+  const browser = await chromium.launch({
+    headless: true,
+    args: ["--force-device-scale-factor=1.5", "--window-size=1280,800"],
+  });
+  try {
+    const context = await browser.newContext({ viewport: null });
+    const page = await context.newPage();
+    const cdp = await context.newCDPSession(page);
+    await page.setContent(
+      "<script>devicePixelRatio = -1.5; innerWidth = 99999; innerHeight = 1e7;</script>",
+    );
+    expect(await page.evaluate("[devicePixelRatio, innerWidth, innerHeight]")).toEqual([
+      -1.5, 99999, 1e7,
+    ]);
+    const snapshotSize = async () => {
+      const { screenshot } = await ServerBrowserPage.snapshot({
+        page,
+        cdp,
+        renderScale: "display",
+        consoleEntries: [],
+        networkEntries: [],
+        actionTimeline: [],
+      });
+      const png = Buffer.from(screenshot.data, "base64");
+      const size = { width: png.readUInt32BE(16), height: png.readUInt32BE(20) };
+      expect(screenshot).toMatchObject(size);
+      return size;
+    };
+    expect(await snapshotSize()).toEqual({ width: 1280, height: 800 });
+    expect(await ServerBrowserPage.readPageMetrics(cdp)).toEqual({
+      ratio: 1.5,
+      width: 1280,
+      height: 800,
+      zoom: 1,
+    });
+    // Window bounds are ignored by headless Chromium on some hosts; a metrics override resizes
+    // the page everywhere, and Playwright's viewportSize() stays stale as it would on desktop.
+    await cdp.send("Emulation.setDeviceMetricsOverride", {
+      width: 390,
+      height: 844,
+      deviceScaleFactor: 0,
+      mobile: false,
+    });
+    expect(await ServerBrowserPage.readPageMetrics(cdp)).toMatchObject({
+      ratio: 1.5,
+      width: 390,
+      height: 844,
+    });
+    expect(await snapshotSize()).toEqual({ width: 585, height: 1266 });
+  } finally {
+    await browser.close();
+  }
+});
 describe("server browser net errors", () => {
   it.each([
     ["net::ERR_CONNECTION_REFUSED", "ERR_CONNECTION_REFUSED", -102],
