@@ -1,5 +1,4 @@
 import type { T3Highlights } from "@t3tools/mobile-highlights-native";
-import { NitroModules } from "react-native-nitro-modules";
 
 import { highlightLanguageId } from "./highlightLanguage";
 import { HIGHLIGHTS_THEME_STYLES } from "./highlights.generated";
@@ -19,11 +18,17 @@ const LINE_END = 0xffffffff;
 // thousands of native text runs.
 const MAX_HIGHLIGHTED_LINE_LENGTH = 1_000;
 
-// @pierre/highlights compiled to native code (modules/t3-highlights). Missing
-// from binaries built before it shipped, where code renders as plain text.
-const nativeHighlights = NitroModules.hasHybridObject("T3Highlights")
-  ? NitroModules.createHybridObject<T3Highlights>("T3Highlights")
-  : undefined;
+// Native @pierre/highlights lexer. Missing builds render plain text.
+// Dynamic import: a static Nitro import throws during startup and aborts launch.
+let nativeHighlights: T3Highlights | undefined;
+
+export const nativeHighlightsReady: Promise<void> = import("./highlightsNativeBinding")
+  .then(({ createNativeHighlights }) => {
+    nativeHighlights = createNativeHighlights();
+  })
+  .catch((error: unknown) => {
+    console.warn("[highlights] native lexer unavailable", error);
+  });
 
 export interface TokenizedCode {
   /** Retained UTF-16 source, compact native records, and line indexes. */
