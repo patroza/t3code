@@ -1,3 +1,4 @@
+import * as DesktopDeepLinks from "./DesktopDeepLinks.ts";
 import { assert, it } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Deferred from "effect/Deferred";
@@ -12,7 +13,7 @@ import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
-import { vi } from "vite-plus/test";
+import { describe, expect, vi } from "vite-plus/test";
 
 vi.mock("electron", () => ({}));
 vi.mock("@clerk/electron", () => ({ createClerkBridge: vi.fn() }));
@@ -126,6 +127,11 @@ it.effect.each([false, true])(
               serverExposureMode: "local-only",
             }),
           } as unknown as DesktopAppSettings.DesktopAppSettings["Service"]),
+          Effect.provideService(DesktopDeepLinks.DesktopDeepLinks, {
+            handleArgv: () => Effect.void,
+            handleUrl: () => Effect.void,
+            start: Effect.void,
+          }),
           Effect.provideService(DesktopLifecycle.DesktopLifecycle, {
             register: Effect.void,
             relaunch: () => Effect.void,
@@ -265,3 +271,23 @@ it.effect.each([false, true])(
       assert.isTrue(yield* Deferred.isDone(registrationStopped));
     }).pipe(Effect.provide(DesktopShutdown.layer)),
 );
+
+describe("resolveDesktopBackendPortHint", () => {
+  it("keeps the renderer protocol aligned with a reused live backend", () => {
+    expect(
+      DesktopApp.resolveDesktopBackendPortHint("http://127.0.0.1:8080/", Option.some(3773)),
+    ).toEqual(Option.some(8080));
+  });
+
+  it("uses the configured port when no live backend exists", () => {
+    expect(DesktopApp.resolveDesktopBackendPortHint(undefined, Option.some(4949))).toEqual(
+      Option.some(4949),
+    );
+  });
+
+  it("ignores a malformed live backend marker", () => {
+    expect(DesktopApp.resolveDesktopBackendPortHint("not a URL", Option.some(4949))).toEqual(
+      Option.some(4949),
+    );
+  });
+});

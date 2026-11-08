@@ -19,6 +19,7 @@ import { clerkFrontendApiHostnameFromPublishableKey } from "@t3tools/shared/rela
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
+import * as DesktopDeepLinks from "./DesktopDeepLinks.ts";
 import * as DesktopUserData from "./DesktopUserData.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import { openClerkTokenStorage } from "./ClerkTokenStore.ts";
@@ -58,6 +59,7 @@ export class DesktopClerk extends Context.Service<
     readonly configure: Effect.Effect<
       void,
       never,
+      | DesktopDeepLinks.DesktopDeepLinks
       | ElectronApp.ElectronApp
       | ElectronWindow.ElectronWindow
       | DesktopWebLinks.DesktopWebLinks
@@ -66,7 +68,7 @@ export class DesktopClerk extends Context.Service<
   }
 >()("@t3tools/desktop/app/DesktopClerk") {}
 
-function resolveDesktopClerkFrontendApiHostname(
+export function resolveDesktopClerkFrontendApiHostname(
   publishableKey: string | undefined,
 ): string | undefined {
   const normalizedKey = publishableKey?.trim();
@@ -161,6 +163,7 @@ export const make = Effect.gen(function* () {
     configure: Effect.gen(function* () {
       const electronApp = yield* ElectronApp.ElectronApp;
       const electronWindow = yield* ElectronWindow.ElectronWindow;
+      const deepLinks = yield* DesktopDeepLinks.DesktopDeepLinks;
       const webLinks = yield* DesktopWebLinks.DesktopWebLinks;
       const context = yield* Effect.context<ElectronWindow.ElectronWindow>();
       const runPromise = Effect.runPromiseWith(context);
@@ -226,7 +229,15 @@ export const make = Effect.gen(function* () {
         startProviderAuthHandoff(url) ||
         resumeProviderAuth(url) ||
         openWebLink(url) ||
-        openAppLink(url);
+        openAppLink(url) ||
+        (() => {
+          const isDesktopDeepLink =
+            Option.isSome(DesktopDeepLinks.parseDesktopThreadDeepLink(url)) ||
+            Option.isSome(DesktopDeepLinks.parseDesktopProjectDeepLink(url));
+          if (!isDesktopDeepLink) return false;
+          void runPromise(deepLinks.handleUrl(url));
+          return true;
+        })();
       for (const url of pendingOpenUrls.splice(0)) handleOpenUrl(url);
       yield* electronApp.on("open-file", (event: { preventDefault: () => void }, path: string) => {
         if (!DesktopWebLinks.isWebPageFile(path)) return;
@@ -239,16 +250,23 @@ export const make = Effect.gen(function* () {
             (value) =>
               startProviderAuthHandoff(value) || resumeProviderAuth(value) || openAppLink(value),
           )
-        )
+        ) {
           return;
+        }
         void runPromise(
           Effect.gen(function* () {
+            yield* deepLinks.handleArgv(argv);
             const mainWindow = yield* electronWindow.currentMainOrFirst;
             if (Option.isSome(mainWindow)) yield* electronWindow.reveal(mainWindow.value);
           }),
         );
       };
       for (const argv of pendingSecondInstances.splice(0)) handleSecondInstance(argv);
+
+      if (environment.isPackaged && !environment.isDevelopment) {
+        yield* electronApp.setAsDefaultProtocolClient(DesktopDeepLinks.DESKTOP_EXTERNAL_PROTOCOL);
+      }
+      yield* deepLinks.handleArgv(args);
     }).pipe(Effect.withSpan("desktop.clerk.configure")),
   });
 });
