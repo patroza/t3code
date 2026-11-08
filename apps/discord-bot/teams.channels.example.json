@@ -1,0 +1,33 @@
+{
+  "channels": [
+    {
+      "teamId": "00000000-0000-0000-0000-000000000000",
+      "channelId": "19:examplechannel@thread.tacv2",
+      "channelName": "Acme Prod Incidents",
+      "projectShortName": "macs-scanner",
+      "deliveryMode": "native",
+      "company": "Acme",
+      "environment": "prod",
+      "companyKeywords": ["acme", "kunde acme"],
+      "environmentKeywords": ["prod", "produktion", "live"],
+      "problemKeywords": ["fehler", "störung", "ausfall", "geht nicht"],
+      "automaticAssessmentEnabled": true,
+      "internalUserIds": ["11111111-1111-1111-1111-111111111111"],
+      "reactionTriggerTypes": ["eyes", "🚨"],
+      "messageTagTriggers": ["#investigate", "#triage"],
+      "respondToMentions": true,
+      "teamsIncomingWebhookUrl": "https://example.webhook.office.com/webhookb2/..."
+    }
+  ],
+  "groupChats": [
+    {
+      "conversationId": "19:examplegroupchat@thread.v2",
+      "titleIncludes": "MAKO Scanner",
+      "projectShortName": "macs-scanner",
+      "passive": true,
+      "mirrorTenantId": "77e3cbed-2705-4d62-8421-efde364a4eeb",
+      "mirrorTeamId": "1523eb08-b152-4a1d-91e1-8658cf950273",
+      "mirrorChannelId": "19:ff57061cd9894df08d0d0230c76947af@thread.tacv2"
+    }
+  ]
+}
