@@ -7,6 +7,7 @@ import * as NodeVM from "node:vm";
 
 import { assert, describe, it } from "vite-plus/test";
 
+import { electronReleaseAssetApiUrl } from "./ensure-electron-runtime.mjs";
 import {
   makeDevelopmentEnvironmentScript,
   makeDevelopmentLauncherScript,
@@ -40,7 +41,7 @@ describe("Electron host runtime repair", () => {
         `${source
           .replace(/^import\s[\s\S]*?;\n/gm, "")
           .replaceAll("import.meta.url", JSON.stringify(import.meta.url))
-          .replace("export function ensureElectronRuntime", "function ensureElectronRuntime")}
+          .replaceAll("export function ", "function ")}
 const firstRuntime = ensureElectronRuntime();
 if (ensureElectronRuntime() !== firstRuntime) throw new Error("Runtime changed between projects");
 firstRuntime;`,
@@ -79,6 +80,30 @@ firstRuntime;`,
     } finally {
       NodeFS.rmSync(directory, { recursive: true, force: true });
     }
+  });
+});
+
+describe("Electron release asset lookup", () => {
+  it("selects the named zip from the GitHub release API payload", () => {
+    const release = {
+      assets: [
+        {
+          name: "SHASUMS256.txt",
+          url: "https://api.github.com/repos/electron/electron/releases/assets/2",
+        },
+        {
+          name: "electron-v44.10.1-linux-x64.zip",
+          url: "https://api.github.com/repos/electron/electron/releases/assets/1",
+        },
+      ],
+    };
+
+    assert.equal(
+      electronReleaseAssetApiUrl(release, "electron-v44.10.1-linux-x64.zip"),
+      "https://api.github.com/repos/electron/electron/releases/assets/1",
+    );
+    assert.equal(electronReleaseAssetApiUrl(release, "missing.zip"), undefined);
+    assert.equal(electronReleaseAssetApiUrl(null, "electron-v44.10.1-linux-x64.zip"), undefined);
   });
 });
 

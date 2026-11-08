@@ -145,12 +145,63 @@ function installFromElectronCache(electronDir) {
   return false;
 }
 
-function downloadElectronRuntime(electronDir, version) {
-  const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-electron-"));
-  const zipPath = NodePath.join(tempDir, `electron-v${version}-${hostPlatform}-${hostArch}.zip`);
+// The public /releases/download URL for current Electron zips has been returning
+// 504 from GitHub's edge. The release API still redirects at the asset CDN.
+export function electronReleaseAssetApiUrl(release, zipName) {
+  const assets = release?.assets;
+  if (!Array.isArray(assets)) {
+    return undefined;
+  }
+  const asset = assets.find((entry) => entry?.name === zipName);
+  return typeof asset?.url === "string" && asset.url.length > 0 ? asset.url : undefined;
+}
 
+function downloadElectronReleaseAsset(version, zipName, zipPath) {
+  const headers = ["-H", "Accept: application/vnd.github+json"];
+  const token = process.env.GITHUB_TOKEN?.trim() || process.env.GH_TOKEN?.trim();
+  if (token) {
+    headers.push("-H", `Authorization: Bearer ${token}`);
+  }
+
+  const releaseResult = NodeChildProcess.spawnSync(
+    "curl",
+    [
+      "-fsSL",
+      "--retry",
+      "2",
+      "--retry-all-errors",
+      "--connect-timeout",
+      "15",
+      "--max-time",
+      "60",
+      ...headers,
+      `https://api.github.com/repos/electron/electron/releases/tags/v${version}`,
+    ],
+    { encoding: "utf8" },
+  );
+  if (releaseResult.status !== 0 || !releaseResult.stdout) {
+    process.stderr.write("GitHub API release lookup failed.\n");
+    return false;
+  }
+
+  let assetUrl;
   try {
-    runChecked("curl", [
+    assetUrl = electronReleaseAssetApiUrl(JSON.parse(releaseResult.stdout), zipName);
+  } catch {
+    process.stderr.write("GitHub API release lookup returned invalid JSON.\n");
+    return false;
+  }
+  if (!assetUrl) {
+    process.stderr.write(`GitHub API release has no ${zipName}.\n`);
+    return false;
+  }
+
+  process.stderr.write(
+    `public Electron download failed, fetching ${zipName} through the GitHub API\n`,
+  );
+  const download = NodeChildProcess.spawnSync(
+    "curl",
+    [
       "-fsSL",
       "--retry",
       "4",
@@ -159,10 +210,50 @@ function downloadElectronRuntime(electronDir, version) {
       "15",
       "--max-time",
       "300",
-      `https://github.com/electron/electron/releases/download/v${version}/electron-v${version}-${hostPlatform}-${hostArch}.zip`,
+      "-H",
+      "Accept: application/octet-stream",
+      ...(token ? ["-H", `Authorization: Bearer ${token}`] : []),
+      "-L",
+      assetUrl,
       "-o",
       zipPath,
-    ]);
+    ],
+    { stdio: "inherit" },
+  );
+  if (download.status !== 0) {
+    process.stderr.write(
+      `GitHub API asset download failed with exit code ${download.status ?? "unknown"}\n`,
+    );
+    return false;
+  }
+  return true;
+}
+
+function downloadElectronRuntime(electronDir, version) {
+  const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-electron-"));
+  const zipName = `electron-v${version}-${hostPlatform}-${hostArch}.zip`;
+  const zipPath = NodePath.join(tempDir, zipName);
+
+  try {
+    try {
+      runChecked("curl", [
+        "-fsSL",
+        "--retry",
+        "4",
+        "--retry-all-errors",
+        "--connect-timeout",
+        "15",
+        "--max-time",
+        "300",
+        `https://github.com/electron/electron/releases/download/v${version}/${zipName}`,
+        "-o",
+        zipPath,
+      ]);
+    } catch (publicError) {
+      if (!downloadElectronReleaseAsset(version, zipName, zipPath)) {
+        throw publicError;
+      }
+    }
     if (hostPlatform === "darwin") {
       runChecked("ditto", ["-x", "-k", zipPath, NodePath.join(electronDir, "dist")]);
     } else {
