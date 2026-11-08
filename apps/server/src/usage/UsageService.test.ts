@@ -1454,29 +1454,9 @@ describe("UsageService", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.live("keeps Cursor credential errors visible when a saved login cannot be read", () =>
-    Effect.gen(function* () {
-      const { settings, home } = yield* setup;
-      const authPath = NodePath.join(home, "config", "cursor", "auth.json");
-      yield* Effect.promise(async () => {
-        await NodeFSP.mkdir(NodePath.dirname(authPath), { recursive: true });
-        await NodeFSP.writeFile(authPath, "invalid json");
-      });
-      const service = yield* UsageService.make.pipe(
-        Effect.provide(
-          layerService({ prefix: "usage-service-cursor-invalid-login", home, settings }),
-        ),
-      );
-      const summary = yield* service.readSummary({ ...WINDOW, awaitRefresh: true });
-      const cursor = summary.sources.find((source) => source.fingerprint.provider === "cursor");
-      assert.strictEqual(cursor?.message, "Cursor credentials could not be read.");
-    }).pipe(Effect.scoped),
-  );
-
   it.live("answers Cursor from its cache while one shared refresh runs", () =>
     Effect.gen(function* () {
       const { settings, home } = yield* setup;
-      yield* writeCursorLogin(home);
       yield* TestClock.setTime(CURSOR_NOW);
       const cursor = makeFakeCursor();
       cursor.state.events = [{ timestampMs: CURSOR_NOW - 2 * HOUR_MS, outputTokens: 5 }];
@@ -1516,14 +1496,22 @@ describe("UsageService", () => {
         assert.isUndefined(cursorSource(fresh)?.refreshing);
         assert.strictEqual(totalOutputTokens(fresh), 12);
         assert.strictEqual(cursor.state.calls.length, 2);
-      }).pipe(Effect.provide(layerService({ prefix: "usage-service-cursor-swr", home, settings })));
+      }).pipe(
+        Effect.provide(
+          layerService({
+            prefix: "usage-service-cursor-swr",
+            home,
+            settings,
+            environment: { CURSOR_API_KEY: "test-key" },
+          }),
+        ),
+      );
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );
 
   it.live("caches Cursor's whole retention and then refetches only the newest edge", () =>
     Effect.gen(function* () {
       const { settings, home } = yield* setup;
-      yield* writeCursorLogin(home);
       yield* TestClock.setTime(CURSOR_NOW);
       const cursor = makeFakeCursor();
       cursor.state.events = [
@@ -1565,7 +1553,12 @@ describe("UsageService", () => {
         assert.strictEqual(cursorSource(yield* read(wide))?.fingerprint.volumeId, "account-b");
       }).pipe(
         Effect.provide(
-          layerService({ prefix: "usage-service-cursor-incremental", home, settings }),
+          layerService({
+            prefix: "usage-service-cursor-incremental",
+            home,
+            settings,
+            environment: { CURSOR_API_KEY: "test-key" },
+          }),
         ),
       );
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
@@ -1574,7 +1567,6 @@ describe("UsageService", () => {
   it.live("reports a failed Cursor refresh from its cache without refreshing", () =>
     Effect.gen(function* () {
       const { settings, home } = yield* setup;
-      yield* writeCursorLogin(home);
       yield* TestClock.setTime(CURSOR_NOW);
       const cursor = makeFakeCursor();
       cursor.state.events = [{ timestampMs: CURSOR_NOW - HOUR_MS * 3, outputTokens: 5 }];
@@ -1602,7 +1594,14 @@ describe("UsageService", () => {
         assert.strictEqual(cursorSource(switched)?.message, cursor.state.error);
         assert.strictEqual(totalOutputTokens(switched), 0);
       }).pipe(
-        Effect.provide(layerService({ prefix: "usage-service-cursor-failure", home, settings })),
+        Effect.provide(
+          layerService({
+            prefix: "usage-service-cursor-failure",
+            home,
+            settings,
+            environment: { CURSOR_API_KEY: "test-key" },
+          }),
+        ),
       );
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );
