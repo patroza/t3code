@@ -31,7 +31,7 @@ export interface AgentAwarenessState {
   readonly deepLink: string;
 }
 
-function buildAgentAwarenessDeepLink(input: {
+export function buildAgentAwarenessDeepLink(input: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
 }): string {

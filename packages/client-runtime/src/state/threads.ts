@@ -524,7 +524,6 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     }
     if (sequence === appliedSequence) return;
     yield* SubscriptionRef.set(lastSequence, sequence);
-    if (fresh.length === 0) return;
 
     const waiting = yield* Ref.get(awaitingCompletion);
     // Apply against the latest projection/history in one update so a concurrent

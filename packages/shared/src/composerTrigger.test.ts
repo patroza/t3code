@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   detectComposerTrigger,
   parseSideChatCommand,
+  parseStandaloneComposerSlashCommand,
   serializeComposerFileLink,
 } from "./composerTrigger.ts";
 
@@ -93,6 +94,13 @@ describe("serializeComposerFileLink", () => {
     expect(serializeComposerFileLink("@scope/package.json")).toBe(
       "[package.json](@scope/package.json)",
     );
+  });
+});
+
+describe("parseStandaloneComposerSlashCommand", () => {
+  it("parses /new without accepting trailing prompt text", () => {
+    expect(parseStandaloneComposerSlashCommand(" /NEW ")).toBe("new");
+    expect(parseStandaloneComposerSlashCommand("/new explain this")).toBeNull();
   });
 });
 

@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 
 import { EnvironmentAuthInvalidError } from "@t3tools/contracts";
 import { hashTelemetryId } from "@t3tools/shared/telemetryId";
+import { OMEGENT_T3_PRODUCT_FAMILY, OMEGENT_T3_PRODUCT_TOKEN } from "@t3tools/shared/productFamily";
 import {
   bootstrapRemoteBearerSession,
   exchangeRemoteDpopAccessToken,
@@ -207,9 +208,18 @@ describe("remote environment authorization", () => {
         connectionMethod: "relay",
       }).pipe(provideRemoteHttp(fetch.fetchFn));
 
-      expect(url).toBe(
-        "wss://remote.example.com/ws?wsTicket=ws-ticket&clientSurface=mobile&clientAppVersion=1.2.3&clientDeviceType=phone&clientOs=Android&clientOsMajorVersion=15&clientDeviceModel=Pixel+9&connectionMethod=relay",
-      );
+      const parsed = new URL(url);
+      expect(parsed.origin + parsed.pathname).toBe("wss://remote.example.com/ws");
+      expect(parsed.searchParams.get("wsTicket")).toBe("ws-ticket");
+      expect(parsed.searchParams.get("productFamily")).toBe("omegent-t3");
+      expect(parsed.searchParams.get("productToken")).toBeTruthy();
+      expect(parsed.searchParams.get("clientSurface")).toBe("mobile");
+      expect(parsed.searchParams.get("clientAppVersion")).toBe("1.2.3");
+      expect(parsed.searchParams.get("clientDeviceType")).toBe("phone");
+      expect(parsed.searchParams.get("clientOs")).toBe("Android");
+      expect(parsed.searchParams.get("clientOsMajorVersion")).toBe("15");
+      expect(parsed.searchParams.get("clientDeviceModel")).toBe("Pixel 9");
+      expect(parsed.searchParams.get("connectionMethod")).toBe("relay");
     }),
   );
 
@@ -245,7 +255,7 @@ describe("remote environment authorization", () => {
         { method: "GET", url: "https://remote.example.com/ws", accessToken: "ws-ticket" },
       ]);
       expect(url).toBe(
-        "wss://remote.example.com/ws?wsTicket=ws-ticket&dpop=proof-2&connectionMethod=relay",
+        `wss://remote.example.com/ws?wsTicket=ws-ticket&dpop=proof-2&connectionMethod=relay&productFamily=${OMEGENT_T3_PRODUCT_FAMILY}&productToken=${OMEGENT_T3_PRODUCT_TOKEN}`,
       );
     }),
   );

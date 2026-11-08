@@ -32,6 +32,7 @@ export interface QueuedThreadRun {
 }
 
 export interface ThreadQueueWorkflowState {
+  readonly canReorder: boolean;
   readonly activeRun: Run | null;
   readonly queuedRuns: ReadonlyArray<QueuedThreadRun>;
   readonly isHeld: boolean;
@@ -164,6 +165,7 @@ export function deriveThreadQueueWorkflowState(projection: Projection): ThreadQu
   return {
     activeRun,
     queuedRuns,
+    canReorder: capabilities?.supportsQueuedMessages === true,
     isHeld: projection.runs.some((run) => run.status === "queued" && run.queueHeld === true),
     canSendNow:
       activeRun === null &&

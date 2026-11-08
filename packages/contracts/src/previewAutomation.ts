@@ -551,6 +551,7 @@ export const PreviewAutomationSnapshot = Schema.Struct({
     data: Schema.String,
     width: Schema.Int,
     height: Schema.Int,
+    path: Schema.optional(Schema.String),
   }),
   /** The capture before `screenshot` was capped for the agent, when requested and larger. */
   fullScreenshot: Schema.optional(
@@ -605,6 +606,7 @@ export const PreviewAutomationHostFocus = Schema.Struct({
   ...PreviewAutomationHostIdentity.fields,
   connectionId: PreviewAutomationConnectionId,
   focused: Schema.Boolean,
+  threadId: Schema.optional(ThreadId),
   liveTabs: Schema.optional(
     Schema.Array(
       Schema.Struct({

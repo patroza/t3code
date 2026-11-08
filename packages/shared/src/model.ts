@@ -52,7 +52,7 @@ function getProviderOptionSelectionValue(
   return getRawSelectionValueById(selections, id);
 }
 
-function getProviderOptionStringSelectionValue(
+export function getProviderOptionStringSelectionValue(
   selections: ReadonlyArray<ProviderOptionSelection> | null | undefined,
   id: string,
 ): string | undefined {

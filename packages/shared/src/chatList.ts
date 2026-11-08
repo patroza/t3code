@@ -1,5 +1,24 @@
 export const CHAT_LIST_ANCHOR_OFFSET = 16;
 
+/** Mirror server queue-by-default for follow-ups while a turn starts/runs or awaits its provider session.
+ * Bootstrap sends are exempt because they create the thread in the same dispatch.
+ * Queued sends appear by the composer, not the chat list, so clients keep the reader's position.
+ */
+export function sendEntersSteeringQueue(input: {
+  readonly hasBootstrap: boolean;
+  readonly sessionStatus: string | null | undefined;
+  readonly hasPendingTurnStart: boolean;
+}): boolean {
+  if (input.hasBootstrap) {
+    return false;
+  }
+  return (
+    input.sessionStatus === "running" ||
+    input.sessionStatus === "starting" ||
+    input.hasPendingTurnStart
+  );
+}
+
 export interface ChatListAnchoredEndSpace {
   readonly anchorIndex: number;
   readonly anchorOffset: number;

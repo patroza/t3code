@@ -252,7 +252,7 @@ describe("pools", () => {
       [[stale, fresh, newest], "Claude Max Subscription", 5],
     ] as const) {
       for (const order of reports.length === 2
-        ? [reports, reports.toReversed()]
+        ? [reports, [...reports].reverse()]
         : [
             [stale, fresh, newest],
             [stale, newest, fresh],
@@ -991,7 +991,7 @@ describe("pooled account columns", () => {
     ]);
     expect(pool!.windows[1]!.resets.map((reset) => reset.member.account.key)).toEqual(["a", "b"]);
     expect(pool!.windows[1]!.remainingPercent).toBe(50);
-    expect(keys(collectLimitPools(accounts.toReversed(), now)[0]!)).toEqual(keys(pool!));
+    expect(keys(collectLimitPools([...accounts].reverse(), now)[0]!)).toEqual(keys(pool!));
   });
 
   it.each([undefined, "invalid", "2026-09-03T11:30:00.000Z"])(
@@ -1284,7 +1284,7 @@ describe("/usage-limits", () => {
       },
     });
     const duplicates = [failed, staleCredit, credited, freshest];
-    for (const providers of [duplicates, duplicates.toReversed()]) {
+    for (const providers of [duplicates, [...duplicates].reverse()]) {
       const report = collectProviderUsageLimits(failed.instanceId, providers, sources, now);
       expect(report?.accounts.map((account) => account.id)).toEqual(["codex-fresh", "hub:oss"]);
       expect(report?.accounts[0]).toMatchObject({

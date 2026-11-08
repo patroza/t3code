@@ -48,7 +48,7 @@ const hiddenIds = (localTags: Array<string> | null, linkedTags: Array<string> | 
       { environmentId: local, threads: localThreads, hiddenTags: localTags },
       { environmentId: linked, threads: linkedThreads, hiddenTags: linkedTags },
     ]),
-  ].toSorted();
+  ].sort();
 const key = (environmentId: EnvironmentId, id: string) =>
   threadKey({ environmentId, threadId: ThreadId.make(id) });
 
@@ -66,7 +66,7 @@ describe("hiddenThreadKeys", () => {
         key(local, "private"),
         key(local, "private-subagent"),
         key(linked, "delegated-from-private"),
-      ].toSorted(),
+      ].sort(),
     );
   });
 

@@ -13,6 +13,7 @@ export const SourceControlProviderInfo = Schema.Struct({
   kind: SourceControlProviderKind,
   name: TrimmedNonEmptyString,
   baseUrl: Schema.String,
+  repositoryUrl: Schema.optional(TrimmedNonEmptyString),
 });
 export type SourceControlProviderInfo = typeof SourceControlProviderInfo.Type;
 
@@ -35,6 +36,7 @@ export const ChangeRequest = Schema.Struct({
   isCrossRepository: Schema.optional(Schema.Boolean),
   headRepositoryNameWithOwner: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   headRepositoryOwnerLogin: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  hasFailingChecks: Schema.optional(Schema.Boolean),
 });
 export type ChangeRequest = typeof ChangeRequest.Type;
 

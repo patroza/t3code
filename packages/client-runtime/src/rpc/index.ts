@@ -1,4 +1,5 @@
 export * from "./client.ts";
 export * from "./http.ts";
-export type { WsRpcProtocolClient } from "./protocol.ts";
-export { type RpcSession } from "./session.ts";
+export * from "./protocol.ts";
+export { applyServerConfigProjection } from "../state/serverConfigProjection.ts";
+export { type RpcSession, RpcSessionFactory, layer as rpcSessionFactoryLayer } from "./session.ts";
