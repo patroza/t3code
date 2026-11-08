@@ -1,7 +1,11 @@
-import { highlightCode } from "../../lib/highlights";
+import { highlightCode, nativeHighlightsReady } from "../../lib/highlights";
 
 import { EnvironmentId, ProjectId } from "@t3tools/contracts";
-import { expect, it, vi } from "vite-plus/test";
+import { beforeEach, expect, it, vi } from "vite-plus/test";
+
+beforeEach(async () => {
+  await nativeHighlightsReady;
+});
 import { AsyncResult } from "effect/reactivity";
 
 import { highlightNativeReviewDiffVisibleRows } from "../diffs/nativeReviewDiffHighlighter";
