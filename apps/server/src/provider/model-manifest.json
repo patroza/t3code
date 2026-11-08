@@ -84,6 +84,12 @@
       ]
     },
     {
+      "driver": "kimi",
+      "t3CodeRange": ">=0.0.42",
+      "recommendedRange": ">=0.0.0",
+      "ranges": [{ "range": ">=0.0.0", "status": "supported" }]
+    },
+    {
       "driver": "kiro",
       "t3CodeRange": ">=0.0.46",
       "recommendedRange": ">=2.27.0",

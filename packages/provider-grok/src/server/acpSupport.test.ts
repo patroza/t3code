@@ -3,7 +3,47 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as EffectAcpErrors from "effect-acp/errors";
 
-import { applyGrokAcpModelSelection, grokAcpSpawnArgs } from "./acpSupport.ts";
+import {
+  applyGrokAcpModelSelection,
+  buildGrokAcpSpawnInput,
+  grokAcpRuntimeProcessOwnership,
+  grokAcpSpawnArgs,
+  isValidGrokReasoningEffortToken,
+  resolveGrokAcpBaseModelId,
+  resolveGrokReasoningEffortSelection,
+  resolveGrokRequestedModeId,
+} from "./acpSupport.ts";
+
+describe("grokAcpRuntimeProcessOwnership", () => {
+  it("opts Grok into detached process-tree ownership on the injected host platform", () => {
+    expect(grokAcpRuntimeProcessOwnership("linux")).toEqual({
+      ownDescendantProcessGroups: true,
+      ownDetachedProcessGroup: true,
+      processGroupPlatform: "linux",
+    });
+  });
+
+  it("uses the prior provider-group path on Darwin and Windows", () => {
+    expect(grokAcpRuntimeProcessOwnership("darwin")).toEqual({
+      ownDescendantProcessGroups: false,
+      ownDetachedProcessGroup: true,
+      processGroupPlatform: "darwin",
+    });
+    expect(grokAcpRuntimeProcessOwnership("win32")).toEqual({
+      ownDescendantProcessGroups: false,
+      ownDetachedProcessGroup: true,
+      processGroupPlatform: "win32",
+    });
+  });
+});
+
+describe("resolveGrokAcpBaseModelId", () => {
+  it("normalizes empty and custom Grok model ids", () => {
+    expect(resolveGrokAcpBaseModelId(undefined)).toBe("grok-4.6");
+    expect(resolveGrokAcpBaseModelId("   ")).toBe("grok-4.6");
+    expect(resolveGrokAcpBaseModelId("  grok-test-custom-model  ")).toBe("grok-test-custom-model");
+  });
+});
 
 describe("grokAcpSpawnArgs", () => {
   it("inherits the Grok CLI config when no T3 runtime mode is set", () => {
@@ -17,6 +57,86 @@ describe("grokAcpSpawnArgs", () => {
       "agent",
       "stdio",
     ]);
+  });
+
+  it("maps Full access to Grok always-approve", () => {
+    expect(grokAcpSpawnArgs("full-access")).toEqual(["agent", "--always-approve", "stdio"]);
+  });
+
+  it("launches Auto on Grok's classifier and a mode Grok does not offer asking", () => {
+    expect(grokAcpSpawnArgs("auto")).toEqual(["--permission-mode", "auto", "agent", "stdio"]);
+    expect(grokAcpSpawnArgs("auto-accept-edits")).toEqual([
+      "--permission-mode",
+      "default",
+      "agent",
+      "stdio",
+    ]);
+  });
+});
+
+describe("buildGrokAcpSpawnInput", () => {
+  it("passes the T3 Code referrer through Grok OAuth env", () => {
+    const spawn = buildGrokAcpSpawnInput({ binaryPath: "/usr/local/bin/grok" }, "/tmp/project", {
+      XAI_API_KEY: "secret",
+      GROK_OAUTH2_REFERRER: "other-client",
+    });
+
+    expect(spawn).toEqual({
+      command: "/usr/local/bin/grok",
+      args: ["agent", "stdio"],
+      cwd: "/tmp/project",
+      env: {
+        XAI_API_KEY: "secret",
+        GROK_OAUTH2_REFERRER: "t3code",
+      },
+      extendEnv: false,
+    });
+  });
+
+  it("forwards reasoning effort as a process-level agent flag", () => {
+    const spawn = buildGrokAcpSpawnInput(
+      { binaryPath: "grok" },
+      "/tmp/project",
+      undefined,
+      undefined,
+      {
+        reasoningEffort: "medium",
+      },
+    );
+    expect(spawn.args).toEqual(["agent", "--reasoning-effort", "medium", "stdio"]);
+  });
+
+  it("ignores unknown effort values on spawn", () => {
+    const spawn = buildGrokAcpSpawnInput(
+      { binaryPath: "grok" },
+      "/tmp/project",
+      undefined,
+      undefined,
+      {
+        reasoningEffort: "turbo",
+      },
+    );
+    expect(spawn.args).toEqual(["agent", "stdio"]);
+  });
+
+  it("puts Supervised on the Grok argv so config always-approve cannot win", () => {
+    const spawn = buildGrokAcpSpawnInput(
+      { binaryPath: "/usr/local/bin/grok" },
+      "/tmp/project",
+      undefined,
+      "approval-required",
+    );
+    expect(spawn.args).toEqual(["--permission-mode", "default", "agent", "stdio"]);
+  });
+});
+
+describe("isValidGrokReasoningEffortToken", () => {
+  it("accepts future ACP tokens and rejects malformed metadata values", () => {
+    expect(isValidGrokReasoningEffortToken("xhigh")).toBe(true);
+    expect(isValidGrokReasoningEffortToken("turbo_v2")).toBe(true);
+    expect(isValidGrokReasoningEffortToken("not a token")).toBe(false);
+    expect(isValidGrokReasoningEffortToken("-leading-dash")).toBe(false);
+    expect(isValidGrokReasoningEffortToken("x".repeat(33))).toBe(false);
   });
 });
 
@@ -125,4 +245,24 @@ describe("applyGrokAcpModelSelection", () => {
       expect(result).toBe("grok-4.6");
     }),
   );
+});
+
+describe("resolveGrokReasoningEffortSelection", () => {
+  it("reads reasoningEffort and effort option ids", () => {
+    expect(resolveGrokReasoningEffortSelection([{ id: "reasoningEffort", value: "High" }])).toBe(
+      "high",
+    );
+    expect(resolveGrokReasoningEffortSelection([{ id: "effort", value: "low" }])).toBe("low");
+    expect(resolveGrokReasoningEffortSelection([{ id: "reasoningEffort", value: "nope" }])).toBe(
+      undefined,
+    );
+  });
+});
+
+describe("resolveGrokRequestedModeId", () => {
+  it("pins Build and unset to agent; Plan to plan; never ask", () => {
+    expect(resolveGrokRequestedModeId("plan")).toBe("plan");
+    expect(resolveGrokRequestedModeId("default")).toBe("agent");
+    expect(resolveGrokRequestedModeId(undefined)).toBe("agent");
+  });
 });

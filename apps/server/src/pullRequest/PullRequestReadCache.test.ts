@@ -1,3 +1,5 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off - WeakRef collection needs a native JavaScript job boundary, not Effect scheduler or clock advancement.
+import * as NodeTimersPromises from "node:timers/promises";
 import * as NodeV8 from "node:v8";
 import * as NodeVM from "node:vm";
 import { assert, it } from "@effect/vitest";
@@ -220,7 +222,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("PR filesystem ca
       });
       for (let index = 0; index < 5; index++) yield* sweep(index);
       // WeakRef targets stay alive until the current job ends, so yield before collecting.
-      yield* Effect.yieldNow;
+      // oxlint-disable-next-line t3code/no-real-time-wait-in-tests -- WeakRef collection requires a new JavaScript job, not elapsed time or TestClock advancement.
+      yield* Effect.promise(() => NodeTimersPromises.setImmediate());
       collectGarbage();
       assert.strictEqual(sweeps.filter((sweepData) => sweepData.deref() !== undefined).length, 0);
     }).pipe(Effect.provide(KeyValueStore.layerMemory)),

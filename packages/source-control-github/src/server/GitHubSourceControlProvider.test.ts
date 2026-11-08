@@ -157,12 +157,17 @@ function harness(input: {
   readonly graphql?: GraphQlRespond;
   readonly credential?: (
     host: string,
+    target?: GitHubCredentials.GitHubCredentialTarget,
   ) => Effect.Effect<
     GitHubCredentials.GitHubCredential,
     GitHubCredentials.GitHubCredentialUnavailableError
   >;
   readonly localBranches?: ReadonlyArray<string>;
   readonly resolved?: string;
+  readonly checks?: string;
+  readonly environment?: NodeJS.ProcessEnv;
+  /** Fails the local branch listing, the first git read a checkout makes. */
+
   readonly gitFailure?: unknown;
 }) {
   const git: Array<readonly [string, unknown]> = [];
@@ -205,7 +210,9 @@ function harness(input: {
         Effect.succeed(
           args.args[0] === "remote"
             ? processOutput(input.remotes)
-            : processOutput(input.resolved ?? "", input.resolved ? 0 : 1),
+            : args.command === "gh" && args.args[1] === "checks"
+              ? processOutput(input.checks ?? "", 1)
+              : processOutput(input.resolved ?? "", input.resolved ? 0 : 1),
         ),
     },
   });
@@ -214,19 +221,20 @@ function harness(input: {
     (() => {
       throw new Error("Unexpected GraphQL read");
     });
+  const credential =
+    input.credential ??
+    ((host: string, _target?: GitHubCredentials.GitHubCredentialTarget) =>
+      Effect.succeed({
+        host,
+        token: Redacted.make("token"),
+        source: "gh" as const,
+        fingerprint: `${host}:token`,
+      }));
   const policy = GitHubRequestPolicy.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
         Layer.succeed(GitHubCredentials.GitHubCredentials, {
-          get:
-            input.credential ??
-            ((host) =>
-              Effect.succeed({
-                host,
-                token: Redacted.make("token"),
-                source: "gh" as const,
-                fingerprint: `${host}:token`,
-              })),
+          get: credential,
           saved: () => Effect.succeedNone,
           fingerprint: (host, token) => Effect.succeed(`${host}:${token}`),
           invalidate: () => Effect.void,
@@ -240,10 +248,19 @@ function harness(input: {
   const layer = Layer.mergeAll(
     host,
     appSignedOut,
-    Layer.mock(GitHubRest.GitHubRest)(input.api ?? {}),
+    Layer.unwrap(
+      Effect.gen(function* () {
+        const requests = yield* GitHubRequestPolicy.GitHubRequestPolicy;
+        return Layer.mock(GitHubRest.GitHubRest)({
+          credential: requests.credential,
+          ...input.api,
+        });
+      }),
+    ).pipe(Layer.provide(policy)),
     policy,
     Layer.succeed(HttpClient.HttpClient, graphQlHttp(graphql, graphqlCalls)),
     NodeServices.layer,
+    Layer.succeed(HostProcess.Environment, input.environment ?? {}),
   );
   return { layer, git, graphqlCalls };
 }
@@ -485,6 +502,36 @@ describe("GitHubSourceControlProvider change request lookups by head", () => {
 });
 
 describe("GitHubSourceControlProvider.getChangeRequest", () => {
+  it.effect("includes failing checks even when gh checks exits non-zero", () => {
+    const { layer } = harness({
+      remotes: remotesOutput(["origin", "git@github.com:acme/web.git"]),
+      checks: encodeJson([
+        { bucket: "pass", state: "SUCCESS" },
+        { bucket: "fail", state: "FAILURE" },
+      ]),
+      graphql: () => ({ pullRequest: node(42, "feature") }),
+    });
+    return Effect.gen(function* () {
+      const gh = yield* GitHubSourceControlProvider.make;
+      const request = yield* gh.getChangeRequest({ cwd: "/repo", reference: "#42" });
+      assert.strictEqual(request.hasFailingChecks, true);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("keeps the pull request when checks output cannot be read", () => {
+    const { layer } = harness({
+      remotes: remotesOutput(["origin", "git@github.com:acme/web.git"]),
+      checks: "not json",
+      graphql: () => ({ pullRequest: node(42, "feature") }),
+    });
+    return Effect.gen(function* () {
+      const gh = yield* GitHubSourceControlProvider.make;
+      const request = yield* gh.getChangeRequest({ cwd: "/repo", reference: "#42" });
+      assert.strictEqual(request.number, 42);
+      assert.strictEqual(request.hasFailingChecks, undefined);
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("reads a pull request by number, and by URL on its own repository", () => {
     const { layer, graphqlCalls } = harness({
       remotes: remotesOutput(["origin", "git@github.com:acme/web.git"]),
@@ -1143,6 +1190,7 @@ it.effect.each([
   ({ host, resolved, envRepository, expected }) => {
     const targets: string[] = [];
     const { layer } = harness({
+      environment: { GH_REPO: envRepository },
       remotes: remotesOutput(
         ["origin", `git@${host}:me/web.git`],
         ["upstream", `git@${host}:acme/web.git`],
@@ -1190,11 +1238,7 @@ it.effect.each([
         `${host}/repos/${expected}`,
         `${host}/repos/${expected}/pulls`,
       ]);
-    }).pipe(
-      Effect.provide(layer),
-      Effect.provideService(HostProcess.Environment, { GH_REPO: envRepository }),
-      Effect.scoped,
-    );
+    }).pipe(Effect.provide(layer), Effect.scoped);
   },
 );
 

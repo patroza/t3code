@@ -76,6 +76,7 @@ export function runVcsDriverContractSuite<R, E>(input: VcsDriverContractSuiteInp
               normalizePathForComparison(cwd),
             ),
           );
+          assert.equal(identity?.bare, false);
           assert.equal(identity?.freshness.source, "live-local");
           assert.isTrue(DateTime.isDateTime(identity?.freshness.observedAt));
           assert.isTrue(Option.isNone(identity?.freshness.expiresAt ?? Option.none()));

@@ -1,3 +1,4 @@
+import * as DirenvEnvironment from "@t3tools/provider-core/server/DirenvEnvironment";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
@@ -37,6 +38,12 @@ const layerTest = TestProviderHost.layer({ runBackgroundWork: false }).pipe(
       HttpClient.HttpClient,
       HttpClient.make(() => Effect.die("Disabled Grok must not make an HTTP request")),
     ),
+  ),
+  Layer.provideMerge(
+    Layer.succeed(DirenvEnvironment.DirenvEnvironment, {
+      allow: DirenvEnvironment.noopDirenvEnvironmentAllow,
+      resolve: DirenvEnvironment.identityDirenvEnvironmentResolver,
+    }),
   ),
 );
 

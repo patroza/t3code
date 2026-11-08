@@ -35,6 +35,7 @@ import {
   type VcsStatusResult,
   type WorktreeSubmodules,
 } from "@t3tools/contracts";
+import * as DirenvEnvironment from "../provider/DirenvEnvironment.ts";
 import { isMissingExecutable } from "@t3tools/source-control-core/server/discovery";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
@@ -44,6 +45,7 @@ import {
 } from "./GitVcsDriverCore.ts";
 import * as VcsDriver from "./VcsDriver.ts";
 import * as VcsProcess from "./VcsProcess.ts";
+import { probeGitRepository } from "./GitRepositoryProbe.ts";
 
 export interface ExecuteGitInput {
   readonly operation: string;
@@ -162,6 +164,8 @@ export interface GitCommitProgress {
 export interface GitCommitOptions {
   readonly timeoutMs?: number;
   readonly progress?: GitCommitProgress;
+  readonly disableSigning?: boolean;
+  /** Stage the current working tree immediately before committing. */
   readonly stage?: { readonly filePaths?: readonly string[] };
 }
 
@@ -574,21 +578,23 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
   const vcsProcess = yield* VcsProcess.VcsProcess;
   const random = yield* SecureRandom.SecureRandom;
   const hostPlatform = yield* HostProcess.Platform;
-  const isInsideWorkTree: VcsDriver.VcsDriver["Service"]["isInsideWorkTree"] = (cwd) =>
-    gitCommand(
-      vcsProcess,
-      "GitVcsDriver.isInsideWorkTree",
-      cwd,
-      ["rev-parse", "--is-inside-work-tree"],
-      {
+  /**
+   * A single `rev-parse` separates the three states we care about: outside any
+   * repository (non-zero exit), a bare repository (no working tree of its own),
+   * and an ordinary checkout. Keep it one call — repeated rev-parse probes on
+   * every status poll were a major VCS load contributor.
+   */
+  const probeRepository = (cwd: string) =>
+    probeGitRepository(path.resolve(cwd), (args) =>
+      gitCommand(vcsProcess, "GitVcsDriver.probeRepository", cwd, args, {
         allowNonZeroExit: true,
         timeoutMs: 5_000,
         maxOutputBytes: 4_096,
-      },
-    ).pipe(
-      Effect.map((result) => result.exitCode === 0 && result.stdout.trim() === "true"),
-      Effect.catchIf(isMissingExecutable, () => Effect.succeed(false)),
-    );
+      }),
+    ).pipe(Effect.catchIf(isMissingExecutable, () => Effect.succeed(null)));
+
+  const isInsideWorkTree: VcsDriver.VcsDriver["Service"]["isInsideWorkTree"] = (cwd) =>
+    probeRepository(cwd).pipe(Effect.map((probe) => probe?.insideWorkTree === true));
 
   const execute: VcsDriver.VcsDriver["Service"]["execute"] = (input) =>
     gitCommand(vcsProcess, input.operation, input.cwd, input.args, {
@@ -618,31 +624,68 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         maxOutputBytes: 16_384,
       },
     ).pipe(Effect.catchIf(isMissingExecutable, () => Effect.succeed(null)));
-    if (result === null || result.exitCode !== 0) return null;
-    const lines = result.stdout.replace(/\r?\n$/u, "").split(/\r?\n/u);
-    if (lines[0]?.trim() !== "true") return null;
-    // A newline inside a path breaks the line framing; ask for each path on its own.
-    if (lines.length !== 3) {
-      const root = yield* gitCommand(vcsProcess, "GitVcsDriver.detectRepository", cwd, [
-        "rev-parse",
-        "--show-toplevel",
-      ]);
-      const gitCommonDir = yield* gitCommand(vcsProcess, "GitVcsDriver.detectRepository", cwd, [
+    if (result !== null && result.exitCode === 0) {
+      const lines = result.stdout.replace(/\r?\n$/u, "").split(/\r?\n/u);
+      if (lines[0]?.trim() !== "true") return null;
+      if (lines.length === 3) {
+        return {
+          kind: "git" as const,
+          rootPath: lines[1]!.trim(),
+          metadataPath: lines[2]!.trim() || null,
+          bare: false,
+          freshness: yield* nowFreshness(),
+        };
+      }
+    }
+    const probe = yield* probeRepository(cwd);
+    if (!probe) {
+      return null;
+    }
+    if (!probe.insideWorkTree && !probe.bare) {
+      // Inside the metadata directory of a non-bare repository (e.g. `.git/`),
+      // which is not a workspace any driver operation can act on.
+      return null;
+    }
+
+    const gitCommonDir = yield* gitCommand(
+      vcsProcess,
+      "GitVcsDriver.detectRepository.commonDir",
+      cwd,
+      [
+        ...(probe.gitDir === null ? [] : ["--git-dir", probe.gitDir]),
         "rev-parse",
         "--git-common-dir",
-      ]).pipe(Effect.orElseSucceed(() => null));
+      ],
+    ).pipe(Effect.orElseSucceed(() => null));
+    const metadataPath = gitCommonDir?.stdout.trim() || null;
+
+    // A bare repository has no toplevel to report, but it is still a complete
+    // repository: `fetch`, ref plumbing, and `worktree add` all work against
+    // it, so it is a valid source for thread worktrees. Report its metadata
+    // directory as the root rather than rejecting it as "not a repository".
+    if (!probe.insideWorkTree) {
+      const commonDir = metadataPath ?? ".";
       return {
         kind: "git" as const,
-        rootPath: root.stdout.trim(),
-        metadataPath: gitCommonDir?.stdout.trim() || null,
+        rootPath: path.normalize(
+          path.isAbsolute(commonDir) ? commonDir : path.resolve(cwd, commonDir),
+        ),
+        metadataPath,
+        bare: true,
         freshness: yield* nowFreshness(),
       };
     }
 
+    const root = yield* gitCommand(vcsProcess, "GitVcsDriver.detectRepository.root", cwd, [
+      "rev-parse",
+      "--show-toplevel",
+    ]);
+
     return {
       kind: "git" as const,
-      rootPath: lines[1]!.trim(),
-      metadataPath: lines[2]!.trim() || null,
+      rootPath: root.stdout.trim(),
+      metadataPath,
+      bare: false,
       freshness: yield* nowFreshness(),
     };
   });
@@ -1593,5 +1636,9 @@ export const make = Effect.gen(function* () {
   return GitVcsDriver.of(git);
 });
 
-export const layerVcs = Layer.effect(VcsDriver.VcsDriver, makeVcsDriver);
-export const layer = Layer.effect(GitVcsDriver, make);
+export const layerVcs = Layer.effect(VcsDriver.VcsDriver, makeVcsDriver).pipe(
+  Layer.provide(DirenvEnvironment.layerLive),
+);
+export const layer = Layer.effect(GitVcsDriver, make).pipe(
+  Layer.provide(DirenvEnvironment.layerLive),
+);

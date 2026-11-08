@@ -68,7 +68,7 @@ export interface TranscriptUsageFormat<State> {
    * file resumes with it. Absent means every line stands alone.
    */
   readonly state?: {
-    readonly initial: () => State;
+    readonly initial: (filePath: string) => State;
     readonly schema: Schema.Codec<State, unknown>;
   };
   /** Enable cross-file deduplication when session records can appear in multiple files. */

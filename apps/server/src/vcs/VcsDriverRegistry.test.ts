@@ -4,6 +4,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
 import * as Path from "effect/Path";
 import { ChildProcessSpawner } from "effect/process";
 
@@ -66,6 +67,26 @@ describe("VcsDriverRegistry", () => {
       ),
     );
 
+  it.effect("caches repository detection for repeated resolves in the same cwd and kind", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const repoDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-vcs-registry-" });
+      yield* fs.makeDirectory(path.join(repoDir, ".git"));
+      const calls: string[] = [];
+
+      yield* Effect.gen(function* () {
+        const registry = yield* VcsDriverRegistry.VcsDriverRegistry;
+        const first = yield* registry.resolve({ cwd: repoDir, requestedKind: "git" });
+        const second = yield* registry.resolve({ cwd: repoDir, requestedKind: "git" });
+
+        assert.equal(first.repository.rootPath, repoDir);
+        assert.equal(second.repository.rootPath, repoDir);
+        assert.deepStrictEqual(calls, [DETECT_COMMAND]);
+      }).pipe(Effect.provide(makeDiskBackedLayer(repoDir, calls)));
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("detects again when a cached repository is removed from disk", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -122,10 +143,30 @@ describe("VcsDriverRegistry", () => {
         assert.equal(yield* registry.detect({ cwd: repoDir }), null);
 
         yield* fs.makeDirectory(path.join(repoDir, ".git"));
+        yield* TestClock.adjust("16 seconds");
 
         assert.equal((yield* registry.detect({ cwd: repoDir }))?.repository.rootPath, repoDir);
         assert.equal(calls.filter((call) => call === DETECT_COMMAND).length, 2);
       }).pipe(Effect.provide(makeDiskBackedLayer(repoDir, calls)));
     }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  );
+  it.effect("fresh detect sees a repository created during a negative cache TTL", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const repoDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-vcs-registry-fresh-" });
+      const calls: string[] = [];
+      yield* Effect.gen(function* () {
+        const registry = yield* VcsDriverRegistry.VcsDriverRegistry;
+        assert.equal(yield* registry.detect({ cwd: repoDir }), null);
+        yield* fs.makeDirectory(path.join(repoDir, ".git"));
+        assert.equal(yield* registry.detect({ cwd: repoDir }), null);
+        assert.equal(
+          (yield* registry.detect({ cwd: repoDir, fresh: true }))?.repository.rootPath,
+          repoDir,
+        );
+        assert.equal(calls.filter((call) => call === DETECT_COMMAND).length, 2);
+      }).pipe(Effect.provide(makeDiskBackedLayer(repoDir, calls)));
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

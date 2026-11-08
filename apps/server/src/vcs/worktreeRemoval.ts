@@ -57,6 +57,7 @@ export const removeLinkedWorktree = Effect.fn("WorktreeRemoval.removeLinkedWorkt
       command: "git worktree remove",
       cwd: input.cwd,
       detail: `fatal: ${message}`,
+      failureKind: "unknown",
       ...(cause === undefined ? {} : { cause }),
     });
   const gitOutput = (cwd: string, args: ReadonlyArray<string>, env?: NodeJS.ProcessEnv) =>

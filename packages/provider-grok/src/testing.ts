@@ -13,6 +13,7 @@ export {
 } from "./server/acpSupport.ts";
 export {
   buildGrokModelCapabilities,
+  buildGrokModelsFromSessionModelState,
   buildInitialGrokProviderSnapshot,
   checkGrokProviderStatus,
   grokSlashCommandsFromInitialize,

@@ -1,4 +1,3 @@
-// @effect-diagnostics globalJsonInEffect:off
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";

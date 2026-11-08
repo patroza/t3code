@@ -29,20 +29,28 @@ function harness(
 ) {
   const requests: Array<HttpClientRequest.HttpClientRequest> = [];
   let invalidations = 0;
+  let credentialReads = 0;
+  const targets: Array<GitHubCredentials.GitHubCredentialTarget | undefined> = [];
+  const invalidatedTargets: Array<GitHubCredentials.GitHubCredentialTarget | undefined> = [];
   const services = Layer.mergeAll(
     Layer.succeed(GitHubCredentials.GitHubCredentials, {
-      get: (host) =>
-        Effect.succeed({
-          host,
-          token: Redacted.make("secret"),
-          source: "gh" as const,
-          fingerprint: `${host}:secret`,
+      get: (host, target) =>
+        Effect.sync(() => {
+          credentialReads++;
+          targets.push(target);
+          return {
+            host,
+            token: Redacted.make(invalidations === 0 ? "secret" : "refreshed"),
+            source: "gh" as const,
+            fingerprint: `${host}:${invalidations}`,
+          };
         }),
       saved: () => Effect.succeedNone,
       fingerprint: (host, token) => Effect.succeed(`${host}:${token}`),
-      invalidate: () =>
+      invalidate: (_host, target) =>
         Effect.sync(() => {
           invalidations++;
+          invalidatedTargets.push(target);
         }),
     }),
     Layer.succeed(
@@ -63,7 +71,14 @@ function harness(
         }),
   );
   const layer = GitHubRest.layer.pipe(Layer.provideMerge(services));
-  return { layer, requests, invalidations: () => invalidations };
+  return {
+    layer,
+    requests,
+    targets,
+    invalidatedTargets,
+    credentialReads: () => credentialReads,
+    invalidations: () => invalidations,
+  };
 }
 
 const json = (body: unknown, init?: ResponseInit) =>
@@ -93,6 +108,32 @@ const readStats = (host: string, number = 7) =>
 const stats = { additions: 3, deletions: 1 };
 
 describe("GitHubGraphQlAuth", () => {
+  it.effect("selects and refreshes repository credentials once per GraphQL request", () => {
+    const { layer, requests, targets, invalidatedTargets, credentialReads } = harness((request) =>
+      request.headers.authorization === "Bearer secret"
+        ? new Response(null, { status: 401 })
+        : json({ data: { repository: { pullRequest: stats } } }),
+    );
+    const target = { cwd: "/scanner", repository: "organization/scanner" };
+    return Effect.gen(function* () {
+      expect((yield* Effect.flip(callStats(target)))._tag).toBe("GitHubApiAuthenticationError");
+      expect(credentialReads()).toBe(1);
+      expect(invalidatedTargets).toHaveLength(1);
+      expect(invalidatedTargets[0]).toMatchObject(target);
+      yield* callStats(target);
+      expect(credentialReads()).toBe(2);
+      expect(
+        targets.every(
+          (entry) => entry?.repository === target.repository && entry.cwd === target.cwd,
+        ),
+      ).toBe(true);
+      expect(requests.map((request) => request.headers.authorization)).toEqual([
+        "Bearer secret",
+        "Bearer refreshed",
+      ]);
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("asks again with the user's own credential when the app token gets NOT_FOUND", () => {
     const { layer, requests } = harness(
       (request) =>

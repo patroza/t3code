@@ -27,7 +27,7 @@ export interface GitHubRestResponse {
   readonly invalidUtf8: boolean;
 }
 
-export interface GitHubRestInput {
+export interface GitHubRestInput extends GitHubCredentials.GitHubCredentialTarget {
   readonly host: string;
   readonly operation: string;
   readonly method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -118,6 +118,7 @@ export const make = Effect.gen(function* () {
 
   const send = Effect.fn("GitHubRest.send")(function* (input: {
     readonly host: string;
+    readonly target: GitHubCredentials.GitHubCredentialTarget;
     readonly operation: string;
     readonly request: HttpClientRequest.HttpClientRequest;
     readonly maxResponseBytes: number;
@@ -135,6 +136,7 @@ export const make = Effect.gen(function* () {
     return yield* policy.request(
       {
         host,
+        ...input.target,
         operation: input.operation,
         // All current paths spend `core`; search would need a different resource.
         resource: "core",
@@ -197,6 +199,10 @@ export const make = Effect.gen(function* () {
       Effect.flatMap((interactive) =>
         send({
           host: input.host,
+          target: {
+            cwd: input.cwd,
+            repository: input.repository ?? /^\/?repos\/([^/]+\/[^/?]+)/.exec(input.path)?.[1],
+          },
           operation: input.operation,
           request,
           maxResponseBytes: input.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES,
