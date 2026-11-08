@@ -787,9 +787,9 @@ describe("ClientSettings composer collapse", () => {
 });
 
 describe("ServerSettings thread settlement", () => {
-  it("defaults merge settlement on and inactivity settlement to three days", () => {
+  it("defaults merge settlement on and inactivity settlement to seven days", () => {
     const settings = decodeServerSettings({});
-    expect(settings.sidebarAutoSettleAfterDays).toBe(3);
+    expect(settings.sidebarAutoSettleAfterDays).toBe(7);
     expect(settings.sidebarAutoSettleOnMerge).toBe(true);
   });
 
