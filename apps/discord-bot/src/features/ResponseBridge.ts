@@ -5716,7 +5716,7 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
         "resetAt" in failure &&
         typeof failure.resetAt === "string" &&
         Number.isFinite(Date.parse(failure.resetAt))
-          ? ` The usage limit resets at ${new Date(failure.resetAt).toUTCString()}.`
+          ? ` The usage limit resets at ${failure.resetAt}.`
           : "";
       const text = unavailable
         ? `This model is currently unavailable. Please try another model.${resetAt}\n\n${failure.message}`

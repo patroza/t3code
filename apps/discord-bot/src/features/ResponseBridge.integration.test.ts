@@ -707,7 +707,7 @@ describe("shared response runner", () => {
           ]);
           expect([...messages.values()][0]?.content).toContain("Balance exhausted");
           expect([...messages.values()][0]?.content).toContain(
-            "resets at Tue, 01 Jan 2030 00:00:00 GMT",
+            "resets at 2030-01-01T00:00:00.000Z",
           );
           expect([...messages.values()][0]?.content).not.toContain("Working");
           yield* Fiber.interrupt(fiber);
