@@ -5673,6 +5673,65 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
       }
     }
 
+    // Provider failures are turn items, even when the provider session remains reusable.
+    // Deliver them through the normal final-message path so Working is removed and the
+    // durable delivery receipt prevents duplicate notifications after reconnecting.
+    const failureActivity =
+      thread.latestTurn?.state === "error"
+        ? thread.activities.findLast((activity) => {
+            if (activity.turnId !== activeTurnId || activity.tone !== "error") return false;
+            const payload = activity.payload;
+            return (
+              typeof payload === "object" &&
+              payload !== null &&
+              "itemType" in payload &&
+              payload.itemType === "error" &&
+              "failure" in payload &&
+              typeof payload.failure === "object" &&
+              payload.failure !== null &&
+              "message" in payload.failure &&
+              typeof payload.failure.message === "string"
+            );
+          })
+        : undefined;
+    if (
+      failureActivity &&
+      typeof failureActivity.payload === "object" &&
+      failureActivity.payload !== null &&
+      "failure" in failureActivity.payload &&
+      typeof failureActivity.payload.failure === "object" &&
+      failureActivity.payload.failure !== null &&
+      "message" in failureActivity.payload.failure &&
+      typeof failureActivity.payload.failure.message === "string"
+    ) {
+      const failure = failureActivity.payload.failure;
+      const unavailable =
+        "class" in failure &&
+        (failure.class === "usage_limit" ||
+          failure.class === "provider_error" ||
+          failure.class === "transport_error");
+      const resetAt =
+        "class" in failure &&
+        failure.class === "usage_limit" &&
+        "resetAt" in failure &&
+        typeof failure.resetAt === "string" &&
+        Number.isFinite(Date.parse(failure.resetAt))
+          ? ` The usage limit resets at ${failure.resetAt}.`
+          : "";
+      const text = unavailable
+        ? `This model is currently unavailable. Please try another model.${resetAt}\n\n${failure.message}`
+        : `The turn failed: ${failure.message}`;
+      yield* postUserMessagesBefore();
+      yield* postOrEditAssistant({
+        turnId: activeTurnId,
+        t3MessageId: failureActivity.id,
+        text,
+        streaming: false,
+        images: [],
+        worktreePath: thread.worktreePath,
+      }).pipe(Effect.tapCause(alertStreamFailure("provider-failure")), Effect.asVoid);
+    }
+
     // User messages after the last answer remain after it, ahead of side work.
     yield* postUserMessagesBefore();
 
