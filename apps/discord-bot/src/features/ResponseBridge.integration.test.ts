@@ -141,6 +141,8 @@ function fixture(completed: boolean, progress = false, longAnswer = false, withT
 
 describe("shared response runner", () => {
   it.live.each([
+    { platform: "discord", failure: "provider" },
+    { platform: "teams", failure: "provider" },
     { platform: "discord", failure: "none" },
     { platform: "discord", failure: "progress" },
     { platform: "discord", failure: "final" },
@@ -267,6 +269,7 @@ describe("shared response runner", () => {
         const final = yield* Deferred.make<string>();
         const info = yield* Deferred.make<string>();
         const setupFailed = yield* Deferred.make<void>();
+        const providerFailed = yield* Deferred.make<void>();
         const ready = yield* Deferred.make<void>();
         const messages = new Map<string, BotMessage>();
         let counter = 0;
@@ -284,6 +287,8 @@ describe("shared response runner", () => {
             const message = { id: id ?? String(++counter), content, author: { id: "bot" } };
             messages.set(message.id, message);
             fieldsById.set(message.id, fields);
+            if (content.includes("Please try another model"))
+              yield* Deferred.succeed(providerFailed, undefined);
             if (content.includes("a later note")) yield* Deferred.succeed(echoedAfter, undefined);
             if (fields.actions?.some((action) => action.command === "stop"))
               progressIds.add(message.id);
@@ -515,6 +520,35 @@ describe("shared response runner", () => {
                 yield* onThread(latest);
                 return yield* Effect.never;
               }
+              if (failure === "provider") {
+                latest = {
+                  ...running,
+                  latestTurn: {
+                    ...running.latestTurn!,
+                    state: "error",
+                    runStatus: "failed",
+                    completedAt: time,
+                  },
+                  activities: [
+                    {
+                      id: EventId.make("provider-failure"),
+                      turnId: running.latestTurn!.turnId,
+                      tone: "error",
+                      kind: "tool.updated",
+                      summary: "Provider error",
+                      createdAt: time,
+                      payload: {
+                        itemType: "error",
+                        failure: { class: "usage_limit", message: "Balance exhausted" },
+                      },
+                    },
+                  ],
+                };
+                yield* onThread(latest);
+                yield* Deferred.await(providerFailed);
+                yield* onThread(latest);
+                return yield* Effect.never;
+              }
               if (failure === "setup") {
                 latest = {
                   ...running,
@@ -661,6 +695,17 @@ describe("shared response runner", () => {
           (effect) => effect as Effect.Effect<void, unknown, Scope.Scope>,
           Effect.forkChild,
         );
+        if (failure === "provider") {
+          yield* Deferred.await(providerFailed);
+          yield* awaitLink((link) => link?.deliveryReceipt?.completed === true);
+          expect([...messages.values()].map((message) => message.content)).toEqual([
+            expect.stringContaining("Please try another model"),
+          ]);
+          expect([...messages.values()][0]?.content).toContain("Balance exhausted");
+          expect([...messages.values()][0]?.content).not.toContain("Working");
+          yield* Fiber.interrupt(fiber);
+          return;
+        }
         if (failure === "setup") {
           yield* Deferred.await(setupFailed);
           expect(infoContent[0]).toContain("Preparing workspace…");
