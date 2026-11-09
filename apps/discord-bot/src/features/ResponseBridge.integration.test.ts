@@ -539,7 +539,11 @@ describe("shared response runner", () => {
                       createdAt: time,
                       payload: {
                         itemType: "error",
-                        failure: { class: "usage_limit", message: "Balance exhausted" },
+                        failure: {
+                          class: "usage_limit",
+                          message: "Balance exhausted",
+                          resetAt: "2030-01-01T00:00:00.000Z",
+                        },
                       },
                     },
                   ],
@@ -702,6 +706,9 @@ describe("shared response runner", () => {
             expect.stringContaining("Please try another model"),
           ]);
           expect([...messages.values()][0]?.content).toContain("Balance exhausted");
+          expect([...messages.values()][0]?.content).toContain(
+            "resets at Tue, 01 Jan 2030 00:00:00 GMT",
+          );
           expect([...messages.values()][0]?.content).not.toContain("Working");
           yield* Fiber.interrupt(fiber);
           return;

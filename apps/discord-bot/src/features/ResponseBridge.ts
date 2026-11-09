@@ -5710,8 +5710,16 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
         (failure.class === "usage_limit" ||
           failure.class === "provider_error" ||
           failure.class === "transport_error");
+      const resetAt =
+        "class" in failure &&
+        failure.class === "usage_limit" &&
+        "resetAt" in failure &&
+        typeof failure.resetAt === "string" &&
+        Number.isFinite(Date.parse(failure.resetAt))
+          ? ` The usage limit resets at ${new Date(failure.resetAt).toUTCString()}.`
+          : "";
       const text = unavailable
-        ? `This model is currently unavailable. Please try another model.\n\n${failure.message}`
+        ? `This model is currently unavailable. Please try another model.${resetAt}\n\n${failure.message}`
         : `The turn failed: ${failure.message}`;
       yield* postUserMessagesBefore();
       yield* postOrEditAssistant({
