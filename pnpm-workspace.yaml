@@ -214,7 +214,8 @@ overrides:
   "@voidzero-dev/vite-plus-core>typescript": "-"
   "@volar/typescript>typescript": "-"
   "@volar/language-service>typescript": "-"
-  "@volar/kit>typescript": "-"
+  # Astro check needs the TypeScript language service, which the native compiler lacks.
+  "@volar/kit>typescript": 6.0.3
   "@volar/language-server>typescript": "-"
   "volar-service-typescript>typescript": "-"
   "volar-service-typescript-twoslash-queries>typescript": "-"
