@@ -351,14 +351,14 @@ const isolatedUnitTestProject = {
 const browserTestApiPort = 61_000 + ((Hash.string(import.meta.dirname) >>> 0) % 4_000);
 
 const cpuThrottleSessions = new WeakMap<Page, CDPSession>();
+const tracedBrowserPages = new WeakSet<Page>();
+const tracedBrowserContexts = new WeakSet<object>();
 
 const browserTestProject = {
   extends: true,
   // Lazy views and mocked imports hide these from the initial dependency scan.
   // Discovering them while a browser test runs reloads its page and closes its mock RPCs.
   optimizeDeps: {
-    // Late discovery reloads the orchestrator and invalidates pending test RPCs.
-    noDiscovery: true,
     include: [
       "vite-plus/test/browser",
       "react/compiler-runtime",
@@ -426,7 +426,9 @@ const browserTestProject = {
   },
   test: {
     name: "browser",
-    maxWorkers: 4,
+    // Browser mock/session teardown must finish before another file starts.
+    // Keep unit workers parallel, but avoid overlapping browser session lifecycles.
+    maxWorkers: 1,
     sequence: { groupOrder: 2 },
     include: ["src/**/*.browser.test.{ts,tsx}"],
     hookTimeout: 15_000,
@@ -453,6 +455,45 @@ const browserTestProject = {
         // Playwright's mouse outlives each test, so whatever mounts under its last
         // position starts hovered. test/browserSetup.ts parks it off the page before each test.
         resetPointer: async ({ page }) => {
+          if (process.env.T3_BROWSER_TRACE && !tracedBrowserPages.has(page)) {
+            tracedBrowserPages.add(page);
+            const id = Math.random().toString(36).slice(2);
+            const log = (event: string, detail: unknown = "") =>
+              console.error(`[browser-lifecycle ${id}] ${event}`, detail);
+            log("attached", page.url());
+            page.on("close", () => log("page-close"));
+            page.on("crash", () => log("page-crash"));
+            page.on("framenavigated", (frame) => {
+              if (frame === page.mainFrame()) log("main-navigation", frame.url());
+            });
+            page.on("requestfailed", (request) => {
+              if (request.isNavigationRequest())
+                log("navigation-failed", `${request.url()} ${request.failure()?.errorText}`);
+            });
+            const context = page.context();
+            if (!tracedBrowserContexts.has(context)) {
+              tracedBrowserContexts.add(context);
+              context.on("close", () => log("context-close"));
+            }
+            const trace = await context.newCDPSession(page);
+            trace.on("Network.webSocketCreated", (event) => log("ws-created", event));
+            trace.on("Network.webSocketClosed", (event) => log("ws-closed", event));
+            trace.on("Network.webSocketFrameError", (event) => log("ws-error", event));
+            trace.on("Network.webSocketFrameReceived", (event) => {
+              if (event.response.opcode === 8) log("ws-close-received", event);
+            });
+            trace.on("Network.webSocketFrameSent", (event) => {
+              if (event.response.opcode === 8) log("ws-close-sent", event);
+            });
+            trace.on("Inspector.detached", (event) => log("inspector-detached", event));
+            await trace.send("Network.enable");
+            await page.evaluate(() => {
+              addEventListener("beforeunload", () =>
+                console.error("BROWSER BEFOREUNLOAD", location.href),
+              );
+              addEventListener("pagehide", () => console.error("BROWSER PAGEHIDE", location.href));
+            });
+          }
           await page.mouse.move(-1, -1);
         },
       },

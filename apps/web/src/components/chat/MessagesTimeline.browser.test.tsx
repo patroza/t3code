@@ -1662,9 +1662,11 @@ describe("MessagesTimeline scroll position", () => {
         `long-${index}`,
       ),
     );
+    let commits = 0;
     let nestedCommits = 0;
     let maxNestedCommits = 0;
     const onRender = (_id: string, phase: string) => {
+      commits += 1;
       nestedCommits = phase === "nested-update" ? nestedCommits + 1 : 0;
       maxNestedCommits = Math.max(maxNestedCommits, nestedCommits);
     };
@@ -1680,6 +1682,20 @@ describe("MessagesTimeline scroll position", () => {
       viewport.dispatchEvent(new Event("scroll"));
     });
 
+    // Observe a quiet layout boundary instead of counting initial placement as prepend work.
+    const waitForSettledLayout = () =>
+      vi.waitFor(async () => {
+        const before = commits;
+        await act(async () => {
+          await new Promise<void>((resolve) =>
+            // oxlint-disable-next-line t3code/no-frame-waits-in-browser-tests -- The profiler budget measures real layout convergence; retry until two frames contain no commits.
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+          );
+        });
+        expect(commits).toBe(before);
+      });
+    await waitForSettledLayout();
+
     // Measure this prepend independently of the initial long-message layout chain.
     nestedCommits = 0;
     maxNestedCommits = 0;
@@ -1691,6 +1707,7 @@ describe("MessagesTimeline scroll position", () => {
       });
       expect(screen.text()).toContain("Short reply 0");
     });
+    await waitForSettledLayout();
     expect(maxNestedCommits).toBeLessThan(8);
   });
 

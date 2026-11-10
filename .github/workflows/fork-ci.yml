@@ -204,8 +204,7 @@ jobs:
 
       - name: Test
         env:
-          # Capture process exits and session teardown when a browser transport closes.
-          DEBUG: vitest:browser:api,vitest:browser:pool,vitest:browser:playwright,vite:server,pw:browser
+          T3_BROWSER_TRACE: "1"
         run: vp run --filter @t3tools/web test
 
   # Preserve the required Test check. Run even after failures or cancellation,
