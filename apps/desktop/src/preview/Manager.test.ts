@@ -248,7 +248,6 @@ const managerLayer = (platform: NodeJS.Platform = "darwin", webAuthnAvailable = 
     Layer.provideMerge(
       Layer.mock(PreviewPasskeys.PreviewPasskeys)({
         bridgeEnabled: false,
-        webAuthnAvailable: false,
         webAuthnAvailable,
         installSessionHandlers: () => {},
         attachGuest: () => () => {},
