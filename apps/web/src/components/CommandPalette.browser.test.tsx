@@ -57,6 +57,8 @@ describe("CommandPalette open intents", () => {
     await expect
       .element(page.getByPlaceholder("Search commands, projects, and threads..."))
       .toHaveFocus();
+    // Input focus can arrive before Base UI applies its initial automatic highlight.
+    await expect.element(page.getByRole("option").first()).toHaveAttribute("data-highlighted");
     await userEvent.keyboard("{ArrowDown}");
     await expect
       .element(page.getByRole("option", { name: /^New thread in\.\.\./ }))
