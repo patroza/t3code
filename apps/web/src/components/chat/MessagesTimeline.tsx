@@ -492,10 +492,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
   };
 
   const collapseNotificationPendingRef = useRef<string | null>(null);
-  const onToggleWorkEntry = useStableCallback((anchorKey: string, collapsed: boolean = false) => {
-    collapseNotificationPendingRef.current = collapsed ? listIdentityKey : null;
-    preserveDisclosurePosition(anchorKey);
-  });
   const notifyToolOutputCollapsedAtEnd = useStableCallback(() => {
     if (collapseNotificationPendingRef.current !== listIdentityKey) {
       collapseNotificationPendingRef.current = null;
@@ -505,6 +501,11 @@ const ConversationTimeline = memo(function ConversationTimeline({
     // Size/scroll signals can lag the disclosure commit. Keep the intent until end is confirmed.
     collapseNotificationPendingRef.current = null;
     onToolOutputCollapsedAtEnd?.();
+  });
+  const onToggleWorkEntry = useStableCallback((anchorKey: string, collapsed: boolean = false) => {
+    collapseNotificationPendingRef.current = collapsed ? listIdentityKey : null;
+    preserveDisclosurePosition(anchorKey);
+    if (collapsed) notifyToolOutputCollapsedAtEnd();
   });
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Notify after layout settles; this is an imperative event, not derived state.
   useLayoutEffect(() => {
