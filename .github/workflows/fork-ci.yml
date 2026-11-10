@@ -203,8 +203,6 @@ jobs:
         run: node apps/web/node_modules/playwright/cli.js install --with-deps --only-shell chromium
 
       - name: Test
-        env:
-          T3_BROWSER_TRACE: "1"
         run: vp run --filter @t3tools/web test
 
   # Preserve the required Test check. Run even after failures or cancellation,
