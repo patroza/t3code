@@ -532,6 +532,7 @@ export const ClientSettingsSchema = Schema.Struct({
   proactivePanelsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   showSkillsInSlashMenu: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   boringSidebarEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  legacySidebarEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   boringSidebarMultilineRows: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
@@ -545,9 +546,6 @@ export const ClientSettingsSchema = Schema.Struct({
   threadDetailsItems: Schema.Record(Schema.String, Schema.Boolean).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
-  // Opt-in for the removed legacy sidebar. Still read so those users land in
-  // the boring sidebar; the boring sidebar toggle clears it.
-  legacySidebarEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   sidebarWorkingShelfEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   sidebarProjectGroupingMode: SidebarProjectGroupingMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_PROJECT_GROUPING_MODE)),
@@ -1144,6 +1142,74 @@ export const GitHubSettings = Schema.Struct({
   ),
 });
 export type GitHubSettings = typeof GitHubSettings.Type;
+export const TextGeneratorKind = Schema.Literals(["openaiCompatible", "anthropic"]);
+export type TextGeneratorKind = typeof TextGeneratorKind.Type;
+
+const TextGeneratorBaseUrl = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(2048),
+  Schema.makeFilter((value) => {
+    try {
+      const url = new URL(value);
+      return (
+        (url.protocol === "http:" || url.protocol === "https:") &&
+        !url.username &&
+        !url.password &&
+        !url.search &&
+        !url.hash
+      );
+    } catch {
+      return false;
+    }
+  }),
+);
+
+/** A model API that only generates text. Its key shares the id namespace with provider instances. */
+export const TextGeneratorConfig = Schema.Struct({
+  kind: TextGeneratorKind,
+  label: Schema.optional(TrimmedNonEmptyString),
+  baseUrl: TextGeneratorBaseUrl,
+  apiKey: SettingsSecretValue.pipe(Schema.withDecodingDefault(Effect.succeed("")), secretSetting),
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+});
+export type TextGeneratorConfig = typeof TextGeneratorConfig.Type;
+
+export const TextGeneratorModel = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+});
+export type TextGeneratorModel = typeof TextGeneratorModel.Type;
+
+export const ListTextGeneratorModelsInput = Schema.Struct({
+  id: ProviderInstanceId,
+  /**
+   * Unsaved settings to check before saving, such as from the add dialog. A redacted key keeps
+   * the one saved under `id`.
+   */
+  config: Schema.optional(TextGeneratorConfig),
+  /** Skip the server's cached list and ask the API again. */
+  refresh: Schema.optional(Schema.Boolean),
+  /** Also have a model answer a tiny prompt, which proves the key, endpoint, and model. */
+  test: Schema.optional(Schema.Boolean),
+  /** With `test`, the model to try; a cheap listed one when omitted. */
+  model: Schema.optional(TrimmedNonEmptyString),
+});
+export type ListTextGeneratorModelsInput = typeof ListTextGeneratorModelsInput.Type;
+
+export const ListTextGeneratorModelsResult = Schema.Struct({
+  models: Schema.Array(TextGeneratorModel),
+  /** The model that answered, when `test` was set. */
+  testedModel: Schema.optional(TrimmedNonEmptyString),
+});
+export type ListTextGeneratorModelsResult = typeof ListTextGeneratorModelsResult.Type;
+
+export class TextGeneratorError extends Schema.TaggedError<TextGeneratorError>()(
+  "TextGeneratorError",
+  { detail: Schema.String },
+) {
+  override get message(): string {
+    return this.detail;
+  }
+}
 
 export const SecretProviderKind = SecretProviderSlug.pipe(Schema.brand("SecretProviderKind"));
 export type SecretProviderKind = typeof SecretProviderKind.Type;
@@ -1416,14 +1482,33 @@ export const DatabaseStorageStatus = Schema.Struct({
   incrementalVacuumEnabled: Schema.Boolean,
   /** Run on the host while offline. */
   compactCommand: Schema.String,
+  /** The server can run the repair itself: the desktop app or background service restarts it. */
+  canReclaim: Schema.optionalKey(Schema.Boolean),
+  /** Why the last repair started from Settings failed. */
+  reclaimFailure: Schema.optionalKey(Schema.String),
 });
 export type DatabaseStorageStatus = typeof DatabaseStorageStatus.Type;
+
+export class DatabaseReclaimError extends Schema.TaggedError<DatabaseReclaimError>()(
+  "DatabaseReclaimError",
+  { reason: Schema.String },
+) {
+  override get message() {
+    return this.reason;
+  }
+}
 
 export function shouldRecommendDatabaseCompaction(status: DatabaseStorageStatus): boolean {
   return (
     !status.incrementalVacuumEnabled &&
     status.reclaimableBytes >= DATABASE_COMPACTION_RECOMMENDED_BYTES
   );
+}
+
+/** Offline minutes the repair takes, at 30 s per GiB of live data (a BB-1 NVMe disk took 21 s). */
+export function databaseReclaimMinutes(status: DatabaseStorageStatus): number {
+  const liveGiB = (status.databaseBytes - status.reclaimableBytes) / 1024 ** 3;
+  return Math.max(1, Math.ceil(liveGiB / 2));
 }
 
 export const StorageCleanupReportEntry = Schema.Struct({
@@ -1488,6 +1573,8 @@ export const ServerSettings = Schema.Struct({
   ),
 
   worktreesDirectory: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  /** macOS only, Labs beta: clone new worktrees from a cached checkout instead of writing every file. */
+  fastWorktreeCheckout: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   /** Server-maintained history keeps old worktrees eligible for cleanup and review diffs. */
   previousWorktreesDirectories: Schema.Array(TrimmedString).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
@@ -1587,6 +1674,8 @@ export const ServerSettings = Schema.Struct({
    * and tasks on another machine; tasks already running there finish.
    */
   linkedEnvironmentsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /** Beta: Claude and Codex predict the next prompt after completed turns. Codex follows a change at once; open Claude threads after they restart. */
+  promptSuggestionsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   sidebarAutoSettleKeepPullRequests: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
@@ -1694,6 +1783,9 @@ export const ServerSettings = Schema.Struct({
   usageLimitSources: Schema.Record(UsageLimitSourceId, UsageLimitSourceConfig).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  textGenerators: Schema.Record(ProviderInstanceId, TextGeneratorConfig).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
   secretProviders: Schema.Record(SecretProviderId, SecretProviderConfig).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
@@ -1771,6 +1863,27 @@ export const resolveProjectProviderInstanceEnabled = (
     ? resolveProviderInstanceEnabled(instanceConfig)
     : isUnconfiguredDefaultInstanceEnabled(instanceId);
 };
+
+/** The text generator a selection names, if any; it takes precedence over a provider instance. */
+export const textGeneratorForSelection = (
+  settings: Pick<ServerSettings, "textGenerators">,
+  instanceId: ProviderInstanceId,
+): TextGeneratorConfig | undefined =>
+  Object.hasOwn(settings.textGenerators, instanceId)
+    ? settings.textGenerators[instanceId]
+    : undefined;
+
+/** Whether a text generation selection can run: an enabled text generator or provider instance. */
+export const resolveTextGenerationSelectionEnabled = (
+  settings: Pick<
+    ServerSettings,
+    "providerInstances" | "projectSettingsOverrides" | "textGenerators"
+  >,
+  projectId: ProjectId | null,
+  instanceId: ProviderInstanceId,
+): boolean =>
+  textGeneratorForSelection(settings, instanceId)?.enabled ??
+  resolveProjectProviderInstanceEnabled(settings, projectId, instanceId);
 
 const decodeClaudeSettings = Schema.decodeUnknownOption(ClaudeSettings);
 
@@ -2005,6 +2118,7 @@ export const ServerSettingsPatch = Schema.Struct({
     }),
   ),
   worktreesDirectory: Schema.optionalKey(TrimmedString),
+  fastWorktreeCheckout: Schema.optionalKey(Schema.Boolean),
   responseStreamingMode: Schema.optionalKey(ResponseStreamingMode),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),
@@ -2068,6 +2182,7 @@ export const ServerSettingsPatch = Schema.Struct({
   hideTaggedThreads: Schema.optionalKey(Schema.Boolean),
   guestSharingEnabled: Schema.optionalKey(Schema.Boolean),
   linkedEnvironmentsEnabled: Schema.optionalKey(Schema.Boolean),
+  promptSuggestionsEnabled: Schema.optionalKey(Schema.Boolean),
   backgroundActivity: Schema.optionalKey(
     Schema.Struct({
       schemaVersion: Schema.optionalKey(Schema.Literal(1)),
@@ -2141,6 +2256,10 @@ export const ServerSettingsPatch = Schema.Struct({
   usageLimitSources: Schema.optionalKey(
     Schema.Record(UsageLimitSourceId, Schema.NullOr(UsageLimitSourceConfig)),
   ),
+  // Merge per entry like usageLimitSources; null removes an entry.
+  textGenerators: Schema.optionalKey(
+    Schema.Record(ProviderInstanceId, Schema.NullOr(TextGeneratorConfig)),
+  ),
   secretProviders: Schema.optionalKey(
     Schema.Record(SecretProviderId, Schema.NullOr(SecretProviderConfigWrite)),
   ),
@@ -2166,6 +2285,7 @@ export function requiredScopesForServerSettingsPatch(
       key === "providers" ||
       key === "providerInstances" ||
       key === "usageLimitSources" ||
+      key === "textGenerators" ||
       key === "secretProviders"
     ) {
       changesProviders = true;
@@ -2255,11 +2375,11 @@ export const ClientSettingsPatch = Schema.Struct({
   proactivePanelsEnabled: Schema.optionalKey(Schema.Boolean),
   showSkillsInSlashMenu: Schema.optionalKey(Schema.Boolean),
   boringSidebarEnabled: Schema.optionalKey(Schema.Boolean),
+  legacySidebarEnabled: Schema.optionalKey(Schema.Boolean),
   boringSidebarMultilineRows: Schema.optionalKey(Schema.Boolean),
   toolCallVisibility: Schema.optionalKey(ToolCallVisibility),
   threadDetailsUsageEnabled: Schema.optionalKey(Schema.Boolean),
   threadDetailsItems: Schema.optionalKey(Schema.Record(Schema.String, Schema.Boolean)),
-  legacySidebarEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarWorkingShelfEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
   sidebarProjectGroupingOverrides: Schema.optionalKey(

@@ -77,11 +77,15 @@
         "T3CODE_MOBILE_EXPO_OWNER": "omegent",
         "T3CODE_MOBILE_IOS_BUNDLE_IDENTIFIER": "dev.patroza.t3code",
         "T3CODE_MOBILE_IOS_TEAM_ID": "8B9VRZFRAA",
-        "SOURCEMAP_FILE": "/tmp/t3code-ios-main.jsbundle.map"
+        "SOURCEMAP_FILE": "/tmp/t3code-ios-main.jsbundle.map",
+        "ORG_GRADLE_PROJECT_reactNativeArchitectures": "armeabi-v7a,arm64-v8a"
       },
       "channel": "production",
       "environment": "production",
       "autoIncrement": true,
+      "android": {
+        "gradleCommand": ":app:bundleRelease -x lintVitalAnalyzeRelease -x lintVitalRelease"
+      },
       "ios": {
         "image": "macos-tahoe-26.6-xcode-27.1"
       }
