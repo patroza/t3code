@@ -1650,7 +1650,8 @@ describe("MessagesTimeline scroll position", () => {
   }
 
   it("settles when earlier short replies load above long ones", async () => {
-    const props = baseProps();
+    // Loading earlier history follows manual navigation, which releases live-end following.
+    const props = { ...baseProps(), liveFollowEnabled: false };
     const short = Array.from({ length: 80 }, (_, index) =>
       message(`Short reply ${index}`, { role: "assistant" }, `short-${index}`),
     );
@@ -1679,6 +1680,8 @@ describe("MessagesTimeline scroll position", () => {
       viewport.dispatchEvent(new Event("scroll"));
     });
 
+    // Measure this prepend independently of the initial long-message layout chain.
+    nestedCommits = 0;
     maxNestedCommits = 0;
     await act(async () => screen.rerender(timeline([...short, ...long])));
     await vi.waitFor(async () => {
