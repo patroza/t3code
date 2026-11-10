@@ -3912,6 +3912,13 @@ export default function ChatView(props: ChatViewProps) {
                             {!composerMounted ? null : (
                               <ChatComposer
                                 activeContextWindow={activeContextWindow}
+                                detailLoading={threadDetailLoading}
+                                threadStarted={Boolean(
+                                  activeThreadShell &&
+                                  (activeThreadShell.latestRun !== null ||
+                                    activeThreadShell.latestUserMessageAt !== null ||
+                                    activeThreadShell.runtime !== null),
+                                )}
                                 canOperateThread={canOperateThread}
                                 reportedModelSelection={reportedModelSelection}
                                 multipleModelSelections={multipleModelSelections}

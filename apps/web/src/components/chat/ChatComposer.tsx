@@ -1,3 +1,7 @@
+import {
+  resolveContextWindowModelDisplayName,
+  shouldReserveContextWindowMeter,
+} from "./ContextWindowMeter.logic";
 import type { ContextWindowSnapshot } from "@t3tools/client-runtime/state/context-window";
 import { settlePromise } from "@t3tools/client-runtime/state/runtime";
 import { VoiceInputSetup } from "./VoiceInputSetup";
@@ -106,11 +110,7 @@ import {
   DEFAULT_COMPOSER_PLACEHOLDER,
   DISCONNECTED_COMPOSER_PLACEHOLDER,
 } from "../../composerPlaceholder";
-import {
-  deriveComposerSendState,
-  getAntigravitySendBlockReason,
-  threadShellHasStarted,
-} from "../ChatView.logic";
+import { deriveComposerSendState, getAntigravitySendBlockReason } from "../ChatView.logic";
 import {
   dataTransferHasComposerMention,
   makeComposerMentionDragHandlers,
@@ -405,6 +405,8 @@ export interface ChatComposerProps {
   sendDisabledReason: string | null;
   isPreparingWorktree: boolean;
   activeContextWindow?: ContextWindowSnapshot | null;
+  detailLoading?: boolean;
+  threadStarted?: boolean;
   isCompacting: boolean;
   bannerItems: readonly ComposerBannerStackItem[];
   resumeCompactionTokens: number | null;
@@ -1070,8 +1072,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   );
   const reserveContextWindowMeter = shouldReserveContextWindowMeter({
     meterEnabled: settings.contextWindowMeterEnabled,
-    detailLoading: props.threadSyncPhase === "loading",
-    threadStarted: threadShellHasStarted(props.activeThreadShell),
+    detailLoading: props.detailLoading === true,
+    threadStarted: props.threadStarted === true,
     providerReportsContextWindow: selectedProviderStatus
       ? selectedProviderStatus.reportsContextWindow === true
       : null,

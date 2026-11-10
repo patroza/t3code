@@ -610,7 +610,6 @@ export const TraitsPicker = memo(function TraitsPicker({
   }
 
   const { label: triggerLabel, speedLabel } = buildSharedTraitsTriggerDisplay({
-    provider,
     descriptors,
     primarySelectDescriptorId: primarySelectDescriptor?.id ?? null,
     ultrathinkPromptControlled,
