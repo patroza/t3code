@@ -246,6 +246,16 @@ describe("GitHubRest", () => {
               expect(input.args).toEqual(["config", "get", "http_unix_socket"]);
               return Effect.succeed(TestSourceControlHost.processOutput(`${socketPath}\n`));
             }
+            if (input.args[0] === "pr") {
+              expect(input.args).toEqual([
+                "pr",
+                "checks",
+                "https://github.com/acme/web/pull/7",
+                "--json",
+                "bucket,state",
+              ]);
+              return Effect.succeed(TestSourceControlHost.processOutput("[]\n"));
+            }
             expect(input.args.slice(0, 2)).toEqual(["auth", "token"]);
             return Effect.succeed(TestSourceControlHost.processOutput("placeholder\n"));
           },
