@@ -1273,6 +1273,7 @@ describe("MessagesTimeline history and thread links", () => {
       screen.rerender(<FollowedTimeline {...props} timelineEntries={entries} />),
     );
     const viewport = props.listRef.current!.getScrollableNode();
+    if (viewport === null) throw new Error("Timeline viewport is not mounted");
     await vi.waitFor(() => {
       expect(viewport.scrollHeight).toBeGreaterThan(viewport.clientHeight);
       expect(screen.text()).toContain("Paragraph 11.59");

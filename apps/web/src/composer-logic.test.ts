@@ -517,12 +517,12 @@ describe("parseStandaloneComposerSlashCommand", () => {
     expect(parseStandaloneComposerSlashCommand(" /NEW ")).toBe("new");
   });
 
-  it("parses standalone /plan command", () => {
-    expect(parseStandaloneComposerSlashCommand(" /plan ")).toBe("plan");
+  it("leaves /plan to provider plan agents", () => {
+    expect(parseStandaloneComposerSlashCommand(" /plan ")).toBeNull();
   });
 
-  it("parses standalone /default command", () => {
-    expect(parseStandaloneComposerSlashCommand("/default")).toBe("default");
+  it("leaves /default to provider commands", () => {
+    expect(parseStandaloneComposerSlashCommand("/default")).toBeNull();
   });
 
   it("ignores slash commands with extra message text", () => {
