@@ -15,6 +15,7 @@ export function applyIntegrationShellStreamItem(
   shell: OrchestrationV2ShellSnapshot | null,
   item: OrchestrationV2ShellStreamItem,
 ): OrchestrationV2ShellSnapshot | null {
+  if (item.kind === "snapshot-required") return null;
   if (item.kind === "synchronized") return shell;
   if (item.kind === "snapshot") {
     return mergeShellSnapshotProjects(
