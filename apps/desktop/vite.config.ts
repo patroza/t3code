@@ -11,6 +11,8 @@ const testSetupFiles = [
 ];
 
 const isolatedDesktopTestFiles = [
+  // The menu fixture replaces Electron webContents to exercise DevTools-only close.
+  "src/window/DesktopApplicationMenu.test.ts",
   // This suite replaces Electron net/nativeImage/clipboard used by image capture.
   "src/window/ContextMenuImage.test.ts",
   "src/app/DesktopClerk.test.ts",

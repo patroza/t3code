@@ -1649,50 +1649,71 @@ describe("MessagesTimeline scroll position", () => {
     return props.listRef.current!.getScrollableNode()!;
   }
 
-  it("settles when earlier short replies load above long ones", async () => {
-    // Loading earlier history follows manual navigation, which releases live-end following.
-    const props = { ...baseProps(), liveFollowEnabled: false };
-    const short = Array.from({ length: 80 }, (_, index) =>
-      message(`Short reply ${index}`, { role: "assistant" }, `short-${index}`),
-    );
-    const long = Array.from({ length: 4 }, (_, index) =>
-      message(
-        `${"Long handbook paragraph. ".repeat(40)}\n\n`.repeat(60),
-        { role: "assistant" },
-        `long-${index}`,
-      ),
-    );
-    let nestedCommits = 0;
-    let maxNestedCommits = 0;
-    const onRender = (_id: string, phase: string) => {
-      nestedCommits = phase === "nested-update" ? nestedCommits + 1 : 0;
-      maxNestedCommits = Math.max(maxNestedCommits, nestedCommits);
-    };
-    const timeline = (entries: Entry[]) => (
-      <Profiler id="timeline" onRender={onRender}>
-        <MessagesTimeline {...props} timelineEntries={entries} />
-      </Profiler>
-    );
-    await using screen = await renderElement(timeline(long));
-    const viewport = await waitForList(props);
-    await act(async () => {
-      viewport.scrollTop = 0;
-      viewport.dispatchEvent(new Event("scroll"));
-    });
-
-    // Measure this prepend independently of the initial long-message layout chain.
-    nestedCommits = 0;
-    maxNestedCommits = 0;
-    await act(async () => screen.rerender(timeline([...short, ...long])));
-    await vi.waitFor(async () => {
+  it.each([80, 800])(
+    "settles when %i earlier short replies load above long ones",
+    async (historySize) => {
+      // Loading earlier history follows manual navigation, which releases live-end following.
+      const props = { ...baseProps(), liveFollowEnabled: false };
+      const short = Array.from({ length: historySize }, (_, index) =>
+        message(`Short reply ${index}`, { role: "assistant" }, `short-${index}`),
+      );
+      const long = Array.from({ length: 4 }, (_, index) =>
+        message(
+          `${"Long handbook paragraph. ".repeat(40)}\n\n`.repeat(60),
+          { role: "assistant" },
+          `long-${index}`,
+        ),
+      );
+      let commits = 0;
+      let nestedCommits = 0;
+      let maxNestedCommits = 0;
+      const onRender = (_id: string, phase: string) => {
+        commits += 1;
+        nestedCommits = phase === "nested-update" ? nestedCommits + 1 : 0;
+        maxNestedCommits = Math.max(maxNestedCommits, nestedCommits);
+      };
+      const timeline = (entries: Entry[]) => (
+        <Profiler id="timeline" onRender={onRender}>
+          <MessagesTimeline {...props} timelineEntries={entries} />
+        </Profiler>
+      );
+      await using screen = await renderElement(timeline(long));
+      const viewport = await waitForList(props);
       await act(async () => {
         viewport.scrollTop = 0;
         viewport.dispatchEvent(new Event("scroll"));
       });
-      expect(screen.text()).toContain("Short reply 0");
-    });
-    expect(maxNestedCommits).toBeLessThan(8);
-  });
+
+      // Observe a quiet layout boundary instead of counting initial placement as prepend work.
+      const waitForSettledLayout = () =>
+        vi.waitFor(async () => {
+          const before = commits;
+          await act(async () => {
+            await new Promise<void>((resolve) =>
+              // oxlint-disable-next-line t3code/no-frame-waits-in-browser-tests -- The profiler budget measures real layout convergence; retry until two frames contain no commits.
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+            );
+          });
+          expect(commits).toBe(before);
+        });
+      await waitForSettledLayout();
+
+      // Measure this prepend independently of the initial long-message layout chain.
+      nestedCommits = 0;
+      maxNestedCommits = 0;
+      await act(async () => screen.rerender(timeline([...short, ...long])));
+      await vi.waitFor(async () => {
+        await act(async () => {
+          viewport.scrollTop = 0;
+          viewport.dispatchEvent(new Event("scroll"));
+        });
+        expect(screen.text()).toContain("Short reply 0");
+      });
+      await waitForSettledLayout();
+      // LegendList 3.7 converges in at most eight passes, independent of history size.
+      expect(maxNestedCommits).toBeLessThanOrEqual(8);
+    },
+  );
 
   it("restores a manual reading position after reopening and switching threads", async () => {
     const props = baseProps();

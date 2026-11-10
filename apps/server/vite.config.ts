@@ -171,6 +171,8 @@ export default mergeConfig(
             testTimeout: serverTestTimeout,
             include: ["integration/**/*.test.ts", "scripts/**/*.test.ts", "src/**/*.test.ts"],
             exclude: [
+              // Speech service fixtures replace the native loader and offered-model registry.
+              "src/speech/SpeechService.test.ts",
               "src/usage/UsageService.test.ts",
               // The child-process spy must bind before DocumentText is imported.
               "src/provider/userInputAttachments.test.ts",
@@ -225,6 +227,8 @@ export default mergeConfig(
               // The process-group spy must bind before PortScanner is imported. Shared workers
               // can otherwise retain a real signal function from an earlier provider test.
               "src/preview/PortScanner.test.ts",
+              // Speech service fixtures replace the native loader and offered-model registry.
+              "src/speech/SpeechService.test.ts",
               // Muse history discovery mocks the SDK initializer. Provider imports
               // in another file otherwise retain the real binding and hide history.
               "src/usage/UsageService.test.ts",
