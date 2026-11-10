@@ -424,7 +424,8 @@ const browserTestProject = {
   },
   test: {
     name: "browser",
-    maxWorkers: 4,
+    // Hosted CI has less headroom than developer machines; keep page creation bounded.
+    maxWorkers: process.env.CI ? 2 : 4,
     sequence: { groupOrder: 2 },
     include: ["src/**/*.browser.test.{ts,tsx}"],
     hookTimeout: 15_000,
