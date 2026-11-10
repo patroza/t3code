@@ -91,6 +91,7 @@ describe("searchSettings", () => {
       "worktree-remove-confirmation",
       "worktree-branch-naming",
       "storage-worktree-keep-when",
+      "worktree-fast-checkout",
       "network-access",
       "project-defaults",
       "environment-identification",

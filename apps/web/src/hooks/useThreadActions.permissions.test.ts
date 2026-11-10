@@ -388,6 +388,7 @@ describe("thread action permissions", () => {
       "clear-draft:side-chat",
       "refresh-archive",
       "clear-terminal-ui",
+      "remove-ui-state",
     ]);
     expect(state.localEffects).not.toContain("clear-draft:fork");
     expect(state.localEffects).not.toContain("clear-draft:other-side-chat");
