@@ -203,6 +203,9 @@ jobs:
         run: node apps/web/node_modules/playwright/cli.js install --with-deps --only-shell chromium
 
       - name: Test
+        env:
+          # Capture process exits and session teardown when a browser transport closes.
+          DEBUG: vitest:browser:pool,vitest:browser:playwright,pw:browser
         run: vp run --filter @t3tools/web test
 
   # Preserve the required Test check. Run even after failures or cancellation,
