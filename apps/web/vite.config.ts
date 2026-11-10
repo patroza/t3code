@@ -357,6 +357,8 @@ const browserTestProject = {
   // Lazy views and mocked imports hide these from the initial dependency scan.
   // Discovering them while a browser test runs reloads its page and closes its mock RPCs.
   optimizeDeps: {
+    // Late discovery reloads the orchestrator and invalidates pending test RPCs.
+    noDiscovery: true,
     include: [
       "vite-plus/test/browser",
       "react/compiler-runtime",
@@ -424,8 +426,7 @@ const browserTestProject = {
   },
   test: {
     name: "browser",
-    // Hosted CI has less headroom than developer machines; keep page creation bounded.
-    maxWorkers: process.env.CI ? 2 : 4,
+    maxWorkers: 4,
     sequence: { groupOrder: 2 },
     include: ["src/**/*.browser.test.{ts,tsx}"],
     hookTimeout: 15_000,
