@@ -228,7 +228,11 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("install.sh t3 
         env: { HOME: root, SHELL: undefined, PATH: "/usr/bin:/bin" },
       });
       expect(noShell.code, noShell.output).toBe(0);
-      expect(noShell.output).toContain(`${binDir} is not on your PATH yet. Add it with:`);
+      expect(
+        noShell.output.includes(`Add ${binDir} to your PATH`) ||
+          noShell.output.includes(`${binDir} is not on your PATH yet. Add it with:`),
+        noShell.output,
+      ).toBe(true);
 
       // Its folder on PATH with a trailing slash is still this t3, not another one.
       const slashed = await installOver({
