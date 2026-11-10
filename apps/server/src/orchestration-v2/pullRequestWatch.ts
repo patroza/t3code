@@ -123,7 +123,9 @@ export function evaluatePullRequestWatch(
 
     const seen = new Set(checks.map((check) => check.name));
     const stillPending = new Set(
-      checks.filter((check) => check.status === "pending").map((check) => check.name),
+      checks
+        .filter((check) => check.status === "pending" || check.status === "action-required")
+        .map((check) => check.name),
     );
     const failedNames = new Set(failed.map((check) => check.name));
     const settledNames = [

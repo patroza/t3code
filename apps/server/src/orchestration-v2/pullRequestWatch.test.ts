@@ -180,7 +180,10 @@ describe("evaluatePullRequestWatch", () => {
     assert.deepEqual(advisory.next.awaitingApproval, []);
     const completed = detail({ checks: [required, job, { ...pending, status: "success" }] });
     const finished = evaluatePullRequestWatch(unlinked.next, completed, noRemarks);
-    assert.deepEqual(finished.changes, [{ kind: "checks-passed", count: 1, required: true }]);
+    assert.deepEqual(finished.changes, [
+      { kind: "checks-passed", count: 1, required: true },
+      { kind: "checks-settled", checks: [{ ...pending, status: "success" }] },
+    ]);
     assert.deepEqual(finished.next.awaitingApproval, []);
     assert.deepEqual(evaluatePullRequestWatch(finished.next, completed, noRemarks).changes, []);
 

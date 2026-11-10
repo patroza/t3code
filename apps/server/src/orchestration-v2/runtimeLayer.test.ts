@@ -4070,7 +4070,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch?.pendingChecks,
         ["test", "advisory"],
       );
-      assert.deepEqual(yield* summaries, ["#12: checks passed"]);
+      assert.deepEqual(yield* summaries, [firstSummary]);
 
       // The fresh reactor reloads the nonempty obligation from the persisted watch.
       const restarted = yield* PullRequestWatchReactor.make.pipe(Effect.provide(host));
@@ -4102,14 +4102,14 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       yield* worker.drain();
       assert.deepEqual(yield* summaries, [
         firstSummary,
-        approval ? "#12: checks passed" : "#12: checks finished",
+        approval ? "#12: checks passed, checks finished" : "#12: checks finished",
       ]);
       yield* TestClock.adjust("10 minutes");
       yield* restarted.sweep;
       yield* worker.drain();
       assert.deepEqual(yield* summaries, [
         firstSummary,
-        approval ? "#12: checks passed" : "#12: checks finished",
+        approval ? "#12: checks passed, checks finished" : "#12: checks finished",
       ]);
       assert.deepEqual(
         (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch?.owedChecks,

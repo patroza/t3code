@@ -556,7 +556,9 @@ export const make = Effect.gen(function* () {
       fingerprint: group.fingerprint,
       inFlight:
         detail.mergeability === "unknown" ||
-        detail.checks.some((check) => check.status === "pending"),
+        detail.checks.some(
+          (check) => check.status === "pending" || check.status === "action-required",
+        ),
       remarksComplete: plan.activity ? remarks !== null : (last?.remarksComplete ?? false),
       watches: new Set(group.targets.map(watchKey)),
       status: fingerprint?.status ?? null,
