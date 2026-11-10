@@ -1,175 +1,305 @@
-import { act, render as renderScreen } from "../../../test/render";
-import { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import { RegistryContext } from "@effect/atom-react";
+import {
+  AuthOrchestrationOperateScope,
+  AuthOrchestrationReadScope,
+  EnvironmentId,
+  ProjectId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type AgentSessionProjectCandidate,
+  type AuthEnvironmentScope,
+  type AuthSessionState,
+  type EnvironmentCloudLinkStateResult,
+  type ServerProvider,
+} from "@t3tools/contracts";
+import { AsyncResult, Atom } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 
-const mocks = vi.hoisted(() => ({
-  importThreads: vi.fn(),
-  serverConfigs: new Map(),
+import "~/index.css";
+import { act, render } from "../../../test/render";
+
+type SessionResult = AsyncResult.AsyncResult<AuthSessionState, Error>;
+type Project = { id: ProjectId; environmentId: EnvironmentId; workspaceRoot: string };
+type CreateProjectInput = {
+  environmentId: EnvironmentId;
+  input: { projectId: ProjectId; workspaceRoot: string };
+};
+const state = vi.hoisted(() => ({
+  sessions: new Map<string, unknown>(),
+  projects: null as unknown,
+  providers: null as unknown,
+  config: null as unknown,
+  candidates: null as unknown,
   createProject: vi.fn(),
-  complete: vi.fn(),
-  refresh: vi.fn(),
-  toast: vi.fn(),
-  projects: [] as Array<{ id: string; environmentId: string; workspaceRoot: string }>,
+  importThreads: vi.fn(),
+  refreshProviders: vi.fn(),
+  completeOnboarding: vi.fn(),
+  onDone: vi.fn(),
+  scan: vi.fn(),
+  refreshScan: vi.fn(),
+  waitForProject: vi.fn(),
+  cloud: false,
+  auth: { isLoaded: true, isSignedIn: false, userId: null as string | null },
+  linkState: null as unknown,
+  linkError: null as string | null,
+  refreshLinkState: vi.fn(),
+  scanError: null as string | null,
+  scanPending: false,
 }));
-vi.mock("../../state/session", () => ({
-  useEnvironmentScope: () => true,
-  useEnvironmentsWithScope: (environments: Array<{ environmentId: string }>) =>
-    new Set(environments.map((entry) => entry.environmentId)),
-  readEnvironmentScope: () => true,
-}));
-vi.mock("../../state/agentSessions", () => ({ agentSessionImport: "import" }));
-vi.mock("../../state/projects", () => ({ projectEnvironment: { create: "create" } }));
-vi.mock("../../state/use-atom-command", () => ({
-  useAtomCommand: (command: string) =>
-    command === "import"
-      ? mocks.importThreads
-      : command === "create"
-        ? mocks.createProject
-        : mocks.refresh,
-}));
-vi.mock("../../onboarding/firstRun", () => ({ completeOnboarding: mocks.complete }));
-vi.mock("../../state/entities", () => ({
-  useProjects: () => mocks.projects,
-  useServerConfigs: () => mocks.serverConfigs,
-  readProjects: () => mocks.projects,
-  waitForProject: async () => mocks.projects[0],
-  // Partial mocks leak under isolate:false. Preview reopen needs this export.
-  readEnvironmentSupportsServerBrowser: () => false,
-}));
-vi.mock("../../state/environments", () => {
-  const environment = {
-    environmentId: "test-env",
-    label: "Computer",
-    connection: { phase: "connected" },
-    entry: { enabled: true },
-  };
+
+vi.mock(import("@t3tools/client-runtime/state/session"), async (original) => {
+  const actual = await original();
   return {
-    useEnvironments: () => ({ environments: [environment] }),
-    usePrimaryEnvironment: () => environment,
-    usePrimaryEnvironmentId: () => environment.environmentId,
+    ...actual,
+    createEnvironmentSessionAtoms: ((runtime: never) => ({
+      ...actual.createEnvironmentSessionAtoms(runtime),
+      sessionStateAtom: (id: EnvironmentId) => state.sessions.get(id),
+    })) as never,
   };
 });
-vi.mock("../../state/server", () => ({
-  serverEnvironment: {
-    providersValueAtom: () => [],
-    configValueAtom: () => null,
-    refreshProviders: "refresh",
-  },
+vi.mock(import("../../cloud/publicConfig"), async (original) => ({
+  ...(await original()),
+  hasCloudPublicConfig: () => state.cloud,
 }));
-vi.mock("@effect/atom-react", async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  useAtomValue: (value: unknown) => value,
+vi.mock(import("@clerk/react"), async (original) => ({
+  ...(await original()),
+  useAuth: (() => state.auth) as never,
 }));
-vi.mock("../../onboarding/useProjectScans", () => ({
-  useProjectScans: () => [
-    {
-      environmentId: "test-env",
+vi.mock(import("../clerk/useT3ConnectAuthPrompt"), async (original) => ({
+  ...(await original()),
+  useT3ConnectAuthPrompt: (() => ({ openAuthPrompt: () => {} })) as never,
+}));
+vi.mock(import("../../cloud/cloudLinkState"), async (original) => {
+  const { useAtomValue } = await import("@effect/atom-react");
+  return {
+    ...(await original()),
+    useCloudLinkState: (() => ({
+      data: useAtomValue(state.linkState as Atom.Atom<EnvironmentCloudLinkStateResult | null>),
+      error: state.linkError,
       isPending: false,
-      error: null,
-      refresh: mocks.refresh,
-      data: {
-        truncated: false,
-        candidates: [
-          {
-            path: "/project",
-            title: "project",
-            projectId: "test-project",
-            threadCount: 29,
-            lastActiveAt: new Date().toISOString(),
-            sources: ["codex"],
-          },
-        ],
-      },
+      refresh: state.refreshLinkState,
+    })) as never,
+  };
+});
+vi.mock(import("../../onboarding/firstRun"), async (original) => ({
+  ...(await original()),
+  completeOnboarding: state.completeOnboarding,
+}));
+vi.mock(import("../../state/environments"), async (original) => ({
+  ...(await original()),
+  useEnvironments: (() => ({
+    environments: [{ environmentId: "primary", label: "primary" }],
+  })) as never,
+  usePrimaryEnvironmentId: (() => "primary") as never,
+}));
+vi.mock(import("../../state/server"), async (original) => {
+  const actual = await original();
+  return {
+    ...actual,
+    serverEnvironment: {
+      ...actual.serverEnvironment,
+      providersValueAtom: (() => state.providers) as never,
+      configValueAtom: (() => state.config) as never,
+      refreshProviders: "refreshProviders" as never,
     },
-  ],
+  };
+});
+vi.mock(import("../../state/entities"), async (original) => {
+  const { useAtomValue } = await import("@effect/atom-react");
+  return {
+    ...(await original()),
+    useProjects: (() => useAtomValue(state.projects as Atom.Atom<Project[]>)) as never,
+    readProjects: (() => appAtomRegistry.get(state.projects as Atom.Atom<Project[]>)) as never,
+    waitForProject: ((ref: unknown) => state.waitForProject(ref)) as never,
+  };
+});
+vi.mock(import("../../state/projects"), async (original) => ({
+  ...(await original()),
+  projectEnvironment: { create: "createProject" } as never,
 }));
-vi.mock("../../connection/onboarding", () => ({ connectPairing: vi.fn() }));
-vi.mock("../../state/terminal", () => ({ terminalEnvironment: {} }));
-vi.mock("../clerk/useT3ConnectAuthPrompt", () => ({ useT3ConnectAuthPrompt: vi.fn() }));
-vi.mock("../../cloud/publicConfig", () => ({ hasCloudPublicConfig: () => false }));
-vi.mock("../ThreadTerminalDrawer", () => ({ TerminalViewport: () => null }));
-vi.mock("../settings/ChatGptWelcomeCoordinator", () => ({ ChatGptWelcomeCoordinator: () => null }));
-vi.mock("../settings/CodexSetupSection", () => ({
-  CodexSetupSection: () => null,
-  AddManagedCodexAccountDialog: () => null,
+vi.mock(import("../../state/agentSessions"), async (original) => ({
+  ...(await original()),
+  agentSessionImport: "importThreads" as never,
 }));
-vi.mock("../cloud/CloudEnvironmentConnectList", () => ({
-  CloudEnvironmentConnectRows: () => null,
-}));
-vi.mock("../ui/toast", () => ({
-  toastManager: { add: mocks.toast, close: vi.fn(), update: vi.fn() },
-}));
-
-import { WelcomeWizard } from "./WelcomeWizard";
-
-async function setup() {
-  await using resources = new AsyncDisposableStack();
-  resources.defer(async () => {});
-  const container = document.createElement("div");
-
-  vi.clearAllMocks();
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
+vi.mock(import("../../onboarding/useProjectScans"), async (original) => {
+  const { useAtomValue } = await import("@effect/atom-react");
+  return {
+    ...(await original()),
+    useProjectScans: (ids: readonly EnvironmentId[]) => {
+      const candidates = useAtomValue(
+        state.candidates as Atom.Atom<AgentSessionProjectCandidate[]>,
+      );
+      return ids.map((environmentId) => {
+        state.scan({ environmentId });
+        return {
+          environmentId,
+          data: (state.scanPending ? null : { candidates, truncated: false }) as never,
+          isPending: state.scanPending,
+          error: state.scanError,
+          refresh: state.refreshScan,
+        };
+      });
     },
-  );
-  Object.defineProperty(Element.prototype, "getAnimations", {
-    configurable: true,
-    value: () => [],
-  });
-  mocks.projects = [{ id: "test-project", environmentId: "test-env", workspaceRoot: "/project" }];
-  mocks.complete.mockResolvedValue(undefined);
-  mocks.refresh.mockResolvedValue(undefined);
-  mocks.importThreads.mockResolvedValue({
-    _tag: "Success",
-    value: { importedCount: 28, skippedCount: 1 },
-  });
+  };
+});
+vi.mock(import("../../state/use-atom-command"), async (original) => ({
+  ...(await original()),
+  useAtomCommand: ((command: "createProject" | "importThreads" | "refreshProviders") =>
+    state[command]) as never,
+}));
 
-  const screen = resources.use(await renderScreen(<></>, { container }));
+import { welcomeImportSelectionKey } from "../../onboarding/welcomeState";
+import { appAtomRegistry } from "../../rpc/atomRegistry";
+import { toastManager } from "../ui/toast";
+import { WelcomePage } from "./WelcomePage";
 
-  async function click(label: string) {
-    const button = [...document.querySelectorAll("button")].find(
-      (element) => element.textContent?.trim() === label,
-    );
-    expect(button, `button ${label}`).toBeDefined();
-    await act(async () => button!.click());
-  }
-  const lifetime = resources.move();
-  return { screen, container, click, [Symbol.asyncDispose]: () => lifetime.disposeAsync() };
+const primaryId = EnvironmentId.make("primary");
+const readyClaude: ServerProvider = {
+  instanceId: ProviderInstanceId.make("claudeAgent"),
+  driver: ProviderDriverKind.make("claudeAgent"),
+  enabled: true,
+  installed: true,
+  version: "1.0.0",
+  status: "ready",
+  auth: { status: "authenticated" },
+  checkedAt: "2026-01-01T00:00:00.000Z",
+  models: [],
+  slashCommands: [],
+  skills: [],
+};
+
+function session(scopes: ReadonlyArray<AuthEnvironmentScope>): AuthSessionState {
+  return {
+    authenticated: true,
+    scopes: [AuthOrchestrationReadScope, ...scopes],
+    auth: {
+      policy: "remote-reachable",
+      bootstrapMethods: ["one-time-token"],
+      sessionMethods: ["bearer-access-token"],
+      sessionCookieName: "t3_session",
+    },
+  };
 }
 
-it("enters the workspace after a partial import and warns after navigation finishes", async () => {
-  await using harness = await setup();
-  const { screen, click } = harness;
+function projectsAtom() {
+  return state.projects as Atom.Writable<ReadonlyArray<Project>>;
+}
 
-  let finishNavigation = () => {};
-  const navigation = new Promise<void>((resolve) => {
-    finishNavigation = resolve;
+function candidatesAtom() {
+  return state.candidates as Atom.Writable<ReadonlyArray<AgentSessionProjectCandidate>>;
+}
+
+// Default selection only picks recently active projects, so pin "now".
+const NOW = Date.parse("2026-01-01T00:00:00.000Z");
+
+function candidate(
+  path: string,
+  overrides: Partial<AgentSessionProjectCandidate> = {},
+): AgentSessionProjectCandidate {
+  return {
+    path,
+    title: path.split("/").at(-1)!,
+    sources: ["codex"],
+    threadCount: 10,
+    lastActiveAt: new Date(NOW - 60_000).toISOString(),
+    alreadyImported: false,
+    ...overrides,
+  };
+}
+
+function recordProject({ environmentId, input }: CreateProjectInput) {
+  appAtomRegistry.set(projectsAtom(), [
+    ...appAtomRegistry.get(projectsAtom()),
+    { id: input.projectId, environmentId, workspaceRoot: input.workspaceRoot },
+  ]);
+  return AsyncResult.success(undefined);
+}
+
+// Resolves once the project reaches the mocked projects atom; the real helper's timeout is
+// replaced per test with a rejection.
+function waitForRecordedProject(ref: { environmentId: EnvironmentId; projectId: string }) {
+  const find = () =>
+    appAtomRegistry
+      .get(projectsAtom())
+      .find(
+        (project) => project.id === ref.projectId && project.environmentId === ref.environmentId,
+      );
+  return new Promise<Project>((resolve) => {
+    const current = find();
+    if (current) return resolve(current);
+    const unsubscribe = appAtomRegistry.subscribe(projectsAtom(), () => {
+      const project = find();
+      if (!project) return;
+      unsubscribe();
+      resolve(project);
+    });
   });
-  const onDone = vi.fn(() => navigation);
-  await act(async () => screen.rerender(<WelcomeWizard localAvailable onDone={onDone} />));
-  await click("Continue");
-  await click("Continue");
-  await click("Import 1 project");
-  expect(onDone).toHaveBeenCalledWith({
-    environmentId: EnvironmentId.make("test-env"),
-    projectId: ProjectId.make("test-project"),
-  });
-  expect(mocks.toast).not.toHaveBeenCalled();
-  await act(async () => finishNavigation());
-  expect(mocks.toast).toHaveBeenCalledWith(
-    expect.objectContaining({
-      type: "warning",
-      description: "Imported 28 threads. 1 thread could not be imported.",
-    }),
+}
+
+function button(label: string) {
+  const found = [...document.querySelectorAll("button")].find(
+    (element) => element.textContent?.trim() === label,
   );
-  expect(mocks.toast.mock.invocationCallOrder[0]).toBeGreaterThan(
-    onDone.mock.invocationCallOrder[0]!,
+  if (!found) throw new Error(`Missing button: ${label}`);
+  return found;
+}
+
+async function click(label: string) {
+  const target = button(label);
+  expect(target.disabled).toBe(false);
+  await act(async () => target.click());
+}
+
+async function mountWelcome() {
+  return render(
+    <RegistryContext.Provider value={appAtomRegistry}>
+      <WelcomePage environmentId={primaryId} onDone={state.onDone} />
+    </RegistryContext.Provider>,
   );
-});
+}
+
+// The mocked modules read `state`, so every test starts by replacing all of it.
+// Returns the clock spy so each test can `using` it; the spy would otherwise outlive the test.
+function setup() {
+  const now = vi.spyOn(Date, "now").mockReturnValue(NOW);
+  state.sessions.clear();
+  for (const id of [primaryId]) {
+    state.sessions.set(
+      id,
+      Atom.make<SessionResult>(AsyncResult.success(session([AuthOrchestrationOperateScope]))).pipe(
+        Atom.keepAlive,
+      ),
+    );
+  }
+  state.projects = Atom.make<ReadonlyArray<Project>>([]).pipe(Atom.keepAlive);
+  state.providers = Atom.make<ReadonlyArray<ServerProvider>>([readyClaude]).pipe(Atom.keepAlive);
+  state.config = Atom.make(null).pipe(Atom.keepAlive);
+  state.candidates = Atom.make<ReadonlyArray<AgentSessionProjectCandidate>>([
+    candidate("/projects/first"),
+    candidate("/projects/second"),
+  ]).pipe(Atom.keepAlive);
+  state.createProject
+    .mockReset()
+    .mockImplementation(async (input: CreateProjectInput) => recordProject(input));
+  state.importThreads
+    .mockReset()
+    .mockResolvedValue(AsyncResult.success({ importedCount: 1, skippedCount: 0 }));
+  state.refreshProviders.mockReset().mockResolvedValue(AsyncResult.success(undefined));
+  state.completeOnboarding.mockReset().mockResolvedValue(undefined);
+  state.onDone.mockReset();
+  state.scan.mockReset();
+  state.refreshScan.mockReset();
+  state.waitForProject.mockReset().mockImplementation(waitForRecordedProject);
+  state.cloud = false;
+  state.auth = { isLoaded: true, isSignedIn: false, userId: null };
+  state.linkState = Atom.make<EnvironmentCloudLinkStateResult | null>(null).pipe(Atom.keepAlive);
+  state.linkError = null;
+  state.refreshLinkState.mockReset();
+  state.scanError = null;
+  state.scanPending = false;
+  localStorage.removeItem(welcomeImportSelectionKey(primaryId));
+  return now;
+}
 
 it.each([
   [0, 0, null],
@@ -180,84 +310,55 @@ it.each([
 ] as const)(
   "finishes setup with %i imported and %i skipped threads",
   async (importedCount, skippedCount, warning) => {
-    await using harness = await setup();
-    const { screen, click } = harness;
+    using _now = setup();
+    appAtomRegistry.set(candidatesAtom(), [candidate("/projects/first")]);
+    state.importThreads.mockResolvedValue(AsyncResult.success({ importedCount, skippedCount }));
+    await using _screen = await mountWelcome();
+    using toastAdd = vi.spyOn(toastManager, "add");
 
-    mocks.importThreads.mockResolvedValue({
-      _tag: "Success",
-      value: { importedCount, skippedCount },
-    });
-    const onDone = vi.fn();
-    await act(async () => screen.rerender(<WelcomeWizard localAvailable onDone={onDone} />));
-    await click("Continue");
-    await click("Continue");
-    await click("Import 1 project");
-    expect(onDone).toHaveBeenCalledOnce();
-    if (warning === null && importedCount > 0) {
-      expect(mocks.toast).toHaveBeenCalledWith({
-        type: "success",
-        title: `Imported ${importedCount} ${importedCount === 1 ? "thread" : "threads"}`,
-      });
-    } else if (warning === null) {
-      expect(mocks.toast).not.toHaveBeenCalled();
-    } else {
-      expect(mocks.toast).toHaveBeenCalledWith(
-        expect.objectContaining({ type: "warning", description: warning }),
+    await click("Import 1 project and start");
+    await vi.waitFor(() => expect(state.onDone).toHaveBeenCalledOnce());
+    if (warning !== null) {
+      await vi.waitFor(() =>
+        expect(toastAdd).toHaveBeenCalledWith(
+          expect.objectContaining({ type: "warning", description: warning }),
+        ),
       );
+    } else if (importedCount > 0) {
+      await vi.waitFor(() =>
+        expect(toastAdd).toHaveBeenCalledWith({
+          type: "success",
+          title: `Imported ${importedCount} ${importedCount === 1 ? "thread" : "threads"}`,
+        }),
+      );
+    } else {
+      expect(toastAdd).not.toHaveBeenCalled();
     }
   },
 );
 
-it("keeps setup open when saving completion fails and preserves the import warning on retry", async () => {
-  await using harness = await setup();
-  const { screen, click } = harness;
-
-  mocks.complete.mockRejectedValueOnce(new Error("settings unavailable"));
-  const onDone = vi.fn();
-  await act(async () => screen.rerender(<WelcomeWizard localAvailable onDone={onDone} />));
-  await click("Continue");
-  await click("Continue");
-  await click("Import 1 project");
-  expect(onDone).not.toHaveBeenCalled();
-  expect(mocks.toast).toHaveBeenCalledWith(
-    expect.objectContaining({ type: "error", title: "Could not finish setup" }),
+it("preserves the partial-import warning when saving setup fails and is retried", async () => {
+  using _now = setup();
+  appAtomRegistry.set(candidatesAtom(), [candidate("/projects/first")]);
+  state.importThreads
+    .mockResolvedValueOnce(AsyncResult.success({ importedCount: 28, skippedCount: 1 }))
+    // Imported history is idempotent; retry only reports the still-skipped thread.
+    .mockResolvedValue(AsyncResult.success({ importedCount: 0, skippedCount: 1 }));
+  state.completeOnboarding.mockRejectedValueOnce(new Error("settings unavailable"));
+  await using _screen = await mountWelcome();
+  using toastAdd = vi.spyOn(toastManager, "add");
+  await click("Import 1 project and start");
+  await vi.waitFor(() => expect(state.completeOnboarding).toHaveBeenCalledOnce());
+  await vi.waitFor(() => expect(button("Import threads and start").disabled).toBe(false));
+  expect(state.onDone).not.toHaveBeenCalled();
+  await click("Import threads and start");
+  await vi.waitFor(() => expect(state.onDone).toHaveBeenCalledOnce());
+  await vi.waitFor(() =>
+    expect(toastAdd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "warning",
+        description: "Imported 28 threads. 1 thread could not be imported.",
+      }),
+    ),
   );
-  await click("Do not import projects");
-  expect(onDone).toHaveBeenCalledOnce();
-  expect(mocks.importThreads).toHaveBeenCalledOnce();
-  expect(mocks.toast).toHaveBeenLastCalledWith(
-    expect.objectContaining({
-      type: "warning",
-      description: "Imported 28 threads. 1 thread could not be imported.",
-    }),
-  );
-});
-
-it("requires explicit Close to complete local setup", async () => {
-  await using harness = await setup();
-  const { screen } = harness;
-
-  const onDone = vi.fn();
-  await act(async () => screen.rerender(<WelcomeWizard localAvailable onDone={onDone} />));
-  await act(async () => {
-    document.activeElement?.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
-    );
-    const backdrop = document.querySelector<HTMLElement>('[data-slot="dialog-backdrop"]')!;
-    backdrop.dispatchEvent(
-      new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse" }),
-    );
-    backdrop.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    backdrop.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-    backdrop.click();
-  });
-  expect(document.querySelector('[role="dialog"]')).not.toBeNull();
-  expect(mocks.complete).not.toHaveBeenCalled();
-  expect(onDone).not.toHaveBeenCalled();
-
-  const close = document.querySelector<HTMLButtonElement>('button[aria-label="Close"]');
-  expect(close).not.toBeNull();
-  await act(async () => close!.click());
-  expect(mocks.complete).toHaveBeenCalledOnce();
-  expect(onDone).toHaveBeenCalledWith(undefined);
 });

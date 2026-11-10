@@ -517,12 +517,12 @@ describe("parseStandaloneComposerSlashCommand", () => {
     expect(parseStandaloneComposerSlashCommand(" /NEW ")).toBe("new");
   });
 
-  it("parses standalone /plan command", () => {
-    expect(parseStandaloneComposerSlashCommand(" /plan ")).toBe("plan");
+  it("leaves /plan to provider plan agents", () => {
+    expect(parseStandaloneComposerSlashCommand(" /plan ")).toBeNull();
   });
 
-  it("parses standalone /default command", () => {
-    expect(parseStandaloneComposerSlashCommand("/default")).toBe("default");
+  it("leaves /default to provider commands", () => {
+    expect(parseStandaloneComposerSlashCommand("/default")).toBeNull();
   });
 
   it("ignores slash commands with extra message text", () => {
@@ -571,7 +571,7 @@ describe("extendReplacementRangeForTrailingSpace", () => {
 
 describe("side chat slash commands", () => {
   it("are not offered after the start of a message", () => {
-    const items = (["side", "btw", "clear", "plan"] as const).map((command) => ({
+    const items = (["side", "btw", "clear", "model"] as const).map((command) => ({
       id: `slash:${command}`,
       type: "slash-command" as const,
       command,
@@ -579,7 +579,7 @@ describe("side chat slash commands", () => {
       description: "",
     }));
     expect(slashCommandItemsForPromptPosition(items, false).map((item) => item.id)).toEqual([
-      "slash:plan",
+      "slash:model",
     ]);
   });
 });

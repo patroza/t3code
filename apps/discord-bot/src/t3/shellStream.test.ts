@@ -37,6 +37,17 @@ function snapshot(
 }
 
 describe("applyIntegrationShellStreamItem", () => {
+  it("drops stale shell state when a fresh snapshot is required", () => {
+    const held = snapshot([project("t3code", T3CODE_ROOT)]);
+    expect(applyIntegrationShellStreamItem(held, { kind: "snapshot-required" })).toBeNull();
+    expect(
+      applyIntegrationShellStreamItem(null, {
+        kind: "snapshot",
+        snapshot: snapshot([project("scanner", SCANNER_ROOT)], 2),
+      }),
+    ).toEqual(snapshot([project("scanner", SCANNER_ROOT)], 2));
+  });
+
   it("keeps registered projects when an enrichment snapshot lists only one root", () => {
     const held = snapshot([project("t3code", T3CODE_ROOT), project("scanner", SCANNER_ROOT)]);
     const identity = {

@@ -38,7 +38,6 @@ describe("installFileEditorDismissal", () => {
         </div>
       </>,
     );
-    const shadowRoot = () => screen.container.querySelector("diffs-container")?.shadowRoot;
     const content = await contentReady;
 
     editor!.setSelections([
@@ -56,9 +55,7 @@ describe("installFileEditorDismissal", () => {
         cancelable: true,
       }),
     );
-    await vi.waitFor(() =>
-      expect(shadowRoot()?.querySelectorAll("[data-match-range]")).toHaveLength(1),
-    );
+    await vi.waitFor(() => expect(CSS.highlights.get("diffs-search-current")?.size).toBe(1));
 
     using _dismissal = {
       [Symbol.dispose]: installFileEditorDismissal({

@@ -282,8 +282,7 @@ it.each([true, false])(
     });
     await using screen = await renderSection({ canList, projects: [project, second] });
     await screen.getByRole("combobox").click();
-    if (canList) await userEvent.keyboard("{ArrowDown}{Enter}");
-    else await screen.getByRole("option", { name: "Second", exact: true }).click();
+    await screen.getByRole("option", { name: "Second", exact: true }).click();
     await expect
       .element(
         screen.getByRole("combobox", {

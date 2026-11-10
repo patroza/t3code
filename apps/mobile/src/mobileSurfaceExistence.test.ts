@@ -120,7 +120,7 @@ describe("mobile surface existence (anti stack-drop)", () => {
   });
 
   it("keeps the iOS settings cog and ownership chip on the thread list", () => {
-    const toolbar = readSrc("features/layout/workspace/WorkspaceToolbar.ios.tsx");
+    const toolbar = readSrc("features/layout/workspace/WorkspaceToolbar.tsx");
     const filters = readSrc("features/home/ThreadListFilters.tsx");
     const ownership = readSrc("features/home/thread-list-ownership-filter.ts");
     expect(toolbar).toContain('accessibilityLabel="Open settings"');

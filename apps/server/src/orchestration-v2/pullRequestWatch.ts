@@ -18,6 +18,7 @@ export type PullRequestWatchChange =
   | { readonly kind: "checks-failed"; readonly failed: ReadonlyArray<PullRequestCheck> }
   | { readonly kind: "checks-passed"; readonly count: number; readonly required: boolean }
   | { readonly kind: "checks-settled"; readonly checks: ReadonlyArray<PullRequestCheck> }
+  | { readonly kind: "checks-awaiting-approval"; readonly checks: ReadonlyArray<PullRequestCheck> }
   | { readonly kind: "remarks"; readonly remarks: ReadonlyArray<PullRequestComment> }
   | { readonly kind: "no-checks"; readonly minutes: number }
   | { readonly kind: "conflicting" };
@@ -28,9 +29,12 @@ export interface PullRequestWatchReport {
   readonly exhausted: boolean;
 }
 
-// action-required is a finished check needing human input.
 const isFailedCheck = (check: PullRequestCheck) =>
-  check.status === "failure" || check.status === "cancelled" || check.status === "action-required";
+  check.status === "failure" || check.status === "cancelled";
+
+// A GitHub Actions job's URL extends its workflow run's URL; their names need not match.
+const workflowRunOf = (url: string | null) => url?.match(/^.*\/actions\/runs\/\d+/)?.[0] ?? null;
+const approvalKey = (check: PullRequestCheck) => workflowRunOf(check.url) ?? check.name;
 
 export function evaluatePullRequestWatch(
   watch: ThreadPullRequestWatch,
@@ -52,16 +56,60 @@ export function evaluatePullRequestWatch(
   let passedChecks = headMoved ? [] : watch.passedChecks;
   let pendingChecks = headMoved ? [] : watch.pendingChecks;
   let owedChecks = headMoved ? [] : (watch.owedChecks ?? []);
-  if (detail.checks.length > 0) {
-    const previousFailedChecks = failedChecks;
-    const failed = detail.checks.filter(isFailedCheck);
+  let awaitingApproval = headMoved ? [] : (watch.awaitingApproval ?? []);
+  let approvalAnnounced = headMoved ? false : (watch.approvalAnnounced ?? false);
+  // An unavailable approval read cannot establish success or that no checks exist.
+  const unread = detail.checks.some((check) => check.placeholder === true);
+  const checks = detail.checks.filter((check) => check.placeholder !== true);
+  const failed = checks.filter(isFailedCheck);
+  const awaiting = checks.filter((check) => check.status === "action-required");
+  const previousFailedChecks = failedChecks;
+  if (checks.length > 0) {
     const newlyFailed = failed.filter((check) => !failedChecks.includes(check.name));
     if (newlyFailed.length > 0) changes.push({ kind: "checks-failed", failed: newlyFailed });
+    if (!approvalAnnounced && awaiting.length > 0) {
+      changes.push({ kind: "checks-awaiting-approval", checks: awaiting });
+      approvalAnnounced = true;
+    }
     failedChecks = failed.map((check) => check.name);
 
-    const required = detail.checks.filter((check) => check.required === true);
-    const gate = required.length > 0 ? required : detail.checks;
-    const passedNow = gate.every((check) => check.status !== "pending" && !isFailedCheck(check));
+    // Approval reads can omit gated runs. Keep each hold until its jobs finish.
+    const awaitingNow = [...new Set(awaiting.map(approvalKey))];
+    const nameUnfinished = (name: string) => {
+      const matching = checks.filter((check) => check.name === name);
+      return (
+        matching.length === 0 ||
+        matching.some((check) => check.status === "pending" || check.status === "action-required")
+      );
+    };
+    // GitHub deduplicates jobs across runs, so a visible pending job may hide one in an awaited run.
+    // A pending check without a URL could be such a job; one with another host's URL cannot.
+    const jobsPending = checks.some(
+      (check) =>
+        check.status === "pending" && (check.url === null || workflowRunOf(check.url) !== null),
+    );
+    const finished = new Set(
+      jobsPending
+        ? []
+        : checks
+            .filter((check) => check.status !== "action-required" && check.status !== "pending")
+            .map((check) => workflowRunOf(check.url)),
+    );
+    awaitingApproval = [
+      ...awaitingNow,
+      ...awaitingApproval.filter(
+        (key) =>
+          !awaitingNow.includes(key) &&
+          (workflowRunOf(key) === key ? !finished.has(key) : nameUnfinished(key)),
+      ),
+    ];
+  }
+  const required = checks.filter((check) => check.required === true);
+  const gate = required.length > 0 ? required : checks;
+  const passedNow =
+    awaitingApproval.length === 0 &&
+    gate.every((check) => check.status !== "pending" && !isFailedCheck(check));
+  if (checks.length > 0 && !(unread && passedNow)) {
     const gateNames = gate.map((check) => check.name);
     const told = passed && passedChecks.length === 0 ? gateNames : passedChecks;
     // Required checks can finish between sweeps; detect new names. With no required checks, ignore advisory gate growth.
@@ -73,9 +121,11 @@ export function evaluatePullRequestWatch(
     passed = passedNow;
     passedChecks = passedNow ? gateNames : [];
 
-    const seen = new Set(detail.checks.map((check) => check.name));
+    const seen = new Set(checks.map((check) => check.name));
     const stillPending = new Set(
-      detail.checks.filter((check) => check.status === "pending").map((check) => check.name),
+      checks
+        .filter((check) => check.status === "pending" || check.status === "action-required")
+        .map((check) => check.name),
     );
     const failedNames = new Set(failed.map((check) => check.name));
     const settledNames = [
@@ -88,7 +138,7 @@ export function evaluatePullRequestWatch(
         !(passedThisPass && gateNames.includes(name)),
     );
     const settled = settledNames.flatMap((name) => {
-      const check = detail.checks.find(
+      const check = checks.find(
         (candidate) =>
           candidate.name === name &&
           (candidate.status === "success" ||
@@ -100,7 +150,7 @@ export function evaluatePullRequestWatch(
     if (settled.length > 0) changes.push({ kind: "checks-settled", checks: settled });
     owedChecks = passedThisPass
       ? required.length > 0
-        ? detail.checks
+        ? checks
             .filter((check) => check.required !== true && check.status === "pending")
             .map((check) => check.name)
         : []
@@ -121,9 +171,9 @@ export function evaluatePullRequestWatch(
     const awaitedBefore = headMoved
       ? DateTime.formatIso(DateTime.makeUnsafe(now))
       : (watch.checksAwaitedSince ?? null);
-    checksAwaitedSince = detail.checks.length > 0 ? null : awaitedBefore;
+    checksAwaitedSince = checks.length > 0 ? null : awaitedBefore;
     const awaitedMs = checksAwaitedSince === null ? 0 : now - Date.parse(checksAwaitedSince);
-    if (awaitedMs >= PULL_REQUEST_WATCH_NO_CHECKS_MS) {
+    if (!unread && awaitedMs >= PULL_REQUEST_WATCH_NO_CHECKS_MS) {
       changes.push({ kind: "no-checks", minutes: Math.round(awaitedMs / 60_000) });
       checksAwaitedSince = null;
     }
@@ -169,12 +219,14 @@ export function evaluatePullRequestWatch(
       failedChecks,
       passed,
       passedChecks,
+      owedChecks,
+      awaitingApproval,
+      approvalAnnounced,
       remarksThrough,
       remarkIds,
       conflicting,
       wakes,
       pendingChecks,
-      owedChecks,
       checksAwaitedSince,
     },
     exhausted: commentsOnly && wakes >= PULL_REQUEST_WATCH_WAKE_LIMIT,
@@ -213,6 +265,11 @@ function changeLines(
             `  - ${check.name}${check.status === "failure" ? "" : ` (${check.status})`}${check.url ? ` ${check.url}` : ""}`,
         ),
       ];
+    case "checks-awaiting-approval":
+      return [
+        `- Checks are waiting for approval or action from a maintainer${context.commit}:`,
+        ...listed(change.checks, (check) => `  - ${check.name}${check.url ? ` ${check.url}` : ""}`),
+      ];
     case "checks-passed":
       return [
         `- All ${change.count} ${change.required ? "required " : ""}${change.count === 1 ? "check" : "checks"} passed${context.commit}.`,
@@ -245,6 +302,7 @@ const SUMMARY: Record<PullRequestWatchChange["kind"], string> = {
   "checks-failed": "checks failed",
   "checks-passed": "checks passed",
   "checks-settled": "checks finished",
+  "checks-awaiting-approval": "checks await approval",
   remarks: "new comments",
   "no-checks": "no checks reported",
   conflicting: "merge conflict",

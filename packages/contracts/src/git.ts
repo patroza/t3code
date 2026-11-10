@@ -132,6 +132,8 @@ export const VcsResolveBranchChangeRequestInput = Schema.Struct({
   refName: TrimmedNonEmptyStringSchema,
 });
 export type VcsResolveBranchChangeRequestInput = typeof VcsResolveBranchChangeRequestInput.Type;
+export const VcsBranchStatus = Schema.Struct({ refName: Schema.NullOr(Schema.String) });
+export type VcsBranchStatus = typeof VcsBranchStatus.Type;
 
 export const VcsStatusSubscriptionInput = Schema.Struct({
   ...VcsStatusInput.fields,

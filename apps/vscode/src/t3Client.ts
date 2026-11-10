@@ -778,6 +778,11 @@ export class T3Client {
     ).pipe(
       Stream.runForEach((item) =>
         Effect.sync(() => {
+          if (item.kind === "snapshot-required") {
+            this.#shell = null;
+            if (this.#session === session) this.#startShellSubscription(session);
+            return;
+          }
           if (item.kind === "snapshot") this.#shell = item.snapshot;
           else if (item.kind === "synchronized") {
             // Status-only marker (parity with EnvironmentShellState.applyItem); no shell mutation.

@@ -27,6 +27,8 @@ fi
       encoding: "utf8",
       env: {
         ...process.env,
+        // Keep shell startup hooks from replacing the fake CLI on PATH.
+        BASH_ENV: "/dev/null",
         PATH: `${dir}:${process.env.PATH}`,
         CALLS: log,
         SCENARIO: scenario,
@@ -35,6 +37,11 @@ fi
         RELEASE_SHA: "exact-sha",
       },
     });
+    if (!NodeFS.existsSync(log)) {
+      throw new Error(
+        `Release script did not call gh: status=${result.status}; error=${result.error?.message ?? "none"}; stderr=${result.stderr}`,
+      );
+    }
     return { ...result, calls: NodeFS.readFileSync(log, "utf8") };
   } finally {
     NodeFS.rmSync(dir, { recursive: true, force: true });

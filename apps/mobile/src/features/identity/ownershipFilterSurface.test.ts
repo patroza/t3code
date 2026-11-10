@@ -13,7 +13,7 @@ describe("mobile ownership filter surface", () => {
     const sidebar = readSource("../threads/ThreadNavigationSidebar.tsx");
     const preferences = readSource("../../persistence/mobile-preferences.ts");
     const layout = readSource("../layout/AdaptiveWorkspaceLayout.tsx");
-    const workspaceToolbar = readSource("../layout/workspace/WorkspaceToolbar.ios.tsx");
+    const workspaceToolbar = readSource("../layout/workspace/WorkspaceToolbar.tsx");
     const threadListFilters = readSource("../home/ThreadListFilters.tsx");
 
     // iOS keeps Mine/Theirs beside the environment and project chips;

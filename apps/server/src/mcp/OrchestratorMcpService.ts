@@ -63,6 +63,7 @@ import {
   type ServerProviderModel,
   ThreadId,
   isOrchestrationV2WorkActive,
+  latestProviderTurnForAttempt,
   resolveProjectProviderInstanceEnabled,
   SECRET_REQUEST_UNSAVED_NOTE,
 } from "@t3tools/contracts";
@@ -616,7 +617,7 @@ function pageIncludesTerminalTaskResult(input: {
   readonly task: OrchestrationV2Subagent;
   readonly target: Pick<
     OrchestrationV2ThreadProjection,
-    "thread" | "runs" | "contextTransfers" | "messages" | "turnItems"
+    "thread" | "runs" | "contextTransfers" | "messages" | "turnItems" | "providerTurns"
   >;
   readonly maxChars: number;
 }): boolean {
@@ -806,7 +807,7 @@ function listItemFromShell(
     threadId: shell.id,
     projectId: shell.projectId,
     title: shell.title,
-    link: threadLinkFor(scope, shell.id),
+    link: threadLinkFor(scope, shell.id, shell.title),
     createdBy: shell.createdBy,
     creationSource: shell.creationSource,
     status: shell.activityRunStatus ?? shell.status,
@@ -840,7 +841,7 @@ function threadDetail(
     threadId: projection.thread.id,
     projectId: projection.thread.projectId,
     title: projection.thread.title,
-    link: threadLinkFor(scope, projection.thread.id),
+    link: threadLinkFor(scope, projection.thread.id, projection.thread.title),
     createdBy: projection.thread.createdBy,
     creationSource: projection.thread.creationSource,
     status: active?.status ?? latest?.status ?? "idle",
@@ -877,13 +878,26 @@ function threadDetail(
   };
 }
 
-function threadRun(run: OrchestrationV2Run): OrchestratorMcpThreadRun {
+function runExecutedModel(
+  projection: Pick<OrchestrationV2ThreadProjection, "providerTurns">,
+  run: Pick<OrchestrationV2Run, "activeAttemptId"> | undefined,
+): string | null {
+  return run === undefined
+    ? null
+    : (latestProviderTurnForAttempt(projection.providerTurns, run.activeAttemptId)?.model ?? null);
+}
+
+function threadRun(
+  projection: Pick<OrchestrationV2ThreadProjection, "providerTurns">,
+  run: OrchestrationV2Run,
+): OrchestratorMcpThreadRun {
   return {
     runId: run.id,
     ordinal: run.ordinal,
     status: run.status,
     providerInstanceId: run.modelSelection.instanceId,
     model: run.modelSelection.model,
+    executedModel: runExecutedModel(projection, run),
     requestedAt: DateTime.formatIso(run.requestedAt),
     startedAt: run.startedAt === null ? null : DateTime.formatIso(run.startedAt),
     completedAt: run.completedAt === null ? null : DateTime.formatIso(run.completedAt),
@@ -1282,10 +1296,11 @@ const make = Effect.gen(function* () {
     const records =
       parent === undefined
         ? threadManagement
-            .getProjectThreadRecords(input, ["runs", "runtimeRequests"])
+            .getProjectThreadRecords(input, ["runs", "providerTurns", "runtimeRequests"])
             .pipe(Effect.map((target) => ({ ...target, contextTransfers: [] })))
         : threadManagement.getProjectThreadRecords(input, [
             "runs",
+            "providerTurns",
             "runtimeRequests",
             "contextTransfers",
           ]);
@@ -1511,6 +1526,7 @@ const make = Effect.gen(function* () {
           "contextTransfers",
           "subagents",
           "providerThreads",
+          "providerTurns",
           "runtimeRequests",
           "nodes",
         ],
@@ -1603,7 +1619,12 @@ const make = Effect.gen(function* () {
       : null;
     const resultContextTransferId = resultTransfer?.id ?? null;
     const latestTerminalResultContextTransferId = resultTransferForRun(terminalRun)?.id ?? null;
-    const modelSelection = childRun?.modelSelection ??
+    const executionRun =
+      task.result === null
+        ? (taskResultRun ?? childRun)
+        : (childControls.runs.find((run) => run.id === resultTransfer?.sourcePoint.runId) ??
+          childRun);
+    const modelSelection = executionRun?.modelSelection ??
       childControls.thread.modelSelection ?? {
         instanceId: task.providerInstanceId,
         model: task.model,
@@ -1611,10 +1632,10 @@ const make = Effect.gen(function* () {
     const result = {
       taskId: task.id,
       childThreadId: task.childThreadId,
-      link: formatThreadLink({
-        environmentId: scope.environmentId,
-        threadId: task.childThreadId,
-      }),
+      link: formatThreadLink(
+        { environmentId: scope.environmentId, threadId: task.childThreadId },
+        childControls.thread.title,
+      ),
       childRunId: childRun?.id ?? null,
       childNodeId: task.id,
       status,
@@ -1622,6 +1643,7 @@ const make = Effect.gen(function* () {
       hasPendingChildRuns: hasPendingChildRuns(childProjection, childRun),
       providerInstanceId: modelSelection.instanceId,
       model: modelSelection.model,
+      executedModel: runExecutedModel(childControls, executionRun),
       options: modelSelection.options ?? [],
       summary: derivedResult,
       resultContextTransferId,
@@ -1657,7 +1679,11 @@ const make = Effect.gen(function* () {
       task.completionDelivery?.state !== "acknowledged" &&
       task.completionDelivery?.state !== "disposed"
     ) {
-      const observingRun = ThreadManagementService.latestActiveRun(parentProjection);
+      const observingRun = ThreadManagementService.latestActiveRun({
+        runs: parentProjection.runs.filter(
+          (run) => run.providerInstanceId === scope.thread.providerInstanceId,
+        ),
+      });
       const acknowledgementRequestKey = yield* requestKey(undefined);
       yield* threadManagement
         .dispatch({
@@ -1669,10 +1695,7 @@ const make = Effect.gen(function* () {
           }),
           parentThreadId: scope.thread.threadId,
           taskId,
-          observedByRunId:
-            observingRun?.providerInstanceId === scope.thread.providerInstanceId
-              ? observingRun.id
-              : null,
+          observedByRunId: observingRun?.id ?? null,
         })
         .pipe(
           Effect.mapError((error) =>
@@ -1752,7 +1775,11 @@ const make = Effect.gen(function* () {
             ),
           ),
         );
-      const observingRun = ThreadManagementService.latestActiveRun(parentProjection);
+      const observingRun = ThreadManagementService.latestActiveRun({
+        runs: parentProjection.runs.filter(
+          (run) => run.providerInstanceId === scope.thread.providerInstanceId,
+        ),
+      });
       yield* threadManagement
         .dispatch({
           type: "delegated_task.completion-delivery.acknowledge",
@@ -1763,10 +1790,7 @@ const make = Effect.gen(function* () {
           }),
           parentThreadId: scope.thread.threadId,
           taskId: task.id,
-          observedByRunId:
-            observingRun?.providerInstanceId === scope.thread.providerInstanceId
-              ? observingRun.id
-              : null,
+          observedByRunId: observingRun?.id ?? null,
         })
         .pipe(
           Effect.mapError((error) =>
@@ -1782,7 +1806,10 @@ const make = Effect.gen(function* () {
       childThreadId: null,
       ...(task.remoteChild === undefined
         ? {}
-        : { remoteChild: task.remoteChild, link: formatThreadLink(task.remoteChild) }),
+        : {
+            remoteChild: task.remoteChild,
+            link: formatThreadLink(task.remoteChild, task.remoteChild.title),
+          }),
       childRunId: null,
       childNodeId: task.id,
       status,
@@ -1790,6 +1817,7 @@ const make = Effect.gen(function* () {
       hasPendingChildRuns: false,
       providerInstanceId: task.providerInstanceId,
       model: task.model,
+      executedModel: null,
       summary: task.result,
       resultContextTransferId: null,
       latestTerminalRunId: null,
@@ -2213,6 +2241,7 @@ const make = Effect.gen(function* () {
             turnItemId,
             label: input.label,
             reason: input.reason,
+            ...(input.url === undefined ? {} : { url: input.url }),
             ...(input.placeholder === undefined ? {} : { placeholder: input.placeholder }),
             ...(input.delivery === "file" ? { delivery: "file" as const } : {}),
             secretStatus,
@@ -2974,7 +3003,10 @@ const make = Effect.gen(function* () {
                 );
               return {
                 threadId,
-                link: formatThreadLink({ environmentId: scope.environmentId, threadId }),
+                link: formatThreadLink(
+                  { environmentId: scope.environmentId, threadId },
+                  projection.thread.title,
+                ),
                 runId: run?.id ?? null,
                 status: run?.status ?? "idle",
                 title: projection.thread.title,
@@ -3135,7 +3167,7 @@ const make = Effect.gen(function* () {
         recentRuns: target.runs
           .toSorted((left, right) => right.ordinal - left.ordinal)
           .slice(0, input.runLimit ?? DEFAULT_THREAD_RUN_LIMIT)
-          .map(threadRun),
+          .map((run) => threadRun(target, run)),
         items: page.map((row) =>
           timelineItem({
             row,
@@ -3196,7 +3228,7 @@ const make = Effect.gen(function* () {
         );
       return {
         threadId: input.threadId,
-        link: threadLinkFor(scope, input.threadId),
+        link: threadLinkFor(scope, input.threadId, target.thread.title),
         messageId,
         runId: result.run.id,
         ...(result.run.delegatedTaskId === undefined ? {} : { taskId: result.run.delegatedTaskId }),

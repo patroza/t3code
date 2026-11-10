@@ -336,12 +336,14 @@ describe("fork surface existence (anti stack-drop)", () => {
     }
   });
 
-  it("sidebar v2 uses budgeted list VCS status so PR markers and auto-settle stay fresh", () => {
+  it("sidebar v2 leases lightweight branch queries so PR markers and auto-settle stay fresh", () => {
     const sidebar = [
       readSrc("components/Sidebar.tsx"),
       readSrc("components/sidebar/SidebarThreadRow.tsx"),
     ].join("\n");
-    expect(sidebar).toContain("vcsEnvironment.listStatus({");
+    expect(sidebar).toContain("vcsEnvironment.branch({");
+    expect(sidebar).toContain("useSidebarRowSubscriptionLease(");
+    expect(sidebar).toContain("useAtomMount(vcsBranchRevalidation(branchTarget))");
     expect(sidebar).not.toContain("vcsEnvironment.status({");
   });
 
