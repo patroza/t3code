@@ -340,17 +340,18 @@ it.each([
 it("preserves the partial-import warning when saving setup fails and is retried", async () => {
   using _now = setup();
   appAtomRegistry.set(candidatesAtom(), [candidate("/projects/first")]);
-  state.importThreads.mockResolvedValue(
-    AsyncResult.success({ importedCount: 28, skippedCount: 1 }),
-  );
+  state.importThreads
+    .mockResolvedValueOnce(AsyncResult.success({ importedCount: 28, skippedCount: 1 }))
+    // Imported history is idempotent; retry only reports the still-skipped thread.
+    .mockResolvedValue(AsyncResult.success({ importedCount: 0, skippedCount: 1 }));
   state.completeOnboarding.mockRejectedValueOnce(new Error("settings unavailable"));
   await using _screen = await mountWelcome();
   using toastAdd = vi.spyOn(toastManager, "add");
   await click("Import 1 project and start");
   await vi.waitFor(() => expect(state.completeOnboarding).toHaveBeenCalledOnce());
-  await vi.waitFor(() => expect(button("Import 1 project and start").disabled).toBe(false));
+  await vi.waitFor(() => expect(button("Import threads and start").disabled).toBe(false));
   expect(state.onDone).not.toHaveBeenCalled();
-  await click("Import 1 project and start");
+  await click("Import threads and start");
   await vi.waitFor(() => expect(state.onDone).toHaveBeenCalledOnce());
   await vi.waitFor(() =>
     expect(toastAdd).toHaveBeenCalledWith(

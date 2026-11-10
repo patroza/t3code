@@ -40,6 +40,8 @@ esac
       {
         env: {
           ...process.env,
+          // Do not let inherited shell startup hooks replace the mocked EAS CLI.
+          BASH_ENV: "/dev/null",
           PATH: `${dir}:${process.env.PATH}`,
           CALLS: log,
           SCENARIO: scenario,
@@ -50,6 +52,11 @@ esac
         timeout: 5000,
       },
     );
+    if (!NodeFS.existsSync(log)) {
+      throw new Error(
+        `Release script did not call eas: status=${result.status}; error=${result.error?.message ?? "none"}; stderr=${result.stderr}`,
+      );
+    }
     return { ...result, calls: NodeFS.readFileSync(log, "utf8") };
   } finally {
     NodeFS.rmSync(dir, { recursive: true, force: true });
