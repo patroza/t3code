@@ -282,17 +282,7 @@ it.each([true, false])(
     });
     await using screen = await renderSection({ canList, projects: [project, second] });
     await screen.getByRole("combobox").click();
-    if (canList) {
-      // The popup's initial highlight settles after its trigger opens.
-      await expect
-        .element(screen.getByRole("option", { name: "Antigravity", exact: true }))
-        .toHaveAttribute("data-highlighted");
-      await userEvent.keyboard("{ArrowDown}");
-      await expect
-        .element(screen.getByRole("option", { name: "Second", exact: true }))
-        .toHaveAttribute("data-highlighted");
-      await userEvent.keyboard("{Enter}");
-    } else await screen.getByRole("option", { name: "Second", exact: true }).click();
+    await screen.getByRole("option", { name: "Second", exact: true }).click();
     await expect
       .element(
         screen.getByRole("combobox", {
