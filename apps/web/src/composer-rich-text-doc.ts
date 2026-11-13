@@ -672,7 +672,10 @@ function listNormalizationPlugin(isComposing: () => boolean) {
       const undoesInputRule = oldState.plugins.some(
         (plugin) => plugin.spec.isInputRules && plugin.getState(oldState),
       );
-      if (undoesInputRule || transactions.some(isHistoryTransaction)) {
+      if (
+        undoesInputRule ||
+        transactions.some((tr) => tr.getMeta("inputRule") === true || isHistoryTransaction(tr))
+      ) {
         pending.clear();
         return null;
       }
