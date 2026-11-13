@@ -97,7 +97,6 @@ describe("fallbackTextGenerationModelSelection", () => {
     const fallback = fallbackTextGenerationModelSelection(
       providerInstances,
       (candidate) => candidate === instanceId,
-      { includeConfiguredInstances: true },
     );
     expect(fallback).toEqual({ instanceId, model: "kimi-code/k3" });
   });
