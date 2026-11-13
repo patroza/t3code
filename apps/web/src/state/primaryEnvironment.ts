@@ -22,7 +22,7 @@ export const primaryEnvironmentNativeBrowserAtom = Atom.make((get) => {
   return false;
 }).pipe(Atom.withLabel("web-primary-environment-native-browser"));
 
-const hostEnvironmentIdAtom = Atom.make<string | null>(null).pipe(
+export const hostEnvironmentIdAtom = Atom.make<string | null>(null).pipe(
   Atom.keepAlive,
   Atom.withLabel("web-host-environment-id"),
 );

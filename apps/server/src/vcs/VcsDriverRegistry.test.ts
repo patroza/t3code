@@ -169,4 +169,28 @@ describe("VcsDriverRegistry", () => {
       }).pipe(Effect.provide(makeDiskBackedLayer(repoDir, calls)));
     }).pipe(Effect.provide(NodeServices.layer)),
   );
+
+  it.effect("reads only a failed work-tree probe as no repository", () =>
+    Effect.gen(function* () {
+      const probeFailure = yield* VcsDriverRegistry.VcsDriverRegistry.pipe(
+        Effect.flatMap((registry) => registry.detect({ cwd: "/repo" })),
+        Effect.provide(
+          makeFailingLayer({
+            ...processOutput(""),
+            exitCode: ChildProcessSpawner.ExitCode(128),
+            stderr: "fatal: bad config line 1 in file .git/config",
+          }),
+        ),
+      );
+      assert.equal(probeFailure, null);
+
+      // A newline in the root path makes detection ask for it again, and main surfaced that failure.
+      const fallbackFailure = yield* VcsDriverRegistry.VcsDriverRegistry.pipe(
+        Effect.flatMap((registry) => registry.detect({ cwd: "/repo" })),
+        Effect.provide(makeFailingLayer(processOutput("true\n/re\npo\n.git\n"))),
+        Effect.flip,
+      );
+      assert.equal(fallbackFailure._tag, "VcsProcessExitError");
+    }),
+  );
 });

@@ -1,4 +1,5 @@
 import "vite-plus/test/config";
+import * as NodeOS from "node:os";
 import { defineConfig } from "vite-plus";
 import { defineProject } from "vite-plus/test/config";
 
@@ -67,11 +68,19 @@ const isolatedDesktopTestFiles = [
 ] as const;
 
 const repoEnv = loadRepoEnv();
+const domTests = ["src/preview/PickPreload.test.ts"];
 
 // Install only bundle externals; the server bundle already carries its dependency tree.
 const isMainProcessExternal = (id: string) =>
   id === "electron" || id.startsWith("electron/") || isDesktopRuntimeExternalDependency(id);
 const shouldLaunchElectronAfterPack = process.env.T3CODE_DESKTOP_DEV === "1";
+// tsdown runs onSuccess through a shell. dash forks instead of exec'ing the last command, which
+// would leave an `sh` between `vp pack` and the supervisor and hide `vp pack` dying from it.
+const devElectronCommand =
+  // oxlint-disable-next-line t3code/no-global-process-runtime -- Build config has no Effect runtime.
+  NodeOS.platform() === "win32"
+    ? "node scripts/dev-electron.mjs"
+    : "exec node scripts/dev-electron.mjs";
 const publicConfigDefine = {
   __T3CODE_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(
     repoEnv.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() ?? "",
@@ -83,6 +92,14 @@ export default defineConfig({
     projects: [
       defineProject({
         test: {
+          name: "dom",
+          include: domTests,
+          environment: "jsdom",
+          setupFiles: ["../../packages/shared/src/testing/providerEnv.ts"],
+        },
+      }),
+      defineProject({
+        test: {
           name: "desktop",
           environment: "node",
           setupFiles: testSetupFiles,
@@ -92,7 +109,7 @@ export default defineConfig({
             "scripts/**/*.test.{ts,mjs}",
             "../../native/kde-snap-shot/src/*.test.ts",
           ],
-          exclude: [...isolatedDesktopTestFiles],
+          exclude: [...isolatedDesktopTestFiles, ...domTests],
           isolate: false,
           fileParallelism: true,
           maxWorkers: 4,
@@ -174,7 +191,7 @@ export default defineConfig({
         neverBundle: isMainProcessExternal,
         onlyBundle: false,
       },
-      ...(shouldLaunchElectronAfterPack ? { onSuccess: "node scripts/dev-electron.mjs" } : {}),
+      ...(shouldLaunchElectronAfterPack ? { onSuccess: devElectronCommand } : {}),
     },
     {
       format: "cjs",

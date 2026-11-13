@@ -36,14 +36,20 @@ import { FLOATING_TABS } from "../layout/workspace/floating-workspace-tabs";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/ui/AppText";
+import { Button } from "../../components/ui/Button";
 import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
-import { useProjects, useNavigationThreadShells } from "../../state/entities";
+import { useProjects } from "../../state/entities";
+import { steadyNavigationThreadShellsAtom } from "../../state/threads";
 import { useThreadSearch } from "../../state/queries";
 import { useThreadListV2ShelfPreferences } from "./use-thread-list-v2-shelf-preferences";
 import { useThreadListNow } from "./use-thread-list-now";
 import { usePendingThreadOrder } from "../../state/thread-order";
 import { threadListEnvironmentsAtom } from "../../state/presentation";
-import { usePendingNewTasks, type PendingNewTask } from "../../state/use-pending-new-tasks";
+import {
+  useLaunchingThreads,
+  usePendingNewTasks,
+  type PendingNewTask,
+} from "../../state/use-pending-new-tasks";
 import { useQueuedThreadKeys } from "../../state/use-thread-outbox";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
@@ -64,7 +70,6 @@ import { usePendingTaskListActions } from "../home/usePendingTaskListActions";
 import { useThreadListActions } from "../home/useThreadListActions";
 import { useFabScroll } from "../home/FabScrollContext";
 import { WorkspaceListHeader } from "../layout/workspace/WorkspaceListHeader";
-import { WORKSPACE_LIST_SCROLL_INSETS } from "../layout/workspace/workspace-list-insets";
 import { WorkspaceSidebarColumn } from "../layout/workspace/WorkspaceSidebarColumn";
 import {
   ThreadListV2PendingRow,
@@ -133,7 +138,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
   const insets = useSafeAreaInsets();
   const { fabClearance, fabSize } = useAndroidControlSizing();
   const projects = useProjects();
-  const threads = useNavigationThreadShells();
+  const threads = useAtomValue(steadyNavigationThreadShellsAtom);
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const openSwipeableRef = useRef<SwipeableMethods | null>(null);
@@ -269,6 +274,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
         relation: options.ownershipRelation,
       }),
   );
+  const launchingThreads = useLaunchingThreads(scopedThreads);
   const threadSearchMatchByKey = useThreadListSearchMatches(scopedThreads, threadSearch);
   const selectedProjectKey = selectedProjectScope?.key ?? null;
   const projectByKey = (() => {
@@ -322,7 +328,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     contentOnlyThreadKeys,
     olderSettledShelf,
   } = useThreadListV2({
-    threads: options.listMode === "threads" ? scopedThreads : [],
+    threads: options.listMode === "threads" ? launchingThreads : [],
     pendingTasks: options.listMode === "threads" ? pendingTasks : [],
     environmentId: null,
     selectedEnvironmentIds: options.selectedEnvironmentIds,
@@ -638,34 +644,51 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
       }}
     />
   );
+  const showAddEnvironment =
+    !catalogState.isLoadingConnections &&
+    !catalogState.hasReadyEnvironment &&
+    !catalogState.hasConnectingEnvironment;
   const listEmpty = (
-    <Text
-      className={
-        Platform.OS === "android"
-          ? "px-4 py-4 text-center text-sm text-drawer-foreground-muted"
-          : "px-2 py-4 text-sm text-drawer-foreground-muted"
-      }
-    >
-      {catalogState.isLoadingConnections
-        ? "Loading threads…"
-        : Platform.OS === "android" && !catalogState.hasConnections
-          ? "No environments connected"
-          : props.searchQuery.trim().length > 0
-            ? threadSearch.isPending
-              ? "Searching thread messages…"
+    <View>
+      <Text
+        className={
+          Platform.OS === "android"
+            ? "px-4 py-4 text-center text-sm text-drawer-foreground-muted"
+            : "px-2 py-4 text-sm text-drawer-foreground-muted"
+        }
+      >
+        {catalogState.isLoadingConnections
+          ? "Loading threads…"
+          : showAddEnvironment
+            ? "No environments connected"
+            : props.searchQuery.trim().length > 0
+              ? threadSearch.isPending
+                ? "Searching thread messages…"
+                : snoozedCount > 0
+                  ? snoozedCount === 1
+                    ? "1 matching thread snoozed"
+                    : "All matching threads snoozed"
+                  : "No matching threads"
               : snoozedCount > 0
                 ? snoozedCount === 1
-                  ? "1 matching thread snoozed"
-                  : "All matching threads snoozed"
-                : "No matching threads"
-            : snoozedCount > 0
-              ? snoozedCount === 1
-                ? "1 thread snoozed"
-                : `${snoozedCount} threads snoozed`
-              : selectedProjectScope !== null
-                ? `No threads in ${selectedProjectScope.title}`
-                : "No threads yet"}
-    </Text>
+                  ? "1 thread snoozed"
+                  : `${snoozedCount} threads snoozed`
+                : selectedProjectScope !== null
+                  ? `No threads in ${selectedProjectScope.title}`
+                  : "No threads yet"}
+      </Text>
+      {showAddEnvironment ? (
+        <View className={Platform.OS === "android" ? "self-center" : "px-2"}>
+          <Button
+            tone="primary"
+            size="compact"
+            icon="plus"
+            label="Add environment"
+            onPress={props.onOpenEnvironmentSettings}
+          />
+        </View>
+      ) : null}
+    </View>
   );
 
   if (Platform.OS === "ios") {
@@ -686,7 +709,9 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
                 itemsAreEqual={sidebarItemsAreEqual}
                 keyExtractor={(item) => item.key}
                 renderItem={renderListItem}
-                {...WORKSPACE_LIST_SCROLL_INSETS}
+                automaticallyAdjustsScrollIndicatorInsets
+                // The column lays the list under its bar, glass or solid; UIKit insets it past both.
+                contentInsetAdjustmentBehavior="automatic"
                 contentContainerStyle={[
                   styles.threadListContent,
                   {

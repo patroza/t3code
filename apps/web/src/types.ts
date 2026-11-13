@@ -14,6 +14,7 @@ import type {
   ProviderInteractionMode,
   RunId,
   RuntimeMode,
+  OrchestrationV2LinkedSender,
   ScheduledTaskId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -85,6 +86,7 @@ export interface ChatMessage {
   readonly source?: SourceRef | undefined;
   readonly scheduledTaskId?: ScheduledTaskId;
   readonly senderThreadId?: ThreadId;
+  readonly linkedSender?: OrchestrationV2LinkedSender;
   readonly idleCompaction?: import("@t3tools/contracts").OrchestrationV2IdleCompaction;
   readonly createdAt: string;
   readonly updatedAt: string;

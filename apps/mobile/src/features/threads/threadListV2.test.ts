@@ -42,7 +42,6 @@ import {
   resolveThreadListV2SnoozePresets,
   resolveThreadListV2Status,
   resolveThreadListV2WokeAt,
-  sortThreadsForListV2,
   threadListV2ListItemsAreEqual,
   threadHasUnseenCompletion,
   type ThreadListV2ListItem,
