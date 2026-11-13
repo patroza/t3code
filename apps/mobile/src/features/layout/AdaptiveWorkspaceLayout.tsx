@@ -691,7 +691,9 @@ function AdaptiveWorkspaceLayoutContent(
     const listEnvironmentIds = (
       saved?.selectedEnvironmentIds ??
       (listFilters?.environmentId ? [listFilters.environmentId] : [])
-    ).filter((id) => savedConnections[id] !== undefined);
+    )
+      .map((id) => EnvironmentId.make(id))
+      .filter((id) => savedConnections[id] !== undefined);
     const listEnvironmentId = listEnvironmentIds.length === 1 ? listEnvironmentIds[0]! : null;
     const filteredScope = resolveHomeProjectFilterScope(
       buildHomeProjectScopes({
