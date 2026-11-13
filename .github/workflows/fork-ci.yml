@@ -222,7 +222,8 @@ jobs:
 
   mobile_native_static_analysis:
     name: Mobile Native Static Analysis
-    runs-on: macos-15
+    # Static checks do not require ARM; avoid the constrained Apple Silicon runner pool.
+    runs-on: macos-15-intel
     timeout-minutes: 10
     steps:
       - name: Checkout
