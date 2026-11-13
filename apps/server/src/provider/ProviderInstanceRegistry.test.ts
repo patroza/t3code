@@ -994,6 +994,8 @@ describe("ProviderInstanceRegistry — all drivers slice", () => {
   const layerTest = ProviderOrchestrationAdapterInfrastructure.layer.pipe(
     Layer.provideMerge(layerBase),
     Layer.provide(Layer.mock(PortScanner.PortDiscovery)({ trackAgent: () => () => undefined })),
+    Layer.provideMerge(ProviderInstallationGate.layer),
+    Layer.provideMerge(SqlitePersistence.layerMemory),
   );
 
   it.live("boots one instance of every shipped driver from a single config map", () =>
