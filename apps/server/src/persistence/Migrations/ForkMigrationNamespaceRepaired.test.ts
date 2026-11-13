@@ -77,6 +77,7 @@ layer("fork migration namespace for a repaired database", (it) => {
           { migration_id: 86, name: "QueuedTurnInputIndex" },
           { migration_id: 87, name: "ProjectionProjectsCustomTitle" },
           { migration_id: 88, name: "TurnItemTypeStatusIndex" },
+          { migration_id: 89, name: "ShellThreadReadIndexes" },
         ],
       );
       assert.deepStrictEqual(fork, [

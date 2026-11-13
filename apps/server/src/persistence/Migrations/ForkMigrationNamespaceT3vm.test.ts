@@ -69,6 +69,7 @@ layer("t3vm migration namespace repair", (it) => {
           { migration_id: 86, name: "QueuedTurnInputIndex" },
           { migration_id: 87, name: "ProjectionProjectsCustomTitle" },
           { migration_id: 88, name: "TurnItemTypeStatusIndex" },
+          { migration_id: 89, name: "ShellThreadReadIndexes" },
         ],
       );
       const fork = yield* sql<LedgerRow>`
