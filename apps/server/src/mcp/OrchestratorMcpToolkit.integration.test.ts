@@ -1225,11 +1225,12 @@ describe("orchestrator MCP toolkit", () => {
             expect(firstChunk.text + (remainder.items[0]?.text ?? "")).toBe(
               "Claude completed: Complete before a parent reads this child result directly.",
             );
+            // Reading the final nonempty text page acknowledges the terminal result.
             expect(
               (yield* orchestrator.getThreadProjection(parentThreadId)).subagents.find(
                 (task) => task.id === directRead.task.id,
               )?.completionDelivery?.state,
-            ).toBe("claimed");
+            ).toBe("acknowledged");
 
             const terminalResultReadCall = yield* invoke("t3_thread_read", {
               threadId: directChildThreadId,
@@ -1525,7 +1526,9 @@ describe("orchestrator MCP toolkit", () => {
               threadId: parentThreadId,
               cursor: 90,
             }).pipe(Effect.flip);
-            expect(unknownPagingParamError.message).toContain("Expected no excess property");
+            expect(unknownPagingParamError.message).toContain('Unknown argument "cursor"');
+            expect(unknownPagingParamError.message).toContain("afterPosition");
+            expect(unknownPagingParamError.message).toContain("beforePosition");
             const threadUpdateTool = server.tools.find(
               ({ tool }) => tool.name === "t3_thread_update",
             );
@@ -2685,6 +2688,8 @@ describe("orchestrator MCP toolkit", () => {
 
             const promptedReadCall = yield* invoke("t3_thread_read", {
               threadId: promptedThread.threadId,
+              // This assertion walks the prompt and response in forward order.
+              afterPosition: -1,
               limit: 1,
             });
             const promptedRead = yield* decodeThreadReadResult(

@@ -4683,6 +4683,12 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           number: 12,
           watching: false,
         });
+        assert.equal(
+          (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+            (run) => run.userMessageId === wakes[0]!.id,
+          )?.status,
+          "queued",
+        );
         const active = (yield* orchestrator.getThreadProjection(threadId)).runs[0]!;
         yield* orchestrator.dispatch({
           type: "run.interrupt",
@@ -6179,6 +6185,14 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         });
       }
 
+      if (mode === "comment limit") {
+        assert.equal(
+          (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+            (run) => run.id === wakeRun.id,
+          )?.status,
+          "queued",
+        );
+      }
       const afterSequence = yield* orchestrator.getThreadEventSequence(threadId);
       const completedAt = yield* DateTime.now;
       yield* eventSink.write({
@@ -10077,7 +10091,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         "#11: checks finished",
         "#11: new comments",
       ]);
-    }).pipe(Effect.provide(layerTest)),
+    }).pipe(Effect.provide(Layer.fresh(layerTest))),
   );
 
   it.effect("reports how long an ended watch was quiet", () =>

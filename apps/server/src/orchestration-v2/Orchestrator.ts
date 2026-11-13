@@ -827,6 +827,20 @@ function watchWithPendingWakes(
   return { ...watch, pendingWakeMessageIds: ids };
 }
 
+/** Shared notifications stay queued while another contributing watch still owns them. */
+function exclusivePendingWakeMessageIds(
+  thread: OrchestrationV2AppThread,
+  ending: ReturnType<typeof normalizeThreadPullRequestKey>,
+  messageIds: ReadonlyArray<MessageId>,
+): ReadonlyArray<MessageId> {
+  const retained = threadPullRequestsOf(thread).filter(
+    (link) => !threadPullRequestKeysEqual(link, ending),
+  );
+  return messageIds.filter(
+    (messageId) => !retained.some((link) => link.watch?.pendingWakeMessageIds?.includes(messageId)),
+  );
+}
+
 /**
  * Wakes to cancel when a legacy link command drops a pull request.
  * Relinking that same pull request copies its watch forward, so those wakes stay.
@@ -849,7 +863,7 @@ function pendingWakeMessageIdsLostByLegacyRelink(
       if (!ids.includes(messageId)) ids.push(messageId);
     }
   }
-  return ids;
+  return previous === null ? [] : exclusivePendingWakeMessageIds(thread, previous, ids);
 }
 
 /** Message ids of wakes to cancel because this command takes the watch away. */
@@ -870,6 +884,15 @@ function pendingWakeMessageIdsEndingWith(
   }
   if (command.type === "thread.pull-request.watch" && command.watching) return [];
   if (command.type === "thread.pull-request-watch.sync" && command.watch !== null) return [];
+  // Exhausting the comment limit still owes previously queued notices. Promotion
+  // validates them against this generation's final notice and latest snapshot.
+  if (
+    command.type === "thread.pull-request-watch.sync" &&
+    command.endedWatch !== undefined &&
+    command.wake?.includesRemarks === true
+  ) {
+    return [];
+  }
   const key = normalizeThreadPullRequestKey(command);
   const link = threadPullRequestsOf(thread).find(
     (candidate) =>
@@ -883,7 +906,7 @@ function pendingWakeMessageIdsEndingWith(
   ) {
     return [];
   }
-  return link?.watch?.pendingWakeMessageIds ?? [];
+  return exclusivePendingWakeMessageIds(thread, key, link?.watch?.pendingWakeMessageIds ?? []);
 }
 
 /** The link with its watch replaced, or removed when `watch` is undefined. */
@@ -3957,9 +3980,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       for (const { entry } of entries) {
         const { includesRemarks: _, ...mutation } = entry;
         // Every link contributing to this wake owns the queued message. Preserve its ID
-        // while recording progress so stopping any of those watches can cancel it.
+        // while recording progress so ending its last contributing watch can cancel it.
         yield* dispatchThreadMutation(
-          { ...mutation, ...(wake === undefined ? {} : { wake }) },
+          { ...mutation, ...(wake === undefined || outdated[0] ? {} : { wake }) },
           events,
           effects,
         );
