@@ -23,9 +23,7 @@ interface FileRevealHandle {
         }[];
       }
     | undefined;
-  getItem(
-    id: string,
-  ):
+  getItem(id: string):
     | {
         collapsed?: boolean;
         readonly type?: string;
