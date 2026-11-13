@@ -198,6 +198,7 @@ const localChild = (childThreadId: ThreadId | null): ThreadId => {
 
 const parentThreadId = ThreadId.make("thread:mcp-orchestrator-parent");
 const projectId = ProjectId.make("project:mcp-orchestrator");
+const foreignProjectId = ProjectId.make("project:mcp-foreign");
 const codexInstanceId = ProviderInstanceId.make("codex");
 const codexModel = "gpt-5.4";
 const parentPrompt = "Keep this parent turn active while orchestration tools are tested.";
@@ -819,7 +820,7 @@ describe("orchestrator MCP toolkit", () => {
               Layer.mock(ProjectService.ProjectService)({
                 getById: (id) =>
                   Effect.succeed(
-                    id === projectId
+                    id === projectId || id === foreignProjectId
                       ? Option.some({ id, defaultModelSelection: null } as never)
                       : Option.none(),
                   ),
@@ -2958,7 +2959,7 @@ describe("orchestrator MCP toolkit", () => {
               creationSource: "web",
               commandId: CommandId.make("command:mcp-foreign-project:create"),
               threadId: foreignThreadId,
-              projectId: ProjectId.make("project:mcp-foreign"),
+              projectId: foreignProjectId,
               title: "Foreign project thread",
               modelSelection: codexSelection,
               runtimeMode: "full-access",
@@ -2989,8 +2990,9 @@ describe("orchestrator MCP toolkit", () => {
               title: "Renamed from another project",
             });
             const foreignListCall = yield* invoke("t3_thread_list", {
-              projectId: "project:mcp-foreign",
+              projectId: foreignProjectId,
             });
+            expect(foreignListCall.isError).toBe(false);
             const foreignListed = yield* decodeThreadListResult(
               foreignListCall.structuredContent,
             ).pipe(Effect.orDie);
@@ -4485,12 +4487,14 @@ describe("orchestrator MCP toolkit", () => {
               completionWake: "always",
               result: `Codex completed: ${approvalCompletionPrompt}`,
             });
-            const offers = (yield* SubscriptionRef.get(continuationOffers)).filter(
-              (offer) => offer.threadId === approvalParentId,
+            const approvalParent = yield* orchestrator.getThreadProjection(approvalParentId);
+            const approvalParentRun = approvalParent.runs[0]!;
+            const offers = scopedContinuationOffers(
+              yield* SubscriptionRef.get(continuationOffers),
+              approvalParentRun.id,
             );
             expect(offers).toHaveLength(1);
-            const approvalParent = yield* orchestrator.getThreadProjection(approvalParentId);
-            const approvalDelivery = approvalParent.runs[0]!.delegatedCompletion?.delivery;
+            const approvalDelivery = approvalParentRun.delegatedCompletion?.delivery;
             expect(approvalDelivery?.taskIds).toEqual([approvalTask.id]);
             expect(offers[0]?.delegatedCompletion?.messageId).toBe(approvalDelivery?.messageId);
             expect(yield* readApprovalStatus()).toMatchObject({
@@ -4504,8 +4508,9 @@ describe("orchestrator MCP toolkit", () => {
             expect((yield* readApprovalStatus()).pendingApproval).toBeNull();
             yield* worker.drain();
             expect(
-              (yield* SubscriptionRef.get(continuationOffers)).filter(
-                (offer) => offer.threadId === approvalParentId,
+              scopedContinuationOffers(
+                yield* SubscriptionRef.get(continuationOffers),
+                approvalParentRun.id,
               ),
             ).toHaveLength(1);
             yield* Deferred.succeed(approvalParentGate, undefined);
