@@ -252,6 +252,7 @@ import * as EventLoopMonitor from "./observability/EventLoopMonitor.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { requiredScopeForDeviceList, rpcAuthorizationError } from "./auth/RpcAuthorization.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
+import { planThreadAttributionRepair } from "./identity/repairThreadAttribution.ts";
 import * as IdentityService from "./identity/IdentityService.ts";
 import { stampOrchestrationCommandSource } from "./identity/stampSource.ts";
 import * as RpcAuthorization from "./auth/RpcAuthorization.ts";
@@ -2162,10 +2163,85 @@ export const layerWsRpc = (
               yield* identity.clearClaim(payload.sessionId);
               return { claim: null };
             }
-            return yield* identity.claim(payload.sessionId, {
+            const result = yield* identity.claim(payload.sessionId, {
               username: payload.username,
               method: "settings",
             });
+            if (payload.repairThreadIds?.length) {
+              const requested = yield* Effect.forEach(
+                payload.repairThreadIds,
+                (threadId) =>
+                  orchestrationEngine.getThreadProjection(threadId).pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new IdentityError({
+                          code: "identity_attribution_repair_rejected",
+                          message: String(cause),
+                        }),
+                    ),
+                  ),
+                { concurrency: 1 },
+              );
+              const projections = new Map(
+                requested.map((projection) => [projection.thread.id, projection]),
+              );
+              const roots = [
+                ...new Set(requested.map((projection) => projection.thread.lineage.rootThreadId)),
+              ];
+              for (const rootId of roots) {
+                if (!projections.has(rootId))
+                  projections.set(
+                    rootId,
+                    yield* orchestrationEngine.getThreadProjection(rootId).pipe(
+                      Effect.mapError(
+                        (cause) =>
+                          new IdentityError({
+                            code: "identity_attribution_repair_rejected",
+                            message: String(cause),
+                          }),
+                      ),
+                    ),
+                  );
+              }
+              const repairs = yield* Effect.try({
+                try: () =>
+                  planThreadAttributionRepair({
+                    claim: result.claim,
+                    projections,
+                    threadIds: payload.repairThreadIds ?? [],
+                  }),
+                catch: (cause) =>
+                  new IdentityError({
+                    code: "identity_attribution_repair_rejected",
+                    message: String(cause),
+                  }),
+              });
+              for (const repair of repairs) {
+                yield* orchestrationEngine
+                  .dispatch({
+                    type: "thread.attribution.repair",
+                    commandId: CommandId.make(
+                      "identity-repair:" +
+                        payload.sessionId +
+                        ":" +
+                        result.claim.personId +
+                        ":" +
+                        repair.threadId,
+                    ),
+                    ...repair,
+                  })
+                  .pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new IdentityError({
+                          code: "identity_attribution_repair_rejected",
+                          message: String(cause),
+                        }),
+                    ),
+                  );
+              }
+            }
+            return result;
           },
         ),
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>

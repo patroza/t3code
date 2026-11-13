@@ -16,6 +16,8 @@ import {
   ContextTransferId,
   EventId,
   MessageId,
+  PersonId,
+  IdentityUsername,
   NodeId,
   RuntimeRequestId,
   TurnItemId,
@@ -10133,3 +10135,51 @@ it.layer(layerQueueResumeDisabledInstanceTest)(
     );
   },
 );
+
+it.layer(layerTest)("trusted attribution maintenance", (it) => {
+  it.effect("persists repaired attribution through projection replay without a message", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const maintenance = yield* ProjectionReplay.ProjectionReplay;
+      const threadId = ThreadId.make("attribution-repair-thread");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("attribution-repair-create"),
+        threadId,
+        projectId: ProjectId.make("attribution-repair-project"),
+        createdBy: "user",
+        creationSource: "mcp",
+        title: "Historical MCP thread",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      const command = {
+        type: "thread.attribution.repair" as const,
+        commandId: CommandId.make("attribution-repair-apply"),
+        threadId,
+        source: {
+          channel: "bot" as const,
+          personId: PersonId.make("andrea"),
+          username: IdentityUsername.make("andrea"),
+        },
+      };
+      yield* orchestrator.dispatch(command);
+      yield* orchestrator.dispatch(command);
+      assert.equal(
+        (yield* orchestrator.getThreadProjection(threadId)).thread.originSource?.personId,
+        "andrea",
+      );
+      assert.isTrue((yield* maintenance.rebuild).valid);
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(projection.thread.originSource?.personId, "andrea");
+      assert.isTrue(
+        projection.thread.participantSummaries?.some((person) => person.personId === "andrea") ===
+          true,
+      );
+      assert.equal(projection.messages.length, 0);
+    }),
+  );
+});

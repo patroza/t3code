@@ -5,7 +5,7 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
-import { AuthSessionId, TrimmedNonEmptyString, IsoDateTime } from "./baseSchemas.ts";
+import { AuthSessionId, ThreadId, TrimmedNonEmptyString, IsoDateTime } from "./baseSchemas.ts";
 
 // ── Username / person ──────────────────────────────────────────
 
@@ -194,6 +194,8 @@ export type IdentitySessionClaimResult = typeof IdentitySessionClaimResult.Type;
 export const IdentitySetClientClaimInput = Schema.Struct({
   sessionId: AuthSessionId,
   username: Schema.NullOr(IdentityUsername),
+  /** Admin-confirmed historical MCP launches to repair using this session's provenance. */
+  repairThreadIds: Schema.optional(Schema.Array(ThreadId).check(Schema.isMaxLength(100))),
 });
 export type IdentitySetClientClaimInput = typeof IdentitySetClientClaimInput.Type;
 
@@ -210,6 +212,7 @@ export class IdentityError extends Schema.TaggedError<IdentityError>()("Identity
     "identity_claim_missing",
     "identity_map_invalid",
     "identity_session_not_assignable",
+    "identity_attribution_repair_rejected",
   ]),
   message: Schema.String,
 }) {}
