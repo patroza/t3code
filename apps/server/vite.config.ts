@@ -122,6 +122,8 @@ export default mergeConfig(
             },
           }
         : {}),
+      // jsonc-parser's UMD main requires its own files at runtime, which the bundle cannot follow.
+      alias: { "jsonc-parser": "jsonc-parser/lib/esm/main.js" },
       deps: {
         // alwaysBundle=false has no opinion; neverBundle must retain transitive native acceleration.
         alwaysBundle: shouldBundleCliDependency,
@@ -213,7 +215,12 @@ export default mergeConfig(
               // Under isolate:false that worker is the real one and the test's
               // recorded list stays empty.
               "src/persistence/Sqlite.test.ts",
+              // These instrument imports already cached by other persistence/search fixtures.
+              "src/orchestration-v2/FoundationPersistence.test.ts",
+              "src/orchestration-v2/ThreadFind.test.ts",
               "src/preview/PortScanner.test.ts",
+              "src/resourceTelemetry/HostResources.test.ts",
+              "src/cloud/bootService.test.ts",
             ],
           },
         },
@@ -227,6 +234,9 @@ export default mergeConfig(
               // The process-group spy must bind before PortScanner is imported. Shared workers
               // can otherwise retain a real signal function from an earlier provider test.
               "src/preview/PortScanner.test.ts",
+              // Keep mocked host counters and lease-containment observer bound before imports.
+              "src/resourceTelemetry/HostResources.test.ts",
+              "src/cloud/bootService.test.ts",
               // Speech service fixtures replace the native loader and offered-model registry.
               "src/speech/SpeechService.test.ts",
               // Muse history discovery mocks the SDK initializer. Provider imports
@@ -290,6 +300,9 @@ export default mergeConfig(
               // Mocks `node:worker_threads` before the sqlite client constructs
               // its checkpoint worker.
               "src/persistence/Sqlite.test.ts",
+              // These instrument imports already cached by other persistence/search fixtures.
+              "src/orchestration-v2/FoundationPersistence.test.ts",
+              "src/orchestration-v2/ThreadFind.test.ts",
             ],
           },
         },

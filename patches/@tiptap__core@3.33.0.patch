@@ -1,0 +1,36 @@
+diff --git a/src/InputRule.ts b/src/InputRule.ts
+--- a/src/InputRule.ts
++++ b/src/InputRule.ts
+@@ -109,7 +109,7 @@
+     return { inputTransaction: null, tr: editor.view.state.tr }
+   }
+ 
+-  const inputTransaction = editor.view.state.tr.insertText(text, from, to)
++  const inputTransaction = editor.view.state.tr.insertText(text, from, to).setMeta('inputRule', true)
+   const inputState = EditorState.create({
+     doc: inputTransaction.doc,
+     selection: inputTransaction.selection,
+diff --git a/dist/index.js b/dist/index.js
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -5155,7 +5155,7 @@
+ 		inputTransaction: null,
+ 		tr: editor.view.state.tr
+ 	};
+-	const inputTransaction = editor.view.state.tr.insertText(text, from, to);
++	const inputTransaction = editor.view.state.tr.insertText(text, from, to).setMeta("inputRule", true);
+ 	return {
+ 		inputTransaction,
+ 		tr: EditorState.create({
+diff --git a/dist/index.cjs b/dist/index.cjs
+--- a/dist/index.cjs
++++ b/dist/index.cjs
+@@ -5167,7 +5167,7 @@
+ 		inputTransaction: null,
+ 		tr: editor.view.state.tr
+ 	};
+-	const inputTransaction = editor.view.state.tr.insertText(text, from, to);
++	const inputTransaction = editor.view.state.tr.insertText(text, from, to).setMeta("inputRule", true);
+ 	return {
+ 		inputTransaction,
+ 		tr: _tiptap_pm_state.EditorState.create({

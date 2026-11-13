@@ -132,7 +132,11 @@ export const VcsResolveBranchChangeRequestInput = Schema.Struct({
   refName: TrimmedNonEmptyStringSchema,
 });
 export type VcsResolveBranchChangeRequestInput = typeof VcsResolveBranchChangeRequestInput.Type;
-export const VcsBranchStatus = Schema.Struct({ refName: Schema.NullOr(Schema.String) });
+export const VcsBranchStatus = Schema.Struct({
+  refName: Schema.NullOr(Schema.String),
+  /** Absent from older servers, where a removed checkout looks like a detached HEAD. */
+  isRepo: Schema.optional(Schema.Boolean),
+});
 export type VcsBranchStatus = typeof VcsBranchStatus.Type;
 
 export const VcsStatusSubscriptionInput = Schema.Struct({
@@ -452,6 +456,7 @@ export const GitCommandFailureReason = Schema.Literals([
   "path_already_exists",
   "push_rejected_by_remote",
   "push_rejected_non_fast_forward",
+  "ref_name_conflict",
   "ref_not_found",
   "remote_unreachable",
   "tag_would_be_clobbered",

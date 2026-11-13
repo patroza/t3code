@@ -23,6 +23,7 @@ import { loadRepoEnv } from "../../scripts/lib/public-config";
 import { thirdPartyLicensesPlugin } from "../../scripts/lib/third-party-licenses";
 import { tailwindPlugins } from "./vite/tailwind";
 import { warmBundledDevPlugin } from "./vite/warmBundledDev";
+import { formatAppDisplayName, resolveWebAppStageLabel } from "./src/branding.logic";
 
 const repoEnv = loadRepoEnv();
 Object.assign(process.env, repoEnv);
@@ -72,6 +73,11 @@ const builtDev = process.env.T3CODE_BUILT_DEV === "1";
 
 const bundledDevEnv = process.env.T3CODE_BUNDLED_DEV?.trim().toLowerCase();
 const bundledDev = bundledDevEnv === "1" || bundledDevEnv === "true";
+
+// Bundled dev and `build --watch` pass Rolldown `exclude` but not Vite's default `ignored`, so
+// they watch node_modules. Those files are pnpm-store hardlinks shared by every worktree, so each
+// `vp i` or worktree removal elsewhere rebuilds every long-running server and leaks native memory.
+const rolldownWatchExclude = [/[\\/]node_modules[\\/]/];
 
 const buildSourcemap: boolean | "hidden" =
   sourcemapEnv === "0" || sourcemapEnv === "false"
@@ -168,12 +174,12 @@ const isolatedUnitTestFiles = [
   // Same react-hook mock as the .ts sibling; the .tsx refresh tests were added
   // upstream and fail under isolate:false when real React is already bound.
   "src/components/files/projectFilesQueryState.test.tsx",
+  "src/components/files/projectFilesQueryState.refresh.test.tsx",
   // Mocks `~/browserFaviconStore`; under `isolate: false` an earlier file in
   // the same worker can bind the real module first, and the mock then never
   // applies — the icon falls back to the browser mockup and the stored-favicon
   // assertion fails, depending only on how files land across workers.
   "src/components/preview/PreviewFaviconIcon.test.tsx",
-  "src/components/preview/PreviewView.test.tsx",
   "src/components/preview/openPreviewSession.test.ts",
   "src/components/preview/openTerminalLinkInPreview.test.ts",
   // Replaces `openPreviewSession` with a bare vi.fn(). Under isolate:false
@@ -311,6 +317,8 @@ const isolatedUnitTestFiles = [
 
 const compilerTestFiles = ["src/components/ChatView.compiler.test.ts"] as const;
 
+const domUnitTestFiles = ["src/components/preview/PreviewView.test.tsx"];
+
 const unitTestProject = {
   extends: true,
   test: {
@@ -323,7 +331,12 @@ const unitTestProject = {
     maxWorkers: 4,
     sequence: { groupOrder: 1 },
     include: ["src/**/*.test.{ts,tsx}"],
-    exclude: [...isolatedUnitTestFiles, ...compilerTestFiles, "src/**/*.browser.test.{ts,tsx}"],
+    exclude: [
+      ...isolatedUnitTestFiles,
+      ...domUnitTestFiles,
+      ...compilerTestFiles,
+      "src/**/*.browser.test.{ts,tsx}",
+    ],
     hookTimeout: 15_000,
     testTimeout: 15_000,
     setupFiles: [
@@ -344,6 +357,16 @@ const isolatedUnitTestProject = {
     include: [...isolatedUnitTestFiles],
     hookTimeout: 15_000,
     testTimeout: 15_000,
+  },
+} satisfies TestProjectInlineConfiguration;
+
+const domUnitTestProject = {
+  ...isolatedUnitTestProject,
+  test: {
+    ...isolatedUnitTestProject.test,
+    name: "unit-dom",
+    environment: "jsdom",
+    include: domUnitTestFiles,
   },
 } satisfies TestProjectInlineConfiguration;
 
@@ -569,6 +592,42 @@ function chunkCycleGuardPlugin(): Plugin {
   };
 }
 
+// Bundled dev never evicts emitted files from memory (vitejs/vite#23781), so hashed names keep
+// a copy of every changed chunk from every rebuild. Fixed names overwrite the previous copy.
+function bundledDevStableNamesPlugin(): Plugin {
+  return {
+    name: "t3code:bundled-dev-stable-names",
+    apply: "serve",
+    outputOptions: (options) => ({
+      ...options,
+      chunkFileNames: "assets/[name].js",
+      assetFileNames: "assets/[name][extname]",
+    }),
+  };
+}
+
+// Stamps index.html's title with the name branding.ts resolves once the app
+// loads, so a tab opens on the right channel instead of flashing another's.
+// Desktop swaps in its injected branding from an inline script in index.html.
+function bootstrapTitlePlugin(): Plugin {
+  let development = false;
+  return {
+    name: "t3code:bootstrap-title",
+    configResolved(config) {
+      // The same flag Vite exposes to the app as import.meta.env.DEV.
+      development = !config.isProduction;
+    },
+    transformIndexHtml(html) {
+      const stageLabel = resolveWebAppStageLabel({
+        hostedAppChannel: configuredHostedAppChannel,
+        development,
+      });
+      const title = formatAppDisplayName({ baseName: "T3 Code", stageLabel });
+      return html.replace(/<title>[^<]*<\/title>/, `<title>${title}</title>`);
+    },
+  };
+}
+
 // Allow Tailnet hosts for sharing; Tailscale-controlled DNS prevents attacker rebinding.
 const configuredAllowedHosts = (process.env.T3CODE_DEV_ALLOWED_HOSTS ?? "")
   .split(",")
@@ -589,6 +648,7 @@ export default defineConfig(() => {
     },
     assetsInclude: ["**/*.wasm"],
     plugins: [
+      bootstrapTitlePlugin(),
       devCompressionPlugin(),
       chunkCycleGuardPlugin(),
       builtDev
@@ -606,6 +666,7 @@ export default defineConfig(() => {
       react({ compiler: true }),
       tailwindPlugins(bundledDev),
       warmBundledDevPlugin(),
+      bundledDev ? bundledDevStableNamesPlugin() : undefined,
     ],
     optimizeDeps: {
       include: [
@@ -646,12 +707,6 @@ export default defineConfig(() => {
     },
     resolve: {
       tsconfigPaths: true,
-      alias: {
-        "@betteroffice/fonts-cjk": new URL(
-          "./src/components/files/office/fonts-cjk.ts",
-          import.meta.url,
-        ).pathname,
-      },
       dedupe: ["react", "react-dom"],
     },
     experimental: {
@@ -667,6 +722,7 @@ export default defineConfig(() => {
       warmup: {
         clientFiles: ["./src/main.tsx"],
       },
+      watch: { exclude: rolldownWatchExclude },
       ...(devProxyTarget
         ? {
             // Share prefixes with the backend catch-all so the proxy and 404 lists cannot drift.
@@ -702,6 +758,7 @@ export default defineConfig(() => {
       emptyOutDir: true,
       manifest: true,
       sourcemap: buildSourcemap,
+      ...(builtDev ? { watch: { exclude: rolldownWatchExclude } } : {}),
       rolldownOptions: {
         output: {
           // PDF.js resolves decoder modules and ICC data relative to wasmUrl.
@@ -717,6 +774,7 @@ export default defineConfig(() => {
       projects: [
         defineProject(unitTestProject),
         defineProject(isolatedUnitTestProject),
+        defineProject(domUnitTestProject),
         defineProject(browserTestProject),
         defineProject(compilerTestProject),
         defineProject(renderScenariosProject),

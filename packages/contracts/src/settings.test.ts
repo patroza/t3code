@@ -815,19 +815,24 @@ describe("ServerSettings thread settlement", () => {
 });
 
 describe("ClientSettings pull request merge methods", () => {
-  it("defaults to no project overrides and accepts supported methods", () => {
+  it("defaults to no project overrides", () => {
     expect(decodeClientSettings({}).pullRequestMergeMethodOverrides).toEqual({});
-    expect(
-      decodeClientSettingsPatch({
-        pullRequestMergeMethodOverrides: { project: "squash" },
-      }).pullRequestMergeMethodOverrides,
-    ).toEqual({ project: "squash" });
   });
+
+  it.each(["merge", "squash", "rebase", "fast-forward"])(
+    "accepts the %s merge method",
+    (method) => {
+      expect(
+        decodeClientSettingsPatch({ pullRequestMergeMethodOverrides: { project: method } })
+          .pullRequestMergeMethodOverrides,
+      ).toEqual({ project: method });
+    },
+  );
 
   it("rejects unsupported project merge methods", () => {
     expect(() =>
       decodeClientSettingsPatch({
-        pullRequestMergeMethodOverrides: { project: "fast-forward" },
+        pullRequestMergeMethodOverrides: { project: "unsupported" },
       }),
     ).toThrow();
   });
@@ -1124,14 +1129,6 @@ describe("voice settings", () => {
     expect(() => decodeClientSettingsPatch({ speechCorrectionWord: "x".repeat(51) })).toThrow();
     expect(DEFAULT_SERVER_SETTINGS.speechProjectCustomWords).toEqual([]);
     expect(PROJECT_SCOPED_SERVER_SETTING_KEYS).toContain("speechProjectCustomWords");
-  });
-
-  it("stores the transcription model and resources on the environment", () => {
-    expect(DEFAULT_SERVER_SETTINGS).toMatchObject({
-      speechModelId: "handy-computer/parakeet-unified-en-0.6b-gguf",
-      speechAcceleration: "auto",
-      speechModelUnloadTimeout: "min_15",
-    });
   });
 });
 

@@ -15,16 +15,16 @@ describe("formatDuration", () => {
     [9_950, "10s"],
     [22_000, "22s"],
     [59_499, "59s"],
-    [59_500, "1m"],
-    [59_999, "1m"],
-    [60_000, "1m"],
+    [59_500, "1m 0s"],
+    [59_999, "1m 0s"],
+    [60_000, "1m 0s"],
     [65_000, "1m 5s"],
-    [119_500, "2m"],
+    [119_500, "2m 0s"],
     [3_599_499, "59m 59s"],
     [3_599_500, "1h"],
     [3_600_000, "1h"],
     [3_601_000, "1h 1s"],
-    [3_660_000, "1h 1m"],
+    [3_660_000, "1h 1m 0s"],
     [3_661_000, "1h 1m 1s"],
     [7_199_500, "2h"],
     [25_190_000, "6h 59m 50s"],
@@ -35,6 +35,18 @@ describe("formatDuration", () => {
 
   it.each([-1, NaN, Infinity, -Infinity])("handles invalid durations: %s", (durationMs) => {
     expect(formatDuration(durationMs)).toBe("0ms");
+  });
+
+  it.each([
+    [59_000, "59s"],
+    [59_500, "1m 0s"],
+    [60_000, "1m 0s"],
+    [720_000, "12m 0s"],
+    [736_000, "12m 16s"],
+    [3_600_000, "1h"],
+    [3_660_000, "1h 1m 0s"],
+  ])("formats %i milliseconds as %s", (durationMs, expected) => {
+    expect(formatDuration(durationMs)).toBe(expected);
   });
 });
 

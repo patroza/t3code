@@ -889,7 +889,7 @@ describe("GitHub PR response bridge turn resolution", () => {
     ).toEqual({
       _tag: "terminal",
       status: "completed",
-      body: "Wake-up restatement for the new delivery only.\n\n_`gpt-5.4` · 1m_",
+      body: "Wake-up restatement for the new delivery only.\n\n_`gpt-5.4` · 1m 0s_",
       targetTurnId: "turn-2",
     });
   });

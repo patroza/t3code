@@ -78,6 +78,8 @@ import { decodeImagePreview } from "./decodeImagePreview";
 import type { BinaryWorkerResult } from "./binaryPreviewProtocol";
 import type { TextPreviewResult } from "./largeTextProtocol";
 import type { ReactElement } from "react";
+import { OFFICE_PREVIEW_MAX_COLUMNS, type OfficeWorkerResult } from "./officePreviewProtocol";
+import { WORD_LIMITS } from "./officeArchive";
 
 // Real worker imports and WASM initialization can exceed waitFor's default second
 // when the full browser project runs concurrently on CI.
@@ -481,7 +483,6 @@ describe("bounded binary previews", () => {
     }
   });
 });
-import { OFFICE_PREVIEW_MAX_COLUMNS, type OfficeWorkerResult } from "./officePreviewProtocol";
 
 describe("large text preview recovery", () => {
   it("retains the workspace viewer across URL renewals and reloads revisions and manual refreshes", async () => {
@@ -1095,10 +1096,15 @@ it.each([
     }
     expect(sheet.getElementsByTagNameNS(ns, "dimension")).toHaveLength(0);
     expect(sheet.getElementsByTagNameNS(ns, "mergeCell")).toHaveLength(0);
-    const columns = sheet.getElementsByTagNameNS(ns, "col");
-    expect(columns).toHaveLength(1);
-    expect(columns[0]!.getAttribute("min")).toBe(String(OFFICE_PREVIEW_MAX_COLUMNS - 1));
-    expect(columns[0]!.getAttribute("max")).toBe(String(OFFICE_PREVIEW_MAX_COLUMNS));
+    const columns = Array.from(sheet.getElementsByTagNameNS(ns, "col"));
+    const visibleColumns = columns.filter((column) => column.getAttribute("hidden") !== "1");
+    expect(visibleColumns).toHaveLength(1);
+    expect(visibleColumns[0]!.getAttribute("min")).toBe(String(OFFICE_PREVIEW_MAX_COLUMNS - 1));
+    expect(visibleColumns[0]!.getAttribute("max")).toBe(String(OFFICE_PREVIEW_MAX_COLUMNS));
+    const hiddenColumns = columns.filter((column) => column.getAttribute("hidden") === "1");
+    expect(hiddenColumns).toHaveLength(1);
+    expect(hiddenColumns[0]!.getAttribute("min")).toBe(String(OFFICE_PREVIEW_MAX_COLUMNS + 1));
+    expect(hiddenColumns[0]!.getAttribute("max")).toBe(String(OFFICE_PREVIEW_MAX_COLUMNS + 30));
   } finally {
     worker.terminate();
   }
@@ -1203,7 +1209,7 @@ it.each([
   if (scenario === "auxiliary XML" || scenario === "renamed XML")
     archive.file(
       scenario === "renamed XML" ? "word/footnotes.dat" : "word/footnotes.xml",
-      `<w:footnotes>${"<w:p/>".repeat(50_001)}</w:footnotes>`,
+      `<w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">${"<w:p/>".repeat(WORD_LIMITS.auxiliaryMarkup + 1)}</w:footnotes>`,
     );
   const file = await archive.generateAsync({ type: "blob", compression: "DEFLATE" });
   const src = URL.createObjectURL(file);
@@ -1253,9 +1259,18 @@ it.each([
             scenario === "section after prefix" ? null : "landscape",
           );
         }
-        expect(markup.length).toBeLessThan(body.length);
-        expect(markup.length).toBeLessThanOrEqual(3 * 1024 * 1024);
-        expect(markup.match(/<(?![!?/])/g)!.length).toBeLessThanOrEqual(100_000);
+        const parsed = new DOMParser().parseFromString(markup, "application/xml");
+        const retainedBody = parsed.getElementsByTagNameNS("*", "body")[0]!;
+        const retainedSection = retainedBody.lastElementChild!;
+        const contentStart = markup.indexOf(">", markup.indexOf(`<${retainedBody.tagName}`)) + 1;
+        const contentEnd = markup.lastIndexOf(`<${retainedSection.tagName}`);
+        const retainedContent = markup.slice(contentStart, contentEnd);
+        expect(retainedContent.length).toBeLessThan(body.length);
+        expect(new TextEncoder().encode(retainedContent).length).toBeLessThanOrEqual(
+          WORD_LIMITS.bodyBytes,
+        );
+        retainedSection.remove();
+        expect(retainedBody.querySelectorAll("*").length).toBeLessThanOrEqual(WORD_LIMITS.bodyTags);
       }
     } finally {
       worker.terminate();
@@ -1286,15 +1301,15 @@ it.each([
   );
   archive.file(
     "word/_rels/document.xml.rels",
-    `<Relationships>${scenario === "content type" ? "" : `<Relationship Id="style" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="${path.slice(5)}"/>`}${scenario === "metadata type" ? "<unused/>".repeat(50_001) : ""}</Relationships>`,
+    `<Relationships>${scenario === "content type" ? "" : `<Relationship Id="style" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="${path.slice(5)}"/>`}${scenario === "metadata type" ? "<unused/>".repeat(WORD_LIMITS.auxiliaryMarkup + 1) : ""}</Relationships>`,
   );
   archive.file(
     path,
     scenario === "relationship bytes"
-      ? `<styles>${"x".repeat(1024 * 1024)}</styles>`
+      ? `<styles>${"x".repeat(WORD_LIMITS.auxiliaryPartBytes + 1)}</styles>`
       : scenario === "deep XML"
         ? `${"<styles>".repeat(65)}${"</styles>".repeat(65)}`
-        : `<styles>${"<style/>".repeat(50_001)}</styles>`,
+        : `<styles>${"<style/>".repeat(WORD_LIMITS.auxiliaryMarkup + 1)}</styles>`,
   );
   const bytes = await archive.generateAsync({ type: "arraybuffer", compression: "DEFLATE" });
   const worker = new Worker(new URL("./officePreview.worker.ts", import.meta.url), {
@@ -1348,11 +1363,16 @@ async function expandedWordFixture(role: (typeof EXPANDED_WORD_ROLES)[number]) {
     '<Relationships><Relationship Id="doc" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>',
   );
   const text = (value: string) => `<w:p><w:r><w:t>${value}</w:t></w:r></w:p>`;
-  // Each copy of the 2,000-paragraph payload costs 8,000 markup units, so 20
-  // references (or pages) exceed the 100,000-unit expansion budget.
+  const copies = 20;
+  const expandedParagraphs = Math.ceil(WORD_LIMITS.expandedMarkup / (copies * 3)) + 1;
+  const noteRootPadding = 32_000;
+  const noteRoots = Math.ceil(WORD_LIMITS.expandedBytes / (noteRootPadding * 2)) + 1;
+  const numberingLevels = 18;
+  const numberingCopies = Math.ceil(WORD_LIMITS.numberingMarkup / (1 + numberingLevels * 2)) + 1;
+  const styleVisits = Math.ceil(WORD_LIMITS.styleVisits / 30) + 32;
   archive.file(
     "word/document.xml",
-    `<w:document xmlns:w="${ns}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>${text("body retained")}${Array.from({ length: 20 }, () => `<w:p><w:r><w:footnoteReference w:id="1"/><w:endnoteReference w:id="1"/><w:commentReference w:id="1"/><w:br w:type="page"/></w:r></w:p>`).join("")}<w:sectPr><w:headerReference w:type="default" r:id="aux"/><w:footerReference w:type="default" r:id="aux"/></w:sectPr></w:body></w:document>`,
+    `<w:document xmlns:w="${ns}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>${text("body retained")}${Array.from({ length: copies }, () => `<w:p><w:r><w:footnoteReference w:id="1"/><w:endnoteReference w:id="1"/><w:commentReference w:id="1"/><w:br w:type="page"/></w:r></w:p>`).join("")}<w:sectPr><w:headerReference w:type="default" r:id="aux"/><w:footerReference w:type="default" r:id="aux"/></w:sectPr></w:body></w:document>`,
   );
   archive.file(
     "word/_rels/document.xml.rels",
@@ -1360,23 +1380,23 @@ async function expandedWordFixture(role: (typeof EXPANDED_WORD_ROLES)[number]) {
   );
   const xml =
     role === "style chain" || role === "style count" || role === "style visits"
-      ? `<w:styles xmlns:w="${ns}">${Array.from({ length: role === "style count" ? 3_000 : 1_000 }, (_, i) => `<w:style w:styleId="s${i}" w:type="paragraph">${i ? `<w:basedOn w:val="s${role === "style visits" && i >= 30 ? 29 : i - 1}"/>` : ""}<w:pPr><w:spacing w:after="120"/></w:pPr></w:style>`).join("")}</w:styles>`
+      ? `<w:styles xmlns:w="${ns}">${Array.from({ length: role === "style count" ? WORD_LIMITS.styles + 1 : role === "style visits" ? styleVisits : 1_000 }, (_, i) => `<w:style w:styleId="s${i}" w:type="paragraph">${i ? `<w:basedOn w:val="s${role === "style visits" && i >= 30 ? 29 : i - 1}"/>` : ""}<w:pPr><w:spacing w:after="120"/></w:pPr></w:style>`).join("")}</w:styles>`
       : role === "styles"
         ? `<w:styles xmlns:w="${ns}">${Array.from({ length: 100 }, (_, i) => `<w:style w:styleId="${"s".repeat(2_000)}${i}" w:type="paragraph"><w:basedOn w:val="s0"/><w:pPr><w:spacing w:after="120"/></w:pPr></w:style>`).join("")}</w:styles>`
         : role.includes("numbering")
-          ? `<w:numbering xmlns:w="${ns}">${role === "picture numbering" ? '<w:numPicBullet w:numPicBulletId="1"/>' : ""}<w:abstractNum w:abstractNumId="1">${Array.from({ length: 9 }, (_, i) => `<w:lvl w:ilvl="${i}"><w:lvlText w:val="%1."/></w:lvl>`).join("")}</w:abstractNum>${Array.from({ length: 100 }, (_, i) => `<w:num w:numId="${i}"><w:abstractNumId w:val="1"/></w:num>`).join("")}</w:numbering>`
+          ? `<w:numbering xmlns:w="${ns}">${role === "picture numbering" ? '<w:numPicBullet w:numPicBulletId="1"/>' : ""}<w:abstractNum w:abstractNumId="1">${Array.from({ length: numberingLevels }, (_, i) => `<w:lvl w:ilvl="${i}"><w:lvlText w:val="%1."/></w:lvl>`).join("")}</w:abstractNum>${Array.from({ length: numberingCopies }, (_, i) => `<w:num w:numId="${i}"><w:abstractNumId w:val="1"/></w:num>`).join("")}</w:numbering>`
           : role === "header" || role === "footer"
-            ? `<w:${role === "header" ? "hdr" : "ftr"} xmlns:w="${ns}">${text("omitted payload").repeat(2_000)}</w:${role === "header" ? "hdr" : "ftr"}>`
-            : `<w:${role} xmlns:w="${ns}"><w:${role.slice(0, -1)} w:id="1">${text("omitted payload").repeat(2_000)}</w:${role.slice(0, -1)}></w:${role}>`;
+            ? `<w:${role === "header" ? "hdr" : "ftr"} xmlns:w="${ns}">${text("omitted payload").repeat(expandedParagraphs)}</w:${role === "header" ? "hdr" : "ftr"}>`
+            : `<w:${role} xmlns:w="${ns}"><w:${role.slice(0, -1)} w:id="1">${text("omitted payload").repeat(expandedParagraphs)}</w:${role.slice(0, -1)}></w:${role}>`;
   archive.file("word/media/aux.xml", xml);
   if (role === "note roots") {
     archive.file(
       "word/document.xml",
-      `<w:document xmlns:w="${ns}"><w:body>${text("body retained")}${Array.from({ length: 200 }, (_, id) => `<w:p><w:r><w:footnoteReference w:id="${id}"/></w:r></w:p>`).join("")}</w:body></w:document>`,
+      `<w:document xmlns:w="${ns}"><w:body>${text("body retained")}${Array.from({ length: noteRoots }, (_, id) => `<w:p><w:r><w:footnoteReference w:id="${id}"/></w:r></w:p>`).join("")}</w:body></w:document>`,
     );
     archive.file(
       "word/media/aux.xml",
-      `<w:footnotes xmlns:w="${ns}" padding="${"x".repeat(32_000)}">${Array.from({ length: 200 }, (_, id) => `<w:footnote w:id="${id}">${text("omitted payload")}</w:footnote>`).join("")}</w:footnotes>`,
+      `<w:footnotes xmlns:w="${ns}" padding="${"x".repeat(noteRootPadding)}">${Array.from({ length: noteRoots }, (_, id) => `<w:footnote w:id="${id}">${text("omitted payload")}</w:footnote>`).join("")}</w:footnotes>`,
     );
   }
   return archive.generateAsync({ type: "blob", compression: "DEFLATE" });
@@ -1401,7 +1421,9 @@ it.each(EXPANDED_WORD_ROLES)(
             (sum, [chunk]) => sum + (typeof chunk === "string" ? chunk.length : 0),
             0,
           ),
-        ).toBeLessThan(4 * 1024 * 1024);
+        ).toBeLessThan(
+          WORD_LIMITS.expandedBytes + 2 * (WORD_LIMITS.auxiliaryPartBytes + WORD_LIMITS.bodyBytes),
+        );
       const bounded = await JSZip.loadAsync(prepared.bytes);
       const markup = await bounded.file("word/document.xml")!.async("string");
       expect(markup).toContain("body retained");
@@ -1622,7 +1644,7 @@ it.each([false, true])(
   },
 );
 
-it.each([1, 145])(
+it.each([1, Math.ceil(WORD_LIMITS.bodyBytes / (5_000 * "body".length)) + 1])(
   "counts shared Word settings once with %s text repetitions",
   async (repetitions) => {
     const { default: JSZip } = await import("jszip");
@@ -1658,7 +1680,17 @@ it.each([1, 145])(
       const document = await bounded.file("word/document.xml")!.async("string");
       const retainedSettings = await bounded.file("word/settings.xml")!.async("string");
       expect(document.match(/<w:p>/g)!.length).toBeGreaterThan(100);
-      expect(document.length + retainedSettings.length).toBeLessThanOrEqual(3 * 1024 * 1024);
+      const bodyStart = document.indexOf(">", document.indexOf("<w:body")) + 1;
+      const sectionStart = document.lastIndexOf("<w:sectPr");
+      const bodyEnd = sectionStart >= bodyStart ? sectionStart : document.lastIndexOf("</w:body>");
+      expect(bodyStart).toBeGreaterThan(0);
+      expect(bodyEnd).toBeGreaterThan(bodyStart);
+      expect(
+        new TextEncoder().encode(document.slice(bodyStart, bodyEnd)).length,
+      ).toBeLessThanOrEqual(WORD_LIMITS.bodyBytes);
+      expect(new TextEncoder().encode(document + retainedSettings).length).toBeLessThanOrEqual(
+        WORD_LIMITS.expandedBytes,
+      );
     } finally {
       worker.terminate();
     }
@@ -1825,7 +1857,14 @@ it("keeps spreadsheet dates on their calendar day west of UTC", async () => {
     });
     const { createWorkerClient } = await import("./office/worker-rpc");
     const client = createWorkerClient<import("./office/sheet-protocol").SheetMethods>(worker);
-    await client.call("open", { bytes }, { transfer: [bytes] });
+    await client.call(
+      "open",
+      {
+        bytes,
+        view: { hiddenGridlines: [], themeFonts: { major: "Calibri Light", minor: "Calibri" } },
+      },
+      { transfer: [bytes] },
+    );
     const cells = await client.call("cells", {
       sheet: 0,
       range: { top: 0, bottom: 0, left: 0, right: 0 },
@@ -1884,10 +1923,13 @@ describe("standalone Mermaid previews", () => {
       .spyOn(HTMLImageElement.prototype, "src", "set")
       .mockImplementation(() => {});
     await using screen = await render(<MermaidFilePreview text={`flowchart LR\n${node}`} />);
-    await vi.waitFor(() =>
-      expect(screen.container.querySelector('[role="alert"]')?.textContent).toContain(
-        "Show Mermaid source",
-      ),
+    // The first case loads the Mermaid viewer chunk, which can take over a second on a slow runner.
+    await vi.waitFor(
+      () =>
+        expect(screen.container.querySelector('[role="alert"]')?.textContent).toContain(
+          "Show Mermaid source",
+        ),
+      { timeout: 10_000 },
     );
     expect(imageSource).not.toHaveBeenCalled();
     expect(screen.container.querySelector("svg")).toBeNull();
@@ -2218,24 +2260,17 @@ it.each([
       target.startsWith("/") ? target.slice(1) : `xl/${target}`,
       `<worksheet><sheetData><row r="${row}"><c r="A${row}" t="inlineStr"><is><t>worksheet value</t></is></c></row></sheetData></worksheet>`,
     );
-    const file = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
-    const src = URL.createObjectURL(file);
-    try {
-      await using screen = await render(
-        <div style={{ display: "flex", height: 400, width: 600 }}>
-          <OfficeFilePreview name="custom.xlsx" src={src} kind="xlsx" sizeBytes={file.size} />
-        </div>,
+    const bytes = await zip.generateAsync({ type: "arraybuffer", compression: "DEFLATE" });
+    const { prepareOffice } = await import("./officeArchive");
+    if (row > 250000) {
+      await expect(prepareOffice(bytes, "xlsx")).rejects.toThrow(
+        "This workbook exceeds the preview limit",
       );
-      await vi.waitFor(
-        () =>
-          expect(screen.container.textContent).toContain(
-            row > 250000 ? "This workbook exceeds the preview limit" : "worksheet value",
-          ),
-        { timeout: 10_000 },
-      );
-    } finally {
-      URL.revokeObjectURL(src);
+      return;
     }
+    const prepared = await prepareOffice(bytes, "xlsx");
+    const bounded = await JSZip.loadAsync(prepared.bytes);
+    expect(await bounded.file(`xl/${target}`)!.async("string")).toContain("worksheet value");
   },
 );
 
@@ -2255,6 +2290,23 @@ it("copies every indexed line rather than the mounted preview rows", async () =>
   expect(await first).toBe(text);
   expect(await copyContents.current!()).toBe(text);
   expect(screen.container.querySelector('[role="alert"]')).toBeNull();
+});
+
+it.each([
+  ["one.csv", "text/csv", "name\nAda\n", "1 row · 1 column ·"],
+  ["two.csv", "text/csv", "name,count\nAda,1\nGrace,2\n", "2 rows · 2 columns ·"],
+  ["one.tsv", "text/tab-separated-values", "name\nAda\n", "1 row · 1 column ·"],
+  ["one.txt", "text/plain", "a".repeat(1024 * 1024) + "\n", "1 line ·"],
+  ["two.txt", "text/plain", ("a".repeat(512 * 1024) + "\n").repeat(2), "2 lines ·"],
+] as const)("labels the counts of %s in the status line", async (name, mimeType, text, label) => {
+  const file = new Blob([text], { type: mimeType });
+  await using screen = await render(
+    <AttachmentFilePreview name={name} mimeType={mimeType} sizeBytes={file.size} file={file} />,
+  );
+  const status = () => screen.container.querySelector('[role="status"]')?.textContent ?? "";
+  // A cold large-text worker can take longer than waitFor's default to boot on CI.
+  await vi.waitFor(() => expect(status()).toMatch(/ [KM]?B$/), { timeout: 10_000 });
+  expect(status()).toContain(label);
 });
 
 it.each(["archive", "sqlite"] as const)(
@@ -2762,7 +2814,7 @@ it.each(["rtf", "epub", "ods"] as const)(
           expect(screen.container.textContent).toContain("North");
           expect(screen.container.textContent).toContain("150");
           expect(screen.container.textContent).not.toContain("private note");
-          expect(screen.container.textContent).toContain("1 rows · 2 columns");
+          expect(screen.container.textContent).toContain("1 row · 2 columns");
           expect(screen.container.textContent).not.toContain("Limited to 500");
         } else {
           const frame = screen.container.querySelector("iframe");

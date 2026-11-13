@@ -196,15 +196,19 @@ function settledOverrideFor(value: string | null): OrchestrationV2AppThread["set
   return value === "settled" || value === "active" ? value : null;
 }
 
-function dateTime(value: string): DateTime.Utc {
-  return DateTime.makeUnsafe(value);
+// V1 rows can hold unparseable timestamps; fall back to another time rather than fail the import.
+function dateTimeOr(value: string | null, fallback: DateTime.Utc): DateTime.Utc {
+  return value === null ? fallback : Option.getOrElse(DateTime.make(value), () => fallback);
 }
 
-function nullableDateTime(value: string | null): DateTime.Utc | null {
-  return value === null ? null : dateTime(value);
+// A malformed marker stays set so archived or deleted threads keep that state.
+function nullableDateTime(value: string | null, fallback: DateTime.Utc): DateTime.Utc | null {
+  return value === null ? null : dateTimeOr(value, fallback);
 }
 
-function importedThread(row: LegacyThreadRow): OrchestrationV2AppThread {
+function importedThread(row: LegacyThreadRow, importedAt: DateTime.Utc): OrchestrationV2AppThread {
+  const createdAt = dateTimeOr(row.created_at, dateTimeOr(row.updated_at, importedAt));
+  const updatedAt = dateTimeOr(row.updated_at, createdAt);
   const threadId = ThreadId.make(row.thread_id);
   const modelSelection = modelSelectionFor(row);
   const branch = row.branch?.trim() || null;
@@ -254,27 +258,30 @@ function importedThread(row: LegacyThreadRow): OrchestrationV2AppThread {
       rootThreadId: threadId,
     },
     forkedFrom: null,
-    createdAt: dateTime(row.created_at),
-    updatedAt: dateTime(row.updated_at),
-    archivedAt: nullableDateTime(row.archived_at),
+    createdAt,
+    updatedAt,
+    archivedAt: nullableDateTime(row.archived_at, updatedAt),
     settledOverride: settledOverrideFor(row.settled_override),
-    settledAt: nullableDateTime(row.settled_at),
-    unsettledAt: nullableDateTime(row.unsettled_at),
-    snoozedUntil: nullableDateTime(row.snoozed_until),
-    snoozedAt: nullableDateTime(row.snoozed_at),
-    pinnedAt: nullableDateTime(row.pinned_at),
-    autoSettleDisabledAt: nullableDateTime(row.auto_settle_disabled_at),
+    settledAt: nullableDateTime(row.settled_at, updatedAt),
+    unsettledAt: nullableDateTime(row.unsettled_at, updatedAt),
+    snoozedUntil: nullableDateTime(row.snoozed_until, updatedAt),
+    snoozedAt: nullableDateTime(row.snoozed_at, updatedAt),
+    pinnedAt: nullableDateTime(row.pinned_at, updatedAt),
+    autoSettleDisabledAt: nullableDateTime(row.auto_settle_disabled_at, updatedAt),
     pinOrderKey: row.pin_order_key?.trim() || null,
     lastVisitedAt: null,
-    deletedAt: nullableDateTime(row.deleted_at),
+    deletedAt: nullableDateTime(row.deleted_at, updatedAt),
   };
 }
 
-function messageEvents(row: LegacyMessageRow): ReadonlyArray<OrchestrationV2DomainEvent> {
+function messageEvents(
+  row: LegacyMessageRow,
+  importedAt: DateTime.Utc,
+): ReadonlyArray<OrchestrationV2DomainEvent> {
   const threadId = ThreadId.make(row.thread_id);
   const messageId = MessageId.make(row.message_id);
-  const createdAt = dateTime(row.created_at);
-  const updatedAt = dateTime(row.updated_at);
+  const createdAt = dateTimeOr(row.created_at, dateTimeOr(row.updated_at, importedAt));
+  const updatedAt = dateTimeOr(row.updated_at, createdAt);
   const attachments = attachmentsFor(row);
   const context = contextFor(row);
   const message: OrchestrationV2ConversationMessage = {
@@ -367,7 +374,7 @@ function queuedMessageEvents(
   ordinal: number,
 ): ReadonlyArray<OrchestrationV2DomainEvent> {
   const runId = RunId.make(`${IMPORT_EVENT_PREFIX}:queued-run:${row.message_id}`);
-  const requestedAt = dateTime(row.queued_at);
+  const requestedAt = dateTimeOr(row.queued_at, thread.createdAt);
   const modelSelection =
     row.model_selection_json === null
       ? thread.modelSelection
@@ -402,14 +409,17 @@ function queuedMessageEvents(
         }
       : {}),
   };
-  const events = messageEvents({
-    ...row,
-    role: "user",
-    is_streaming: 0,
-    created_at: row.queued_at,
-    updated_at: row.queued_at,
-    ordinal,
-  });
+  const events = messageEvents(
+    {
+      ...row,
+      role: "user",
+      is_streaming: 0,
+      created_at: row.queued_at,
+      updated_at: row.queued_at,
+      ordinal,
+    },
+    requestedAt,
+  );
   return [
     {
       id: EventId.make(`${IMPORT_EVENT_PREFIX}:queued-run:${row.message_id}`),
@@ -556,7 +566,7 @@ const make = Effect.gen(function* () {
   });
 
   const reconcileShellsBase = Effect.gen(function* () {
-    const now = DateTime.formatIso(yield* DateTime.now);
+    const now = yield* DateTime.now;
     const repairRows = yield* sql<LegacyRepairRow>`
       SELECT
         thread.thread_id,
@@ -607,7 +617,7 @@ const make = Effect.gen(function* () {
       const decoded = decodeStoredThread(row.payload_json);
       if (Option.isNone(decoded)) continue;
       const current = decoded.value;
-      const legacy = importedThread(row);
+      const legacy = importedThread(row, now);
       const legacyPullRequests = legacy.pullRequests ?? [];
       const repaired: OrchestrationV2AppThread = {
         ...current,
@@ -656,7 +666,7 @@ const make = Effect.gen(function* () {
             type: "thread.metadata-updated",
             threadId: repaired.id,
             providerInstanceId: repaired.providerInstanceId,
-            occurredAt: dateTime(now),
+            occurredAt: now,
             payload: repaired,
           },
         ],
@@ -705,7 +715,7 @@ const make = Effect.gen(function* () {
     let importedThreadCount = repairedThreadCount;
     let importedMessageCount = 0;
     for (const row of rows) {
-      const thread = importedThread(row);
+      const thread = importedThread(row, now);
       const previews = yield* listShellMessages(thread.id);
       const queued = yield* sql<LegacyQueuedMessageRow>`
         SELECT * FROM projection_queued_messages WHERE thread_id = ${thread.id} ORDER BY rowid ASC
@@ -725,7 +735,7 @@ const make = Effect.gen(function* () {
           occurredAt: thread.createdAt,
           payload: thread,
         },
-        ...previews.flatMap(messageEvents),
+        ...previews.flatMap((message) => messageEvents(message, now)),
         ...queuedEvents,
         {
           id: EventId.make(`${IMPORT_EVENT_PREFIX}:thread:${row.thread_id}:shell`),
@@ -775,7 +785,7 @@ const make = Effect.gen(function* () {
             VALUES (
               ${thread.id},
               ${row.updated_at},
-              ${now},
+              ${DateTime.formatIso(now)},
               NULL,
               ${previews.length},
               NULL
@@ -838,6 +848,7 @@ const make = Effect.gen(function* () {
           confirmedTranscriptThreadIds.add(threadId);
           return { importedThreadCount: 0, importedMessageCount: 0 };
         }
+        const importedAt = yield* DateTime.now;
         const messages = yield* listMessages(threadId);
         // Hint the index to skip V1 events without scanning their payloads.
         const existingRows = yield* sql<{ readonly event_id: string }>`
@@ -871,7 +882,9 @@ const make = Effect.gen(function* () {
               `,
             { discard: true },
           );
-          yield* eventSink.write({ events: batch.flatMap(messageEvents) });
+          yield* eventSink.write({
+            events: batch.flatMap((message) => messageEvents(message, importedAt)),
+          });
           yield* Effect.yieldNow;
         }
         const now = DateTime.formatIso(yield* DateTime.now);

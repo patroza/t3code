@@ -282,7 +282,12 @@ async function setup() {
   checkoutState.error = null;
   prepareThread.mockReset().mockResolvedValue({
     _tag: "Success",
-    value: { branch: "feature", worktreePath: "/workspace/pr" },
+    value: {
+      branch: "feature",
+      worktreePath: "/workspace/pr",
+      pullRequest: detail,
+      isOnPullRequestHead: true,
+    },
   });
   update.mockReset().mockResolvedValue({ _tag: "Success", value: undefined });
 
@@ -807,7 +812,9 @@ it("keeps discussion counts and Timeline expansion in sync with activity refresh
     const toggle = threadToggle.element();
     if (status) expect(toggle.textContent).toContain(status);
     else expect(toggle.textContent).not.toMatch(/Resolved|Review dismissed/);
-    const visibleBody = (toggle.parentElement as HTMLElement).innerText;
+    const group = toggle.parentElement?.parentElement;
+    if (!group) throw new Error("Discussion group not found");
+    const visibleBody = group.innerText;
     expect({
       expanded: toggle.getAttribute("aria-expanded"),
       findingVisible: visibleBody.includes("Discussion finding"),

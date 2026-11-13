@@ -25,6 +25,22 @@ describe("threadRoutes", () => {
     expect(isThreadRoutePathname("/env-2/thread-1", ref)).toBe(false);
     expect(isThreadRoutePathname("/draft/thread-1", ref)).toBe(false);
     expect(isThreadRoutePathname("/env-1/thread-1/extra", ref)).toBe(false);
+
+    const encodedRef = scopeThreadRef("env space" as never, ThreadId.make("mcp:example/part"));
+    expect(isThreadRoutePathname("/env%20space/mcp%3Aexample%2Fpart", encodedRef)).toBe(true);
+    expect(isThreadRoutePathname("/env%20space/mcp%3Aexample%2Fpart/", encodedRef)).toBe(true);
+    expect(isThreadRoutePathname("/env%20space/mcp%3Aexample/part", encodedRef)).toBe(false);
+    expect(isThreadRoutePathname("/env%20space/mcp%253Aexample%2Fpart", encodedRef)).toBe(false);
+    expect(isThreadRoutePathname("/env%20space/mcp%ZZexample", encodedRef)).toBe(false);
+    expect(isThreadRoutePathname("/env%20space/mcp%3Aexample%2Fpart/extra", encodedRef)).toBe(
+      false,
+    );
+    expect(
+      isThreadRoutePathname(
+        "/env-1/mcp%253Aexample",
+        scopeThreadRef("env-1" as never, ThreadId.make("mcp%3Aexample")),
+      ),
+    ).toBe(true);
   });
 
   it("resolves the backing thread while a draft route is being promoted", () => {
@@ -40,6 +56,13 @@ describe("threadRoutes", () => {
       environmentId: "env-2",
       threadId: "server-thread",
     });
+    expect(
+      resolveActiveThreadRouteRef(
+        target,
+        null,
+        scopeThreadRef("env-2" as never, ThreadId.make("server-thread")),
+      ),
+    ).toEqual({ environmentId: "env-2", threadId: "server-thread" });
   });
 
   it("does not treat a draft's reserved thread ref as an active sidebar thread", () => {

@@ -45,6 +45,9 @@ lines.on("line", (line) => {
       account: { email: "dev@example.com", subscriptionType: "pro", tokenSource: "oauth" },
     });
   }
+  if (message.request?.subtype === "get_settings") {
+    reply({ effective: {}, sources: [] });
+  }
   if (message.request?.subtype === "get_usage") {
     reply({
       session: {},
