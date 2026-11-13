@@ -10,7 +10,7 @@
     "build": "vp build",
     "i18n:generate": "gt generate",
     "preview": "vp preview",
-    "test": "node scripts/test.mjs --passWithNoTests --project unit --project unit-isolated --project browser --project compiler",
+    "test": "node scripts/test.mjs --passWithNoTests --project unit --project unit-isolated --project unit-dom --project browser --project compiler",
     "i18n:translate": "gt translate"
   },
   "dependencies": {
@@ -119,6 +119,7 @@
     "@vitest/browser-playwright": "5.0.5",
     "compression": "^1.8.2",
     "gt": "2.27.0",
+    "jsdom": "^30.0.1",
     "micromark-util-types": "catalog:",
     "oxc-transform-react": "~0.152.0",
     "playwright": "1.64.1",

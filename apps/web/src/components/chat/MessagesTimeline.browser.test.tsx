@@ -2065,6 +2065,7 @@ describe("timeline tooltip scroll dismissal", () => {
 
   async function renderTooltip(pullRequest: boolean, outside: boolean) {
     environmentQuery.data = null;
+    environmentQuery.error = "Pull request not found";
     const tooltip = pullRequest ? (
       <PullRequestLinkPreview
         link={<button>message link</button>}

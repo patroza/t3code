@@ -28,10 +28,15 @@ vi.mock(import("./ThreadDetailsPrRow"), async (importOriginal) => {
 vi.mock(import("~/state/entities"), async (importOriginal) => ({
   ...(await importOriginal()),
   useProjects: () => [],
+  useServerConfigs: (() =>
+    new Map([
+      [threadRef.environmentId, { environment: { capabilities: { pullRequestChecks: true } } }],
+    ])) as never,
   useQuietThreadShell: (() => ({
     environmentId: "environment",
     projectId: "project",
     worktreePath: null,
+    pullRequests: fixture.realRows ? manyLinks : [],
   })) as never,
   useProject: (() => ({ workspaceRoot: "/tmp/project" })) as never,
   useThreadShellsForProjectRefs: () => [],
@@ -60,25 +65,6 @@ vi.mock(import("./ThreadRelationshipsControl"), () => ({ ThreadRelationshipsPane
 vi.mock(import("../pullRequest/usePullRequestActions"), async (original) => ({
   ...(await original()),
   usePullRequestHandoffs: () => ({ handoff: null, startAsk: vi.fn(), startHandoff: vi.fn() }),
-}));
-vi.mock(import("../BranchToolbarBranchSelector"), () => ({
-  BranchToolbarBranchSelector: () => (
-    <ThreadDetailsPrRows
-      threadRef={threadRef}
-      links={manyLinks}
-      currentLink={manyLinks[0]!}
-      onOpenLink={vi.fn()}
-      environmentId={threadRef.environmentId}
-      pr={null}
-      number={1}
-      reference={manyLinks[0]!}
-      status={null}
-      project={null}
-      label="#1"
-      openAriaLabel="Open pull request #1"
-      onOpen={vi.fn()}
-    />
-  ),
 }));
 
 import { PopoverCreateHandle } from "../ui/popover";
@@ -295,12 +281,18 @@ it("keeps workspace controls after expanding and collapsing 70 linked pull reque
   await userEvent.click(page.getByRole("button", { name: "Show 69 more" }));
   await expect.element(page.getByRole("button", { name: "Show less" })).toBeInTheDocument();
   const extraRows = () =>
-    container.querySelectorAll('[aria-label^="https://github.com/pingdotgg/t3code/pull/"]');
+    container.querySelectorAll(
+      '[data-thread-details-pr-list] [aria-label^="https://github.com/pingdotgg/t3code/pull/"]',
+    );
   expect(extraRows()).toHaveLength(69);
   await userEvent.click(page.getByRole("button", { name: "Show less" }));
   await expect.element(page.getByRole("button", { name: "Show 69 more" })).toBeVisible();
   expect(extraRows()).toHaveLength(0);
-  await expect.element(page.getByRole("button", { name: "Open pull request #1" })).toBeVisible();
+  await expect
+    .element(
+      page.getByRole("button", { name: "https://github.com/pingdotgg/t3code/pull/1", exact: true }),
+    )
+    .toBeVisible();
   await expect.element(runContext).toBeVisible();
   await expect.element(editor).toBeVisible();
 });

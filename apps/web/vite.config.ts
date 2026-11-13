@@ -174,12 +174,12 @@ const isolatedUnitTestFiles = [
   // Same react-hook mock as the .ts sibling; the .tsx refresh tests were added
   // upstream and fail under isolate:false when real React is already bound.
   "src/components/files/projectFilesQueryState.test.tsx",
+  "src/components/files/projectFilesQueryState.refresh.test.tsx",
   // Mocks `~/browserFaviconStore`; under `isolate: false` an earlier file in
   // the same worker can bind the real module first, and the mock then never
   // applies — the icon falls back to the browser mockup and the stored-favicon
   // assertion fails, depending only on how files land across workers.
   "src/components/preview/PreviewFaviconIcon.test.tsx",
-  "src/components/preview/PreviewView.test.tsx",
   "src/components/preview/openPreviewSession.test.ts",
   "src/components/preview/openTerminalLinkInPreview.test.ts",
   // Replaces `openPreviewSession` with a bare vi.fn(). Under isolate:false
@@ -317,6 +317,8 @@ const isolatedUnitTestFiles = [
 
 const compilerTestFiles = ["src/components/ChatView.compiler.test.ts"] as const;
 
+const domUnitTestFiles = ["src/components/preview/PreviewView.test.tsx"];
+
 const unitTestProject = {
   extends: true,
   test: {
@@ -329,7 +331,12 @@ const unitTestProject = {
     maxWorkers: 4,
     sequence: { groupOrder: 1 },
     include: ["src/**/*.test.{ts,tsx}"],
-    exclude: [...isolatedUnitTestFiles, ...compilerTestFiles, "src/**/*.browser.test.{ts,tsx}"],
+    exclude: [
+      ...isolatedUnitTestFiles,
+      ...domUnitTestFiles,
+      ...compilerTestFiles,
+      "src/**/*.browser.test.{ts,tsx}",
+    ],
     hookTimeout: 15_000,
     testTimeout: 15_000,
     setupFiles: [
@@ -350,6 +357,16 @@ const isolatedUnitTestProject = {
     include: [...isolatedUnitTestFiles],
     hookTimeout: 15_000,
     testTimeout: 15_000,
+  },
+} satisfies TestProjectInlineConfiguration;
+
+const domUnitTestProject = {
+  ...isolatedUnitTestProject,
+  test: {
+    ...isolatedUnitTestProject.test,
+    name: "unit-dom",
+    environment: "jsdom",
+    include: domUnitTestFiles,
   },
 } satisfies TestProjectInlineConfiguration;
 
@@ -757,6 +774,7 @@ export default defineConfig(() => {
       projects: [
         defineProject(unitTestProject),
         defineProject(isolatedUnitTestProject),
+        defineProject(domUnitTestProject),
         defineProject(browserTestProject),
         defineProject(compilerTestProject),
         defineProject(renderScenariosProject),

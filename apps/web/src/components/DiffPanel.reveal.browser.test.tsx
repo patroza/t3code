@@ -42,6 +42,8 @@ vi.mock("../state/review", () => ({
 }));
 vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
 vi.mock("../hooks/useSettings", () => ({
+  getClientSettings: () => DEFAULT_CLIENT_SETTINGS,
+  isClientSettingsHydrated: () => true,
   useClientSettings: () => ({
     ...DEFAULT_CLIENT_SETTINGS,
     diffFilesCollapsed: useAtomValue(collapsedAtom),

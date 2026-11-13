@@ -39,6 +39,7 @@ it("keeps the title when dragging a search result from a collapsed folder", asyn
   __setClientSettingsForTests({
     ...DEFAULT_CLIENT_SETTINGS,
     boringSidebarEnabled: true,
+    sidebarThreadPreviewCount: 0,
     onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
   });
   const router = getRouter(

@@ -1,11 +1,5 @@
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-
-const stageArtworkState = vi.hoisted(() => ({
-  mode: "none" as "artwork" | "none",
-  variant: null as "nightly" | "dev" | null,
-}));
+import { describe, expect, it } from "vite-plus/test";
+import { shouldDisableCollapsedComposerSubmitAction } from "./ComposerPrimaryActions";
 
 describe("shouldDisableCollapsedComposerSubmitAction", () => {
   it("keeps the collapsed mobile submit button disabled while a turn is running", () => {
@@ -28,103 +22,5 @@ describe("shouldDisableCollapsedComposerSubmitAction", () => {
         hasSendableContent: true,
       }),
     ).toBe(false);
-  });
-});
-vi.mock("~/hooks/useSettings", () => ({
-  useEnvironmentIdentificationMode: () => stageArtworkState.mode,
-  useClientSettings: (select: (settings: { redesignEnabled: boolean }) => unknown) =>
-    select({ redesignEnabled: false }),
-}));
-vi.mock("../SidebarStageBackdrop", () => ({
-  StageBackdropButtonArt: ({ variant }: { variant: string }) => `stage-${variant}`,
-  useSidebarStageBackdropVariant: (mode: string) =>
-    mode === "artwork" ? stageArtworkState.variant : null,
-}));
-
-import {
-  ComposerPrimaryActions,
-  shouldDisableCollapsedComposerSubmitAction,
-} from "./ComposerPrimaryActions";
-
-function renderPendingActions(isRunning: boolean) {
-  return renderToStaticMarkup(
-    createElement(ComposerPrimaryActions, {
-      compact: true,
-      canOperateThread: true,
-      pendingAction: {
-        questionIndex: 0,
-        isLastQuestion: true,
-        canAdvance: true,
-        isResponding: false,
-        isComplete: true,
-      },
-      isRunning,
-      canInterrupt: isRunning,
-      isSendBusy: false,
-      sendDisabledReason: null,
-      isEnvironmentUnavailable: false,
-      isPreparingWorktree: false,
-      hasSendableContent: false,
-      onPreviousPendingQuestion: () => {},
-      onInterrupt: () => {},
-    }),
-  );
-}
-
-function renderSendButton(sendDisabledReason: string | null = null) {
-  return renderToStaticMarkup(
-    createElement(ComposerPrimaryActions, {
-      compact: true,
-      canOperateThread: true,
-      pendingAction: null,
-      isRunning: false,
-      canInterrupt: false,
-      isSendBusy: false,
-      sendDisabledReason,
-      isEnvironmentUnavailable: false,
-      isPreparingWorktree: false,
-      hasSendableContent: true,
-      onPreviousPendingQuestion: () => {},
-      onInterrupt: () => {},
-    }),
-  );
-}
-
-afterEach(() => {
-  stageArtworkState.mode = "none";
-  stageArtworkState.variant = null;
-});
-
-describe("ComposerPrimaryActions", () => {
-  it("disables and labels the send button while feedback is uploading", () => {
-    const markup = renderSendButton("Sending feedback");
-
-    expect(markup).toContain("disabled");
-    expect(markup).toContain('aria-label="Sending feedback"');
-  });
-
-  it("offers Stop generation while a running turn is waiting for user input", () => {
-    expect(renderPendingActions(true)).toContain('aria-label="Stop generation"');
-  });
-
-  it("does not offer Stop generation for a pending request without a running turn", () => {
-    expect(renderPendingActions(false)).not.toContain('aria-label="Stop generation"');
-  });
-
-  it("renders stage artwork inside the send button when artwork identification is active", () => {
-    stageArtworkState.mode = "artwork";
-    stageArtworkState.variant = "nightly";
-
-    const markup = renderSendButton();
-
-    expect(markup).toContain("stage-nightly");
-  });
-
-  it("hides stage artwork when artwork identification is inactive", () => {
-    stageArtworkState.variant = "nightly";
-
-    const markup = renderSendButton();
-
-    expect(markup).not.toContain("stage-nightly");
   });
 });

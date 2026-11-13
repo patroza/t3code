@@ -4,13 +4,28 @@ import type { ComponentProps } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import { act, fakeTimers, render } from "../../../test/render";
 
+const stageArtworkState = vi.hoisted(() => ({
+  mode: "none" as "artwork" | "none",
+  variant: null as "nightly" | "dev" | null,
+}));
+
+function stageArtwork(
+  mode: typeof stageArtworkState.mode,
+  variant: typeof stageArtworkState.variant,
+) {
+  const previous = { ...stageArtworkState };
+  Object.assign(stageArtworkState, { mode, variant });
+  return { [Symbol.dispose]: () => Object.assign(stageArtworkState, previous) };
+}
+
 vi.mock("~/hooks/useSettings", () => ({
-  useEnvironmentIdentificationMode: () => "none",
+  useEnvironmentIdentificationMode: () => stageArtworkState.mode,
   useClientSettings: () => false,
 }));
 vi.mock("../SidebarStageBackdrop", () => ({
-  StageBackdropButtonArt: () => null,
-  useSidebarStageBackdropVariant: () => null,
+  StageBackdropButtonArt: ({ variant }: { variant: string }) => `stage-${variant}`,
+  useSidebarStageBackdropVariant: (mode: string) =>
+    mode === "artwork" ? stageArtworkState.variant : null,
 }));
 
 import { CollapsedComposerStopAction, ComposerPrimaryActions } from "./ComposerPrimaryActions";
@@ -193,4 +208,68 @@ it("swaps the collapsed composer's send button for Stop while a turn can be stop
     .toBeDisabled();
   await screen.rerender(collapsed({ canInterrupt: false }));
   await expect.element(screen.getByRole("button", { name: "Send message" })).toBeVisible();
+});
+
+function pendingProps(isRunning: boolean) {
+  return {
+    ...setup(),
+    pendingAction: {
+      questionIndex: 0,
+      isLastQuestion: true,
+      canAdvance: true,
+      isResponding: false,
+      isComplete: true,
+    },
+    isRunning,
+    canInterrupt: isRunning,
+  };
+}
+
+function sendProps(sendDisabledReason: string | null = null) {
+  return {
+    ...setup(),
+    isRunning: false,
+    canInterrupt: false,
+    hasSendableContent: true,
+    sendDisabledReason,
+  };
+}
+
+it("disables and labels the send button while feedback is uploading", async () => {
+  const props = sendProps("Sending feedback");
+  await using screen = await render(<ComposerPrimaryActions {...props} />);
+  const button = screen.getByRole("button", { name: "Sending feedback", exact: true });
+  await expect.element(button).toBeDisabled();
+  await act(() => (button.element() as HTMLButtonElement).click());
+  expect(props.onSubmitMessage).not.toHaveBeenCalled();
+});
+
+it("offers Stop generation while a running turn is waiting for user input", async () => {
+  const props = pendingProps(true);
+  await using screen = await render(<ComposerPrimaryActions {...props} />);
+  const stop = screen.getByRole("button", { name: "Stop generation", exact: true });
+  await expect.element(stop).toBeVisible();
+  await act(() => (stop.element() as HTMLButtonElement).click());
+  expect(props.onInterrupt).toHaveBeenCalledOnce();
+});
+
+it("does not offer Stop generation for a pending request without a running turn", async () => {
+  await using screen = await render(<ComposerPrimaryActions {...pendingProps(false)} />);
+  expect(screen.container.querySelector('[aria-label="Stop generation"]')).toBeNull();
+});
+
+it("renders stage artwork inside the send button when artwork identification is active", async () => {
+  using _stage = stageArtwork("artwork", "nightly");
+  await using screen = await render(<ComposerPrimaryActions {...sendProps()} />);
+  expect(
+    screen.getByRole("button", { name: "Submit message", exact: true }).element().textContent,
+  ).toContain("stage-nightly");
+});
+
+it("hides stage artwork when artwork identification is inactive", async () => {
+  using _stage = stageArtwork("none", "nightly");
+  await using screen = await render(<ComposerPrimaryActions {...sendProps()} />);
+  expect(
+    screen.getByRole("button", { name: "Submit message", exact: true }).element().textContent,
+  ).not.toContain("stage-nightly");
 });
