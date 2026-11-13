@@ -360,6 +360,7 @@ it.effect("says a clone that ran out of time timed out, not git's last remote li
                   orElse: () =>
                     Effect.fail(
                       new GitCommandError({
+                        failureKind: "unknown",
                         operation: input.operation,
                         command: "git",
                         cwd: input.cwd,

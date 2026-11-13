@@ -2844,6 +2844,7 @@ it.effect("leaves uncertain Git detection failures to workspace preparation", ()
         repositoryRoot: () =>
           Effect.fail(
             new GitCommandError({
+              failureKind: "unknown",
               operation: "detect-repository",
               command: "git",
               cwd: project.workspaceRoot,

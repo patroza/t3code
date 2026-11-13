@@ -1,3 +1,4 @@
+import { VcsProcessExitError } from "@t3tools/contracts";
 import { assert, it, describe } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -169,6 +170,32 @@ describe("VcsDriverRegistry", () => {
       }).pipe(Effect.provide(makeDiskBackedLayer(repoDir, calls)));
     }).pipe(Effect.provide(NodeServices.layer)),
   );
+
+  const makeFailingLayer = (detectOutput: VcsProcess.VcsProcessOutput) =>
+    Layer.effect(VcsDriverRegistry.VcsDriverRegistry, VcsDriverRegistry.make).pipe(
+      Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      Layer.provide(
+        Layer.mock(VcsProjectConfig.VcsProjectConfig)({
+          resolveKind: (input) => Effect.succeed(input.requestedKind ?? "auto"),
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(VcsProcess.VcsProcess)({
+          run: (input) =>
+            normalizeGitArgs(input.args).join(" ") === DETECT_COMMAND
+              ? Effect.succeed(detectOutput)
+              : Effect.fail(
+                  new VcsProcessExitError({
+                    operation: input.operation,
+                    command: "git",
+                    cwd: input.cwd,
+                    exitCode: 128,
+                    detail: "fatal: bad config line 1 in file .git/config",
+                  }),
+                ),
+        }),
+      ),
+    );
 
   it.effect("reads only a failed work-tree probe as no repository", () =>
     Effect.gen(function* () {

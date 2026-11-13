@@ -3922,6 +3922,8 @@ it.layer(
                 throw new Error(`Unexpected args: ${command} ${joined}`);
               }),
             ),
+            Layer.provideMerge(ProviderInstallationGate.layer),
+            Layer.provideMerge(SqlitePersistence.layerMemory),
           );
           const runtimeServices = yield* Layer.build(
             Layer.mergeAll(

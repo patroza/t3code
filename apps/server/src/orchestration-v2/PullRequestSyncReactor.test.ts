@@ -1830,6 +1830,7 @@ describe("PullRequestSyncReactor", () => {
         failedChecks: [],
         passed: true,
         passedChecks: ["test"],
+        pendingChecks: [],
         remarksThrough: NOW,
         remarkIds: [],
         conflicting: false,

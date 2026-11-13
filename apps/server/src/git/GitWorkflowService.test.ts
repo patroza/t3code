@@ -75,9 +75,9 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
   it.effect("reports a non-Git VCS repository as not a Git repository", () =>
     Effect.gen(function* () {
       const workflow = yield* GitWorkflowService.GitWorkflowService;
-      const isRepository = yield* workflow.isRepository("/jj-repo");
+      const repositoryRoot = yield* workflow.repositoryRoot("/jj-repo");
 
-      assert.equal(isRepository, false);
+      assert.equal(repositoryRoot, null);
     }).pipe(
       Effect.provide(
         layer({

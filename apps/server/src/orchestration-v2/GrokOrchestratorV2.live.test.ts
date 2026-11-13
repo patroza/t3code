@@ -1,3 +1,4 @@
+import * as ProviderInstallationGate from "../provider/ProviderInstallationGate.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as PortScanner from "../preview/PortScanner.ts";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
@@ -142,6 +143,10 @@ const layerLive = RuntimeLayer.layer.pipe(
   Layer.provide(layerBackgroundPolicy),
   Layer.provide(layerPlatformTest),
   Layer.provide(McpProviderSessions.layer),
+  Layer.provide(ModelManifest.layerTest),
+  Layer.provide(ProviderInstallationGate.layer),
+  Layer.provide(layerServerSettings),
+  Layer.provide(SqlitePersistence.layerMemory),
 );
 
 let nextLiveShellMarker = 0;

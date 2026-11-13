@@ -1389,12 +1389,11 @@ describe("pullCurrentBranch", () => {
             args: ["fetch"],
             env: { PATH: `${directory}:${hostPath}` },
             timeoutMs: 1_000,
-            forceKillAfterMs: 100,
           })
           .pipe(Effect.flip, Effect.forkScoped);
         yield* probe.started;
 
-        yield* TestClock.adjust("1 second");
+        yield* TestClock.adjust("2 seconds");
 
         yield* probe.exited;
         assert.equal((yield* Fiber.join(run)).detail, "Git command timed out.");

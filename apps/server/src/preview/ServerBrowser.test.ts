@@ -3607,6 +3607,34 @@ it.effect("reports a desktop tab's load failure from before the server connected
   ).pipe(Effect.provide(layer)),
 );
 
+// Holds the next profile save at its temp-file cleanup, after the rename, until released.
+const gateSaveCleanup = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const cleanupStarted = yield* Deferred.make<void>();
+  const releaseCleanup = yield* Deferred.make<void>();
+  let paused = false;
+  return {
+    cleanupStarted,
+    releaseCleanup,
+    pauseNext: () => {
+      paused = true;
+    },
+    fs: FileSystem.FileSystem.of({
+      ...fs,
+      remove: (target, options) =>
+        fs.remove(target, options).pipe(
+          Effect.tap(() => {
+            if (!paused) return Effect.void;
+            paused = false;
+            return Deferred.succeed(cleanupStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseCleanup)),
+            );
+          }),
+        ),
+    }),
+  };
+});
+
 it.effect("a report interrupted while an earlier save holds the lock is still saved", () =>
   Effect.gen(function* () {
     const gate = yield* gateSaveCleanup;

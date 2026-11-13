@@ -249,6 +249,8 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
     Layer.provide(Layer.merge(PortScanner.layerTest, SqlitePersistence.layerMemory)),
     Layer.provideMerge(layerBase),
     Layer.provide(Layer.mock(PortScanner.PortDiscovery)({ trackAgent: () => () => undefined })),
+    Layer.provideMerge(ProviderInstallationGate.layer),
+    Layer.provideMerge(SqlitePersistence.layerMemory),
   );
 
   it.effect.each(["replacement", "removal", "creation failure"] as const)(

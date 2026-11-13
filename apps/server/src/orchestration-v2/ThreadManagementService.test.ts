@@ -1857,6 +1857,7 @@ it.effect(
         ]),
       );
       const layerTest = ThreadManagementService.layer.pipe(
+        Layer.provide(cloneTrackerLayer),
         Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
         Layer.provide(
           Layer.mock(Orchestrator.OrchestratorV2)({

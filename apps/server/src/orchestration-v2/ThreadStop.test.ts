@@ -2048,6 +2048,9 @@ it.effect.each([
         }),
       );
       const layerLive = ThreadManagementService.layer.pipe(
+        Layer.provide(
+          Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({ get: () => Effect.succeed(null) }),
+        ),
         Layer.provide(layerSessionsStartingFollowUpFirst),
         Layer.provideMerge(
           Layer.mergeAll(

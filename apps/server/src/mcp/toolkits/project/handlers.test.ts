@@ -804,6 +804,7 @@ it.effect("an agent's clone is not cut off while git is still transferring", () 
                 orElse: () =>
                   Effect.fail(
                     new GitCommandError({
+                      failureKind: "unknown",
                       operation: input.operation,
                       command: "git",
                       cwd: input.cwd,
