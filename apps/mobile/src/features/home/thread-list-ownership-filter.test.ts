@@ -9,7 +9,13 @@ import {
 
 describe("ownership list filter chip", () => {
   it("labels the default as Mine and names a narrowed relation", () => {
-    expect(ownershipFilterChipLabel("mine", "both")).toBe("Mine");
+    expect(ownershipFilterChipLabel("mine", "both")).toBe("Mine + unattributed");
+    expect(ownershipFilterChipLabel("mine-only", "both")).toBe("Only mine");
+    expect(
+      ownershipFilterMenuActions("mine-only", "both")[0]?.subactions?.find(
+        (action) => action.state === "on",
+      )?.title,
+    ).toBe("Only mine");
     expect(ownershipFilterChipLabel("theirs", "created")).toBe("Theirs · Created");
     expect(ownershipFilterIsCustom("mine", "both")).toBe(false);
     expect(ownershipFilterIsCustom("any", "both")).toBe(true);
@@ -19,7 +25,9 @@ describe("ownership list filter chip", () => {
   it("offers ownership, and includes only for Mine or Theirs", () => {
     const mine = ownershipFilterMenuActions("mine", "created");
     expect(mine.map((action) => action.title)).toEqual(["Ownership", "Mine includes"]);
-    expect(mine[0]?.subactions?.find((action) => action.state === "on")?.title).toBe("Mine");
+    expect(mine[0]?.subactions?.find((action) => action.state === "on")?.title).toBe(
+      "Mine + unattributed",
+    );
     expect(mine[1]?.subactions?.find((action) => action.state === "on")?.title).toBe("Created");
 
     const anyone = ownershipFilterMenuActions("any", "both");

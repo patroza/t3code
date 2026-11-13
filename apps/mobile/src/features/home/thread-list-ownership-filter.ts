@@ -20,7 +20,10 @@ export function ownershipFilterChipLabel(
   filter: OwnershipFilter,
   relation: OwnershipRelation,
 ): string {
-  if ((filter === "mine" || filter === "theirs") && relation !== DEFAULT_OWNERSHIP_RELATION) {
+  if (
+    (filter === "mine" || filter === "mine-only" || filter === "theirs") &&
+    relation !== DEFAULT_OWNERSHIP_RELATION
+  ) {
     return `${OWNERSHIP_FILTER_LABELS[filter]} · ${OWNERSHIP_RELATION_LABELS[relation]}`;
   }
   return OWNERSHIP_FILTER_LABELS[filter];
@@ -50,10 +53,10 @@ export function ownershipFilterMenuActions(
       })),
     },
   ];
-  if (filter === "mine" || filter === "theirs") {
+  if (filter === "mine" || filter === "mine-only" || filter === "theirs") {
     actions.push({
       id: "relation",
-      title: filter === "mine" ? "Mine includes" : "Theirs includes",
+      title: filter !== "theirs" ? "Mine includes" : "Theirs includes",
       subactions: OWNERSHIP_RELATIONS.map((value) => ({
         id: `relation:${value}`,
         title: OWNERSHIP_RELATION_LABELS[value],

@@ -75,10 +75,12 @@ export function SidebarThreadFilters(props: {
             ))}
           </SelectPopup>
         </Select>
-        {props.ownershipFilter === "mine" || props.ownershipFilter === "theirs" ? (
+        {props.ownershipFilter === "mine" ||
+        props.ownershipFilter === "mine-only" ||
+        props.ownershipFilter === "theirs" ? (
           <>
             <span className="text-xs text-muted-foreground">
-              {props.ownershipFilter === "mine" ? "Mine includes" : "Theirs includes"}
+              {props.ownershipFilter !== "theirs" ? "Mine includes" : "Theirs includes"}
             </span>
             <Select
               value={props.ownershipRelation}
@@ -88,7 +90,9 @@ export function SidebarThreadFilters(props: {
             >
               <SelectTrigger
                 size="xs"
-                aria-label={props.ownershipFilter === "mine" ? "Mine includes" : "Theirs includes"}
+                aria-label={
+                  props.ownershipFilter !== "theirs" ? "Mine includes" : "Theirs includes"
+                }
               >
                 <SelectValue>
                   {SIDEBAR_OWNERSHIP_RELATION_LABELS[props.ownershipRelation]}

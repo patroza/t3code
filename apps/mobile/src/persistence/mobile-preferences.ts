@@ -158,7 +158,7 @@ export interface Preferences {
    * Home/sidebar ownership filter (anyone / mine / theirs). Device-local so
    * it survives app restarts — without this, Mine/Theirs resets on launch.
    */
-  readonly ownershipFilter?: "any" | "mine" | "theirs";
+  readonly ownershipFilter?: "any" | "mine" | "mine-only" | "theirs";
   /**
    * Sub-filter for mine/theirs: created, participated, or both (default).
    */
@@ -257,7 +257,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     hideSettledOnRecent?: boolean;
     hideSettledOnProjects?: boolean;
     threadGrouping?: "recency" | "project" | "none";
-    ownershipFilter?: "any" | "mine" | "theirs";
+    ownershipFilter?: "any" | "mine" | "mine-only" | "theirs";
     ownershipRelation?: "created" | "participated" | "both";
     planModeEnabled?: boolean;
     toolCallVisibility?: ToolCallVisibility;
@@ -414,6 +414,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   if (
     parsed.ownershipFilter === "any" ||
     parsed.ownershipFilter === "mine" ||
+    parsed.ownershipFilter === "mine-only" ||
     parsed.ownershipFilter === "theirs"
   ) {
     preferences.ownershipFilter = parsed.ownershipFilter;
@@ -473,10 +474,13 @@ function sanitizePreferences(parsed: Preferences): Preferences {
 }
 
 /** Resolve stored ownership filter; default Mine when never chosen. */
-export function resolveOwnershipFilter(preferences: Preferences): "any" | "mine" | "theirs" {
+export function resolveOwnershipFilter(
+  preferences: Preferences,
+): "any" | "mine" | "mine-only" | "theirs" {
   if (
     preferences.ownershipFilter === "any" ||
     preferences.ownershipFilter === "mine" ||
+    preferences.ownershipFilter === "mine-only" ||
     preferences.ownershipFilter === "theirs"
   ) {
     return preferences.ownershipFilter;

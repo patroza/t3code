@@ -109,10 +109,11 @@ describe("buildHomeListFilterMenuItems", () => {
     const ownershipMenu = submenu(items, "Ownership");
     expect(ownershipMenu.items).toMatchObject([
       { title: "Anyone", selected: false },
-      { title: "Mine", selected: true },
+      { title: "Mine + unattributed", selected: true },
+      { title: "Only mine", selected: false },
       { title: "Theirs", selected: false },
     ]);
-    const theirs = ownershipMenu.items[2];
+    const theirs = ownershipMenu.items.find((item) => item.title === "Theirs");
     if (!theirs || !("onPress" in theirs)) throw new Error("Expected ownership action");
     theirs.onPress();
     expect(onOwnershipFilterChange).toHaveBeenCalledWith("theirs");

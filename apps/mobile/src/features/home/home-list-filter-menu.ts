@@ -95,10 +95,14 @@ export function buildHomeListFilterMenuItems(props: {
     },
   ];
 
-  if (props.ownershipFilter === "mine" || props.ownershipFilter === "theirs") {
+  if (
+    props.ownershipFilter === "mine" ||
+    props.ownershipFilter === "mine-only" ||
+    props.ownershipFilter === "theirs"
+  ) {
     items.push({
       id: "ownership-relation",
-      title: props.ownershipFilter === "mine" ? "Mine includes" : "Theirs includes",
+      title: props.ownershipFilter !== "theirs" ? "Mine includes" : "Theirs includes",
       items: OWNERSHIP_RELATIONS.map((value) => ({
         id: `ownership-relation:${value}`,
         title: OWNERSHIP_RELATION_LABELS[value],
