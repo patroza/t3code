@@ -962,6 +962,7 @@ it.effect.each([
     Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
     Layer.provide(
       Layer.mock(Orchestrator.OrchestratorV2)({
+        getThreadShell: () => Effect.succeed({ projectId } as OrchestrationV2ThreadShell),
         getThreadRecords: () =>
           Effect.succeed({
             thread: {

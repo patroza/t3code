@@ -46,6 +46,7 @@ describe("migration namespaces", () => {
         [86, "QueuedTurnInputIndex"],
         [87, "ProjectionProjectsCustomTitle"],
         [88, "TurnItemTypeStatusIndex"],
+        [89, "ShellThreadReadIndexes"],
       ],
     );
     assert.deepStrictEqual(forkMigrationManifest, [
