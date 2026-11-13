@@ -352,7 +352,7 @@ describe("ssh tunnel scripts", () => {
     );
     assert.include(
       SshTunnel.buildRemoteStopScript(stateKey),
-      'if [ "$REMOTE_MANAGED" != "external" ] && [ -n "$REMOTE_PID" ]',
+      'if [ "$REMOTE_MANAGED" != "external" ] && managed_server_running "$REMOTE_PID"',
     );
     assert.include(
       SshTunnel.buildRemoteStopScript(stateKey),
@@ -383,7 +383,7 @@ describe("ssh tunnel scripts", () => {
     );
     assert.isBelow(
       launch.indexOf('DEFAULT_RUNTIME_INFO="$(resolve_default_runtime_port'),
-      launch.indexOf('elif [ -n "$REMOTE_PID" ]'),
+      launch.indexOf('elif [ -n "$REMOTE_PORT" ] && managed_server_running "$REMOTE_PID"'),
     );
   });
   it.each([
