@@ -1238,49 +1238,49 @@ importers:
         specifier: ^1.160.2
         version: 1.170.46(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@tiptap/core':
-        specifier: ^3.31.3
+        specifier: 3.33.0
         version: 3.33.0(patch_hash=1a1a49596570a96b23ad42805f3d7517a255b02bd62d7f3d46ab73a1dc931966)(@tiptap/pm@3.33.0)
       '@tiptap/extension-blockquote':
-        specifier: ^3.31.3
+        specifier: 3.33.0
         version: 3.33.0(@tiptap/core@3.33.0(patch_hash=1a1a49596570a96b23ad42805f3d7517a255b02bd62d7f3d46ab73a1dc931966)(@tiptap/pm@3.33.0))(@tiptap/pm@3.33.0)
       '@tiptap/extension-bold':
-        specifier: ^3.31.3
+        specifier: 3.33.0
         version: 3.33.0(@tiptap/core@3.33.0(patch_hash=1a1a49596570a96b23ad42805f3d7517a255b02bd62d7f3d46ab73a1dc931966)(@tiptap/pm@3.33.0))
       '@tiptap/extension-code':
-        specifier: ^3.31.3
+        specifier: 3.33.0
         version: 3.33.0(@tiptap/core@3.33.0(patch_hash=1a1a49596570a96b23ad42805f3d7517a255b02bd62d7f3d46ab73a1dc931966)(@tiptap/pm@3.33.0))
       '@tiptap/extension-code-block':
-        specifier: ^3.31.3
+        specifier: 3.33.0
         version: 3.33.0(@tiptap/core@3.33.0(patch_hash=1a1a49596570a96b23ad42805f3d7517a255b02bd62d7f3d46ab73a1dc931966)(@tiptap/pm@3.33.0))(@tiptap/pm@3.33.0)
       '@tiptap/extension-heading':
-        specifier: ^3.31.3
+        specifier: 3.33.0
         version: 3.33.0(@tiptap/core@3.33.0(patch_hash=1a1a49596570a96b23ad42805f3d7517a255b02bd62d7f3d46ab73a1dc931966)(@tiptap/pm@3.33.0))
       '@tiptap/extension-horizontal-rule':
-        specifier: ^3.31.3
+        specifier: 3.33.0
         version: 3.33.0(@tiptap/core@3.33.0(patch_hash=1a1a49596570a96b23ad42805f3d7517a255b02bd62d7f3d46ab73a1dc931966)(@tiptap/pm@3.33.0))(@tiptap/pm@3.33.0)
       '@tiptap/extension-italic':
-        specifier: ^3.31.3
+        specifier: 3.33.0
         version: 3.33.0(@tiptap/core@3.33.0(patch_hash=1a1a49596570a96b23ad42805f3d7517a255b02bd62d7f3d46ab73a1dc931966)(@tiptap/pm@3.33.0))
       '@tiptap/extension-list':
-        specifier: ^3.31.3
+        specifier: 3.33.0
         version: 3.33.0(@tiptap/core@3.33.0(patch_hash=1a1a49596570a96b23ad42805f3d7517a255b02bd62d7f3d46ab73a1dc931966)(@tiptap/pm@3.33.0))(@tiptap/pm@3.33.0)
       '@tiptap/extension-strike':
-        specifier: ^3.31.3
+        specifier: 3.33.0
         version: 3.33.0(@tiptap/core@3.33.0(patch_hash=1a1a49596570a96b23ad42805f3d7517a255b02bd62d7f3d46ab73a1dc931966)(@tiptap/pm@3.33.0))
       '@tiptap/extension-task-item':
-        specifier: ^3.31.3
+        specifier: 3.33.0
         version: 3.33.0(@tiptap/extension-list@3.33.0(@tiptap/core@3.33.0(patch_hash=1a1a49596570a96b23ad42805f3d7517a255b02bd62d7f3d46ab73a1dc931966)(@tiptap/pm@3.33.0))(@tiptap/pm@3.33.0))
       '@tiptap/extension-task-list':
-        specifier: ^3.31.3
+        specifier: 3.33.0
         version: 3.33.0(@tiptap/extension-list@3.33.0(@tiptap/core@3.33.0(patch_hash=1a1a49596570a96b23ad42805f3d7517a255b02bd62d7f3d46ab73a1dc931966)(@tiptap/pm@3.33.0))(@tiptap/pm@3.33.0))
       '@tiptap/pm':
-        specifier: ^3.31.3
+        specifier: 3.33.0
         version: 3.33.0
       '@tiptap/react':
-        specifier: ^3.31.3
+        specifier: 3.33.0
         version: 3.33.0(@floating-ui/dom@1.8.0)(@tiptap/core@3.33.0(patch_hash=1a1a49596570a96b23ad42805f3d7517a255b02bd62d7f3d46ab73a1dc931966)(@tiptap/pm@3.33.0))(@tiptap/pm@3.33.0)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@tiptap/starter-kit':
-        specifier: ^3.31.3
+        specifier: 3.33.0
         version: 3.33.0
       canvas-confetti:
         specifier: 1.9.4
