@@ -1,8 +1,14 @@
 import * as NodeSqlite from "node:sqlite";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Temporary identity-map fixture.
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Temporary identity-map fixture.
+import * as NodePath from "node:path";
 
 import { assert, it, vi } from "@effect/vitest";
 import {
   EnvironmentId,
+  PersonId,
   EventId,
   CommandId,
   CheckpointId,
@@ -40,6 +46,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
+import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Statement from "effect/sql/Statement";
 import { projectThreadAwarenessV2 } from "@t3tools/shared/agentAwareness";
@@ -272,6 +279,109 @@ const addRolledBackRecoveryCandidate = Effect.fn("addRolledBackRecoveryCandidate
 
   return threadId;
 });
+
+it.effect("resolves stored external actors consistently in thread and shell reads", () =>
+  Effect.gen(function* () {
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "projection-attribution-"));
+    const path = NodePath.join(directory, "people.json");
+    NodeFS.writeFileSync(
+      path,
+      JSON.stringify({
+        people: {
+          "147977704522645504": { username: "mapped-discord" },
+          "mapped-teams": {
+            username: "mapped-teams",
+            teams: { aadObjectId: "11111111-1111-4111-8111-111111111111" },
+          },
+        },
+      }),
+    );
+    // @effect-diagnostics-next-line processEnvInEffect:off -- Exercise the actual environment-map reader.
+    const previousPath = process.env.T3_IDENTITY_MAP_PATH;
+    // @effect-diagnostics-next-line processEnvInEffect:off -- Exercise the actual environment-map reader.
+    process.env.T3_IDENTITY_MAP_PATH = path;
+    try {
+      yield* Effect.gen(function* () {
+        const store = yield* ProjectionStore.ProjectionStoreV2;
+        const sql = yield* SqlClient.SqlClient;
+        for (const [suffix, source, expected] of [
+          [
+            "discord",
+            { channel: "discord", actor: { platformId: "147977704522645504" } },
+            "mapped-discord",
+          ],
+          [
+            "teams",
+            { channel: "teams", actor: { platformId: "11111111-1111-4111-8111-111111111111" } },
+            "mapped-teams",
+          ],
+          [
+            "unknown",
+            { channel: "discord", actor: { platformId: "999999999999999999" } },
+            undefined,
+          ],
+          [
+            "explicit",
+            {
+              channel: "discord",
+              actor: { platformId: "147977704522645504" },
+              personId: "recorded-person",
+              username: "recorded-person",
+            },
+            "recorded-person",
+          ],
+        ] as const) {
+          const threadId = yield* addRolledBackRecoveryCandidate(`stored-${suffix}`);
+          yield* sql`UPDATE orchestration_v2_projection_threads
+            SET payload_json = json_set(payload_json, '$.originSource', json(${JSON.stringify(source)}))
+            WHERE thread_id = ${threadId}`;
+          const projection = yield* store.getThreadProjection(threadId);
+          const direct = yield* store.getThread(threadId);
+          const shell = yield* store.getThreadShell(threadId);
+          const listed = (yield* store.getShellSnapshot()).threads.find(
+            (thread) => thread.id === threadId,
+          );
+          for (const thread of [projection.thread, direct, shell, listed]) {
+            assert.equal(
+              thread?.originSource?.personId,
+              expected === undefined ? undefined : PersonId.make(expected),
+            );
+            assert.equal(
+              thread?.participantSummaries?.[0]?.personId,
+              expected === undefined ? undefined : PersonId.make(expected),
+            );
+          }
+          // Enrichment is a view, not a rewrite of historical ownership evidence.
+          const rows = yield* sql<{
+            readonly origin: string;
+          }>`SELECT json_extract(payload_json, '$.originSource') AS origin
+            FROM orchestration_v2_projection_threads WHERE thread_id = ${threadId}`;
+          assert.deepEqual(JSON.parse(rows[0]!.origin), source);
+        }
+        NodeFS.writeFileSync(
+          path,
+          JSON.stringify({
+            people: {
+              "147977704522645504": { username: "mapped-discord" },
+              "999999999999999999": { username: "newly-mapped" },
+            },
+          }),
+        );
+        yield* TestClock.adjust("61 seconds");
+        const reloaded = yield* store.getThreadShell(
+          ThreadId.make("thread:stored-unknown:rolled-back"),
+        );
+        assert.equal(reloaded?.originSource?.personId, PersonId.make("newly-mapped"));
+      }).pipe(Effect.provide(layerTest));
+    } finally {
+      // @effect-diagnostics-next-line processEnvInEffect:off -- Restore the fixture environment.
+      if (previousPath === undefined) delete process.env.T3_IDENTITY_MAP_PATH;
+      // @effect-diagnostics-next-line processEnvInEffect:off -- Restore the fixture environment.
+      else process.env.T3_IDENTITY_MAP_PATH = previousPath;
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  }),
+);
 
 it.effect("routes full projection reads to readers and retains uncommitted writer state", () =>
   Effect.gen(function* () {

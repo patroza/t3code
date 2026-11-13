@@ -104,6 +104,11 @@ export function readIdentityMapPeopleFromEnv(): ReadonlyArray<IdentityMapPerson>
   return loadPeopleFromEnv();
 }
 
+/** A reloadable last-good map for projection attribution, using the same TTL as identity claims. */
+export function makeIdentityMapPeopleReader(): Effect.Effect<ReadonlyArray<IdentityMapPerson>> {
+  return makeFileSource().current.pipe(Effect.map((snapshot) => snapshot.people));
+}
+
 const isIdentityMapParseError = Schema.is(IdentityMapParseError);
 
 function identityMapPathLabel(): string {

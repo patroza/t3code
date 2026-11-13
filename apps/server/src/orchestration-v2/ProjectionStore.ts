@@ -1,3 +1,5 @@
+import { applyStoredThreadAttribution } from "../identity/applyThreadAttribution.ts";
+import { makeIdentityMapPeopleReader } from "../identity/IdentityService.ts";
 import type { ProjectThreadAwarenessV2Input } from "@t3tools/shared/agentAwareness";
 import { pendingGuestMessageCount } from "@t3tools/contracts";
 import { applyThreadPullRequestLinkUpdate } from "../sourceControl/threadPullRequests.ts";
@@ -1984,6 +1986,28 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
 
+    // Reuse the identity map's TTL/last-good reload policy instead of reading a file per row.
+    const attributionPeople = makeIdentityMapPeopleReader();
+    const attributedThread = (
+      thread: OrchestrationV2AppThread,
+      people: Effect.Success<typeof attributionPeople>,
+    ): OrchestrationV2AppThread => ({
+      ...thread,
+      ...applyStoredThreadAttribution(
+        {
+          originSource: thread.originSource,
+          participantSummaries: thread.participantSummaries,
+          createdAt: DateTime.formatIso(thread.createdAt),
+        },
+        people,
+      ),
+    });
+    // Row decoding is already covered by the enclosing projection read span.
+    const decodeAttributedThreadPayload = Effect.fnUntraced(function* (payload: string) {
+      const people = yield* attributionPeople;
+      return attributedThread(yield* decodeThreadPayload(payload), people);
+    });
+
     const inlineWorkOutput = sql`item.type = 'dynamic_tool' AND (
       item.payload_json LIKE '%htmlRender%' OR item.payload_json LIKE ${`%${MCP_APP_OUTPUT_KEY}%`}
       OR item.payload_json LIKE '%"viewedImagePath"%'
@@ -3394,7 +3418,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           contextHandoffRows,
           contextTransferRows,
         ] = yield* Effect.all([
-          decodeThreadPayload(threadRow.payload_json),
+          decodeAttributedThreadPayload(threadRow.payload_json),
           (fields !== undefined && !fields.includes("runs")) ||
           (window === undefined &&
             (matchesNothing(filter?.runIds) ||
@@ -5012,7 +5036,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         if (rows[0] === undefined) {
           return yield* new ProjectionStoreThreadNotFoundError({ threadId });
         }
-        return yield* decodeThreadPayload(rows[0].payload_json);
+        return yield* decodeAttributedThreadPayload(rows[0].payload_json);
       },
       (effect, threadId) =>
         effect.pipe(
@@ -6869,7 +6893,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           providerThreadsByThreadId,
           pendingTurnItemsByThreadId,
         } = input;
-        const thread = yield* decodeThreadPayload(row.payload_json);
+        const thread = yield* decodeAttributedThreadPayload(row.payload_json);
         const latestUserAuthoredMessageAt =
           row.latest_user_authored_message_at === null
             ? null
