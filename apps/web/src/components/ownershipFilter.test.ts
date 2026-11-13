@@ -84,15 +84,44 @@ describe("buildOwnershipPredicate", () => {
     expect(theirs(thread(them))).toBe(true);
   });
 
-  it("keeps fully unattributed threads under mine", () => {
-    // Local work carries no person at all; hiding it under the default filter
-    // would hide local threads for anyone not using identity claims.
+  it("excludes unattributed threads from a claimed person’s mine filter", () => {
+    // Shared and imported work must not become mine just because attribution is absent.
     const predicate = buildOwnershipPredicate({
       claimPersonIdByEnvironment: claims,
       mode: "mine",
       relation: "both",
     });
 
-    expect(predicate(thread(null))).toBe(true);
+    expect(predicate(thread(null))).toBe(false);
+    expect(
+      buildOwnershipPredicate({
+        claimPersonIdByEnvironment: claims,
+        mode: "any",
+        relation: "both",
+      })(thread(null)),
+    ).toBe(true);
+  });
+  it("uses each environment's claim without assigning unknown shared threads to me", () => {
+    const remote = EnvironmentId.make("environment-remote");
+    const mine = buildOwnershipPredicate({
+      claimPersonIdByEnvironment: new Map([
+        [environmentId, me],
+        [remote, "remote-me"],
+      ]),
+      mode: "mine",
+      relation: "both",
+    });
+    expect(
+      [
+        thread(null),
+        thread(them),
+        thread(me),
+        { ...thread("remote-me"), environmentId: remote },
+        { ...thread(me), environmentId: remote },
+        { ...thread(null), environmentId: remote },
+      ]
+        .filter(mine)
+        .map((entry) => entry.originSource?.personId),
+    ).toEqual([me, "remote-me"]);
   });
 });

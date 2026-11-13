@@ -98,7 +98,7 @@ export function isOwnershipRelation(value: unknown): value is OwnershipRelation 
   return value === "created" || value === "participated" || value === "both";
 }
 
-/** Mine/both includes started, joined, and unattributed legacy threads; narrower Mine roles exclude unattributed rows.
+/** Mine includes positive creator or participant matches. Unclaimed environments retain legacy local work.
  * Theirs includes attributed threads without the claim person, refined by the other participants' roles.
  */
 export function threadMatchesMine(input: {
@@ -120,12 +120,13 @@ export function threadMatchesMine(input: {
   }
 
   const fullyUnattributed = origin.length === 0 && participants.size === 0;
-  // Unattributed stays under Mine only for the default "both" relation.
+  const claimId = input.claimPersonId?.trim().toLowerCase() ?? "";
+  // Unknown attribution is not evidence of ownership by a claimed person.
+  // Keep legacy local work visible only where no identity has been claimed.
   if (fullyUnattributed) {
-    return input.mode === "mine" && relation === "both";
+    return claimId.length === 0 && input.mode === "mine" && relation === "both";
   }
 
-  const claimId = input.claimPersonId?.trim().toLowerCase() ?? "";
   const fullPeople = new Set<string>(participants);
   if (origin.length > 0) fullPeople.add(origin);
 
