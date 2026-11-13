@@ -659,8 +659,33 @@ describe("orchestrator MCP toolkit", () => {
               take: Effect.never,
             },
           );
-          const waitForContinuationOffers = (count: number) =>
+          // A pending delivery may be offered again after another orchestration event.
+          // Count distinct deliveries for this parent run, rather than enqueue attempts.
+          const scopedContinuationOffers = (
+            offers: ReadonlyArray<ProviderContinuationRequests.ProviderContinuationRequest>,
+            parentRunId: RunId | undefined,
+          ) => {
+            if (parentRunId === undefined) return offers;
+            const deliveries = new Map<
+              string,
+              ProviderContinuationRequests.ProviderContinuationRequest
+            >();
+            for (const offer of offers) {
+              const completion = offer.delegatedCompletion;
+              if (completion?.parentRunId !== parentRunId) continue;
+              const key = JSON.stringify([
+                offer.threadId,
+                completion.parentRunId,
+                completion.generation,
+                completion.messageId,
+              ]);
+              deliveries.set(key, offer);
+            }
+            return [...deliveries.values()];
+          };
+          const waitForContinuationOffers = (count: number, parentRunId?: RunId) =>
             SubscriptionRef.changes(continuationOffers).pipe(
+              Stream.map((offers) => scopedContinuationOffers(offers, parentRunId)),
               Stream.filter((current) => current.length >= count),
               Stream.runHead,
               Effect.flatMap(
@@ -671,10 +696,10 @@ describe("orchestrator MCP toolkit", () => {
               ),
             );
           // Callers await the corresponding persisted workflow state before checking its offers.
-          const expectContinuationOfferCount = (count: number) =>
+          const expectContinuationOfferCount = (count: number, parentRunId?: RunId) =>
             SubscriptionRef.get(continuationOffers).pipe(
               Effect.map((offers) => {
-                expect(offers).toHaveLength(count);
+                expect(scopedContinuationOffers(offers, parentRunId)).toHaveLength(count);
               }),
               Effect.asVoid,
             );
@@ -1042,7 +1067,7 @@ describe("orchestrator MCP toolkit", () => {
               expect.arrayContaining(coalescedTaskIds),
             );
             expect(coalescedCohort?.delivery?.taskIds).toHaveLength(2);
-            const coalescedOffers = yield* waitForContinuationOffers(1);
+            const coalescedOffers = yield* waitForContinuationOffers(1, parentRun.id);
             expect(coalescedOffers).toEqual(
               expect.arrayContaining([
                 expect.objectContaining({
@@ -2073,8 +2098,31 @@ describe("orchestrator MCP toolkit", () => {
 
             expect(childFollowup.taskId).toBeDefined();
             expect(activeChildFollowup.taskId).toBeDefined();
-            yield* waitForContinuationOffers(2);
-            yield* expectContinuationOfferCount(2);
+            // No consumer dispatches the reserved delivery in this probe. Both
+            // follow-ups therefore join its cohort and reoffer the same identity.
+            const followupCohort = yield* waitForProjection(
+              orchestrator,
+              parentThreadId,
+              (projection) =>
+                [childFollowup.taskId, activeChildFollowup.taskId].every(
+                  (taskId) =>
+                    projection.subagents.find((task) => task.id === taskId)?.completionDelivery
+                      ?.state === "claimed",
+                ),
+            );
+            const followupDelivery = followupCohort.runs.find((run) => run.id === parentRun.id)
+              ?.delegatedCompletion?.delivery;
+            expect(followupDelivery?.taskIds).toEqual(
+              expect.arrayContaining([childFollowup.taskId, activeChildFollowup.taskId]),
+            );
+            expect(followupDelivery?.taskIds).toHaveLength(2);
+            const followupOffers = yield* waitForContinuationOffers(1, parentRun.id);
+            expect(followupOffers).toHaveLength(1);
+            expect(followupOffers[0]?.delegatedCompletion).toEqual({
+              parentRunId: parentRun.id,
+              generation: followupDelivery?.generation,
+              messageId: followupDelivery?.messageId,
+            });
             yield* invoke("task_status", { taskId: childFollowup.taskId });
             yield* invoke("task_status", { taskId: activeChildFollowup.taskId });
             yield* SubscriptionRef.set(continuationOffers, []);
@@ -3545,7 +3593,7 @@ describe("orchestrator MCP toolkit", () => {
               generation: firstLateDelivery.generation + 1,
               taskIds: [lateTask.id],
             });
-            const lateOffers = yield* waitForContinuationOffers(2);
+            const lateOffers = yield* waitForContinuationOffers(2, lateParentRun.id);
             expect(lateOffers).toHaveLength(2);
             expect(
               successorReserved.runs.filter((run) => {
@@ -3654,7 +3702,7 @@ describe("orchestrator MCP toolkit", () => {
               generation: successorDelivery.generation,
               taskIds: successorDelivery.taskIds,
             });
-            yield* expectContinuationOfferCount(2);
+            yield* expectContinuationOfferCount(2, lateParentRun.id);
             yield* Deferred.succeed(successorGate, undefined);
             const batchedReserved = yield* waitForProjection(
               orchestrator,
@@ -3686,8 +3734,8 @@ describe("orchestrator MCP toolkit", () => {
                     ?.state,
               ),
             ).toEqual(["delivered", "claimed", "claimed"]);
-            yield* waitForContinuationOffers(3);
-            yield* expectContinuationOfferCount(3);
+            yield* waitForContinuationOffers(3, lateParentRun.id);
+            yield* expectContinuationOfferCount(3, lateParentRun.id);
             expect(
               batchedReserved.runs.filter((run) => {
                 const message = batchedReserved.messages.find(
@@ -3734,7 +3782,7 @@ describe("orchestrator MCP toolkit", () => {
                     ?.state,
               ),
             ).toEqual(["delivered", "delivered", "delivered", "delivered"]);
-            yield* expectContinuationOfferCount(3);
+            yield* expectContinuationOfferCount(3, lateParentRun.id);
 
             const removeParentGate = yield* Deferred.make<void>();
             parentTerminalGates.set(lateParentThreadId, removeParentGate);
