@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vite-plus/test";
+import { expect, it, onTestFinished, vi } from "vite-plus/test";
 
 import { START_PICK_CHANNEL } from "./GuestProtocol.ts";
 import "./PickPreload.ts";
@@ -54,10 +54,26 @@ it("switches tools from the keyboard after a toolbar button is clicked", () => {
 
 it("keeps the tool while typing a tool key in the comment", () => {
   const shadowRoot = startAnnotation();
+  const target = document.body.appendChild(document.createElement("div"));
+  target.textContent = "Annotation target";
+  const originalHitTest = Object.getOwnPropertyDescriptor(document, "elementsFromPoint");
+  Object.defineProperty(document, "elementsFromPoint", {
+    configurable: true,
+    value: () => [target],
+  });
+  onTestFinished(() => {
+    target.remove();
+    if (originalHitTest) Object.defineProperty(document, "elementsFromPoint", originalHitTest);
+    else Reflect.deleteProperty(document, "elementsFromPoint");
+  });
+  target.dispatchEvent(
+    new MouseEvent("pointerdown", { button: 0, bubbles: true, clientX: 10, clientY: 10 }),
+  );
   const comment = shadowRoot.querySelector("textarea");
   if (!comment) throw new Error("comment textarea not found");
 
   comment.focus();
+  expect(shadowRoot.activeElement).toBe(comment);
   comment.dispatchEvent(new KeyboardEvent("keydown", { key: "r", bubbles: true, composed: true }));
 
   expect(document.documentElement.getAttribute("data-t3code-annotation-tool")).toBe("select");
