@@ -99,8 +99,8 @@ jobs:
           green="$(
             gh api --method GET \
               "repos/${GITHUB_REPOSITORY}/actions/workflows/fork-ci.yml/runs" \
-              -f branch="${RELEASE_REF}" -f event=push -f status=success -f per_page=30 \
-              --jq "[.workflow_runs[] | select(.head_sha == \"${RELEASE_SHA}\")] | length"
+              -f branch="${RELEASE_REF}" -f event=push -f head_sha="${RELEASE_SHA}" -f per_page=30 \
+              --jq "[.workflow_runs[] | select(.head_sha == \"${RELEASE_SHA}\" and .head_branch == \"${RELEASE_REF}\" and .event == \"push\" and .status == \"completed\" and .conclusion == \"success\")] | length"
           )"
           if [[ "${green}" -lt 1 ]]; then
             echo "error: no successful Fork CI push run for ${RELEASE_SHA} on ${RELEASE_REF}" >&2
@@ -119,8 +119,8 @@ jobs:
           previous_sha="$(
             gh api --method GET \
               "repos/${GITHUB_REPOSITORY}/actions/workflows/fork-release.yml/runs" \
-              -f branch="${RELEASE_REF}" -f status=success -f per_page=30 \
-              --jq "[.workflow_runs[] | select(.head_sha != \"${RELEASE_SHA}\")] | first | .head_sha // \"\""
+              -f branch="${RELEASE_REF}" -f per_page=100 \
+              --jq "[.workflow_runs[] | select(.status == \"completed\" and .conclusion == \"success\" and .head_branch == \"${RELEASE_REF}\" and .head_sha != \"${RELEASE_SHA}\")] | first | .head_sha // \"\""
           )"
           echo "sha=${previous_sha}" >>"${GITHUB_OUTPUT}"
 
