@@ -189,7 +189,7 @@ function makeTestInstance(input: MakeInstanceInput) {
     label: Effect.succeed("Windows"),
     configResolve: input.configResolve ?? Effect.succeed(input.config ?? baseConfig),
     ...(input.onReadyPid
-      ? { onReady: input.onReadyPid }
+      ? { onReady: (_url, pid) => input.onReadyPid!(pid) }
       : input.onReady
         ? { onReady: () => input.onReady! }
         : {}),

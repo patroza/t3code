@@ -119,7 +119,7 @@ describe("getLocalEnvironmentBootstraps", () => {
               id: DesktopBackendManager.BackendInstanceId("primary"),
               currentConfig: Effect.succeedSome({
                 ...readyWslConfig,
-                reuseExisting,
+                ...(reuseExisting ? { reuseExisting: { pid: 123 } } : {}),
                 bootstrapDelivery,
                 bootstrap: {
                   ...readyWslConfig.bootstrap,

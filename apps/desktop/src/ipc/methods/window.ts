@@ -175,7 +175,7 @@ export const getLocalEnvironmentBootstraps = DesktopIpc.makeSyncIpcMethod({
         httpBaseUrl: httpBaseUrl.href,
         wsBaseUrl: toWebSocketBaseUrl(httpBaseUrl),
         nativeServerBrowser:
-          config.value.reuseExisting !== true &&
+          config.value.reuseExisting === undefined &&
           config.value.bootstrapDelivery === "fd3" &&
           bootstrap.desktopBrowserFd !== undefined &&
           bootstrap.desktopBrowserControlFd !== undefined,
