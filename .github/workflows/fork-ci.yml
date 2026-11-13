@@ -224,7 +224,8 @@ jobs:
     name: Mobile Native Static Analysis
     # Static checks do not require ARM; avoid the constrained Apple Silicon runner pool.
     runs-on: macos-15-intel
-    timeout-minutes: 10
+    # Cold dependency/tool installation can consume ten minutes before lint begins.
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
