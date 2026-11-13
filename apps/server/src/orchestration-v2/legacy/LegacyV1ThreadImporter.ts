@@ -374,7 +374,7 @@ function queuedMessageEvents(
   ordinal: number,
 ): ReadonlyArray<OrchestrationV2DomainEvent> {
   const runId = RunId.make(`${IMPORT_EVENT_PREFIX}:queued-run:${row.message_id}`);
-  const requestedAt = dateTime(row.queued_at);
+  const requestedAt = dateTimeOr(row.queued_at, thread.createdAt);
   const modelSelection =
     row.model_selection_json === null
       ? thread.modelSelection

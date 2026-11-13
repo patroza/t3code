@@ -3085,6 +3085,10 @@ export const make = Effect.gen(function* () {
       return { pr: null };
     }
 
+    const defaultBranch = yield* gitCore.resolvePrimaryRemoteName(input.cwd).pipe(
+      Effect.flatMap((remoteName) => gitCore.resolveDefaultBranchName(input.cwd, remoteName)),
+      Effect.orElseSucceed(() => null),
+    );
     const upstreamRef = yield* readConfigValueNullable(input.cwd, `branch.${input.refName}.merge`);
     const hostingProvider = yield* resolveHostingProvider(input.cwd, input.refName);
     const latestPr = yield* resolveBranchHeadContext(input.cwd, {
@@ -3092,7 +3096,7 @@ export const make = Effect.gen(function* () {
       upstreamRef,
     }).pipe(
       Effect.flatMap((headContext) =>
-        findLatestPrForHeadContext(input.cwd, headContext, details.defaultBranch),
+        findLatestPrForHeadContext(input.cwd, headContext, defaultBranch),
       ),
       Effect.orElseSucceed(() => null),
     );
