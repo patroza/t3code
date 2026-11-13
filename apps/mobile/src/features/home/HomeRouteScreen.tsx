@@ -21,10 +21,7 @@ import { use, useCallback, useMemo, useState } from "react";
 import { Platform } from "react-native";
 
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import {
-  pickableProjectGroups,
-  resolveScratchProjectScopeKey,
-} from "@t3tools/client-runtime/state/project-grouping";
+import { pickableProjectGroups } from "@t3tools/client-runtime/state/project-grouping";
 
 import { useProjects } from "../../state/entities";
 import { steadyNavigationThreadShellsAtom } from "../../state/threads";
@@ -48,7 +45,7 @@ import {
   useAtomValueWhileVisible,
   useHomeRouteVisible,
 } from "./home-route-visibility";
-import { buildHomeProjectScopes } from "./homeThreadList";
+import { buildHomeProjectScopes, resolveHomeProjectFilterScope } from "./homeThreadList";
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useThreadListActions } from "./useThreadListActions";
 import { useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
@@ -175,6 +172,15 @@ export function HomeRouteScreen() {
       threads,
     ],
   );
+  const projectScopes = useMemo(
+    () =>
+      buildHomeProjectScopes({
+        projects,
+        selectedEnvironmentIds,
+        projectGroupingMode: listOptions.projectGroupingMode,
+      }),
+    [listOptions.projectGroupingMode, projects, selectedEnvironmentIds],
+  );
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   // Recency/none default to hide settled; default/project grouping defaults to show.
@@ -196,31 +202,17 @@ export function HomeRouteScreen() {
     },
     [listOptions.threadGrouping, savePreferences],
   );
-  const projectScopeKey = listOptions.selectedProjectKey;
-  const resolvedProjectKey = resolveScratchProjectScopeKey(projectScopeKey, projects, {
-    sidebarProjectGroupingMode: listOptions.projectGroupingMode,
-    sidebarProjectGroupingOverrides: {},
-  });
 
   const projectFilterOptions = useMemo(
     () =>
-      pickableProjectGroups(
-        buildHomeProjectScopes({
-          projects,
-          selectedEnvironmentIds,
-          projectGroupingMode: listOptions.projectGroupingMode,
-        }),
-      ).map((scope) => ({
+      pickableProjectGroups(projectScopes).map((scope) => ({
         key: scope.key,
         label: scope.title,
       })),
-    [listOptions.projectGroupingMode, projects, selectedEnvironmentIds],
+    [projectScopes],
   );
-  const selectedProjectKey = projectFilterOptions.some(
-    (project) => project.key === resolvedProjectKey,
-  )
-    ? resolvedProjectKey
-    : null;
+  const selectedProjectKey =
+    resolveHomeProjectFilterScope(projectScopes, projects, listOptions)?.key ?? null;
   const filterCustomized =
     selectedEnvironmentIds.length > 0 ||
     listOptions.ownershipFilter !== DEFAULT_OWNERSHIP_FILTER ||
