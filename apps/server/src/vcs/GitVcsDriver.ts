@@ -646,22 +646,31 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         timeoutMs: 5_000,
         maxOutputBytes: 4_096,
       }).pipe(
-        Effect.filterOrFail(
-          (result) =>
-            result.exitCode === 0 ||
-            result.stderr.includes("safe.bareRepository") ||
-            hasStderrLine(result.stderr, [
-              "fatal: not a git repository",
-              "fatal: cannot use bare repository",
-            ]),
-          (result) =>
-            new VcsProcessExitError({
+        Effect.flatMap((result) =>
+          Effect.gen(function* () {
+            if (
+              result.exitCode === 0 ||
+              result.stderr.includes("safe.bareRepository") ||
+              hasStderrLine(result.stderr, [
+                "fatal: not a git repository",
+                "fatal: cannot use bare repository",
+              ]) ||
+              (result.stdout.trim() === "false" &&
+                hasStderrLine(result.stderr, [
+                  "fatal: this operation must be run in a work tree",
+                ])) ||
+              !(yield* fileSystem.exists(cwd).pipe(Effect.orElseSucceed(() => true)))
+            ) {
+              return result;
+            }
+            return yield* new VcsProcessExitError({
               operation: WORK_TREE_PROBE_OPERATION,
               command: "git rev-parse",
               cwd,
               exitCode: result.exitCode,
               detail: result.stderr.trim() || "git rev-parse failed",
-            }),
+            });
+          }),
         ),
       ),
     ).pipe(Effect.catchIf(isMissingExecutable, () => Effect.succeed(null)));

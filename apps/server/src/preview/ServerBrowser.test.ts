@@ -3155,7 +3155,7 @@ it.live.each([
       const png = Buffer.from(result.screenshot.data, "base64");
       expect(result.screenshot).toMatchObject(size);
       expect({ width: png.readUInt32BE(16), height: png.readUInt32BE(20) }).toEqual(size);
-      expect(captures).toEqual([{ format: "png" }]);
+      expect(captures).toEqual([{ format: "jpeg", quality: 70 }, { format: "png" }]);
       expect(shrinks).toEqual(
         desktop && page.width * page.zoom * display <= 1280 ? [] : [{ ...size, contextId: 7 }],
       );

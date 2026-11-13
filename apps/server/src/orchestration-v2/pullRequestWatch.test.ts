@@ -137,7 +137,9 @@ describe("evaluatePullRequestWatch", () => {
       { kind: "checks-failed", failed: [check("test", "failure")] },
     ]);
     const clean = evaluatePullRequestWatch(failed.next, detail(), noRemarks);
-    assert.deepEqual(clean.changes, []);
+    assert.deepEqual(clean.changes, [
+      { kind: "checks-settled", checks: [check("lint", "success")] },
+    ]);
     assert.deepEqual(evaluatePullRequestWatch(clean.next, broken, noRemarks).changes, [
       { kind: "checks-failed", failed: [check("lint", "failure")] },
       { kind: "conflicting" },
@@ -266,7 +268,9 @@ describe("evaluatePullRequestWatch", () => {
       },
       noRemarks,
     );
-    assert.deepEqual(settled.changes, [{ kind: "checks-passed", count: 2, required: false }]);
+    assert.deepEqual(settled.changes, [
+      { kind: "checks-settled", checks: [check("bot", "success")] },
+    ]);
     assert.deepEqual(
       evaluatePullRequestWatch(
         settled.next,

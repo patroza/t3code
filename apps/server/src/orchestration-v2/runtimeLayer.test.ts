@@ -3889,6 +3889,11 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         headSha: "abc",
         passed: true,
       });
+      assert.deepEqual(
+        (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch
+          ?.pendingWakeMessageIds,
+        [MessageId.make("pr-watch-cancel-checks")],
+      );
       yield* wake("pr-watch-cancel-comment", "new comment", {
         ...started,
         headSha: "abc",
@@ -4805,7 +4810,9 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         e2e = "success";
         yield* TestClock.adjust("10 minutes");
         yield* reactor.sweep;
-        assert.deepEqual(yield* summaries, []);
+        // Finishing the previously pending advisory checks is fork per-check news even
+        // though another check failed; clearing the pending answer does not erase it.
+        assert.deepEqual(yield* summaries, ["#17: checks finished; #18: checks finished"]);
         assert.isFalse(yield* checksPending);
 
         // A push clears the answer while a read with news is in flight. That read's answer is the
@@ -4834,7 +4841,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         gate = null;
         yield* Deferred.succeed(release, undefined);
         yield* Fiber.join(inFlight);
-        assert.lengthOf(yield* summaries, 1);
+        assert.lengthOf(yield* summaries, 2);
         assert.isUndefined(yield* checksPending);
 
         // The next sweep reads it again though nothing on the host changed.
@@ -4966,7 +4973,8 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       yield* watch(true, "again");
       assert.strictEqual(
         (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch?.checksPending,
-        approval ? undefined : true,
+        // The advisory check added above is pending for both approval variants.
+        true,
       );
       yield* restarted.sweep;
       yield* worker.drain();
@@ -10069,7 +10077,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         "#11: checks finished",
         "#11: new comments",
       ]);
-    }),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("reports how long an ended watch was quiet", () =>
@@ -10168,103 +10176,9 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
-  it.effect("wakes once for a state it reported, across a restart and a new watch", () =>
-    Effect.gen(function* () {
-      const orchestrator = yield* Orchestrator.OrchestratorV2;
-      const threadId = ThreadId.make("runtime-pull-request-watch-told");
-      const projectId = ProjectId.make("pr-watch-told-project");
-      yield* seedProject({
-        projectId,
-        title: "Watch told",
-        workspaceRoot: "/workspace/watch-told",
-        defaultModelSelection: null,
-        createdAt: "2026-10-01T00:00:00.000Z",
-      });
-      yield* orchestrator.dispatch({
-        type: "thread.create",
-        createdBy: "user",
-        creationSource: "web",
-        commandId: CommandId.make("pr-watch-told-create"),
-        threadId,
-        projectId,
-        title: "Watch told",
-        modelSelection,
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        branch: null,
-        worktreePath: null,
-      });
-      const watch = (on: boolean, id: string) =>
-        orchestrator.dispatch({
-          type: "thread.pull-request.watch",
-          commandId: CommandId.make(`pr-watch-told-${id}`),
-          threadId,
-          host: "github.com",
-          repository: "pingdotgg/t3code",
-          number: 12,
-          watching: on,
-          link: { url: "https://github.com/pingdotgg/t3code/pull/12", source: "agent" },
-        });
-      yield* watch(true, "start");
-
-      let headSha = "ad70160aaa";
-      const host = Layer.mergeAll(
-        NodeServices.layer,
-        NodeCrypto.layer,
-        Layer.mock(PullRequestService.PullRequestService)({
-          detail: () =>
-            Effect.sync(() => ({
-              ...watchedPullRequestDetail({
-                projectId,
-                number: 12,
-                at: "2026-10-02T12:00:00.000Z",
-              }),
-              headSha,
-              checks: ["lint", "test"].map((name) => ({
-                name,
-                status: "success" as const,
-                description: null,
-                url: null,
-                required: true,
-              })),
-            })),
-          activity: () =>
-            Effect.succeed({
-              comments: [],
-              commentCount: 0,
-              commentsTruncated: false,
-              reviewThreads: [],
-              commits: [],
-            }),
-        }),
-      );
-      const summaries = Effect.map(
-        orchestrator.getThreadRecords(threadId, ["messages"]),
-        ({ messages }) => messages.flatMap((message) => message.notification?.summary ?? []),
-      );
-
-      const reactor = yield* PullRequestWatchReactor.make.pipe(Effect.provide(host));
-      yield* reactor.sweep;
-      yield* TestClock.adjust("10 minutes");
-      yield* reactor.sweep;
-      assert.deepEqual(yield* summaries, ["#12: checks passed"]);
-
-      const restarted = yield* PullRequestWatchReactor.make.pipe(Effect.provide(host));
-      yield* restarted.sweep;
-      assert.deepEqual(yield* summaries, ["#12: checks passed"]);
-
-      yield* watch(false, "stop");
-      yield* watch(true, "again");
-      yield* restarted.sweep;
-      assert.deepEqual(yield* summaries, ["#12: checks passed"]);
-
-      headSha = "bbbbbbbbbb";
-      yield* TestClock.adjust("10 minutes");
-      yield* restarted.sweep;
-      assert.deepEqual(yield* summaries, ["#12: checks passed", "#12: checks passed"]);
-      yield* watch(false, "end");
-    }),
-  );
+  // Restart/new-watch deduplication is covered above by
+  // "baselines a new watch across restarts and reports later changes". That fixture
+  // also verifies baseline suppression; do not repeat its IDs in this shared layer.
 });
 
 it.layer(layerSharedApplicationDataPlaneTest)("pending provider interruption", (it) => {

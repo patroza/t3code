@@ -26,6 +26,7 @@ import {
   v2PullRequestThread,
 } from "../../../orchestration-v2/testkit/pullRequestFixtures.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
+import * as PullRequestService from "../../../pullRequest/PullRequestService.ts";
 import * as PullRequestWatchService from "../../../pullRequest/PullRequestWatchService.ts";
 import * as PullRequestReviewGuideService from "../../../pullRequest/PullRequestReviewGuideService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -167,8 +168,20 @@ const makeHarness = Effect.fn("makePullRequestsToolkitHarness")(function* (
       yield* Ref.update(commands, (recorded) => [...recorded, command]);
       return { sequence: 1, storedEvents: [] };
     });
-  const layerDependencies = Layer.mergeAll(
-    Layer.mock(PullRequestWatchService.PullRequestWatchService)({}),
+  const serviceDependencies = Layer.mergeAll(
+    Layer.mock(PullRequestService.PullRequestService)({
+      summary: (input) =>
+        Effect.succeed({
+          ...input,
+          provider: SourceControlProviderKind.make("github"),
+          title: "Pull request",
+          url: `https://github.com/${input.repository}/pull/${input.number}`,
+          state: "open",
+          headBranch: "feature",
+          baseBranch: "main",
+          updatedAt: "2026-08-20T00:00:00.000Z",
+        }),
+    }),
     Layer.mock(ProjectService.ProjectService)({
       getShell: () => Effect.succeed(Option.fromNullishOr(project)),
       listShells: () => Effect.succeed(options.projects ?? (project ? [project] : [])),
@@ -198,6 +211,9 @@ const makeHarness = Effect.fn("makePullRequestsToolkitHarness")(function* (
     }),
     Layer.succeed(SecureRandom.SecureRandom, testCrypto),
     McpToolAccessTestkit.liveThreadsLayer,
+  );
+  const layerDependencies = PullRequestWatchService.layer.pipe(
+    Layer.provideMerge(serviceDependencies),
   );
   const toolkit = yield* PullRequestsToolkit.pipe(
     Effect.provide(

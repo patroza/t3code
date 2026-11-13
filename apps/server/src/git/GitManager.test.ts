@@ -251,6 +251,7 @@ function initRepo(
     for (const entry of [".git", "README.md"]) {
       yield* fs.copy(NodePath.join(templates.repo, entry), NodePath.join(cwd, entry));
     }
+    yield* fs.makeDirectory(NodePath.join(cwd, ".git", "hooks"), { recursive: true });
   });
 }
 

@@ -3956,7 +3956,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
       for (const { entry } of entries) {
         const { includesRemarks: _, ...mutation } = entry;
-        yield* dispatchThreadMutation(mutation, events, effects);
+        // Every link contributing to this wake owns the queued message. Preserve its ID
+        // while recording progress so stopping any of those watches can cancel it.
+        yield* dispatchThreadMutation(
+          { ...mutation, ...(wake === undefined ? {} : { wake }) },
+          events,
+          effects,
+        );
       }
       if (wake === undefined || outdated[0]) return;
       const { sections, ...wakeMessage } = wake;

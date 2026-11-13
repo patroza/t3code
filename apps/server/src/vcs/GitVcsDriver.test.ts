@@ -1496,7 +1496,7 @@ it.effect("GitVcsDriver fails repository probes when git cannot read the reposit
   }).pipe(Effect.scoped, Effect.provide(layerGitContract)),
 );
 
-it.effect("GitVcsDriver reports no repository for a deleted cwd or a bare repository", () =>
+it.effect("GitVcsDriver rejects deleted paths and preserves bare repository sources", () =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -1506,10 +1506,13 @@ it.effect("GitVcsDriver reports no repository for a deleted cwd or a bare reposi
     yield* runGit(bare, ["init", "--bare"]);
     const driver = yield* GitVcsDriver.makeVcsDriverShape();
 
-    for (const cwd of [path.join(root, "deleted"), bare]) {
-      assert.equal(yield* driver.isInsideWorkTree(cwd), false, cwd);
-      assert.equal(yield* driver.detectRepository(cwd), null, cwd);
-    }
+    const deleted = path.join(root, "deleted");
+    assert.equal(yield* driver.isInsideWorkTree(deleted), false);
+    assert.equal(yield* driver.detectRepository(deleted), null);
+    assert.equal(yield* driver.isInsideWorkTree(bare), false);
+    const repository = yield* driver.detectRepository(bare);
+    assert.equal(repository?.bare, true);
+    assert.equal(repository?.rootPath, bare);
   }).pipe(Effect.scoped, Effect.provide(layerGitContract)),
 );
 

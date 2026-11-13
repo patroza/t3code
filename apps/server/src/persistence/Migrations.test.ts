@@ -174,10 +174,10 @@ describe("runMigrations", () => {
       yield* runMigrations({ toMigrationInclusive: 72 });
       yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id BETWEEN 70 AND 72`;
 
-      assert.deepStrictEqual(
-        yield* runMigrations(),
-        migrationManifest.filter(([id]) => id >= 70),
-      );
+      assert.deepStrictEqual(yield* runMigrations(), [
+        ...migrationManifest.filter(([id]) => id >= 70),
+        ...forkMigrationManifest,
+      ]);
       assert.deepStrictEqual(yield* history, migrationManifest);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

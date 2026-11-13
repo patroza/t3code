@@ -15,7 +15,7 @@ layer("055_OrchestrationV2", (it) => {
     Effect.sync(() => {
       assert.deepStrictEqual(
         migrationEntries.map(([id]) => id),
-        Array.from({ length: 80 }, (_, index) => index + 1),
+        Array.from({ length: 88 }, (_, index) => index + 1),
       );
     }),
   );
@@ -54,6 +54,14 @@ layer("055_OrchestrationV2", (it) => {
         [78, "DropOrchestrationEventCorrelationIndex"],
         [79, "DelegatedRecoveryIndexes"],
         [80, "ScheduledTaskThreadMode"],
+        [81, "ProjectionMessageSearchText"],
+        [82, "TurnItemConversationIndex"],
+        [83, "CommandReadIndexes"],
+        [84, "LastExecutedRunIndex"],
+        [85, "TurnItemCounts"],
+        [86, "QueuedTurnInputIndex"],
+        [87, "ProjectionProjectsCustomTitle"],
+        [88, "TurnItemTypeStatusIndex"],
         [1, "ProjectionQueuedMessages"],
         [2, "SessionIdentityClaims"],
         [3, "ProjectionThreadSourceAttribution"],
@@ -103,6 +111,14 @@ layer("055_OrchestrationV2", (it) => {
         { migration_id: 78, name: "DropOrchestrationEventCorrelationIndex" },
         { migration_id: 79, name: "DelegatedRecoveryIndexes" },
         { migration_id: 80, name: "ScheduledTaskThreadMode" },
+        { migration_id: 81, name: "ProjectionMessageSearchText" },
+        { migration_id: 82, name: "TurnItemConversationIndex" },
+        { migration_id: 83, name: "CommandReadIndexes" },
+        { migration_id: 84, name: "LastExecutedRunIndex" },
+        { migration_id: 85, name: "TurnItemCounts" },
+        { migration_id: 86, name: "QueuedTurnInputIndex" },
+        { migration_id: 87, name: "ProjectionProjectsCustomTitle" },
+        { migration_id: 88, name: "TurnItemTypeStatusIndex" },
       ]);
 
       const tables = yield* sql<{ readonly name: string }>`

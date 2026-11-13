@@ -197,7 +197,7 @@ describe("VcsDriverRegistry", () => {
       ),
     );
 
-  it.effect("reads only a failed work-tree probe as no repository", () =>
+  it.effect("surfaces corrupt configuration in work-tree and fallback probes", () =>
     Effect.gen(function* () {
       const probeFailure = yield* VcsDriverRegistry.VcsDriverRegistry.pipe(
         Effect.flatMap((registry) => registry.detect({ cwd: "/repo" })),
@@ -208,8 +208,9 @@ describe("VcsDriverRegistry", () => {
             stderr: "fatal: bad config line 1 in file .git/config",
           }),
         ),
+        Effect.flip,
       );
-      assert.equal(probeFailure, null);
+      assert.equal(probeFailure._tag, "VcsProcessExitError");
 
       // A newline in the root path makes detection ask for it again, and main surfaced that failure.
       const fallbackFailure = yield* VcsDriverRegistry.VcsDriverRegistry.pipe(
