@@ -87,7 +87,7 @@ describe("threadMatchesMine", () => {
     ).toBe(true);
   });
 
-  it("does not assign unattributed threads to a claimed person", () => {
+  it("treats unattributed threads as mine (legacy / channel-only / identity off)", () => {
     // No origin or participants — old threads, { channel: "desktop" } only, etc.
     expect(
       threadMatchesMine({
@@ -96,7 +96,7 @@ describe("threadMatchesMine", () => {
         participantPersonIds: [],
         mode: "mine",
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       threadMatchesMine({
         claimPersonId: "patroza",
@@ -266,7 +266,7 @@ describe("threadMatchesMine", () => {
       }),
     ).toBe(true);
 
-    // Unattributed rows cannot match a claimed person in either relation
+    // Fully unattributed only under mine + both
     expect(
       threadMatchesMine({
         claimPersonId: "patroza",
@@ -284,7 +284,7 @@ describe("threadMatchesMine", () => {
         mode: "mine",
         relation: "both",
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 });
 
