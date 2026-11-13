@@ -607,6 +607,7 @@ it.effect("preserves failed legacy materialization when reading checkpoint conte
     cause: new Error("checkpoint import failed"),
   });
   const layerTest = threadManagementLegacyLayer.pipe(
+    Layer.provide(Layer.mock(ThreadWorktreeRestore)({})),
     Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
     Layer.provide(
       Layer.mergeAll(
