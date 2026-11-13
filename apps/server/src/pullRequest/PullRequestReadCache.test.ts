@@ -1,4 +1,3 @@
-// @effect-diagnostics-next-line nodeBuiltinImport:off - WeakRef collection needs a native JavaScript job boundary, not Effect scheduler or clock advancement.
 import * as NodeV8 from "node:v8";
 import { assert, it } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
