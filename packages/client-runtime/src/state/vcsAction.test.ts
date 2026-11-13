@@ -577,6 +577,7 @@ describe("vcsActionState", () => {
                     action,
                     phase: "push",
                     message: "push failed after creating the branch",
+                    failureKind: "unknown",
                   }),
                 ),
       } as unknown as WsRpcProtocolClient;

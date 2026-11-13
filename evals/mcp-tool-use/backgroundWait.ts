@@ -40,6 +40,7 @@ import * as PeerLinks from "../../apps/server/src/peer/PeerLinks.ts";
 import * as RemoteDelegation from "../../apps/server/src/peer/RemoteDelegation.ts";
 import * as SqlitePersistence from "../../apps/server/src/persistence/Sqlite.ts";
 import * as ServerSettings from "../../apps/server/src/serverSettings.ts";
+import * as ProjectCloneTracker from "../../apps/server/src/project/ProjectCloneTracker.ts";
 
 const threadId = ThreadId.make("mcp-tool-use-eval");
 const providerThreadId = ProviderThreadId.make("provider-thread:mcp-tool-use-eval");
@@ -83,6 +84,7 @@ export const makeBackgroundWait = Effect.fn("evaluateMcpToolUse.makeBackgroundWa
           Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
             get: () => Effect.succeedSome(runtime),
           }),
+          Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({ get: () => Effect.succeed(null) }),
           ServerSettings.layerTest(),
           CommandReceiptStore.layer.pipe(Layer.provide(SqlitePersistence.layerMemory)),
         ),
