@@ -72,7 +72,7 @@ describe("formatTurnResponseStatsLine", () => {
       },
     });
 
-    expect(line).toBe("_`claude-opus-4-6` · effort max · 1m_");
+    expect(line).toBe("_`claude-opus-4-6` · effort max · 1m 0s_");
   });
 
   it("prefers matching turn usage over older activities", () => {
