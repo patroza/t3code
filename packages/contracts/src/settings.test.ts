@@ -815,19 +815,24 @@ describe("ServerSettings thread settlement", () => {
 });
 
 describe("ClientSettings pull request merge methods", () => {
-  it("defaults to no project overrides and accepts supported methods", () => {
+  it("defaults to no project overrides", () => {
     expect(decodeClientSettings({}).pullRequestMergeMethodOverrides).toEqual({});
-    expect(
-      decodeClientSettingsPatch({
-        pullRequestMergeMethodOverrides: { project: "squash" },
-      }).pullRequestMergeMethodOverrides,
-    ).toEqual({ project: "squash" });
   });
+
+  it.each(["merge", "squash", "rebase", "fast-forward"])(
+    "accepts the %s merge method",
+    (method) => {
+      expect(
+        decodeClientSettingsPatch({ pullRequestMergeMethodOverrides: { project: method } })
+          .pullRequestMergeMethodOverrides,
+      ).toEqual({ project: method });
+    },
+  );
 
   it("rejects unsupported project merge methods", () => {
     expect(() =>
       decodeClientSettingsPatch({
-        pullRequestMergeMethodOverrides: { project: "fast-forward" },
+        pullRequestMergeMethodOverrides: { project: "unsupported" },
       }),
     ).toThrow();
   });
