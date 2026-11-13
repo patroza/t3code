@@ -578,7 +578,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
         : backendExposure.httpBaseUrl,
       captureOutput: true,
       preflightFailure: Option.none(),
-      ...(existingBackend ? { reuseExisting: true } : {}),
+      ...(existingBackend ? { reuseExisting: { pid: existingBackend.pid } } : {}),
     } satisfies DesktopBackendManager.DesktopBackendStartConfig;
   },
 );

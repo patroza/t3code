@@ -127,6 +127,7 @@ interface MakeInstanceInput {
   readonly httpClientLayer?: Layer.Layer<HttpClient.HttpClient>;
   readonly backendOutputLog?: Partial<DesktopObservability.DesktopBackendOutputLogShape>;
   readonly onReady?: Effect.Effect<void>;
+  readonly onReadyPid?: (pid: number) => Effect.Effect<void>;
   readonly onShutdown?: Effect.Effect<void>;
   readonly onStateDirOwned?: Effect.Effect<void>;
   readonly onStartupFailure?: (
@@ -187,7 +188,11 @@ function makeTestInstance(input: MakeInstanceInput) {
     id: DesktopBackendManager.PRIMARY_INSTANCE_ID,
     label: Effect.succeed("Windows"),
     configResolve: input.configResolve ?? Effect.succeed(input.config ?? baseConfig),
-    ...(input.onReady ? { onReady: () => input.onReady! } : {}),
+    ...(input.onReadyPid
+      ? { onReady: input.onReadyPid }
+      : input.onReady
+        ? { onReady: () => input.onReady! }
+        : {}),
     ...(input.onShutdown ? { onShutdown: () => input.onShutdown! } : {}),
     ...(input.onStateDirOwned ? { onStateDirOwned: () => input.onStateDirOwned! } : {}),
     ...(input.onPreflightFailed ? { onPreflightFailed: input.onPreflightFailed } : {}),
@@ -855,7 +860,7 @@ describe("DesktopBackendManager", () => {
     Effect.scoped(
       Effect.gen(function* () {
         let spawnCount = 0;
-        const ready = yield* Deferred.make<void>();
+        const ready = yield* Deferred.make<number>();
         const spawnerLayer = Layer.succeed(
           ChildProcessSpawner.ChildProcessSpawner,
           ChildProcessSpawner.make(() => {
@@ -864,13 +869,13 @@ describe("DesktopBackendManager", () => {
           }),
         );
         const instance = yield* makeTestInstance({
-          config: { ...baseConfig, reuseExisting: true },
+          config: { ...baseConfig, reuseExisting: { pid: 4815 } },
           spawnerLayer,
-          onReady: Deferred.succeed(ready, undefined).pipe(Effect.asVoid),
+          onReadyPid: (pid) => Deferred.succeed(ready, pid).pipe(Effect.asVoid),
         });
 
         yield* instance.start;
-        yield* Deferred.await(ready);
+        assert.equal(yield* Deferred.await(ready), 4815);
         assert.equal(spawnCount, 0);
         assert.equal((yield* instance.snapshot).ready, true);
 

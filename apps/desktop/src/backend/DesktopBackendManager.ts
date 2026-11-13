@@ -83,7 +83,7 @@ export interface DesktopBackendStartConfig extends BackendProcessContext {
   readonly captureOutput: boolean;
   readonly preflightFailure: Option.Option<PreflightFailure>;
   /** Connect to this already-running backend without owning or terminating its process. */
-  readonly reuseExisting?: boolean;
+  readonly reuseExisting?: { readonly pid: number };
   // Present for a WSL run after the configured/default distro has been
   // resolved to the concrete distro passed to wsl.exe.
 
@@ -421,6 +421,7 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
 ): Effect.fn.Return<BackendProcessExit, BackendProcessError, BackendProcessRunRequirements> {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   if (options.reuseExisting) {
+    const existingPid = options.reuseExisting.pid;
     yield* waitForHttpReady({
       executablePath: options.executablePath,
       entryPath: options.entryPath,
@@ -430,7 +431,7 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
     }).pipe(
       Effect.matchEffect({
         onFailure: (error) => options.onReadinessFailure?.(error) ?? Effect.void,
-        onSuccess: () => options.onReady?.() ?? Effect.void,
+        onSuccess: () => options.onReady?.(existingPid) ?? Effect.void,
       }),
     );
 

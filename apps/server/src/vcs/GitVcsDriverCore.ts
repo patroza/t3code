@@ -2597,7 +2597,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         if (Option.isSome(inProgress)) {
           const { operation } = inProgress.value;
           return yield* new GitCommandError({
-            failureKind: "unknown",
             operation: "GitVcsDriver.commit",
             failureKind: "unknown",
             command: "git commit",
@@ -3589,7 +3588,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         command: "git ls-files",
         cwd,
         detail: remembered.detail,
-        failureKind: "unknown",
       });
     }
     // Empty status can mean untracked files are hidden; retain the full scan.
@@ -3646,7 +3644,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         command: "git diff --numstat",
         cwd,
         detail: "Could not read Changes totals.",
-        failureKind: "unknown",
         exitCode: result.exitCode,
       });
     }
