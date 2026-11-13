@@ -329,6 +329,10 @@ describe("fork surface existence (anti stack-drop)", () => {
   it("every thread surface filters through the shared ownership predicate", () => {
     // Thread lists apply the shared ownership filter consistently.
     const sidebar = readSrc("components/Sidebar.tsx");
+    const ownershipOptions = readSrc("components/listEnvironmentFilter.ts");
+    expect(ownershipOptions).toContain('"mine-only"');
+    expect(ownershipOptions).toContain('"Only mine"');
+    expect(ownershipOptions).toContain('"Mine + unattributed"');
     for (const source of [sidebar]) {
       expect(source).toContain("useOwnershipFilter()");
       expect(source).toContain("buildOwnershipPredicate({");
