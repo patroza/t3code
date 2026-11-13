@@ -63,6 +63,27 @@ describe("filterPeopleForTypeahead", () => {
 });
 
 describe("threadMatchesMine", () => {
+  it("offers strict Mine without changing the unattributed discovery mode", () => {
+    const unknown = { claimPersonId: "patroza", originPersonId: null, participantPersonIds: [] };
+    expect(threadMatchesMine({ ...unknown, mode: "mine" })).toBe(true);
+    expect(threadMatchesMine({ ...unknown, mode: "mine-only" })).toBe(false);
+    expect(threadMatchesMine({ ...unknown, claimPersonId: null, mode: "mine-only" })).toBe(false);
+    expect(
+      threadMatchesMine({ claimPersonId: "patroza", originPersonId: "patroza", mode: "mine-only" }),
+    ).toBe(true);
+    expect(
+      threadMatchesMine({
+        claimPersonId: "patroza",
+        originPersonId: "andrea",
+        participantPersonIds: ["patroza"],
+        mode: "mine-only",
+      }),
+    ).toBe(true);
+    expect(
+      threadMatchesMine({ claimPersonId: "patroza", originPersonId: "andrea", mode: "mine-only" }),
+    ).toBe(false);
+  });
+
   it("filters mine vs theirs when threads are person-attributed", () => {
     expect(
       threadMatchesMine({

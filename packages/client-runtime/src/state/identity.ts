@@ -105,7 +105,7 @@ export function threadMatchesMine(input: {
   readonly claimPersonId: string | null | undefined;
   readonly originPersonId?: string | null | undefined;
   readonly participantPersonIds?: ReadonlyArray<string> | null | undefined;
-  readonly mode: "mine" | "theirs" | "any";
+  readonly mode: "mine" | "mine-only" | "theirs" | "any";
   /** Defaults to `both` (created or participated). */
   readonly relation?: OwnershipRelation;
 }): boolean {
@@ -131,7 +131,7 @@ export function threadMatchesMine(input: {
 
   // No session claim: attributed work is someone else's.
   if (claimId.length === 0) {
-    if (input.mode === "mine") return false;
+    if (input.mode === "mine" || input.mode === "mine-only") return false;
     return matchesTheirsRelation({ relation, origin, participants });
   }
 
@@ -140,7 +140,7 @@ export function threadMatchesMine(input: {
   const participatedByMe = !createdByMe && fullPeople.has(claimId);
   const involved = createdByMe || participatedByMe;
 
-  if (input.mode === "mine") {
+  if (input.mode === "mine" || input.mode === "mine-only") {
     if (relation === "created") return createdByMe;
     if (relation === "participated") return participatedByMe;
     return involved;

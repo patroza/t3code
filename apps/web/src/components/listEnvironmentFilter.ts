@@ -107,12 +107,13 @@ export const DEFAULT_HIDE_SETTLED_PROJECTS = false;
  */
 export const SIDEBAR_OWNERSHIP_FILTER_STORAGE_KEY = "t3.sidebar.ownershipFilter";
 export const SIDEBAR_OWNERSHIP_RELATION_STORAGE_KEY = "t3.sidebar.ownershipRelation";
-export type SidebarOwnershipFilter = "any" | "mine" | "theirs";
+export type SidebarOwnershipFilter = "any" | "mine" | "mine-only" | "theirs";
 export const DEFAULT_SIDEBAR_OWNERSHIP_FILTER: SidebarOwnershipFilter = "mine";
-export const SIDEBAR_OWNERSHIP_FILTERS = ["any", "mine", "theirs"] as const;
+export const SIDEBAR_OWNERSHIP_FILTERS = ["any", "mine", "mine-only", "theirs"] as const;
 export const SIDEBAR_OWNERSHIP_FILTER_LABELS: Record<SidebarOwnershipFilter, string> = {
   any: "Anyone",
-  mine: "Mine",
+  mine: "Mine + unattributed",
+  "mine-only": "Only mine",
   theirs: "Theirs",
 };
 export const SIDEBAR_OWNERSHIP_RELATIONS = ["both", "created", "participated"] as const;
@@ -125,7 +126,7 @@ export const SIDEBAR_OWNERSHIP_RELATION_LABELS = {
 export function parseSidebarOwnershipFilter(
   raw: string | null | undefined,
 ): SidebarOwnershipFilter {
-  if (raw === "any" || raw === "mine" || raw === "theirs") return raw;
+  if (raw === "any" || raw === "mine" || raw === "mine-only" || raw === "theirs") return raw;
   return DEFAULT_SIDEBAR_OWNERSHIP_FILTER;
 }
 

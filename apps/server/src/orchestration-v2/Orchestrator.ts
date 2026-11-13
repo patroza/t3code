@@ -247,6 +247,9 @@ export class OrchestratorProjectionError extends Schema.TaggedError<Orchestrator
   }
 }
 
+const decodeParticipantSummariesSync = Schema.decodeUnknownSync(
+  Schema.Array(ThreadParticipantSummary),
+);
 const decodeParticipantSummaries = Schema.decodeUnknownEffect(
   Schema.Array(ThreadParticipantSummary),
 );
@@ -599,6 +602,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.tag.set":
     case "thread.visit":
     case "thread.mark-unread":
+    case "thread.attribution.repair":
     case "thread.metadata.update":
     case "thread.pull-request.link":
     case "thread.pull-request.unlink":
@@ -3646,6 +3650,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           | "thread.tag.set"
           | "thread.active.reorder"
           | "thread.mark-unread"
+          | "thread.attribution.repair"
           | "thread.metadata.update"
           | "thread.pull-request.link"
           | "thread.pull-request.unlink"
@@ -4237,6 +4242,26 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               : {}),
           };
         }
+        case "thread.attribution.repair": {
+          if (
+            thread.originSource?.personId != null &&
+            thread.originSource.personId !== command.source.personId
+          ) {
+            return thread;
+          }
+          return {
+            ...thread,
+            originSource: { ...thread.originSource, ...command.source },
+            participantSummaries: decodeParticipantSummariesSync(
+              mergeParticipantSummaries({
+                existing: thread.participantSummaries ?? [],
+                source: command.source,
+                participatedAt: DateTime.formatIso(thread.createdAt),
+                originPersonId: command.source.personId,
+              }),
+            ),
+          };
+        }
         case "thread.metadata.update": {
           const previousRecovery =
             thread.limitRecovery?.runId === command.limitRecovery?.runId &&
@@ -4614,6 +4639,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           return "thread.tags-updated" as const;
         case "thread.mark-unread":
           return "thread.marked-unread" as const;
+        case "thread.attribution.repair":
         case "thread.metadata.update":
         case "thread.title.regeneration.complete":
           return "thread.metadata-updated" as const;
@@ -13924,6 +13950,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.active.reorder":
       case "thread.tag.set":
       case "thread.mark-unread":
+      case "thread.attribution.repair":
       case "thread.metadata.update":
       case "thread.pull-request.link":
       case "thread.pull-request.unlink":

@@ -104,6 +104,7 @@ describe("sidebar ownership filter prefs", () => {
   it("parses stored values and falls back to Mine", () => {
     expect(parseSidebarOwnershipFilter("any")).toBe("any");
     expect(parseSidebarOwnershipFilter("mine")).toBe("mine");
+    expect(parseSidebarOwnershipFilter("mine-only")).toBe("mine-only");
     expect(parseSidebarOwnershipFilter("theirs")).toBe("theirs");
     expect(parseSidebarOwnershipFilter(null)).toBe("mine");
     expect(parseSidebarOwnershipFilter("nope")).toBe("mine");

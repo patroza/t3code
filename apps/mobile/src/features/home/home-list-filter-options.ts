@@ -4,17 +4,19 @@ import type { HomeProjectSortOrder } from "./homeThreadList";
 
 export type { OwnershipRelation } from "@t3tools/client-runtime/state/identity";
 
-export type OwnershipFilter = "any" | "mine" | "theirs";
+export type OwnershipFilter = "any" | "mine" | "mine-only" | "theirs";
 
 export const OWNERSHIP_FILTERS = [
   "any",
   "mine",
+  "mine-only",
   "theirs",
 ] as const satisfies readonly OwnershipFilter[];
 
 export const OWNERSHIP_FILTER_LABELS: Record<OwnershipFilter, string> = {
   any: "Anyone",
-  mine: "Mine",
+  mine: "Mine + unattributed",
+  "mine-only": "Only mine",
   theirs: "Theirs",
 };
 
@@ -31,7 +33,7 @@ export const OWNERSHIP_RELATION_LABELS: Record<OwnershipRelation, string> = {
 };
 
 export function isOwnershipFilter(value: unknown): value is OwnershipFilter {
-  return value === "any" || value === "mine" || value === "theirs";
+  return value === "any" || value === "mine" || value === "mine-only" || value === "theirs";
 }
 
 export const PROJECT_SORT_OPTIONS: ReadonlyArray<{

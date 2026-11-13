@@ -20,6 +20,18 @@ function thread(
 }
 
 describe("buildOwnershipPredicate", () => {
+  it("only mine excludes unknown ownership while Mine + unattributed preserves discovery", () => {
+    const input = { claimPersonIdByEnvironment: claims, relation: "both" as const };
+    const rows = [thread(me), thread(them), thread(null)];
+    expect(rows.filter(buildOwnershipPredicate({ ...input, mode: "mine-only" }))).toEqual([
+      rows[0],
+    ]);
+    expect(rows.filter(buildOwnershipPredicate({ ...input, mode: "mine" }))).toEqual([
+      rows[0],
+      rows[2],
+    ]);
+  });
+
   it("keeps only my threads under mine", () => {
     const predicate = buildOwnershipPredicate({
       claimPersonIdByEnvironment: claims,

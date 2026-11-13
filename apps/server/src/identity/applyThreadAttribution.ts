@@ -1,3 +1,4 @@
+import type { IdentityMapPerson } from "@t3tools/shared/identityMap";
 import type { SourceRef, ThreadParticipantSummary } from "@t3tools/contracts";
 import { IdentityUsername, PersonId } from "@t3tools/contracts";
 import { enrichThreadAttribution } from "@t3tools/shared/sourceAttribution";
@@ -7,25 +8,27 @@ import { readIdentityMapPeopleFromEnv } from "./IdentityService.ts";
 /**
  * Re-resolve Discord/GitHub/Jira actors on stored origin stamps.
  * Threads created while the identity map was empty (or before sourceHint)
- * keep `actor.platformId` without personId; Mine then treats them as ours.
+ * keep `actor.platformId` without personId; resolve it for ownership labels and filters.
  */
-export function applyStoredThreadAttribution(input: {
-  readonly originSource?: SourceRef | null | undefined;
-  readonly participantSummaries?: ReadonlyArray<ThreadParticipantSummary> | null | undefined;
-  readonly createdAt: string;
-  readonly messages?:
-    | ReadonlyArray<{
-        readonly role: string;
-        readonly createdAt: string;
-        readonly text?: string | undefined;
-        readonly source?: SourceRef | undefined;
-      }>
-    | undefined;
-}): {
+export function applyStoredThreadAttribution(
+  input: {
+    readonly originSource?: SourceRef | null | undefined;
+    readonly participantSummaries?: ReadonlyArray<ThreadParticipantSummary> | null | undefined;
+    readonly createdAt: string;
+    readonly messages?:
+      | ReadonlyArray<{
+          readonly role: string;
+          readonly createdAt: string;
+          readonly text?: string | undefined;
+          readonly source?: SourceRef | undefined;
+        }>
+      | undefined;
+  },
+  people: ReadonlyArray<IdentityMapPerson> = readIdentityMapPeopleFromEnv(),
+): {
   readonly originSource?: SourceRef;
   readonly participantSummaries?: ReadonlyArray<ThreadParticipantSummary>;
 } {
-  const people = readIdentityMapPeopleFromEnv();
   if (people.length === 0) {
     return {
       ...(input.originSource !== null && input.originSource !== undefined

@@ -1,5 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import {
+  AuthSessionId,
+  IdentityUsername,
   EnvironmentId,
   OrchestratorMcpEnvironmentTarget,
   OrchestratorMcpFailure,
@@ -17,6 +19,7 @@ import { McpSchema, McpServer, Tool, Toolkit } from "effect/ai";
 
 import { OrchestratorProjectionError } from "../orchestration-v2/Orchestrator.ts";
 import * as PeerForwarding from "../peer/PeerForwarding.ts";
+import * as IdentityService from "../identity/IdentityService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
@@ -242,6 +245,39 @@ const fullAccessLinkedClient: McpInvocationContext.McpInvocationScope = {
   client: { ...fullAccessClient.client!, linked: true },
 };
 const previewOnly = { ...fullAccess, capabilities: new Set(["preview"] as const) };
+
+it.effect("requires an outside MCP client's own identity claim before writes", () =>
+  Effect.gen(function* () {
+    const identity = yield* IdentityService.IdentityService;
+    expect(yield* call("reads", fullAccessClient)).toBe("ran");
+    for (const tool of ["writes", "writes_threads", "starts_threads", "writes_with_capability"]) {
+      expect(yield* call(tool, fullAccessClient)).toBe("capability_denied");
+    }
+    yield* identity.claim(AuthSessionId.make("session"), {
+      username: IdentityUsername.make("andrea"),
+      method: "settings",
+    });
+    expect(yield* call("starts_threads", fullAccessClient)).toBe("full-access/default");
+    // A new authorization session cannot inherit identity from a display label.
+    const rotated = {
+      ...fullAccessClient,
+      client: { ...fullAccessClient.client!, sessionId: "replacement" },
+    };
+    expect(yield* call("starts_threads", rotated)).toBe("capability_denied");
+  }).pipe(
+    Effect.provide(
+      probeServer(
+        Layer.mock(ThreadManagement.ThreadManagementService)({
+          getThreadShell: (threadId) => Effect.succeed(shells.get(threadId) ?? null),
+        }),
+      ).pipe(
+        Layer.provideMerge(
+          IdentityService.layerWithPeople([{ personId: "andrea", username: "andrea" }]),
+        ),
+      ),
+    ),
+  ),
+);
 
 it.effect.each([
   ["reads", ended, {}, "ran"],
