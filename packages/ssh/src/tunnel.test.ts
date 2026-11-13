@@ -321,10 +321,7 @@ describe("ssh tunnel scripts", () => {
       nodeEngineRange: TEST_NODE_ENGINE_RANGE,
     });
 
-    assert.include(
-      launch,
-      '[ -n "$REMOTE_PID" ] && [ -n "$REMOTE_PORT" ] && server_running "$REMOTE_PID"',
-    );
+    assert.include(launch, '[ -n "$REMOTE_PORT" ] && managed_server_running "$REMOTE_PID"');
     assert.include(launch, "RUNNER_CHANGED=1");
     assert.include(launch, "ensure_remote_node_path()");
     assert.include(launch, "if ! ensure_remote_node_path; then");
