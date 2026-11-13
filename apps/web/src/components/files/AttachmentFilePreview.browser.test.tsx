@@ -78,7 +78,7 @@ import { decodeImagePreview } from "./decodeImagePreview";
 import type { BinaryWorkerResult } from "./binaryPreviewProtocol";
 import type { TextPreviewResult } from "./largeTextProtocol";
 import type { ReactElement } from "react";
-import type { OfficeWorkerResult } from "./officePreviewProtocol";
+import { OFFICE_PREVIEW_MAX_COLUMNS, type OfficeWorkerResult } from "./officePreviewProtocol";
 
 // Real worker imports and WASM initialization can exceed waitFor's default second
 // when the full browser project runs concurrently on CI.
@@ -1825,7 +1825,14 @@ it("keeps spreadsheet dates on their calendar day west of UTC", async () => {
     });
     const { createWorkerClient } = await import("./office/worker-rpc");
     const client = createWorkerClient<import("./office/sheet-protocol").SheetMethods>(worker);
-    await client.call("open", { bytes }, { transfer: [bytes] });
+    await client.call(
+      "open",
+      {
+        bytes,
+        view: { hiddenGridlines: [], themeFonts: { major: "Calibri Light", minor: "Calibri" } },
+      },
+      { transfer: [bytes] },
+    );
     const cells = await client.call("cells", {
       sheet: 0,
       range: { top: 0, bottom: 0, left: 0, right: 0 },

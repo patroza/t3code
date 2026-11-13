@@ -256,6 +256,8 @@ it("keeps workspace controls after expanding and collapsing 70 linked pull reque
   await screen.rerender(
     <ThreadDetailsPanel
       {...threadRef}
+      composerDraftTarget={threadRef}
+      workspaceMutationId={null}
       projectId={ProjectId.make("project")}
       usage={{ providerInstanceId: null, providers: [], sources: [], contextWindow: null }}
       worktreePath={null}

@@ -1590,7 +1590,7 @@ export default function GitActionsControl({
             ...(scopedToastData !== undefined ? { data: scopedToastData } : {}),
           }),
         );
-        return;
+        return false;
       }
       toastManager.update(
         resolvedProgressToastId,

@@ -415,7 +415,6 @@ export interface ChatComposerProps {
   activeContextWindow?: ContextWindowSnapshot | null;
   detailLoading?: boolean;
   threadStarted?: boolean;
-  isCompacting: boolean;
   canSteer: boolean;
   bannerItems: readonly ComposerBannerStackItem[];
   resumeCompactionTokens: number | null;

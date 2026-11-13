@@ -409,14 +409,17 @@ function queuedMessageEvents(
         }
       : {}),
   };
-  const events = messageEvents({
-    ...row,
-    role: "user",
-    is_streaming: 0,
-    created_at: row.queued_at,
-    updated_at: row.queued_at,
-    ordinal,
-  });
+  const events = messageEvents(
+    {
+      ...row,
+      role: "user",
+      is_streaming: 0,
+      created_at: row.queued_at,
+      updated_at: row.queued_at,
+      ordinal,
+    },
+    requestedAt,
+  );
   return [
     {
       id: EventId.make(`${IMPORT_EVENT_PREFIX}:queued-run:${row.message_id}`),

@@ -2344,14 +2344,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         statusCacheKey
           ? Cache.get(defaultBranchCache, statusCacheKey).pipe(Effect.orElseSucceed(() => null))
           : resolvePrimaryDefaultBranchName(cwd).pipe(Effect.orElseSucceed(() => null)),
-        statusCacheKey
-          ? Cache.get(primaryRemoteExistsCache, statusCacheKey).pipe(
-              Effect.orElseSucceed(() => false),
-            )
-          : listRemoteNames(cwd).pipe(
-              Effect.map((remoteNames) => remoteNames.length > 0),
-              Effect.orElseSucceed(() => false),
-            ),
+        listRemoteNames(cwd).pipe(
+          Effect.map((remoteNames) => remoteNames.length > 0),
+          Effect.orElseSucceed(() => false),
+        ),
       ],
       { concurrency: "unbounded" },
     );
@@ -2601,6 +2597,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         if (Option.isSome(inProgress)) {
           const { operation } = inProgress.value;
           return yield* new GitCommandError({
+            failureKind: "unknown",
             operation: "GitVcsDriver.commit",
             failureKind: "unknown",
             command: "git commit",
@@ -2671,6 +2668,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             Effect.mapError(
               (cause) =>
                 new GitCommandError({
+                  failureKind: "unknown",
                   operation: "GitVcsDriver.commit.conflictMarkers",
                   command: "git commit",
                   cwd,
@@ -2686,6 +2684,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         }
         if (conflicted.length > 0) {
           return yield* new GitCommandError({
+            failureKind: "unknown",
             operation: "GitVcsDriver.commit",
             command: "git commit",
             cwd,
@@ -3585,6 +3584,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       (yield* Clock.currentTimeMillis) < remembered.retryAt
     ) {
       return yield* new GitCommandError({
+        failureKind: "unknown",
         operation: "GitVcsDriver.readBranchChangeTotals",
         command: "git ls-files",
         cwd,
@@ -3615,6 +3615,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         if (oldestKey !== undefined) untrackedTotalsFailures.delete(oldestKey);
       }
       return yield* new GitCommandError({
+        failureKind: "unknown",
         operation: "GitVcsDriver.readBranchChangeTotals",
         command: "git ls-files",
         cwd,
@@ -3640,6 +3641,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }
     if (result.exitCode !== 0) {
       return yield* new GitCommandError({
+        failureKind: "unknown",
         operation: "GitVcsDriver.readBranchChangeTotals",
         command: "git diff --numstat",
         cwd,
