@@ -3091,7 +3091,9 @@ export const make = Effect.gen(function* () {
       branch: input.refName,
       upstreamRef,
     }).pipe(
-      Effect.flatMap((headContext) => findLatestPrForHeadContext(input.cwd, headContext)),
+      Effect.flatMap((headContext) =>
+        findLatestPrForHeadContext(input.cwd, headContext, details.defaultBranch),
+      ),
       Effect.orElseSucceed(() => null),
     );
     const fallbackPr =
