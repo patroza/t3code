@@ -51,6 +51,11 @@ interface TimelineFollowVisit {
   readonly followEnd: boolean;
 }
 
+interface TimelineFollowPill {
+  readonly visit: TimelineFollowVisit;
+  readonly show: boolean;
+}
+
 /**
  * Scroll bookkeeping that belongs to one visit. Handlers fetch it for the
  * current visit, so a thread switch leaves the old one behind instead of
@@ -58,14 +63,21 @@ interface TimelineFollowVisit {
  */
 function createVisitScrollState(
   visit: TimelineFollowVisit,
-  showScrollToBottom: (visit: TimelineFollowVisit) => void,
+  currentScroll: RefObject<{ readonly visit: TimelineFollowVisit } | null>,
+  setPill: Dispatch<SetStateAction<TimelineFollowPill>>,
 ) {
   return {
     visit,
     // Debounce *showing* the scroll-to-bottom pill so it doesn't flash during
     // thread switches. LegendList fires scroll events with isAtEnd=false while
     // initialScrollAtEnd is settling; hiding is always immediate.
-    showScrollDebouncer: new Debouncer(() => showScrollToBottom(visit), { wait: 150 }),
+    // Construct this callback outside the hook's render scope, which also holds the projection.
+    showScrollDebouncer: new Debouncer(
+      () => {
+        if (currentScroll.current?.visit === visit) setPill({ visit, show: true });
+      },
+      { wait: 150 },
+    ),
     positionedAnchor: null as MessageId | null,
     settledAnchor: null as MessageId | null,
     releaseAnchorScrollHold: null as (() => void) | null,
@@ -196,9 +208,7 @@ export function useTimelineFollow(input: TimelineFollowInput) {
   }
   // Keyed by visit, so a pill decision from the previous thread (a pending
   // debounce) never shows here.
-  const [pill, setPill] = useState<{ readonly visit: TimelineFollowVisit; readonly show: boolean }>(
-    { visit, show: false },
-  );
+  const [pill, setPill] = useState<TimelineFollowPill>({ visit, show: false });
   const showScrollToBottom = pill.visit === visit ? pill.show : !visit.followEnd;
   // Called on every streamed chunk while following; an unchanged pill must
   // bail out instead of re-rendering ChatView.
@@ -242,11 +252,7 @@ export function useTimelineFollow(input: TimelineFollowInput) {
   /** Only from handlers: the bookkeeping of the visit they run in. */
   const visitScroll = () => {
     if (visitScrollRef.current?.visit !== visit) {
-      visitScrollRef.current = createVisitScrollState(visit, (shownVisit) => {
-        // A debounce that outlived its visit must not overwrite the current one's pill.
-        if (visitScrollRef.current?.visit === shownVisit)
-          setPill({ visit: shownVisit, show: true });
-      });
+      visitScrollRef.current = createVisitScrollState(visit, visitScrollRef, setPill);
     }
     return visitScrollRef.current;
   };
