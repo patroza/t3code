@@ -203,7 +203,7 @@ describe("question answer paths", () => {
     Effect.acquireUseRelease(
       Effect.promise(async () => {
         const { execFile } = await vi.importActual<typeof NodeChildProcess>("node:child_process");
-        const worker = vi.spyOn(NodeChildProcess, "execFile");
+        const worker = vi.spyOn(NodeChildProcess, "execFile").mockClear();
         worker.mockImplementationOnce(((
           file: string,
           args: readonly string[],
@@ -246,9 +246,9 @@ describe("question answer paths", () => {
           expect(worker).toHaveBeenCalledTimes(2);
           expect(yield* documents.ensure(path)).toBe(path + ".txt");
           expect(worker).toHaveBeenCalledTimes(2);
-        }).pipe(Effect.provide(layer)),
+        }),
       (worker) => Effect.sync(() => worker.mockRestore()),
-    ),
+    ).pipe(Effect.provide(layer)),
   );
 
   it.effect.each([
@@ -258,7 +258,7 @@ describe("question answer paths", () => {
     ["rtf", String.raw`{\rtf1\ansi\ansicpg99999 Unsupported}`],
   ] as const)("caches unchanged document rejections: %s %s", ([extension, source]) =>
     Effect.acquireUseRelease(
-      Effect.sync(() => vi.spyOn(NodeChildProcess, "execFile")),
+      Effect.sync(() => vi.spyOn(NodeChildProcess, "execFile").mockClear()),
       (worker) =>
         Effect.gen(function* () {
           const config = yield* ServerConfig.ServerConfig;
@@ -271,9 +271,9 @@ describe("question answer paths", () => {
             expect(worker).toHaveBeenCalledTimes(1);
             expect(NodeFS.existsSync(path + ".txt")).toBe(false);
           }
-        }).pipe(Effect.provide(layer)),
+        }),
       (worker) => Effect.sync(() => worker.mockRestore()),
-    ),
+    ).pipe(Effect.provide(layer)),
   );
 
   it.effect.each([
