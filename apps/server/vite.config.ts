@@ -216,6 +216,8 @@ export default mergeConfig(
               "src/vcs/GitVcsDriverCore.test.ts",
               // The env -C mock must bind before the spawner module is imported.
               "src/process/SpawnWorker.test.ts",
+              // Cleanup-shell and boot-service spies must bind before the CLI imports.
+              "src/cli/uninstall.test.ts",
               "src/workspace/WorkspaceEntries.test.ts",
               "src/workspace/WorkspaceFileSystem.test.ts",
               // Mocks `./ServerBrowserContexts`. Under isolate:false the real
@@ -283,6 +285,8 @@ export default mergeConfig(
               "src/vcs/GitVcsDriverCore.test.ts",
               // The env -C mock must bind before the spawner module is imported.
               "src/process/SpawnWorker.test.ts",
+              // Cleanup-shell and boot-service spies must bind before the CLI imports.
+              "src/cli/uninstall.test.ts",
               // Mocks `node:v8`.writeHeapSnapshot. Under isolate:false an
               // earlier file binds the real v8 module and the partial-file
               // cleanup assertion never sees the mocked path.
