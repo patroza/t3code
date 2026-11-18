@@ -70,6 +70,15 @@ layer("t3vm migration namespace repair", (it) => {
           { migration_id: 87, name: "ProjectionProjectsCustomTitle" },
           { migration_id: 88, name: "TurnItemTypeStatusIndex" },
           { migration_id: 89, name: "ShellThreadReadIndexes" },
+          { migration_id: 90, name: "AuthConnectDevices" },
+          { migration_id: 91, name: "AuthConnectDeniedRequests" },
+          { migration_id: 92, name: "QueuedTurnInputIndexJsonValid" },
+          { migration_id: 93, name: "ProviderTurnAttemptIndex" },
+          { migration_id: 94, name: "TurnItemMessageOrdinalIndex" },
+          { migration_id: 95, name: "TurnItemInlineWorkOutput" },
+          { migration_id: 96, name: "RepairStaleTitleRegeneration" },
+          { migration_id: 97, name: "IssueTrackerBindings" },
+          { migration_id: 98, name: "ActiveShellIndexIndexes" },
         ],
       );
       const fork = yield* sql<LedgerRow>`

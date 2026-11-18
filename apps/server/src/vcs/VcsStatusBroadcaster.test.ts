@@ -838,6 +838,7 @@ describe("VcsStatusBroadcaster", () => {
         ),
         Layer.provide(
           Layer.mock(GitWorkflowService.GitWorkflowService)({
+            readRefSnapshot: () => Effect.succeed("refs"),
             currentBranch: () => Effect.sync(() => local.refName),
             localStatus: () => Effect.succeed(local),
             remoteStatus: (_input, options) =>
@@ -934,6 +935,7 @@ describe("VcsStatusBroadcaster", () => {
         ),
         Layer.provide(
           Layer.mock(GitWorkflowService.GitWorkflowService)({
+            readRefSnapshot: () => Effect.succeed("refs"),
             currentBranch: () => Effect.sync(() => local.refName),
             localStatus: () =>
               Effect.suspend(() =>
@@ -1296,6 +1298,7 @@ describe("VcsStatusBroadcaster", () => {
         Layer.provide(lifecycleScriptRunnerMock),
         Layer.provide(
           Layer.mock(GitWorkflowService.GitWorkflowService)({
+            readRefSnapshot: () => Effect.succeed("refs"),
             localStatus: (input) =>
               Effect.sync(() => {
                 seenCwds.push(input.cwd);
@@ -1518,6 +1521,7 @@ describe("VcsStatusBroadcaster", () => {
       Layer.provide(lifecycleScriptRunnerMock),
       Layer.provide(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
+          readRefSnapshot: () => Effect.succeed("refs"),
           currentBranch: () => Effect.sync(() => state.currentLocalStatus.refName),
           localStatus: () =>
             Effect.sync(() => {
@@ -1768,6 +1772,7 @@ describe("VcsStatusBroadcaster", () => {
         ),
         Layer.provide(
           Layer.mock(GitWorkflowService.GitWorkflowService)({
+            readRefSnapshot: () => Effect.succeed("refs"),
             currentBranch: () => Effect.sync(() => state.currentLocalStatus.refName),
             localStatus: () =>
               Effect.sync(() => {
@@ -1984,8 +1989,8 @@ describe("VcsStatusBroadcaster", () => {
         Effect.forkIn(headerScope),
       );
       const headerSnapshot = yield* Queue.take(headerEvents);
-      assert.strictEqual(headerSnapshot._tag, "snapshot");
-      if (headerSnapshot._tag === "snapshot") {
+      assert.strictEqual(headerSnapshot._tag, "localUpdated");
+      if (headerSnapshot._tag === "localUpdated") {
         assert.deepStrictEqual(headerSnapshot.local.branchChanges, branchChanges);
       }
       const paletteUpdate = yield* Queue.take(paletteEvents);
@@ -2180,6 +2185,7 @@ describe("VcsStatusBroadcaster", () => {
       Layer.provide(lifecycleScriptRunnerMock),
       Layer.provide(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
+          readRefSnapshot: () => Effect.succeed("refs"),
           currentBranch: () => Effect.sync(() => state.currentLocalStatus.refName),
           localStatus: () =>
             Effect.sync(() => {
@@ -2871,6 +2877,7 @@ describe("VcsStatusBroadcaster", () => {
       Layer.provide(lifecycleScriptRunnerMock),
       Layer.provide(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
+          readRefSnapshot: () => Effect.succeed("refs"),
           localStatus: () =>
             Effect.sync(() => {
               state.localStatusCalls += 1;
@@ -2975,6 +2982,7 @@ describe("VcsStatusBroadcaster", () => {
       Layer.provide(lifecycleScriptRunnerMock),
       Layer.provide(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
+          readRefSnapshot: () => Effect.succeed("refs"),
           currentBranch: () => Effect.sync(() => state.currentLocalStatus.refName),
           localStatus: () =>
             Effect.sync(() => {
@@ -3082,6 +3090,7 @@ describe("VcsStatusBroadcaster", () => {
         branchChanges: { baseRef: "origin/main", insertions: 0, deletions: 0 },
       };
       state.currentLocalStatus = fetchedLocal;
+      state.refSnapshot = "fetched refs";
       yield* Deferred.succeed(finishFetch, undefined);
 
       const status = yield* Fiber.join(refresh);

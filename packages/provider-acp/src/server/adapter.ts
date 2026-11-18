@@ -4279,11 +4279,14 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     : ("completed" as const);
               const hydrated =
                 backgroundCompletion.appendOutput.length > 0
-                  ? isMonitorEndNoticeText(toolOutputText(target)) ||
+                  ? owner.backgroundCommands.has(backgroundCompletion.taskId) ||
+                    isMonitorEndNoticeText(toolOutputText(target)) ||
                     toolOutputText(target).trim().length === 0
                     ? setToolOutputText(
                         { ...target, status: nextStatus },
-                        backgroundCompletion.appendOutput,
+                        toolOutputText(target).trim() === backgroundCompletion.appendOutput.trim()
+                          ? toolOutputText(target)
+                          : backgroundCompletion.appendOutput,
                       )
                     : appendToolOutputText(
                         { ...target, status: nextStatus },
@@ -5059,7 +5062,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           },
         ) {
           const context = yield* backgroundCommandTurn(mutation.taskId);
-          if (context === undefined || context.finalized) return;
+          if (context === undefined) return;
           if (!context.promptSettled) {
             if (options?.queueUntilSettle === true) {
               yield* Ref.update(preSettleBackgroundCompletions, (current) => {
@@ -8169,6 +8172,17 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         ): Effect.fn.Return<void> {
           if (context.finalized) return;
           const settledStatus = context.interrupted ? "interrupted" : status;
+          if (settledStatus === "completed" && !context.promptSettled) {
+            context.promptSettled = true;
+            context.promptSettledStatus = settledStatus;
+            const pending = yield* Ref.get(preSettleBackgroundCompletions);
+            yield* flushPreSettleBackgroundCompletions();
+            for (const [taskId, completion] of context.backgroundCommands) {
+              if (completion !== null && !pending.has(taskId)) {
+                yield* finishRegisteredBackgroundTool({ taskId, ...completion });
+              }
+            }
+          }
           context.finalizedStatus = settledStatus;
           context.finalized = true;
           const watchdog = context.inactivityWatchdog;

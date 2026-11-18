@@ -10,7 +10,7 @@ import {
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
-import { Tool, Toolkit } from "effect/ai";
+import { McpSchema, Tool, Toolkit } from "effect/ai";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -1323,6 +1323,7 @@ const DiscordPostTool = Tool.make("discord_post_to_linked_channel", {
   }),
   success: Schema.Union([DiscordPostSkipped, DiscordPostDelivered]),
 })
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients)
   .annotate(Tool.Title, "Post to linked Discord thread")
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)

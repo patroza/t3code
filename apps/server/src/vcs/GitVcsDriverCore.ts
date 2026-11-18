@@ -5472,7 +5472,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       Effect.andThen(
         onWorktreeClaimed
           ? Effect.uninterruptible(
-              onWorktreeClaimed(worktreePath).pipe(
+              Effect.suspend(() => onWorktreeClaimed(worktreePath)).pipe(
                 Effect.andThen(
                   Effect.sync(() => {
                     claimed = true;

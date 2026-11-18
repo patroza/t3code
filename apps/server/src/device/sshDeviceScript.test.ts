@@ -154,6 +154,16 @@ describe("remote helper lifecycle", () => {
           "#!/bin/sh\nprintf 'emulated webcam<N> none\\n' >&2\n",
           { mode: 0o755 },
         );
+        const sdk = NodePath.join(home, "sdk");
+        for (const [relative, command] of [
+          ["platform-tools/adb", "adb"],
+          ["emulator/emulator", "emulator"],
+          ["cmdline-tools/latest/bin/avdmanager", "adb"],
+        ] as const) {
+          const target = NodePath.join(sdk, relative);
+          await NodeFSP.mkdir(NodePath.dirname(target), { recursive: true });
+          await NodeFSP.symlink(NodePath.join(bin, command), target);
+        }
         const root = NodePath.join(home, ".t3/device");
         const hubDir = NodePath.join(root, `tools/expo-device-hub@${DEVICE_HUB_VERSION}`);
         const agentDir = NodePath.join(root, `tools/agent-device@${AGENT_DEVICE_VERSION}`);
@@ -214,7 +224,7 @@ else { const child=spawn(process.execPath,[path.join(path.dirname(process.argv[1
               HOME: home,
               PATH: `${bin}:${process.env.PATH}`,
               SERVE_EMU_FFMPEG: NodePath.join(home, "missing-ffmpeg"),
-              ANDROID_HOME: "",
+              ANDROID_HOME: sdk,
               EXPO_DEVICE_HUB_EMULATOR_EXTRA_ARGS: "-memory 4096",
             },
           });

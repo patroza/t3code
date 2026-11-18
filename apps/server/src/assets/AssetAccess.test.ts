@@ -1139,6 +1139,7 @@ describe("AssetAccess", () => {
           const url = yield* issueAssetUrl({ resource, workspaceRoot: root });
           const suffix = url.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
           expect(yield* resolveAsset(suffix.slice(0, suffix.indexOf("/")), fontName)).toEqual({
+            file: expect.any(Object),
             kind: "file",
             path: canonicalFontPath,
             renderIntent: "file-preview",

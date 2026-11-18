@@ -24,6 +24,7 @@ const launches = vi.hoisted(() => ({
   rm: vi.fn().mockResolvedValue(undefined),
 }));
 const launchChromium = chromium.launch.bind(chromium);
+const connectChromium = chromium.connectOverCDP.bind(chromium);
 const launchPersistentChromium = chromium.launchPersistentContext.bind(chromium);
 vi.spyOn(chromium, "launch").mockImplementation(launches.launch);
 vi.spyOn(chromium, "launchPersistentContext").mockImplementation(launches.persistent);
@@ -410,6 +411,7 @@ describe("ServerBrowserContexts", () => {
           NodePath.join(userDataDir, "DevToolsActivePort"),
           "utf8",
         ).split("\n");
+        launches.connect.mockImplementation(connectChromium);
         const { browser, page } = await pool.connectDesktopPage(`http://127.0.0.1:${port}`);
         try {
           const file = NodePath.join(directory, "large.bin");

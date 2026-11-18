@@ -350,7 +350,13 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
       ...(yield* run({ loader: makeMigrationLoader(id), table: upstreamMigrationTable })),
     );
   }
-  if (toMigrationInclusive === undefined) {
+  const [forkLatest] = yield* sql<{ readonly id: number | null }>`
+    SELECT MAX(migration_id) AS id FROM ${sql(forkMigrationTable)}
+  `;
+  if (
+    toMigrationInclusive === undefined &&
+    (forkLatest?.id ?? 0) < Math.max(...forkMigrationEntries.map(([id]) => id))
+  ) {
     executedMigrations.push(
       ...(yield* run({ loader: makeForkMigrationLoader(), table: forkMigrationTable })),
     );

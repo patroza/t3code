@@ -5797,7 +5797,10 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
             commands.push(
               command.args.map((word) => (Redacted.isRedacted(word) ? Redacted.value(word) : word)),
             );
-            if (command.args.join(" ") === "symbolic-ref refs/remotes/origin/HEAD") {
+            if (
+              command.args.join(" ") ===
+              "rev-parse --verify --quiet --symbolic-full-name refs/remotes/origin/HEAD"
+            ) {
               originHeadReads++;
               if (failFirstOriginHead && originHeadReads === 1) return makeNonRepositoryHandle();
             }

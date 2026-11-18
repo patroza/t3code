@@ -214,6 +214,8 @@ export default mergeConfig(
               "src/terminal/NodePtyAdapter.test.ts",
               "src/terminal/Manager.test.ts",
               "src/vcs/GitVcsDriverCore.test.ts",
+              // The env -C mock must bind before the spawner module is imported.
+              "src/process/SpawnWorker.test.ts",
               "src/workspace/WorkspaceEntries.test.ts",
               "src/workspace/WorkspaceFileSystem.test.ts",
               // Mocks `./ServerBrowserContexts`. Under isolate:false the real
@@ -279,6 +281,8 @@ export default mergeConfig(
               // leftover hook (`cannot find a hook named post-checkout`).
               "src/git/GitManager.test.ts",
               "src/vcs/GitVcsDriverCore.test.ts",
+              // The env -C mock must bind before the spawner module is imported.
+              "src/process/SpawnWorker.test.ts",
               // Mocks `node:v8`.writeHeapSnapshot. Under isolate:false an
               // earlier file binds the real v8 module and the partial-file
               // cleanup assertion never sees the mocked path.
