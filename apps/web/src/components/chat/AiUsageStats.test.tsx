@@ -35,7 +35,7 @@ const claudeWithDrainedExtras: AiUsageProviderStatus = {
 
 const render = (item: AiUsageProviderStatus) =>
   renderToStaticMarkup(
-    <GTProvider>
+    <GTProvider locale="en" translations={{}}>
       <AiUsageStats item={item} nowMs={1785866400_000} />
     </GTProvider>,
   );

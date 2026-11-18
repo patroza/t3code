@@ -15,7 +15,12 @@ import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup as renderMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-const renderToStaticMarkup = (node: ReactNode) => renderMarkup(<GTProvider>{node}</GTProvider>);
+const renderToStaticMarkup = (node: ReactNode) =>
+  renderMarkup(
+    <GTProvider locale="en" translations={{}}>
+      {node}
+    </GTProvider>,
+  );
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(async (_tabId: string, _url: string): Promise<void> => undefined),
