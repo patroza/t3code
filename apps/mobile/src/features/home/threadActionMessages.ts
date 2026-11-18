@@ -1,3 +1,5 @@
+import { msg } from "gt-react-native";
+import { m as resolveCopy } from "../../i18n/messages";
 import * as Cause from "effect/Cause";
 
 export type ThreadListAction = "archive" | "unarchive" | "delete" | "settle" | "unsettle";
@@ -18,13 +20,13 @@ export function actionFailureMessage(
   if (error instanceof Error && error.message.trim().length > 0) {
     return error.message;
   }
-  return `The thread could not be ${ACTION_VERBS[action]}.`;
+  return resolveCopy(msg("The thread could not be {value0}.", { value0: ACTION_VERBS[action] }));
 }
 
 export function actionFailureTitle(action: ThreadListAction): string {
-  if (action === "archive") return "Could not archive thread";
-  if (action === "unarchive") return "Could not unarchive thread";
-  if (action === "settle") return "Could not settle thread";
-  if (action === "unsettle") return "Could not un-settle thread";
-  return "Could not delete thread";
+  if (action === "archive") return resolveCopy(msg("Could not archive thread"));
+  if (action === "unarchive") return resolveCopy(msg("Could not unarchive thread"));
+  if (action === "settle") return resolveCopy(msg("Could not settle thread"));
+  if (action === "unsettle") return resolveCopy(msg("Could not un-settle thread"));
+  return resolveCopy(msg("Could not delete thread"));
 }

@@ -1,4 +1,5 @@
 import { useAtomMount, useAtomSubscribe, useAtomValue } from "@effect/atom-react";
+import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
 import { resolveFilesystemReadAccess } from "@t3tools/client-runtime/state/filesystem";
 import {
   assetUrlStateFromResult,
@@ -10,6 +11,8 @@ import {
   makeRevisionedAssetUrlFamily,
 } from "@t3tools/client-runtime/state/assets";
 import { executeAtomQuery, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { msg, useMessages } from "gt-react-native";
+import { m } from "../i18n/messages";
 import type { AssetResource, EnvironmentId } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -57,13 +60,17 @@ export function useAssetUrlState(
   const fileAccessSession = useEnvironmentQuery(
     environmentId === null ? null : environmentSession.sessionStateAtom(environmentId),
   );
+  const messages = useMessages();
   const fileEnvironment = useEnvironmentPresentation(environmentId);
-  const fileAccess = resolveFilesystemReadAccess({
-    isCatalogReady: fileEnvironment.isReady,
-    connection: fileEnvironment.presentation?.connection ?? null,
-    session: fileAccessSession.data,
-    sessionError: fileAccessSession.error,
-  });
+  const fileAccess = resolveFilesystemReadAccess(
+    {
+      isCatalogReady: fileEnvironment.isReady,
+      connection: fileEnvironment.presentation?.connection ?? null,
+      session: fileAccessSession.data,
+      sessionError: fileAccessSession.error,
+    },
+    messages,
+  );
   const blocked = blockedAssetUrlState(resource, fileAccess);
   const preparedConnection = usePreparedConnection(environmentId);
   const connectionPhase = fileEnvironment.presentation?.connection.phase ?? "available";
@@ -201,7 +208,7 @@ const freshAssetUrlFamily = Atom.family((key: FreshAssetUrlKey) =>
           : await refreshAssetUrl(key.environmentId, key.resource, signal).catch(() => null),
       catch: (cause) =>
         new AssetUrlUnavailableError({
-          message: cause instanceof Error ? cause.message : "The attachment is unavailable.",
+          message: errorDisplayMessage(cause, m) ?? m(msg("The attachment is unavailable.")),
           cause,
         }),
     }).pipe(
@@ -213,7 +220,7 @@ const freshAssetUrlFamily = Atom.family((key: FreshAssetUrlKey) =>
             }))
           : Effect.fail(
               new AssetUrlUnavailableError({
-                message: "Reconnect to this environment and try again.",
+                message: m(msg("Reconnect to this environment and try again.")),
               }),
             ),
       ),

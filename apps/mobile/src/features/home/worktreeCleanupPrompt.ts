@@ -1,3 +1,5 @@
+import { msg } from "gt-react-native";
+import { m as resolveCopy } from "../../i18n/messages";
 import type { WorktreeCleanupConfirmation } from "@t3tools/client-runtime/state/worktreeCleanup";
 
 export interface WorktreeCleanupPromptButtons {
@@ -12,8 +14,13 @@ export function buildWorktreeCleanupPrompt(displayWorktreePath: string): {
   readonly message: string;
 } {
   return {
-    title: "Remove worktree?",
-    message: `This thread is the last active one linked to the worktree “${displayWorktreePath}”. Remove it when archiving? The branch is kept.`,
+    title: resolveCopy(msg("Remove worktree?")),
+    message: resolveCopy(
+      msg(
+        "This thread is the last active one linked to the worktree “{value0}”. Remove it when archiving? The branch is kept.",
+        { value0: displayWorktreePath },
+      ),
+    ),
   };
 }
 

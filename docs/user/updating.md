@@ -76,13 +76,15 @@ threads that were actively working. Terminal commands may still be interrupted,
 and threads without saved provider resume state need a new message.
 If you previously enabled continuation for updates, enable this setting once
 to allow recovery without a connected client.
-A thread that finished its turn to wait on a subagent, a background task, or a
+A thread that finished its turn to wait on a subagent, a background task, a Claude monitor, or a
 command or monitor the agent said it was waiting on is woken and told that this work
 stopped. Other background shells and monitors, such as a dev server and its
 watchdog, do not wake it; the thread learns about them with your next message.
 A thread is not resumed while it waits for your approval, answer, or secret, or
-while it is archived, snoozed, or settled. After three automatic resumes in a row,
-the thread waits for your next message.
+while it is archived, snoozed, or settled. After three consecutive crash recoveries
+of an unfinished turn, the thread waits for your next message, even when crashes
+are more than five minutes apart. A completed turn or a planned shutdown resets
+that limit.
 
 Updates from the previous orchestration system preserve conversation transcripts but cannot carry
 every kind of runtime history forward. Read [Threads from older T3 Code versions](./thread-migration.md)

@@ -1,3 +1,5 @@
+import { msg } from "gt-react";
+import { m as resolveCopy } from "../../i18n/messages";
 import type { ModelSelection, ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
 import {
   resolveSelectableProviderInstanceEntry,
@@ -55,11 +57,19 @@ export function formatContextWindowCompactionMessage(
   autoCompactThreshold?: number | null,
 ): string {
   if (typeof autoCompactThreshold === "number" && autoCompactThreshold > 0) {
-    return `Compacts automatically at about ${autoCompactThreshold.toLocaleString("en-US")} tokens.`;
+    return resolveCopy(
+      msg("Compacts automatically at about {value0} tokens.", {
+        value0: autoCompactThreshold.toLocaleString("en-US"),
+      }),
+    );
   }
   return modelDisplayName
-    ? `Context for ${modelDisplayName} compacts automatically when needed.`
-    : "Context compacts automatically when needed.";
+    ? resolveCopy(
+        msg("Context for {value0} compacts automatically when needed.", {
+          value0: modelDisplayName,
+        }),
+      )
+    : resolveCopy(msg("Context compacts automatically when needed."));
 }
 
 export function shouldReserveContextWindowMeter(input: {

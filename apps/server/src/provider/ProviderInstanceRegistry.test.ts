@@ -244,9 +244,13 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
   const layerBase = ProviderHostLive.layer.pipe(
     Layer.provide(Layer.mock(PortScanner.PortDiscovery)({ trackAgent: () => () => undefined })),
     Layer.provideMerge(layerBaseDeps),
+    Layer.provideMerge(
+      Layer.mock(PortScanner.PortDiscovery)({ trackAgent: () => () => undefined }),
+    ),
   );
   const layerTest = ProviderOrchestrationAdapterInfrastructure.layer.pipe(
-    Layer.provide(Layer.merge(PortScanner.layerTest, SqlitePersistence.layerMemory)),
+    Layer.provide(SqlitePersistence.layerMemory),
+    Layer.provideMerge(PortScanner.layerTest),
     Layer.provideMerge(layerBase),
     Layer.provide(Layer.mock(PortScanner.PortDiscovery)({ trackAgent: () => () => undefined })),
     Layer.provideMerge(ProviderInstallationGate.layer),
@@ -990,6 +994,9 @@ describe("ProviderInstanceRegistry — all drivers slice", () => {
   const layerBase = ProviderHostLive.layer.pipe(
     Layer.provide(Layer.mock(PortScanner.PortDiscovery)({ trackAgent: () => () => undefined })),
     Layer.provideMerge(layerBaseDeps),
+    Layer.provideMerge(
+      Layer.mock(PortScanner.PortDiscovery)({ trackAgent: () => () => undefined }),
+    ),
   );
   const layerTest = ProviderOrchestrationAdapterInfrastructure.layer.pipe(
     Layer.provideMerge(layerBase),

@@ -1,3 +1,5 @@
+import { msg } from "gt-react";
+import { m as resolveCopy } from "../../i18n/messages";
 import {
   AntigravitySettings,
   ClaudeSettings,
@@ -33,8 +35,8 @@ export const providerClients = makeProviderClientRegistry([
   openCodeClient,
   {
     driverKind: ProviderDriverKind.make("kimi"),
-    label: "Kimi Code",
-    badgeLabel: "Early Access",
+    label: resolveCopy(msg("Kimi Code")),
+    badgeLabel: resolveCopy(msg("Early Access")),
     settingsSchema: KimiSettings,
   },
   {

@@ -1,3 +1,5 @@
+import { T } from "gt-react";
+import { useGT as useCopyTranslation } from "gt-react";
 import type { AiUsageProviderStatus } from "@t3tools/contracts";
 
 import {
@@ -31,6 +33,8 @@ export function AiUsageStats(props: {
   compact?: boolean;
   nowMs?: number;
 }) {
+  const translateCopy = useCopyTranslation();
+
   const { item, compact = false } = props;
   const nowMinute = useNowMinute();
   const nowMs = props.nowMs ?? Date.parse(`${nowMinute}:00Z`);
@@ -72,7 +76,7 @@ export function AiUsageStats(props: {
                 ) : null}
                 {showSubLine ? (
                   <div className="text-3xs text-muted-foreground">
-                    {resets ? `resets in ${resets}` : null}
+                    {resets ? translateCopy("resets in {value0}", { value0: resets }) : null}
                     {resets && pace ? " · " : null}
                     {pace}
                   </div>
@@ -82,18 +86,26 @@ export function AiUsageStats(props: {
           })}
         </div>
       ) : (
-        <div className="text-3xs text-muted-foreground">{item.error ?? "usage unavailable"}</div>
+        <div className="text-3xs text-muted-foreground">
+          {item.error ?? translateCopy("usage unavailable")}
+        </div>
       )}
       {item.stale ? (
-        <div className="text-3xs text-muted-foreground">Stale. Showing last known usage</div>
+        <div className="text-3xs text-muted-foreground">
+          <T>Stale. Showing last known usage</T>
+        </div>
       ) : null}
       {marker.fill === "critical" ? (
-        <div className="text-3xs font-medium text-destructive">limit reached</div>
+        <div className="text-3xs font-medium text-destructive">
+          <T>limit reached</T>
+        </div>
       ) : marker.fill === "warn" ? (
-        <div className="text-3xs font-medium text-warning">close to limit</div>
+        <div className="text-3xs font-medium text-warning">
+          <T>close to limit</T>
+        </div>
       ) : marker.outlookAtRisk ? (
         <div className="text-3xs font-medium text-warning">
-          usable now · weekly on track to overshoot
+          <T>usable now · weekly on track to overshoot</T>
         </div>
       ) : null}
     </div>

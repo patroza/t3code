@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 import { Tool } from "effect/ai";
 
 import { advertisedJsonSchema } from "./advertisedJsonSchema.ts";
+import { ThemeToolkit } from "./toolkits/theme/tools.ts";
 
 it.each([false, true])("compacts JSON while preserving strict=%s validation", (strict) => {
   const Every = Schema.Struct({ ms: Schema.Int });
@@ -50,4 +51,19 @@ it.each([false, true])("compacts JSON while preserving strict=%s validation", (s
     required: ["beforeRunId", "every"],
     ...strictProperties,
   });
+});
+
+it("advertises only string enum values, which Gemini requires", () => {
+  const enumValues: Array<unknown> = [];
+  const collect = (node: unknown): void => {
+    if (Array.isArray(node)) return node.forEach(collect);
+    if (typeof node !== "object" || node === null) return;
+    for (const [key, value] of Object.entries(node)) {
+      if (key === "enum" && Array.isArray(value)) enumValues.push(...value);
+      else collect(value);
+    }
+  };
+  collect(advertisedJsonSchema(ThemeToolkit.tools.t3_theme_set));
+
+  expect(enumValues.filter((value) => typeof value !== "string")).toEqual([]);
 });

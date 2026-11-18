@@ -39,7 +39,7 @@ const relaySettings = (
 const fakeT3Chat = (body: unknown, status = 200) => {
   const requests: Array<{ url: string; authorization: string | undefined; body: unknown }> = [];
   const client = HttpClient.make((request) =>
-    Effect.gen(function* () {
+    Effect.sync(() => {
       requests.push({
         url: request.url,
         authorization: request.headers["authorization"],

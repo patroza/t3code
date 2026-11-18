@@ -1,3 +1,5 @@
+import { T } from "gt-react";
+import { useGT as useCopyTranslation } from "gt-react";
 import { useClientSettings, updateClientSettings } from "../../hooks/useSettings";
 import {
   MIN_SIDEBAR_THREAD_PREVIEW_COUNT,
@@ -44,6 +46,8 @@ export function SidebarThreadFilters(props: {
   readonly onClearEnvironments: () => void;
   readonly onToggleEnvironment: (value: EnvironmentId) => void;
 }) {
+  const translateCopy = useCopyTranslation();
+
   const previewCount = useClientSettings((settings) => settings.sidebarThreadPreviewCount);
   const hideProviderIcons = useClientSettings((settings) => settings.sidebarHideProviderIcons);
   return (
@@ -52,7 +56,9 @@ export function SidebarThreadFilters(props: {
       data-testid="sidebar-thread-filters"
     >
       <div className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2">
-        <span className="text-xs text-muted-foreground">Ownership</span>
+        <span className="text-xs text-muted-foreground">
+          <T>Ownership</T>
+        </span>
         <Select
           value={props.ownershipFilter}
           onValueChange={(value) => {
@@ -60,7 +66,7 @@ export function SidebarThreadFilters(props: {
               props.onOwnershipFilterChange(value);
           }}
         >
-          <SelectTrigger size="xs" aria-label="Ownership">
+          <SelectTrigger size="xs" aria-label={translateCopy("Ownership")}>
             <SelectValue>{SIDEBAR_OWNERSHIP_FILTER_LABELS[props.ownershipFilter]}</SelectValue>
           </SelectTrigger>
           <SelectPopup>
@@ -80,7 +86,9 @@ export function SidebarThreadFilters(props: {
         props.ownershipFilter === "theirs" ? (
           <>
             <span className="text-xs text-muted-foreground">
-              {props.ownershipFilter !== "theirs" ? "Mine includes" : "Theirs includes"}
+              {props.ownershipFilter !== "theirs"
+                ? translateCopy("Mine includes")
+                : translateCopy("Theirs includes")}
             </span>
             <Select
               value={props.ownershipRelation}
@@ -91,7 +99,9 @@ export function SidebarThreadFilters(props: {
               <SelectTrigger
                 size="xs"
                 aria-label={
-                  props.ownershipFilter !== "theirs" ? "Mine includes" : "Theirs includes"
+                  props.ownershipFilter !== "theirs"
+                    ? translateCopy("Mine includes")
+                    : translateCopy("Theirs includes")
                 }
               >
                 <SelectValue>
@@ -112,7 +122,9 @@ export function SidebarThreadFilters(props: {
             </Select>
           </>
         ) : null}
-        <span className="text-xs text-muted-foreground">Thread ordering</span>
+        <span className="text-xs text-muted-foreground">
+          <T>Thread ordering</T>
+        </span>
         <Select
           value={props.threadGrouping}
           onValueChange={(value) => {
@@ -121,7 +133,7 @@ export function SidebarThreadFilters(props: {
         >
           <SelectTrigger
             size="xs"
-            aria-label="Thread ordering"
+            aria-label={translateCopy("Thread ordering")}
             data-testid="sidebar-thread-grouping"
           >
             <SelectValue>{WEB_THREAD_GROUPING_LABELS[props.threadGrouping]}</SelectValue>
@@ -140,9 +152,9 @@ export function SidebarThreadFilters(props: {
         </Select>
       </div>
       <label className="mt-2 flex items-center gap-2 text-xs">
-        Visible threads per closed project
+        <T>Visible threads per closed project</T>
         <NumberField
-          aria-label="Visible thread count"
+          aria-label={translateCopy("Visible thread count")}
           size="sm"
           min={MIN_SIDEBAR_THREAD_PREVIEW_COUNT}
           max={MAX_SIDEBAR_THREAD_PREVIEW_COUNT}
@@ -159,9 +171,9 @@ export function SidebarThreadFilters(props: {
           }}
         >
           <NumberFieldGroup>
-            <NumberFieldDecrement aria-label="Decrease visible thread count" />
-            <NumberFieldInput aria-label="Visible thread count" />
-            <NumberFieldIncrement aria-label="Increase visible thread count" />
+            <NumberFieldDecrement aria-label={translateCopy("Decrease visible thread count")} />
+            <NumberFieldInput aria-label={translateCopy("Visible thread count")} />
+            <NumberFieldIncrement aria-label={translateCopy("Increase visible thread count")} />
           </NumberFieldGroup>
         </NumberField>
       </label>
@@ -173,7 +185,7 @@ export function SidebarThreadFilters(props: {
           }}
           data-testid="sidebar-hide-provider-icons"
         />
-        Hide provider icons (hold Control or Command to reveal)
+        <T>Hide provider icons (hold Control or Command to reveal)</T>
       </label>
       <label className="mt-2 flex items-center gap-2 text-xs">
         <Checkbox
@@ -181,18 +193,20 @@ export function SidebarThreadFilters(props: {
           onCheckedChange={props.onSettledShelfExpandedChange}
           data-testid="sidebar-settled-shelf-expanded"
         />
-        Expand settled shelf
+        <T>Expand settled shelf</T>
       </label>
       {props.environments.length > 1 ? (
         <fieldset className="mt-2 space-y-2">
-          <legend className="mb-1 text-xs text-muted-foreground">Environment</legend>
+          <legend className="mb-1 text-xs text-muted-foreground">
+            <T>Environment</T>
+          </legend>
           <label className="flex items-center gap-2 text-xs">
             <Checkbox
               checked={isAllEnvironmentsSelected(props.selectedEnvironmentIds)}
               onCheckedChange={props.onClearEnvironments}
               data-testid="sidebar-environment-filter-all"
             />
-            All environments
+            <T>All environments</T>
           </label>
           {props.environments.map((environment) => (
             <label key={environment.environmentId} className="flex items-center gap-2 text-xs">

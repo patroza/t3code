@@ -1,3 +1,5 @@
+import { T } from "gt-react";
+import { useGT as useCopyTranslation } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
 import {
   claimPersonIdForEnvironment,
@@ -26,6 +28,8 @@ export function ParticipantStack(props: {
    */
   readonly interactive?: boolean | undefined;
 }) {
+  const translateCopy = useCopyTranslation();
+
   const people = props.participants;
   const claimPersonIdByEnvironment = useAtomValue(identityClaimPersonIdByEnvironmentAtom);
   const claimPersonId = claimPersonIdForEnvironment(
@@ -76,7 +80,7 @@ export function ParticipantStack(props: {
               : "bg-muted text-muted-foreground",
           )}
           aria-hidden={!youParticipated}
-          aria-label={youParticipated ? "You participated" : undefined}
+          aria-label={youParticipated ? translateCopy("You participated") : undefined}
           data-testid={youParticipated ? "you-participated-indicator" : undefined}
         >
           +{extras.length}
@@ -103,7 +107,9 @@ export function ParticipantStack(props: {
               <span className="truncate text-foreground">
                 {participantDisplayLabel(person)}
                 {person.personId === claimPersonId ? (
-                  <span className="text-primary"> · You</span>
+                  <span className="text-primary">
+                    <T> · You</T>
+                  </span>
                 ) : null}
               </span>
             </span>
@@ -119,6 +125,8 @@ export function SourceChannelGlyph(props: {
   readonly overlay?: boolean;
   readonly className?: string | undefined;
 }) {
+  const translateCopy = useCopyTranslation();
+
   if (!props.channel) return null;
   const short =
     props.channel === "desktop"
@@ -143,7 +151,7 @@ export function SourceChannelGlyph(props: {
         props.className,
       )}
       data-testid="source-channel-glyph"
-      aria-label={`Source ${props.channel}`}
+      aria-label={translateCopy("Source {value0}", { value0: props.channel })}
     >
       {short}
     </span>

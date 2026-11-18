@@ -1,3 +1,5 @@
+import { T } from "gt-react";
+import { useGT as useCopyTranslation } from "gt-react";
 import {
   formatHostResourceBytes as formatBytes,
   formatHostResourcePercent as formatPercent,
@@ -61,6 +63,8 @@ export function HostResourceStatus(props: {
   readonly remote?: boolean;
   readonly className?: string;
 }) {
+  const translateCopy = useCopyTranslation();
+
   const { data, error, isPending, refresh } = useHostResourceSnapshot(
     props.environmentId,
     props.connected,
@@ -88,11 +92,17 @@ export function HostResourceStatus(props: {
       <div
         className={cn("flex items-center gap-1.5 text-3xs text-muted-foreground", props.className)}
       >
-        <span>{isPending ? "Reading host resources…" : "Host resources unavailable"}</span>
+        <span>
+          {isPending
+            ? translateCopy("Reading host resources…")
+            : translateCopy("Host resources unavailable")}
+        </span>
         {props.showRefresh ? (
           <button
             type="button"
-            aria-label={`Refresh host resources for ${props.environmentLabel}`}
+            aria-label={translateCopy("Refresh host resources for {value0}", {
+              value0: props.environmentLabel,
+            })}
             className="inline-flex size-5 items-center justify-center rounded hover:bg-accent hover:text-foreground"
             onClick={refresh}
           >
@@ -143,7 +153,9 @@ export function HostResourceStatus(props: {
                   "inline-flex shrink-0 text-muted-foreground",
                   pressureClass(getHostResourcePressure(data)),
                 )}
-                aria-label={`Remote host: ${data.hostname ?? props.environmentLabel}`}
+                aria-label={translateCopy("Remote host: {value0}", {
+                  value0: data.hostname ?? props.environmentLabel,
+                })}
               >
                 <CloudIcon className="size-3" aria-hidden />
               </span>
@@ -156,23 +168,32 @@ export function HostResourceStatus(props: {
         <TooltipTrigger render={summary} />
         <TooltipPopup side="bottom" className="w-96 max-w-[calc(100vw-1rem)]">
           <div className="grid grid-cols-[6rem_minmax(0,1fr)] gap-x-3 gap-y-1">
-            <span className="text-muted-foreground">Host</span>
+            <span className="text-muted-foreground">
+              <T>Host</T>
+            </span>
             <span className="whitespace-nowrap">{data.hostname ?? props.environmentLabel}</span>
             <span className="text-muted-foreground">CPU</span>
             <span className="whitespace-nowrap">
-              {formatPercent(data.cpuPercent)} across {data.logicalCores ?? "N/A"} logical cores
+              {formatPercent(data.cpuPercent)} across {data.logicalCores ?? "N/A"}
+              <T> logical cores</T>
             </span>
-            <span className="text-muted-foreground">Memory</span>
+            <span className="text-muted-foreground">
+              <T>Memory</T>
+            </span>
             <span className="whitespace-nowrap">
               {formatBytes(data.memoryUsedBytes)} / {formatBytes(data.memoryTotalBytes)} used
             </span>
-            <span className="text-muted-foreground">Load</span>
+            <span className="text-muted-foreground">
+              <T>Load</T>
+            </span>
             <span className="whitespace-nowrap">
               {data.loadAverage
                 ? `${data.loadAverage.m1.toFixed(2)} / ${data.loadAverage.m5.toFixed(2)} / ${data.loadAverage.m15.toFixed(2)}`
                 : "N/A"}
             </span>
-            <span className="text-muted-foreground">Updated</span>
+            <span className="text-muted-foreground">
+              <T>Updated</T>
+            </span>
             <span className="whitespace-nowrap">
               {new Date(data.checkedAt).toLocaleTimeString()}
             </span>
@@ -182,7 +203,9 @@ export function HostResourceStatus(props: {
       {props.showRefresh ? (
         <button
           type="button"
-          aria-label={`Refresh host resources for ${props.environmentLabel}`}
+          aria-label={translateCopy("Refresh host resources for {value0}", {
+            value0: props.environmentLabel,
+          })}
           className="inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
           onClick={refresh}
         >

@@ -1,5 +1,7 @@
+import { useGT as useCopyTranslation } from "gt-react-native";
 import { useCallback } from "react";
 import { useAtomMount } from "@effect/atom-react";
+import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
 
 import { EnvironmentProject, EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
@@ -22,6 +24,8 @@ import {
   sanitizeFeatureBranchName,
 } from "@t3tools/shared/git";
 import * as Cause from "effect/Cause";
+import { msg } from "gt-react-native";
+import { m } from "../i18n/messages";
 import { AsyncResult } from "effect/reactivity";
 import * as Dialog from "../components/ui/Dialog";
 
@@ -42,7 +46,7 @@ import { useSelectedThreadWorktree } from "./use-selected-thread-worktree";
 
 function refreshFailureMessage(cause: Cause.Cause<unknown>): string {
   const error = Cause.squash(cause);
-  return error instanceof Error ? error.message : "Failed to refresh git status.";
+  return errorDisplayMessage(error, m) ?? m(msg("Failed to refresh git status."));
 }
 
 // Selecting a thread or reconnecting its environment refreshes the checkout's
@@ -57,6 +61,8 @@ const selectedThreadStatusRevalidation = createVcsStatusRevalidationAtomFamily({
 });
 
 export function useSelectedThreadGitActions() {
+  const translateCopy = useCopyTranslation();
+
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
@@ -104,7 +110,7 @@ export function useSelectedThreadGitActions() {
         Cause.fail(
           new EnvironmentAuthorizationError({
             requiredScope: AuthOrchestrationOperateScope,
-            message: "This connection cannot update the thread's branch.",
+            message: m(msg("This connection cannot update the thread's branch.")),
           }),
         ),
       );
@@ -145,7 +151,7 @@ export function useSelectedThreadGitActions() {
           target,
           {
             operation: "refresh_status",
-            label: "Refreshing source control status",
+            label: m(msg("Refreshing source control status")),
           },
           execute,
         );
@@ -211,9 +217,13 @@ export function useSelectedThreadGitActions() {
         if (options?.onFailure?.(error) === true) {
           return null;
         }
-        const message = error instanceof Error ? error.message : "Git action failed.";
+        const message = errorDisplayMessage(error, m) ?? m(msg("Git action failed."));
         setPendingConnectionError(message);
-        showGitActionResult({ type: "error", title: "Git action failed", description: message });
+        showGitActionResult({
+          type: "error",
+          title: m(msg("Git action failed")),
+          description: message,
+        });
         return null;
       }
       return result.value;
@@ -229,9 +239,13 @@ export function useSelectedThreadGitActions() {
     });
     if (AsyncResult.isFailure(result)) {
       const error = Cause.squash(result.cause);
-      const message = error instanceof Error ? error.message : "Failed to refresh branches.";
+      const message = errorDisplayMessage(error, m) ?? m(msg("Failed to refresh branches."));
       setPendingConnectionError(message);
-      showGitActionResult({ type: "error", title: "Git action failed", description: message });
+      showGitActionResult({
+        type: "error",
+        title: m(msg("Git action failed")),
+        description: message,
+      });
       return null;
     }
     setPendingConnectionError(null);
@@ -262,7 +276,7 @@ export function useSelectedThreadGitActions() {
   const onCheckoutSelectedThreadBranch = async (branch: string) => {
     return runSelectedThreadGitMutation(
       "switch_ref",
-      "Switching branch",
+      m(msg("Switching branch")),
       async ({ thread, cwd }) => {
         const result = await switchRef({
           environmentId: thread.environmentId,
@@ -288,7 +302,7 @@ export function useSelectedThreadGitActions() {
   const onCreateSelectedThreadBranch = async (branch: string) => {
     return runSelectedThreadGitMutation(
       "create_ref",
-      "Creating branch",
+      m(msg("Creating branch")),
       async ({ thread, cwd }) => {
         const result = await createRef({
           environmentId: thread.environmentId,
@@ -317,7 +331,7 @@ export function useSelectedThreadGitActions() {
   }) => {
     return runSelectedThreadGitMutation(
       "create_worktree",
-      "Creating worktree",
+      m(msg("Creating worktree")),
       async ({ thread, project }) => {
         const result = await createWorktree({
           environmentId: thread.environmentId,
@@ -348,7 +362,7 @@ export function useSelectedThreadGitActions() {
   const onPullSelectedThreadBranch = async () => {
     await runSelectedThreadGitMutation(
       "pull",
-      "Pulling latest changes",
+      m(msg("Pulling latest changes")),
       async ({ thread, cwd }) => {
         const result = await pull({
           environmentId: thread.environmentId,
@@ -362,8 +376,8 @@ export function useSelectedThreadGitActions() {
           type: "success",
           title:
             result.value.status === "skipped_up_to_date"
-              ? "Already up to date"
-              : `Pulled latest on ${result.value.refName}`,
+              ? m(msg("Already up to date"))
+              : m(msg("Pulled latest on {branch}", { branch: result.value.refName })),
         });
         return result;
       },
@@ -379,7 +393,7 @@ export function useSelectedThreadGitActions() {
         const actionId = uuidv4();
         return await runSelectedThreadGitMutation(
           "run_change_request",
-          "Running source control action",
+          m(msg("Running source control action")),
           async ({ thread, cwd }) => {
             const result = await runStackedAction({
               actionId,
@@ -442,12 +456,12 @@ export function useSelectedThreadGitActions() {
                 return false;
               }
               Dialog.alert(
-                "Commit signing failed",
-                "Git couldn’t sign the commit. Retry this commit without signing?",
+                translateCopy("Commit signing failed"),
+                translateCopy("Git couldn’t sign the commit. Retry this commit without signing?"),
                 [
-                  { text: "Cancel", style: "cancel" },
+                  { text: translateCopy("Cancel"), style: "cancel" },
                   {
-                    text: "Retry without signing",
+                    text: translateCopy("Retry without signing"),
                     onPress: () => {
                       void runAction(buildUnsignedCommitRetryInput(actionInput), {
                         syncCurrentBranchOnSuccess: actionInput.featureBranch === true,
@@ -470,6 +484,7 @@ export function useSelectedThreadGitActions() {
       runSelectedThreadGitMutation,
       selectedThreadWorktreePath,
       syncSelectedThreadBranchState,
+      translateCopy,
     ],
   );
 

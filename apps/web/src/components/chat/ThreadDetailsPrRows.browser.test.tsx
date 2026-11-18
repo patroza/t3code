@@ -140,7 +140,7 @@ async function setup() {
         status={null}
         project={null}
         label={`#${current.number}`}
-        openAriaLabel="Open pull request"
+
         onOpen={vi.fn()}
       />,
     );

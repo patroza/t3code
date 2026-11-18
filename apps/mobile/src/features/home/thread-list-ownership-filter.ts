@@ -1,3 +1,5 @@
+import { msg } from "gt-react-native";
+import { m as resolveCopy } from "../../i18n/messages";
 import type { MenuAction } from "@react-native-menu/menu";
 import {
   DEFAULT_OWNERSHIP_RELATION,
@@ -45,7 +47,7 @@ export function ownershipFilterMenuActions(
   const actions: MenuAction[] = [
     {
       id: "ownership",
-      title: "Ownership",
+      title: resolveCopy(msg("Ownership")),
       subactions: OWNERSHIP_FILTERS.map((value) => ({
         id: `ownership:${value}`,
         title: OWNERSHIP_FILTER_LABELS[value],
@@ -56,7 +58,10 @@ export function ownershipFilterMenuActions(
   if (filter === "mine" || filter === "mine-only" || filter === "theirs") {
     actions.push({
       id: "relation",
-      title: filter !== "theirs" ? "Mine includes" : "Theirs includes",
+      title:
+        filter !== "theirs"
+          ? resolveCopy(msg("Mine includes"))
+          : resolveCopy(msg("Theirs includes")),
       subactions: OWNERSHIP_RELATIONS.map((value) => ({
         id: `relation:${value}`,
         title: OWNERSHIP_RELATION_LABELS[value],

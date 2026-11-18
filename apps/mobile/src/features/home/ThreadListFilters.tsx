@@ -1,5 +1,7 @@
+import { useGT as useCopyTranslation } from "gt-react-native";
 import { DEFAULT_OWNERSHIP_RELATION } from "@t3tools/client-runtime/state/identity";
 import type { EnvironmentId } from "@t3tools/contracts";
+import { useGT } from "gt-react-native";
 import { Pressable, ScrollView } from "react-native";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { ListFilterMenu } from "../layout/workspace/ListFilterMenu";
@@ -34,6 +36,9 @@ export function ThreadListFilters(props: {
   /** List padding the scroller bleeds through so pills start where row content does. */
   readonly gutter: number;
 }) {
+  const translateCopy = useCopyTranslation();
+
+  const gt = useGT();
   const selectedEnvironment = props.environments.find(
     (environment) =>
       props.selectedEnvironmentIds.length === 1 &&
@@ -54,14 +59,14 @@ export function ThreadListFilters(props: {
           selectedEnvironment?.label ??
           (props.selectedEnvironmentIds.length > 0
             ? `${props.selectedEnvironmentIds.length} environments`
-            : "All environments")
+            : gt("All environments"))
         }
-        accessibilityLabel="Filter threads by environment"
+        accessibilityLabel={gt("Filter threads by environment")}
         active={props.selectedEnvironmentIds.length > 0}
         actions={[
           {
             id: "all",
-            title: "All environments",
+            title: gt("All environments"),
             state: props.selectedEnvironmentIds.length === 0 ? "on" : "off",
           },
           ...props.environments.map((environment) => ({
@@ -84,7 +89,7 @@ export function ThreadListFilters(props: {
       />
       <ListFilterMenu
         label={ownershipFilterChipLabel(props.ownershipFilter, props.ownershipRelation)}
-        accessibilityLabel="Filter threads by ownership"
+        accessibilityLabel={translateCopy("Filter threads by ownership")}
         active={ownershipFilterIsCustom(props.ownershipFilter, props.ownershipRelation)}
         actions={ownershipFilterMenuActions(props.ownershipFilter, props.ownershipRelation)}
         onSelect={(id) =>
@@ -95,13 +100,13 @@ export function ThreadListFilters(props: {
         }
       />
       <ListFilterMenu
-        label={selectedProject?.label ?? "All projects"}
-        accessibilityLabel="Filter threads by project"
+        label={selectedProject?.label ?? gt("All projects")}
+        accessibilityLabel={gt("Filter threads by project")}
         active={selectedProject !== undefined}
         actions={[
           {
             id: "all",
-            title: "All projects",
+            title: gt("All projects"),
             state: props.selectedProjectKey === null ? "on" : "off",
           },
           ...props.projects.map((project) => ({
@@ -125,7 +130,7 @@ export function ThreadListFilters(props: {
       ownershipFilterIsCustom(props.ownershipFilter, props.ownershipRelation) ? (
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Reset thread filters"
+          accessibilityLabel={gt("Reset thread filters")}
           className="h-8 w-8 items-center justify-center"
           onPress={() => {
             props.onClearEnvironments();

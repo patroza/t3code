@@ -1,4 +1,5 @@
 import type { Processor } from "unified";
+import { decodeString } from "micromark-util-decode-string";
 import { isWindowsAbsolutePath } from "./path.ts";
 
 interface DestinationCompileContext {
@@ -11,13 +12,14 @@ function keepWindowsPathDestination(this: DestinationCompileContext, token: unkn
   const decoded = this.resume();
   const authored = this.sliceSerialize(token);
   const node = this.stack.at(-1);
-  // Character references still need decoding, so those destinations keep the parsed URL.
   if (node)
-    node.url = isWindowsAbsolutePath(authored) && !authored.includes("&") ? authored : decoded;
+    node.url = isWindowsAbsolutePath(authored)
+      ? decodeString(authored.replaceAll("\\", "\\\\"))
+      : decoded;
 }
 
 // A drive path that has not reached whitespace yet: `C:`, `C:\Users\me`, `C:/work`.
-const UNFINISHED_DRIVE_PATH = /(?:^|\W)[A-Za-z]:(?:[\\/]\S*)?$/;
+export const UNFINISHED_DRIVE_PATH = /(?:^|\W)[A-Za-z]:(?:[\\/]\S*)?$/;
 
 interface EscapeCompileContext {
   readonly stack: ReadonlyArray<{
@@ -56,6 +58,7 @@ function keepWindowsProsePathEscape(this: EscapeCompileContext) {
  * from a sentence, and `C:\x and \*this\*` must still read `*this*`.
  */
 export function remarkKeepWindowsProsePaths(this: Processor) {
+  // oxlint-disable-next-line oxc/no-this-in-exported-function -- Micromark binds the tokenizer context to this callback.
   (this.data().fromMarkdownExtensions ??= []).push({
     exit: { characterEscape: keepWindowsProsePathEscape },
   });
@@ -67,6 +70,7 @@ export function remarkKeepWindowsProsePaths(this: Processor) {
  * Windows paths keep the text as written, and so do escapes inside drive paths.
  */
 export function remarkKeepWindowsPaths(this: Processor) {
+  // oxlint-disable-next-line oxc/no-this-in-exported-function -- Micromark binds the tokenizer context to this callback.
   (this.data().fromMarkdownExtensions ??= []).push({
     exit: {
       resourceDestinationString: keepWindowsPathDestination,

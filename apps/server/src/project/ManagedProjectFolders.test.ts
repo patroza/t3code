@@ -7,6 +7,7 @@ import {
   ProjectId,
   ThreadId,
   VcsProcessSpawnError,
+  VcsProcessTimeoutError,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Deferred from "effect/Deferred";
@@ -187,6 +188,44 @@ it.effect("offers a Scratch folder when Git is not installed", () =>
   ),
 );
 
+it.effect("offers the Scratch folder once a Git check that timed out is asked again", () =>
+  withScratch(
+    ({ baseDir }) =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const scratch = yield* ManagedProjectFolders.ManagedProjectFolders;
+        assert.isTrue(Option.isNone(yield* scratch.scratchRoot));
+        assert.equal(yield* requireRoot, path.resolve(baseDir, "scratch"));
+      }),
+    {
+      vcsProcess: Layer.effect(
+        VcsProcess.VcsProcess,
+        Effect.map(VcsProcess.make, (real) => {
+          let timedOut = false;
+          return VcsProcess.VcsProcess.of({
+            run: (input) =>
+              Effect.suspend(() => {
+                if (timedOut) return real.run(input);
+                timedOut = true;
+                return Effect.fail(
+                  new VcsProcessTimeoutError({
+                    operation: input.operation,
+                    command: input.command,
+                    cwd: input.cwd,
+                    timeoutMs: 5_000,
+                  }),
+                );
+              }),
+          });
+        }),
+      ).pipe(
+        Layer.provide(ProcessRunner.layer),
+        Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    },
+  ),
+);
+
 it.effect("creates one Scratch project, even for concurrent first requests", () =>
   withScratch(() =>
     Effect.gen(function* () {
@@ -287,6 +326,15 @@ it.effect("gives each Scratch thread its own folder, named from its message", ()
       );
       assert.equal(path.dirname(pasted), root);
       assert.isAtMost(path.basename(pasted).length, 80);
+
+      const accented = Option.getOrThrow(
+        yield* scratch.folderForThread({
+          projectId,
+          threadId: ThreadId.make("thread-diacritics"),
+          text: "tìm kiếm skill",
+        }),
+      );
+      assert.match(path.basename(accented), /^\d{4}-\d{2}-\d{2}-tim-kiem-skill-/);
     }),
   ),
 );
