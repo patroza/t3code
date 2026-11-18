@@ -160,7 +160,7 @@ describe("GitHubCredentials", () => {
       const error = yield* Effect.flip(credentials.get("github.com"));
       expect(error._tag).toBe("GitHubHostDisabledError");
       expect(error.message).toBe(
-        "GitHub host github.com is turned off in Settings → Source Control.",
+        "GitHub host github.com is turned off in Settings → Source control & issues.",
       );
       expect(calls).toEqual([]);
     }).pipe(Effect.provide(layer));
