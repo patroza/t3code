@@ -3,6 +3,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
 import { AiUsageStats } from "./AiUsageStats";
+import { GTProvider, initializeGT } from "gt-react";
+
+initializeGT({ defaultLocale: "en", locales: ["en"] });
 
 /**
  * The live `ai-usage` daemon shape for a claude/max plan: plenty of headroom on
@@ -31,7 +34,11 @@ const claudeWithDrainedExtras: AiUsageProviderStatus = {
 };
 
 const render = (item: AiUsageProviderStatus) =>
-  renderToStaticMarkup(<AiUsageStats item={item} nowMs={1785866400_000} />);
+  renderToStaticMarkup(
+    <GTProvider>
+      <AiUsageStats item={item} nowMs={1785866400_000} />
+    </GTProvider>,
+  );
 
 describe("AiUsageStats", () => {
   it("does not mark the provider out of limit for a drained extra-usage pool", () => {

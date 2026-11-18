@@ -123,12 +123,12 @@ describe("mobile surface existence (anti stack-drop)", () => {
     const toolbar = readSrc("features/layout/workspace/WorkspaceToolbar.tsx");
     const filters = readSrc("features/home/ThreadListFilters.tsx");
     const ownership = readSrc("features/home/thread-list-ownership-filter.ts");
-    expect(toolbar).toContain('accessibilityLabel="Open settings"');
+    expect(toolbar).toContain('accessibilityLabel={translateCopy("Open settings")}');
     expect(toolbar).toContain('icon="gearshape"');
     expect(toolbar).not.toContain("Thread filters and settings");
-    expect(filters).toContain('accessibilityLabel="Filter threads by environment"');
-    expect(filters).toContain('accessibilityLabel="Filter threads by project"');
-    expect(filters).toContain('accessibilityLabel="Filter threads by ownership"');
+    expect(filters).toContain('accessibilityLabel={gt("Filter threads by environment")}');
+    expect(filters).toContain('accessibilityLabel={gt("Filter threads by project")}');
+    expect(filters).toContain('accessibilityLabel={translateCopy("Filter threads by ownership")}');
     expect(filters).toContain("ownershipFilterMenuActions");
     expect(ownership).toContain("Mine includes");
     expect(ownership).toContain("Theirs includes");

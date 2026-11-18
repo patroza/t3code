@@ -1,3 +1,7 @@
+import { GTProvider, initializeGT } from "gt-react";
+
+initializeGT({ defaultLocale: "en", locales: ["en"] });
+
 import {
   BUILT_IN_BROWSER_PROFILES,
   DEFAULT_BROWSER_PROFILE_ID,
@@ -7,9 +11,11 @@ import {
   FILL_PREVIEW_VIEWPORT,
   ThreadId,
 } from "@t3tools/contracts";
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
+import { createElement, type ReactNode } from "react";
+import { renderToStaticMarkup as renderMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+
+const renderToStaticMarkup = (node: ReactNode) => renderMarkup(<GTProvider>{node}</GTProvider>);
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(async (_tabId: string, _url: string): Promise<void> => undefined),
@@ -125,6 +131,9 @@ vi.mock("~/previewStateStore", () => ({
     desktopByTabId: {
       "tab-1": {
         hasWebContents: true,
+        navStatus: mocks.showEmptyState
+          ? { _tag: "Idle" }
+          : { _tag: "Success", url: "http://example.com/", title: "Example" },
         canGoBack: false,
         canGoForward: false,
         loading: mocks.loading,

@@ -1,4 +1,5 @@
 import { CompactBrandTitle } from "../../../components/CompactBrandTitle";
+import { AppText as Text } from "../../../components/ui/AppText";
 import { WorkspaceNoTabs } from "./WorkspaceNoTabs";
 import { isSharedSlotTab } from "./navigation-tab-order";
 import { SharedSlotTitle } from "./SharedSlotTitle";
@@ -71,6 +72,10 @@ function WorkspaceRootTitle(props: {
         brand={
           !settingsOpen && isSharedSlotTab(state.selectedTab) ? (
             <SharedSlotTitle tab={state.selectedTab} />
+          ) : !settingsOpen && state.selectedTab === "threads" ? (
+            <Text className="text-[18px] font-t3-bold text-foreground" numberOfLines={1}>
+              {props.title}
+            </Text>
           ) : (
             <CompactBrandTitle
               accessibilityLabel={gt("{product}, {title}", { product: "T3 Code", title: tabTitle })}
@@ -112,12 +117,12 @@ function WorkspaceRootContent() {
   const { state } = workspace;
   const listMode = useHomeListMode();
   const title = workspace.settingsOpen
-    ? "Settings"
+    ? gt("Settings")
     : enabled.length === 0
-      ? "Navigation"
+      ? gt("Navigation")
       : state.selectedTab === "threads"
-        ? HOME_LIST_MODE_TITLES[listMode]
-        : TAB_TITLES[state.selectedTab];
+        ? m(HOME_LIST_MODE_TITLES[listMode])
+        : m(TAB_TITLES[state.selectedTab]);
   const solidHeader = deviceType === "duo-folded" || state.selectedTab === "usage";
   // Settings is a workspace tab too; its list takes the place of the selected tab's.
   const settingsOpen = workspace.settingsOpen;

@@ -290,7 +290,9 @@ it("an interrupted image-only first send of a new thread says it may not have be
   await expect.element(editor).toHaveTextContent("next draft");
   launch.release();
 
-  await expect.element(page.getByText("Message may not have been sent")).toBeVisible();
+  await expect
+    .element(page.getByRole("alert").getByText("Message may not have been sent"))
+    .toBeVisible();
   await expect.element(editor).toHaveTextContent("next draft");
   // With no text there is nothing to copy.
   expect(page.getByText("Copy message", { exact: true }).query()).toBeNull();

@@ -19,7 +19,7 @@ vi.mock(import("../localApi"), async (original) => ({
 vi.mock(import("../hooks/useCopyToClipboard"), async (original) => ({
   ...(await original()),
   writeTextToClipboard: state.writeTextToClipboard,
-  useCopyToClipboard: ((options: { target: string }) => ({
+  useCopyToClipboard: ((options: { target: { target: string } }) => ({
     copyToClipboard: (command: string) => state.writeTextToClipboard(command, options.target),
     isCopied: false,
   })) as never,
@@ -118,7 +118,10 @@ it.each([
       expect(state.writeTextToClipboard).not.toHaveBeenCalled();
     } else {
       await vi.waitFor(() =>
-        expect(state.writeTextToClipboard).toHaveBeenCalledWith(copiedPath, "workspace path"),
+        expect(state.writeTextToClipboard).toHaveBeenCalledWith(
+          copiedPath,
+          expect.objectContaining({ target: "workspace path" }),
+        ),
       );
     }
   },

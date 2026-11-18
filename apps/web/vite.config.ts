@@ -87,6 +87,12 @@ const buildSourcemap: boolean | "hidden" =
       : true;
 
 const isolatedUnitTestFiles = [
+  // Fork fixtures replace shared runtime modules and need their own mock registries.
+  "src/themeBackground.test.ts",
+  "src/components/chat/ChatHeader.test.ts",
+  "src/components/settings/IntegrationsSettings.logic.test.ts",
+  "src/components/preview/closePreviewSession.test.ts",
+  "src/components/desktopUpdate.toast.test.tsx",
   // The published-theme harness must bind its server atom before the palette module loads.
   "src/hooks/useEnvironmentTheme.test.ts",
   // The terminal attach harness replaces modules also imported by terminal/status components.

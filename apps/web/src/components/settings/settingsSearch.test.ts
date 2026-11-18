@@ -115,10 +115,10 @@ describe("searchSettings", () => {
       "start-from-origin",
       "project-actions",
       "linked-environments",
-      "keybinding-composer.previousWorktree",
-      "keybinding-composer.workspace",
       "keybinding-workspace.focusNext",
       "keybinding-workspace.focusPrevious",
+      "keybinding-composer.previousWorktree",
+      "keybinding-composer.workspace",
     ]);
     expect(searchSettings("deploy").map((item) => item.id)).toContain(
       "continue-threads-after-server-update",
@@ -164,6 +164,7 @@ describe("searchSettings", () => {
       "unpin-confirmation",
       "archive-confirmation",
       "delete-confirmation",
+      "terminal-close-confirmation",
       "worktree-remove-confirmation",
     ]);
   });

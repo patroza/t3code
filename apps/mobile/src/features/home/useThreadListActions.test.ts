@@ -38,6 +38,11 @@ const state = vi.hoisted(() => ({
   heldActions: new Map<string, Promise<void>>(),
 }));
 
+vi.mock("gt-react-native", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("gt-react-native")>();
+  return { ...actual, useGT: () => actual.gtFallback, useMessages: () => actual.mFallback };
+});
+
 vi.mock("react", () => ({
   useCallback: (callback: unknown) => callback,
   useRef: (current: unknown) => ({ current }),

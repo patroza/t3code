@@ -2593,6 +2593,27 @@ export default function ChatView(props: ChatViewProps) {
     setScrollToEndClearance(clearance);
   };
   const publishComposerOverlayHeightStable = useStableCallback(publishComposerOverlayHeight);
+  // Timeline rows may retain old props; keep their handlers outside this render's projection scope.
+  const restoreComposerAfterTimelineStable = useStableCallback(() =>
+    composerRef.current?.restoreAfterTimelineReachedEnd(),
+  );
+  const getTimelineScrollableNodeStable = useStableCallback(
+    () => legendListRef.current?.getScrollableNode() ?? null,
+  );
+  const isTimelineAtLogicalEndStable = useStableCallback(() => {
+    const node = legendListRef.current?.getScrollableNode();
+    return (
+      node !== null &&
+      node !== undefined &&
+      node.scrollHeight - node.scrollTop - node.clientHeight < 2
+    );
+  });
+  const collapseComposerForPageScrollStable = useStableCallback(
+    (key: Parameters<typeof onComposerPageScrollKeyDownStable>[0]) => {
+      composerRef.current?.collapseForTimelineScrollKey(key);
+      onComposerPageScrollKeyDownStable(key);
+    },
+  );
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- measures the composer overlay element before paint for a new thread or composer mount
   useLayoutEffect(() => {
     if (!composerOverlayElement) return;
@@ -3893,9 +3914,7 @@ export default function ChatView(props: ChatViewProps) {
                   contentInsetEndAdjustment={composerTimelineInset}
                   liveFollowEnabled={timelineLiveFollowEnabled}
                   onIsAtEndChange={onIsAtEndChangeStable}
-                  onToolOutputCollapsedAtEnd={() =>
-                    composerRef.current?.restoreAfterTimelineReachedEnd()
-                  }
+                  onToolOutputCollapsedAtEnd={restoreComposerAfterTimelineStable}
                   onViewportAttach={attachTimelineViewport}
                   onFooterGrow={onTimelineFooterGrowStable}
                   hideEmptyPlaceholder={isDraftHeroState || threadDetailLoading}
@@ -4146,17 +4165,8 @@ export default function ChatView(props: ChatViewProps) {
                                 threadPullRequests={
                                   (activeThreadShell ?? activeThread)?.pullRequests
                                 }
-                                getTimelineScrollableNode={() =>
-                                  legendListRef.current?.getScrollableNode() ?? null
-                                }
-                                isTimelineAtLogicalEnd={() => {
-                                  const node = legendListRef.current?.getScrollableNode();
-                                  return (
-                                    node !== null &&
-                                    node !== undefined &&
-                                    node.scrollHeight - node.scrollTop - node.clientHeight < 2
-                                  );
-                                }}
+                                getTimelineScrollableNode={getTimelineScrollableNodeStable}
+                                isTimelineAtLogicalEnd={isTimelineAtLogicalEndStable}
                                 onComposerOverlayHeightChange={publishComposerOverlayHeightStable}
                                 permissionsShownInStrip={
                                   showComposerContextStrip && !isServerThread
@@ -4165,10 +4175,7 @@ export default function ChatView(props: ChatViewProps) {
                                 composerImagesRef={composerImagesRef}
                                 composerFilesRef={composerFilesRef}
                                 composerTerminalContextsRef={composerTerminalContextsRef}
-                                onPageScrollKeyDown={(key) => {
-                                  composerRef.current?.collapseForTimelineScrollKey(key);
-                                  onComposerPageScrollKeyDownStable(key);
-                                }}
+                                onPageScrollKeyDown={collapseComposerForPageScrollStable}
                                 onPageScrollKeyUp={onComposerPageScrollKeyUpStable}
                                 onPageScrollRelease={onComposerPageScrollReleaseStable}
                                 onCompactContext={onComposerCompactContextStable}

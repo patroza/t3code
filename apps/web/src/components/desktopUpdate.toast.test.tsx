@@ -1,6 +1,7 @@
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { DesktopUpdateState } from "@t3tools/contracts";
+import { T } from "gt-react";
 
 const testState = vi.hoisted(() => ({
   addToast: vi.fn(),
@@ -25,6 +26,7 @@ function findReleaseNotesLink(node: ReactNode): ClickableElement | null {
   if (!isValidElement(node)) return null;
   const element = node as ReactElement<{ readonly children?: ReactNode }>;
   if (element.type === "button") return element as ClickableElement;
+  if (element.type === T) return null;
   if (typeof element.type === "function") {
     const render = element.type as (props: unknown) => ReactNode;
     return findReleaseNotesLink(render(element.props));

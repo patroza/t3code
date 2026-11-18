@@ -145,7 +145,10 @@ it.each([
       expect(state.writeTextToClipboard).not.toHaveBeenCalled();
     } else {
       await vi.waitFor(() =>
-        expect(state.writeTextToClipboard).toHaveBeenCalledWith(copiedPath, "workspace path"),
+        expect(state.writeTextToClipboard).toHaveBeenCalledWith(
+          copiedPath,
+          expect.objectContaining({ target: "workspace path" }),
+        ),
       );
     }
   },

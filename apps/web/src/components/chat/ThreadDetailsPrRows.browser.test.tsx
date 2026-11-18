@@ -281,17 +281,13 @@ it("keeps workspace controls after expanding and collapsing 70 linked pull reque
   await userEvent.click(page.getByRole("button", { name: "Show 69 more" }));
   await expect.element(page.getByRole("button", { name: "Show less" })).toBeInTheDocument();
   const extraRows = () =>
-    container.querySelectorAll(
-      '[data-thread-details-pr-list] [aria-label^="https://github.com/pingdotgg/t3code/pull/"]',
-    );
+    container.querySelectorAll('[data-thread-details-pr-list] [aria-label^="Pull request #"]');
   expect(extraRows()).toHaveLength(69);
   await userEvent.click(page.getByRole("button", { name: "Show less" }));
   await expect.element(page.getByRole("button", { name: "Show 69 more" })).toBeVisible();
   expect(extraRows()).toHaveLength(0);
   await expect
-    .element(
-      page.getByRole("button", { name: "https://github.com/pingdotgg/t3code/pull/1", exact: true }),
-    )
+    .element(page.getByRole("button", { name: "Pull request #1, open: Change 1", exact: true }))
     .toBeVisible();
   await expect.element(runContext).toBeVisible();
   await expect.element(editor).toBeVisible();

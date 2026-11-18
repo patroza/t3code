@@ -1297,7 +1297,10 @@ it.each([
       ) {
         expect(result).toMatchObject({
           type: "error",
-          message: expect.stringContaining("Preview limited"),
+          message:
+            scenario === "oversized section"
+              ? "word-limited-section-markup"
+              : "word-limited-auxiliary-markup",
         });
       } else {
         expect(result.type).toBe("docx");
@@ -1388,7 +1391,8 @@ it.each([
     });
     expect(result).toMatchObject({
       type: "error",
-      message: expect.stringContaining("Preview limited"),
+      message:
+        scenario === "deep XML" ? "word-limited-xml-nesting" : "word-limited-auxiliary-markup",
     });
   } finally {
     worker.terminate();
@@ -1797,7 +1801,7 @@ it.each(["repeated binary", "XML relationship alias", "duplicate relationship ID
       });
       expect(result).toMatchObject({
         type: "error",
-        message: expect.stringContaining("expanded markup"),
+        message: "word-limited-expanded-markup",
       });
     } finally {
       worker.terminate();
@@ -1839,7 +1843,7 @@ it.each(["XFD200", "XFD1048576", "AX500", "AZ9999999"])(
       if (ref === "AZ9999999" || ref === "XFD1048576") {
         expect(result).toMatchObject({
           type: "error",
-          message: expect.stringContaining(ref === "AZ9999999" ? "invalid" : "preview limit"),
+          message: ref === "AZ9999999" ? "workbook-dimensions" : "workbook-too-many-rows",
         });
       } else {
         expect(result.type).toBe("xlsx");

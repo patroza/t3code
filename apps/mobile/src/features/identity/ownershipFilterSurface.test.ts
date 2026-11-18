@@ -18,16 +18,18 @@ describe("mobile ownership filter surface", () => {
 
     // iOS keeps Mine/Theirs beside the environment and project chips;
     // Android keeps ownership in its native header menu.
-    expect(workspaceToolbar).toContain('accessibilityLabel="Open settings"');
+    expect(workspaceToolbar).toContain('accessibilityLabel={translateCopy("Open settings")}');
     expect(workspaceToolbar).toContain('icon="gearshape"');
     expect(workspaceToolbar).not.toContain("Thread filters and settings");
     expect(workspaceToolbar).not.toContain("setOwnershipFilter");
-    expect(threadListFilters).toContain('accessibilityLabel="Filter threads by ownership"');
+    expect(threadListFilters).toContain(
+      'accessibilityLabel={translateCopy("Filter threads by ownership")}',
+    );
     expect(threadListFilters).toContain("ownershipFilterMenuActions");
     expect(threadListFilters).toContain("onOwnershipFilterChange");
     expect(threadListFilters).toContain("onOwnershipRelationChange");
 
-    expect(filterMenu).toMatch(/title:\s*"Ownership"|title="Ownership"/);
+    expect(filterMenu).toContain('title: resolveCopy(msg("Ownership"))');
     expect(filterMenu).toContain("onOwnershipFilterChange");
     expect(filterMenu).toContain("onOwnershipRelationChange");
     expect(homeRoute).toContain("ownershipFilteredThreads");

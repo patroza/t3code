@@ -26,6 +26,11 @@ const state = vi.hoisted(() => ({
   cachedRefs: [] as VcsListRefsResult["refs"],
 }));
 
+vi.mock("gt-react-native", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("gt-react-native")>();
+  return { ...actual, useGT: () => actual.gtFallback, useMessages: () => actual.mFallback };
+});
+
 vi.mock("react", () => ({
   useCallback: (callback: unknown) => callback,
   useMemo: (factory: () => unknown) => factory(),

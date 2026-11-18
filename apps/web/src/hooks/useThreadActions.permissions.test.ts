@@ -54,6 +54,11 @@ const state = vi.hoisted(() => ({
   sessionLookupFails: false,
 }));
 
+vi.mock("gt-react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("gt-react")>();
+  return { ...actual, useGT: () => actual.gtFallback, useMessages: () => actual.mFallback };
+});
+
 vi.mock("react", () => ({
   useCallback: (callback: unknown) => callback,
   useLayoutEffect: (effect: () => void) => effect(),
@@ -206,6 +211,7 @@ vi.mock("./useSettings", () => ({
       sidebarThreadSortOrder: "createdAt",
       confirmThreadDelete: true,
       confirmThreadUnpin: true,
+      confirmWorktreeRemoval: true,
     }),
 }));
 
@@ -464,6 +470,7 @@ describe("thread action permissions", () => {
     expect(state.confirm).toHaveBeenCalledOnce();
     expect(state.requests.map((request) => request.action)).toEqual([
       "stopSession",
+      "closeTerminal",
       "delete",
       "removeWorktree",
       "refreshStatus",

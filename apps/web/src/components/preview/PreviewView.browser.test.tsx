@@ -112,9 +112,10 @@ vi.mock(import("~/previewStateStore"), async (original) => ({
     desktopByTabId: {
       "tab-1": {
         hasWebContents: true,
-        navStatus: mocks.idleDesktopOverlay
-          ? { _tag: "Idle" }
-          : { _tag: "Success", url: "http://example.com/", title: "Example" },
+        navStatus:
+          mocks.idleDesktopOverlay || mocks.showEmptyState
+            ? { _tag: "Idle" }
+            : { _tag: "Success", url: "http://example.com/", title: "Example" },
         canGoBack: false,
         canGoForward: false,
         loading: mocks.loading,

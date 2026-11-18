@@ -569,7 +569,7 @@ describe("useQueuedRunEdit", () => {
       expect(revoke).not.toHaveBeenCalled();
       finishSave({ _tag: result });
       await act(() => saved);
-      if (transition === "cancel") {
+      if (transition === "cancel" || (transition === "replace" && result === "Success")) {
         expect(readAttachmentUpload(image.id)).toBeUndefined();
         expect(revoke).toHaveBeenCalledWith(image.previewUrl);
         expect(useComposerDraftStore.getState().getComposerDraft(target)).toBeNull();

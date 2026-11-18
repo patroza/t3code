@@ -26,6 +26,7 @@ vi.mock("~/env", async (importOriginal) => ({
 vi.mock("~/state/primaryEnvironment", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/state/primaryEnvironment")>()),
   primaryEnvironmentIdAtom: Atom.make<EnvironmentId | null>(null),
+  primaryEnvironmentNativeBrowserAtom: Atom.make(true),
 }));
 
 const threadRef = {
