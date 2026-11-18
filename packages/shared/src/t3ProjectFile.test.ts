@@ -39,6 +39,7 @@ describe("buildT3ProjectFileJsonSchema", () => {
       "iconPath",
       "jiraProjects",
       "scripts",
+      "worktreeSparsePatternsPath",
       "worktreeSubmodules",
     ]);
     expect(schema.properties.jiraProjects?.description).toContain("bare PROJ-123");
