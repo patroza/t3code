@@ -147,6 +147,9 @@ vi.mock("../lib/composerImages", async (importOriginal) => ({
   removePersistedComposerAttachmentFile: composerAttachmentCleanupMocks.remove,
 }));
 
+// Finish the async partial mock before background cleanup imports it concurrently.
+import "../lib/composerImages";
+
 vi.mock("../lib/uuid", () => ({ uuidv4: () => "uuid", randomHex: () => "0000" }));
 vi.mock("./assets", () => ({ assetEnvironment: {} }));
 vi.mock("./attachments", () => ({ attachmentEnvironment: {} }));
