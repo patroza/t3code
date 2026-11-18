@@ -28,12 +28,14 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Tracer from "effect/Tracer";
 import { McpSchema, McpServer, Tool, Toolkit } from "effect/ai";
-import { HttpBody, HttpClient, HttpClientRequest, HttpRouter } from "effect/http";
+import { HttpBody, HttpClient, HttpClientRequest, HttpRouter, HttpServer } from "effect/http";
+import * as NetAddress from "effect/net/NetAddress";
 import { vi } from "vite-plus/test";
 
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
+import * as AssetSigner from "../assets/AssetSigner.ts";
 import * as DocumentText from "../provider/DocumentText.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -43,11 +45,13 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
+import * as PreviewManager from "../preview/Manager.ts";
 
 import * as DeviceService from "../device/DeviceService.ts";
 import * as PullRequestReviewGuideService from "../pullRequest/PullRequestReviewGuideService.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as ServerConfig from "../config.ts";
+import * as ServerHttp from "../http.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { advertisedJsonSchema } from "./advertisedJsonSchema.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
@@ -59,7 +63,9 @@ import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
 import { PreviewToolkit } from "./toolkits/preview/tools.ts";
+import { PreviewControlsToolkit } from "./toolkits/previewControls/tools.ts";
 import { ProjectToolkit } from "./toolkits/project/tools.ts";
+import { ThreadToolkit } from "./toolkits/thread/tools.ts";
 
 const tabId = PreviewTabId.make("tab-mcp-test");
 
@@ -278,12 +284,32 @@ it.effect.each([
     ),
 );
 
+it.effect("rejects a metadata-only response when the screenshot is saved", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* serveSnapshots("mcp-missing-pixels", {
+        ...snapshotResult,
+        screenshot: { width: 10, height: 5 },
+      });
+      const result = yield* callSnapshot({ save: true });
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        { type: "text", text: expect.stringContaining("did not contain requested PNG pixels") },
+      ]);
+    }),
+  ).pipe(Effect.provide(layerTest)),
+);
+
 const layerRecordingTools = (calls: Array<unknown>) => {
   const RecordingToolkit = Toolkit.make(
     OrchestratorToolkit.tools.delegate_task,
+    OrchestratorToolkit.tools.t3_thread_list,
     OrchestratorToolkit.tools.t3_thread_read,
     OrchestratorToolkit.tools.t3_thread_wait,
+    ProjectToolkit.tools.t3_project_list,
     ProjectToolkit.tools.t3_project_update,
+    ThreadToolkit.tools.t3_queue,
+    PreviewControlsToolkit.tools.t3_preview_list,
     ProjectToolkit.tools.t3_thread_launch,
   );
   const record = McpToolAccess.reads((params: unknown) =>
@@ -297,9 +323,13 @@ const layerRecordingTools = (calls: Array<unknown>) => {
     RecordingToolkit,
     McpToolAccess.toLayer(RecordingToolkit, {
       delegate_task: record,
+      t3_thread_list: record,
       t3_thread_read: record,
       t3_thread_wait: record,
+      t3_project_list: record,
       t3_project_update: record,
+      t3_queue: record,
+      t3_preview_list: record,
       t3_thread_launch: record,
     }),
   ).pipe(
@@ -309,6 +339,8 @@ const layerRecordingTools = (calls: Array<unknown>) => {
         McpToolAccessTestkit.liveThreadsLayer,
         Layer.mock(OrchestratorMcpService.OrchestratorMcpService)({}),
         Layer.mock(ProjectService.ProjectService)({}),
+        Layer.mock(PreviewManager.PreviewManager)({}),
+        Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
         Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
         Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
           namedProjectsRoot: process.cwd(),
@@ -421,7 +453,9 @@ it.effect.each([
           tabId: alternateTabId,
           threadId,
         });
-        expect(event.request.input).toEqual({});
+        expect(event.request.input).toEqual(
+          images && requests !== 7 ? {} : { pixelsRequired: false },
+        );
         return broker.respond({
           clientId: "mcp-image-option-client",
           connectionId: event.connectionId,
@@ -430,7 +464,8 @@ it.effect.each([
           result: {
             ...page,
             title: `Snapshot ${requests}`,
-            screenshot: { ...screenshot, data: png },
+            screenshot:
+              images || requests === 7 ? { ...screenshot, data: png } : { width: 1, height: 1 },
           },
         });
       }).pipe(Effect.forkScoped);
@@ -548,11 +583,12 @@ it.effect("names the screenshot destination when saving it fails", () =>
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
       yield* (yield* FileSystem.FileSystem).writeFileString(config.browserArtifactsDir, "occupied");
-      yield* serveSnapshots("mcp-save-failure-client", snapshotResult);
+      const inputs = yield* serveSnapshots("mcp-save-failure-client", snapshotResult);
 
       const snapshot = yield* callSnapshot({ tabId: alternateTabId, save: true });
       const text = snapshot.content[0]?.type === "text" ? snapshot.content[0].text : "";
 
+      expect(inputs).toEqual([{ fullScreenshot: true }]);
       expect(snapshot.isError).toBe(true);
       expect(text).toMatch(/^Preview snapshot failed: Could not save preview screenshot to /);
       expect(text).toContain(config.browserArtifactsDir);
@@ -575,13 +611,11 @@ it.effect("refuses preview tools to a client outside a thread before they run", 
     const click = yield* server
       .callTool({ name: "preview_act", arguments: { action: "click", locator: "text=Send" } })
       .pipe(
+        Effect.flip,
         Effect.provideService(McpInvocationContext.McpInvocationContext, readOnly),
         Effect.provideService(McpSchema.McpServerClient, client),
       );
-    expect(click.isError).toBe(true);
-    expect(click.content).toEqual([
-      { type: "text", text: expect.stringContaining("needs an agent running inside T3 Code") },
-    ]);
+    expect(click.message).toContain("Tool 'preview_act' not found");
   }).pipe(Effect.provide(layerTest)),
 );
 
@@ -650,6 +684,34 @@ it.effect("decodes null optional arguments the way it decodes omitted ones", () 
     expect(calls[1]).toEqual(calls[0]);
     expect(calls[3]).toEqual(calls[2]);
     expect(calls[4]).toStrictEqual({ projectId: "project-1", projectIcon: null });
+  }).pipe(Effect.provide(layerRecordingTools(calls)));
+});
+
+it.effect("decodes a JSON-stringified delegate target as the same object", () => {
+  const calls: Array<unknown> = [];
+  return Effect.gen(function* () {
+    const task = "Inspect";
+    const target = {
+      providerInstanceId: "codex",
+      model: "gpt-6.2-sol",
+      options: { reasoningEffort: "medium" },
+    };
+    yield* callTool("delegate_task", { task, target });
+    yield* callTool("delegate_task", { task, target: JSON.stringify(target) });
+
+    for (const invalidTarget of ["{model:", '{"model":42}']) {
+      const error = yield* Effect.flip(callTool("delegate_task", { task, target: invalidTarget }));
+      expect(error).toBeInstanceOf(McpSchema.InvalidParams);
+    }
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toEqual({
+      task,
+      target: {
+        ...target,
+        options: [{ id: "reasoningEffort", value: "medium" }],
+      },
+    });
+    expect(calls[1]).toEqual(calls[0]);
   }).pipe(Effect.provide(layerRecordingTools(calls)));
 });
 
@@ -728,6 +790,29 @@ it.effect.each(["limit", "runLimit", "maxCharsPerItem"])(
 
       expect(String(rejected)).toContain("greater than or equal to 1");
       expect(calls).toEqual([]);
+    }).pipe(Effect.provide(layerRecordingTools(calls)));
+  },
+);
+
+const clampedListLimits = [
+  { tool: "t3_thread_list", input: { allProjects: true }, maximum: 100 },
+  { tool: "t3_project_list", input: {}, maximum: 100 },
+  { tool: "t3_queue", input: { action: "list" }, maximum: 100 },
+  { tool: "t3_preview_list", input: {}, maximum: 50 },
+];
+
+it.effect.each(clampedListLimits)(
+  "clamps a $tool limit above its maximum instead of rejecting the call",
+  ({ tool, input, maximum }) => {
+    const calls: Array<unknown> = [];
+    return Effect.gen(function* () {
+      yield* callTool(tool, { ...input, limit: maximum * 2 });
+      yield* callTool(tool, { ...input, limit: 7 });
+
+      expect(calls).toEqual([
+        { ...input, limit: maximum },
+        { ...input, limit: 7 },
+      ]);
     }).pipe(Effect.provide(layerRecordingTools(calls)));
   },
 );
@@ -1363,6 +1448,12 @@ it.effect("admits provider and OAuth client credentials and points only clients 
               ),
           }),
         ),
+        Layer.provide(ServerHttp.layerBrowserApiCors),
+        Layer.provide(
+          ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-origin-test-" }).pipe(
+            Layer.provide(NodeServices.layer),
+          ),
+        ),
       );
       const traced = recordSpans();
       yield* HttpRouter.serve(serverLayer, { disableListenLog: true, disableLogger: true }).pipe(
@@ -1445,6 +1536,30 @@ it.effect("admits provider and OAuth client credentials and points only clients 
           (span) => span.name.startsWith("mcp.tool.") || span.name.startsWith("McpServer."),
         ),
       ).toEqual([]);
+
+      // A present, disallowed Origin is refused with 403 before credentials or CORS answer.
+      const foreignOrigin = (method: "POST" | "OPTIONS", token: string | undefined) =>
+        httpClient.execute(
+          HttpClientRequest.make(method)("/mcp", {
+            headers: {
+              origin: "https://untrusted.invalid",
+              accept: "application/json, text/event-stream",
+              "access-control-request-method": "POST",
+              ...(token === undefined ? {} : { authorization: `Bearer ${token}` }),
+            },
+            ...(method === "POST"
+              ? {
+                  body: HttpBody.text(
+                    `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"1.0.0"}}}`,
+                    "application/json",
+                  ),
+                }
+              : {}),
+          }),
+        );
+      expect((yield* foreignOrigin("POST", providerToken)).status).toBe(403);
+      expect((yield* foreignOrigin("POST", undefined)).status).toBe(403);
+      expect((yield* foreignOrigin("OPTIONS", undefined)).status).toBe(403);
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
@@ -1548,6 +1663,107 @@ it.effect("accepts case-insensitive MCP bearer schemes and diagnoses rejected cr
     ),
   );
 });
+
+it.effect("gives outside clients an upload URL on the origin their request reached", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const token = "outsideClientToken";
+      const scope: McpInvocationContext.McpInvocationScope = {
+        environmentId,
+        requestNamespace: `client:${token}`,
+        thread: undefined,
+        client: { sessionId: token, label: "Hosted agent", access: "full-access" },
+        capabilities: new Set(["orchestration"]),
+        issuedAt: 1,
+      };
+      const serverLayer = McpHttpServer.layerMcpTransport(
+        McpHttpServer.layerAttachmentToolkit,
+      ).pipe(
+        Layer.provide(ServerSettings.layerTest()),
+        Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
+        Layer.provide(
+          Layer.mock(McpSessionRegistry.McpSessionRegistry)({
+            resolve: () => Effect.undefined,
+          }),
+        ),
+        // Signs in the way an OAuth client such as a hosted ChatGPT app does.
+        Layer.provide(
+          Layer.succeed(McpHttpServer.McpClientAuthenticator)({
+            authenticate: (request) =>
+              Effect.succeed(
+                request.headers.authorization === `Bearer ${token}` ? scope : undefined,
+              ),
+          }),
+        ),
+        Layer.provide(
+          AssetSigner.layer.pipe(
+            Layer.provideMerge(ServerSecretStore.layer),
+            Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-upload-" })),
+            Layer.provideMerge(DocumentText.layer),
+            Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          ),
+        ),
+      );
+      yield* HttpRouter.serve(serverLayer, { disableListenLog: true, disableLogger: true }).pipe(
+        Layer.build,
+      );
+      const httpClient = yield* HttpClient.HttpClient;
+      const prepareUpload = (proxyHeaders: Record<string, string>) =>
+        Effect.gen(function* () {
+          const headers = {
+            accept: "application/json, text/event-stream",
+            authorization: `Bearer ${token}`,
+            ...proxyHeaders,
+          };
+          const initialize = yield* httpClient.post("/mcp", {
+            headers,
+            body: HttpBody.text(
+              `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"1.0.0"}}}`,
+              "application/json",
+            ),
+          });
+          const response = yield* httpClient.post("/mcp", {
+            headers: {
+              ...headers,
+              "mcp-session-id": initialize.headers["mcp-session-id"]!,
+              "mcp-protocol-version": "2025-06-18",
+            },
+            body: HttpBody.text(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: 2,
+                method: "tools/call",
+                params: {
+                  name: "t3_attachment_prepare_upload",
+                  arguments: {
+                    upload: {
+                      type: "image",
+                      name: "shot.png",
+                      mimeType: "image/png",
+                      sizeBytes: 6,
+                    },
+                  },
+                },
+              }),
+              "application/json",
+            ),
+          });
+          const body = (yield* response.json) as {
+            result: { structuredContent: { uploadUrl: string } };
+          };
+          return body.result.structuredContent;
+        });
+
+      const direct = yield* prepareUpload({});
+      const { address } = yield* HttpServer.HttpServer;
+      if (!NetAddress.isInetAddress(address)) throw new Error("Expected a TCP test server");
+      expect(new URL(direct.uploadUrl).origin).toBe(`http://127.0.0.1:${address.port}`);
+
+      const proxied = yield* prepareUpload({ "x-forwarded-proto": "https" });
+      expect(new URL(proxied.uploadUrl).protocol).toBe("https:");
+    }),
+  ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+);
 
 it.effect("hides tools for links and refuses another environment while the beta is off", () =>
   Effect.scoped(

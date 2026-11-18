@@ -1,3 +1,4 @@
+import { useGT as useCopyTranslation } from "gt-react-native";
 import { getHostResourcePressure } from "@t3tools/client-runtime/state/hostResourcePresentation";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { Pressable, View } from "react-native";
@@ -18,6 +19,8 @@ export function HostResourceStatus(props: {
   readonly environmentLabel: string;
   readonly connected: boolean;
 }) {
+  const translateCopy = useCopyTranslation();
+
   const { data, isPending, refresh } = useHostResourceSnapshot(
     props.environmentId,
     props.connected,
@@ -36,12 +39,14 @@ export function HostResourceStatus(props: {
       >
         {unavailable
           ? isPending
-            ? "Reading host resources…"
-            : "Host resources unavailable"
+            ? translateCopy("Reading host resources…")
+            : translateCopy("Host resources unavailable")
           : `C ${Math.round(data.cpuPercent ?? 0)}% · M ${Math.round(data.memoryUsedPercent ?? 0)}% · L ${data.loadAverage?.m1.toFixed(1) ?? "n/a"}`}
       </Text>
       <Pressable
-        accessibilityLabel={`Refresh host resources for ${props.environmentLabel}`}
+        accessibilityLabel={translateCopy("Refresh host resources for {value0}", {
+          value0: props.environmentLabel,
+        })}
         accessibilityRole="button"
         className="h-7 w-7 items-center justify-center rounded-lg active:bg-subtle"
         onPress={(event) => {

@@ -6,7 +6,7 @@ modern AI tools.
 That said, it is also ours.
 
 T3 Code is built and maintained by a small team with a clear vision. We are explicitly NOT INTERESTED
-in new feature addition PRs from people outside of said team.
+in unsolicited new feature addition PRs from people outside of said team.
 
 We are much more bottlenecked by review capacity than we are creativity, tokens or code. It takes more
 effort to review a PR than it does to create one in the vast majority of cases.
@@ -20,6 +20,14 @@ So who should contribute? Daily users hitting specific bugs that haven't been ad
 meaningful way.
 
 Things we are explicitly NOT interested in (and we will auto close):
+
+- New features
+- UI overhauls
+- New providers
+- Architecture overhauls (extensions, plugins, new connection methods)
+- New source control methods and providers
+- Different auth methods
+- Support for additional platforms (I already regret Windows ARM)
 
 If you are an external contributor, expect `vouch:unvouched` until a maintainer vouches for you. This fork does not carry upstream's `.github/VOUCHED.td` roster.
 
@@ -59,7 +67,7 @@ the product behaves is a feature, even when the PR calls it a fix.
 
 A small fix for an obvious bug needs no issue. For a larger fix, link the issue that shows the bug.
 
-The only way around this rule is a PR that a maintainer asked you to open. Link the request.
+A maintainer can ask you to open a PR that is not a bug fix. Link the request.
 
 <a id="one-problem"></a>
 
@@ -72,7 +80,7 @@ docs. Cleanup, refactors, and a second fix go in their own PRs.
 
 ### Show that it works
 
-Say how you found the bug, how you checked the fix, and what you saw. "Tests pass" is not evidence.
+Say how you found the bug (or what your feature changes), how you checked it, and what you saw. "Tests pass" is not evidence.
 
 UI changes need before and after screenshots. Add a short video when the change is about motion or
 timing. Upload them to the PR. Do not commit them.
@@ -115,6 +123,9 @@ Passing once does not grant permanent trust.
 - If we decide that you spam us with automation, you will be banned.
 - If you make our lives harder as reviewers and maintainers, you will be banned. Examples are repeated
   pings, a fight over a closure, and a second account to get around a limit.
+
+A banned account is denounced in [.github/VOUCHED.td](.github/VOUCHED.td). Any issue or PR it opens
+is closed when it is opened.
 
 <a id="closure-and-reconsideration"></a>
 

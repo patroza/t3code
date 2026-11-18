@@ -1,3 +1,4 @@
+import { m as resolveCopy } from "../../i18n/messages";
 import type { EnvironmentId, SidebarThreadSortOrder } from "@t3tools/contracts";
 
 import { isAllEnvironmentsSelected, isEnvironmentSelected } from "./homeEnvironmentFilter";
@@ -17,12 +18,31 @@ import {
   type OwnershipFilter,
   type OwnershipRelation,
 } from "./home-list-filter-options";
+import * as Arr from "effect/Array";
+import * as Order from "effect/Order";
+
+import { msg } from "gt-react-native";
 
 import type { AppBarMenuItem } from "../../components/ui/AppBar.types";
+import { m, type MessageResolver } from "../../i18n/messages";
+import type { WorkspaceEnvironment } from "../../state/workspaceModel";
 
 export interface HomeListFilterMenuEnvironment {
   readonly environmentId: EnvironmentId;
   readonly label: string;
+}
+
+export function homeListFilterEnvironments(environments: ReadonlyArray<WorkspaceEnvironment>) {
+  return Arr.sort(
+    environments
+      .filter((environment) => environment.isEnabled)
+      .map((environment) => ({
+        environmentId: environment.environmentId,
+        label: environment.environmentLabel,
+        connectionState: environment.connectionState,
+      })),
+    Order.mapInput(Order.String, (environment: { readonly label: string }) => environment.label),
+  );
 }
 
 export interface HomeListFilterMenuProject {
@@ -30,46 +50,49 @@ export interface HomeListFilterMenuProject {
   readonly label: string;
 }
 
-export function buildHomeListFilterMenuItems(props: {
-  readonly environments: ReadonlyArray<HomeListFilterMenuEnvironment>;
-  readonly projects: ReadonlyArray<HomeListFilterMenuProject>;
-  readonly selectedEnvironmentIds: readonly EnvironmentId[];
-  readonly selectedProjectKey: string | null;
-  readonly ownershipFilter: OwnershipFilter;
-  readonly ownershipRelation: OwnershipRelation;
-  readonly projectSortOrder?: HomeProjectSortOrder;
-  readonly threadSortOrder?: SidebarThreadSortOrder;
-  readonly onClearEnvironments: () => void;
-  readonly onToggleEnvironment: (environmentId: EnvironmentId) => void;
-  readonly onProjectChange: (projectKey: string | null) => void;
-  readonly onOwnershipFilterChange: (filter: OwnershipFilter) => void;
-  readonly onOwnershipRelationChange: (relation: OwnershipRelation) => void;
-  readonly onProjectSortOrderChange?: (sortOrder: HomeProjectSortOrder) => void;
-  readonly onThreadSortOrderChange?: (sortOrder: SidebarThreadSortOrder) => void;
-  /**
-   * True shows project/thread sort submenus (classic grouped list). v2 Home
-   * never sets this — its layout ignores those controls.
-   */
-  readonly listOrganization?: boolean;
-  /**
-   * Threads surface: hide settled threads. When provided, the menu offers a
-   * toggle (recency/none default on; project defaults off at the call site).
-   */
-  readonly hideSettledThreads?: boolean;
-  readonly onHideSettledThreadsChange?: (hide: boolean) => void;
-  /** When set, offers Group by recency / project / nothing. */
-  readonly threadGrouping?: HomeThreadGrouping;
-  readonly onThreadGroupingChange?: (grouping: HomeThreadGrouping) => void;
-}): AppBarMenuItem[] {
+export function buildHomeListFilterMenuItems(
+  props: {
+    readonly environments: ReadonlyArray<HomeListFilterMenuEnvironment>;
+    readonly projects: ReadonlyArray<HomeListFilterMenuProject>;
+    readonly selectedEnvironmentIds: readonly EnvironmentId[];
+    readonly selectedProjectKey: string | null;
+    readonly ownershipFilter: OwnershipFilter;
+    readonly ownershipRelation: OwnershipRelation;
+    readonly projectSortOrder?: HomeProjectSortOrder;
+    readonly threadSortOrder?: SidebarThreadSortOrder;
+    readonly onClearEnvironments: () => void;
+    readonly onToggleEnvironment: (environmentId: EnvironmentId) => void;
+    readonly onProjectChange: (projectKey: string | null) => void;
+    readonly onOwnershipFilterChange: (filter: OwnershipFilter) => void;
+    readonly onOwnershipRelationChange: (relation: OwnershipRelation) => void;
+    readonly onProjectSortOrderChange?: (sortOrder: HomeProjectSortOrder) => void;
+    readonly onThreadSortOrderChange?: (sortOrder: SidebarThreadSortOrder) => void;
+    /**
+     * True shows project/thread sort submenus (classic grouped list). v2 Home
+     * never sets this — its layout ignores those controls.
+     */
+    readonly listOrganization?: boolean;
+    /**
+     * Threads surface: hide settled threads. When provided, the menu offers a
+     * toggle (recency/none default on; project defaults off at the call site).
+     */
+    readonly hideSettledThreads?: boolean;
+    readonly onHideSettledThreadsChange?: (hide: boolean) => void;
+    /** When set, offers Group by recency / project / nothing. */
+    readonly threadGrouping?: HomeThreadGrouping;
+    readonly onThreadGroupingChange?: (grouping: HomeThreadGrouping) => void;
+  },
+  resolve: MessageResolver = m,
+): AppBarMenuItem[] {
   const items: AppBarMenuItem[] = [
     {
       id: "environment",
-      title: "Environment",
+      title: resolve(msg("Environment", { $context: "filter menu heading" })),
       items: [
         {
           id: "environment:all",
-          title: "All environments",
-          subtitle: "Show threads from every environment",
+          title: resolve(msg("All environments")),
+          subtitle: resolve(msg("Show threads from every environment")),
           selected: isAllEnvironmentsSelected(props.selectedEnvironmentIds),
           onPress: () => props.onClearEnvironments(),
         },
@@ -85,7 +108,7 @@ export function buildHomeListFilterMenuItems(props: {
     },
     {
       id: "ownership",
-      title: "Ownership",
+      title: resolveCopy(msg("Ownership")),
       items: OWNERSHIP_FILTERS.map((value) => ({
         id: `ownership:${value}`,
         title: OWNERSHIP_FILTER_LABELS[value],
@@ -102,7 +125,10 @@ export function buildHomeListFilterMenuItems(props: {
   ) {
     items.push({
       id: "ownership-relation",
-      title: props.ownershipFilter !== "theirs" ? "Mine includes" : "Theirs includes",
+      title:
+        props.ownershipFilter !== "theirs"
+          ? resolveCopy(msg("Mine includes"))
+          : resolveCopy(msg("Theirs includes")),
       items: OWNERSHIP_RELATIONS.map((value) => ({
         id: `ownership-relation:${value}`,
         title: OWNERSHIP_RELATION_LABELS[value],
@@ -115,12 +141,12 @@ export function buildHomeListFilterMenuItems(props: {
   if (props.projects.length > 0) {
     items.push({
       id: "project",
-      title: "Project",
+      title: resolve(msg("Project", { $context: "filter menu heading" })),
       items: [
         {
           id: "project:all",
-          title: "All projects",
-          subtitle: "Show threads from every project",
+          title: resolve(msg("All projects")),
+          subtitle: resolve(msg("Show threads from every project")),
           selected: props.selectedProjectKey === null,
           onPress: () => props.onProjectChange(null),
         },
@@ -138,7 +164,7 @@ export function buildHomeListFilterMenuItems(props: {
     const onThreadGroupingChange = props.onThreadGroupingChange;
     items.push({
       id: "grouping",
-      title: "Group threads",
+      title: resolveCopy(msg("Group threads")),
       items: HOME_THREAD_GROUPINGS.map((grouping) => ({
         id: `grouping:${grouping}`,
         title: HOME_THREAD_GROUPING_LABELS[grouping],
@@ -153,8 +179,8 @@ export function buildHomeListFilterMenuItems(props: {
     const onHideSettledThreadsChange = props.onHideSettledThreadsChange;
     items.push({
       id: "hide-settled",
-      title: "Hide settled",
-      subtitle: "Move settled threads out of the main list",
+      title: resolveCopy(msg("Hide settled")),
+      subtitle: resolveCopy(msg("Move settled threads out of the main list")),
       selected: hideSettledThreads,
       onPress: () => onHideSettledThreadsChange(!hideSettledThreads),
     });
@@ -174,7 +200,7 @@ export function buildHomeListFilterMenuItems(props: {
     items.push(
       {
         id: "sort-projects",
-        title: "Sort projects",
+        title: resolveCopy(msg("Sort projects")),
         items: PROJECT_SORT_OPTIONS.map((option) => ({
           id: `sort-projects:${option.value}`,
           title: option.label,
@@ -184,7 +210,7 @@ export function buildHomeListFilterMenuItems(props: {
       },
       {
         id: "sort-threads",
-        title: "Sort threads",
+        title: resolveCopy(msg("Sort threads")),
         items: THREAD_SORT_OPTIONS.map((option) => ({
           id: `sort-threads:${option.value}`,
           title: option.label,

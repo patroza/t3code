@@ -23,6 +23,7 @@ import {
   codexMcpListLaunchArgs,
   resolveCodexLaunchArgs,
 } from "../provider/codexLaunchArgs.ts";
+import { codexAppServerEnvironment } from "../provider/CodexProvider.ts";
 import * as TextGenerationOperations from "@t3tools/provider-core/server/textGenerationOperations";
 import {
   normalizeCliError,
@@ -57,9 +58,11 @@ const codexMcpServersOff = (names: ReadonlyArray<string>): string | null =>
     : `mcp_servers={${names.map((name) => `${JSON.stringify(name)}={enabled=false}`).join(",")}}`;
 // Codex splits -c keys at the first "=" and on every dot, so only those names take a dotted flag.
 const codexMcpServerOffFlags = (names: ReadonlyArray<string>) =>
-  names
-    .filter((name) => !name.includes(".") && !name.includes("="))
-    .flatMap((name) => ["--config", `mcp_servers.${name}.enabled=false`]);
+  names.flatMap((name) =>
+    !name.includes(".") && !name.includes("=")
+      ? ["--config", `mcp_servers.${name}.enabled=false`]
+      : [],
+  );
 const encodeJsonString = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(function* (
   codexConfig: CodexSettings,
@@ -286,7 +289,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         resolved || fellBack ? undefined : getCodexServiceTierOptionValue(modelSelection);
       const binary = effectiveConfig.binaryPath || "codex";
       const env = {
-        ...effectiveEnvironment,
+        ...codexAppServerEnvironment(effectiveEnvironment),
         ...(effectiveConfig.homePath
           ? {
               CODEX_HOME: expandHomePath(
@@ -326,6 +329,11 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
           model,
           "--config",
           `model_reasoning_effort="${reasoningEffort}"`,
+          // Current Codex gives hooks precedence over the historical codex_hooks alias.
+          "--config",
+          "features.codex_hooks=false",
+          "--config",
+          "features.hooks=false",
           ...(serviceTier ? ["--config", `service_tier="${serviceTier}"`] : []),
           "--output-schema",
           schemaPath,

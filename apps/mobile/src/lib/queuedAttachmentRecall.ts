@@ -1,3 +1,5 @@
+import { msg } from "gt-react-native";
+import { m as resolveCopy } from "../i18n/messages";
 import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@t3tools/contracts";
 
 import type { DraftComposerImageAttachment } from "./composerImages";
@@ -92,8 +94,18 @@ export async function recallQueuedAttachments(
 export function formatMissingAttachmentsError(missing: ReadonlyArray<string>): string | null {
   if (missing.length === 0) return null;
   return missing.length === 1
-    ? `'${missing[0]}' could not be loaded, so the message is still queued. Try again. If it keeps failing, the image is no longer on the server and the message has to be sent or replaced as it is.`
-    : `${missing.length} attachments could not be loaded, so the message is still queued. Try again. If it keeps failing, the image is no longer on the server and the message has to be sent or replaced as it is.`;
+    ? resolveCopy(
+        msg(
+          "''{value0}'' could not be loaded, so the message is still queued. Try again. If it keeps failing, the image is no longer on the server and the message has to be sent or replaced as it is.",
+          { value0: missing[0] },
+        ),
+      )
+    : resolveCopy(
+        msg(
+          "{value0} attachments could not be loaded, so the message is still queued. Try again. If it keeps failing, the image is no longer on the server and the message has to be sent or replaced as it is.",
+          { value0: missing.length },
+        ),
+      );
 }
 
 /**
@@ -108,7 +120,14 @@ export function describeQueuedAttachmentCapacity(
   if (queuedCount === 0) return null;
   const capacity = Math.max(0, PROVIDER_SEND_TURN_MAX_ATTACHMENTS - draftImageCount);
   if (queuedCount <= capacity) return null;
-  return `Editing this message would bring back ${queuedCount} image${
-    queuedCount === 1 ? "" : "s"
-  }, past the ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS}-image limit. Remove some images from the composer first.`;
+  return resolveCopy(
+    msg(
+      "Editing this message would bring back {value0} image{value1}, past the {value2}-image limit. Remove some images from the composer first.",
+      {
+        value0: queuedCount,
+        value1: queuedCount === 1 ? "" : "s",
+        value2: PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+      },
+    ),
+  );
 }

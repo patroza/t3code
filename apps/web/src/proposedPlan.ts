@@ -1,16 +1,58 @@
-import { proposedPlanTitle } from "@t3tools/shared/proposedPlan";
+import { stripDisplayedPlanMarkdown, proposedPlanTitle } from "@t3tools/shared/proposedPlanText";
+import { msg } from "gt-react";
 
-/** Prefix of the message the app sends when the user approves a plan. */
-export const PLAN_IMPLEMENTATION_PROMPT_PREFIX = "PLEASE IMPLEMENT THIS PLAN:\n";
+import { m, type MessageResolver } from "./i18n/messages";
+
+export function buildCollapsedProposedPlanPreviewMarkdown(
+  planMarkdown: string,
+  options?: {
+    maxLines?: number;
+  },
+  resolve: MessageResolver = m,
+): string {
+  const maxLines = options?.maxLines ?? 8;
+  const lines = stripDisplayedPlanMarkdown(planMarkdown)
+    .trimEnd()
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd());
+  const previewLines: string[] = [];
+  let visibleLineCount = 0;
+  let hasMoreContent = false;
+
+  for (const line of lines) {
+    const isVisibleLine = line.trim().length > 0;
+    if (isVisibleLine && visibleLineCount >= maxLines) {
+      hasMoreContent = true;
+      break;
+    }
+    previewLines.push(line);
+    if (isVisibleLine) {
+      visibleLineCount += 1;
+    }
+  }
+
+  while (previewLines.length > 0 && previewLines.at(-1)?.trim().length === 0) {
+    previewLines.pop();
+  }
+
+  if (previewLines.length === 0) {
+    return proposedPlanTitle(planMarkdown) ?? resolve(msg("Plan preview unavailable."));
+  }
+
+  if (hasMoreContent) {
+    previewLines.push("", "...");
+  }
+
+  return previewLines.join("\n");
+}
 
 export {
-  buildCollapsedProposedPlanPreviewMarkdown,
   buildPlanImplementationPrompt,
   buildPlanImplementationThreadTitle,
-  proposedPlanTitle,
   resolvePlanFollowUpSubmission,
-  stripDisplayedPlanMarkdown,
 } from "@t3tools/shared/proposedPlan";
+export { proposedPlanTitle, stripDisplayedPlanMarkdown };
+export const PLAN_IMPLEMENTATION_PROMPT_PREFIX = "PLEASE IMPLEMENT THIS PLAN:\n";
 
 function sanitizePlanFileSegment(input: string): string {
   const sanitized = input

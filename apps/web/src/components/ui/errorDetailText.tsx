@@ -1,5 +1,6 @@
 "use client";
 
+import { msg, useGT } from "gt-react";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -29,8 +30,15 @@ export function errorDetailClampClassName(shouldClamp: boolean): string | undefi
 }
 
 export function ErrorDetailCopyButton({ text, className }: { text: string; className?: string }) {
-  const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "error-message" });
-  const label = isCopied ? "Copied error" : "Copy error";
+  const gt = useGT();
+  const { copyToClipboard, isCopied } = useCopyToClipboard({
+    target: {
+      target: "error-message",
+      unavailableMessage: msg("Clipboard API is unavailable while copying the error message."),
+      failureMessage: msg("Failed to copy the error message to the clipboard."),
+    },
+  });
+  const label = isCopied ? gt("Copied error") : gt("Copy error");
 
   return (
     <Tooltip>

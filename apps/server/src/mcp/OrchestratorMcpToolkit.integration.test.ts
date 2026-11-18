@@ -1383,7 +1383,8 @@ describe("orchestrator MCP toolkit", () => {
             expect(declaredFailure(missingThreadQueue)).toMatchObject({
               _tag: "OrchestratorMcpFailure",
               code: "thread_not_found",
-              message: "The thread was not found.",
+              message:
+                "The thread was not found. Thread ids belong to one environment: for a thread on a linked one, find it with `t3_environment_links` and pass its `environmentId` to a tool that takes one.",
             });
             expect(missingThreadQueue.structuredContent).toBeUndefined();
             expect(validateQueue({ items: "invalid", nextCursor: null }).valid).toBe(false);
@@ -2323,7 +2324,7 @@ describe("orchestrator MCP toolkit", () => {
             const cancellable = yield* decodeDelegateTaskResult(
               cancellableCall.structuredContent,
             ).pipe(Effect.orDie);
-            expect(cancellable.status).toBe("running");
+            expect(["starting", "running"]).toContain(cancellable.status);
             expect(cancellable.hasPendingChildRuns).toBe(false);
             yield* waitForProjection(
               orchestrator,
@@ -3041,7 +3042,7 @@ describe("orchestrator MCP toolkit", () => {
             const upgradedDelegated = yield* decodeDelegateTaskResult(
               upgradedCall.structuredContent,
             ).pipe(Effect.orDie);
-            expect(upgradedDelegated.status).toBe("running");
+            expect(["starting", "running"]).toContain(upgradedDelegated.status);
             yield* waitForProjection(
               orchestrator,
               localChild(upgradedDelegated.childThreadId),

@@ -78,7 +78,7 @@ describe("ChatHeader AI usage + host resources surface (anti stack-drop)", () =>
     // JSX markers co-located with the pure gates so that cannot pass silently.
     expect(chatHeaderSource).toContain("useAiUsageSnapshot");
     expect(chatHeaderSource).toContain("resolveDriverUsage");
-    expect(chatHeaderSource).toContain('aria-label="provider usage status"');
+    expect(chatHeaderSource).toContain('aria-label={translateCopy("provider usage status")}');
     expect(chatHeaderSource).toContain("AiUsageStats");
     expect(chatHeaderSource).toContain("HostResourceStatus");
     expect(chatHeaderSource).toContain("isLocalConnectionTarget");

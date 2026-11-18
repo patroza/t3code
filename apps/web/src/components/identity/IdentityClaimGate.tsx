@@ -1,3 +1,5 @@
+import { T } from "gt-react";
+import { useGT as useCopyTranslation } from "gt-react";
 import {
   filterPeopleForTypeahead,
   identityClaimRequired,
@@ -113,6 +115,8 @@ function IdentityClaimGateForEnvironment(props: {
   readonly environmentLabel: string | null;
   readonly forceOpen: boolean;
 }) {
+  const translateCopy = useCopyTranslation();
+
   const target = (() => ({ environmentId: props.environmentId, input: {} as const }))();
   const snapshotQuery = useEnvironmentQuery(identityEnvironment.snapshot(target));
   const claimQuery = useEnvironmentQuery(identityEnvironment.sessionClaim(target));
@@ -158,10 +162,10 @@ function IdentityClaimGateForEnvironment(props: {
       >
         <section className="w-full max-w-md rounded-2xl border border-border/80 bg-card p-6 shadow-2xl">
           <h1 id="identity-claim-title" className="text-xl font-semibold tracking-tight">
-            Checking identity…
+            <T>Checking identity…</T>
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            Loading this server’s identity map before you can send turns.
+            <T>Loading this server’s identity map before you can send turns.</T>
           </p>
         </section>
       </div>
@@ -179,7 +183,7 @@ function IdentityClaimGateForEnvironment(props: {
       >
         <section className="w-full max-w-md rounded-2xl border border-border/80 bg-card p-6 shadow-2xl">
           <h1 id="identity-claim-title" className="text-xl font-semibold tracking-tight">
-            Could not load identity
+            <T>Could not load identity</T>
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">{snapshotQuery.error}</p>
           <div className="mt-5 flex justify-end gap-2">
@@ -190,7 +194,7 @@ function IdentityClaimGateForEnvironment(props: {
                 claimQuery.refresh();
               }}
             >
-              Retry
+              <T>Retry</T>
             </Button>
           </div>
         </section>
@@ -216,12 +220,14 @@ function IdentityClaimGateForEnvironment(props: {
   const submitUsername = async (username: string) => {
     const normalized = username.trim().toLowerCase();
     if (normalized.length === 0) {
-      setError("Type your username, then pick a match from the list.");
+      setError(translateCopy("Type your username, then pick a match from the list."));
       return;
     }
     const exact = snapshot.people.find((person) => person.username === normalized);
     if (!exact) {
-      setError("That identity is not on this server’s map. Keep typing to see matches.");
+      setError(
+        translateCopy("That identity is not on this server’s map. Keep typing to see matches."),
+      );
       return;
     }
     setSubmitting(true);
@@ -236,14 +242,16 @@ function IdentityClaimGateForEnvironment(props: {
           },
         });
         if (result._tag === "Failure") {
-          setError("Could not claim identity on this server.");
+          setError(translateCopy("Could not claim identity on this server."));
           return;
         }
         claimQuery.refresh();
         snapshotQuery.refresh();
         clearForceClaimOpen();
       } catch (cause) {
-        setError(cause instanceof Error ? cause.message : "Could not claim identity.");
+        setError(
+          cause instanceof Error ? cause.message : translateCopy("Could not claim identity."),
+        );
       }
     })().finally(() => {
       setSubmitting(false);
@@ -260,23 +268,26 @@ function IdentityClaimGateForEnvironment(props: {
     >
       <section className="w-full max-w-md rounded-2xl border border-border/80 bg-card p-6 shadow-2xl shadow-black/25">
         <p className="text-2xs font-semibold tracking-widest text-muted-foreground uppercase">
-          Shared environment · {envLabel}
+          <T>Shared environment · </T>
+          {envLabel}
         </p>
         <h1 id="identity-claim-title" className="mt-2 text-xl font-semibold tracking-tight">
-          Who are you?
+          <T>Who are you?</T>
         </h1>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-          <span className="font-medium text-foreground">{envLabel}</span> uses a closed identity
-          map. Type at least {IDENTITY_CLAIM_TYPEAHEAD_MIN_CHARS} characters of your username (for
-          example <span className="font-medium text-foreground">pat</span>
-          …), then choose a match. Free-form names are not allowed.
+          <span className="font-medium text-foreground">{envLabel}</span>
+          <T> uses a closed identity map. Type at least </T>
+          {IDENTITY_CLAIM_TYPEAHEAD_MIN_CHARS}
+          <T> characters of your username (for example </T>
+          <span className="font-medium text-foreground">pat</span>
+          <T>…), then choose a match. Free-form names are not allowed.</T>
         </p>
 
         <label
           className="mt-5 block text-xs font-medium text-muted-foreground"
           htmlFor="identity-claim-input"
         >
-          Username
+          <T>Username</T>
         </label>
         <Input
           id="identity-claim-input"
@@ -284,7 +295,7 @@ function IdentityClaimGateForEnvironment(props: {
           autoComplete="username"
           value={query}
           disabled={submitting}
-          placeholder="e.g. patroza"
+          placeholder={translateCopy("e.g. patroza")}
           className="mt-1.5"
           onChange={(event) => {
             setQuery(event.currentTarget.value);
@@ -333,11 +344,16 @@ function IdentityClaimGateForEnvironment(props: {
             ))}
           </ul>
         ) : query.trim().length >= IDENTITY_CLAIM_TYPEAHEAD_MIN_CHARS ? (
-          <p className="mt-2 text-xs text-muted-foreground">No map matches for that query.</p>
+          <p className="mt-2 text-xs text-muted-foreground">
+            <T>No map matches for that query.</T>
+          </p>
         ) : (
           <p className="mt-2 text-xs text-muted-foreground">
-            Type {IDENTITY_CLAIM_TYPEAHEAD_MIN_CHARS}+ characters to search the map (
-            {snapshot.people.length} people listed).
+            <T>Type </T>
+            {IDENTITY_CLAIM_TYPEAHEAD_MIN_CHARS}
+            <T>+ characters to search the map (</T>
+            {snapshot.people.length}
+            <T> people listed).</T>
           </p>
         )}
 
@@ -345,7 +361,7 @@ function IdentityClaimGateForEnvironment(props: {
 
         <div className="mt-5 flex justify-end gap-2">
           <Button type="button" disabled={submitting} onClick={() => void submitUsername(query)}>
-            {submitting ? "Saving…" : "Save identity"}
+            {submitting ? translateCopy("Saving…") : translateCopy("Save identity")}
           </Button>
         </div>
       </section>

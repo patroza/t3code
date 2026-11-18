@@ -1,5 +1,15 @@
-import { renderToStaticMarkup } from "react-dom/server";
+import { renderToStaticMarkup as renderMarkup } from "react-dom/server";
+import type { ReactNode } from "react";
+import { GTProvider, initializeGT } from "gt-react";
 import { describe, expect, it, vi } from "vite-plus/test";
+
+initializeGT({ defaultLocale: "en", locales: ["en"] });
+const renderToStaticMarkup = (node: ReactNode) =>
+  renderMarkup(
+    <GTProvider locale="en" translations={{}}>
+      {node}
+    </GTProvider>,
+  );
 
 const state = vi.hoisted(() => ({
   projection: null as unknown,
@@ -11,7 +21,7 @@ vi.mock("@t3tools/client-runtime/state/thread-workflows", () => ({
 }));
 
 vi.mock("../../state/entities", () => ({
-  useThreadProjection: () => state.projection,
+  useQuietThreadProjection: () => state.projection,
   useQuietThreadShell: () => null,
 }));
 
@@ -19,6 +29,7 @@ vi.mock("../../state/threads", () => ({
   threadEnvironment: {
     cancelQueuedRun: Symbol("cancelQueuedRun"),
     promoteQueuedRun: Symbol("promoteQueuedRun"),
+    sendQueuedRun: Symbol("sendQueuedRun"),
     reorderQueuedRun: Symbol("reorderQueuedRun"),
   },
 }));
@@ -65,6 +76,7 @@ describe("QueuedRunsControl automatic completion delivery", () => {
 
     const html = renderToStaticMarkup(
       <QueuedRunsControl
+        onImageExpand={() => undefined}
         editBlockedReason={null}
         environmentId={"environment:test" as never}
         optimisticMessages={[]}
@@ -111,6 +123,7 @@ describe("QueuedRunsControl attachments and edit mode", () => {
 
       const html = renderToStaticMarkup(
         <QueuedRunsControl
+          onImageExpand={() => undefined}
           editBlockedReason={null}
           environmentId={"environment:test" as never}
           optimisticMessages={[]}
@@ -144,6 +157,7 @@ describe("QueuedRunsControl attachments and edit mode", () => {
 
     const html = renderToStaticMarkup(
       <QueuedRunsControl
+        onImageExpand={() => undefined}
         editBlockedReason={null}
         environmentId={"environment:test" as never}
         optimisticMessages={[
@@ -172,6 +186,7 @@ describe("QueuedRunsControl attachments and edit mode", () => {
 
     const html = renderToStaticMarkup(
       <QueuedRunsControl
+        onImageExpand={() => undefined}
         editBlockedReason={null}
         environmentId={"environment:test" as never}
         optimisticMessages={[]}

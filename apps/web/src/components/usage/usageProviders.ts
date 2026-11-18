@@ -1,3 +1,5 @@
+import { msg } from "gt-react";
+import { m as resolveCopy } from "../../i18n/messages";
 import type { UsageProviderKind } from "@t3tools/contracts";
 
 import { ProviderDriverKind } from "@t3tools/contracts";
@@ -32,7 +34,11 @@ export const PROVIDER_PRESENTATION = {
     color: "#5b9bbd",
     driverKind: ProviderDriverKind.make("opencode"),
   },
-  kimi: { label: "Kimi", color: "#ff6a3d", driverKind: ProviderDriverKind.make("kimi") },
+  kimi: {
+    label: resolveCopy(msg("Kimi")),
+    color: "#ff6a3d",
+    driverKind: ProviderDriverKind.make("kimi"),
+  },
   antigravity: {
     label: "Antigravity",
     color: "#8c7bd1",

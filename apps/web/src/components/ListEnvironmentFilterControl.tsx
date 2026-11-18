@@ -1,3 +1,5 @@
+import { T } from "gt-react";
+import { useGT as useCopyTranslation } from "gt-react";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { CheckIcon, ChevronsUpDownIcon } from "lucide-react";
 
@@ -25,6 +27,8 @@ export function ListEnvironmentFilterControl(props: {
   triggerClassName?: string;
   "data-testid"?: string;
 }) {
+  const translateCopy = useCopyTranslation();
+
   const {
     environments,
     selectedEnvironmentIds,
@@ -39,7 +43,7 @@ export function ListEnvironmentFilterControl(props: {
 
   const triggerLabel = (() => {
     if (allSelected || environments.length === 0) {
-      return "All environments";
+      return translateCopy("All environments");
     }
     if (selectedCount === 1) {
       const onlyId = selectedEnvironmentIds[0];
@@ -65,7 +69,7 @@ export function ListEnvironmentFilterControl(props: {
               variant="outline"
               size={size}
               className="min-w-0 w-full justify-between"
-              aria-label="Filter by environment"
+              aria-label={translateCopy("Filter by environment")}
               data-testid={props["data-testid"] ?? "list-environment-filter"}
             />
           }
@@ -87,7 +91,9 @@ export function ListEnvironmentFilterControl(props: {
             >
               {allSelected ? <CheckIcon className="size-2.5" /> : null}
             </span>
-            <span className="flex-1 truncate">All environments</span>
+            <span className="flex-1 truncate">
+              <T>All environments</T>
+            </span>
           </button>
           <div className="my-1 h-px bg-border/70" />
           {environments.map((environment) => {

@@ -89,6 +89,7 @@ const publicConfigDefine = {
 
 export default defineConfig({
   test: {
+    globalSetup: ["./scripts/ensure-electron-runtime.mjs"],
     projects: [
       defineProject({
         test: {

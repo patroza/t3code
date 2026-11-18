@@ -6,7 +6,7 @@ import type {
 } from "@t3tools/contracts";
 import { parseGitRemoteHost } from "@t3tools/source-control-core/shared/definition";
 import { repositoryPathFromRemoteUrl } from "@t3tools/source-control-core/server/SourceControlProvider";
-import { normalizeGitRemoteUrl } from "@t3tools/shared/git";
+import { canonicalRepositoryPath, normalizeGitRemoteUrl } from "@t3tools/shared/git";
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -128,7 +128,13 @@ function pickPrimaryRemote(
 function repositoryPathOf(canonicalKey: string, remoteUrl: string): string {
   const canonicalPath = canonicalKey.split("/").slice(1).join("/");
   const displayPath = repositoryPathFromRemoteUrl(remoteUrl);
-  return displayPath?.toLowerCase() === canonicalPath ? displayPath : canonicalPath;
+  if (displayPath === null) return canonicalPath;
+  // A host that names repositories literally keeps the `.git` the display path drops.
+  return (
+    [displayPath, `${displayPath}.git`].find(
+      (path) => canonicalRepositoryPath(path) === canonicalRepositoryPath(canonicalPath),
+    ) ?? canonicalPath
+  );
 }
 
 function buildRepositoryOrigin(
@@ -230,8 +236,8 @@ const resolveRepositoryIdentityCacheKey = Effect.fn("RepositoryIdentityResolver.
       return null;
     }
     if (topLevelResult.value.code === 0) {
-      // Paths may end in spaces, so strip only git's line terminator.
-      const rootPath = topLevelResult.value.stdout.replace(/\r?\n$/, "");
+      // Git appends LF on every platform; a preceding CR belongs to the path.
+      const rootPath = topLevelResult.value.stdout.replace(/\n$/, "");
       return rootPath.length > 0
         ? new RepositoryIdentityCacheKey({ rootPath, isBare: false })
         : null;
@@ -275,7 +281,8 @@ const resolveRepositoryIdentityCacheKey = Effect.fn("RepositoryIdentityResolver.
       if (bareResult._tag === "None" || bareResult.value.timedOut) return null;
       if (bareResult.value.code !== 0) continue;
 
-      const [isBare, rootPath = ""] = bareResult.value.stdout.split(/\r?\n/);
+      const [isBare, ...rootLines] = bareResult.value.stdout.split("\n");
+      const rootPath = rootLines.join("\n").replace(/\n$/, "");
       // A checkout's .git directory contains remotes but is not a project root.
       return isBare === "true" && rootPath.length > 0
         ? new RepositoryIdentityCacheKey({ rootPath, isBare: true })

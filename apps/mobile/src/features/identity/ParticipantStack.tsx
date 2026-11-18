@@ -1,3 +1,4 @@
+import { useGT as useCopyTranslation } from "gt-react-native";
 import { useAtomValue } from "@effect/atom-react";
 import {
   claimPersonIdForEnvironment,
@@ -22,6 +23,8 @@ export function ParticipantStack(props: {
   readonly channel?: string | null | undefined;
   readonly className?: string | undefined;
 }) {
+  const translateCopy = useCopyTranslation();
+
   const people = props.participants;
   const claimPersonIdByEnvironment = useAtomValue(identityClaimPersonIdByEnvironmentAtom);
   const claimPersonId = claimPersonIdForEnvironment(
@@ -63,7 +66,7 @@ export function ParticipantStack(props: {
         <View
           accessibilityElementsHidden={!youParticipated}
           importantForAccessibility={youParticipated ? "auto" : "no-hide-descendants"}
-          accessibilityLabel={youParticipated ? "You participated" : undefined}
+          accessibilityLabel={youParticipated ? translateCopy("You participated") : undefined}
           className={cn(
             "size-3.5 items-center justify-center rounded-full",
             youParticipated ? "border border-primary bg-primary/15" : "bg-subtle",
@@ -89,6 +92,8 @@ export function SourceChannelGlyph(props: {
   readonly overlay?: boolean;
   readonly className?: string | undefined;
 }) {
+  const translateCopy = useCopyTranslation();
+
   if (!props.channel) return null;
   const short =
     props.channel === "desktop"
@@ -106,7 +111,7 @@ export function SourceChannelGlyph(props: {
                 : props.channel.slice(0, 1).toUpperCase();
   return (
     <View
-      accessibilityLabel={`Source ${props.channel}`}
+      accessibilityLabel={translateCopy("Source {value0}", { value0: props.channel })}
       accessibilityRole="text"
       className={cn(
         props.overlay

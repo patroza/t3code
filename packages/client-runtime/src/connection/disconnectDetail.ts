@@ -1,3 +1,5 @@
+import { msg } from "gt-i18n";
+import { mFallback as resolveCopy } from "gt-i18n";
 /**
  * Short, user-safe connection failure text for UI + diagnostics.
  * Prefer a close code or known cause over the bare "disconnected." message.
@@ -90,15 +92,23 @@ export function formatDisconnectDetail(input: FormatDisconnectDetailInput): stri
   const closeReason = sanitizeCloseReason(input.close?.reason);
 
   if (!input.wasConnected) {
-    if (cause) return `${label} could not open WebSocket (${cause}).`;
+    if (cause)
+      return resolveCopy(
+        msg("{value0} could not open WebSocket ({value1}).", { value0: label, value1: cause }),
+      );
     // Our open-timeout path closes with 1000; that is not useful "clean" signal.
     const usefulOpenClose =
       typeof code === "number" && !(code === 1000 && (closeReason === null || closeReason === ""));
     if (usefulOpenClose) {
       const bits = [`${code}${codeName ? ` ${codeName}` : ""}`, closeReason].filter(Boolean);
-      return `${label} could not open WebSocket (${bits.join(": ")}).`;
+      return resolveCopy(
+        msg("{value0} could not open WebSocket ({value1}).", {
+          value0: label,
+          value1: bits.join(": "),
+        }),
+      );
     }
-    return `${label} could not open WebSocket.`;
+    return resolveCopy(msg("{value0} could not open WebSocket.", { value0: label }));
   }
 
   if (cause === "ping timeout") {

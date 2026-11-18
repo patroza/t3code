@@ -11,6 +11,8 @@ const legacyTable =
   /\bprojection_(?:threads|thread_messages|thread_activities|thread_proposed_plans|thread_pull_requests|thread_sessions|turns|pending_approvals|state)\b/;
 const legacyReaders = ["orchestration-v2/legacy/", "persistence/Migrations/"] as const;
 const legacyReaderFiles: Record<string, string> = {
+  "persistence/DatabaseMaintenance.ts":
+    "read-only legacy record counts protect unmigrated data during database maintenance",
   "externalSessions/backfillGrokSession.ts":
     "offline V1 transcript repair rejects migrated V2 databases before reading or writing legacy data",
   // Provider history for settings migration reads V1 thread sessions once at load.

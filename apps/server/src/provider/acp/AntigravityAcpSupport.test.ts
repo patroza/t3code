@@ -42,15 +42,17 @@ function makeModelRuntime(
     if (failure) return yield* failure;
     selections.push(model);
   });
-  const setConfigOption = Effect.fn("AntigravityAcpSupportTest.setConfigOption")(function* (
+  const setConfigOption = Effect.fn("AntigravityAcpSupportTest.setConfigOption")((
     configId: string,
     value: string | boolean,
     options?: { readonly allowUnlistedValue?: boolean },
-  ) {
-    selections.push(
-      `${configId}=${String(value)}${options?.allowUnlistedValue === true ? " (unlisted)" : ""}`,
-    );
-    return { configOptions };
+  ) => {
+    return Effect.sync(() => {
+      selections.push(
+        `${configId}=${String(value)}${options?.allowUnlistedValue === true ? " (unlisted)" : ""}`,
+      );
+      return { configOptions };
+    });
   });
   return {
     runtime: { getConfigOptions: Effect.succeed(configOptions), setModel, setConfigOption },

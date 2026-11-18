@@ -15,7 +15,7 @@ layer("055_OrchestrationV2", (it) => {
     Effect.sync(() => {
       assert.deepStrictEqual(
         migrationEntries.map(([id]) => id),
-        Array.from({ length: 89 }, (_, index) => index + 1),
+        Array.from({ length: 98 }, (_, index) => index + 1),
       );
     }),
   );
@@ -63,6 +63,15 @@ layer("055_OrchestrationV2", (it) => {
         [87, "ProjectionProjectsCustomTitle"],
         [88, "TurnItemTypeStatusIndex"],
         [89, "ShellThreadReadIndexes"],
+        [90, "AuthConnectDevices"],
+        [91, "AuthConnectDeniedRequests"],
+        [92, "QueuedTurnInputIndexJsonValid"],
+        [93, "ProviderTurnAttemptIndex"],
+        [94, "TurnItemMessageOrdinalIndex"],
+        [95, "TurnItemInlineWorkOutput"],
+        [96, "RepairStaleTitleRegeneration"],
+        [97, "IssueTrackerBindings"],
+        [98, "ActiveShellIndexIndexes"],
         [1, "ProjectionQueuedMessages"],
         [2, "SessionIdentityClaims"],
         [3, "ProjectionThreadSourceAttribution"],
@@ -121,6 +130,15 @@ layer("055_OrchestrationV2", (it) => {
         { migration_id: 87, name: "ProjectionProjectsCustomTitle" },
         { migration_id: 88, name: "TurnItemTypeStatusIndex" },
         { migration_id: 89, name: "ShellThreadReadIndexes" },
+        { migration_id: 90, name: "AuthConnectDevices" },
+        { migration_id: 91, name: "AuthConnectDeniedRequests" },
+        { migration_id: 92, name: "QueuedTurnInputIndexJsonValid" },
+        { migration_id: 93, name: "ProviderTurnAttemptIndex" },
+        { migration_id: 94, name: "TurnItemMessageOrdinalIndex" },
+        { migration_id: 95, name: "TurnItemInlineWorkOutput" },
+        { migration_id: 96, name: "RepairStaleTitleRegeneration" },
+        { migration_id: 97, name: "IssueTrackerBindings" },
+        { migration_id: 98, name: "ActiveShellIndexIndexes" },
       ]);
 
       const tables = yield* sql<{ readonly name: string }>`

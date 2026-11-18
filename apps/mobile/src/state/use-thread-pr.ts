@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import { Atom } from "effect/reactivity";
 import { use, useCallback, useEffect, useMemo } from "react";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { useMessages } from "gt-react-native";
 
 import { connectionAtomRuntime } from "../connection/runtime";
 import { appAtomRegistry } from "./atom-registry";
@@ -102,6 +103,7 @@ export function useThreadPr(
 ): ThreadPrPresentation | null {
   const cwd = thread.worktreePath ?? projectCwd ?? null;
   const demand = use(ThreadPrDemandContext);
+  const resolve = useMessages();
   const supportsLinks = useAtomValue(
     serverEnvironment.configValueAtom(thread.environmentId),
     (config) => config !== null,
@@ -115,8 +117,15 @@ export function useThreadPr(
           branchPullRequest: thread.branchPullRequest,
         },
         supportsLinks,
+        resolve,
       ),
-    [thread.pullRequests, thread.linkedPullRequest, thread.branchPullRequest, supportsLinks],
+    [
+      thread.pullRequests,
+      thread.linkedPullRequest,
+      thread.branchPullRequest,
+      supportsLinks,
+      resolve,
+    ],
   );
   const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
   const snapshotIdentity = JSON.stringify(pullRequestRef ?? { branch: thread.branch, cwd });
@@ -162,12 +171,16 @@ export function useThreadPr(
     () =>
       summary === undefined
         ? null
-        : presentThreadPr(pullRequestDetailToVcsStatus(summary), {
-            kind: summary.provider,
-            name: summary.provider,
-            baseUrl: "",
-          }),
-    [summary],
+        : presentThreadPr(
+            pullRequestDetailToVcsStatus(summary),
+            {
+              kind: summary.provider,
+              name: summary.provider,
+              baseUrl: "",
+            },
+            resolve,
+          ),
+    [summary, resolve],
   );
   const live = useMemo<ThreadPrPresentation | null | undefined>(() => {
     if (pullRequestRef !== null) return null;
@@ -176,8 +189,8 @@ export function useThreadPr(
     const status = gitStatus.data;
     if (status === null) return undefined;
     if (status.refName !== thread.branch || !status.pr) return null;
-    return presentThreadPr(status.pr, status.sourceControlProvider);
-  }, [cwd, gitStatus.data, pullRequestRef, thread.branch]);
+    return presentThreadPr(status.pr, status.sourceControlProvider, resolve);
+  }, [cwd, gitStatus.data, pullRequestRef, thread.branch, resolve]);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- keeps the bounded PR snapshot registry in step with live query results across row virtualization
   useEffect(() => {

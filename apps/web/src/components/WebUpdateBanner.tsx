@@ -1,3 +1,4 @@
+import { T } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
 import { useState } from "react";
 
@@ -31,7 +32,9 @@ export function WebUpdateBanner() {
       className="fixed bottom-4 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-full border border-border bg-background/95 px-4 py-2 text-sm shadow-lg backdrop-blur"
       role="status"
     >
-      <span className="text-muted-foreground">A new version of T3 Code is available.</span>
+      <span className="text-muted-foreground">
+        <T>A new version of T3 Code is available.</T>
+      </span>
       <button
         type="button"
         className="rounded-full bg-primary px-3 py-1 font-medium text-primary-foreground hover:opacity-90"
@@ -39,7 +42,7 @@ export function WebUpdateBanner() {
           window.location.reload();
         }}
       >
-        Reload
+        <T>Reload</T>
       </button>
     </div>
   );

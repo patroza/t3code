@@ -13,6 +13,98 @@ import { AGENT_DEVICE_VERSION, DEVICE_HUB_VERSION } from "./DeviceToolchain.ts";
 const exec = NodeUtil.promisify(NodeChildProcess.execFile);
 const hostProcessEnv = process.env;
 
+const executable = async (file: string, body = "exit 0") => {
+  await NodeFSP.mkdir(NodePath.dirname(file), { recursive: true });
+  await NodeFSP.writeFile(file, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+};
+
+const completeSdk = async (sdk: string, adb = "echo Android Debug Bridge") => {
+  await executable(NodePath.join(sdk, "platform-tools/adb"), adb);
+  await executable(NodePath.join(sdk, "emulator/emulator"));
+  await executable(NodePath.join(sdk, "cmdline-tools/latest/bin/avdmanager"));
+};
+
+/** Runs the probe through the SSH shell setup, then `after` in that same shell. */
+const probeAndroid = (setup: (home: string) => Promise<Record<string, string>>, after = "true") =>
+  Effect.promise(async () => {
+    const home = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-ssh-sdk-"));
+    try {
+      const env = await setup(home);
+      await executable(NodePath.join(home, "bin/npm"), "echo 10.0.0");
+      const probe = NodePath.join(home, "probe.cjs");
+      await NodeFSP.writeFile(probe, remoteDeviceScript("fixture", "probe"));
+      const result = await exec(
+        "/bin/sh",
+        ["-c", `${remoteDeviceEnvironment}\n"$NODE" "$PROBE" && ${after}`],
+        {
+          env: {
+            HOME: home,
+            PATH: `${NodePath.join(home, "bin")}:/usr/bin:/bin`,
+            NODE: process.execPath,
+            PROBE: probe,
+            ...env,
+          },
+        },
+      );
+      const [inventory = "", ...rest] = result.stdout.trim().split("\n");
+      const android = JSON.parse(inventory).platforms.find(
+        (entry: { platform: string }) => entry.platform === "android",
+      );
+      return { android, after: rest.join("\n") };
+    } finally {
+      await NodeFSP.rm(home, { recursive: true, force: true });
+    }
+  });
+
+it.effect("does not offer Android when the SDK adb cannot run", () =>
+  Effect.gen(function* () {
+    if ((yield* HostProcess.Platform) === "win32") return;
+    const { android } = yield* probeAndroid(async (home) => {
+      const sdk = NodePath.join(home, "sdk");
+      await completeSdk(sdk, "exit 1");
+      return { ANDROID_HOME: sdk };
+    });
+    expect(android).toEqual({ platform: "android", available: false, reason: expect.any(String) });
+  }),
+);
+
+it.effect("does not offer Android when SDK tools are directories", () =>
+  Effect.gen(function* () {
+    if ((yield* HostProcess.Platform) === "win32") return;
+    const { android } = yield* probeAndroid(async (home) => {
+      const sdk = NodePath.join(home, "sdk");
+      await executable(NodePath.join(sdk, "platform-tools/adb"), "echo Android Debug Bridge");
+      await NodeFSP.mkdir(NodePath.join(sdk, "emulator/emulator"), { recursive: true });
+      await NodeFSP.mkdir(NodePath.join(sdk, "cmdline-tools/latest/bin/avdmanager"), {
+        recursive: true,
+      });
+      return { ANDROID_HOME: sdk };
+    });
+    expect(android).toEqual({
+      platform: "android",
+      available: false,
+      reason: expect.stringContaining("Android Emulator"),
+    });
+  }),
+);
+
+it.effect("uses the SDK the probe accepted for later SSH commands", () =>
+  Effect.gen(function* () {
+    if ((yield* HostProcess.Platform) === "win32") return;
+    let sdk = "";
+    const result = yield* probeAndroid(async (home) => {
+      // Incomplete default locations must not shadow the configured SDK.
+      await NodeFSP.mkdir(NodePath.join(home, "Library/Android/sdk"), { recursive: true });
+      await NodeFSP.mkdir(NodePath.join(home, "Android/Sdk"), { recursive: true });
+      sdk = NodePath.join(home, "custom-sdk");
+      await completeSdk(sdk);
+      return { ANDROID_SDK_ROOT: sdk };
+    }, "command -v emulator");
+    expect(result.android).toEqual({ platform: "android", available: true });
+    expect(result.after).toBe(NodePath.join(sdk, "emulator/emulator"));
+  }),
+);
+
 it.effect("finds Android Studio Java for a non-interactive SSH session", () =>
   Effect.gen(function* () {
     if ((yield* HostProcess.Platform) === "win32") return;
@@ -62,6 +154,16 @@ describe("remote helper lifecycle", () => {
           "#!/bin/sh\nprintf 'emulated webcam<N> none\\n' >&2\n",
           { mode: 0o755 },
         );
+        const sdk = NodePath.join(home, "sdk");
+        for (const [relative, command] of [
+          ["platform-tools/adb", "adb"],
+          ["emulator/emulator", "emulator"],
+          ["cmdline-tools/latest/bin/avdmanager", "adb"],
+        ] as const) {
+          const target = NodePath.join(sdk, relative);
+          await NodeFSP.mkdir(NodePath.dirname(target), { recursive: true });
+          await NodeFSP.symlink(NodePath.join(bin, command), target);
+        }
         const root = NodePath.join(home, ".t3/device");
         const hubDir = NodePath.join(root, `tools/expo-device-hub@${DEVICE_HUB_VERSION}`);
         const agentDir = NodePath.join(root, `tools/agent-device@${AGENT_DEVICE_VERSION}`);
@@ -122,7 +224,7 @@ else { const child=spawn(process.execPath,[path.join(path.dirname(process.argv[1
               HOME: home,
               PATH: `${bin}:${process.env.PATH}`,
               SERVE_EMU_FFMPEG: NodePath.join(home, "missing-ffmpeg"),
-              ANDROID_HOME: "",
+              ANDROID_HOME: sdk,
               EXPO_DEVICE_HUB_EMULATOR_EXTRA_ARGS: "-memory 4096",
             },
           });
@@ -306,7 +408,7 @@ if (fs.existsSync(${JSON.stringify(failMarker)})) process.exitCode = 1;`,
         expect(start().stderr).toContain("Could not stop the agent-device daemon");
         expect(await NodeFSP.readFile(daemonFile, "utf8")).toContain("claims");
         await NodeFSP.rm(failMarker);
-        expect(start().stderr).toContain("Android SDK missing");
+        expect(start().stderr).toContain("Android SDK was not found");
         await expect(NodeFSP.access(daemonFile)).rejects.toThrow();
         expect(await NodeFSP.readFile(calls, "utf8")).toBe(
           `daemon stop --state-dir ${state}\ndaemon stop --state-dir ${state}\n`,
@@ -349,7 +451,7 @@ it.effect("keeps a daemon record its missing agent CLI cannot stop", () =>
         );
         expect(await NodeFSP.readFile(daemonFile, "utf8")).toContain("claims");
         const exited = NodeChildProcess.spawnSync(process.execPath, ["-e", ""]).pid;
-        expect((await start(exited)).stderr).toContain("Android SDK missing");
+        expect((await start(exited)).stderr).toContain("Android SDK was not found");
         await expect(NodeFSP.access(daemonFile)).rejects.toThrow();
       } finally {
         await NodeFSP.rm(home, { recursive: true, force: true });

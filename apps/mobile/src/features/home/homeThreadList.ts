@@ -20,6 +20,7 @@ import type {
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 
+import { m, type MessageResolver } from "../../i18n/messages";
 import { scopedProjectKey } from "../../lib/scopedEntities";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { matchesEnvironmentFilter } from "./homeEnvironmentFilter";
@@ -47,28 +48,34 @@ function getProjectSortTimestamp(
         Number.NEGATIVE_INFINITY);
 }
 
-export function buildHomeProjectScopes(input: {
-  readonly projects: ReadonlyArray<EnvironmentProject>;
-  /** Empty = all environments. Prefer this over the legacy single-id field. */
-  readonly selectedEnvironmentIds?: readonly EnvironmentId[];
-  /** @deprecated Use selectedEnvironmentIds. Kept for call-site migration. */
-  readonly environmentId?: EnvironmentId | null;
-  readonly projectGroupingMode: SidebarProjectGroupingMode;
-}): ReadonlyArray<HomeProjectScope> {
+export function buildHomeProjectScopes(
+  input: {
+    readonly projects: ReadonlyArray<EnvironmentProject>;
+    /** Empty = all environments. Prefer this over the legacy single-id field. */
+    readonly selectedEnvironmentIds?: readonly EnvironmentId[];
+    /** @deprecated Use selectedEnvironmentIds. Kept for call-site migration. */
+    readonly environmentId?: EnvironmentId | null;
+    readonly projectGroupingMode: SidebarProjectGroupingMode;
+  },
+  resolve: MessageResolver = m,
+): ReadonlyArray<HomeProjectScope> {
   const selectedEnvironmentIds =
     input.selectedEnvironmentIds ??
     (input.environmentId != null && input.environmentId !== undefined ? [input.environmentId] : []);
   const projects = input.projects.filter((project) =>
     matchesEnvironmentFilter(project.environmentId, selectedEnvironmentIds),
   );
-  return buildProjectGroups({
-    projects,
-    groupScratchProjects: true,
-    settings: {
-      sidebarProjectGroupingMode: input.projectGroupingMode,
-      sidebarProjectGroupingOverrides: {},
+  return buildProjectGroups(
+    {
+      projects,
+      groupScratchProjects: true,
+      settings: {
+        sidebarProjectGroupingMode: input.projectGroupingMode,
+        sidebarProjectGroupingOverrides: {},
+      },
     },
-  }).map((group) => {
+    resolve,
+  ).map((group) => {
     return {
       key: group.key,
       title: group.label,

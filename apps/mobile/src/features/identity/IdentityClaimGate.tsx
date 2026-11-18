@@ -1,3 +1,5 @@
+import { T } from "gt-react-native";
+import { useGT as useCopyTranslation } from "gt-react-native";
 import {
   filterPeopleForTypeahead,
   identityClaimRequired,
@@ -57,6 +59,8 @@ function IdentityClaimGateBody(props: {
   readonly environment: EnvironmentPresentation;
   readonly onSkip: () => void;
 }) {
+  const translateCopy = useCopyTranslation();
+
   const environmentId = props.environment.environmentId;
   const { onSkip } = props;
   const target = useMemo(() => ({ environmentId, input: {} as const }), [environmentId]);
@@ -122,7 +126,7 @@ function IdentityClaimGateBody(props: {
     const normalized = username.trim().toLowerCase();
     const exact = snapshotQuery.data?.people.find((person) => person.username === normalized);
     if (!exact) {
-      setError("Pick a username from the server map.");
+      setError(translateCopy("Pick a username from the server map."));
       return;
     }
     setSubmitting(true);
@@ -137,7 +141,7 @@ function IdentityClaimGateBody(props: {
       });
       claimQuery.refresh();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Claim failed");
+      setError(cause instanceof Error ? cause.message : translateCopy("Claim failed"));
     }
     setSubmitting(false);
   };
@@ -158,19 +162,23 @@ function IdentityClaimGateBody(props: {
       <View className="flex-1 items-center justify-center bg-backdrop px-5">
         <View className="w-full max-w-md rounded-2xl border border-border bg-card p-5">
           <Text className="text-xs font-semibold tracking-widest text-muted-foreground uppercase">
-            Shared environment · {envLabel}
+            <T>Shared environment · </T>
+            {envLabel}
           </Text>
-          <Text className="mt-2 text-xl font-semibold text-foreground">Who are you?</Text>
+          <Text className="mt-2 text-xl font-semibold text-foreground">
+            <T>Who are you?</T>
+          </Text>
           <Text className="mt-2 text-sm text-muted-foreground">
-            {envLabel} uses a closed identity map. Type at least{" "}
-            {IDENTITY_CLAIM_TYPEAHEAD_MIN_CHARS} characters, then choose a map match.
+            {envLabel}
+            <T> uses a closed identity map. Type at least</T> {IDENTITY_CLAIM_TYPEAHEAD_MIN_CHARS}
+            <T> characters, then choose a map match.</T>
           </Text>
           <TextInput
             autoFocus
             autoCapitalize="none"
             autoCorrect={false}
             editable={!submitting}
-            placeholder="e.g. patroza"
+            placeholder={translateCopy("e.g. patroza")}
             placeholderTextColor="#888"
             value={query}
             onChangeText={(value) => {
@@ -210,7 +218,9 @@ function IdentityClaimGateBody(props: {
             {submitting ? (
               <ActivityIndicator color="#fff" />
             ) : (
-              <Text className="text-base font-semibold text-primary-foreground">Save identity</Text>
+              <Text className="text-base font-semibold text-primary-foreground">
+                <T>Save identity</T>
+              </Text>
             )}
           </Pressable>
         </View>

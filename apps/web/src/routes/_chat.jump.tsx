@@ -1,3 +1,5 @@
+import { T } from "gt-react";
+import { useGT as useCopyTranslation } from "gt-react";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
@@ -19,6 +21,8 @@ import {
 import { buildThreadRouteParams } from "../threadRoutes";
 
 function ProjectJumpRoute() {
+  const translateCopy = useCopyTranslation();
+
   const search = Route.useSearch();
   const projects = useProjects();
   const threads = useThreadShells();
@@ -63,12 +67,16 @@ function ProjectJumpRoute() {
     <SidebarInset className="h-dvh min-h-0 overflow-hidden">
       <Empty className="flex-1">
         <EmptyHeader>
-          <EmptyTitle>Project not found</EmptyTitle>
+          <EmptyTitle>
+            <T>Project not found</T>
+          </EmptyTitle>
           <EmptyDescription>
-            No project matches “{search.project || "(empty)"}” in a connected environment.
+            <T>No project matches “</T>
+            {search.project || translateCopy("(empty)")}
+            <T>” in a connected environment.</T>
           </EmptyDescription>
           <Button size="sm" onClick={() => void navigate({ to: "/", replace: true })}>
-            Go home
+            <T>Go home</T>
           </Button>
         </EmptyHeader>
       </Empty>

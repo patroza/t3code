@@ -1,3 +1,5 @@
+import { msg } from "gt-i18n";
+import { mFallback as resolveCopy } from "gt-i18n";
 import type { ServerHostResourceSnapshot } from "@t3tools/contracts";
 
 export type HostResourcePressure = "normal" | "warning" | "critical";
@@ -73,14 +75,18 @@ export function getHostResourceMetrics(
       label: "M",
       value: formatHostResourcePercent(snapshot.memoryUsedPercent),
       ratio: snapshot.memoryUsedPercent === null ? null : snapshot.memoryUsedPercent / 100,
-      description: `Memory ${formatHostResourcePercent(snapshot.memoryUsedPercent)}`,
+      description: resolveCopy(
+        msg("Memory {value0}", { value0: formatHostResourcePercent(snapshot.memoryUsedPercent) }),
+      ),
     },
     {
       key: "load",
       label: "L",
       value: loadValue,
       ratio: getHostResourceLoadRatio(snapshot),
-      description: `Load ${loadOne === null ? "unavailable" : loadValue}`,
+      description: resolveCopy(
+        msg("Load {value0}", { value0: loadOne === null ? "unavailable" : loadValue }),
+      ),
     },
   ];
 }

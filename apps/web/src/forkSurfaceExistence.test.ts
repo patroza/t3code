@@ -15,7 +15,7 @@ describe("fork surface existence (anti stack-drop)", () => {
   it("keeps provider visibility and project preview controls in the live sidebar", () => {
     const controls = readSrc("components/sidebar/SidebarThreadFilters.tsx");
     expect(controls).toContain('data-testid="sidebar-hide-provider-icons"');
-    expect(controls).toContain('aria-label="Visible thread count"');
+    expect(controls).toContain('aria-label={translateCopy("Visible thread count")}');
     expect(readSrc("components/Sidebar.tsx")).toContain("sidebarThreadPreviewCount");
     expect(readSrc("components/Sidebar.tsx")).toContain(
       "hideProviderIcons={hideProviderIcons && !revealProviderIcons}",
@@ -36,7 +36,7 @@ describe("fork surface existence (anti stack-drop)", () => {
   });
   it("keeps the upstream editor picker without custom application management", () => {
     const picker = readSrc("components/chat/OpenInPicker.tsx");
-    expect(picker).toContain('aria-label="Choose editor"');
+    expect(picker).toContain('aria-label={gt("Choose editor")}');
     expect(picker).toContain("useRemoteOpenState");
     expect(picker).not.toContain("openWithEntries");
     expect(picker).not.toContain("openWithDialogs");
@@ -50,7 +50,7 @@ describe("fork surface existence (anti stack-drop)", () => {
   });
   it("keeps branch reuse available in the shared worktree picker", () => {
     expect(readSrc("components/BranchPicker.tsx")).toContain(
-      'aria-label="Reuse the selected branch in the worktree"',
+      'aria-label={translateCopy("Reuse the selected branch in the worktree")}',
     );
     expect(readSrc("components/BranchToolbarBranchSelector.tsx")).toContain("reuseBaseControl=");
     expect(readSrc("components/ChatView.tsx")).toContain("onReuseBaseBranchChange");
@@ -122,7 +122,7 @@ describe("fork surface existence (anti stack-drop)", () => {
   it("chat header keeps AI usage status and host resource gauges", () => {
     const header = readSrc("components/chat/ChatHeader.tsx");
     expect(header).toContain("HostResourceStatus");
-    expect(header).toContain('aria-label="provider usage status"');
+    expect(header).toContain('aria-label={translateCopy("provider usage status")}');
     expect(header).toContain("AiUsageStats");
     expect(header).toContain("useAiUsageSnapshot");
     const chatView = readSrc("components/ChatView.tsx");
@@ -212,7 +212,9 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(sidebarV2).toContain("usageDotFillClass");
     expect(sidebarV2).toContain("statusDotClassName");
     expect(sidebarV2).toContain("AiUsageStats");
-    expect(sidebarV2).toContain('role: "img", "aria-label": "provider usage status"');
+    expect(sidebarV2).toContain(
+      'role: "img", "aria-label": translateCopy("provider usage status")',
+    );
   });
 
   it("Sidebar V2 grouping changes ordering and headers without changing its row surface", () => {
@@ -223,7 +225,7 @@ describe("fork surface existence (anti stack-drop)", () => {
     const filters = readSrc("components/sidebar/SidebarThreadFilters.tsx");
     expect(filters).toContain("sidebar-thread-grouping-${value}");
     expect(filters).toContain('data-testid="sidebar-thread-grouping"');
-    expect(filters).toContain('aria-label="Thread ordering"');
+    expect(filters).toContain('aria-label={translateCopy("Thread ordering")}');
     expect(sidebarV2).toContain('"Filter threads by project"');
     expect(filters).toContain('["project", "recency"] as const');
     expect(sidebarV2).toContain('threadGrouping !== "recency"');
@@ -260,16 +262,16 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(chat).not.toContain("QueuedMessageChips");
     expect(chat).not.toContain("threadTurnOutbox");
     const queue = readSrc("components/chat/QueuedRunsControl.tsx");
-    expect(queue).toContain('aria-label="Edit queued message"');
-    expect(queue).toContain('aria-label="Remove queued message"');
-    expect(queue).toContain('item.heldForEdit ? <span className="shrink-0 text-xs">Editing</span>');
+    expect(queue).toContain('aria-label={gt("Edit queued message")}');
+    expect(queue).toContain('aria-label={gt("Remove queued message")}');
+    expect(queue).toMatch(/item\.heldForEdit\s*\?\s*\([\s\S]*?<T>Editing<\/T>/);
     expect(queue).toContain("canPromoteToSteer");
     expect(queue).toContain("Reorder queued message");
   });
 
   it("git action menu keeps the GitHub pull request list link", () => {
     const gitActions = readSrc("components/GitActionsControl.tsx");
-    expect(gitActions).toContain('aria-label="View GitHub pull requests"');
+    expect(gitActions).toContain('aria-label={translateCopy("View GitHub pull requests")}');
     expect(gitActions).toContain("openPullRequestList");
     expect(gitActions).toContain("`${repositoryUrl}/pulls`");
   });
@@ -368,10 +370,10 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(route).toContain("projectIds={");
     expect(panel).toContain("projectOverride={projectOverride}");
     expect(card).toContain(
-      'aria-label="Overridden for this project. Show where this value comes from"',
+      'aria-label={gt("Overridden for this project. Show where this value comes from")}',
     );
-    expect(card).toContain('tooltip="Reset to the device setting"');
-    expect(card).toContain("aria-label={`Enable ${displayName}`}");
+    expect(card).toContain('tooltip={gt("Reset to the device setting")}');
+    expect(card).toContain('aria-label={gt("Enable {provider}", { provider: displayName })}');
   });
 
   it("keeps project jump navigation alongside prompt links and the sidebar reveal target", () => {

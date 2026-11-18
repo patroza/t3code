@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - Owns Playwright fixture resources outside the Effect runtime.
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { INCOGNITO_BROWSER_PROFILE_ID } from "@t3tools/contracts";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
@@ -12,12 +13,14 @@ describe("streamed browser authentication", () => {
   let pool: ServerBrowserContexts | undefined;
   let profilesDir: string | undefined;
   let executable: string;
+  let chromeVersion: string;
   let nativeOther: unknown;
 
   beforeAll(async () => {
     // CI installs only Playwright's headless shell; executablePath() names full Chrome.
     const browser = await chromium.launch({ headless: true, args: ["--enable-automation"] });
     try {
+      chromeVersion = browser.version();
       const cdp = await browser.newBrowserCDPSession();
       const command = await cdp.send("Browser.getBrowserCommandLine");
       if (!command.arguments[0]) throw new Error("Missing browser executable");
@@ -50,6 +53,7 @@ describe("streamed browser authentication", () => {
       profilesDir = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-browser-auth-"));
       pool = new ServerBrowserContexts({
         profilesDir,
+        chrome: { version: chromeVersion, platform: HostProcess.Platform.defaultValue() },
         executable: async () => executable,
         env: { ...process.env, T3CODE_SERVER_BROWSER_SANDBOX: "0" },
       });

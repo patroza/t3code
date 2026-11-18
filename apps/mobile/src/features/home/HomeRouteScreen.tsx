@@ -14,11 +14,10 @@ import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/
 import { prefetchEnvironmentThread, warmSelectedEnvironmentThread } from "../../state/threads";
 import { identityClaimPersonIdByEnvironmentAtom } from "../../state/identity";
 import { NativePrimaryColumnContext } from "../../native/v5-workspace-context";
-import * as Arr from "effect/Array";
-import * as Order from "effect/Order";
 import { useNavigation } from "@react-navigation/native";
 import { use, useCallback, useMemo, useState } from "react";
 import { Platform } from "react-native";
+import { useGT, useMessages } from "gt-react-native";
 
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { pickableProjectGroups } from "@t3tools/client-runtime/state/project-grouping";
@@ -45,7 +44,11 @@ import {
   useAtomValueWhileVisible,
   useHomeRouteVisible,
 } from "./home-route-visibility";
-import { buildHomeProjectScopes, resolveHomeProjectFilterScope } from "./homeThreadList";
+import {
+  buildHomeProjectScopes,
+  resolveHomeProjectFilterScope,
+  sortHomeProjectScopes,
+} from "./homeThreadList";
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useThreadListActions } from "./useThreadListActions";
 import { useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
@@ -54,9 +57,11 @@ import { useSelectWorkspaceTab } from "../layout/workspace/useSelectWorkspaceTab
 import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
 import { WorkspaceListEmptyDetail } from "../layout/workspace/WorkspaceListEmptyDetail";
 import { WorkspaceListHeader } from "../layout/workspace/WorkspaceListHeader";
-import { buildHomeListFilterMenuItems } from "./home-list-filter-menu";
+import { buildHomeListFilterMenuItems, homeListFilterEnvironments } from "./home-list-filter-menu";
 
 export function HomeRouteScreen() {
+  const gt = useGT();
+  const m = useMessages();
   const nativePrimaryColumn = use(NativePrimaryColumnContext);
   const { layout, setPrimarySidebarSearchQuery, startNewTask } = useAdaptiveWorkspaceLayout();
   const { primarySidebarSearchQuery } = useWorkspacePaneState();
@@ -121,19 +126,7 @@ export function HomeRouteScreen() {
   const pendingTasks = usePendingNewTasks();
   const { openPendingTask, confirmDeletePendingTask } =
     usePendingTaskListActions(selectThreadRoute);
-  const connectionStateByEnvironmentId = new Map(
-    workspaceEnvironments.map(
-      (environment) => [environment.environmentId, environment.connectionState] as const,
-    ),
-  );
-  const environments = Arr.sort(
-    Object.values(savedConnectionsById).map((connection) => ({
-      environmentId: connection.environmentId,
-      label: connection.environmentLabel,
-      connectionState: connectionStateByEnvironmentId.get(connection.environmentId) ?? "available",
-    })),
-    Order.mapInput(Order.String, (environment: { readonly label: string }) => environment.label),
-  );
+  const environments = homeListFilterEnvironments(workspaceEnvironments);
   const availableEnvironmentIds = useMemo(
     () => new Set(environments.map((environment) => environment.environmentId)),
     [environments],
@@ -174,12 +167,15 @@ export function HomeRouteScreen() {
   );
   const projectScopes = useMemo(
     () =>
-      buildHomeProjectScopes({
-        projects,
-        selectedEnvironmentIds,
-        projectGroupingMode: listOptions.projectGroupingMode,
-      }),
-    [listOptions.projectGroupingMode, projects, selectedEnvironmentIds],
+      buildHomeProjectScopes(
+        {
+          projects,
+          selectedEnvironmentIds,
+          projectGroupingMode: listOptions.projectGroupingMode,
+        },
+        m,
+      ),
+    [listOptions.projectGroupingMode, projects, selectedEnvironmentIds, m],
   );
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
@@ -205,11 +201,18 @@ export function HomeRouteScreen() {
 
   const projectFilterOptions = useMemo(
     () =>
-      pickableProjectGroups(projectScopes).map((scope) => ({
+      pickableProjectGroups(
+        sortHomeProjectScopes({
+          scopes: projectScopes,
+          threads,
+          pendingTasks: [],
+          projectSortOrder: "updated_at",
+        }),
+      ).map((scope) => ({
         key: scope.key,
         label: scope.title,
       })),
-    [projectScopes],
+    [projectScopes, threads],
   );
   const selectedProjectKey =
     resolveHomeProjectFilterScope(projectScopes, projects, listOptions)?.key ?? null;
@@ -235,33 +238,36 @@ export function HomeRouteScreen() {
     <AndroidHomeFabLayout onStartNewTask={startNewTask}>
       <>
         <WorkspaceListHeader
-          accessibilityLabel="T3 Code, Threads"
+          accessibilityLabel={gt("T3 Code, Threads")}
           onOpenEnvironments={() => openSettings(navigation, "SettingsEnvironments")}
           search={{
             value: searchQuery,
             onChangeText: setSearchQuery,
-            placeholder: "Search",
-            accessibilityLabel: "Search threads",
+            placeholder: gt("Search", { $context: "search field placeholder" }),
+            accessibilityLabel: gt("Search threads"),
           }}
           filter={{
             customized: filterCustomized,
-            items: buildHomeListFilterMenuItems({
-              environments,
-              projects: projectFilterOptions,
-              selectedEnvironmentIds,
-              selectedProjectKey,
-              ownershipFilter: listOptions.ownershipFilter,
-              ownershipRelation: listOptions.ownershipRelation,
-              threadGrouping: listOptions.threadGrouping,
-              hideSettledThreads,
-              onClearEnvironments: clearSelectedEnvironments,
-              onToggleEnvironment: toggleSelectedEnvironmentId,
-              onProjectChange: setSelectedProjectKey,
-              onOwnershipFilterChange: setOwnershipFilter,
-              onOwnershipRelationChange: setOwnershipRelation,
-              onThreadGroupingChange: setThreadGrouping,
-              onHideSettledThreadsChange: setHideSettledThreads,
-            }),
+            items: buildHomeListFilterMenuItems(
+              {
+                environments,
+                projects: projectFilterOptions,
+                selectedEnvironmentIds,
+                selectedProjectKey,
+                ownershipFilter: listOptions.ownershipFilter,
+                ownershipRelation: listOptions.ownershipRelation,
+                threadGrouping: listOptions.threadGrouping,
+                hideSettledThreads,
+                onClearEnvironments: clearSelectedEnvironments,
+                onToggleEnvironment: toggleSelectedEnvironmentId,
+                onProjectChange: setSelectedProjectKey,
+                onOwnershipFilterChange: setOwnershipFilter,
+                onOwnershipRelationChange: setOwnershipRelation,
+                onThreadGroupingChange: setThreadGrouping,
+                onHideSettledThreadsChange: setHideSettledThreads,
+              },
+              m,
+            ),
           }}
         />
 
