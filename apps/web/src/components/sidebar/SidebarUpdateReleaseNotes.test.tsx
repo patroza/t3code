@@ -6,6 +6,18 @@ const testState = vi.hoisted(() => ({
   addToast: vi.fn(),
 }));
 
+vi.mock("gt-react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("gt-react")>();
+  const children = ({ children }: { children: ReactNode }) => children;
+  return {
+    ...actual,
+    useGT: () => actual.gtFallback,
+    useMessages: () => actual.mFallback,
+    T: children,
+    Var: children,
+  };
+});
+
 vi.mock("../ui/toast", () => ({
   toastManager: { add: testState.addToast },
 }));

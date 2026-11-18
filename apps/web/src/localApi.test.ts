@@ -146,7 +146,7 @@ describe("LocalApi", () => {
     await expect(api.persistence.getClientSettings()).resolves.toEqual(DEFAULT_CLIENT_SETTINGS);
     await api.persistence.setClientSettings(DEFAULT_CLIENT_SETTINGS);
 
-    expect(showContextMenu).toHaveBeenCalledWith(items, undefined);
+    expect(showContextMenu).toHaveBeenCalledWith(items, undefined, undefined);
     expect(pickFolder).toHaveBeenCalledWith({ initialPath: "/tmp" });
     expect(getClientSettings).toHaveBeenCalledTimes(1);
     expect(setClientSettings).toHaveBeenCalledWith(DEFAULT_CLIENT_SETTINGS);
