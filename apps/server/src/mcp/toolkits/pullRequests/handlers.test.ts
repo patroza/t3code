@@ -38,6 +38,7 @@ import * as PullRequestService from "../../../pullRequest/PullRequestService.ts"
 import * as PullRequestWatchService from "../../../pullRequest/PullRequestWatchService.ts";
 import * as PullRequestReviewGuideService from "../../../pullRequest/PullRequestReviewGuideService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import { alreadyEndedWatchNext } from "./tools.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as McpToolAccessTestkit from "../../McpToolAccess.testkit.ts";
 import { listThreadPullRequests } from "./handlers.ts";
@@ -329,39 +330,46 @@ describe("pull request toolkit handlers", () => {
     }),
   );
 
-  it.effect("refuses to watch a merged pull request and stops an existing watch", () =>
-    Effect.gen(function* () {
-      const watch = {
-        startedAt: "2026-08-20T00:00:00.000Z",
-        headSha: null,
-        failedChecks: [],
-        passed: false,
-        passedChecks: [],
-        pendingChecks: [],
-        remarksThrough: "2026-08-20T00:00:00.000Z",
-        remarkIds: [],
-        conflicting: false,
-        wakes: 0,
-      };
-      const merged = makeLink(1, { headBranch: "done" });
-      const harness = yield* makeHarness({
-        thread: makeThread([
-          { ...merged, snapshot: merged.snapshot && { ...merged.snapshot, state: "merged" } },
-          makeLink(2, { headBranch: "idle" }),
-          makeLink(3, { headBranch: "watched", watch }),
-        ]),
-      });
-      const error = yield* harness
-        .call("watch_pull_request", { repository: "t3tools/t3code", number: 1 })
-        .pipe(Effect.flip);
-      expect(error).toMatchObject({ _tag: "PullRequestNotOpenError", state: "merged" });
-      expect(
-        yield* harness.call("unwatch_pull_request", { repository: "t3tools/t3code", number: 3 }),
-      ).toMatchObject({ wasWatching: true });
-      expect(yield* Ref.get(harness.commands)).toMatchObject([
-        { type: "thread.pull-request.watch", number: 3, watching: false },
-      ]);
-    }),
+  it.effect(
+    "reports a merged pull request instead of watching it, and stops an existing watch",
+    () =>
+      Effect.gen(function* () {
+        const watch = {
+          startedAt: "2026-08-20T00:00:00.000Z",
+          headSha: null,
+          failedChecks: [],
+          passed: false,
+          passedChecks: [],
+          pendingChecks: [],
+          remarksThrough: "2026-08-20T00:00:00.000Z",
+          remarkIds: [],
+          conflicting: false,
+          wakes: 0,
+        };
+        const merged = makeLink(1, { headBranch: "done" });
+        const harness = yield* makeHarness({
+          thread: makeThread([
+            { ...merged, snapshot: merged.snapshot && { ...merged.snapshot, state: "merged" } },
+            makeLink(2, { headBranch: "idle" }),
+            makeLink(3, { headBranch: "watched", watch }),
+          ]),
+        });
+        expect(
+          yield* harness.call("watch_pull_request", { repository: "t3tools/t3code", number: 1 }),
+        ).toMatchObject({
+          number: 1,
+          watching: false,
+          wasWatching: false,
+          state: "merged",
+          next: alreadyEndedWatchNext("merged"),
+        });
+        expect(
+          yield* harness.call("unwatch_pull_request", { repository: "t3tools/t3code", number: 3 }),
+        ).toMatchObject({ wasWatching: true });
+        expect(yield* Ref.get(harness.commands)).toMatchObject([
+          { type: "thread.pull-request.watch", number: 3, watching: false },
+        ]);
+      }),
   );
 
   it.effect("watches a pull request saved as closed, since it may have reopened", () =>
