@@ -1664,6 +1664,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
               command: "git fetch",
               cwd: fetchCwd,
               detail: "Background Git fetch could not use its object directory.",
+              failureKind: "unknown",
               cause: error,
             }),
       ),

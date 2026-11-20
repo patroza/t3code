@@ -249,16 +249,19 @@ function buildRepositoryIdentity(input: {
     ...(primary.provider ? { provider: primary.provider } : {}),
     ...(primary.owner ? { owner: primary.owner } : {}),
     ...(primary.name ? { name: primary.name } : {}),
-    remotes: [...input.remotes].map(([remoteName, remoteUrl]) =>
-      describeRemote({
+    remotes: [...input.remotes].map(([remoteName, remoteUrl]) => {
+      const keyUrl =
+        input.originUrl !== undefined && remoteUrl === input.originUrl
+          ? input.originKeyUrl
+          : remoteUrl === input.remoteUrl
+            ? input.keyUrl
+            : undefined;
+      return describeRemote({
         remoteName,
         remoteUrl,
-        ...(remoteUrl === input.remoteUrl ? { keyUrl: input.keyUrl } : {}),
-        ...(input.originUrl !== undefined && remoteUrl === input.originUrl
-          ? { keyUrl: input.originKeyUrl }
-          : {}),
-      }),
-    ),
+        ...(keyUrl !== undefined ? { keyUrl } : {}),
+      });
+    }),
   };
 }
 
