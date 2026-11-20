@@ -335,6 +335,7 @@ it.effect("preserves a GitHub App wrapper diagnostic from credential acquisition
       }),
     ),
     Layer.provide(NodeCrypto.layer),
+    Layer.provide(FileSystem.layerNoop({})),
   );
   return Effect.gen(function* () {
     const credentials = yield* GitHubCredentials.GitHubCredentials;
