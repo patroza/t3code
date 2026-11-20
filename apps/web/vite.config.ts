@@ -678,7 +678,9 @@ export default defineConfig(({ command }) => {
               { bundle: "desktop", path: new URL("../desktop/package.json", import.meta.url) },
             ],
           }),
-      tanstackRouter({ autoCodeSplitting: true }),
+      // Vitest uses the checked-in route tree. The generator rewrites that file
+      // when its text differs, and the rewrite drops in-flight browser mocks.
+      process.env.VITEST ? undefined : tanstackRouter({ autoCodeSplitting: true }),
       react({ compiler: true }),
       tailwindPlugins(bundledDev),
       warmBundledDevPlugin(),
