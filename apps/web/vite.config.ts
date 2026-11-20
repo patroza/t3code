@@ -679,7 +679,7 @@ export default defineConfig(({ command }) => {
             ],
           }),
       // Vitest uses the checked-in route tree. The generator rewrites that file
-      // when its text differs, and the rewrite drops in-flight browser mocks.
+      // when its text differs, which dirties the worktree in the middle of the run.
       process.env.VITEST ? undefined : tanstackRouter({ autoCodeSplitting: true }),
       react({ compiler: true }),
       tailwindPlugins(bundledDev),
