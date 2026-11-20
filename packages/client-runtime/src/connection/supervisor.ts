@@ -1411,7 +1411,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
   // keepRunning restarts the follower if it defects and re-reads status.
   yield* keepRunning(
     "network-listener",
-    Connectivity.followNetworkStatus({
+    Connectivity.observeNetworkStatus({
       connectivity,
       wakeups,
       apply: applyNetworkStatus,
