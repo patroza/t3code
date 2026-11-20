@@ -341,8 +341,13 @@ const cleanupFixture = (
     const config = yield* ServerConfig.ServerConfig;
     const git = yield* GitVcsDriver.GitVcsDriver;
     const repo = yield* fs.realPath(yield* fs.makeTempDirectoryScoped({ prefix: "cleanup-repo-" }));
-    const command = (cwd: string, args: string[]) =>
-      git.execute({ operation: "cleanup-test", cwd, args });
+    const command = (cwd: string, args: string[], env?: NodeJS.ProcessEnv) =>
+      git.execute({
+        operation: "cleanup-test",
+        cwd,
+        args,
+        ...(env !== undefined ? { env } : {}),
+      });
     yield* command(repo, ["init", "-b", "main"]);
     yield* command(repo, ["config", "user.email", "cleanup@example.test"]);
     yield* command(repo, ["config", "user.name", "Cleanup test"]);
@@ -3300,7 +3305,10 @@ describe("storage cleanup reports and local file policies", () => {
         yield* command(worktree, ["commit", "-am", "unpushed"]);
         expect((yield* service.runNow).entries[0]).toMatchObject({ outcome: "kept" });
         yield* command(worktree, ["checkout", "--detach", "main"]);
-        yield* command(worktree, ["-c", "sequence.editor=echo break >>", "rebase", "-i", "--root"]);
+        // An ambient sequence editor accepts the todo unchanged, and a trailing break no longer pauses.
+        yield* command(worktree, ["rebase", "-i", "--root"], {
+          GIT_SEQUENCE_EDITOR: "sed -i 1ibreak",
+        });
         expect((yield* service.runNow).entries[0]).toMatchObject({ outcome: "kept" });
         yield* command(worktree, ["rebase", "--abort"]);
         yield* command(worktree, ["checkout", "-b", "topic", "main"]);

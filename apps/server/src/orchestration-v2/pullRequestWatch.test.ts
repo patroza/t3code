@@ -209,7 +209,7 @@ describe("evaluatePullRequestWatch", () => {
         detail({ checks: [check("lint", "failure"), check("test", "success")] }),
         noRemarks,
       ).changes,
-      [],
+      [{ kind: "checks-settled", checks: [check("test", "success")] }],
     );
     assert.deepEqual(
       evaluatePullRequestWatch(

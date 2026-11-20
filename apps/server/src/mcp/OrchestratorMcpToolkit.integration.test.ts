@@ -205,6 +205,15 @@ const parentPrompt = "Keep this parent turn active while orchestration tools are
 const delegatedPrompt = "Inspect the delegated API boundary and return the result.";
 const delegatedResult = "Delegated API boundary inspected.";
 const cancellationPrompt = "Remain active until the parent cancels this delegated task.";
+
+// Agent turns prepend a sender note. Match the prompt the test wrote.
+const withoutSenderNote = (text: string) => {
+  if (!text.startsWith("[T3 Code:")) return text;
+  const splitAt = text.indexOf("\n\n");
+  return splitAt === -1 ? text : text.slice(splitAt + 2);
+};
+const stampedByParent = (text: string) =>
+  `[T3 Code: the agent in T3 thread ${JSON.stringify(parentThreadId)} sent this message, not the user.]\n\n${text}`;
 const queuedFollowupPrompt = "Complete the queued follow-up and return the final result.";
 const queuedFollowupResult = "Queued delegated follow-up completed.";
 const decodeThreadRead = Schema.decodeUnknownEffect(OrchestratorMcpThreadReadResult);
@@ -616,33 +625,36 @@ describe("orchestrator MCP toolkit", () => {
               },
               capturedTurns,
               shouldComplete: (turn) =>
-                turn.threadId !== parentThreadId && turn.message.text !== cancellationPrompt,
-              terminalGate: (turn) =>
-                turn.message.text.startsWith("Delegated task") ||
-                turn.message.text.startsWith("Delegated tasks")
+                turn.threadId !== parentThreadId &&
+                withoutSenderNote(turn.message.text) !== cancellationPrompt,
+              terminalGate: (turn) => {
+                const text = withoutSenderNote(turn.message.text);
+                return text.startsWith("Delegated task") || text.startsWith("Delegated tasks")
                   ? (fanoutDeliveryGates.get(turn.message.messageId) ??
-                    deliveryTerminalGates.get(turn.threadId))
-                  : (parentTerminalGates.get(turn.threadId) ??
-                    promptTerminalGates.get(turn.message.text)),
-              response: (turn) => `Codex completed: ${turn.message.text}`,
+                      deliveryTerminalGates.get(turn.threadId))
+                  : (parentTerminalGates.get(turn.threadId) ?? promptTerminalGates.get(text));
+              },
+              response: (turn) => `Codex completed: ${withoutSenderNote(turn.message.text)}`,
             }),
             makeDeterministicAdapter({
               instanceId: claudeInstanceId,
               driver: ProviderDriverKind.make("claudeAgent"),
               capabilities: ClaudeProviderCapabilitiesV2,
               capturedTurns,
-              shouldComplete: (turn) => turn.message.text !== cancellationPrompt,
-              terminalGate: (turn) =>
-                turn.message.text.startsWith("Delegated task") ||
-                turn.message.text.startsWith("Delegated tasks")
+              shouldComplete: (turn) => withoutSenderNote(turn.message.text) !== cancellationPrompt,
+              terminalGate: (turn) => {
+                const text = withoutSenderNote(turn.message.text);
+                return text.startsWith("Delegated task") || text.startsWith("Delegated tasks")
                   ? (fanoutDeliveryGates.get(turn.message.messageId) ??
-                    deliveryTerminalGates.get(turn.threadId))
-                  : parentTerminalGates.get(turn.threadId),
+                      deliveryTerminalGates.get(turn.threadId))
+                  : parentTerminalGates.get(turn.threadId);
+              },
               response: (turn) =>
-                turn.message.text === delegatedPrompt
+                withoutSenderNote(turn.message.text) === delegatedPrompt
                   ? delegatedResult
-                  : `Claude completed: ${turn.message.text}`,
-              steerReceived: (steer) => steerReceivedGates.get(steer.message.text),
+                  : `Claude completed: ${withoutSenderNote(turn.message.text)}`,
+              steerReceived: (steer) =>
+                steerReceivedGates.get(withoutSenderNote(steer.message.text)),
             }),
           ]);
           const approvalParentId = ThreadId.make("thread:mcp-approval-parent");
@@ -831,6 +843,7 @@ describe("orchestrator MCP toolkit", () => {
                       ? Option.some({ id, defaultModelSelection: null } as never)
                       : Option.none(),
                   ),
+                workspaceScanDirectory: Effect.succeed,
               }),
             ),
             Layer.provideMerge(
@@ -1255,9 +1268,9 @@ describe("orchestrator MCP toolkit", () => {
               Effect.orDie,
             );
             expect(remainder.items[0]?.nextTextOffset).toBeNull();
-            expect(firstChunk.text + (remainder.items[0]?.text ?? "")).toBe(
-              "Claude completed: Complete before a parent reads this child result directly.",
-            );
+            const childResult =
+              "Claude completed: Complete before a parent reads this child result directly.";
+            expect(firstChunk.text + (remainder.items[0]?.text ?? "")).toBe(childResult);
             // Reading the final nonempty text page acknowledges the terminal result.
             expect(
               (yield* orchestrator.getThreadProjection(parentThreadId)).subagents.find(
@@ -1276,7 +1289,7 @@ describe("orchestrator MCP toolkit", () => {
             expect(terminalResultRead.items).toMatchObject([
               {
                 type: "assistant_message",
-                text: "Claude completed: Complete before a parent reads this child result directly.",
+                text: childResult,
                 textTruncated: false,
               },
             ]);
@@ -1889,7 +1902,7 @@ describe("orchestrator MCP toolkit", () => {
               {
                 instanceId: claudeInstanceId,
                 threadId: localChild(delegated.childThreadId),
-                text: delegatedPrompt,
+                text: stampedByParent(delegatedPrompt),
                 modelSelection: { ...claudeSelection, options: delegatedOptions },
               },
             ]);

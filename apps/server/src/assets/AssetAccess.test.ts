@@ -1158,6 +1158,7 @@ describe("AssetAccess", () => {
             expect(resolved).toEqual({
               kind: "file",
               path: yield* fs.realPath(target),
+              file: expect.any(Object),
               renderIntent: "file-preview",
             });
           } else {
@@ -1256,11 +1257,13 @@ describe("AssetAccess", () => {
       expect(yield* resolveAsset(dotToken, "report.html")).toEqual({
         kind: "file",
         path: yield* fileSystem.realPath(dotHtmlPath),
+        file: expect.any(Object),
         renderIntent: "file-preview",
       });
       expect(yield* resolveAsset(dotToken, "report.css")).toEqual({
         kind: "file",
         path: yield* fileSystem.realPath(dotCssPath),
+        file: expect.any(Object),
         renderIntent: "file-preview",
       });
       expect(yield* resolveAsset(dotToken, ".cache/hidden.css")).toBeNull();

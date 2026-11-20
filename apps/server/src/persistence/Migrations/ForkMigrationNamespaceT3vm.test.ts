@@ -79,6 +79,10 @@ layer("t3vm migration namespace repair", (it) => {
           { migration_id: 96, name: "RepairStaleTitleRegeneration" },
           { migration_id: 97, name: "IssueTrackerBindings" },
           { migration_id: 98, name: "ActiveShellIndexIndexes" },
+          { migration_id: 99, name: "BackgroundRecoveryIndexes" },
+          { migration_id: 100, name: "TurnStartReadIndexes" },
+          { migration_id: 101, name: "DelegatedTaskReadIndexes" },
+          { migration_id: 102, name: "ThreadItemCounts" },
         ],
       );
       const fork = yield* sql<LedgerRow>`

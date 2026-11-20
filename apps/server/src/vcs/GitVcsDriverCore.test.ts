@@ -1257,7 +1257,8 @@ describe("pullCurrentBranch", () => {
   const controlledStatusFetch = Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const cwd = yield* makeTmpDir();
-    yield* fs.makeDirectory(`${cwd}/.git`);
+    // Status fetches download into a temp directory under .git/objects before git fetch runs.
+    yield* fs.makeDirectory(`${cwd}/.git/objects`, { recursive: true });
     const started = yield* Queue.unbounded<{
       cwd: string;
       release: Deferred.Deferred<ChildProcessSpawner.ExitCode>;
@@ -1284,9 +1285,13 @@ describe("pullCurrentBranch", () => {
           yield* Queue.offer(started, { cwd: workingDirectory, release });
           yield* Effect.addFinalizer(() => Queue.offer(finalized, workingDirectory));
           yield* Effect.addFinalizer(() => Ref.set(fetching, false));
+          // A dry run with empty stderr does not start the second ref-moving fetch.
+          // Non-zero exits fail before that check, which is what the backoff cases hold.
           return ChildProcessSpawner.makeHandle({
             ...makeSuccessfulHandle(""),
-            stderr: Stream.encodeText(Stream.make("fatal: remote unavailable\n")),
+            stderr: args.includes("--dry-run")
+              ? Stream.empty
+              : Stream.encodeText(Stream.make("fatal: remote unavailable\n")),
             exitCode: Deferred.await(release),
           });
         }
@@ -1489,7 +1494,7 @@ describe("pullCurrentBranch", () => {
       const statuses = [];
       for (let i = 0; i < 4; i++) {
         const cwd = `${fixture.cwd}/repo-${i}`;
-        yield* fs.makeDirectory(`${cwd}/.git`, { recursive: true });
+        yield* fs.makeDirectory(`${cwd}/.git/objects`, { recursive: true });
         statuses.push(yield* fixture.status(cwd).pipe(Effect.forkScoped));
         yield* Queue.take(fixture.started);
       }
@@ -1501,6 +1506,9 @@ describe("pullCurrentBranch", () => {
       assert.equal(yield* Ref.get(fixture.attempts), 4);
 
       yield* TestClock.adjust(290_000);
+      // The queued fetch creates its object directory with the real filesystem
+      // before git runs, so the attempt is counted on a live turn after the slots free.
+      yield* TestClock.withLive(Effect.sleep("200 millis"));
       assert.equal(yield* Ref.get(fixture.attempts), 5);
       for (let i = 0; i < 4; i++) yield* Queue.take(fixture.finalized);
       const healthy = yield* Queue.take(fixture.started);

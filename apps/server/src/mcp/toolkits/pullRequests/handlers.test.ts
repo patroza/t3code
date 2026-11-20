@@ -190,7 +190,9 @@ const makeHarness = Effect.fn("makePullRequestsToolkitHarness")(function* (
           headBranch: "feature",
           baseBranch: "main",
           updatedAt: "2026-08-20T00:00:00.000Z",
+          checksState: "pending",
         }),
+      ...options.pullRequests,
     }),
     Layer.mock(ProjectService.ProjectService)({
       getShell: () => Effect.succeed(Option.fromNullishOr(project)),
@@ -219,7 +221,6 @@ const makeHarness = Effect.fn("makePullRequestsToolkitHarness")(function* (
         Effect.succeed(id === thread?.id ? v2PullRequestThread(thread) : null),
       dispatch,
     }),
-    Layer.mock(PullRequestService.PullRequestService)(options.pullRequests ?? {}),
     Layer.mock(GitManager.GitManager)(options.git ?? {}),
     Layer.succeed(SecureRandom.SecureRandom, testCrypto),
     McpToolAccessTestkit.liveThreadsLayer,
