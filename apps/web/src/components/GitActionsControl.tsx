@@ -33,7 +33,7 @@ import type {
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import * as Option from "effect/Option";
-import { type MouseEvent, useEffect, useEffectEvent, useId, useRef, useState } from "react";
+import { memo, type MouseEvent, useEffect, useEffectEvent, useId, useRef, useState } from "react";
 import { useDeadlinePassed } from "../hooks/useDeadline";
 import { useNowSecond } from "../hooks/useNowSecond";
 import { flushSync } from "react-dom";
@@ -1041,7 +1041,12 @@ export function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
   );
 }
 
-export default function GitActionsControl({
+export default memo(function GitActionsControl(props: GitActionsControlProps) {
+  const checkoutKey = JSON.stringify([props.activeThreadRef?.environmentId ?? null, props.gitCwd]);
+  return <CheckoutGitActionsControl key={checkoutKey} {...props} />;
+});
+
+function CheckoutGitActionsControl({
   presentation = "toolbar",
   displayMode = "toolbar",
   compact = false,
@@ -1639,7 +1644,9 @@ export default function GitActionsControl({
       const createdPullRequest = actionResult.pr.status === "created";
       setInlineSuccess({
         title: createdPullRequest
-          ? translateCopy("Created {value0}", { value0: changeRequestTerminology.shortLabel })
+          ? gt("Created {term, select, mr {MR} cr {change request} other {PR}}", {
+              term: changeRequestTermKind(changeRequestTerminology),
+            })
           : actionResult.toast.title,
         description: createdPullRequest ? null : (actionResult.toast.description ?? null),
         scopeKey: successScopeKey,

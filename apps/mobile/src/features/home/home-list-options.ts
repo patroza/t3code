@@ -10,7 +10,7 @@ export {
   THREAD_SORT_OPTIONS,
   type OwnershipFilter,
 } from "./home-list-filter-options";
-import { RegistryContext, useAtomSet, useAtomValue } from "@effect/atom-react";
+import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/reactivity";
 import type {
   EnvironmentId,
@@ -47,7 +47,8 @@ import {
   type HomeThreadGrouping,
 } from "./homeListMode";
 import type { ThreadListFilters } from "../../persistence/mobile-preferences";
-import { updateMobilePreferencesAtom } from "../../state/preferences";
+import { saveMobilePreferences } from "../../state/preferences";
+import { useAtomCommand } from "../../state/use-atom-command";
 import type { HomeProjectSortOrder } from "./homeThreadList";
 
 export type { OwnershipRelation };
@@ -159,7 +160,7 @@ export function HomeListOptionsProvider({
     },
     [registry, optionsAtom],
   );
-  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const savePreferences = useAtomCommand(saveMobilePreferences);
   const saved = useRef(savedFilters);
   const environmentId =
     options.selectedEnvironmentIds.length === 1 ? options.selectedEnvironmentIds[0]! : null;
@@ -205,7 +206,7 @@ export function HomeListOptionsProvider({
       (saved.current?.projectKey ?? null) !== projectKey
     ) {
       saved.current = { environmentId, projectKey };
-      savePreferences({ threadListFilters: saved.current });
+      void savePreferences({ threadListFilters: saved.current });
     }
     if (hydrated.environments && storedEnvironmentIds !== undefined && onStoreEnvironmentIds) {
       if (persisted.current.environments === undefined) {

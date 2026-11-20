@@ -9,6 +9,7 @@ import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 const testSetupFiles = [
   "../../packages/shared/src/testing/longTempDir.ts",
   "../../packages/shared/src/testing/providerEnv.ts",
+  "../../packages/shared/src/testing/gitEnv.ts",
 ];
 
 const isolatedDesktopTestFiles = [
@@ -89,6 +90,8 @@ const publicConfigDefine = {
 
 export default defineConfig({
   test: {
+    // `require("electron")` downloads a missing binary, so concurrent workers race to
+    // extract it into the same dist/. Install it once before any worker starts.
     globalSetup: ["./scripts/ensure-electron-runtime.mjs"],
     projects: [
       defineProject({
@@ -96,7 +99,10 @@ export default defineConfig({
           name: "dom",
           include: domTests,
           environment: "jsdom",
-          setupFiles: ["../../packages/shared/src/testing/providerEnv.ts"],
+          setupFiles: [
+            "../../packages/shared/src/testing/providerEnv.ts",
+            "../../packages/shared/src/testing/gitEnv.ts",
+          ],
         },
       }),
       defineProject({

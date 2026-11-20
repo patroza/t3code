@@ -3,6 +3,7 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
 import {
+  AuthAdministrativeClientScopes,
   AuthStandardClientScopes,
   type AuthClientMetadata,
   type AuthConnectDevice,
@@ -447,7 +448,7 @@ export const make = Effect.gen(function* () {
     const now = yield* DateTime.now;
     yield* seedGrant(config.desktopBootstrapToken, {
       method: "desktop-bootstrap",
-      scopes: AuthStandardClientScopes,
+      scopes: AuthAdministrativeClientScopes,
       subject: "desktop-bootstrap",
       expiresAt: DateTime.add(now, {
         milliseconds: Duration.toMillis(DESKTOP_BOOTSTRAP_TTL_HOURS),
@@ -580,7 +581,7 @@ export const make = Effect.gen(function* () {
       if (yield* consumeRotatingDesktopToken(credential, now.epochMilliseconds)) {
         return {
           method: "desktop-bootstrap",
-          scopes: AuthStandardClientScopes,
+          scopes: AuthAdministrativeClientScopes,
           subject: "desktop-bootstrap",
           expiresAt: DateTime.add(now, {
             milliseconds: DESKTOP_BOOTSTRAP_TOKEN_WINDOW_MS,
@@ -872,7 +873,11 @@ export const make = Effect.gen(function* () {
   const revokeConnectDevice: PairingGrantStore["Service"]["revokeConnectDevice"] = Effect.fn(
     "PairingGrantStore.revokeConnectDevice",
   )(function* (proofKeyThumbprint) {
-    yield* revokeUnspentLinks({ proofKeyThumbprint, keepProofKeyThumbprint: null });
+    yield* revokeUnspentLinks({
+      proofKeyThumbprint,
+      keepProofKeyThumbprint: null,
+      includeUnbound: false,
+    });
     const removed = yield* connectDevices
       .remove(proofKeyThumbprint)
       .pipe(Effect.mapError((cause) => new ConnectDevicesError({ operation: "revoke", cause })));
@@ -882,7 +887,12 @@ export const make = Effect.gen(function* () {
 
   const revokeConnectDevicesExcept: PairingGrantStore["Service"]["revokeConnectDevicesExcept"] =
     Effect.fn("PairingGrantStore.revokeConnectDevicesExcept")(function* (keepProofKeyThumbprint) {
-      yield* revokeUnspentLinks({ proofKeyThumbprint: null, keepProofKeyThumbprint });
+      // "Revoke all others" promises every other way in is gone, so unspent codes go too.
+      yield* revokeUnspentLinks({
+        proofKeyThumbprint: null,
+        keepProofKeyThumbprint,
+        includeUnbound: true,
+      });
       const removed = yield* connectDevices
         .removeAllExcept(keepProofKeyThumbprint)
         .pipe(Effect.mapError((cause) => new ConnectDevicesError({ operation: "revoke", cause })));
