@@ -533,8 +533,11 @@ describe("MessagesTimeline messages", () => {
         ],
       }),
     ]);
-    await vi.waitFor(() =>
-      expect(screen.container.querySelector('[aria-label="Expand diagram"] svg')).not.toBeNull(),
+    await vi.waitFor(
+      () =>
+        expect(screen.container.querySelector('[aria-label="Expand diagram"] svg')).not.toBeNull(),
+      // The diagram chunk is shared with the rest of the browser suite, so the first paint can miss the default wait.
+      { timeout: 10_000 },
     );
     const paragraphs = [...screen.container.querySelectorAll("p")];
     const before = paragraphs.find((p) => p.textContent === "Before")!.firstChild!;
