@@ -18,6 +18,11 @@ export type PullRequestWatchChange =
   | { readonly kind: "checks-failed"; readonly failed: ReadonlyArray<PullRequestCheck> }
   | { readonly kind: "checks-passed"; readonly count: number; readonly required: boolean }
   | { readonly kind: "checks-settled"; readonly checks: ReadonlyArray<PullRequestCheck> }
+  | {
+      readonly kind: "checks-finished";
+      readonly passed: number;
+      readonly failing: ReadonlyArray<PullRequestCheck>;
+    }
   | { readonly kind: "checks-awaiting-approval"; readonly checks: ReadonlyArray<PullRequestCheck> }
   | { readonly kind: "remarks"; readonly remarks: ReadonlyArray<PullRequestComment> }
   | { readonly kind: "no-checks"; readonly minutes: number }
@@ -66,6 +71,7 @@ export function evaluatePullRequestWatch(
   let passedChecks = headMoved ? [] : watch.passedChecks;
   let pendingChecks = headMoved ? [] : watch.pendingChecks;
   let owedChecks = headMoved ? [] : (watch.owedChecks ?? []);
+  const owedBefore = owedChecks;
   let awaitingApproval = headMoved ? [] : (watch.awaitingApproval ?? []);
   let approvalAnnounced = headMoved ? false : (watch.approvalAnnounced ?? false);
   // A watch with no answer (saved before the field, or since a push) waits only while the clock
@@ -76,14 +82,14 @@ export function evaluatePullRequestWatch(
   const checks = detail.checks.filter((check) => check.placeholder !== true);
   const failed = checks.filter(isFailedCheck);
   const awaiting = checks.filter((check) => check.status === "action-required");
-  const previousFailedChecks = failedChecks;
+  const failedBefore = failedChecks;
+  const newlyFailed = failed.filter((check) => !failedBefore.includes(check.name));
   if (checks.length > 0) {
     // A run awaiting approval waits on a person, like a review, so only running checks count.
     // An unfinished baseline read keeps the seed below for the next one.
     checksPending =
       checks.some((check) => check.status === "pending") ||
       (checksBaseline && unread && watch.checksPending === true);
-    const newlyFailed = failed.filter((check) => !failedChecks.includes(check.name));
     // The baseline hides failures from before the watch, but CI running at the start can fail
     // before the first read.
     if (newlyFailed.length > 0 && (!checksBaseline || watch.checksPending === true)) {
@@ -137,9 +143,24 @@ export function evaluatePullRequestWatch(
     // Required checks can finish between sweeps; detect new names. With no required checks, ignore advisory gate growth.
     const gateGrew = required.length > 0 && gateNames.some((name) => !told.includes(name));
     const passedThisPass = passedNow && (!passed || gateGrew);
+    // A failed gate never sends the passed wake. A failure seen while other checks still run, or
+    // a failed check that ran again, owes one wake once every check has finished.
+    const rerun = failedBefore.some((name) => !failedChecks.includes(name));
+    const gateFailed = gate.some(isFailedCheck);
+    const running =
+      unread ||
+      awaitingApproval.length > 0 ||
+      checks.some((check) => check.status === "pending" || check.status === "action-required");
+    const finishOwed = gateFailed && !running && (owedBefore.length > 0 || rerun);
     if (passedThisPass) {
       if (!checksBaseline)
         changes.push({ kind: "checks-passed", count: gate.length, required: required.length > 0 });
+    } else if (finishOwed) {
+      changes.push({
+        kind: "checks-finished",
+        passed: checks.filter((check) => check.status === "success").length,
+        failing: failed,
+      });
     }
     passed = passedNow;
     passedChecks = passedNow ? gateNames : [];
@@ -151,15 +172,19 @@ export function evaluatePullRequestWatch(
         .map((check) => check.name),
     );
     const failedNames = new Set(failed.map((check) => check.name));
-    const settledNames = [
-      ...new Set([...pendingChecks, ...owedChecks, ...previousFailedChecks]),
-    ].filter(
-      (name) =>
-        seen.has(name) &&
-        !stillPending.has(name) &&
-        !failedNames.has(name) &&
-        !(passedThisPass && gateNames.includes(name)),
-    );
+    // A pending or previously failing check that then succeeds is its own wake, unless this pass
+    // already reported the gate passing or every check finishing after a failure. While the gate
+    // is still failing, those completions wait for that one checks-finished wake.
+    const reportSettled = !finishOwed && !gateFailed;
+    const settledNames = reportSettled
+      ? [...new Set([...pendingChecks, ...owedChecks, ...failedBefore])].filter(
+          (name) =>
+            seen.has(name) &&
+            !stillPending.has(name) &&
+            !failedNames.has(name) &&
+            !(passedThisPass && gateNames.includes(name)),
+        )
+      : [];
     const settled = settledNames.flatMap((name) => {
       const check = checks.find(
         (candidate) =>
@@ -172,15 +197,26 @@ export function evaluatePullRequestWatch(
     });
     if (!checksBaseline && settled.length > 0)
       changes.push({ kind: "checks-settled", checks: settled });
-    owedChecks = passedThisPass
-      ? required.length > 0
-        ? checks
-            .filter((check) => check.required !== true && check.status === "pending")
-            .map((check) => check.name)
-        : []
-      : owedChecks.filter(
-          (name) => !settledNames.includes(name) && !required.some((check) => check.name === name),
-        );
+    if (passedThisPass) {
+      owedChecks =
+        required.length > 0
+          ? checks
+              .filter((check) => check.required !== true && check.status === "pending")
+              .map((check) => check.name)
+          : [];
+    } else if (
+      gateFailed &&
+      running &&
+      (owedBefore.length > 0 || rerun || newlyFailed.length > 0)
+    ) {
+      owedChecks = failedChecks;
+    } else if (finishOwed) {
+      owedChecks = [];
+    } else {
+      owedChecks = owedChecks.filter(
+        (name) => !settledNames.includes(name) && !required.some((check) => check.name === name),
+      );
+    }
     pendingChecks = [
       ...new Set([...stillPending, ...pendingChecks.filter((name) => !seen.has(name))]),
     ];
@@ -380,19 +416,20 @@ function listed<T>(items: ReadonlyArray<T>, line: (item: T) => string): Array<st
   return lines;
 }
 
+const failedCheckLine = (check: PullRequestCheck) =>
+  `  - ${check.name}${check.status === "failure" ? "" : ` (${check.status})`}${check.url ? ` ${check.url}` : ""}`;
+
 function changeLines(
   change: PullRequestWatchChange,
   context: { readonly baseBranch: string; readonly commit: string },
 ): Array<string> {
   switch (change.kind) {
     case "checks-failed":
+      return [`- Checks failed${context.commit}:`, ...listed(change.failed, failedCheckLine)];
+    case "checks-finished":
       return [
-        `- Checks failed${context.commit}:`,
-        ...listed(
-          change.failed,
-          (check) =>
-            `  - ${check.name}${check.status === "failure" ? "" : ` (${check.status})`}${check.url ? ` ${check.url}` : ""}`,
-        ),
+        `- Every check has finished${context.commit}: ${change.passed} passed, ${change.failing.length} still failing:`,
+        ...listed(change.failing, failedCheckLine),
       ];
     case "checks-awaiting-approval":
       return [
@@ -437,6 +474,7 @@ const SUMMARY: Record<PullRequestWatchChange["kind"], string> = {
   "checks-failed": "checks failed",
   "checks-passed": "checks passed",
   "checks-settled": "checks finished",
+  "checks-finished": "checks finished",
   "checks-awaiting-approval": "checks await approval",
   remarks: "new comments",
   "no-checks": "no checks reported",
@@ -532,6 +570,7 @@ export function pullRequestWatchMessage(input: {
   const failed = changes.some(
     (change) =>
       change.kind === "checks-failed" ||
+      change.kind === "checks-finished" ||
       change.kind === "conflicting" ||
       change.kind === "needs-rebase" ||
       change.kind === "merge-queue-removed",
