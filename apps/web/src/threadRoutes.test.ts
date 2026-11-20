@@ -51,24 +51,37 @@ describe("threadRoutes", () => {
   });
 
   it("matches encoded MCP thread IDs from router navigation", async () => {
-    const root = createRootRoute();
-    const thread = createRoute({ getParentRoute: () => root, path: "$environmentId/$threadId" });
-    const newThread = createRoute({ getParentRoute: () => root, path: "new" });
-    const router = createRouter({
-      routeTree: root.addChildren([thread, newThread]),
-      history: createMemoryHistory({ initialEntries: ["/new"] }),
-    });
-    await router.load();
-    const ref = scopeThreadRef("local" as never, ThreadId.make("mcp:example"));
-    await router.navigate({
-      to: "/$environmentId/$threadId",
-      params: { environmentId: ref.environmentId, threadId: ref.threadId },
-    });
-    expect(router.state.location.pathname).toBe("/local/mcp%3Aexample");
-    expect(router.state.matches.at(-1)?.params).toEqual(ref);
-    expect(isThreadRoutePathname(router.state.location.pathname, ref)).toBe(true);
-    await router.navigate({ to: "/new" });
-    expect(isThreadRoutePathname(router.state.location.pathname, ref)).toBe(false);
+    const previousWindow = globalThis.window;
+    // This router build skips client navigate() when there is no document, and
+    // the client path reads `window` even with `?.`. The node runner has neither.
+    globalThis.window = { origin: "http://localhost" } as Window & typeof globalThis;
+    try {
+      const root = createRootRoute();
+      const thread = createRoute({ getParentRoute: () => root, path: "$environmentId/$threadId" });
+      const newThread = createRoute({ getParentRoute: () => root, path: "new" });
+      const router = createRouter({
+        routeTree: root.addChildren([thread, newThread]),
+        history: createMemoryHistory({ initialEntries: ["/new"] }),
+        isServer: false,
+      });
+      await router.load();
+      const ref = scopeThreadRef("local" as never, ThreadId.make("mcp:example"));
+      await router.navigate({
+        to: "/$environmentId/$threadId",
+        params: { environmentId: ref.environmentId, threadId: ref.threadId },
+      });
+      expect(router.state.location.pathname).toBe("/local/mcp%3Aexample");
+      expect(router.state.matches.at(-1)?.params).toEqual(ref);
+      expect(isThreadRoutePathname(router.state.location.pathname, ref)).toBe(true);
+      await router.navigate({ to: "/new" });
+      expect(isThreadRoutePathname(router.state.location.pathname, ref)).toBe(false);
+    } finally {
+      if (previousWindow === undefined) {
+        Reflect.deleteProperty(globalThis, "window");
+      } else {
+        globalThis.window = previousWindow;
+      }
+    }
   });
 
   it("does not take a linked environment's thread route for a thread this client can open", () => {

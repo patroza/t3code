@@ -2084,7 +2084,8 @@ describe("MessagesTimeline subagents", () => {
       if (result?.trim() && result !== preview) expect(screen.text()).not.toContain(result);
       if (progress && progress !== preview) expect(screen.text()).not.toContain(progress);
       await click(children()[0]!);
-      expect(onOpenThread).toHaveBeenCalledWith("thread-subagent-1");
+      // A plain click reports the primary intent, so the thread opens beside this one or in its place.
+      expect(onOpenThread).toHaveBeenCalledWith("thread-subagent-1", undefined, "primary");
       if (count > 1) {
         await click(screen.button(`${count} subagents`));
         await vi.waitFor(() => expect(children()).toHaveLength(0));
