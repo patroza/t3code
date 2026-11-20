@@ -3447,6 +3447,11 @@ it.effect("replays an accepted steer after its target turn completes", () =>
     }).pipe(
       Effect.provide(
         ThreadManagementService.layer.pipe(
+          Layer.provide(
+            Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({
+              get: () => Effect.succeed(null),
+            }),
+          ),
           Layer.provideMerge(layer),
           Layer.provide(ServerSettings.layerTest()),
           Layer.provide(

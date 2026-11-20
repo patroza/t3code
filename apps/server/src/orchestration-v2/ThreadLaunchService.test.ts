@@ -1966,6 +1966,7 @@ it.effect("fails a run whose preparation failure could not be stored until stora
                 cwd: project.workspaceRoot,
                 detail: "Git could not reach the remote.",
                 exitCode: 128,
+                failureKind: "unknown",
               }),
             ),
           ),
@@ -3670,7 +3671,7 @@ it.effect("replays an accepted message.dispatch after the project disables the i
       createdBy: "user" as const,
       creationSource: "web" as const,
     };
-    const first = yield* ThreadMessageIntake.dispatchCommand(dispatchInput);
+    const first = yield* dispatchIntakeCommand(dispatchInput);
 
     yield* settings.updateSettings({
       projectSettingsOverrides: {
@@ -3678,10 +3679,10 @@ it.effect("replays an accepted message.dispatch after the project disables the i
       },
     });
 
-    const retry = yield* ThreadMessageIntake.dispatchCommand(dispatchInput);
+    const retry = yield* dispatchIntakeCommand(dispatchInput);
     assert.deepEqual(retry, { ...first, replayed: true });
 
-    const fresh = yield* ThreadMessageIntake.dispatchCommand({
+    const fresh = yield* dispatchIntakeCommand({
       ...dispatchInput,
       commandId: CommandId.make("command:dispatch:fresh-after-disable"),
       messageId: MessageId.make("message:dispatch:fresh-after-disable"),
