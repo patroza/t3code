@@ -10,17 +10,15 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const saved = vi.hoisted(() => [] as unknown[]);
-vi.mock("../../state/preferences", async () => {
-  const { Atom } = await import("effect/reactivity");
-  return {
-    updateMobilePreferencesAtom: Atom.writable(
-      () => null,
-      (_ctx, patch: unknown) => {
-        saved.push(patch);
-      },
-    ),
-  };
-});
+vi.mock("../../state/preferences", () => ({
+  saveMobilePreferences: { label: "test-save-mobile-preferences" },
+}));
+vi.mock("../../state/use-atom-command", () => ({
+  useAtomCommand: () => (patch: unknown) => {
+    saved.push(patch);
+    return Promise.resolve({ _tag: "Success", value: undefined });
+  },
+}));
 
 import type { ThreadListFilters } from "../../persistence/mobile-preferences";
 import {

@@ -1,6 +1,6 @@
 import { uuidv4 } from "../../lib/uuid";
 import { ThreadUndoNotice } from "./ThreadUndoNotice";
-import { useAtomSet, useAtomValue } from "@effect/atom-react";
+import { useAtomValue } from "@effect/atom-react";
 import {
   claimPersonIdForEnvironment,
   threadMatchesMine,
@@ -10,7 +10,8 @@ import {
   resolveHideSettledOnProjects,
   resolveHideSettledOnRecent,
 } from "../../persistence/mobile-preferences";
-import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
+import { mobilePreferencesAtom, saveMobilePreferences } from "../../state/preferences";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { prefetchEnvironmentThread, warmSelectedEnvironmentThread } from "../../state/threads";
 import { identityClaimPersonIdByEnvironmentAtom } from "../../state/identity";
 import { NativePrimaryColumnContext } from "../../native/v5-workspace-context";
@@ -178,7 +179,7 @@ export function HomeRouteScreen() {
     [listOptions.projectGroupingMode, projects, selectedEnvironmentIds, m],
   );
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
-  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const savePreferences = useAtomCommand(saveMobilePreferences);
   // Recency/none default to hide settled; default/project grouping defaults to show.
   const hideSettledOnRecent = AsyncResult.isSuccess(preferencesResult)
     ? resolveHideSettledOnRecent(preferencesResult.value)

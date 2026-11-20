@@ -15,7 +15,7 @@ import {
 import { threadSelectionDeferral } from "./deferred-navigation";
 import { uuidv4 } from "../../lib/uuid";
 import { EnvironmentId, ThreadId, type SidebarProjectGroupingMode } from "@t3tools/contracts";
-import { useAtomSet, useAtomValue } from "@effect/atom-react";
+import { useAtomValue } from "@effect/atom-react";
 import { NavigationContext, NavigationRouteContext, useNavigation } from "@react-navigation/native";
 import {
   use,
@@ -55,7 +55,8 @@ import {
   isWorkspaceListPath,
   nativeInspectorColumnWidth,
 } from "../../lib/layout";
-import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
+import { mobilePreferencesAtom, saveMobilePreferences } from "../../state/preferences";
+import { useAtomCommand } from "../../state/use-atom-command";
 import type { ThreadListFilters } from "../../persistence/mobile-preferences";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { useProjects } from "../../state/entities";
@@ -244,7 +245,7 @@ export function AdaptiveWorkspaceLayout(props: {
   readonly workspaceRouteName: string | undefined;
 }) {
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
-  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const savePreferences = useAtomCommand(saveMobilePreferences);
   const storeEnvironmentIds = useCallback(
     (ids: readonly EnvironmentId[]) => {
       savePreferences({ selectedEnvironmentIds: [...ids] });
