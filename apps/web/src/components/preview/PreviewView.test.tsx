@@ -291,7 +291,8 @@ vi.mock("./AgentBrowserCursor", () => ({
 vi.mock("~/browser/BrowserSurfaceSlot", () => ({ BrowserSurfaceSlot: () => null }));
 vi.mock("./usePreviewSession", () => ({ usePreviewSession: vi.fn() }));
 
-vi.mock("~/browser/browserTargetResolver", () => ({
+vi.mock("~/browser/browserTargetResolver", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/browser/browserTargetResolver")>()),
   resolveNavigableUrl: mocks.resolveNavigableUrl,
   resolveDiscoveredServerUrl: mocks.resolveDiscoveredServerUrl,
 }));
