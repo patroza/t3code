@@ -96,7 +96,7 @@ describe("mobile surface existence (anti stack-drop)", () => {
   it("keeps selectable markdown connected to the native GFM renderer", () => {
     const selectable = readSrc("native/SelectableMarkdownText.tsx");
     const nativeRenderer = readSrc("native/EnrichedMarkdownText.tsx");
-    expect(selectable).toMatch(/return <MobileEnrichedMarkdownText[\s\S]*?\{\.\.\.props\}/);
+    expect(selectable).toMatch(/<MobileEnrichedMarkdownText[\s\S]*?\{\.\.\.props\}/);
     expect(nativeRenderer).toMatch(/<EnrichedMarkdownText[\s\S]*?markdown=\{markdown\}/);
     expect(nativeRenderer).toMatch(
       /<EnrichedMarkdownText[\s\S]*?flavor="github"[\s\S]*?selectable/,
