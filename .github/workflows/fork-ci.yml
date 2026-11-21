@@ -51,9 +51,11 @@ on:
       # Stable contributor and release branch (docs/stable-dev-release-branch-handover.md).
       - fork/dev
   # fork/dev is never rebased, so its merge commits are the release candidates.
-  # Deployment promotes an exact green SHA and keys on a successful run of this
-  # workflow for that SHA, so every merge must produce one — a green PR tip is
-  # not enough when the merge SHA differs.
+  # Deployment promotes an exact green SHA, so every merge still produces a run.
+  # When the pull request recorded tree evidence and this push is that same tree
+  # and the same workflow file, Verify tree evidence succeeds and the heavy jobs
+  # skip. A skipped heavy job is not evidence: only a pull_request run whose
+  # required jobs succeeded can satisfy the next push.
   push:
     branches:
       - fork/dev
@@ -73,8 +75,40 @@ concurrency:
   cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:
+  # Always runs, including on pull requests, where it only records
+  # short_circuit=false. A skipped gate would also skip the heavy jobs.
+  verify_tree_evidence:
+    name: Verify tree evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      short_circuit: ${{ steps.decide.outputs.short_circuit }}
+    steps:
+      - name: Checkout
+        if: github.event_name == 'push'
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+
+      - name: Decide
+        id: decide
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" != "push" ]]; then
+            echo "short_circuit=false" >> "$GITHUB_OUTPUT"
+            echo "Running the checks. Tree evidence is only reused on a fork/dev push." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          node scripts/fork-ci-tree-evidence.mjs verify
+
   check:
     name: Check
+    needs: verify_tree_evidence
+    if: always() && needs.verify_tree_evidence.outputs.short_circuit != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -129,6 +163,8 @@ jobs:
 
   test_packages:
     name: Test Packages
+    needs: verify_tree_evidence
+    if: always() && needs.verify_tree_evidence.outputs.short_circuit != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -157,6 +193,8 @@ jobs:
   # flakes; the existing weighted sequencer balances six independent shards.
   test_server:
     name: Test Server ${{ matrix.shard }}
+    needs: verify_tree_evidence
+    if: always() && needs.verify_tree_evidence.outputs.short_circuit != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -184,6 +222,8 @@ jobs:
 
   test_web:
     name: Test Web
+    needs: verify_tree_evidence
+    if: always() && needs.verify_tree_evidence.outputs.short_circuit != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -209,8 +249,8 @@ jobs:
   # and fail unless every test job (including every server shard) succeeded.
   test:
     name: Test
-    needs: [test_packages, test_server, test_web]
-    if: ${{ always() }}
+    needs: [verify_tree_evidence, test_packages, test_server, test_web]
+    if: always() && needs.verify_tree_evidence.outputs.short_circuit != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 1
     steps:
@@ -218,10 +258,12 @@ jobs:
         env:
           RESULTS: ${{ toJSON(needs) }}
         run: |
-          echo "$RESULTS" | jq -e 'all(.[]; .result == "success")'
+          echo "$RESULTS" | jq -e 'del(.verify_tree_evidence) | all(.[]; .result == "success")'
 
   mobile_native_static_analysis:
     name: Mobile Native Static Analysis
+    needs: verify_tree_evidence
+    if: always() && needs.verify_tree_evidence.outputs.short_circuit != 'true'
     # Static checks do not require ARM; avoid the constrained Apple Silicon runner pool.
     runs-on: macos-15-intel
     # Cold dependency/tool installation can consume ten minutes before lint begins.
@@ -262,6 +304,8 @@ jobs:
 
   release_smoke:
     name: Release Smoke
+    needs: verify_tree_evidence
+    if: always() && needs.verify_tree_evidence.outputs.short_circuit != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -279,3 +323,27 @@ jobs:
 
       - name: Exercise release-only workflow steps
         run: node scripts/release-smoke.ts
+
+  # The status is the evidence a later fork/dev push verifies. It is not a
+  # required check. A pull request that cannot record it still passes its
+  # checks, and the following push runs them again.
+  record_tree_evidence:
+    name: Record tree evidence
+    needs: [check, test, mobile_native_static_analysis, release_smoke]
+    if: github.event_name == 'pull_request' && success()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      statuses: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || github.sha }}
+
+      - name: Record the tested tree
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/fork-ci-tree-evidence.mjs record
