@@ -245,7 +245,13 @@ it("keeps workspace controls after expanding and collapsing 70 linked pull reque
       composerDraftTarget={threadRef}
       workspaceMutationId={null}
       projectId={ProjectId.make("project")}
-      usage={{ providerInstanceId: null, providers: [], sources: [], contextWindow: null }}
+      usage={{
+        providerInstanceId: null,
+        model: null,
+        providers: [],
+        sources: [],
+        contextWindow: null,
+      }}
       worktreePath={null}
       isServerThread
       anchor={{ current: null }}
