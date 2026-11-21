@@ -7,7 +7,7 @@ description: Weld the latest pingdotgg/t3code main into this fork's fork/dev. Us
 
 Branch policy, the ship gate, and why a weld lands with `gh pr merge --merge` are in `AGENTS.md` (Downstream fork branches, Pull requests, Agent ship gate). This file is the sequence. Do the work in its own worktree. Leave any other checkout alone.
 
-Those phrases ask you to land the current `upstream/main` on `fork/dev`. Stop short of landing only when the user says to prepare the PR and not merge, or when the tip is stale or a required check is not green.
+Those phrases ask you to land one batch: the `upstream/main` already merged into the open weld. Stop short of landing only when the user says to prepare the PR and not merge, or when a required check on that head is not green. A newer `upstream/main` does not make the tip stale. Land the green head, then ask before starting the next batch. Do not merge that newer upstream into the same PR.
 
 ## Refresh the refs
 
@@ -29,10 +29,10 @@ If `upstream/main` is already an ancestor of `origin/fork/dev`, say so and stop.
 List open PRs into `fork/dev` whose head branch matches `sync/upstream-*`. Keep a single one.
 
 1. `origin/fork/dev` is not an ancestor of that head: merge `origin/fork/dev` into the weld branch. Do not rebase a branch that already contains the upstream merge commit.
-2. `upstream/main` is not an ancestor of that head: merge `upstream/main` into the same branch. A ready PR pays the full ship gate on the push. Retitle the PR to the new upstream sha. Do not land the previous tip.
-3. Both are ancestors, the PR is ready, `mergeable` is `MERGEABLE`, the base is `fork/dev`, and every required Fork CI check on that head is green: land it, then verify deployment below.
-4. Both are ancestors but a check is still running: watch that head. Do not open another PR.
-5. A check failed: fix it on that branch.
+2. `upstream/main` has moved past the head: leave it. Do not merge it in, do not retitle the PR to the newer sha, and do not push again for it. Land the green head, then ask whether to weld the commits that remain.
+3. The PR is ready, `mergeable` is `MERGEABLE`, the base is `fork/dev`, `origin/fork/dev` is an ancestor of the head, and every required Fork CI check on that head is green: land it, even when `upstream/main` is not an ancestor. Then ask about the next batch. Do not open that batch in the same turn.
+4. `origin/fork/dev` is an ancestor but a check is still running: watch that head. Do not merge newer upstream while you wait. Do not open another PR.
+5. A check failed: fix it on that branch. Do not widen the branch to a newer `upstream/main` while you fix it.
 
 No open weld: create one.
 
@@ -70,17 +70,17 @@ Run `gh` in the worktree so the direnv shim applies. If `gh` hangs with no outpu
 
 When the t3-code MCP server exposes `link_pull_request`, link this PR's full URL on the thread. Before you finish, list the thread's PRs and link a weld URL that is still missing. If the tool is absent, say so and retry when the server is back. Do not link unrelated PRs.
 
-Publish with `pnpm pr:ready` when the weld is done. Follow the ship gate in `AGENTS.md`.
+Keep the weld as a draft until this batch is ready to land. A draft push pays the changed-file check and typecheck. Publishing runs the full local suite, and every later push of a ready PR runs it again. Publish with `pnpm pr:ready` once, when this batch is done. Do not publish and then absorb a newer `upstream/main`. Follow the ship gate in `AGENTS.md`.
 
 ## Land
 
-Wait until every required check on the PR head is green. Job names are the Fork CI jobs in `.github/workflows/fork-ci.yml`. A green local ship gate is not those checks. Fetch again before landing and confirm `upstream/main` and `origin/fork/dev` are still ancestors of the head. If either moved, return to "One open weld".
+Wait until every required check on the PR head is green. Job names are the Fork CI jobs in `.github/workflows/fork-ci.yml`. A green local ship gate is not those checks. Fetch `origin/fork/dev` before landing. It must be an ancestor of the head. If it is not, merge it into the weld branch, push, and wait for that new head to be green. Do not restart the weld because `upstream/main` moved.
 
 ```bash
 gh pr merge <n> --merge
 ```
 
-Use that command, not the GitHub merge button. `AGENTS.md` records what a squash does to the next weld. After it lands, fetch `origin/fork/dev` and confirm `upstream/main` is an ancestor.
+Use that command, not the GitHub merge button. `AGENTS.md` records what a squash does to the next weld. After it lands, fetch `origin/fork/dev` and `upstream/main`. If `upstream/main` is not an ancestor, say how many commits remain and ask whether to weld that next batch. Do not start it until the user says yes.
 
 Do not push `origin/main`. This task does not move the mirror.
 
