@@ -20,14 +20,33 @@ const mocks = vi.hoisted(() => ({
   runAtomCommand: vi.fn(),
   readEnvironmentScope: vi.fn(),
   readPreparedConnection: vi.fn(),
+  // Verification and minting run as Effects; tests steer them with the settled results above.
+  settledEffect: (
+    Effect: typeof import("effect/Effect"),
+    settle: () => Promise<{
+      readonly _tag: string;
+      readonly value?: unknown;
+      readonly error?: object;
+    }>,
+  ) =>
+    Effect.promise(settle).pipe(
+      Effect.flatMap((result) =>
+        result._tag === "Success" ? Effect.succeed(result.value) : Effect.fail(result.error),
+      ),
+    ),
 }));
 
-vi.mock("@t3tools/client-runtime/state/runtime", async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  executeAtomQuery: mocks.executeAtomQuery,
-  runAtomCommand: mocks.runAtomCommand,
-  squashAtomCommandFailure: (result: { readonly error: unknown }) => result.error,
-}));
+vi.mock("@t3tools/client-runtime/state/runtime", async (importOriginal) => {
+  const Effect = await import("effect/Effect");
+  return {
+    ...(await importOriginal<Record<string, unknown>>()),
+    awaitAtomResult: (...args: ReadonlyArray<unknown>) =>
+      mocks.settledEffect(Effect, () => mocks.executeAtomQuery(...args)),
+    executeAtomQuery: mocks.executeAtomQuery,
+    runAtomCommand: mocks.runAtomCommand,
+    squashAtomCommandFailure: (result: { readonly error: unknown }) => result.error,
+  };
+});
 
 vi.mock("../rpc/atomRegistry", async () => {
   const { AtomRegistry } = await import("effect/reactivity");
@@ -42,12 +61,20 @@ vi.mock("../state/assets", () => ({
   assetEnvironment: { createUrl: mocks.createAssetUrl },
 }));
 
-vi.mock("../state/attachments", () => ({
-  attachmentEnvironment: {
-    createUploadUrl: mocks.createUploadUrl,
-    remove: mocks.removeUpload,
-  },
-}));
+vi.mock("../state/attachments", async () => {
+  const Effect = await import("effect/Effect");
+  return {
+    attachmentEnvironment: {
+      createUploadUrl: {
+        run: (registry: unknown, input: unknown) =>
+          mocks.settledEffect(Effect, () =>
+            mocks.runAtomCommand(registry, mocks.createUploadUrl, input),
+          ),
+      },
+      remove: mocks.removeUpload,
+    },
+  };
+});
 
 vi.mock("../state/session", () => ({
   readEnvironmentScope: mocks.readEnvironmentScope,

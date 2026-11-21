@@ -59,14 +59,17 @@ describe("alternatePreviewRuntime", () => {
   it("moves a remote environment's tab between this computer and the environment", () => {
     state.desktop = true;
 
-    expect(alternatePreviewRuntime(remote, local, true, {})).toBe("server");
-    expect(alternatePreviewRuntime(remote, local, true, { runtime: "server" })).toBe("desktop");
-    expect(alternatePreviewRuntime(local, local, true, {})).toBeNull();
-    expect(alternatePreviewRuntime(remote, local, false, {})).toBeNull();
+    expect(alternatePreviewRuntime(remote, local, true, true, {})).toBe("server");
+    expect(alternatePreviewRuntime(remote, local, true, true, { runtime: "server" })).toBe(
+      "desktop",
+    );
+    expect(alternatePreviewRuntime(remote, local, true, false, { runtime: "server" })).toBeNull();
+    expect(alternatePreviewRuntime(local, local, true, true, {})).toBeNull();
+    expect(alternatePreviewRuntime(remote, local, false, true, {})).toBeNull();
   });
 
   it("offers no move outside the desktop app", () => {
-    expect(alternatePreviewRuntime(remote, null, true, { runtime: "server" })).toBeNull();
+    expect(alternatePreviewRuntime(remote, null, true, true, { runtime: "server" })).toBeNull();
   });
 });
 

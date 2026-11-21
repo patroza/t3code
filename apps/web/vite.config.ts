@@ -260,6 +260,13 @@ const isolatedUnitTestFiles = [
   // module; under isolate:false that incomplete mock leaks into later files
   // that import asset URL atoms (PullRequestListFilters.test.tsx).
   "src/lib/attachmentUploadQueue.test.ts",
+  // Replaces appAtomRegistry with a private registry. Under isolate:false the
+  // agent-opened preview follower subscribes there while preview state is
+  // written on the real one, so server tabs never reach the panel.
+  "src/state/pullRequests.test.ts",
+  // Replaces appAtomRegistry with `{}` and stubs previewStateStore. Under
+  // isolate:false a later preview file then calls subscribe on that stub.
+  "src/browser/browserViewportActions.test.ts",
   "src/localApi.test.ts",
   // Mocks `~/localApi`; under isolate:false terminalCloseConfirm is already
   // bound to the real module so confirm() is never the mock and pending stays false.
@@ -348,6 +355,7 @@ const unitTestProject = {
     setupFiles: [
       "../../packages/shared/src/testing/longTempDir.ts",
       "../../packages/shared/src/testing/providerEnv.ts",
+      "../../packages/shared/src/testing/gitEnv.ts",
     ],
   },
 } satisfies TestProjectInlineConfiguration;
@@ -677,7 +685,9 @@ export default defineConfig(({ command }) => {
               { bundle: "desktop", path: new URL("../desktop/package.json", import.meta.url) },
             ],
           }),
-      tanstackRouter({ autoCodeSplitting: true }),
+      // Vitest uses the checked-in route tree. The generator rewrites that file
+      // when its text differs, which dirties the worktree in the middle of the run.
+      process.env.VITEST ? undefined : tanstackRouter({ autoCodeSplitting: true }),
       react({ compiler: true }),
       tailwindPlugins(bundledDev),
       warmBundledDevPlugin(),

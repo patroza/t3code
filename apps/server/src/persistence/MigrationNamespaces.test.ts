@@ -56,6 +56,10 @@ describe("migration namespaces", () => {
         [96, "RepairStaleTitleRegeneration"],
         [97, "IssueTrackerBindings"],
         [98, "ActiveShellIndexIndexes"],
+        [99, "BackgroundRecoveryIndexes"],
+        [100, "TurnStartReadIndexes"],
+        [101, "DelegatedTaskReadIndexes"],
+        [102, "ThreadItemCounts"],
       ],
     );
     assert.deepStrictEqual(forkMigrationManifest, [

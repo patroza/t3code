@@ -22,14 +22,13 @@ const make = (service: Connectivity["Service"]) => Connectivity.of(service);
 export const layer = (service: Connectivity["Service"]) =>
   Layer.succeed(Connectivity, make(service));
 
-/** Apply listener changes plus a fresh status on resume, because suspended apps can miss transitions.
- * Every listener report (including repeats) invalidates an older async resume read so stale state cannot overwrite it.
- */
-export const followNetworkStatus = Effect.fnUntraced(function* (options: {
+interface FollowNetworkStatusOptions {
   readonly connectivity: Connectivity["Service"];
   readonly wakeups: ConnectionWakeups.ConnectionWakeups["Service"];
   readonly apply: (status: NetworkStatus) => Effect.Effect<void>;
-}) {
+}
+
+const makeNetworkListeners = Effect.fnUntraced(function* (options: FollowNetworkStatusOptions) {
   // Count repeats too: they prove the listener is newer than an in-flight resume read.
   // Otherwise a stale snapshot can overwrite the status the platform just reported.
   const reportCount = yield* Ref.make(0);
@@ -53,18 +52,14 @@ export const followNetworkStatus = Effect.fnUntraced(function* (options: {
     }
   });
 
-  yield* options.connectivity.changes.pipe(
+  const changes = options.connectivity.changes.pipe(
     Stream.runForEach((status) =>
       applyLock.withPermits(1)(
         Ref.update(reportCount, (count) => count + 1).pipe(Effect.andThen(applyStatus(status))),
       ),
     ),
-    // Subscribe before returning so a transition reported while this is still
-    // being set up is not dropped.
-    Effect.forkScoped({ startImmediately: true }),
   );
-
-  yield* options.wakeups.changes.pipe(
+  const resumes = options.wakeups.changes.pipe(
     Stream.runForEach((reason) =>
       reason === "application-active"
         ? Effect.gen(function* () {
@@ -84,6 +79,33 @@ export const followNetworkStatus = Effect.fnUntraced(function* (options: {
           })
         : Effect.void,
     ),
-    Effect.forkScoped({ startImmediately: true }),
   );
+  return { changes, resumes };
 });
+
+/** Runs both listeners until one fails or the fiber is interrupted. */
+export const observeNetworkStatus = (options: FollowNetworkStatusOptions) =>
+  makeNetworkListeners(options).pipe(
+    Effect.flatMap(({ changes, resumes }) =>
+      Effect.all([changes, resumes], { concurrency: "unbounded", discard: true }),
+    ),
+  );
+
+/** Apply listener changes plus a fresh status on resume, because suspended apps can miss transitions.
+ * Every listener report (including repeats) invalidates an older async resume read so stale state cannot overwrite it.
+ * Returns after subscribing. The listeners stay on the current scope.
+ */
+export const followNetworkStatus = (options: FollowNetworkStatusOptions) =>
+  makeNetworkListeners(options).pipe(
+    Effect.flatMap(({ changes, resumes }) =>
+      Effect.all(
+        [
+          // Subscribe before returning so a transition reported while this is still
+          // being set up is not dropped.
+          changes.pipe(Effect.forkScoped({ startImmediately: true })),
+          resumes.pipe(Effect.forkScoped({ startImmediately: true })),
+        ],
+        { concurrency: "unbounded", discard: true },
+      ),
+    ),
+  );
