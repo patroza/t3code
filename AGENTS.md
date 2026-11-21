@@ -24,7 +24,7 @@ pingdotgg/t3code:main
   as missing and the next sync re-resolves every conflict. #401 landed that way and went unnoticed
   for two merges; `.github/workflows/upstream-lineage-guard.yml` now catches it on the next push to
   `fork/dev` and prints the repair.
-- The sequence for that update is `.agents/skills/update-upstream/SKILL.md`.
+- The sequence for that update is `.agents/skills/update-upstream/SKILL.md`. Land the green weld tip even if `upstream/main` has moved, then ask before the next batch. Do not merge newer upstream into the same PR.
 - Independent features use parallel PRs based on `fork/dev`. Chain PRs only when one change
   genuinely depends on another, and merge that chain bottom-up.
 - All features land in `fork/dev`, including upstreamable work. To send something upstream, open a
