@@ -91,10 +91,17 @@ describe("EAS archive ignore rules", () => {
       expect(isIgnored(fixtureRoot, "native/libghostty-vt")).toBe(false);
       NodeFS.unlinkSync(vendorDirectory);
 
+      const speechDirectory = NodePath.join(fixtureRoot, "native/apple-speech");
+      NodeFS.mkdirSync(NodePath.dirname(speechDirectory), { recursive: true });
+      NodeFS.writeFileSync(speechDirectory, "directory path fixture");
+      expect(isIgnored(fixtureRoot, "native/apple-speech")).toBe(false);
+      NodeFS.unlinkSync(speechDirectory);
+
       const rootNativeFile = "native/host.swift";
       const mobileLicense = "native/libghostty-vt/LICENSE";
       const mobileNativeFile = "apps/mobile/src/native/native-glass.ts";
-      for (const path of [rootNativeFile, mobileNativeFile, mobileLicense]) {
+      const speechEngine = "native/apple-speech/AppleSpeechEngine.swift";
+      for (const path of [rootNativeFile, mobileNativeFile, mobileLicense, speechEngine]) {
         NodeFS.mkdirSync(NodePath.dirname(NodePath.join(fixtureRoot, path)), { recursive: true });
         NodeFS.writeFileSync(NodePath.join(fixtureRoot, path), "fixture\n");
       }
@@ -102,6 +109,7 @@ describe("EAS archive ignore rules", () => {
       expect(isIgnored(fixtureRoot, rootNativeFile)).toBe(true);
       expect(isIgnored(fixtureRoot, mobileNativeFile)).toBe(false);
       expect(isIgnored(fixtureRoot, mobileLicense)).toBe(false);
+      expect(isIgnored(fixtureRoot, speechEngine)).toBe(false);
     } finally {
       NodeFS.rmSync(fixtureRoot, { force: true, recursive: true });
     }

@@ -17,6 +17,10 @@ apps/discord-bot/*
 !/native/libghostty-vt
 /native/libghostty-vt/*
 !/native/libghostty-vt/LICENSE
+# The iOS voice module symlinks AppleSpeechEngine.swift here. CocoaPods
+# realpath fails the production build if the archive drops the target.
+!/native/apple-speech
+!/native/apple-speech/**
 release/
 release-mock/
 dist-electron/
