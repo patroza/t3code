@@ -1259,7 +1259,7 @@ it.effect("waitForThread waits for output only from a run that was asked for one
     const threadId = ThreadId.make("thread:thread-management:wait-output");
     const askedRunId = RunId.make("run:thread-management:wait-output:asked");
     const plainRunId = RunId.make("run:thread-management:wait-output:plain");
-    const layerTest = ThreadManagementService.layer.pipe(
+    const layerTest = threadManagementLayer.pipe(
       Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
       Layer.provide(
         Layer.mock(Orchestrator.OrchestratorV2)({

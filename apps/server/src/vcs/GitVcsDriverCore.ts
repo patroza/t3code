@@ -4455,6 +4455,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         command: "git diff",
         cwd: input.cwd,
         detail: "Review source selectors must agree.",
+        failureKind: "unknown",
       });
     }
     const sourceKind = input.file?.sourceKind ?? input.sourceKind;
