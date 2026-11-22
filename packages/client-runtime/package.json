@@ -171,6 +171,10 @@
       "types": "./src/rpc/index.ts",
       "default": "./src/rpc/index.ts"
     },
+    "./rpc/session-fork": {
+      "types": "./src/rpc/sessionFork.ts",
+      "default": "./src/rpc/sessionFork.ts"
+    },
     "./operations": {
       "types": "./src/operations/index.ts",
       "default": "./src/operations/index.ts"

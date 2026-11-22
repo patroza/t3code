@@ -1,0 +1,33 @@
+{
+  "name": "@t3tools/discord-bot",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/main.ts",
+    "dev:teams": "node --watch src/teams-main.ts",
+    "start": "node src/main.ts",
+    "start:teams-gateway": "node src/teams-gateway-main.ts",
+    "start:teams": "node src/teams-main.ts",
+    "typecheck": "effect-tsgo tsrs --noEmit",
+    "test": "vp test run"
+  },
+  "dependencies": {
+    "@effect/platform-node": "catalog:",
+    "@microsoft/teams.apps": "2.0.14",
+    "@t3tools/client-runtime": "workspace:*",
+    "@t3tools/contracts": "workspace:*",
+    "@t3tools/shared": "workspace:*",
+    "dfx": "catalog:",
+    "effect": "catalog:",
+    "yaml": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "engines": {
+    "node": "^22.18 || ^23.11 || >=24.10"
+  }
+}
