@@ -14,6 +14,7 @@ import { PASSKEY_CREATE_CHANNEL, PASSKEY_GET_CHANNEL } from "./GuestProtocol.ts"
 import type { PasskeyBackend, PasskeyCeremonyContext } from "./PasskeyBackend.ts";
 import { macPasskeyBackend } from "./PasskeyBackendMac.ts";
 import type { PasskeyCeremonyResult } from "./PasskeyBridge.ts";
+import { makePreviewWebAuthnPolicy } from "./WebAuthnPolicy.ts";
 
 const PasskeyPackageMetadata = Schema.Struct({
   t3codeWebAuthn: Schema.optional(
@@ -133,15 +134,19 @@ const make = Effect.gen(function* () {
   const backend = metadata?.browserPasskeys === true ? backendFor(environment.platform) : undefined;
   const bridgeEnabled = backend !== undefined;
   const sessionsWithHandlers = new WeakSet<Session>();
+  const webAuthn = makePreviewWebAuthnPolicy({ bridgeEnabled, platform: environment.platform });
 
-  return PreviewPasskeys.of({
+  const service = PreviewPasskeys.of({
     bridgeEnabled,
     configure: Effect.gen(function* () {
       if (keychainAccessGroup === undefined) return;
       yield* Effect.try({
         try: () => app.configureWebAuthn({ touchID: { keychainAccessGroup } }),
         catch: (cause) => new PreviewPasskeysConfigureError({ keychainAccessGroup, cause }),
-      }).pipe(Effect.catch((error) => Effect.logWarning(error.message, { cause: error.cause })));
+      }).pipe(
+        Effect.tap(webAuthn.markTouchIdConfigured),
+        Effect.catch((error) => Effect.logWarning(error.message, { cause: error.cause })),
+      );
     }).pipe(Effect.withSpan("desktop.previewPasskeys.configure")),
     installSessionHandlers: (session) => {
       if (sessionsWithHandlers.has(session)) return;
@@ -210,6 +215,7 @@ const make = Effect.gen(function* () {
       return detach;
     },
   });
+  return webAuthn.register(service);
 }).pipe(Effect.withSpan("PreviewPasskeys.make"));
 
 export const layer = Layer.effect(PreviewPasskeys, make);
