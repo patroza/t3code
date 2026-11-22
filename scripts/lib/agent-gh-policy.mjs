@@ -66,8 +66,8 @@ export const requiresShipGate = (argv, env = NodeProcess.env) => {
   const args = stripGhGlobalFlags(argv);
   if (args.length === 0) return { required: false };
 
-  // gh pr ready [number]
-  if (args[0] === "pr" && args[1] === "ready") {
+  // gh pr ready [number]; `--undo` only returns a PR to draft.
+  if (args[0] === "pr" && args[1] === "ready" && !args.includes("--undo")) {
     return {
       required: true,
       reason: "`gh pr ready` publishes this PR — running the ship gate first",
@@ -153,4 +153,15 @@ export const findRealGh = (opts = {}) => {
     }
   }
   return null;
+};
+
+/**
+ * Whether `cwd` is inside the checkout that owns this shim. The shim must stay
+ * inert anywhere else: agents in other projects may inherit a PATH that has it.
+ * @param {string} cwd
+ * @param {string} checkoutRoot
+ */
+export const isInsideCheckout = (cwd, checkoutRoot) => {
+  const relative = NodePath.relative(NodePath.resolve(checkoutRoot), NodePath.resolve(cwd));
+  return relative === "" || (!relative.startsWith("..") && !NodePath.isAbsolute(relative));
 };

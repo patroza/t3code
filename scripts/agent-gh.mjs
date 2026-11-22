@@ -7,14 +7,16 @@ import * as NodePath from "node:path";
 import * as NodeProcess from "node:process";
 import * as NodeURL from "node:url";
 import { isCodingAgent } from "./lib/agent-env.mjs";
-import { findRealGh, requiresShipGate } from "./lib/agent-gh-policy.mjs";
+import { findRealGh, isInsideCheckout, requiresShipGate } from "./lib/agent-gh-policy.mjs";
 
 const selfPath = NodeURL.fileURLToPath(import.meta.url);
 const argv = NodeProcess.argv.slice(2);
 
 let shipping = false;
 
-if (isCodingAgent()) {
+const checkoutRoot = NodePath.resolve(NodePath.dirname(selfPath), "..");
+
+if (isCodingAgent() && isInsideCheckout(NodeProcess.cwd(), checkoutRoot)) {
   const gate = requiresShipGate(argv);
   if (gate.required) {
     console.error(`agent gh: ${gate.reason}`);
