@@ -40,7 +40,7 @@ apps/server/src/orchestration-v2/ThreadLaunchService.ts  # identity: a launch's 
 apps/server/src/orchestration-v2/ThreadManagementService.ts  # identity: sendToThread may carry a server-stamped source
 apps/server/src/persistence/Migrations.ts  # migrations: runMigrations/hasPendingMigrations take the fork ledger hooks (ForkMigrations.ts)
 apps/server/src/processRunner.ts  # direnv: optional extendEnv so direnv runs with exactly the provider environment
-apps/server/src/server.ts  # identity: provides the persisted IdentityService layer
+apps/server/src/server.ts  # identity: provides the persisted IdentityService layer; discord: the command-readiness middleware lets the bot's token exchange and discovery through (discord/commandReadinessExemption.ts)
 apps/server/src/ws.ts  # identity: spreads identity.* handlers and wraps dispatch/launch so operate commands carry the session's source (identity/identityWsHandlers.ts)
 apps/web/src/components/ChatView.tsx  # identity: passes message sender context to the timeline (chat/MessageSenderCaption.tsx)
 apps/web/src/components/Sidebar.tsx  # identity: thread list follows the ownership filter (ownershipFilter.ts)
