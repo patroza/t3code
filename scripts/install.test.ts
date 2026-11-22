@@ -286,7 +286,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("install.sh t3 
         script: "install.sh",
         home,
         binDir,
-        env: { HOME: root, SHELL: undefined, PATH: "/usr/bin:/bin" },
+        env: { HOME: root, SHELL: "", PATH: "/usr/bin:/bin" },
       });
       expect(noShell.code, noShell.output).toBe(0);
       expect(noShell.output).toContain(`Add ${binDir} to your PATH`);

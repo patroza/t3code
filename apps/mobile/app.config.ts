@@ -2,6 +2,7 @@ import type { ExpoConfig } from "expo/config";
 
 import { BRAND_ASSET_PATHS } from "../../scripts/lib/brand-assets.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
+import { applyForkMobileConfig } from "./app.config.fork.ts";
 
 type AppVariant = "development" | "preview" | "production";
 
@@ -501,4 +502,4 @@ const config: ExpoConfig = {
   },
 };
 
-export default config;
+export default applyForkMobileConfig(config);

@@ -1,0 +1,20 @@
+{
+  "$comment": "Fork-only. scripts/apply-fork-eas-overlay.mjs merges `eas` into eas.json and writes `env` into every build profile (and $GITHUB_ENV) before the fork mobile workflows run EAS. app.config.fork.ts reads the identity.",
+  "env": {
+    "T3CODE_MOBILE_EAS_PROJECT_ID": "731ac55d-f006-4a63-95ef-091c2146caeb",
+    "T3CODE_MOBILE_EXPO_OWNER": "omegent",
+    "T3CODE_MOBILE_IOS_BUNDLE_IDENTIFIER": "dev.patroza.t3code",
+    "T3CODE_MOBILE_IOS_TEAM_ID": "8B9VRZFRAA"
+  },
+  "eas": {
+    "build": {
+      "development": {
+        "environment": "development",
+        "env": { "MOBILE_VERSION_POLICY": "fingerprint" }
+      }
+    },
+    "submit": {
+      "production": { "ios": { "ascAppId": "6794618314" } }
+    }
+  }
+}
