@@ -1435,6 +1435,7 @@ describe("ThreadFeed previews", () => {
             threadId,
             detailRef: null,
             threadTitle: "preview",
+            agentLabel: "Codex agent",
             workspaceRoot: "/repo",
             feed: [
               {
