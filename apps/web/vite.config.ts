@@ -51,7 +51,6 @@ const configuredDesktopUpdateRepository =
   process.env.T3CODE_DESKTOP_UPDATE_REPOSITORY?.trim() ||
   process.env.GITHUB_REPOSITORY?.trim() ||
   "";
-const configuredFeatureSecrets = process.env.T3CODE_FEATURE_SECRETS?.trim() || "";
 const configuredHostedAppUrl = (() => {
   const explicitHostedAppUrl = process.env.VITE_HOSTED_APP_URL?.trim();
   if (explicitHostedAppUrl) {
@@ -434,9 +433,12 @@ const browserTestProject = {
       "@base-ui/react/autocomplete",
       "@base-ui/react/field",
       "@base-ui/react/preview-card",
+      "@effect/vitest",
+      "@pierre/diffs/ssr",
       "@pierre/diffs/worker",
       "@pierre/trees/react",
       "dompurify",
+      "effect/testing",
       "hast-util-to-html",
       "hast-util-to-jsx-runtime",
       "katex",
@@ -726,7 +728,6 @@ export default defineConfig(({ command }) => {
       "import.meta.env.T3CODE_DESKTOP_UPDATE_REPOSITORY": JSON.stringify(
         configuredDesktopUpdateRepository,
       ),
-      "import.meta.env.T3CODE_FEATURE_SECRETS": JSON.stringify(configuredFeatureSecrets),
       "import.meta.env.VITE_RELEASE_CHANNEL": JSON.stringify(configuredReleaseChannel),
       "import.meta.env.APP_VERSION": JSON.stringify(configuredAppVersion),
     },

@@ -55,6 +55,7 @@ export * from "./t3ProjectFile.ts";
 export * from "./devStack.ts";
 export * from "./editor.ts";
 export * from "./project.ts";
+export * from "./workspaceFolders.ts";
 export * from "./filesystem.ts";
 export * from "./agentSessions.ts";
 export * from "./assets.ts";

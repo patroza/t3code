@@ -6,16 +6,18 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import { deriveThreadQueueWorkflowState } from "@t3tools/client-runtime/state/thread-workflows";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
+import { isSlashCommand } from "@t3tools/shared/composerTrigger";
 import {
   isAttachmentOnlyBootstrapPrompt,
   replaceComposerContextReferences,
 } from "@t3tools/shared/composerContextReferences";
-import type {
-  ChatAttachment as ContractChatAttachment,
-  EnvironmentId,
-  MessageId,
-  RunId,
-  ThreadId,
+import {
+  parseGoalCommand,
+  type ChatAttachment as ContractChatAttachment,
+  type EnvironmentId,
+  type MessageId,
+  type RunId,
+  type ThreadId,
 } from "@t3tools/contracts";
 import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
 import { Link } from "@tanstack/react-router";
@@ -312,6 +314,9 @@ export function QueuedRunsControl({
           const isEditing = rowRunId !== null && rowRunId === props.editingRunId;
           const rowDraggable =
             rowRunId !== null && rowServerIndex !== null && canReorder && busyRunId === null;
+          // The server decides on the agent's text, and a goal command can stop the turn.
+          const sentText = { text: item.message?.text ?? item.text, attachments: item.attachments };
+          const movesCommandFirst = isSlashCommand(sentText) && parseGoalCommand(sentText) === null;
           return (
             <li
               key={item.key}
@@ -417,6 +422,52 @@ export function QueuedRunsControl({
                   </Button>
                 ) : items.length > 1 ? (
                   <span className="px-1.5 font-medium tabular-nums">{position + 1}</span>
+                ) : null}
+                {canSendRun(item.freshContext) && !isEditing ? (
+                  <>
+                    <Tooltip>
+                      <TooltipTrigger render={<span className="flex shrink-0" />}>
+                        <Button
+                          size="xs"
+                          variant="ghost-muted"
+                          disabled={item.runId === null || busyRunId !== null}
+                          onClick={() => {
+                            if (item.runId !== null) {
+                              void sendQueuedMessage(item.runId);
+                            }
+                          }}
+                        >
+                          <ArrowUpIcon />
+                          <T>Send now</T>
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipPopup>
+                        {item.serverIndex === 0 && props.steerShortcutLabel
+                          ? workflow?.canSendNow
+                            ? gt("Start a turn with this message ({shortcut})", {
+                                shortcut: props.steerShortcutLabel,
+                              })
+                            : workflow?.promoteSkipsCompaction
+                              ? gt("Skip compaction and send this message ({shortcut})", {
+                                  shortcut: props.steerShortcutLabel,
+                                })
+                              : movesCommandFirst
+                                ? gt("Move this command to the front of the queue ({shortcut})", {
+                                    shortcut: props.steerShortcutLabel,
+                                  })
+                                : gt("Send into the current turn ({shortcut})", {
+                                    shortcut: props.steerShortcutLabel,
+                                  })
+                          : workflow?.canSendNow
+                            ? gt("Start a turn with this message")
+                            : workflow?.promoteSkipsCompaction
+                              ? gt("Skip compaction and send this message")
+                              : movesCommandFirst
+                                ? gt("Move this command to the front of the queue")
+                                : gt("Send into the current turn")}
+                      </TooltipPopup>
+                    </Tooltip>
+                  </>
                 ) : null}
                 {item.pending ? (
                   <span className="flex items-center gap-1 px-1">
