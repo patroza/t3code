@@ -1,0 +1,4 @@
+interface:
+  display_name: "Update Upstream"
+  short_description: "Weld upstream main into fork/dev"
+  default_prompt: "Use $update-upstream to weld the latest upstream main into fork/dev and land it with a merge commit."
