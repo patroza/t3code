@@ -2030,6 +2030,7 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
           projectDisplayName={props.projectDisplayName}
           environmentLabel={props.environmentLabel}
           environmentMachine={props.environmentMachine}
+          providerEntryByInstanceId={props.providerEntryByInstanceId}
           providerEntry={providerEntry}
           showInstanceBadge={showInstanceBadge}
           modelInstanceId={modelInstanceId}

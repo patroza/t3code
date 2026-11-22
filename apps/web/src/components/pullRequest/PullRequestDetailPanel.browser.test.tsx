@@ -623,6 +623,7 @@ it("restores the selected PR tab when switching threads and remounting the right
             runShellCommand: () => {},
           }}
           workspaceMutationId={null}
+          workspaceRevision={null}
           getShortcutContext={shortcutContext}
           onSendAnnotation={() => {}}
           onCloseSurface={() => {}}

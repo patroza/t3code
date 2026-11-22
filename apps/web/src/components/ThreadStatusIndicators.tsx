@@ -33,10 +33,17 @@ import {
   type ThreadPullRequestBadge,
   visibleThreadPullRequests,
 } from "@t3tools/client-runtime/thread-pull-requests";
-import { CircleCheckIcon, CircleDashedIcon, FolderPlusIcon, PencilRulerIcon } from "lucide-react";
+import {
+  CircleCheckIcon,
+  CircleDashedIcon,
+  FolderGit2Icon,
+  FolderPlusIcon,
+  PencilRulerIcon,
+} from "lucide-react";
 import { useRender } from "@base-ui/react/use-render";
 import { type ReactNode, type AnimationEvent, type MouseEvent, type ReactElement } from "react";
 import { cn } from "../lib/utils";
+import { formatWorktreePathForDisplay } from "../worktreeCleanup";
 import { revealThreadTerminal } from "../lib/revealThreadTerminal";
 
 import { useEnvironmentQuery } from "../state/query";
