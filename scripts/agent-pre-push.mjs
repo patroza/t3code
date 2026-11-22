@@ -3,6 +3,8 @@
  * Agent pushes enforce changed or full validation by PR state; humans pass through unchanged.
  */
 import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeProcess from "node:process";
 import * as NodeURL from "node:url";
@@ -101,7 +103,12 @@ export const runAgentShipGate = async (opts = {}) => {
     run("vpr typecheck", ["vpr", "typecheck"], { cwd: root, env });
   }
 
-  run("vp run test", ["vp", "run", "test"], { cwd: root, env: testEnv(env) });
+  const configHome = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-gate-config-"));
+  try {
+    run("vp run test", ["vp", "run", "test"], { cwd: root, env: testEnv(env, { configHome }) });
+  } finally {
+    NodeFS.rmSync(configHome, { recursive: true, force: true });
+  }
 
   if (headSha) {
     try {
@@ -150,13 +157,15 @@ if (invokedAs === thisFile) {
   NodeProcess.exit(0);
 }
 
-// Tests run as CI does: .envrc's GH_REPO points gh-backed tests at the fork, and asar skips
-// sources under a dot-directory, which a TMPDIR such as ~/.cache/tmp puts every fixture in.
-export function testEnv(env, platform = NodeProcess.platform) {
+// Tests run as CI does: .envrc's GH_REPO points gh-backed tests at the fork, asar skips sources
+// under a dot-directory (a TMPDIR such as ~/.cache/tmp), and provider tests read the developer's
+// own ~/.config (OpenCode's opencode.json) unless XDG_CONFIG_HOME is empty.
+export function testEnv(env, { configHome, platform = NodeProcess.platform } = {}) {
   const next = { ...env };
   delete next.GH_REPO;
   if (next.TMPDIR && /(^|[/\\])\./.test(next.TMPDIR) && platform !== "win32") {
     next.TMPDIR = "/tmp";
   }
+  if (configHome) next.XDG_CONFIG_HOME = configHome;
   return next;
 }
