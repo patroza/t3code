@@ -1,0 +1,10 @@
+# Fork-only. Agent ship gate; a no-op for humans. See scripts/agent-pre-push.mjs and AGENTS.fork.md.
+# Humans: SKIP_AGENT_PREPUSH=1 git push. Agents never skip it and never use --no-verify.
+#
+# Nested git commands must find their own repository, not this hook's GIT_DIR/GIT_WORK_TREE.
+for name in $(git rev-parse --local-env-vars); do
+  unset "$name"
+done
+# Plain node, not `pnpm exec`: pnpm's dependency check can try to purge node_modules after a
+# rebase moved the lockfile, which aborts without a TTY.
+node scripts/agent-pre-push.mjs
