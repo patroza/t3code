@@ -36,12 +36,12 @@ import {
   PrimaryConnectionTarget,
   type PreparedConnection,
 } from "@t3tools/client-runtime/connection";
-import { layerRemoteHttpClient } from "@t3tools/client-runtime/rpc";
 import {
+  layerRemoteHttpClient,
   RpcSessionFactory,
   rpcSessionFactoryLayer,
   type RpcSession,
-} from "@t3tools/client-runtime/rpc/session-fork";
+} from "@t3tools/client-runtime/rpc";
 import {
   bootstrapRemoteBearerSession,
   resolveRemoteWebSocketConnectionUrl,

@@ -65,8 +65,8 @@ apps/web/src/routes/__root.tsx  # identity: mounts IdentityClaimGate
 docs/user/outside-agents.md  # mcp-tokens: documents headless MCP bearer tokens and --runtime-mode-ceiling
 knip.jsonc  # tooling: entry for scripts/agent-gh.mjs, which only the generated gh shim runs
 package.json  # tooling: prepare runs scripts/fork-prepare.mjs; pr:ready and dist:desktop:linux:dir scripts
-packages/client-runtime/package.json  # identity: subpath exports for state/identity and message-sender; discord: ./rpc/session-fork subpath (rpc/sessionFork.ts) for the bot's own RPC session
-packages/client-runtime/src/rpc/index.ts  # vscode + discord: re-exports RpcSessionFactory/rpcSessionFactoryLayer so headless clients open a raw RPC session
+packages/client-runtime/package.json  # identity: subpath exports for state/identity and message-sender
+packages/client-runtime/src/rpc/index.ts  # vscode + discord: re-exports RpcSessionFactory/rpcSessionFactoryLayer and applyServerConfigProjection so headless clients (extension, bot) open and follow their own RPC session
 packages/contracts/src/clientRpcPermissions.ts  # identity: spreads IDENTITY_GUARDED_RPC_SCOPES (identityRpc.ts) into CLIENT_GUARDED_RPC_SCOPES
 packages/contracts/src/index.ts  # identity: exports identity.ts and identityRpc.ts
 packages/contracts/src/orchestrationV2.ts  # identity: spreads identity field sets (identity.ts) into thread/message/turn-item/command schemas and adds the internal thread.attribution.repair command; optional fields must live inside the upstream structs
