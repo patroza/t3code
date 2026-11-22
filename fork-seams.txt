@@ -72,4 +72,4 @@ packages/contracts/src/rpc.ts  # identity: merges IdentityRpcGroup (identityRpc.
 packages/provider-acp/src/server/adapter.ts  # direnv: wrap the flavor with withDirenvRuntime (direnvRuntime.ts) so every ACP runtime starts with the direnv environment
 packages/provider-core/package.json  # direnv: export ./server/DirenvEnvironment
 packages/provider-opencode/src/server/adapter.ts  # direnv: resolve the OpenCode server environment through resolveCurrentProviderEnvironment
-packages/shared/package.json  # identity: subpath exports for identityAvatar, identityMap, sourceAttribution
+packages/shared/package.json  # identity: subpath exports for identityAvatar, identityMap, sourceAttribution; jira: subpath exports for integrationThreadView, turnResponseStats
