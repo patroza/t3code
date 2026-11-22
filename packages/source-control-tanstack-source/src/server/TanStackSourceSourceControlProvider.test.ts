@@ -86,6 +86,7 @@ function checkout(options: {
                 cwd: input.cwd,
                 argumentCount: input.args.length,
                 exitCode: 1,
+                failureKind: "unknown",
                 detail: "not an ancestor",
               }),
             )
