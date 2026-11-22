@@ -31,6 +31,8 @@ apps/mobile/src/i18n/translations/zh.json  # identity: mobile identity strings
 apps/mobile/src/persistence/mobile-preferences.ts  # identity: persists the Mine/Theirs ownership choice (features/identity/ownershipFilterOptions.ts)
 apps/server/src/auth/EnvironmentAuth.ts  # identity + mcp-tokens: exports MCP_CLIENT_SUBJECT; issueSession passes a runtimeModeCeiling through
 apps/server/src/auth/RpcAuthorization.ts  # identity: spreads IDENTITY_READ_RPC_SCOPES into RPC_REQUIRED_SCOPES
+apps/server/src/cli/auth.ts  # mcp-tokens: --runtime-mode-ceiling flag on auth session issue (cli/mcpClientTokenCeiling.ts)
+apps/server/src/mcp/McpHttpServer.ts  # mcp-tools: merges fork-registered toolkits (mcp/forkMcpTools.ts) into the served MCP layer, beside layerTools so upstream budget/mock tests do not see them
 apps/server/src/mcp/McpToolAccess.ts  # identity: writing tools require an identity claim on outside MCP clients (identity/mcpClientClaim.ts)
 apps/server/src/mcp/OrchestratorMcpService.ts  # identity: MCP-created threads and sends carry the caller's source (sourceRefForMcpCaller)
 apps/server/src/observability/RpcInstrumentation.ts  # identity: spreads identity RPC aggregates
@@ -60,6 +62,7 @@ apps/web/src/i18n/translations/ru.json  # identity: strings for claim gate, part
 apps/web/src/i18n/translations/sv.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
 apps/web/src/i18n/translations/zh.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
 apps/web/src/routes/__root.tsx  # identity: mounts IdentityClaimGate
+docs/user/outside-agents.md  # mcp-tokens: documents headless MCP bearer tokens and --runtime-mode-ceiling
 knip.jsonc  # tooling: entry for scripts/agent-gh.mjs, which only the generated gh shim runs
 package.json  # tooling: prepare runs scripts/fork-prepare.mjs; pr:ready and dist:desktop:linux:dir scripts
 packages/client-runtime/package.json  # identity: subpath exports for state/identity and message-sender

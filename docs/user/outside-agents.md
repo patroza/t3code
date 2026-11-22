@@ -135,6 +135,11 @@ Any agent that supports remote MCP servers over HTTP with OAuth can connect. Giv
 it the MCP URL and choose OAuth, and the agent finds the sign-in settings itself.
 Agents without OAuth support cannot connect.
 
+A headless gateway can use a bearer token instead, issued on the host with
+`t3 auth session issue --subject mcp-client --scope orchestration:read --scope orchestration:operate --token-only`.
+It may start threads only in **approval-required** unless you add
+`--runtime-mode-ceiling auto` (or `auto-accept-edits`, `full-access`).
+
 ## Scripts on the host
 
 On the machine that runs the environment, `t3 thread` uses the same tools
