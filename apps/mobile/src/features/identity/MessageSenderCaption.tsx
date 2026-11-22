@@ -7,7 +7,7 @@ import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { sourceChannelFromDeviceType } from "@t3tools/shared/sourceAttribution";
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { authClientMetadata } from "../../lib/authClientMetadata";
@@ -40,6 +40,28 @@ const messageSourceAtom = Atom.family((key: string) => {
     Atom.withLabel("mobile-identity:message-source"),
   );
 });
+
+const senderRenderers = new Map<string, (messageId: string) => ReactNode>();
+
+/**
+ * ThreadFeed's `renderMessageSender`. ThreadFeed takes it as a prop so it never imports the
+ * connection runtime, and one stable function per thread keeps its memoized rows from re-rendering.
+ */
+export function renderMessageSender(environmentId: EnvironmentId, threadId: ThreadId) {
+  const key = `${environmentId}\0${threadId}`;
+  let render = senderRenderers.get(key);
+  if (render === undefined) {
+    render = (messageId) => (
+      <MessageSenderCaption
+        environmentId={environmentId}
+        threadId={threadId}
+        messageId={messageId}
+      />
+    );
+    senderRenderers.set(key, render);
+  }
+  return render;
+}
 
 /**
  * `username@channel` above a user message someone else sent. Your own message from this

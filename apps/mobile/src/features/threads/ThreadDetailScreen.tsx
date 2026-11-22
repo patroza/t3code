@@ -1,5 +1,6 @@
 import { ChildThreadApprovals } from "./ChildThreadApprovals";
 import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
+import { renderMessageSender } from "../identity/MessageSenderCaption";
 import { useOpenThreadInspector } from "./thread-inspector-navigation";
 import { useSidebarWorkspaceTabs } from "../layout/workspace/useSystemWorkspaceTabBar";
 import { useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
@@ -1534,6 +1535,10 @@ function ThreadDetailBody(
             <WorkspaceMutationIdProvider threadRef={props.selectedThreadDetailRef}>
               <ColumnWidth width={columnWidth}>
                 <ThreadFeed
+                  renderMessageSender={renderMessageSender(
+                    props.environmentId,
+                    props.selectedThread.id,
+                  )}
                   toolCallVisibility={toolCallVisibility}
                   environmentId={props.environmentId}
                   threadId={props.selectedThread.id}

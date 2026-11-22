@@ -16,7 +16,8 @@ describe("mobile identity surfaces", () => {
     ["../threads/ThreadNavigationSidebar.tsx", "withOwnershipFilter("],
     ["../home/ThreadListFilters.tsx", "<OwnershipFilterChip />"],
     ["../threads/thread-list-v2-items.tsx", "<ThreadShellIdentityMark thread={thread} />"],
-    ["../threads/ThreadFeed.tsx", "<MessageSenderCaption"],
+    ["../threads/ThreadFeed.tsx", "props.renderMessageSender?.(message.id)"],
+    ["../threads/ThreadDetailScreen.tsx", "renderMessageSender={renderMessageSender("],
     ["../../persistence/mobile-preferences.ts", "sanitizeOwnershipPreferences(parsed)"],
   ])("%s keeps %s", (file, hook) => {
     expect(readSource(file)).toContain(hook);

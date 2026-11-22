@@ -14,7 +14,8 @@ apps/mobile/package.json  # tooling: eas-build-pre-install script for the trimme
 apps/mobile/src/App.tsx  # identity: mounts IdentityClaimGate
 apps/mobile/src/features/home/HomeRouteScreen.tsx  # identity: ownership-filters the home thread list and adds ownership to its filter menu (features/identity/OwnershipFilter.tsx)
 apps/mobile/src/features/home/ThreadListFilters.tsx  # identity: Mine/Theirs chip beside the environment and project chips
-apps/mobile/src/features/threads/ThreadFeed.tsx  # identity: labels user messages someone else sent (features/identity/MessageSenderCaption.tsx)
+apps/mobile/src/features/threads/ThreadDetailScreen.tsx  # identity: passes renderMessageSender (features/identity/MessageSenderCaption.tsx) to ThreadFeed
+apps/mobile/src/features/threads/ThreadFeed.tsx  # identity: optional renderMessageSender prop rendered above user messages; ThreadFeed imports no identity code
 apps/mobile/src/features/threads/ThreadNavigationSidebar.tsx  # identity: ownership-filters the sidebar thread list and adds ownership to its filter menu
 apps/mobile/src/features/threads/thread-list-v2-items.tsx  # identity: thread rows show the creator/participant mark (features/identity/ParticipantStack.tsx)
 apps/mobile/src/i18n/translations/de.json  # identity: mobile identity strings
