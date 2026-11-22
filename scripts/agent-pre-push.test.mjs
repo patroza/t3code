@@ -3,7 +3,12 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { isCodingAgent, testEnv } from "./agent-pre-push.mjs";
-import { findRealGh, requiresShipGate, stripGhGlobalFlags } from "./lib/agent-gh-policy.mjs";
+import {
+  findRealGh,
+  isInsideCheckout,
+  requiresShipGate,
+  stripGhGlobalFlags,
+} from "./lib/agent-gh-policy.mjs";
 import {
   assertUpToDateWithForkDev,
   filesForChangedShipCheck,
@@ -270,6 +275,7 @@ it("gh policy: pr ready needs the ship gate unless AGENT_PR_SHIP", () => {
   assert.equal(requiresShipGate(["pr", "ready", "12"], {}).required, true);
   assert.equal(requiresShipGate(["pr", "ready"], { AGENT_PR_SHIP: "1" }).required, false);
   assert.equal(requiresShipGate(["pr", "view"], {}).required, false);
+  assert.equal(requiresShipGate(["pr", "ready", "12", "--undo"], {}).required, false);
   assert.equal(requiresShipGate(["pr", "create", "--draft"], {}).required, false);
 });
 
@@ -430,4 +436,11 @@ it("runs the gate's tests without the fork's GH_REPO, a dot-directory TMPDIR, or
   assert.strictEqual(env.GIT_CONFIG_GLOBAL, "/dev/null");
   assert.strictEqual(testEnv({ VITEST_MAX_WORKERS: "6" }).VITEST_MAX_WORKERS, "6");
   assert.strictEqual(testEnv({ TMPDIR: "/var/tmp" }, { platform: "linux" }).TMPDIR, "/var/tmp");
+});
+
+it("keeps the gh shim inert outside the checkout that installed it", () => {
+  assert.equal(isInsideCheckout("/repo", "/repo"), true);
+  assert.equal(isInsideCheckout("/repo/apps/web", "/repo"), true);
+  assert.equal(isInsideCheckout("/other-project", "/repo"), false);
+  assert.equal(isInsideCheckout("/repo-sibling", "/repo"), false);
 });
