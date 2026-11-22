@@ -11,7 +11,11 @@ export const isCommandReadinessExemptPath = (url: string): boolean =>
 /** Runs `httpEffect` directly for exempt paths and `gated` (the readiness wait) otherwise. */
 export const exemptBootstrapPaths =
   <A, E, R>(httpEffect: Effect.Effect<A, E, R>) =>
-  <E2, R2>(gated: Effect.Effect<A, E2, R2>) =>
-    Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
-      isCommandReadinessExemptPath(request.url) ? httpEffect : gated,
+  <E2, R2>(
+    gated: Effect.Effect<A, E2, R2>,
+  ): Effect.Effect<A, E | E2, R | R2 | HttpServerRequest.HttpServerRequest> =>
+    Effect.flatMap(
+      HttpServerRequest.HttpServerRequest,
+      (request): Effect.Effect<A, E | E2, R | R2> =>
+        isCommandReadinessExemptPath(request.url) ? httpEffect : gated,
     );
