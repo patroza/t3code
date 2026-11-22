@@ -5,6 +5,9 @@
 # Fork logic belongs in fork-only files. An upstream file gets at most a hook (an import plus a
 # single call, spread, registration, or layer entry). One line per file, sorted:
 #   <path>  # <feature>: <why>
+.github/workflows/mobile-fingerprint-check.yml  # tooling: runs-on ubuntu-24.04; the fork has no Blacksmith runners, so upstream's job would queue forever
+.github/workflows/pr-size.yml  # tooling: deleted; upstream's PR size labeler (pull_request_target) is not wanted on fork PRs
+.github/workflows/pr-vouch.yml  # tooling: deleted; upstream's contributor vouch gate (pull_request_target) would act on fork PRs
 AGENTS.md  # tooling: one line importing AGENTS.fork.md
 apps/mobile/app.config.ts  # tooling: wraps the default export in applyForkMobileConfig (app.config.fork.ts)
 apps/mobile/package.json  # tooling: eas-build-pre-install script for the trimmed EAS archive (.easignore)
