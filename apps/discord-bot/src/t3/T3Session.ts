@@ -70,6 +70,8 @@ import type { DiscordBotConfig } from "../config.ts";
 import { preferredModelSelection } from "../config.ts";
 import { formatThreadTitle } from "../presentation/messages.ts";
 import { normalizeWorkspacePath } from "../presentation/mentions.ts";
+import { BrowserAutomationHost } from "../browser/BrowserAutomationHost.ts";
+import { claimBrowserHostThread, serveBrowserHost } from "../browser/browserHostSession.ts";
 import { followOrchestrationThread } from "./DiscordThreadFollower.ts";
 import { applyIntegrationShellStreamItem } from "./shellStream.ts";
 import { followBotServerConfig } from "./serverConfigStream.ts";
@@ -387,6 +389,8 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
     let serverConfig: ServerConfig | null = null;
     let shellFiber: Fiber.Fiber<void, unknown> | null = null;
     let configFiber: Fiber.Fiber<void, unknown> | null = null;
+    let browserFiber: Fiber.Fiber<void, unknown> | null = null;
+    let browserHost: BrowserAutomationHost | null = null;
     let reconnecting = false;
     let onReconnected: (() => Promise<void>) | null = null;
     const threadFibers = new Map<string, Fiber.Fiber<void, unknown>>();
@@ -405,7 +409,8 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
      */
     const teardown = async () => {
       const previousScope = scope;
-      const previousFibers = [shellFiber, configFiber, ...threadFibers.values()];
+      const previousFibers = [shellFiber, configFiber, browserFiber, ...threadFibers.values()];
+      const previousBrowserHost = browserHost;
       scope = null;
       session = null;
       httpBaseUrl = null;
@@ -414,6 +419,8 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
       serverConfig = null;
       shellFiber = null;
       configFiber = null;
+      browserFiber = null;
+      browserHost = null;
       // Drop thread subscriptions so subscribeThread() re-subscribes on the new session
       // instead of holding fibers that will never emit again.
       threadFibers.clear();
@@ -428,6 +435,9 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
       }
       if (previousScope !== null) {
         await runtime.runPromise(Scope.close(previousScope, Exit.void)).catch(() => {});
+      }
+      if (previousBrowserHost !== null) {
+        await previousBrowserHost.close().catch(() => {});
       }
     };
 
@@ -618,6 +628,27 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
               ),
             );
             shellFiber = runtime.runFork(stream);
+
+            if (botConfig.browserEnabled) {
+              try {
+                const host = await BrowserAutomationHost.launch(botConfig, environmentId);
+                browserHost = host;
+                browserFiber = runtime.runFork(
+                  serveBrowserHost(connected.client, host, () => {
+                    if (browserHost === host) browserHost = null;
+                  }),
+                );
+                await runtime.runPromise(
+                  Effect.logInfo("Bot browser automation host active", {
+                    profile: botConfig.browserProfile,
+                  }),
+                );
+              } catch (cause) {
+                await runtime.runPromise(
+                  Effect.logError(`Bot browser automation unavailable: ${messageFromCause(cause)}`),
+                );
+              }
+            }
 
             // `shell` is updated by the concurrently running subscription fiber.
             for (let attempt = 0; attempt < SHELL_SNAPSHOT_MAX_ATTEMPTS; attempt += 1) {
@@ -951,6 +982,7 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
             ),
           );
         }
+        yield* claimBrowserHostThread(requireSession().client, browserHost, threadId);
         const attachments = yield* persistAttachments(threadId, messageId, input.attachments ?? []);
         yield* Effect.tryPromise({
           try: () =>
@@ -990,6 +1022,7 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
         // modelSelection is optional on message.dispatch; omit when unknown so the
         // server keeps the thread's existing selection (Grok refuses mid-thread switches).
         const modelSelection = input.modelSelection ?? thread?.modelSelection;
+        yield* claimBrowserHostThread(requireSession().client, browserHost, input.threadId);
         const attachments = yield* persistAttachments(
           input.threadId,
           messageId,

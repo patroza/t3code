@@ -33,13 +33,13 @@ apps/mobile/src/i18n/translations/sv.json  # identity: mobile identity strings
 apps/mobile/src/i18n/translations/zh.json  # identity: mobile identity strings
 apps/mobile/src/persistence/mobile-preferences.ts  # identity: persists the Mine/Theirs ownership choice (features/identity/ownershipFilterOptions.ts)
 apps/server/src/auth/EnvironmentAuth.ts  # identity + mcp-tokens: exports MCP_CLIENT_SUBJECT; issueSession passes a runtimeModeCeiling through
-apps/server/src/auth/RpcAuthorization.ts  # identity: spreads IDENTITY_READ_RPC_SCOPES into RPC_REQUIRED_SCOPES
+apps/server/src/auth/RpcAuthorization.ts  # identity: spreads IDENTITY_READ_RPC_SCOPES into RPC_REQUIRED_SCOPES; bot-browser: spreads PREVIEW_AUTOMATION_HOST_RPC_SCOPES (previewAutomationHostRpc.ts)
 apps/server/src/cli/auth.ts  # mcp-tokens: --runtime-mode-ceiling flag on auth session issue (cli/mcpClientTokenCeiling.ts)
 apps/server/src/issue/IssueTrackerRegistry.ts  # jira: registers the Jira tracker when a site URL is configured (jira/JiraIssueDriver.ts)
 apps/server/src/mcp/McpHttpServer.ts  # mcp-tools: merges fork-registered toolkits (mcp/forkMcpTools.ts) into the served MCP layer, beside layerTools so upstream budget/mock tests do not see them
 apps/server/src/mcp/McpToolAccess.ts  # identity: writing tools require an identity claim on outside MCP clients (identity/mcpClientClaim.ts)
 apps/server/src/mcp/OrchestratorMcpService.ts  # identity: MCP-created threads and sends carry the caller's source (sourceRefForMcpCaller)
-apps/server/src/observability/RpcInstrumentation.ts  # identity: spreads identity RPC aggregates
+apps/server/src/observability/RpcInstrumentation.ts  # identity: spreads identity RPC aggregates; bot-browser: spreads previewAutomationHostRpcAggregates
 apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts  # direnv: resolve the query environment through resolveCurrentProviderEnvironment
 apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts  # direnv: resolve the app-server environment through resolveCurrentProviderEnvironment (error mapped to open-session error)
 apps/server/src/orchestration-v2/Orchestrator.ts  # identity: emit stamps command source on events, dispatch records participants, delegated children inherit the person, thread.attribution.repair case (sourceAttribution.ts)
@@ -50,8 +50,8 @@ apps/server/src/persistence/Migrations.ts  # migrations: runMigrations/hasPendin
 apps/server/src/preview/ServerBrowser.ts  # webauthn: streamed contexts install the no-authenticator script (preview/ServerBrowserAuthentication.ts)
 apps/server/src/preview/ServerBrowserContexts.ts  # webauthn: optional prepareContext option, awaited before a context is handed out; upstream callers and tests leave it unset
 apps/server/src/processRunner.ts  # direnv: optional extendEnv so direnv runs with exactly the provider environment
-apps/server/src/server.ts  # identity: provides the persisted IdentityService layer; direnv: DirenvEnvironment.layerLive in the runtime core layer merge; jira: adds the /api/jira/webhook route layer (jira/JiraServerLayers.ts); github: adds the /api/github/webhook route layer (github/GitHubServerLayers.ts); discord: the command-readiness middleware lets the bot's token exchange and discovery through (discord/commandReadinessExemption.ts)
-apps/server/src/ws.ts  # identity: spreads identity.* handlers and wraps dispatch/launch so operate commands carry the session's source (identity/identityWsHandlers.ts)
+apps/server/src/server.ts  # identity: provides the persisted IdentityService layer; direnv: DirenvEnvironment.layerLive in the runtime core layer merge; jira: adds the /api/jira/webhook route layer (jira/JiraServerLayers.ts); github: adds the /api/github/webhook route layer (github/GitHubServerLayers.ts); discord: the command-readiness middleware lets the bot's token exchange and discovery through (discord/commandReadinessExemption.ts); bot-browser: provides preview/forkPreviewAutomationHost.ts layer in place of PreviewAutomationBroker.layer (same broker plus external hosts and thread claims)
+apps/server/src/ws.ts  # identity: spreads identity.* handlers and wraps dispatch/launch so operate commands carry the session's source (identity/identityWsHandlers.ts); bot-browser: spreads the previewAutomation.* external host handlers (preview/forkPreviewAutomationHost.ts)
 apps/web/src/browser/browserSurfaceStore.ts  # browser: release removes the surface entry so closed tabs do not accumulate; in-place fix, upstream candidate
 apps/web/src/components/ChatView.tsx  # identity: passes message sender context to the timeline (chat/MessageSenderCaption.tsx)
 apps/web/src/components/Sidebar.browser.test.tsx  # tooling: withoutComposerDrafts() empties persisted composer drafts while the draft-row tests run, so drafts another suite left in shared browser storage do not shift the rows. Upstream candidate
@@ -79,15 +79,15 @@ package.json  # tooling: prepare runs scripts/fork-prepare.mjs; pr:ready and dis
 packages/client-runtime/package.json  # identity: subpath exports for state/identity and message-sender
 packages/client-runtime/src/rpc/index.ts  # vscode + discord: re-exports RpcSessionFactory/rpcSessionFactoryLayer and applyServerConfigProjection so headless clients (extension, bot) open and follow their own RPC session
 packages/contracts/src/clientRpcPermissions.ts  # identity: spreads IDENTITY_GUARDED_RPC_SCOPES (identityRpc.ts) into CLIENT_GUARDED_RPC_SCOPES
-packages/contracts/src/index.ts  # identity: exports identity.ts and identityRpc.ts
+packages/contracts/src/index.ts  # identity: exports identity.ts and identityRpc.ts; bot-browser: exports previewAutomationHostRpc.ts
 packages/contracts/src/orchestrationV2.ts  # identity: spreads identity field sets (identity.ts) into thread/message/turn-item/command schemas and adds the internal thread.attribution.repair command; optional fields must live inside the upstream structs
-packages/contracts/src/rpc.ts  # identity: merges IdentityRpcGroup (identityRpc.ts) into WsRpcGroup
+packages/contracts/src/rpc.ts  # identity: merges IdentityRpcGroup (identityRpc.ts) into WsRpcGroup; bot-browser: merges PreviewAutomationHostRpcGroup in the same .merge(...) call
 packages/contracts/src/t3ProjectFile.ts  # jira: spreads the jiraProjects key (t3ProjectFileJira.ts); a t3.json key must live inside the upstream struct
 packages/provider-acp/src/server/adapter.ts  # direnv: wrap the flavor with withDirenvRuntime (direnvRuntime.ts) so every ACP runtime starts with the direnv environment
 packages/provider-core/package.json  # direnv: export ./server/DirenvEnvironment
 packages/provider-opencode/src/server/adapter.ts  # direnv: resolve the OpenCode server environment through resolveCurrentProviderEnvironment
 packages/shared/package.json  # identity: subpath exports for identityAvatar, identityMap, sourceAttribution; jira: subpath exports for integrationThreadView, jiraBareKeyProjects, turnResponseStats (server, bot, extension); discord + vscode: discordProjectTopic, integrationPendingInteractions, integrationTasks, sessionWake exports shared by the bot, the extension and the server MCP tool; github + discord: providerModelSelection, shared by the bot and the GitHub PR bridge
-pnpm-lock.yaml  # vscode + discord: importers for the fork-only apps/vscode and apps/discord-bot, and the patched dfx catalog entry; regenerate with CI= pnpm install --no-frozen-lockfile, never take a side
+pnpm-lock.yaml  # vscode + discord: importers for the fork-only apps/vscode and apps/discord-bot, and the patched dfx catalog entry; regenerate with CI= pnpm install --no-frozen-lockfile, never take a side; bot-browser: playwright-core for apps/discord-bot
 pnpm-workspace.yaml  # discord: dfx catalog entry and its patchedDependencies line (patches/dfx@1.0.16.patch)
 scripts/install.test.ts  # tooling: SHELL "" instead of unset; where /bin/sh is bash (Arch), bash refills an unset SHELL from the login shell. Upstream candidate, drop once upstream has it
 scripts/release-smoke.ts  # discord: adds apps/discord-bot/package.json to the smoke workspace so the dfx patch in pnpm-workspace.yaml is used

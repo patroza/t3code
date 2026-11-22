@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "browser-profile": "node src/browserProfileCli.ts",
     "dev": "node --watch src/main.ts",
     "dev:teams": "node --watch src/teams-main.ts",
     "start": "node src/main.ts",
@@ -20,6 +21,7 @@
     "@t3tools/shared": "workspace:*",
     "dfx": "catalog:",
     "effect": "catalog:",
+    "playwright-core": "1.64.1",
     "yaml": "catalog:"
   },
   "devDependencies": {

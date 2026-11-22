@@ -280,6 +280,7 @@ import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
 import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { makeIdentityWsSession } from "./identity/identityWsHandlers.ts";
+import { makePreviewAutomationHostWsHandlers } from "./preview/forkPreviewAutomationHost.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import { isNetworkPath } from "@t3tools/shared/path";
@@ -1999,6 +2000,7 @@ export const layerWsRpc = (
       const identitySession = yield* makeIdentityWsSession(currentSessionId);
       const handlers = ServerWsRpcGroup.of({
         ...identitySession.handlers,
+        ...(yield* makePreviewAutomationHostWsHandlers()),
         [WS_METHODS.issuesList]: (input) => issues.list(input),
         [WS_METHODS.issuesDetail]: (input) => issues.detail(input),
         [WS_METHODS.issuesComments]: (input) => issues.comments(input),
