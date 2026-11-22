@@ -74,3 +74,4 @@ packages/provider-acp/src/server/adapter.ts  # direnv: wrap the flavor with with
 packages/provider-core/package.json  # direnv: export ./server/DirenvEnvironment
 packages/provider-opencode/src/server/adapter.ts  # direnv: resolve the OpenCode server environment through resolveCurrentProviderEnvironment
 packages/shared/package.json  # identity: subpath exports for identityAvatar, identityMap, sourceAttribution
+pnpm-lock.yaml  # workspace: importers for fork-only apps (apps/vscode); regenerate with CI= pnpm install --no-frozen-lockfile, never take a side
