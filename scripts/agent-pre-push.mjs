@@ -101,7 +101,7 @@ export const runAgentShipGate = async (opts = {}) => {
     run("vpr typecheck", ["vpr", "typecheck"], { cwd: root, env });
   }
 
-  run("vp run test", ["vp", "run", "test"], { cwd: root, env });
+  run("vp run test", ["vp", "run", "test"], { cwd: root, env: testEnv(env) });
 
   if (headSha) {
     try {
@@ -148,4 +148,15 @@ if (invokedAs === thisFile) {
 
   await runAgentShipGate({ root, scope });
   NodeProcess.exit(0);
+}
+
+// Tests run as CI does: .envrc's GH_REPO points gh-backed tests at the fork, and asar skips
+// sources under a dot-directory, which a TMPDIR such as ~/.cache/tmp puts every fixture in.
+export function testEnv(env, platform = NodeProcess.platform) {
+  const next = { ...env };
+  delete next.GH_REPO;
+  if (next.TMPDIR && /(^|[/\\])\./.test(next.TMPDIR) && platform !== "win32") {
+    next.TMPDIR = "/tmp";
+  }
+  return next;
 }
