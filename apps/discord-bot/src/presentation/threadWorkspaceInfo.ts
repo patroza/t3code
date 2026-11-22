@@ -1,5 +1,5 @@
 import { ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE } from "@t3tools/contracts";
-import type { IntegrationThreadView } from "../shared/integrationThreadView.ts";
+import type { IntegrationThreadView } from "@t3tools/shared/integrationThreadView";
 
 /** A missing path during preparation is not evidence that the thread runs locally. */
 export function threadWorkspaceInfo(thread: IntegrationThreadView) {

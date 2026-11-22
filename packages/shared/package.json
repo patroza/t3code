@@ -203,6 +203,18 @@
       "types": "./src/turnResponseStats.ts",
       "import": "./src/turnResponseStats.ts"
     },
+    "./integrationPendingInteractions": {
+      "types": "./src/integrationPendingInteractions.ts",
+      "import": "./src/integrationPendingInteractions.ts"
+    },
+    "./integrationTasks": {
+      "types": "./src/integrationTasks.ts",
+      "import": "./src/integrationTasks.ts"
+    },
+    "./sessionWake": {
+      "types": "./src/sessionWake.ts",
+      "import": "./src/sessionWake.ts"
+    },
     "./projectScripts": {
       "types": "./src/projectScripts.ts",
       "import": "./src/projectScripts.ts"

@@ -1,6 +1,6 @@
 // @effect-diagnostics globalFetch:off globalFetchInEffect:off unknownInEffectCatch:off anyUnknownInErrorContext:off outdatedApi:off
 import type { ProjectId, ThreadId } from "@t3tools/contracts";
-import { readJiraBareKeyProjects } from "../shared/jiraBareKeyProjects.ts";
+import { readJiraBareKeyProjects } from "@t3tools/shared/jiraBareKeyProjects";
 import { DiscordConfig, DiscordREST } from "dfx";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";

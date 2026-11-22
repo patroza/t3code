@@ -1,8 +1,11 @@
-import type { IntegrationLatestTurn, IntegrationSession } from "./lib/integrationThreadView.ts";
+import type {
+  IntegrationLatestTurn,
+  IntegrationSession,
+} from "@t3tools/shared/integrationThreadView";
 type OrchestrationLatestTurnState = IntegrationLatestTurn["state"];
 type OrchestrationSessionStatus = IntegrationSession["status"];
 import { shouldShowPlanReadyStatus } from "./lib/proposedPlan.ts";
-import { sessionNeedsWakeUp } from "./lib/sessionWake.ts";
+import { sessionNeedsWakeUp } from "@t3tools/shared/sessionWake";
 
 export type ThreadDisplayStatusKind =
   | "working"

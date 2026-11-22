@@ -2,7 +2,7 @@ import { hasPendingConversationStart } from "./nativeConversation.ts";
 import type {
   IntegrationThreadView as OrchestrationThread,
   IntegrationThreadShellView as OrchestrationThreadShell,
-} from "./lib/integrationThreadView.ts";
+} from "@t3tools/shared/integrationThreadView";
 /* oxlint-disable unicorn/require-post-message-target-origin -- VS Code Webview.postMessage is not Window.postMessage. */
 // @effect-diagnostics globalTimers:off globalDate:off cryptoRandomUUID:off
 import type {
@@ -21,12 +21,12 @@ import {
 } from "./lib/proposedPlan.ts";
 import { resolveChangeRequestIndicator } from "./lib/changeRequest.ts";
 import { composePrompt, type TextContext } from "./editorContext.ts";
-import { derivePendingInteractions } from "./pendingInteractions.ts";
+import { derivePendingInteractions } from "@t3tools/shared/integrationPendingInteractions";
 import { fitPromptStashImages } from "./promptStashModel.ts";
 import { PromptStashStore, type PromptStashEntry } from "./promptStashStore.ts";
 import type { T3Client } from "./t3Client.ts";
 import { resolveThreadDisplayStatus } from "./threadStatus.ts";
-import { presentTasks } from "./taskPresentation.ts";
+import { presentTasks } from "@t3tools/shared/integrationTasks";
 import { presentToolCalls } from "./toolPresentation.ts";
 import { presentResolvedUserInputs } from "./userInputPresentation.ts";
 import { deriveContextWindowUsage } from "./usagePresentation.ts";

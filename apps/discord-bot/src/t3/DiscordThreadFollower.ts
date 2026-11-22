@@ -1,7 +1,7 @@
 import {
   integrationThreadView,
   type IntegrationThreadView,
-} from "../shared/integrationThreadView.ts";
+} from "@t3tools/shared/integrationThreadView";
 // @effect-diagnostics anyUnknownInErrorContext:off missingEffectError:off
 /** Retains native V2 projections and resumes stream cursors across disconnects.
  * Discord presentation is derived only for delivery; reducers and durable warm

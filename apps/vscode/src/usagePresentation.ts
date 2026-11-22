@@ -1,4 +1,4 @@
-import type { IntegrationActivity as OrchestrationThreadActivity } from "./lib/integrationThreadView.ts";
+import type { IntegrationActivity as OrchestrationThreadActivity } from "@t3tools/shared/integrationThreadView";
 
 export interface ContextWindowUsage {
   readonly usedTokens: number;

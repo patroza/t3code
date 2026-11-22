@@ -1,7 +1,7 @@
 import {
   integrationThreadView,
   type IntegrationThreadView as OrchestrationThread,
-} from "../shared/integrationThreadView.ts";
+} from "@t3tools/shared/integrationThreadView";
 // @effect-diagnostics globalErrorInEffectCatch:off globalErrorInEffectFailure:off preferSchemaOverJson:off tryCatchInEffectGen:off missingEffectError:off nodeBuiltinImport:off globalDate:off globalRandom:off globalDateInEffect:off globalJsonInEffect:off
 /**
  * Persist the native V2 projection and sequence so Discord resumes after restart without refetching the full HTTP tip.

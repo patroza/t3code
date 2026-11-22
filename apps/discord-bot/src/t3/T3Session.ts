@@ -3,7 +3,7 @@ import {
   integrationThreadShellView,
   type IntegrationThreadView as OrchestrationThread,
   type IntegrationThreadShellView as OrchestrationThreadShell,
-} from "../shared/integrationThreadView.ts";
+} from "@t3tools/shared/integrationThreadView";
 // @effect-diagnostics globalDate:off globalFetch:off globalFetchInEffect:off globalTimers:off globalErrorInEffectCatch:off globalErrorInEffectFailure:off anyUnknownInErrorContext:off missingEffectContext:off missingEffectError:off preferSchemaOverJson:off tryCatchInEffectGen:off deterministicKeys:off extendsNativeError:off
 import {
   type ClientSourceHint,

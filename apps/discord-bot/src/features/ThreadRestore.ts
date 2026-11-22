@@ -1,11 +1,11 @@
-import { type IntegrationThreadShellView as OrchestrationThreadShell } from "../shared/integrationThreadView.ts";
+import { type IntegrationThreadShellView as OrchestrationThreadShell } from "@t3tools/shared/integrationThreadView";
 // @effect-diagnostics anyUnknownInErrorContext:off missingEffectContext:off missingEffectError:off
 /**
  * Rehydrate bridges with active/pending shells, interrupted sessions, pending Discord cleanup, or cursor lag.
  * Scan newest activity first (cap 50) and run at most four ensure operations concurrently.
  */
 import type { ThreadId } from "@t3tools/contracts";
-import { sessionNeedsWakeUp } from "../shared/sessionWake.ts";
+import { sessionNeedsWakeUp } from "@t3tools/shared/sessionWake";
 import { DiscordREST } from "dfx";
 import * as Effect from "effect/Effect";
 

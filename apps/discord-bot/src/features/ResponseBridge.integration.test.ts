@@ -13,7 +13,7 @@ import * as Stream from "effect/Stream";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as ConfigProvider from "effect/ConfigProvider";
-import { IntegrationThreadView } from "../shared/integrationThreadView.ts";
+import { IntegrationThreadView } from "@t3tools/shared/integrationThreadView";
 import {
   EventId,
   IdentityUsername,

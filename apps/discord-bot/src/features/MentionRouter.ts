@@ -1,4 +1,4 @@
-import { type IntegrationThreadView as OrchestrationThread } from "../shared/integrationThreadView.ts";
+import { type IntegrationThreadView as OrchestrationThread } from "@t3tools/shared/integrationThreadView";
 // @effect-diagnostics anyUnknownInErrorContext:off missingEffectContext:off globalDate:off globalErrorInEffectFailure:off globalErrorInEffectCatch:off outdatedApi:off globalFetchInEffect:off
 import {
   MessageId,
@@ -7,7 +7,7 @@ import {
   type ThreadId,
   type UploadChatAttachment,
 } from "@t3tools/contracts";
-import { readJiraBareKeyProjects } from "../shared/jiraBareKeyProjects.ts";
+import { readJiraBareKeyProjects } from "@t3tools/shared/jiraBareKeyProjects";
 import { DISCORD_LINK_REQUEST_MARKER } from "../shared/providerModelSelection.ts";
 import { makeKeyedDrainableWorker } from "../shared/KeyedDrainableWorker.ts";
 import { makeInteractionBackground } from "./interactionBackground.ts";
