@@ -96,6 +96,7 @@ export const assertCheckoutIdle = Effect.fn("sharedCheckoutGuard.assertCheckoutI
     operation,
     command: "git checkout",
     cwd,
+    failureKind: "unknown",
     detail: describeBusyCheckout(titles),
   });
 });
