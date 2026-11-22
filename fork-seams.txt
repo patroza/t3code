@@ -32,6 +32,7 @@ apps/mobile/src/persistence/mobile-preferences.ts  # identity: persists the Mine
 apps/server/src/auth/EnvironmentAuth.ts  # identity + mcp-tokens: exports MCP_CLIENT_SUBJECT; issueSession passes a runtimeModeCeiling through
 apps/server/src/auth/RpcAuthorization.ts  # identity: spreads IDENTITY_READ_RPC_SCOPES into RPC_REQUIRED_SCOPES
 apps/server/src/cli/auth.ts  # mcp-tokens: --runtime-mode-ceiling flag on auth session issue (cli/mcpClientTokenCeiling.ts)
+apps/server/src/issue/IssueTrackerRegistry.ts  # jira: registers the Jira tracker when a site URL is configured (jira/JiraIssueDriver.ts)
 apps/server/src/mcp/McpHttpServer.ts  # mcp-tools: merges fork-registered toolkits (mcp/forkMcpTools.ts) into the served MCP layer, beside layerTools so upstream budget/mock tests do not see them
 apps/server/src/mcp/McpToolAccess.ts  # identity: writing tools require an identity claim on outside MCP clients (identity/mcpClientClaim.ts)
 apps/server/src/mcp/OrchestratorMcpService.ts  # identity: MCP-created threads and sends carry the caller's source (sourceRefForMcpCaller)
@@ -74,6 +75,7 @@ packages/contracts/src/clientRpcPermissions.ts  # identity: spreads IDENTITY_GUA
 packages/contracts/src/index.ts  # identity: exports identity.ts and identityRpc.ts
 packages/contracts/src/orchestrationV2.ts  # identity: spreads identity field sets (identity.ts) into thread/message/turn-item/command schemas and adds the internal thread.attribution.repair command; optional fields must live inside the upstream structs
 packages/contracts/src/rpc.ts  # identity: merges IdentityRpcGroup (identityRpc.ts) into WsRpcGroup
+packages/contracts/src/t3ProjectFile.ts  # jira: spreads the jiraProjects key (t3ProjectFileJira.ts); a t3.json key must live inside the upstream struct
 packages/provider-acp/src/server/adapter.ts  # direnv: wrap the flavor with withDirenvRuntime (direnvRuntime.ts) so every ACP runtime starts with the direnv environment
 packages/provider-core/package.json  # direnv: export ./server/DirenvEnvironment
 packages/provider-opencode/src/server/adapter.ts  # direnv: resolve the OpenCode server environment through resolveCurrentProviderEnvironment
