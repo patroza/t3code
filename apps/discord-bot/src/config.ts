@@ -5,6 +5,7 @@ import {
   type RuntimeMode,
 } from "@t3tools/contracts";
 import { resolveProviderModelSelection } from "./shared/providerModelSelection.ts";
+import { jiraSiteHostFromUrl } from "./store/ServerWorkItemJoin.ts";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -60,6 +61,11 @@ export interface DiscordBotConfig {
    * (e.g. `https://example.atlassian.net`).
    */
   readonly jiraBrowseBaseUrl: string | undefined;
+  /**
+   * Host of the Jira site server-side thread links carry, from the server's
+   * `T3CODE_JIRA_SITE_URL` / `T3CODE_JIRA_URL` (or `JIRA_URL`), else the browse base.
+   */
+  readonly jiraSiteHost: string | undefined;
   /** Optional Microsoft Teams intake module (Graph channel polling → Discord/T3). */
   readonly teamsEnabled: boolean;
   readonly teamsTenantId: string | undefined;
@@ -162,6 +168,13 @@ export const DiscordBotConfig: Effect.Effect<DiscordBotConfig, Config.ConfigErro
         return undefined;
       }),
     );
+    const jiraSiteUrl = yield* Config.String("T3CODE_JIRA_SITE_URL").pipe(
+      Config.orElse(() => Config.String("T3CODE_JIRA_URL")),
+      Config.orElse(() => Config.String("JIRA_URL")),
+      Config.option,
+      Config.map(Option.getOrUndefined),
+    );
+    const jiraSiteHost = jiraSiteHostFromUrl(jiraSiteUrl) ?? jiraSiteHostFromUrl(jiraBrowseBaseUrl);
     const teamsEnabled = yield* Config.Boolean("TEAMS_ENABLED").pipe(Config.withDefault(false));
     const teamsTenantId = yield* Config.String("TEAMS_TENANT_ID").pipe(
       Config.option,
@@ -219,6 +232,7 @@ export const DiscordBotConfig: Effect.Effect<DiscordBotConfig, Config.ConfigErro
       alertProcessRulesPath,
       stateSqlitePath,
       jiraBrowseBaseUrl,
+      jiraSiteHost,
       teamsEnabled,
       teamsTenantId,
       teamsClientId,

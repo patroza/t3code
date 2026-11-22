@@ -1,194 +1,126 @@
-// @effect-diagnostics nodeBuiltinImport:off
-import type { ProjectId, ThreadId } from "@t3tools/contracts";
+import { IssueTrackerKind, ProjectId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
-import * as NodeFS from "node:fs";
-import * as NodeOS from "node:os";
-import * as NodePath from "node:path";
 
-import { normalizeThreadLinkInput, type ThreadLink } from "./ThreadLinkStore.ts";
 import {
   findUniqueExternalWorkItemThread,
+  jiraSiteHostFromUrl,
   normalizeGitHubPullRequestRef,
-  normalizeJiraIssueKey,
-  resolveUniqueT3ThreadIdForWorkItems,
-  serverWorkItemsPathFromStateSqlite,
+  type WorkItemThread,
 } from "./ServerWorkItemJoin.ts";
 
-function discordLink(t3ThreadId: string, status: "active" | "tombstone" = "active"): ThreadLink {
-  return normalizeThreadLinkInput({
-    discordThreadId: `discord-${t3ThreadId}`,
-    t3ThreadId: t3ThreadId as ThreadId,
-    projectId: "project-1" as ProjectId,
-    channelId: "channel-1",
-    guildId: "guild-1",
-    createdAt: "2026-07-30T00:00:00.000Z",
-    status,
-  });
+const linkedAt = "2026-07-30T00:00:00.000Z";
+
+function jiraLink(key: string, host = "example.atlassian.net") {
+  return {
+    tracker: IssueTrackerKind.make("jira"),
+    host,
+    scope: key.slice(0, key.lastIndexOf("-")),
+    key,
+    projectId: ProjectId.make("project-1"),
+    url: `https://${host}/browse/${key}`,
+    source: "agent" as const,
+    linkedAt,
+    displayKey: key,
+    title: key,
+  };
 }
 
-describe("ServerWorkItemJoin", () => {
-  it("normalizes keys and PR refs", () => {
-    expect(normalizeJiraIssueKey("sa-401")).toBe("SA-401");
-    expect(normalizeJiraIssueKey("UTF-8")).toBeNull();
+function prLink(
+  repository: string,
+  number: number,
+  source: WorkItemThread["pullRequests"][number]["source"] = "created",
+) {
+  return {
+    host: "github.com",
+    repository,
+    number,
+    url: `https://github.com/${repository}/pull/${number}`,
+    source,
+    linkedAt,
+    snapshot: null,
+    stack: null,
+  };
+}
+
+function thread(
+  id: string,
+  links: {
+    readonly issues?: WorkItemThread["issues"];
+    readonly pullRequests?: WorkItemThread["pullRequests"];
+    readonly deletedAt?: string | null;
+  },
+): WorkItemThread {
+  return {
+    id: ThreadId.make(id),
+    deletedAt: links.deletedAt ?? null,
+    issues: links.issues ?? [],
+    pullRequests: links.pullRequests ?? [],
+  };
+}
+
+const host = jiraSiteHostFromUrl("https://Example.atlassian.net/");
+
+describe("findUniqueExternalWorkItemThread", () => {
+  it("normalizes PR refs and the Jira site host", () => {
     expect(normalizeGitHubPullRequestRef("https://github.com/Acme/Repo/pull/9")).toBe(
       "github.com/acme/repo/pull/9",
     );
+    expect(normalizeGitHubPullRequestRef("acme/repo#9")).toBe("github.com/acme/repo/pull/9");
+    expect(host).toBe("example.atlassian.net");
+    expect(jiraSiteHostFromUrl("not a url")).toBeUndefined();
   });
 
-  it("joins unique server store hits and fails closed on ambiguity", () => {
-    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "work-item-join-"));
-    const filePath = NodePath.join(dir, "thread-work-items.json");
-    NodeFS.writeFileSync(
-      filePath,
-      JSON.stringify({
-        version: 1,
-        records: [
-          {
-            threadId: "t-jira",
-            jiraIssueKeys: ["SA-401"],
-            githubPullRequests: [],
-            sources: ["jira-webhook"],
-            updatedAt: "2026-07-30T00:00:00.000Z",
-          },
-          {
-            threadId: "t-other",
-            jiraIssueKeys: ["SA-402"],
-            githubPullRequests: ["github.com/acme/repo/pull/1"],
-            sources: ["github-webhook"],
-            updatedAt: "2026-07-30T00:00:00.000Z",
-          },
-        ],
-      }),
-    );
+  it("finds the one thread linked to a Jira key and fails closed on ambiguity", () => {
+    const threads = [
+      thread("t-jira", { issues: [jiraLink("SA-401")] }),
+      thread("t-other", { issues: [jiraLink("SA-402")] }),
+    ];
+    const find = (jiraIssueKeys: ReadonlyArray<string>) =>
+      findUniqueExternalWorkItemThread({ jiraIssueKeys, prUrls: [], threads, jiraSiteHost: host });
 
-    expect(
-      resolveUniqueT3ThreadIdForWorkItems({
-        jiraIssueKeys: ["SA-401"],
-        prUrls: [],
-        discordLinks: [],
-        serverWorkItemsPath: filePath,
-      }),
-    ).toBe("t-jira");
-
-    expect(
-      resolveUniqueT3ThreadIdForWorkItems({
-        jiraIssueKeys: ["SA-401", "SA-402"],
-        prUrls: [],
-        discordLinks: [],
-        serverWorkItemsPath: filePath,
-      }),
-    ).toBeNull();
-
-    expect(serverWorkItemsPathFromStateSqlite("/var/lib/t3/userdata/state.sqlite")).toBe(
-      "/var/lib/t3/userdata/thread-work-items.json",
-    );
+    expect(find(["sa-401"])).toBe("t-jira");
+    expect(find(["SA-401", "SA-402"])).toBeNull();
+    expect(find(["SA-999"])).toBeNull();
+    expect(find(["UTF-8"])).toBeNull();
   });
 
-  it("never joins a server work-item thread that already has an active Discord link", () => {
-    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "work-item-join-"));
-    const filePath = NodePath.join(dir, "thread-work-items.json");
-    NodeFS.writeFileSync(
-      filePath,
-      JSON.stringify({
-        version: 1,
-        records: [
-          {
-            threadId: "t-pr",
-            jiraIssueKeys: [],
-            githubPullRequests: ["https://github.com/acme/repo/pull/9"],
-            sources: ["github-webhook"],
-          },
-        ],
-      }),
-    );
-
-    expect(
-      resolveUniqueT3ThreadIdForWorkItems({
-        jiraIssueKeys: [],
-        prUrls: ["https://github.com/acme/repo/pull/9"],
-        discordLinks: [discordLink("t-pr")],
-        serverWorkItemsPath: filePath,
-      }),
-    ).toBeNull();
-
+  it("matches a bare key only on the configured Jira site", () => {
+    const threads = [
+      thread("t-elsewhere", { issues: [jiraLink("SA-401", "other.atlassian.net")] }),
+    ];
     expect(
       findUniqueExternalWorkItemThread({
-        jiraIssueKeys: [],
-        prUrls: ["https://github.com/acme/repo/pull/9"],
-        serverWorkItemsPath: filePath,
+        jiraIssueKeys: ["SA-401"],
+        prUrls: [],
+        threads,
+        jiraSiteHost: host,
       }),
-    ).toBe("t-pr");
-
+    ).toBeNull();
     expect(
-      resolveUniqueT3ThreadIdForWorkItems({
-        jiraIssueKeys: [],
-        prUrls: ["https://github.com/acme/repo/pull/9"],
-        discordLinks: [discordLink("t-pr", "tombstone")],
-        serverWorkItemsPath: filePath,
+      findUniqueExternalWorkItemThread({
+        jiraIssueKeys: ["SA-401"],
+        prUrls: [],
+        threads,
+        jiraSiteHost: undefined,
       }),
-    ).toBe("t-pr");
+    ).toBe("t-elsewhere");
   });
 
-  it("joins a webhook association and ignores a Discord-only row", () => {
-    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "work-item-join-"));
-    const filePath = NodePath.join(dir, "thread-work-items.json");
-    NodeFS.writeFileSync(
-      filePath,
-      JSON.stringify({
-        version: 1,
-        records: [
-          {
-            threadId: "t-330",
-            jiraIssueKeys: ["SA-465"],
-            githubPullRequests: [],
-            sources: ["discord"],
-          },
-          {
-            threadId: "t-jira",
-            jiraIssueKeys: ["SA-465"],
-            githubPullRequests: [],
-            sources: ["jira-webhook"],
-          },
-        ],
-      }),
-    );
+  it("finds a thread by linked pull request and skips dismissed and deleted links", () => {
+    const find = (threads: ReadonlyArray<WorkItemThread>) =>
+      findUniqueExternalWorkItemThread({
+        jiraIssueKeys: [],
+        prUrls: ["https://github.com/Acme/Repo/pull/9"],
+        threads,
+        jiraSiteHost: host,
+      });
 
+    expect(find([thread("t-pr", { pullRequests: [prLink("acme/repo", 9)] })])).toBe("t-pr");
     expect(
-      resolveUniqueT3ThreadIdForWorkItems({
-        jiraIssueKeys: ["SA-465"],
-        prUrls: [],
-        discordLinks: [],
-        serverWorkItemsPath: filePath,
-      }),
-    ).toBe("t-jira");
-
-    NodeFS.writeFileSync(
-      filePath,
-      JSON.stringify({
-        version: 1,
-        records: [
-          {
-            threadId: "t-330",
-            jiraIssueKeys: ["SA-465"],
-            githubPullRequests: [],
-            sources: ["discord"],
-          },
-        ],
-      }),
-    );
+      find([thread("t-pr", { pullRequests: [prLink("acme/repo", 9, "stack-dismissed")] })]),
+    ).toBeNull();
     expect(
-      resolveUniqueT3ThreadIdForWorkItems({
-        jiraIssueKeys: ["SA-465"],
-        prUrls: [],
-        discordLinks: [
-          {
-            ...discordLink("t-330", "tombstone"),
-            linkedJiraIssueKeys: ["SA-465"],
-            backfillJiraIssueKeys: [],
-          },
-        ],
-        serverWorkItemsPath: filePath,
-      }),
+      find([thread("t-pr", { pullRequests: [prLink("acme/repo", 9)], deletedAt: linkedAt })]),
     ).toBeNull();
   });
 });

@@ -1,7 +1,4 @@
-import {
-  applyServerConfigProjection,
-  type RpcSession,
-} from "@t3tools/client-runtime/rpc/session-fork";
+import { applyServerConfigProjection, type RpcSession } from "@t3tools/client-runtime/rpc";
 import type { ServerConfig } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";

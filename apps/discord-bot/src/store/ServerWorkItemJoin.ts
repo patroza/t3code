@@ -1,23 +1,16 @@
-// @effect-diagnostics nodeBuiltinImport:off
-/** Find T3 threads by Jira/GitHub work-item rows written by server webhooks, not mentions or pin backfill.
- * Discord links to the existing conversation only when asked; skip threads already linked to Discord.
+/** Find the T3 thread a Jira issue or GitHub pull request is linked to on the server.
+ * Links are upstream thread issue / pull request links (Jira webhook, agent, or manual),
+ * read from the shell snapshot. Keys a Discord message mentions never create one.
  */
-import * as NodeFS from "node:fs";
-import * as NodePath from "node:path";
-
 import type { ThreadId } from "@t3tools/contracts";
-import * as Effect from "effect/Effect";
+import type { IntegrationThreadShellView } from "@t3tools/shared/integrationThreadView";
 
-import type { ThreadLink } from "./ThreadLinkStore.ts";
+import { normalizeJiraIssueKey } from "../presentation/jiraLinks.ts";
 
-const FALSE_POSITIVE_JIRA_KEYS = new Set(["UTF-8", "ISO-8601", "HTTP-1", "HTTP-2", "TLS-1"]);
-
-export function normalizeJiraIssueKey(raw: string): string | null {
-  const key = raw.trim().toUpperCase();
-  if (!/^[A-Z][A-Z0-9]{1,9}-\d{1,7}$/u.test(key)) return null;
-  if (FALSE_POSITIVE_JIRA_KEYS.has(key)) return null;
-  return key;
-}
+export type WorkItemThread = Pick<
+  IntegrationThreadShellView,
+  "id" | "deletedAt" | "issues" | "pullRequests"
+>;
 
 export function normalizeGitHubPullRequestRef(raw: string): string | null {
   const trimmed = raw.trim();
@@ -35,144 +28,56 @@ export function normalizeGitHubPullRequestRef(raw: string): string | null {
   return null;
 }
 
-type ServerWorkItemRecord = {
-  readonly threadId: string;
-  readonly jiraIssueKeys?: ReadonlyArray<string>;
-  readonly githubPullRequests?: ReadonlyArray<string>;
-  readonly sources?: ReadonlyArray<string>;
-};
-
-const EXTERNAL_WORK_ITEM_SOURCES = new Set(["jira-webhook", "github-webhook"]);
-
-function hasExternalWorkItemSource(sources: ReadonlyArray<string> | undefined): boolean {
-  if (!Array.isArray(sources)) return false;
-  return sources.some(
-    (source) =>
-      typeof source === "string" && EXTERNAL_WORK_ITEM_SOURCES.has(source.trim().toLowerCase()),
-  );
-}
-
-function readServerWorkItemRecords(filePath: string): ReadonlyArray<ServerWorkItemRecord> {
+/** The host a server-side Jira thread link carries; `undefined` when no site URL parses. */
+export function jiraSiteHostFromUrl(siteUrl: string | undefined): string | undefined {
+  if (siteUrl === undefined || siteUrl.trim().length === 0) return undefined;
   try {
-    const raw = NodeFS.readFileSync(filePath, "utf8");
-    const parsed: unknown = JSON.parse(raw);
-    if (parsed === null || typeof parsed !== "object") return [];
-    const records = (parsed as { records?: unknown }).records;
-    if (!Array.isArray(records)) return [];
-    return records.filter(
-      (row): row is ServerWorkItemRecord =>
-        row !== null &&
-        typeof row === "object" &&
-        typeof (row as ServerWorkItemRecord).threadId === "string",
-    );
+    return new URL(siteUrl.trim()).host.toLowerCase();
   } catch {
-    return [];
+    return undefined;
   }
 }
 
-function externalWorkItemThreadIds(input: {
-  readonly jiraIssueKeys: ReadonlyArray<string>;
-  readonly prUrls: ReadonlyArray<string>;
-  readonly serverWorkItemsPath: string;
-  readonly excludedThreadIds?: ReadonlySet<string>;
-}): Set<string> {
-  const jiraKeys = [
-    ...new Set(
-      input.jiraIssueKeys
-        .map((key) => normalizeJiraIssueKey(key))
-        .filter((key): key is string => key !== null),
-    ),
-  ];
-  const prRefs = [
-    ...new Set(
-      input.prUrls
-        .map((url) => normalizeGitHubPullRequestRef(url))
-        .filter((ref): ref is string => ref !== null),
-    ),
-  ];
-  if (jiraKeys.length === 0 && prRefs.length === 0) return new Set();
-
-  const threadIds = new Set<string>();
-  const serverRecords = readServerWorkItemRecords(input.serverWorkItemsPath);
-  for (const record of serverRecords) {
-    if (!hasExternalWorkItemSource(record.sources)) continue;
-    if (input.excludedThreadIds?.has(record.threadId) === true) continue;
-    const recordKeys = new Set(
-      (record.jiraIssueKeys ?? [])
-        .map((key) => normalizeJiraIssueKey(key))
-        .filter((key): key is string => key !== null),
-    );
-    const recordPrs = new Set(
-      (record.githubPullRequests ?? [])
-        .map((url) => normalizeGitHubPullRequestRef(url))
-        .filter((ref): ref is string => ref !== null),
-    );
-    const jiraHit = jiraKeys.some((key) => recordKeys.has(key));
-    const prHit = prRefs.some((ref) => recordPrs.has(ref));
-    if (jiraHit || prHit) threadIds.add(record.threadId);
-  }
-  return threadIds;
-}
-
-function uniqueThreadId(threadIds: ReadonlySet<string>): ThreadId | null {
-  if (threadIds.size !== 1) return null;
-  const [only] = threadIds;
-  return (only ?? null) as ThreadId | null;
+function normalizedSet(
+  values: ReadonlyArray<string>,
+  normalize: (value: string) => string | null,
+): ReadonlySet<string> {
+  return new Set(values.map(normalize).filter((value): value is string => value !== null));
 }
 
 /**
- * Return a unique T3 thread id if the given Jira keys / PR URLs map to exactly one thread
- * that Jira or GitHub recorded. Fail closed on zero or many matches.
- * Discord-only rows do not count. A thread that already has an active Discord link
- * is excluded so a second Discord thread is not attached to it.
- */
-export function resolveUniqueT3ThreadIdForWorkItems(input: {
-  readonly jiraIssueKeys: ReadonlyArray<string>;
-  readonly prUrls: ReadonlyArray<string>;
-  readonly discordLinks: ReadonlyArray<ThreadLink>;
-  readonly serverWorkItemsPath: string;
-}): ThreadId | null {
-  const discordLinkedThreadIds = new Set<string>(
-    input.discordLinks
-      .filter((link) => link.status === "active" && (link.sourceKind ?? "discord") === "discord")
-      .map((link) => link.t3ThreadId),
-  );
-  return uniqueThreadId(
-    externalWorkItemThreadIds({
-      jiraIssueKeys: input.jiraIssueKeys,
-      prUrls: input.prUrls,
-      serverWorkItemsPath: input.serverWorkItemsPath,
-      excludedThreadIds: discordLinkedThreadIds,
-    }),
-  );
-}
-
-/**
- * The one T3 thread Jira or GitHub recorded for these keys, including a thread
- * that already has a Discord home. Null when none or more than one match.
- * Discord uses this to link the existing conversation instead of joining it.
+ * The one live thread linked to any of these Jira keys or PR URLs, including a thread that
+ * already has a Discord home. Null when none or more than one match.
+ * Jira links match on key, and on the Jira site host when it is known, since a bare key
+ * names an issue only within one site.
  */
 export function findUniqueExternalWorkItemThread(input: {
   readonly jiraIssueKeys: ReadonlyArray<string>;
   readonly prUrls: ReadonlyArray<string>;
-  readonly serverWorkItemsPath: string;
+  readonly threads: ReadonlyArray<WorkItemThread>;
+  readonly jiraSiteHost: string | undefined;
 }): ThreadId | null {
-  return uniqueThreadId(
-    externalWorkItemThreadIds({
-      jiraIssueKeys: input.jiraIssueKeys,
-      prUrls: input.prUrls,
-      serverWorkItemsPath: input.serverWorkItemsPath,
-    }),
-  );
-}
+  const jiraKeys = normalizedSet(input.jiraIssueKeys, normalizeJiraIssueKey);
+  const prRefs = normalizedSet(input.prUrls, normalizeGitHubPullRequestRef);
+  if (jiraKeys.size === 0 && prRefs.size === 0) return null;
 
-export function serverWorkItemsPathFromStateSqlite(stateSqlitePath: string): string {
-  return NodePath.join(NodePath.dirname(stateSqlitePath), "thread-work-items.json");
+  const matches = new Set<ThreadId>();
+  for (const thread of input.threads) {
+    if (thread.deletedAt !== null) continue;
+    const jiraHit = thread.issues.some(
+      (link) =>
+        link.tracker === "jira" &&
+        (input.jiraSiteHost === undefined || link.host.toLowerCase() === input.jiraSiteHost) &&
+        jiraKeys.has(link.key.trim().toUpperCase()),
+    );
+    const prHit = thread.pullRequests.some(
+      (link) =>
+        link.source !== "stack-dismissed" &&
+        prRefs.has(`${link.host}/${link.repository}/pull/${link.number}`.toLowerCase()),
+    );
+    if (jiraHit || prHit) matches.add(thread.id);
+  }
+  if (matches.size !== 1) return null;
+  const [only] = matches;
+  return only ?? null;
 }
-
-export const resolveUniqueT3ThreadIdForWorkItemsEffect = (input: {
-  readonly jiraIssueKeys: ReadonlyArray<string>;
-  readonly prUrls: ReadonlyArray<string>;
-  readonly discordLinks: ReadonlyArray<ThreadLink>;
-  readonly serverWorkItemsPath: string;
-}) => Effect.sync(() => resolveUniqueT3ThreadIdForWorkItems(input));

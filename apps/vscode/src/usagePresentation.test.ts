@@ -1,4 +1,4 @@
-import type { IntegrationActivity as OrchestrationThreadActivity } from "./lib/integrationThreadView.ts";
+import type { IntegrationActivity as OrchestrationThreadActivity } from "@t3tools/shared/integrationThreadView";
 import { describe, expect, it } from "vite-plus/test";
 
 import { deriveContextWindowUsage } from "./usagePresentation.ts";

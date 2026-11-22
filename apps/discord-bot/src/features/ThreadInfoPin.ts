@@ -1,6 +1,6 @@
 // @effect-diagnostics globalFetch:off globalFetchInEffect:off unknownInEffectCatch:off anyUnknownInErrorContext:off outdatedApi:off
 import type { ProjectId, ThreadId } from "@t3tools/contracts";
-import { readJiraBareKeyProjects } from "../shared/jiraBareKeyProjects.ts";
+import { readJiraBareKeyProjects } from "@t3tools/shared/jiraBareKeyProjects";
 import { DiscordConfig, DiscordREST } from "dfx";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
@@ -612,7 +612,7 @@ export const upsertThreadInfoPin = Effect.fn("ThreadInfoPin.upsertThreadInfoPin"
     }
 
     // Keys seen in Discord stay on the pin. They do not become work-item identity.
-    // Jira and GitHub webhooks are what attach a key or PR to a T3 thread.
+    // Server thread issue / pull request links (Jira webhook, agent, manual) attach them.
 
     let sentryIssueUrls = mergeSentryIssueUrls(
       existing?.sentryIssueUrls,

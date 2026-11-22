@@ -1,4 +1,4 @@
-import type { IntegrationActivity as OrchestrationThreadActivity } from "./lib/integrationThreadView.ts";
+import type { IntegrationActivity as OrchestrationThreadActivity } from "./integrationThreadView.ts";
 import type { TurnId } from "@t3tools/contracts";
 
 export interface PresentedTask {
@@ -7,6 +7,7 @@ export interface PresentedTask {
 }
 
 export interface PresentedTasks {
+  readonly contextKey: string;
   readonly explanation: string | null;
   readonly createdAt: string;
   readonly tasks: ReadonlyArray<PresentedTask>;
@@ -31,6 +32,7 @@ function planFromActivity(activity: OrchestrationThreadActivity): PresentedTasks
   }
   if (tasks.length === 0) return null;
   return {
+    contextKey: activity.turnId ?? activity.id,
     explanation: typeof payload.explanation === "string" ? payload.explanation : null,
     createdAt: activity.createdAt,
     tasks,
@@ -43,7 +45,7 @@ export function presentTasks(
 ): PresentedTasks | null {
   const plans = activities
     .filter((activity) => activity.kind === "turn.plan.updated")
-    .toSorted(
+    .sort(
       (left, right) =>
         (left.sequence ?? 0) - (right.sequence ?? 0) ||
         left.createdAt.localeCompare(right.createdAt),

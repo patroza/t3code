@@ -4,7 +4,7 @@
  * Pure helpers: extract latest context-window activity, format a public Discord
  * reply with before → after token counts.
  */
-import { formatCompactTokenCount } from "../shared/turnResponseStats.ts";
+import { formatCompactTokenCount } from "@t3tools/shared/turnResponseStats";
 
 export type ContextWindowStats = {
   readonly usedTokens: number;

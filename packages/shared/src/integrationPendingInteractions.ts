@@ -1,4 +1,4 @@
-import { type IntegrationActivity as OrchestrationThreadActivity } from "../shared/integrationThreadView.ts";
+import type { IntegrationActivity as OrchestrationThreadActivity } from "./integrationThreadView.ts";
 import type { UserInputQuestion } from "@t3tools/contracts";
 
 export interface PendingApproval {
@@ -69,7 +69,7 @@ export function derivePendingInteractions(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): ReadonlyArray<PendingInteraction> {
   const pending = new Map<string, PendingInteraction>();
-  for (const activity of [...activities].toSorted((left, right) => {
+  for (const activity of [...activities].sort((left, right) => {
     if (left.sequence !== undefined && right.sequence !== undefined)
       return left.sequence - right.sequence;
     return left.createdAt.localeCompare(right.createdAt);
@@ -108,7 +108,5 @@ export function derivePendingInteractions(
       pending.delete(requestId);
     }
   }
-  return [...pending.values()].toSorted((left, right) =>
-    left.createdAt.localeCompare(right.createdAt),
-  );
+  return [...pending.values()].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
 }

@@ -1,8 +1,8 @@
-import type { IntegrationActivity as OrchestrationThreadActivity } from "./lib/integrationThreadView.ts";
+import type { IntegrationActivity as OrchestrationThreadActivity } from "./integrationThreadView.ts";
 
 import { describe, expect, it } from "vite-plus/test";
 
-import { derivePendingInteractions } from "./pendingInteractions.ts";
+import { derivePendingInteractions } from "./integrationPendingInteractions.ts";
 
 const activity = (kind: string, payload: unknown, sequence: number): OrchestrationThreadActivity =>
   ({

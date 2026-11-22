@@ -2,7 +2,7 @@ import type {
   IntegrationThreadView as OrchestrationThread,
   IntegrationThreadShellView as OrchestrationThreadShell,
   IntegrationMessage as OrchestrationMessage,
-} from "./lib/integrationThreadView.ts";
+} from "@t3tools/shared/integrationThreadView";
 // @effect-diagnostics globalDate:off
 import type { ModelSelection, RuntimeMode, ThreadId } from "@t3tools/contracts";
 import { resolveRemotePairingTarget } from "@t3tools/shared/remote";

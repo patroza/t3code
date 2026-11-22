@@ -1,4 +1,4 @@
-import { type IntegrationActivity as OrchestrationThreadActivity } from "../shared/integrationThreadView.ts";
+import { type IntegrationActivity as OrchestrationThreadActivity } from "@t3tools/shared/integrationThreadView";
 import type { TurnId } from "@t3tools/contracts";
 
 function asRecord(value: unknown): Record<string, unknown> | null {

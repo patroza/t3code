@@ -1,16 +1,16 @@
 import type { OrchestrationV2ThreadProjection } from "@t3tools/contracts";
-import { type IntegrationThreadView as OrchestrationThread } from "../shared/integrationThreadView.ts";
+import { type IntegrationThreadView as OrchestrationThread } from "@t3tools/shared/integrationThreadView";
 // @effect-diagnostics anyUnknownInErrorContext:off missingEffectContext:off globalFetchInEffect:off unknownInEffectCatch:off nodeBuiltinImport:off
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import type { ChatImageAttachment, ThreadId, VcsStatusResult } from "@t3tools/contracts";
 import { applyGitStatusStreamEvent } from "@t3tools/shared/git";
-import { sessionNeedsWakeUp } from "../shared/sessionWake.ts";
+import { sessionNeedsWakeUp } from "@t3tools/shared/sessionWake";
 import {
   appendStatsToMessageChunks,
   formatTurnResponseStatsLine,
-} from "../shared/turnResponseStats.ts";
+} from "@t3tools/shared/turnResponseStats";
 import { DiscordREST } from "dfx";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -80,13 +80,14 @@ import {
 import {
   derivePendingInteractions,
   type PendingApproval,
-} from "../presentation/pendingInteractions.ts";
+} from "@t3tools/shared/integrationPendingInteractions";
 import {
   planBackgroundDigestAppend,
   pullRequestWatchIsActive,
   turnFoldsIntoWatchDigest,
 } from "../presentation/backgroundDigest.ts";
-import { formatTasksForDiscord, presentTasks } from "../presentation/tasks.ts";
+import { presentTasks } from "@t3tools/shared/integrationTasks";
+import { formatTasksForDiscord } from "../presentation/tasks.ts";
 import { countTurnToolCalls } from "../presentation/toolCalls.ts";
 import { ThreadLinkStore, type ChatDeliveryReceipt } from "../store/ThreadLinkStore.ts";
 import { ThreadWarmCacheStore } from "../store/ThreadWarmCacheStore.ts";

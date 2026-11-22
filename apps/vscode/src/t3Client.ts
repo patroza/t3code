@@ -11,7 +11,7 @@ import {
   integrationThreadShellView,
   type IntegrationThreadView as OrchestrationThread,
   type IntegrationThreadShellView as OrchestrationThreadShell,
-} from "./lib/integrationThreadView.ts";
+} from "@t3tools/shared/integrationThreadView";
 import { applyOrchestrationV2ProjectionEvent } from "@t3tools/client-runtime/state/orchestration-v2-projection";
 // @effect-diagnostics globalDate:off globalFetch:off
 import {

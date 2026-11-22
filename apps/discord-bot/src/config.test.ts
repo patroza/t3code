@@ -47,6 +47,7 @@ const baseConfig = {
   alertProcessRulesPath: undefined,
   stateSqlitePath: "/var/lib/t3/userdata/state.sqlite",
   jiraBrowseBaseUrl: "https://example.atlassian.net",
+  jiraSiteHost: "example.atlassian.net",
   teamsEnabled: false,
   teamsTenantId: undefined,
   teamsClientId: undefined,
