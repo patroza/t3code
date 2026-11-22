@@ -52,6 +52,7 @@ apps/server/src/preview/ServerBrowserContexts.ts  # webauthn: optional prepareCo
 apps/server/src/processRunner.ts  # direnv: optional extendEnv so direnv runs with exactly the provider environment
 apps/server/src/server.ts  # identity: provides the persisted IdentityService layer; direnv: DirenvEnvironment.layerLive in the runtime core layer merge; jira: adds the /api/jira/webhook route layer (jira/JiraServerLayers.ts); github: adds the /api/github/webhook route layer (github/GitHubServerLayers.ts); discord: the command-readiness middleware lets the bot's token exchange and discovery through (discord/commandReadinessExemption.ts)
 apps/server/src/ws.ts  # identity: spreads identity.* handlers and wraps dispatch/launch so operate commands carry the session's source (identity/identityWsHandlers.ts)
+apps/web/src/browser/browserSurfaceStore.ts  # browser: release removes the surface entry so closed tabs do not accumulate; in-place fix, upstream candidate
 apps/web/src/components/ChatView.tsx  # identity: passes message sender context to the timeline (chat/MessageSenderCaption.tsx)
 apps/web/src/components/Sidebar.browser.test.tsx  # tooling: withoutComposerDrafts() empties persisted composer drafts while the draft-row tests run, so drafts another suite left in shared browser storage do not shift the rows. Upstream candidate
 apps/web/src/components/Sidebar.tsx  # identity: thread list follows the ownership filter (ownershipFilter.ts)
