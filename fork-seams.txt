@@ -1,5 +1,6 @@
 apps/server/src/auth/EnvironmentAuth.ts  # identity + mcp-tokens: exports MCP_CLIENT_SUBJECT; issueSession passes a runtimeModeCeiling through
 apps/server/src/cli/auth.ts  # mcp-tokens: --runtime-mode-ceiling flag on auth session issue (cli/mcpClientTokenCeiling.ts)
+apps/server/src/mcp/McpHttpServer.ts  # mcp-tools: merges fork-registered toolkits (mcp/forkMcpTools.ts) into layerTools
 apps/server/src/mcp/McpToolAccess.ts  # identity: writing tools require an identity claim on outside MCP clients (identity/mcpClientClaim.ts)
 apps/server/src/mcp/OrchestratorMcpService.ts  # identity: MCP-created threads and sends carry the caller's source (sourceRefForMcpCaller)
 apps/server/src/observability/RpcInstrumentation.ts  # identity: spreads identity RPC aggregates
