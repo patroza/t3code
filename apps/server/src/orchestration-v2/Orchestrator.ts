@@ -1,3 +1,9 @@
+import {
+  delegatedChildSource,
+  dispatchThreadAttributionRepair,
+  recordSourceParticipant,
+  withCommandSource,
+} from "./sourceAttribution.ts";
 import type {
   OrchestrationV2ThreadLinkMetadata,
   GuestShareId,
@@ -678,6 +684,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.model-selection.set":
     case "provider-session.detach":
     case "message.dispatch":
+    case "thread.attribution.repair":
     case "notification.delivery.accept":
     case "prepared-run.release":
     case "prepared-run.progress":
@@ -1787,7 +1794,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     (events: Ref.Ref<Array<OrchestrationV2DomainEvent>>, command: OrchestrationV2ServerCommand) =>
     <Event extends OrchestrationV2DomainEvent>(event: Omit<Event, "id">) =>
       Effect.gen(function* () {
-        const withId = yield* makeEvent(command, event);
+        const withId = yield* makeEvent(command, withCommandSource(command, event));
         yield* Ref.update(events, (existing) => [...existing, withId]);
         return withId;
       });
@@ -7202,6 +7209,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     ) {
       projection = yield* getProjectionWithPendingEvents(command.threadId, events);
     }
+    projection = yield* recordSourceParticipant(command, projection, emit(events, command));
     if (command.manualContinuationOfRunId !== undefined) {
       const source = projection.runs.find((run) => run.id === command.manualContinuationOfRunId);
       const limited = latestRootProviderFailure(source ?? null, projection.turnItems);
@@ -10096,6 +10104,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           command.workspaceStrategy === undefined
             ? { type: "start_immediately" }
             : { type: "defer_start", workspaceStrategy: command.workspaceStrategy },
+        ...delegatedChildSource(parentProjection.thread),
       } satisfies Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>;
       yield* dispatchMessage(childMessageCommand, events, effects);
 
@@ -16048,6 +16057,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "run.output.submit":
         yield* dispatchRunOutputSubmit(command, events);
         break;
+      case "thread.attribution.repair": {
+        const { thread } = yield* getProjectionWithPendingEvents(command.threadId, events);
+        yield* dispatchThreadAttributionRepair(command, thread, emit(events, command));
+        break;
+      }
       case "checkpoint.rollback":
         yield* dispatchCheckpointRollback(command, events, effects);
         break;

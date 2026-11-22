@@ -80,6 +80,7 @@ import {
   type ThreadListV2ListItem,
 } from "./threadListV2";
 import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
+import { useOwnershipFilteredThreads, useOwnershipFilterMenu } from "../identity/OwnershipFilter";
 import { NativeScrollView } from "../../native/NativeScrollViewMarker";
 
 type SidebarListItem =
@@ -130,7 +131,8 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
   const insets = useSafeAreaInsets();
   const { fabClearance, fabSize } = useAndroidControlSizing();
   const projects = useProjects();
-  const threads = useAtomValue(steadyNavigationThreadShellsAtom);
+  const threads = useOwnershipFilteredThreads(useAtomValue(steadyNavigationThreadShellsAtom));
+  const withOwnershipFilter = useOwnershipFilterMenu();
   const selectedThreadKey = useSidebarRowThreadKey(props.selectedThreadKey);
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();
@@ -545,7 +547,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
         placeholder: gt("Search", { $context: "search field placeholder" }),
         accessibilityLabel: gt("Search threads"),
       }}
-      filter={{
+      filter={withOwnershipFilter({
         customized: options.selectedEnvironmentId !== null || selectedProjectKey !== null,
         items: buildHomeListFilterMenuItems(
           {
@@ -558,7 +560,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
           },
           messages,
         ),
-      }}
+      })}
       sidebar={{
         width: props.width,
         visible: props.visible,

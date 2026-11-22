@@ -166,6 +166,7 @@ export interface ThreadManagementSendInput {
   readonly outputSchema?: Readonly<Record<string, Schema.Json>>;
   readonly createdBy: OrchestrationV2Actor;
   readonly creationSource: OrchestrationV2CreationSource;
+  readonly source?: import("@t3tools/contracts").SourceRef;
 }
 
 export interface ThreadManagementSendResult {
@@ -974,6 +975,7 @@ const make = Effect.gen(function* () {
       ...(input.senderThreadId === undefined ? {} : { senderThreadId: input.senderThreadId }),
       ...(input.linkedSender === undefined ? {} : { linkedSender: input.linkedSender }),
       text: input.text,
+      ...(input.source && { source: input.source }),
       attachments: input.attachments,
       ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
       ...(input.freshContext ? { freshContext: true } : {}),

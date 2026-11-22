@@ -367,6 +367,7 @@ export interface ThreadFeedHistoryControls {
 }
 
 export interface ThreadFeedProps {
+  readonly renderMessageSender?: (messageId: MessageId) => ReactNode;
   readonly toolCallVisibility?: ToolCallVisibility;
   readonly worktreeSetup?: WorktreeSetupCardProps | null;
   readonly preparingWorktree?: boolean;
@@ -1983,6 +1984,7 @@ function renderFeedEntry(
     | "threadId"
     | "workspaceRoot"
     | "worktreeSetup"
+    | "renderMessageSender"
   > & {
     /** The fold row of the turn the worktree setup handed off to. */
     readonly setupFoldRowId: string | null;
@@ -2405,6 +2407,7 @@ function renderFeedEntry(
               {m(msg("Sent by T3 Code"))}
             </Text>
           ) : null}
+          {foldRowId === null ? props.renderMessageSender?.(message.id) : null}
           {presentation.guestName !== undefined ? (
             <GuestMessageName name={presentation.guestName} />
           ) : null}
@@ -4303,6 +4306,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             onUseArtifactTemplate: props.onUseArtifactTemplate,
             onCiteAssistantText: props.onCiteAssistantText,
             threadId: props.threadId,
+            renderMessageSender: props.renderMessageSender,
             copiedRowId,
             expandedWorkRows,
             workRowSizing,

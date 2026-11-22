@@ -23,6 +23,7 @@ import {
   type DispatchModeRefusal,
 } from "../orchestration-v2/DispatchModeLimit.ts";
 import * as PeerForwarding from "../peer/PeerForwarding.ts";
+import { requireMcpClientIdentityClaim } from "../identity/mcpClientClaim.ts";
 import {
   assertFullAccessNamingLink,
   assertNotLinked,
@@ -130,6 +131,7 @@ const refuseReadOnlyClient = McpInvocationContext.McpInvocationContext.pipe(
         )
       : Effect.void,
   ),
+  Effect.andThen(requireMcpClientIdentityClaim),
 );
 
 const writingCaller = refuseReadOnlyClient.pipe(

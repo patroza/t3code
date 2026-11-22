@@ -139,6 +139,7 @@ import {
 } from "./delegatedTaskModes.ts";
 import { assertTargetWithinLimits, isLiveCallerShell, threadNotFound } from "./threadAccess.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
+import { sourceRefForMcpCaller } from "../identity/stampSource.ts";
 import * as PeerForwarding from "../peer/PeerForwarding.ts";
 import * as RemoteDelegation from "../peer/RemoteDelegation.ts";
 
@@ -3250,6 +3251,10 @@ const make = Effect.gen(function* () {
         const providers = yield* loadProviders;
         const cwd = yield* parentWorkspaceCwd(parent);
         const key = yield* requestKey(input.clientRequestId);
+        const source = yield* sourceRefForMcpCaller({
+          parentOrigin: parent.thread.originSource,
+          clientSessionId: scope.client?.sessionId,
+        });
         const created = yield* Effect.forEach(
           input.threads,
           (request, index) =>
@@ -3311,6 +3316,7 @@ const make = Effect.gen(function* () {
                         index,
                       }),
                       text: request.prompt,
+                      ...(source && { source }),
                       attachments: [],
                     };
               const created = yield* threadManagement
@@ -3318,6 +3324,7 @@ const make = Effect.gen(function* () {
                   type: "thread.create",
                   createdBy: "agent",
                   creationSource: "mcp",
+                  ...(source && { originSource: source }),
                   commandId,
                   threadId,
                   projectId: parent.thread.projectId,
@@ -3672,6 +3679,10 @@ const make = Effect.gen(function* () {
       yield* assertTargetWithinLimits(limits, target.thread);
 
       const mode = input.mode ?? "auto";
+      const source = yield* sourceRefForMcpCaller({
+        parentOrigin: parent?.thread.originSource,
+        clientSessionId: scope.client?.sessionId,
+      });
       const key = yield* requestKey(input.clientRequestId);
       const messageId = stableOperationMessageId({
         scope,
@@ -3700,6 +3711,7 @@ const make = Effect.gen(function* () {
           ...(input.outputSchema === undefined ? {} : { outputSchema: input.outputSchema }),
           createdBy: "agent",
           creationSource: "mcp",
+          ...(source && { source }),
         })
         .pipe(
           Effect.mapError((error) =>

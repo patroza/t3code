@@ -278,6 +278,7 @@ interface MessagesTimelineProps {
   ) => void;
   renderHtmlRender?: TimelineRowSharedState["renderHtmlRender"];
   turnItemSource?: TimelineRowSharedState["turnItemSource"];
+  messageSender?: TimelineRowSharedState["messageSender"];
   /**
    * The thread this one is a subagent or side chat of; `open` is absent when it cannot be
    * opened from here.
@@ -395,6 +396,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   onOpenThread,
   renderHtmlRender,
   turnItemSource,
+  messageSender,
   parentThreadLink = null,
   workflowOpening = null,
   onForkFromRun,
@@ -1110,6 +1112,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
       .map((approval) => [approval.requestId, approval]),
   );
   const sharedState: TimelineRowSharedState = {
+    messageSender,
     pendingApprovals: pendingApprovalsByRequestId,
     respondingRequestIds,
     canOperateThread,

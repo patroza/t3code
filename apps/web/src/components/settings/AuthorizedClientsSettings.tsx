@@ -54,6 +54,7 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
+import { McpClientIdentityControl } from "./McpClientIdentityControl";
 import {
   type ServerClientSessionRecord,
   type ServerPairingLinkRecord,
@@ -570,6 +571,11 @@ const ConnectedClientListRow = memo(function ConnectedClientListRow({
           </p>
         </div>
         <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
+          <McpClientIdentityControl
+            clientSession={clientSession}
+            clientLabel={primaryLabel}
+            canAssign={canRevoke}
+          />
           {!clientSession.current ? (
             <Button
               size="xs"

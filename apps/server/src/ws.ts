@@ -279,6 +279,7 @@ import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
 import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
 import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
+import { makeIdentityWsSession } from "./identity/identityWsHandlers.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import { isNetworkPath } from "@t3tools/shared/path";
@@ -1995,7 +1996,9 @@ export const layerWsRpc = (
         return yield* mutateProjectWithClone(projectService, projectCloneTracker, mutation);
       });
 
+      const identitySession = yield* makeIdentityWsSession(currentSessionId);
       const handlers = ServerWsRpcGroup.of({
+        ...identitySession.handlers,
         [WS_METHODS.issuesList]: (input) => issues.list(input),
         [WS_METHODS.issuesDetail]: (input) => issues.detail(input),
         [WS_METHODS.issuesComments]: (input) => issues.comments(input),
@@ -2010,7 +2013,7 @@ export const layerWsRpc = (
         [WS_METHODS.issueTrackersList]: () => issueTrackers.list,
         [WS_METHODS.issueTrackersConnect]: (input) => issueTrackers.connect(input),
         [WS_METHODS.issueTrackersBindProject]: (input) => issueTrackers.bindProject(input),
-        [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
+        [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: identitySession.stampDispatch((command) =>
           Effect.annotateCurrentSpan({
             "orchestration_v2.command_id": command.commandId,
             "orchestration_v2.command_type": command.type,
@@ -2065,6 +2068,7 @@ export const layerWsRpc = (
                 ),
             ),
           ),
+        ),
         [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: (input) => threadManagement.stopWorkflow(input),
         [ORCHESTRATION_V2_WS_METHODS.forceStopThread]: (input) =>
           threadManagement.forceStopThread(input),
@@ -2201,7 +2205,7 @@ export const layerWsRpc = (
                 ),
             ),
           ),
-        [ORCHESTRATION_V2_WS_METHODS.launchThread]: (input) =>
+        [ORCHESTRATION_V2_WS_METHODS.launchThread]: identitySession.stampLaunch((input) =>
           Effect.annotateCurrentSpan({
             "orchestration_v2.command_id": input.commandId,
             "orchestration_v2.project_id": input.projectId,
@@ -2240,6 +2244,9 @@ export const layerWsRpc = (
                                     ? {}
                                     : { messageId: input.initialMessage.messageId }),
                                   text: input.initialMessage.text,
+                                  ...(input.initialMessage.source && {
+                                    source: input.initialMessage.source,
+                                  }),
                                   attachments: input.initialMessage.attachments,
                                   ...(input.initialMessage.context === undefined
                                     ? {}
@@ -2344,6 +2351,7 @@ export const layerWsRpc = (
                 ),
             ),
           ),
+        ),
         [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: (input) =>
           Stream.unwrap(subscribeOrchestrationV2Shell(input)),
         [ORCHESTRATION_V2_WS_METHODS.subscribeThread]: (input) =>

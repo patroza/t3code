@@ -309,6 +309,7 @@ import type { AssistantCitationRequest } from "./chat/AssistantCitationSource";
 import { useCitedHistory } from "./chat/citationProcedure";
 import type { MessagesTimelineHistoryControls } from "./chat/MessagesTimeline";
 import { ThreadTimeline } from "./chat/ThreadTimeline";
+import { useMessageSenderContext } from "./chat/MessageSenderCaption";
 import { NativeChildWorkDialog } from "./chat/NativeChildWorkDialog";
 import { ProviderSubagentBar } from "./chat/ProviderSubagentBar";
 import { getTriggerDisplayModelName } from "./chat/providerIconUtils";
@@ -1074,6 +1075,11 @@ export default function ChatView(props: ChatViewProps) {
   );
   const browserAvailable = isPreviewSupportedInRuntime() || activeEnvironmentServerBrowser;
   const activeThreadShell = serverThread;
+  const messageSender = useMessageSenderContext({
+    environmentId: activeThread?.environmentId ?? null,
+    messages: serverProjection?.messages,
+    originSource: activeThreadShell?.source.originSource,
+  });
   const limitRecoveryRun =
     serverRuntime?.status === "failed" && serverRuntime.lastErrorClass === "usage_limit"
       ? (activeThreadShell?.latestRun ?? null)
@@ -3669,6 +3675,7 @@ export default function ChatView(props: ChatViewProps) {
                     ? {}
                     : { onOpenTurnDiff: onOpenTurnDiffStable, onForkFromRun: onForkFromRunStable })}
                   onOpenThread={onOpenRelatedThreadStable}
+                  messageSender={messageSender}
                   parentThreadLink={parentThreadLink}
                   workflowOpening={workflowOpening}
                   supportsConversationRollback={supportsConversationRollback}

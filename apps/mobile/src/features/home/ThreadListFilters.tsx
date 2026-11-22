@@ -2,6 +2,7 @@ import { useGT } from "gt-react-native";
 import { Pressable, ScrollView } from "react-native";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { ListFilterMenu } from "../layout/workspace/ListFilterMenu";
+import { OwnershipFilterChip } from "../identity/OwnershipFilter";
 import type { EnvironmentId } from "@t3tools/contracts";
 import type {
   HomeListFilterMenuEnvironment,
@@ -87,6 +88,7 @@ export function ThreadListFilters(props: {
           }
         }}
       />
+      <OwnershipFilterChip />
       {props.selectedEnvironmentId !== null || props.selectedProjectKey !== null ? (
         <Pressable
           accessibilityRole="button"

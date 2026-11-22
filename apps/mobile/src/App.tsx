@@ -27,6 +27,7 @@ import { ProjectChipIconRasterizer } from "./native/ProjectChipIconImages";
 import { ThreadArrangementHost } from "./features/threads/ThreadArrangementSheet";
 import * as Dialog from "./components/ui/Dialog";
 import { CloudAuthProvider } from "./features/cloud/CloudAuthProvider";
+import { IdentityClaimGate } from "./features/identity/IdentityClaimGate";
 import { prepareNativeShowcaseCapture } from "./features/showcase/nativeShowcaseScene";
 import { installShowcaseCapture } from "./features/showcase/ShowcaseCaptureCoordinator";
 import {
@@ -317,6 +318,7 @@ function AppContent() {
                   theme={navigationTheme}
                   onStateChange={handleNavigationStateChange}
                 />
+                <IdentityClaimGate />
                 <Dialog.Host />
                 <ThreadArrangementHost />
                 <ProjectChipIconRasterizer />

@@ -167,6 +167,7 @@ import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as AuthHttp from "./auth/http.ts";
 import * as ReplayMarkers from "./auth/replayMarkers.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import * as IdentityService from "./identity/IdentityService.ts";
 import * as CodexManagedTokenBroker from "./provider/CodexManagedTokenBroker.ts";
 import * as WebhookRoute from "./scheduledTasks/webhookRoute.ts";
 import * as RelayDeliveryProof from "./scheduledTasks/RelayDeliveryProof.ts";
@@ -857,6 +858,7 @@ const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
   // GitVcsDriver.layer is memoized and some of its build sites live outside this file, so the
   // fetch interval goes in context here, before the first build captures it.
   Layer.provideMerge(VcsAutomaticFetchInterval.layer.pipe(Layer.provide(layerServerSettings))),
+  Layer.provideMerge(IdentityService.layerPersisted.pipe(Layer.provide(layerPersistence))),
   Layer.provide(NetService.layer),
 );
 

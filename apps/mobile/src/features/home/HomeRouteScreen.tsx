@@ -21,6 +21,7 @@ import {
 } from "../layout/AdaptiveWorkspaceLayout";
 import { AndroidHomeFabLayout } from "./AndroidHomeFab";
 import { HomeScreen } from "./HomeScreen";
+import { useOwnershipFilteredThreads, useOwnershipFilterMenu } from "../identity/OwnershipFilter";
 import { useHomeListOptions } from "./home-list-options";
 import {
   runWhenHomeCovered,
@@ -52,9 +53,10 @@ export function HomeRouteScreen() {
   const projects = useProjects();
   // Stop rebuilding the streaming thread list while Thread covers Home.
   const visible = useHomeRouteVisible();
-  const threads = useLaunchingThreads(
-    useAtomValueWhileVisible(steadyNavigationThreadShellsAtom, visible),
+  const threads = useOwnershipFilteredThreads(
+    useLaunchingThreads(useAtomValueWhileVisible(steadyNavigationThreadShellsAtom, visible)),
   );
+  const withOwnershipFilter = useOwnershipFilterMenu();
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const navigation = useNavigation();
@@ -172,7 +174,7 @@ export function HomeRouteScreen() {
             placeholder: gt("Search", { $context: "search field placeholder" }),
             accessibilityLabel: gt("Search threads"),
           }}
-          filter={{
+          filter={withOwnershipFilter({
             customized: selectedEnvironmentId !== null || selectedProjectKey !== null,
             items: buildHomeListFilterMenuItems(
               {
@@ -185,7 +187,7 @@ export function HomeRouteScreen() {
               },
               m,
             ),
-          }}
+          })}
         />
 
         <HomeScreen
