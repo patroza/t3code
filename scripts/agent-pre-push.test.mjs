@@ -418,11 +418,12 @@ it("findRealGh prefers the App-aware gh on PATH over the raw T3_GITHUB_REAL_GH b
 it("runs the gate's tests without the fork's GH_REPO, a dot-directory TMPDIR, or the developer's config", () => {
   const env = testEnv(
     { GH_REPO: "patroza/t3code", TMPDIR: "/home/u/.cache/tmp", PATH: "/bin" },
-    { configHome: "/tmp/t3-gate-config-x", platform: "linux" },
+    { xdgRoot: "/tmp/t3-gate-xdg-x", platform: "linux" },
   );
   assert.isUndefined(env.GH_REPO);
   assert.strictEqual(env.PATH, "/bin");
   assert.strictEqual(env.TMPDIR, "/tmp");
-  assert.strictEqual(env.XDG_CONFIG_HOME, "/tmp/t3-gate-config-x");
+  assert.strictEqual(env.XDG_CONFIG_HOME, NodePath.join("/tmp/t3-gate-xdg-x", "config"));
+  assert.strictEqual(env.XDG_DATA_HOME, NodePath.join("/tmp/t3-gate-xdg-x", "data"));
   assert.strictEqual(testEnv({ TMPDIR: "/var/tmp" }, { platform: "linux" }).TMPDIR, "/var/tmp");
 });

@@ -103,11 +103,11 @@ export const runAgentShipGate = async (opts = {}) => {
     run("vpr typecheck", ["vpr", "typecheck"], { cwd: root, env });
   }
 
-  const configHome = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-gate-config-"));
+  const xdgRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-gate-xdg-"));
   try {
-    run("vp run test", ["vp", "run", "test"], { cwd: root, env: testEnv(env, { configHome }) });
+    run("vp run test", ["vp", "run", "test"], { cwd: root, env: testEnv(env, { xdgRoot }) });
   } finally {
-    NodeFS.rmSync(configHome, { recursive: true, force: true });
+    NodeFS.rmSync(xdgRoot, { recursive: true, force: true });
   }
 
   if (headSha) {
@@ -159,13 +159,16 @@ if (invokedAs === thisFile) {
 
 // Tests run as CI does: .envrc's GH_REPO points gh-backed tests at the fork, asar skips sources
 // under a dot-directory (a TMPDIR such as ~/.cache/tmp), and provider tests read the developer's
-// own ~/.config (OpenCode's opencode.json) unless XDG_CONFIG_HOME is empty.
-export function testEnv(env, { configHome, platform = NodeProcess.platform } = {}) {
+// own XDG config and data (OpenCode's ~/.local/share/opencode) unless those folders are empty.
+export function testEnv(env, { xdgRoot, platform = NodeProcess.platform } = {}) {
   const next = { ...env };
   delete next.GH_REPO;
   if (next.TMPDIR && /(^|[/\\])\./.test(next.TMPDIR) && platform !== "win32") {
     next.TMPDIR = "/tmp";
   }
-  if (configHome) next.XDG_CONFIG_HOME = configHome;
+  if (xdgRoot) {
+    next.XDG_CONFIG_HOME = NodePath.join(xdgRoot, "config");
+    next.XDG_DATA_HOME = NodePath.join(xdgRoot, "data");
+  }
   return next;
 }
