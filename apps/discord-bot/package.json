@@ -6,9 +6,9 @@
   "scripts": {
     "dev": "node --watch src/main.ts",
     "dev:teams": "node --watch src/teams-main.ts",
-    "start": "node src/main.ts",
-    "start:teams-gateway": "node src/teams-gateway-main.ts",
-    "start:teams": "node src/teams-main.ts",
+    "start": "node --import tsx src/main.ts",
+    "start:teams-gateway": "node --import tsx src/teams-gateway-main.ts",
+    "start:teams": "node --import tsx src/teams-main.ts",
     "typecheck": "effect-tsgo tsrs --noEmit",
     "test": "vp test run"
   },
@@ -25,6 +25,7 @@
   "devDependencies": {
     "@effect/vitest": "catalog:",
     "@types/node": "catalog:",
+    "tsx": "^4.20.5",
     "vite-plus": "catalog:"
   },
   "engines": {
