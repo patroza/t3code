@@ -1,0 +1,379 @@
+name: Fork CI
+
+# Fork-only. The fork's required checks (Check / Test / Mobile Native Static Analysis /
+# Release Smoke) on GitHub-hosted runners. Upstream's ci.yml runs on Blacksmith runners the fork
+# does not have and stays disabled_manually; mirror its steps here when upstream adds a gate.
+
+env:
+  # Install dependencies without downloading Electron in every job. The desktop jobs
+  # fetch and verify the runtime explicitly below; mobile lint and release smoke do not need it.
+  ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+on:
+  workflow_dispatch:
+    inputs:
+      checkout_ref:
+        description: "Git ref or SHA to check out and test (default: dispatch ref)"
+        required: false
+        type: string
+        default: ""
+  pull_request:
+    # Explicit, to add ready_for_review: a PR marked ready without a new commit
+    # would otherwise sit forever on required checks that can never report.
+    #
+    # "edited" is deliberately absent. It also fires for title and body edits, and
+    # a skipped required check counts as satisfied and supersedes the real run, so
+    # editing the title of a red PR would clear its failures. A retarget without a
+    # push is recoverable: close and reopen fires "reopened".
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches:
+      - fork/dev
+      # The rebuild branch that replaces fork/dev's tree.
+      - fork/next
+  # Deployment promotes an exact green fork/dev SHA, so every merge still produces a run.
+  # When the pull request recorded tree evidence and this push is that same tree
+  # and the same workflow file, Verify tree evidence succeeds and the heavy jobs
+  # skip. A skipped heavy job is not evidence: only a pull_request run whose
+  # required jobs succeeded can satisfy the next push.
+  push:
+    branches:
+      - fork/dev
+
+concurrency:
+  # Push runs are keyed by SHA and never cancelled: the conclusion of a push run
+  # is what approves that exact commit for deployment, so cancelling one as
+  # superseded would leave that merge SHA permanently unapprovable.
+  #
+  # The "v2-" generation exists to escape a wedged run. A run that GitHub will
+  # not cancel ("Cannot cancel a workflow re-run that has not yet queued") keeps
+  # holding its group indefinitely, and no later run in that group can start.
+  # Bumping the generation puts every new run in a fresh namespace. Bump it
+  # again if this recurs; nothing depends on the literal value.
+  group: ci-v2-${{ github.event.pull_request.number || inputs.checkout_ref ||
+    (github.event_name == 'push' && github.sha) || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
+jobs:
+  # Always runs, including on pull requests, where it only records
+  # short_circuit=false. A skipped gate would also skip the heavy jobs.
+  verify_tree_evidence:
+    name: Verify tree evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      short_circuit: ${{ steps.decide.outputs.short_circuit }}
+    steps:
+      - name: Checkout
+        if: github.event_name == 'push'
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+
+      - name: Decide
+        id: decide
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" != "push" ]]; then
+            echo "short_circuit=false" >> "$GITHUB_OUTPUT"
+            echo "Running the checks. Tree evidence is only reused on a fork/dev push." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          node scripts/fork-ci-tree-evidence.mjs verify
+
+  # Cheap and dependency-free, so it always runs, also on pushes that reuse tree evidence.
+  fork_seams:
+    name: Fork Seams
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || github.sha }}
+          # The merge base with upstream needs history; blob ids are enough to compare files.
+          fetch-depth: 0
+          filter: blob:none
+          sparse-checkout: |
+            /fork-seams.txt
+            /scripts/check-fork-seams.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Check upstream files carry only listed seams
+        run: node scripts/check-fork-seams.mjs --fetch
+
+  check:
+    name: Check
+    needs: verify_tree_evidence
+    if: always() && needs.verify_tree_evidence.outputs.short_circuit != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || github.sha }}
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Restore Vite Task check cache
+        id: vite-task-check-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: node_modules/.vite/task-cache
+          key: vite-task-check-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            vite-task-check-${{ runner.os }}-${{ runner.arch }}-
+
+      # electron's install.js (run by ensure:electron) reads this cache before it downloads.
+      - name: Cache Electron download
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/electron
+          key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('node_modules/.pnpm/electron@*/node_modules/electron/package.json') }}
+
+      - name: Ensure Electron runtime is installed
+        run: vp run --filter @t3tools/desktop ensure:electron
+
+      - name: Install browser secret helper build libraries
+        run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
+
+      - name: Reject repository-owned PR assets
+        run: |
+          files="$(git ls-files .github/pr-assets)"
+          if test -n "$files"; then
+            printf 'PR evidence must be uploaded to GitHub, not committed:\n%s\n' "$files" >&2
+            exit 1
+          fi
+
+      # The same gates as upstream ci.yml's Lint job.
+      - name: Check unused code
+        run: vp run knip:check
+
+      - name: Check generated GitHub GraphQL operations
+        run: vp run --filter @t3tools/source-control-github generate --check
+
+      - name: Check generated Expo GraphQL operations
+        run: vp run --filter t3 generate --check
+
+      - name: Check generated Linear GraphQL operations
+        run: vp run --filter @t3tools/issue-tracker-linear generate --check
+
+      - name: Check i18n catalogs
+        run: vp run i18n:check
+
+      - name: Check
+        run: vp check
+
+      - name: Typecheck
+        run: vp run -r --cache --log labeled typecheck
+
+      - name: Build desktop pipeline
+        run: vp run --cache build:desktop
+
+      - name: Verify preload bundle output
+        run: node apps/desktop/scripts/verify-preload-bundle.mjs
+
+      - name: Save Vite Task check cache
+        if: success()
+        uses: actions/cache/save@v6
+        with:
+          path: node_modules/.vite/task-cache
+          key: ${{ steps.vite-task-check-cache.outputs.cache-primary-key }}
+
+  test_packages:
+    name: Test Packages
+    needs: verify_tree_evidence
+    if: always() && needs.verify_tree_evidence.outputs.short_circuit != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || github.sha }}
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Cache Electron download
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/electron
+          key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('node_modules/.pnpm/electron@*/node_modules/electron/package.json') }}
+
+      - name: Ensure Electron runtime is installed
+        run: vp run --filter @t3tools/desktop ensure:electron
+
+      - name: Install browser secret helper build libraries
+        run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
+
+      - name: Test preview artifact validation
+        run: python3 -B .github/scripts/stage-preview-bundle.test.py
+
+      - name: Test release checks
+        run: node --test .github/scripts/check-nightly-release.test.cjs .github/scripts/vercel-deployment-output.test.cjs .github/scripts/mobile-preview-comment.test.cjs .github/scripts/mobile-ios-preview-record.test.cjs .github/scripts/test-delta.test.cjs
+
+      - name: Test
+        run: vp run --parallel --concurrency-limit 4 --filter '!t3' --filter '!@t3tools/monorepo' --filter '!@t3tools/web' test
+
+  # Keep server files sequential within each runner to avoid load-sensitive
+  # flakes; the existing weighted sequencer balances six independent shards.
+  test_server:
+    name: Test Server ${{ matrix.shard }}
+    needs: verify_tree_evidence
+    if: always() && needs.verify_tree_evidence.outputs.short_circuit != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || github.sha }}
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Install Chromium for server browser integration tests
+        run: node apps/server/node_modules/playwright-core/cli.js install --with-deps --only-shell chromium
+
+      - name: Test
+        run: vp run --filter t3 test --shard ${{ matrix.shard }}/${{ strategy.job-total }}
+
+  test_web:
+    name: Test Web
+    needs: verify_tree_evidence
+    if: always() && needs.verify_tree_evidence.outputs.short_circuit != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || github.sha }}
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Install Chromium for web browser tests
+        run: node apps/web/node_modules/playwright/cli.js install --with-deps --only-shell chromium
+
+      - name: Test
+        run: vp run --filter @t3tools/web test
+
+  # Preserve the required Test check. Run even after failures or cancellation,
+  # and fail unless every test job (including every server shard) succeeded.
+  test:
+    name: Test
+    needs: [verify_tree_evidence, test_packages, test_server, test_web]
+    if: always() && needs.verify_tree_evidence.outputs.short_circuit != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    steps:
+      - name: Require every test job to pass
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -e 'del(.verify_tree_evidence) | all(.[]; .result == "success")'
+
+  mobile_native_static_analysis:
+    name: Mobile Native Static Analysis
+    needs: verify_tree_evidence
+    if: always() && needs.verify_tree_evidence.outputs.short_circuit != 'true'
+    # Static checks do not require ARM; avoid the constrained Apple Silicon runner pool.
+    runs-on: macos-15-intel
+    # Cold dependency/tool installation can consume ten minutes before lint begins.
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || github.sha }}
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          # Saving the complete macOS node_modules cache takes ~95 seconds and
+          # loses the cache reservation whenever parallel PR runs overlap.
+          # A clean install is faster and has deterministic completion time.
+          cache: false
+          run-install: true
+
+      - name: Install mobile native static analysis tools
+        run: brew bundle install --file apps/mobile/Brewfile
+
+      - name: Lint mobile native sources
+        run: vp run lint:mobile
+
+  release_smoke:
+    name: Release Smoke
+    needs: verify_tree_evidence
+    if: always() && needs.verify_tree_evidence.outputs.short_circuit != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || github.sha }}
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Exercise release-only workflow steps
+        run: node scripts/release-smoke.ts
+
+  # The status is the evidence a later fork/dev push verifies. It is not a
+  # required check. A pull request that cannot record it still passes its
+  # checks, and the following push runs them again.
+  record_tree_evidence:
+    name: Record tree evidence
+    needs: [check, test, mobile_native_static_analysis, release_smoke]
+    if: github.event_name == 'pull_request' && success()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      statuses: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || github.sha }}
+
+      - name: Record the tested tree
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/fork-ci-tree-evidence.mjs record
