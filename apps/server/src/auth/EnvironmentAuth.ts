@@ -83,7 +83,7 @@ export interface IssuedBearerSession {
 }
 
 // MCP client tokens are restricted to /mcp; HTTP API and WebSocket RPC would bypass their access cap.
-const MCP_CLIENT_SUBJECT = "mcp-client";
+export const MCP_CLIENT_SUBJECT = "mcp-client";
 const MCP_CLIENT_SESSION_TTL = Duration.days(30);
 // A peer link's session moves back out to its full lifetime when a call finds it this far
 // short, so a used link never expires and a busy one writes at most once per step.
