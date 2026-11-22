@@ -262,12 +262,18 @@ jobs:
       - name: Test
         run: vp run --filter t3 test --shard ${{ matrix.shard }}/${{ strategy.job-total }}
 
+  # Two shards, as upstream's ci.yml runs it: one browser run over every file shares
+  # storage and memory across files, which leaks drafts between suites and can close Chromium.
   test_web:
-    name: Test Web
+    name: Test Web ${{ matrix.shard }}
     needs: verify_tree_evidence
     if: always() && needs.verify_tree_evidence.outputs.short_circuit != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -285,7 +291,7 @@ jobs:
         run: node apps/web/node_modules/playwright/cli.js install --with-deps --only-shell chromium
 
       - name: Test
-        run: vp run --filter @t3tools/web test
+        run: vp run --filter @t3tools/web test --shard ${{ matrix.shard }}/${{ strategy.job-total }}
 
   # Preserve the required Test check. Run even after failures or cancellation,
   # and fail unless every test job (including every server shard) succeeded.
