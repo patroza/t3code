@@ -56,6 +56,11 @@ export interface DiscordBotConfig {
    * Path to t3code `state.sqlite` for long-turn detection (guest: /var/lib/t3/userdata/state.sqlite).
    */
   readonly stateSqlitePath: string;
+  readonly browserEnabled: boolean;
+  readonly browserProfile: string;
+  readonly browserExecutablePath: string | undefined;
+  readonly browserFfmpegPath: string;
+  readonly browserAllowedOrigins: ReadonlyArray<string>;
   /**
    * Optional Jira site base for browse links on pinned thread-info messages
    * (e.g. `https://example.atlassian.net`).
@@ -154,6 +159,28 @@ export const DiscordBotConfig: Effect.Effect<DiscordBotConfig, Config.ConfigErro
     const stateSqlitePath = yield* Config.String("T3_STATE_SQLITE_PATH").pipe(
       Config.withDefault("/var/lib/t3/userdata/state.sqlite"),
     );
+    const browserEnabled = yield* Config.Boolean("T3_DISCORD_BROWSER_ENABLED").pipe(
+      Config.withDefault(false),
+    );
+    const browserProfile = yield* Config.String("T3_DISCORD_BROWSER_PROFILE").pipe(
+      Config.withDefault("default"),
+    );
+    const browserExecutablePath = yield* Config.String("T3_DISCORD_BROWSER_EXECUTABLE_PATH").pipe(
+      Config.option,
+      Config.map(Option.getOrUndefined),
+    );
+    const browserFfmpegPath = yield* Config.String("T3_DISCORD_BROWSER_FFMPEG_PATH").pipe(
+      Config.withDefault("ffmpeg"),
+    );
+    const browserAllowedOrigins = yield* Config.String("T3_DISCORD_BROWSER_ALLOWED_ORIGINS").pipe(
+      Config.withDefault(""),
+      Config.map((value) =>
+        value
+          .split(",")
+          .map((origin) => origin.trim())
+          .filter(Boolean),
+      ),
+    );
     const jiraBrowseBaseUrl = yield* Config.String("T3_JIRA_BROWSE_BASE_URL").pipe(
       Config.orElse(() => Config.String("JIRA_BROWSE_BASE_URL")),
       Config.option,
@@ -231,6 +258,11 @@ export const DiscordBotConfig: Effect.Effect<DiscordBotConfig, Config.ConfigErro
       alertsChannelId,
       alertProcessRulesPath,
       stateSqlitePath,
+      browserEnabled,
+      browserProfile,
+      browserExecutablePath,
+      browserFfmpegPath,
+      browserAllowedOrigins,
       jiraBrowseBaseUrl,
       jiraSiteHost,
       teamsEnabled,
