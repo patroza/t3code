@@ -596,6 +596,7 @@ export class EnvironmentAuth extends Context.Service<
       readonly subject?: string;
       readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
       readonly label?: string;
+      readonly runtimeModeCeiling?: import("@t3tools/contracts").RuntimeMode;
     }) => Effect.Effect<IssuedBearerSession, ServerAuthInternalError>;
     readonly listSessions: () => Effect.Effect<
       ReadonlyArray<AuthClientSession>,
@@ -1341,6 +1342,7 @@ export const make = Effect.gen(function* () {
           deviceType: "bot",
         },
         ...(input?.ttl ? { ttl: input.ttl } : {}),
+        ...(input?.runtimeModeCeiling && { runtimeModeCeiling: input.runtimeModeCeiling }),
       })
       .pipe(
         Effect.map(
