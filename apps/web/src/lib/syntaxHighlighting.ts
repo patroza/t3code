@@ -1,4 +1,4 @@
-import { registerAssemblyExtensions } from "@t3tools/client-runtime/assembly-highlighting";
+import "@t3tools/client-runtime/assembly-highlighting";
 import {
   getSharedHighlighter,
   setCustomExtension,
@@ -8,8 +8,6 @@ import {
 } from "@pierre/diffs";
 
 import { DIFF_THEME_NAMES } from "./diffRendering";
-
-registerAssemblyExtensions(setCustomExtension);
 
 // Highlights has no lexer for these dialects, so they use their base language's.
 setCustomExtension("luau", "lua");

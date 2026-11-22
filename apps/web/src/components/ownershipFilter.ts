@@ -1,68 +1,30 @@
-/** Keep shared ownership preferences in their legacy bare-string storage format. */
+import { useAtomValue } from "@effect/atom-react";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import {
   DEFAULT_OWNERSHIP_RELATION,
-  isOwnershipRelation,
-  threadMatchesMine,
   claimPersonIdForEnvironment,
+  threadMatchesMine,
   type OwnershipRelation,
 } from "@t3tools/client-runtime/state/identity";
 import type { EnvironmentId } from "@t3tools/contracts";
-import { useSyncExternalStore } from "react";
+import * as Schema from "effect/Schema";
 
+import { useLocalStorage } from "~/hooks/useLocalStorage";
 import {
-  dispatchLocalStorageChange,
-  LOCAL_STORAGE_CHANGE_EVENT,
-  type LocalStorageChangeDetail,
-} from "~/hooks/useLocalStorage";
-import {
-  DEFAULT_SIDEBAR_OWNERSHIP_FILTER,
-  parseSidebarOwnershipFilter,
-  SIDEBAR_OWNERSHIP_FILTER_STORAGE_KEY,
-  SIDEBAR_OWNERSHIP_RELATION_STORAGE_KEY,
-  type SidebarOwnershipFilter,
-} from "./listEnvironmentFilter";
+  identityClaimPersonIdByEnvironmentAtom,
+  identityEnabledEnvironmentIdsAtom,
+} from "../state/identity";
 
-function readRaw(key: string): string | null {
-  try {
-    return window.localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
+/** Mine + unattributed by default, so the inbox focuses on work you started or joined. */
+export type SidebarOwnershipFilter = "any" | "mine" | "mine-only" | "theirs";
+export const SIDEBAR_OWNERSHIP_FILTERS = ["any", "mine", "mine-only", "theirs"] as const;
+export const SIDEBAR_OWNERSHIP_RELATIONS = ["both", "created", "participated"] as const;
+const DEFAULT_SIDEBAR_OWNERSHIP_FILTER: SidebarOwnershipFilter = "mine";
 
-function writeRaw(key: string, value: string) {
-  try {
-    window.localStorage.setItem(key, value);
-  } catch {
-    // A storage failure must not take the menu down with it; the selection
-    // simply does not survive a reload.
-  }
-  dispatchLocalStorageChange(key);
-}
-
-function subscribeToKey(key: string) {
-  return (onStoreChange: () => void) => {
-    const handleStorage = (event: StorageEvent) => {
-      if (event.key === key) onStoreChange();
-    };
-    const handleLocal = (event: CustomEvent<LocalStorageChangeDetail>) => {
-      if (event.detail.key === key) onStoreChange();
-    };
-    window.addEventListener("storage", handleStorage);
-    window.addEventListener(LOCAL_STORAGE_CHANGE_EVENT, handleLocal as EventListener);
-    return () => {
-      window.removeEventListener("storage", handleStorage);
-      window.removeEventListener(LOCAL_STORAGE_CHANGE_EVENT, handleLocal as EventListener);
-    };
-  };
-}
-
-const subscribeToMode = subscribeToKey(SIDEBAR_OWNERSHIP_FILTER_STORAGE_KEY);
-const subscribeToRelation = subscribeToKey(SIDEBAR_OWNERSHIP_RELATION_STORAGE_KEY);
-const readMode = () => readRaw(SIDEBAR_OWNERSHIP_FILTER_STORAGE_KEY);
-const readRelation = () => readRaw(SIDEBAR_OWNERSHIP_RELATION_STORAGE_KEY);
-// Server render has no storage; both fall back to the documented defaults.
-const readNothing = () => null;
+const SIDEBAR_OWNERSHIP_FILTER_STORAGE_KEY = "t3.sidebar.ownershipFilter";
+const SIDEBAR_OWNERSHIP_RELATION_STORAGE_KEY = "t3.sidebar.ownershipRelation";
+const OwnershipFilterSchema = Schema.Literals(SIDEBAR_OWNERSHIP_FILTERS);
+const OwnershipRelationSchema = Schema.Literals(SIDEBAR_OWNERSHIP_RELATIONS);
 
 export interface OwnershipFilterState {
   readonly mode: SidebarOwnershipFilter;
@@ -73,23 +35,17 @@ export interface OwnershipFilterState {
 
 /** Reads the shared ownership selection and keeps every subscriber in step. */
 export function useOwnershipFilter(): OwnershipFilterState {
-  const rawMode = useSyncExternalStore(subscribeToMode, readMode, readNothing);
-  const rawRelation = useSyncExternalStore(subscribeToRelation, readRelation, readNothing);
-
-  const setMode = (next: SidebarOwnershipFilter) => {
-    writeRaw(SIDEBAR_OWNERSHIP_FILTER_STORAGE_KEY, next);
-  };
-  const setRelation = (next: OwnershipRelation) => {
-    writeRaw(SIDEBAR_OWNERSHIP_RELATION_STORAGE_KEY, next);
-  };
-
-  return {
-    mode:
-      rawMode === null ? DEFAULT_SIDEBAR_OWNERSHIP_FILTER : parseSidebarOwnershipFilter(rawMode),
-    relation: isOwnershipRelation(rawRelation) ? rawRelation : DEFAULT_OWNERSHIP_RELATION,
-    setMode,
-    setRelation,
-  };
+  const [mode, setMode] = useLocalStorage(
+    SIDEBAR_OWNERSHIP_FILTER_STORAGE_KEY,
+    DEFAULT_SIDEBAR_OWNERSHIP_FILTER,
+    OwnershipFilterSchema,
+  );
+  const [relation, setRelation] = useLocalStorage(
+    SIDEBAR_OWNERSHIP_RELATION_STORAGE_KEY,
+    DEFAULT_OWNERSHIP_RELATION,
+    OwnershipRelationSchema,
+  );
+  return { mode, relation, setMode, setRelation };
 }
 
 const EMPTY_CLAIMS: ReadonlyMap<string, string | null | undefined> = new Map();
@@ -101,12 +57,7 @@ export interface OwnershipFilterableThread {
   readonly participantSummaries?: ReadonlyArray<{ readonly personId: string }> | undefined;
 }
 
-/**
- * Builds the ownership predicate once for a list pass.
- *
- * Every surface that lists threads uses this predicate to apply the same
- * ownership selection.
- */
+/** Builds the ownership predicate once for a list pass. */
 export function buildOwnershipPredicate(input: {
   readonly claimPersonIdByEnvironment: ReadonlyMap<string, string | null | undefined> | undefined;
   readonly mode: SidebarOwnershipFilter;
@@ -123,4 +74,27 @@ export function buildOwnershipPredicate(input: {
       mode: input.mode,
       relation: input.relation,
     });
+}
+
+/**
+ * Sidebar hook: threads from environments with an identity map follow the ownership
+ * selection; environments without one are listed as before.
+ */
+export function useOwnedThreads(
+  threads: ReadonlyArray<EnvironmentThreadShell>,
+): ReadonlyArray<EnvironmentThreadShell> {
+  const { mode, relation } = useOwnershipFilter();
+  const claimPersonIdByEnvironment = useAtomValue(identityClaimPersonIdByEnvironmentAtom);
+  const enabled = useAtomValue(identityEnabledEnvironmentIdsAtom);
+  if (enabled.size === 0 || mode === "any") return threads;
+  const owned = buildOwnershipPredicate({ claimPersonIdByEnvironment, mode, relation });
+  return threads.filter(
+    (thread) =>
+      !enabled.has(thread.environmentId) ||
+      owned({
+        environmentId: thread.environmentId,
+        originSource: thread.source.originSource,
+        participantSummaries: thread.source.participantSummaries,
+      }),
+  );
 }

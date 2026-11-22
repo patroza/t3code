@@ -5,7 +5,6 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
-import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
@@ -938,7 +937,7 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
       updated.delete(acknowledgement);
       return { ...state, outstandingAcknowledgements: updated };
     }).pipe(Effect.andThen(Deferred.succeed(acknowledgement, undefined)), Effect.asVoid);
-  const outgoingFiber = yield* Stream.fromQueue(outgoing).pipe(
+  yield* Stream.fromQueue(outgoing).pipe(
     Stream.flatMap((write) => {
       const acknowledgement = write.acknowledgement;
       const completion =
@@ -995,15 +994,6 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
     Effect.forkScoped,
   );
 
-  // A child may wait for stdin EOF before exiting. Interrupt the queued writer
-  // first, then complete the sink so process-scope teardown can await exit.
-  yield* Effect.addFinalizer(() =>
-    Fiber.interrupt(outgoingFiber).pipe(
-      Effect.andThen(Stream.run(Stream.empty, options.stdio.stdout())),
-      Effect.ignore,
-    ),
-  );
-
   // Protocol loops and per-message sends share the caller's operation span.
   const clientProtocol = RpcClient.Protocol.of({
     run: Effect.fnUntraced(function* (_clientId, f) {
@@ -1013,9 +1003,6 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
       );
     }),
     send: Effect.fnUntraced(function* (_clientId, request) {
-      // ACP accepts JSON-RPC requests, not Effect-RPC control frames. Cancellation
-      // uses `session/cancel`, so control frames must never reach the agent's stdin.
-      if (request._tag !== "Request") return;
       return yield* offerOutgoing(request).pipe(
         Effect.mapError(
           (error) =>

@@ -51,14 +51,14 @@ describe("mobile release dispatch", () => {
   it("skips a disabled TestFlight release without dispatching another build", () => {
     const result = run("disabled");
     expect(result.status).toBe(0);
-    expect(result.calls).not.toContain("workflow run mobile-eas-production.yml");
+    expect(result.calls).not.toContain("workflow run fork-mobile-eas-production.yml");
     expect(result.calls).not.toContain("mobile-eas-development.yml");
     expect(result.stdout).toContain("disabled_manually");
   });
   it("dispatches only the iOS TestFlight workflow with the exact source", () => {
     const result = run("active");
     expect(result.status).toBe(0);
-    expect(result.calls).toContain("workflow run mobile-eas-production.yml");
+    expect(result.calls).toContain("workflow run fork-mobile-eas-production.yml");
     expect(result.calls).not.toContain("mobile-eas-development.yml");
     expect(result.calls).toContain("sha=exact-sha");
     expect(result.calls).toContain("mode=auto");

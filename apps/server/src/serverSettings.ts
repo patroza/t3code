@@ -493,9 +493,6 @@ function migrateLegacyProviderSettings(
 
   return {
     ...settings,
-    // Retain the legacy contract field, but retire its migrated values so
-    // sparse persistence removes the map after instances become authoritative.
-    providers: DEFAULT_SERVER_SETTINGS.providers,
     providerInstances,
   };
 }

@@ -1,7 +1,3 @@
-import type {
-  MessageSenderSource,
-  MessageSenderViewer,
-} from "@t3tools/client-runtime/user-message";
 import type { ToolCallDiffTarget } from "../../diffPanelStore";
 import type { SideThreadOpenIntent } from "@t3tools/client-runtime/side-thread";
 import type {
@@ -87,15 +83,13 @@ export interface TimelineRowSharedState {
   renderHtmlRender: ((row: Extract<TimelineRow, { kind: "html-render" }>) => ReactNode) | undefined;
   /** Unset, expanded rows read detail and command output from the environment. */
   turnItemSource: TurnItemSource | undefined;
+  messageSender?: import("./MessageSenderCaption").MessageSenderContext | undefined;
   onOpenThread: (
     threadId: OrchestrationV2TurnItem["threadId"],
     environmentId?: EnvironmentId,
     /** How the click asked to open a subagent or side chat; a plain click when absent. */
     intent?: SideThreadOpenIntent,
   ) => void;
-  messageViewer?: MessageSenderViewer | undefined;
-  originSource?: MessageSenderSource | null | undefined;
-  messageSourceById?: ReadonlyMap<string, MessageSenderSource> | undefined;
   workflowOpening: WorkflowOpening | null;
   /** Absent hides "Fork from this response", as in the guest view. */
   onForkFromRun:

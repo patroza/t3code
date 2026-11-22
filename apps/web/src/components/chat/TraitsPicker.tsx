@@ -1,8 +1,5 @@
-import type { EffortDisplay } from "@t3tools/contracts/settings";
-import { EffortGlyph, resolveEffortGlyph } from "./EffortGlyph";
-import { focusRequestedPermission, useComposerMenuProps } from "./composerEventScope";
 import {
-  buildTraitsTriggerDisplay as buildSharedTraitsTriggerDisplay,
+  buildTraitsTriggerDisplay,
   getDescriptorStringValue,
   getTraitSelectChange,
   replaceDescriptorCurrentValue,
@@ -21,15 +18,13 @@ import {
 import {
   buildProviderOptionSelectionsFromDescriptors,
   getProviderOptionCurrentLabel,
-  getProviderOptionCurrentValue,
   getProviderOptionDescriptors,
   isClaudeUltrathinkPrompt,
   normalizeModelSlug,
 } from "@t3tools/shared/model";
-import { memo, type ReactNode, useRef } from "react";
-import { UltrafastIcon } from "../Icons";
-import { BrainIcon, GaugeIcon, ZapIcon } from "lucide-react";
 import { msg, T, useMessages } from "gt-react";
+import { memo } from "react";
+import { GaugeIcon } from "lucide-react";
 import {
   Menu,
   MenuGroup,
@@ -77,9 +72,9 @@ function savedOptionLabel(id: string, resolve: MessageResolver): string {
         .replace(/^./, (character) => character.toUpperCase());
 }
 
-export function buildUnavailableModelOptionDescriptors(
+function buildUnavailableModelOptionDescriptors(
   selections: ProviderOptions | null | undefined,
-  resolve: MessageResolver = m,
+  resolve: MessageResolver,
 ): ReadonlyArray<ProviderOptionDescriptor> {
   return (selections ?? []).map((selection) =>
     typeof selection.value === "boolean"
@@ -309,11 +304,6 @@ export interface TraitsMenuContentProps {
   allowPromptInjectedEffort?: boolean;
   includePlanAgent?: boolean | undefined;
   triggerClassName?: string;
-  isComposerOwned?: boolean;
-  effortDisplay?: EffortDisplay;
-  extraMenuContent?: ReactNode;
-  extraMenuOwnsModeShortcut?: boolean;
-  extraMenuHint?: string;
 }
 
 export type TraitsSelectionInput = TraitsMenuContentProps & TraitsPersistence;
@@ -512,90 +502,6 @@ const TraitsMenuContent = memo(function TraitsMenuContentImpl(props: TraitsSelec
   );
 });
 
-/**
- * Fast mode uses one bolt; Codex Ultrafast uses two. Keep a text label when
- * speed is the only trait so the trigger remains readable.
- */
-export function buildTraitsTriggerDisplay(input: {
-  provider: ProviderDriverKind;
-  descriptors: ReadonlyArray<ProviderOptionDescriptor>;
-  primarySelectDescriptorId: string | null;
-  ultrathinkPromptControlled: boolean;
-  modelSelection?: ModelSelection | null;
-  reportedModelSelection?: ModelSelection | null | undefined;
-}): { label: string; speedIcon: "fast" | "ultrafast" | null } {
-  let fastModeFallbackLabel: string | null = null;
-  let speedIcon: "fast" | "ultrafast" | null = null;
-  const labels: Array<string> = [];
-  for (const descriptor of input.descriptors) {
-    if (descriptor.id === "fastMode" && descriptor.type === "boolean") {
-      speedIcon = descriptor.currentValue === true ? "fast" : null;
-      fastModeFallbackLabel = speedIcon ? "Fast" : "Normal";
-      continue;
-    }
-    if (
-      input.provider === "codex" &&
-      descriptor.id === "serviceTier" &&
-      descriptor.type === "select"
-    ) {
-      const currentValue = getProviderOptionCurrentValue(descriptor);
-      const fastTier = descriptor.options.find(({ label }) => label === "Fast");
-      const ultrafastTier = descriptor.options.find(({ label }) => label === "Ultrafast");
-      if (
-        ((fastTier || ultrafastTier) && currentValue === "default") ||
-        (fastTier && currentValue === fastTier.id) ||
-        (ultrafastTier && currentValue === ultrafastTier.id)
-      ) {
-        speedIcon =
-          ultrafastTier && currentValue === ultrafastTier.id
-            ? "ultrafast"
-            : fastTier && currentValue === fastTier.id
-              ? "fast"
-              : null;
-        fastModeFallbackLabel =
-          descriptor.options.find(({ id }) => id === currentValue)?.label ?? "Normal";
-        continue;
-      }
-    }
-    const label =
-      input.ultrathinkPromptControlled && descriptor.id === input.primarySelectDescriptorId
-        ? "Ultrathink"
-        : descriptor.type === "boolean"
-          ? `${descriptor.label} ${descriptor.currentValue === true ? "On" : "Off"}`
-          : getProviderOptionCurrentLabel(
-              descriptor,
-              input.modelSelection,
-              input.reportedModelSelection,
-            );
-    if (typeof label === "string" && label.length > 0) {
-      labels.push(label);
-    }
-  }
-
-  if (labels.length === 0 && fastModeFallbackLabel !== null) {
-    return { label: fastModeFallbackLabel, speedIcon: null };
-  }
-  return { label: labels.join(" · "), speedIcon };
-}
-
-/** One bolt for Fast. Ultrafast adds an outlined echo behind it, cut away by the surface color. */
-function FastBolt(props: { ultra: boolean }) {
-  if (!props.ultra) {
-    return (
-      <ZapIcon aria-hidden="true" data-composer-control-icon className="size-3 fill-current" />
-    );
-  }
-  return (
-    <span aria-hidden="true" className="relative h-3 w-3.75 shrink-0">
-      <ZapIcon className="absolute top-0 left-0.75 size-3" />
-      <ZapIcon
-        strokeWidth={4}
-        className="absolute top-0 left-0 size-3 fill-current stroke-(--chat-composer-glass-surface) [paint-order:stroke]"
-      />
-    </span>
-  );
-}
-
 export const TraitsPicker = memo(function TraitsPicker({
   size = "sm",
   hidden = false,
@@ -608,80 +514,24 @@ export const TraitsPicker = memo(function TraitsPicker({
 }) {
   const [isMenuOpen, setIsMenuOpen] = useComposerMenuState(hidden || disabled);
   const traits = useTraitsSelection(props);
-  const composerFloatingLayerProps = useComposerMenuProps();
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const {
-    provider,
-    instanceId,
-    model,
-    modelOptions,
-    reportedModelSelection,
-    triggerClassName,
-    isComposerOwned,
-    effortDisplay = "label",
-    extraMenuContent,
-    extraMenuOwnsModeShortcut,
-    extraMenuHint,
-  } = props;
-  const { descriptors, primarySelectDescriptor, ultrathinkPromptControlled } = traits;
+  const resolve = useMessages();
   if (!traits.hasAnyControls) {
     return null;
   }
-
-  const { label: triggerLabel, speedLabel } = buildSharedTraitsTriggerDisplay({
-    descriptors,
-    primarySelectDescriptorId: primarySelectDescriptor?.id ?? null,
-    ultrathinkPromptControlled,
-    modelSelection: instanceId && model ? { instanceId, model, options: modelOptions ?? [] } : null,
-    reportedModelSelection,
-  });
-  const otherLabels = descriptors
-    .filter(
-      (descriptor) =>
-        !isReasoningSelect(descriptor) &&
-        descriptor.id !== "fastMode" &&
-        descriptor.id !== "serviceTier",
-    )
-    .map((descriptor) => traits.currentLabel(descriptor))
-    .filter((label): label is string => typeof label === "string" && label.length > 0);
-  const speedIcon =
-    speedLabel === "Ultrafast" ? "ultrafast" : speedLabel === "Fast" ? "fast" : null;
-  const fastModeIcon = speedIcon ? (
-    <>
-      <ComposerControlIcon
-        icon={speedIcon === "ultrafast" ? UltrafastIcon : ZapIcon}
-        size={size}
-        className={size === "xs" ? "text-current" : "text-foreground/80 opacity-100"}
-      />
-      <span className="sr-only">{speedLabel}</span>
-    </>
-  ) : null;
-
-  const isCodexStyle = provider === "codex";
-  // In the composer the glyph has no word, so the tooltip and label name the control.
-  const triggerDescription = isComposerOwned
-    ? [`Effort: ${triggerLabel}`, speedLabel, extraMenuHint].filter(Boolean).join(" · ")
-    : triggerLabel;
-  const effortGlyph =
-    isComposerOwned && primarySelectDescriptor && isReasoningSelect(primarySelectDescriptor)
-      ? resolveEffortGlyph(
-          primarySelectDescriptor,
-          ultrathinkPromptControlled
-            ? "ultrathink"
-            : getDescriptorStringValue(
-                primarySelectDescriptor,
-                instanceId && model ? { instanceId, model, options: modelOptions ?? [] } : null,
-                reportedModelSelection,
-              ),
-        )
-      : null;
-  // Workflow levels such as Ultracode always show their name; the setting names every level.
-  // Traits the bars cannot show, such as an agent mode, appear as words in the composer.
-  const effortWord = effortGlyph
-    ? (effortGlyph.special ?? (effortDisplay === "label" ? effortGlyph.label : null))
-    : isComposerOwned
-      ? triggerLabel
-      : null;
+  const { label: triggerLabel } = buildTraitsTriggerDisplay(
+    {
+      descriptors: traits.descriptors,
+      primarySelectDescriptorId: traits.primarySelectDescriptor?.id ?? null,
+      ultrathinkPromptControlled: traits.ultrathinkPromptControlled,
+      modelSelection:
+        props.instanceId && props.model
+          ? { instanceId: props.instanceId, model: props.model, options: props.modelOptions ?? [] }
+          : null,
+      reportedModelSelection: props.reportedModelSelection,
+    },
+    resolve,
+  );
+  const isCodexStyle = props.provider === "codex";
 
   return (
     <Menu
@@ -689,7 +539,6 @@ export const TraitsPicker = memo(function TraitsPicker({
       onOpenChange={(open) => {
         setIsMenuOpen(open && !disabled);
       }}
-      onOpenChangeComplete={(open) => focusRequestedPermission(open, triggerRef.current)}
     >
       <Tooltip>
         <TooltipTrigger
@@ -697,125 +546,43 @@ export const TraitsPicker = memo(function TraitsPicker({
             <MenuTrigger
               render={
                 <ComposerControl
-                  ref={triggerRef}
                   disabled={disabled}
-                  aria-label={triggerDescription}
-                  data-composer-shortcut={
-                    isComposerOwned
-                      ? extraMenuOwnsModeShortcut
-                        ? "composer.effort composer.mode"
-                        : "composer.effort"
-                      : undefined
-                  }
+                  aria-label={triggerLabel}
                   size={size}
                   className={cn(
                     isCodexStyle
                       ? "min-w-0 max-w-40 shrink justify-start overflow-hidden whitespace-nowrap sm:max-w-48"
                       : "shrink-0 whitespace-nowrap",
-                    triggerClassName,
-                    // Effort reads on from the model name, "Opus 5.5 High", at about the space
-                    // inside the name: this cancels the model chip's end padding and the row gap.
-                    isComposerOwned && (effortWord !== null ? "-ms-1 ps-0" : "-ms-1 ps-0.5"),
-                    // The word is muted next to the model name and brightens like it on hover.
-                    effortWord !== null &&
-                      "text-muted-foreground hover:text-foreground data-pressed:text-foreground data-popup-open:text-foreground",
+                    props.triggerClassName,
                   )}
                 />
               }
             />
           }
         >
-          {effortGlyph ? (
-            <span className="flex items-center gap-1.5">
-              {effortWord === null ? (
-                <EffortGlyph count={effortGlyph.count} filled={effortGlyph.filled} size={size} />
-              ) : null}
-              {effortWord !== null ? (
-                <>
-                  <span data-composer-control-label>{effortWord}</span>
-                  {/* Icon-only footers hide labels and reveal this instead. */}
-                  <GaugeIcon
-                    aria-hidden="true"
-                    data-composer-control-compact-icon
-                    className="invisible absolute size-3.5"
-                  />
-                </>
-              ) : (
-                <span data-composer-control-label className="sr-only">
-                  {triggerLabel}
-                </span>
-              )}
-              {speedLabel === "Fast" || speedLabel === "Ultrafast" ? (
-                <FastBolt ultra={speedLabel === "Ultrafast"} />
-              ) : null}
-              {otherLabels.length > 0 ? (
-                <span
-                  aria-hidden="true"
-                  // A label, so icon-only footers drop it; compacted rows drop it before the model.
-                  data-composer-control-label
-                  data-composer-secondary-trait
-                  className="max-w-24 truncate text-xs"
-                >
-                  {otherLabels.join(" · ")}
-                </span>
-              ) : null}
-            </span>
-          ) : effortWord !== null ? (
-            <>
-              <span data-composer-control-label>{effortWord}</span>
-              <GaugeIcon
-                aria-hidden="true"
-                data-composer-control-compact-icon
-                className="invisible absolute size-3.5"
-              />
-            </>
-          ) : isCodexStyle ? (
+          {isCodexStyle ? (
             <span
               className={cn(
                 "flex min-w-0 w-full items-center",
                 size === "xs" ? "gap-1" : "gap-1.5",
               )}
             >
-              {fastModeIcon ?? (
-                <>
-                  <ComposerControlIcon icon={BrainIcon} size={size} className="redesign:hidden" />
-                  <ComposerControlIcon
-                    icon={GaugeIcon}
-                    size={size}
-                    className="hidden redesign:block"
-                  />
-                </>
-              )}
+              <ComposerControlIcon icon={GaugeIcon} size={size} />
               <span data-composer-control-label className="min-w-0 truncate">
                 {triggerLabel}
               </span>
             </span>
           ) : (
             <>
-              {fastModeIcon ?? (
-                <>
-                  <ComposerControlIcon icon={BrainIcon} size={size} className="redesign:hidden" />
-                  <ComposerControlIcon
-                    icon={GaugeIcon}
-                    size={size}
-                    className="hidden redesign:block"
-                  />
-                </>
-              )}
+              <ComposerControlIcon icon={GaugeIcon} size={size} />
               <span data-composer-control-label>{triggerLabel}</span>
             </>
           )}
         </TooltipTrigger>
-        <TooltipPopup side="top">{triggerDescription}</TooltipPopup>
+        <TooltipPopup side="top">{triggerLabel}</TooltipPopup>
       </Tooltip>
-      <MenuPopup align="start" {...(isComposerOwned ? composerFloatingLayerProps : {})}>
+      <MenuPopup align="start">
         <TraitsMenuContent {...props} />
-        {extraMenuContent ? (
-          <>
-            <MenuDivider />
-            {extraMenuContent}
-          </>
-        ) : null}
       </MenuPopup>
     </Menu>
   );

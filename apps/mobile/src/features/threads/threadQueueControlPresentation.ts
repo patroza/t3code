@@ -11,8 +11,6 @@ export const REMOVE_QUEUED_MESSAGE_ACCESSIBILITY_LABEL = msg("Remove queued mess
 export interface ThreadQueueRowControls {
   readonly canDismiss: boolean;
   readonly canEdit: boolean;
-  readonly canMoveDown: boolean;
-  readonly canMoveUp: boolean;
   readonly canSend: boolean;
   readonly dismissAccessibilityLabel: string;
   readonly displayText: string;
@@ -23,14 +21,11 @@ export function resolveThreadQueueRowControls(input: {
   readonly busy: boolean;
   readonly canPromoteToSteer: boolean;
   readonly canSendNow: boolean;
-  readonly canReorder: boolean;
   /** Something else holds the composer, such as an open question. */
   readonly editBlocked?: boolean;
-  readonly index: number;
   readonly isEditing?: boolean;
   /** A guest's message keeps the guest's words; the owner can cancel it, not rewrite it. */
   readonly isGuestMessage?: boolean;
-  readonly queuedCount: number;
   readonly text: string;
 }): ThreadQueueRowControls {
   const mutationEnabled = !input.busy;
@@ -42,8 +37,6 @@ export function resolveThreadQueueRowControls(input: {
     // away whatever has been typed since.
     canEdit:
       mutationEnabled && !isEditing && input.isGuestMessage !== true && input.editBlocked !== true,
-    canMoveDown: mutationEnabled && input.canReorder && input.index < input.queuedCount - 1,
-    canMoveUp: mutationEnabled && input.canReorder && input.index > 0,
     canSend: mutationEnabled && (input.canPromoteToSteer || input.canSendNow) && !isEditing,
     dismissAccessibilityLabel: REMOVE_QUEUED_MESSAGE_ACCESSIBILITY_LABEL,
     // Editing and sending keep the original text so quoted citations stay linked.
@@ -74,28 +67,4 @@ export function buildCancelQueuedRunCommand(input: {
       threadId: input.threadId,
     },
   };
-}
-
-export function resolveQueueDragBeforeRunId(
-  rows: ReadonlyArray<{ id: RunId; y?: number; height?: number }>,
-  runId: RunId,
-  translationY: number,
-): RunId | null | undefined {
-  const sourceIndex = rows.findIndex((row) => row.id === runId);
-  const source = rows[sourceIndex];
-  if (!source || rows.some((row) => row.y === undefined || row.height === undefined)) return;
-  const center = source.y! + source.height! / 2 + translationY;
-  const remaining = rows.filter((row) => row.id !== runId);
-  return remaining.find((row) => center < row.y! + row.height! / 2)?.id ?? null;
-}
-
-export function resolveQueueDropBeforeRunId(
-  rows: ReadonlyArray<{ id: RunId; y?: number; height?: number }>,
-  runId: RunId,
-  translationY: number,
-): RunId | null | undefined {
-  const before = resolveQueueDragBeforeRunId(rows, runId, translationY);
-  if (before === undefined) return;
-  const sourceIndex = rows.findIndex((row) => row.id === runId);
-  return before === (rows[sourceIndex + 1]?.id ?? null) ? undefined : before;
 }

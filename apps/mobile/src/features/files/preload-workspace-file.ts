@@ -6,7 +6,6 @@ import {
   isWorkspaceBrowserPreviewPath,
   isWorkspaceImagePreviewPath,
 } from "@t3tools/shared/filePreview";
-import { Atom } from "effect/reactivity";
 
 import { appAtomRegistry } from "../../state/atom-registry";
 import { projectEnvironment } from "../../state/projects";
@@ -17,7 +16,6 @@ import type { HighlightScheme } from "../../lib/highlights";
 
 const inFlightPreloads = new Map<string, Promise<void>>();
 const MAX_HIGHLIGHT_PRELOAD_CHARACTERS = 256 * 1024;
-const WORKSPACE_FILE_PRELOAD_RETAIN_MS = 1_000;
 
 function preloadKey(input: {
   readonly cwd: string;
@@ -49,12 +47,10 @@ export function preloadWorkspaceFileContents(input: {
 
   const preload = executeAtomQuery(
     appAtomRegistry,
-    projectEnvironment
-      .readFile({
-        environmentId: input.environmentId,
-        input: { cwd: input.cwd, relativePath: input.relativePath },
-      })
-      .pipe(Atom.setIdleTTL(WORKSPACE_FILE_PRELOAD_RETAIN_MS)),
+    projectEnvironment.readFile({
+      environmentId: input.environmentId,
+      input: { cwd: input.cwd, relativePath: input.relativePath },
+    }),
     {
       label: "workspace file preload",
       reportDefect: false,

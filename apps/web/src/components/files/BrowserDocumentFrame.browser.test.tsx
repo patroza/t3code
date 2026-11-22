@@ -322,33 +322,6 @@ it("keeps the first and last selected card rings inside the fitted renderer fram
   }
 });
 
-it("runs HTML reports without granting access to the parent document", async () => {
-  const report = new Promise<boolean>((resolve) => {
-    window.addEventListener("message", function received(event) {
-      if (event.data?.type !== "report-parent-access") return;
-      window.removeEventListener("message", received);
-      resolve(event.data.blocked === true && event.origin === "null");
-    });
-  });
-  const src = URL.createObjectURL(
-    new Blob(
-      [
-        `<script>
-    let blocked = false;
-    try { parent.document.body; } catch { blocked = true; }
-    parent.postMessage({type: "report-parent-access", blocked}, "*");
-  </script>`,
-      ],
-      { type: "text/html" },
-    ),
-  );
-  using _url = { [Symbol.dispose]: () => URL.revokeObjectURL(src) };
-  await using _screen = await render(
-    <BrowserDocumentFrame src={src} title="Local report" pdf={false} />,
-  );
-  expect(await report).toBe(true);
-});
-
 describe("BrowserDocumentFrame", () => {
   it("keeps a page on screen until its next revision has loaded", async () => {
     using pages = (() => {

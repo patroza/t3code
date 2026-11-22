@@ -299,7 +299,6 @@ const startSingleBranchRun = (input: {
           fetchedRefs.push(ref);
           if (input.refuseCommitFetch && ref === repositories.headSha) {
             return yield* new GitCommandError({
-              failureKind: "unknown",
               operation: call.operation,
               command: "git",
               cwd: call.cwd,

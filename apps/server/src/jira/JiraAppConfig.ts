@@ -14,6 +14,8 @@ export interface EnabledJiraAppConfig {
   readonly webhookSecret: string;
   readonly mention: string;
   readonly baseUrl: string;
+  /** Where people open issues (`https://<site>.atlassian.net`); the base URL unless it is a gateway. */
+  readonly siteUrl: string;
   readonly username: string;
   readonly apiToken: string;
   readonly authMode: JiraAuthMode;
@@ -82,6 +84,7 @@ const configEffect = Effect.gen(function* () {
     mention: optionalString("T3CODE_JIRA_MENTION"),
     baseUrl: optionalString("T3CODE_JIRA_URL"),
     legacyBaseUrl: optionalString("JIRA_URL"),
+    siteUrl: optionalString("T3CODE_JIRA_SITE_URL"),
     username: optionalString("T3CODE_JIRA_USERNAME"),
     legacyUsername: optionalString("JIRA_USERNAME"),
     apiToken: optionalSecret("T3CODE_JIRA_API_TOKEN"),
@@ -138,6 +141,7 @@ const configEffect = Effect.gen(function* () {
     webhookSecret: values.webhookSecret!,
     mention,
     baseUrl: baseUrl!.replace(/\/+$/u, ""),
+    siteUrl: (values.siteUrl?.trim() || baseUrl!).replace(/\/+$/u, ""),
     username: username!,
     apiToken: apiToken!,
     authMode: values.authMode,

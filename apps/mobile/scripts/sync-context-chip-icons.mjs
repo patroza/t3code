@@ -172,8 +172,7 @@ const providerSource = `\nexport const PROVIDER_CHIP_ICONS: Readonly<\n  Record<
       readonly accent?: string;
     }
   >\n> = {\n${providerLogos
-    .slice()
-    .sort((left, right) => left.driverKind.localeCompare(right.driverKind))
+    .toSorted((left, right) => left.driverKind.localeCompare(right.driverKind))
     .map(
       ({ driverKind, tintsIcon, accent }) =>
         `  ${driverKind}: {\n    source: require("../../assets/context-chip-icons/provider-${driverKind}.png"),\n    tintsIcon: ${tintsIcon},\n${accent ? `    accent: "${accent}",\n` : ""}  },`,

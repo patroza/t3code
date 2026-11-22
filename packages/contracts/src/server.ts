@@ -700,6 +700,13 @@ export const ServerEventLoopStall = Schema.Struct({
 });
 export type ServerEventLoopStall = typeof ServerEventLoopStall.Type;
 
+/** The boolean `T3CODE_FEATURE_FLAGS` a server started with. Unset flags are off. */
+export const ServerFeatureFlags = Schema.Struct({
+  secretProviders: Schema.optionalKey(Schema.Boolean),
+  tanstackSource: Schema.optionalKey(Schema.Boolean),
+});
+export type ServerFeatureFlags = typeof ServerFeatureFlags.Type;
+
 export const ServerConfig = Schema.Struct({
   environment: ExecutionEnvironmentDescriptor,
   auth: ServerAuthDescriptor,
@@ -737,6 +744,7 @@ export const ServerConfig = Schema.Struct({
   threadSnapshotPagination: Schema.optionalKey(Schema.Boolean),
   threadFind: Schema.optionalKey(Schema.Boolean),
   threadFindProgressive: Schema.optionalKey(Schema.Boolean),
+  featureFlags: Schema.optionalKey(ServerFeatureFlags),
   /** Settings patches may carry `secretProviders`; older servers drop the key without an error. */
   secretProviderSettings: Schema.optionalKey(Schema.Boolean),
   /** Secret settings may point at a secret provider; older servers drop the reference. */
@@ -963,22 +971,6 @@ export const ServerLifecycleStreamReadyEvent = Schema.Struct({
 });
 export type ServerLifecycleStreamReadyEvent = typeof ServerLifecycleStreamReadyEvent.Type;
 
-export const ServerLifecycleWebVersionPayload = Schema.Struct({
-  // Identity of the served web bundle (a hash of index.html). Clients compare
-  // the value they booted with against later broadcasts to detect that the
-  // server's static assets were hot-swapped underneath them.
-  webVersion: TrimmedNonEmptyString,
-});
-export type ServerLifecycleWebVersionPayload = typeof ServerLifecycleWebVersionPayload.Type;
-
-export const ServerLifecycleStreamWebVersionChangedEvent = Schema.Struct({
-  version: Schema.Literal(1),
-  sequence: NonNegativeInt,
-  type: Schema.Literal("webVersionChanged"),
-  payload: ServerLifecycleWebVersionPayload,
-});
-export type ServerLifecycleStreamWebVersionChangedEvent =
-  typeof ServerLifecycleStreamWebVersionChangedEvent.Type;
 export const ServerLifecycleStreamLegacyThreadMigrationEvent = Schema.Struct({
   version: Schema.Literal(1),
   sequence: NonNegativeInt,
@@ -991,7 +983,6 @@ export type ServerLifecycleStreamLegacyThreadMigrationEvent =
 export const ServerLifecycleStreamEvent = Schema.Union([
   ServerLifecycleStreamWelcomeEvent,
   ServerLifecycleStreamReadyEvent,
-  ServerLifecycleStreamWebVersionChangedEvent,
   ServerLifecycleStreamLegacyThreadMigrationEvent,
 ]);
 export type ServerLifecycleStreamEvent = typeof ServerLifecycleStreamEvent.Type;

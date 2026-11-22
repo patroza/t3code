@@ -1,11 +1,7 @@
-import * as Cause from "effect/Cause";
-import { userEvent } from "vite-plus/test/browser";
 import { ThreadDetailsIssueRows } from "./ThreadDetailsIssueRows";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import {
   EnvironmentId,
-  GitCommandError,
-  GitManagerError,
   IssueTrackerKind,
   ProjectId,
   SourceControlProviderKind,
@@ -353,78 +349,6 @@ it.each([
   expect(document.querySelector('[role="alertdialog"]')!.textContent).toContain(
     `using ${expected}`,
   );
-});
-
-it("splits the change by file kind in the hover card", async () => {
-  await using screen = await setup();
-  const { container } = screen;
-  await act(() =>
-    screen.rerender(
-      <ThreadDetailsPrRow
-        environmentId={EnvironmentId.make("environment")}
-        pr={null}
-        number={1}
-        reference={{ repository: "owner/repo", number: 1 }}
-        status={null}
-        project={{ id: ProjectId.make("project"), repositoryIdentity: null } as never}
-        label="Test PR"
-
-        onOpen={vi.fn()}
-      />,
-    ),
-  );
-  await userEvent.hover(container.querySelector('button[aria-label^="Pull request #"]')!);
-  await expect
-    .poll(() => document.querySelector('[data-slot="tooltip-popup"][data-open]')?.textContent)
-    .toMatch(/Docs\+7-3/);
-});
-
-it("shows the current checkout recovery detail when fixing checks fails and is retried", async () => {
-  await using screen = await setup();
-  const { container } = screen;
-  state.status = "failure";
-  const first = new GitManagerError({
-    cwd: "/workspace",
-    operation: "preparePullRequestThread",
-    detail: "This PR branch is already checked out in the main repo. Use Local.",
-  });
-  const second = new GitCommandError({
-    failureKind: "unknown",
-    cwd: "/workspace",
-    operation: "GitVcsDriver.createWorktree",
-    command: "git worktree add",
-    detail: "The worktree directory already exists. Choose another directory.",
-  });
-  await act(async () => {
-    await screen.rerender(
-      <ThreadDetailsPrRow
-        environmentId={EnvironmentId.make("environment")}
-        pr={null}
-        number={1}
-        status={null}
-        project={null}
-        label="Test PR"
-
-        onOpen={vi.fn()}
-      />,
-    );
-  });
-
-  for (const error of [first, second]) {
-    state.prepareThread.mockImplementationOnce(async () => {
-      state.checkoutError = error;
-      return { _tag: "Failure", cause: Cause.fail(error) };
-    });
-    await act(async () => {
-      [...container.querySelectorAll("button")]
-        .find((button) => button.textContent?.trim() === "Fix")!
-        .click();
-    });
-  }
-  expect(state.updateToast.mock.calls.map(([, toast]) => toast.description)).toEqual([
-    expect.stringContaining(first.detail),
-    second.detail,
-  ]);
 });
 
 it("names a linked pull request row by its kind, number and title, not its URL", async () => {

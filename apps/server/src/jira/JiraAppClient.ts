@@ -90,7 +90,7 @@ const CommentGetResponse = Schema.Struct({
   parentId: Schema.optional(Schema.Union([Schema.String, Schema.Number, Schema.Null])),
 });
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const config = yield* JiraAppConfig;
   const httpClient = yield* HttpClient.HttpClient;
 

@@ -69,12 +69,6 @@ import {
   createRuntimeCommand,
   environmentSessionGenerationAtom,
   executeAtomQuery,
-  isAtomCommandInterrupted,
-  mapAtomCommandResult,
-  refreshQueryOnSuccess,
-  settleAsyncResult,
-  settlePromise,
-  squashAtomCommandFailure,
   type QueryAnswerHandler,
 } from "./runtime.ts";
 
@@ -217,221 +211,6 @@ const mountEnvironmentQuery = Effect.fn("TestEnvironmentQuery.mount")(function* 
   return registry;
 });
 
-describe("settleAsyncResult", () => {
-  it("preserves successful values and typed failures", async () => {
-    const success = await settleAsyncResult(() => Promise.resolve(Exit.succeed("done")));
-    expect(AsyncResult.isSuccess(success)).toBe(true);
-    if (AsyncResult.isSuccess(success)) {
-      expect(success.value).toBe("done");
-    }
-
-    const expectedFailure = new Error("request failed");
-    const failure = await settleAsyncResult(() => Promise.resolve(Exit.fail(expectedFailure)));
-    expect(AsyncResult.isFailure(failure)).toBe(true);
-    if (AsyncResult.isFailure(failure)) {
-      expect(Cause.hasDies(failure.cause)).toBe(false);
-      expect(Cause.squash(failure.cause)).toBe(expectedFailure);
-    }
-  });
-
-  it("encodes thrown and rejected promises as defects", async () => {
-    const thrownDefect = new Error("thrown defect");
-    const thrown = await settleAsyncResult<void, never>(() => {
-      throw thrownDefect;
-    });
-    expect(AsyncResult.isFailure(thrown)).toBe(true);
-    if (AsyncResult.isFailure(thrown)) {
-      expect(Cause.hasDies(thrown.cause)).toBe(true);
-      expect(Cause.squash(thrown.cause)).toBe(thrownDefect);
-    }
-
-    const rejectedDefect = new Error("rejected defect");
-    const rejected = await settleAsyncResult<void, never>(() => Promise.reject(rejectedDefect));
-    expect(AsyncResult.isFailure(rejected)).toBe(true);
-    if (AsyncResult.isFailure(rejected)) {
-      expect(Cause.hasDies(rejected.cause)).toBe(true);
-      expect(Cause.squash(rejected.cause)).toBe(rejectedDefect);
-    }
-  });
-});
-
-describe("refreshQueryOnSuccess", () => {
-  it.effect("refreshes the query for new success signals without replaying a cached signal", () =>
-    Effect.gen(function* () {
-      let reads = 0;
-      const query = Atom.make(
-        Effect.sync(() => {
-          reads += 1;
-          return reads;
-        }),
-      );
-      const signal = Atom.make<AsyncResult.AsyncResult<string, never>>(
-        AsyncResult.initial<string, never>(false),
-      );
-      const liveQuery = refreshQueryOnSuccess(query, signal);
-      const registry = AtomRegistry.make();
-      const unmount = registry.mount(liveQuery);
-
-      expect(
-        yield* AtomRegistry.getResult(registry, liveQuery, {
-          suspendOnWaiting: true,
-        }),
-      ).toBe(1);
-      expect(reads).toBe(1);
-
-      registry.set(signal, AsyncResult.success("changed"));
-      expect(
-        yield* AtomRegistry.getResult(registry, liveQuery, {
-          suspendOnWaiting: true,
-        }),
-      ).toBe(2);
-
-      unmount();
-      registry.dispose();
-    }),
-  );
-
-  it.effect("keeps a preloaded zero-TTL query warm through the consumer handoff", () =>
-    Effect.gen(function* () {
-      let reads = 0;
-      const query = Atom.make(
-        Effect.sync(() => {
-          reads += 1;
-          return reads;
-        }),
-      ).pipe(Atom.setIdleTTL(0));
-      const signal = Atom.make<AsyncResult.AsyncResult<string, never>>(
-        AsyncResult.initial<string, never>(false),
-      ).pipe(Atom.setIdleTTL(0));
-      const liveQuery = refreshQueryOnSuccess(query, signal);
-      const preloadedQuery = liveQuery.pipe(Atom.setIdleTTL(1_000));
-      const registry = AtomRegistry.make();
-
-      const preload = yield* Effect.promise(() =>
-        executeAtomQuery(registry, preloadedQuery, {
-          label: "preload",
-        }),
-      );
-      expect(AsyncResult.isSuccess(preload)).toBe(true);
-      expect(reads).toBe(1);
-
-      const unmountConsumer = registry.mount(liveQuery);
-      expect(
-        yield* AtomRegistry.getResult(registry, liveQuery, {
-          suspendOnWaiting: true,
-        }),
-      ).toBe(1);
-      expect(reads).toBe(1);
-
-      unmountConsumer();
-      registry.dispose();
-    }),
-  );
-
-  it.effect("revalidates a stale cached query after the live query remounts", () =>
-    Effect.gen(function* () {
-      let contents = "initial";
-      let reads = 0;
-      const query = Atom.make(
-        Effect.sync(() => {
-          reads += 1;
-          return contents;
-        }),
-      ).pipe(Atom.swr({ staleTime: 0, revalidateOnMount: true }), Atom.setIdleTTL(0));
-      const signal = Atom.make<AsyncResult.AsyncResult<string, never>>(
-        AsyncResult.initial<string, never>(false),
-      );
-      const liveQuery = refreshQueryOnSuccess(query, signal);
-      const scheduledTasks: Array<() => void> = [];
-      const registry = AtomRegistry.make({
-        defaultIdleTTL: 5 * 60_000,
-        scheduleTask: (task) => {
-          let active = true;
-          scheduledTasks.push(() => {
-            if (active) task();
-          });
-          return () => {
-            active = false;
-          };
-        },
-      });
-      const unmountInitial = registry.mount(liveQuery);
-
-      expect(
-        yield* AtomRegistry.getResult(registry, liveQuery, {
-          suspendOnWaiting: true,
-        }),
-      ).toBe("initial");
-      const readsAfterInitialMount = reads;
-
-      unmountInitial();
-      contents = "updated";
-      while (scheduledTasks.length > 0) {
-        scheduledTasks.shift()?.();
-      }
-
-      const unmountUpdated = registry.mount(liveQuery);
-      // SWR queues mount revalidation on the registry's asynchronous scheduler.
-      while (scheduledTasks.length > 0) {
-        scheduledTasks.shift()?.();
-      }
-      expect(
-        yield* AtomRegistry.getResult(registry, liveQuery, {
-          suspendOnWaiting: true,
-        }),
-      ).toBe("updated");
-      expect(reads).toBe(readsAfterInitialMount + 1);
-
-      unmountUpdated();
-      registry.dispose();
-    }),
-  );
-});
-
-describe("atom command result helpers", () => {
-  it("maps successful command values", () => {
-    const result = mapAtomCommandResult(AsyncResult.success(2), (value) => value * 3);
-
-    expect(result._tag).toBe("Success");
-    if (result._tag === "Success") {
-      expect(result.value).toBe(6);
-    }
-  });
-
-  it("preserves failures while mapping", () => {
-    const result = mapAtomCommandResult(
-      AsyncResult.failure<number, string>(Cause.fail("nope")),
-      (value) => value * 3,
-    );
-
-    expect(result._tag).toBe("Failure");
-    if (result._tag === "Failure") {
-      expect(Cause.squash(result.cause)).toBe("nope");
-    }
-  });
-
-  it("distinguishes interruption from other failures", () => {
-    const interrupted = AsyncResult.failure(Cause.interrupt(1));
-    const failed = AsyncResult.failure(Cause.fail("nope"));
-
-    expect(isAtomCommandInterrupted(interrupted)).toBe(true);
-    expect(isAtomCommandInterrupted(failed)).toBe(false);
-    expect(squashAtomCommandFailure(failed)).toBe("nope");
-  });
-
-  it("settles raw promise boundaries as successes or defects", async () => {
-    const success = await settlePromise(() => Promise.resolve("done"));
-    expect(success._tag).toBe("Success");
-
-    const defect = new Error("raw promise rejected");
-    const failure = await settlePromise(() => Promise.reject(defect));
-    expect(failure._tag).toBe("Failure");
-    if (failure._tag === "Failure") {
-      expect(Cause.hasDies(failure.cause)).toBe(true);
-      expect(Cause.squash(failure.cause)).toBe(defect);
-    }
-  });
-});
 it.effect("keeps complete review metadata visible while a refresh is held", () =>
   Effect.gen(function* () {
     const started = yield* Deferred.make<void>();
@@ -484,6 +263,91 @@ it.effect("keeps complete review metadata visible while a refresh is held", () =
       expect(value?.sources[0]!.files).toHaveLength(2);
     }).pipe(Effect.ensuring(Deferred.succeed(release, undefined)));
     expect((yield* readEnvironmentQuery(registry, atom)).sources[0]!.diffHash).toBe("2");
+  }),
+);
+
+it.effect("does not re-read a file patch read while its preview was revalidating", () =>
+  Effect.gen(function* () {
+    let now = 0;
+    using _now = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const previewStarted = yield* Deferred.make<void>();
+    const releasePreview = yield* Deferred.make<void>();
+    let previewReads = 0;
+    let patchReads = 0;
+    const rpcSession = {
+      client: {
+        [WS_METHODS.reviewGetDiffPreview]: (input: ReviewDiffPreviewInput) =>
+          Effect.gen(function* () {
+            if (input.file) patchReads += 1;
+            else if (++previewReads > 1) {
+              yield* Deferred.succeed(previewStarted, undefined);
+              yield* Deferred.await(releasePreview);
+            }
+            return {
+              cwd: input.cwd,
+              generatedAt: DateTime.makeUnsafe(previewReads),
+              sources: [
+                {
+                  id: "working-tree",
+                  kind: "working-tree" as const,
+                  title: "Uncommitted",
+                  baseRef: "HEAD",
+                  headRef: null,
+                  diff: "",
+                  diffHash: "same",
+                  truncated: false,
+                  patchesDeferred: true,
+                  files: [{ path: "a.ts", previousPath: null, additions: 1, deletions: 0 }],
+                },
+              ],
+            };
+          }),
+      },
+    } as unknown as RpcSession.RpcSession;
+    const harness = yield* makeEnvironmentQueryHarness(Effect.void, { rpcSession });
+    const review = createReviewEnvironmentAtoms(harness.runtime);
+    const previewInput = {
+      cwd: "/project",
+      sourceKind: "working-tree",
+      metadataOnly: true,
+    } as const;
+    const preview = review.diffPreview({
+      environmentId: QUERY_ENVIRONMENT.environmentId,
+      input: previewInput,
+    });
+    const registry = yield* mountEnvironmentQuery(preview);
+    yield* readEnvironmentQuery(registry, preview);
+
+    // Opening the Diff panel revalidates the preview and reads the visible patches at once.
+    registry.refresh(preview);
+    yield* Deferred.await(previewStarted);
+    const patch = review.diffFilePatch({
+      environmentId: QUERY_ENVIRONMENT.environmentId,
+      input: {
+        request: {
+          cwd: "/project",
+          sourceKind: "working-tree",
+          file: { sourceKind: "working-tree", path: "a.ts", previousPath: null },
+        },
+        cacheKey: "a.ts",
+        preview: previewInput,
+      },
+    });
+    registry.mount(patch);
+    yield* readEnvironmentQuery(registry, patch);
+    expect(patchReads).toBe(1);
+
+    yield* Deferred.succeed(releasePreview, undefined);
+    yield* readEnvironmentQuery(registry, preview);
+    yield* readEnvironmentQuery(registry, patch);
+    expect(patchReads).toBe(1);
+
+    // A revalidation requested after the patch was read still refreshes it.
+    now = 1;
+    registry.refresh(preview);
+    yield* readEnvironmentQuery(registry, preview);
+    yield* readEnvironmentQuery(registry, patch);
+    expect(patchReads).toBe(2);
   }),
 );
 

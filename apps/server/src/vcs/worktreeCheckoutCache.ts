@@ -679,7 +679,6 @@ export const makeWorktreeCheckoutCache = Effect.fn("WorktreeCheckoutCache.make")
         command: "git worktree add",
         cwd: input.cwd,
         detail: "git worktree add failed: the post-checkout hook failed",
-        failureKind: "unknown",
         exitCode: hook.exitCode,
         stderrLength: hook.stderr.length,
       });

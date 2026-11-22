@@ -73,7 +73,6 @@ import {
 } from "../ipc/channels.ts";
 import * as DesktopBrowserHost from "./DesktopBrowserHost.ts";
 import * as PreviewPasskeys from "./Passkeys.ts";
-import { disableWebAuthn } from "./WebAuthnPolicy.ts";
 import * as BrowserSession from "./BrowserSession.ts";
 import {
   ANNOTATION_CAPTURED_CHANNEL,
@@ -1680,9 +1679,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.setWindowOpenHandler((details) => {
           const action = previewWindowOpenAction(details);
           if (action === "popup") {
-            const webPreferences = { ...POPUP_WINDOW_OPTIONS.webPreferences };
-            if (!passkeys.webAuthnAvailable) disableWebAuthn(webPreferences);
-            return { action: "allow", overrideBrowserWindowOptions: { webPreferences } };
+            return { action: "allow", overrideBrowserWindowOptions: POPUP_WINDOW_OPTIONS };
           }
           if (action === "deny") return { action: "deny" };
           if (action === "new-tab") {
@@ -1766,16 +1763,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         ReadonlyMap<string, PreviewTabState>,
       ] => {
         const existing = tabs.get(tabId);
-        if (existing) {
-          if (!defaults?.serverTab || existing.serverTab)
-            return [{ state: existing, created: false }, tabs] as const;
-          // Navigation can create the tab before its host supplies the server key.
-          const state = { ...existing, serverTab: defaults.serverTab };
-          return [
-            { state, created: false },
-            replaceMap(tabs, (copy) => copy.set(tabId, state)),
-          ] as const;
-        }
+        if (existing) return [{ state: existing, created: false }, tabs] as const;
         const initial: PreviewTabState = {
           tabId,
           webContentsId: null,
@@ -2052,6 +2040,51 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     );
   });
 
+  // Clears a tab's dead guest so callers see "no webview" until the renderer registers a new one.
+  const detachDestroyedWebContents = Effect.fn("PreviewManager.detachDestroyedWebContents")(
+    function* (tabId: string, webContentsId: number) {
+      const expectedAttachment = (yield* Ref.get(attachedRef)).get(webContentsId);
+      yield* withTabLifecycleLock(
+        tabId,
+        Effect.gen(function* () {
+          const currentTab = (yield* SynchronizedRef.get(tabsRef)).get(tabId);
+          const currentAttachment = (yield* Ref.get(attachedRef)).get(webContentsId);
+          const currentWebContents = webContents.fromId(webContentsId);
+          if (
+            currentTab?.webContentsId !== webContentsId ||
+            currentAttachment !== expectedAttachment ||
+            (currentWebContents && !currentWebContents.isDestroyed())
+          ) {
+            return;
+          }
+          yield* Effect.all(
+            [
+              detachControlSession(webContentsId),
+              detachListeners(webContentsId),
+              cancelPickElement(tabId),
+            ],
+            { concurrency: 3, discard: true },
+          );
+          const detached = yield* SynchronizedRef.modify(tabsRef, (tabs) => {
+            const current = tabs.get(tabId);
+            if (current?.webContentsId !== webContentsId) {
+              return [Option.none<PreviewTabState>(), tabs] as const;
+            }
+            const { favicon: _favicon, ...currentWithoutFavicon } = current;
+            const next: PreviewTabState = { ...currentWithoutFavicon, webContentsId: null };
+            return [
+              Option.some(next),
+              replaceMap(tabs, (copy) => {
+                copy.set(tabId, next);
+              }),
+            ] as const;
+          });
+          if (Option.isSome(detached)) yield* emitIfCurrent(tabId, detached.value);
+        }),
+      );
+    },
+  );
+
   // URL tabs can paint before registerWebview; set the background at attach time.
   const prepareWebview = Effect.fn("PreviewManager.prepareWebview")(function* (
     wc: Electron.WebContents,
@@ -2071,7 +2104,13 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     });
     wc.once("destroyed", () => {
       guestLoadFailures.delete(webContentsId);
-      runFork(hideDestroyedGuest(webContentsId));
+      runFork(
+        Effect.gen(function* () {
+          yield* hideDestroyedGuest(webContentsId);
+          const tabId = yield* tabIdForWebContents(webContentsId);
+          if (tabId) yield* detachDestroyedWebContents(tabId, webContentsId);
+        }),
+      );
       runFork(detachControlSession(webContentsId));
     });
     yield* ensureControlSession(wc).pipe(
@@ -2126,7 +2165,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         zoomFactor: current?.zoomFactor ?? DEFAULT_ZOOM_FACTOR,
         pictureInPicture: current?.pictureInPicture ?? false,
         colorScheme: current?.colorScheme ?? "system",
-        ...(current?.serverTab === undefined ? {} : { serverTab: current.serverTab }),
         // Keep audibility until Chromium replaces the document; clearing it here can lose the final transition.
         audioMuted: current?.audioMuted ?? false,
         audible: current?.audible ?? false,
@@ -2148,45 +2186,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     const webContentsId = pending.webContentsId;
     const wc = webContents.fromId(webContentsId);
     if (!wc || wc.isDestroyed()) {
-      const expectedAttachment = (yield* Ref.get(attachedRef)).get(webContentsId);
-      yield* withTabLifecycleLock(
-        tabId,
-        Effect.gen(function* () {
-          const currentTab = (yield* SynchronizedRef.get(tabsRef)).get(tabId);
-          const currentAttachment = (yield* Ref.get(attachedRef)).get(webContentsId);
-          const currentWebContents = webContents.fromId(webContentsId);
-          if (
-            currentTab?.webContentsId !== webContentsId ||
-            currentAttachment !== expectedAttachment ||
-            (currentWebContents && !currentWebContents.isDestroyed())
-          ) {
-            return;
-          }
-          yield* Effect.all(
-            [
-              detachControlSession(webContentsId),
-              detachListeners(webContentsId),
-              cancelPickElement(tabId),
-            ],
-            { concurrency: 3, discard: true },
-          );
-          const detached = yield* SynchronizedRef.modify(tabsRef, (tabs) => {
-            const current = tabs.get(tabId);
-            if (current?.webContentsId !== webContentsId) {
-              return [Option.none<PreviewTabState>(), tabs] as const;
-            }
-            const { favicon: _favicon, ...currentWithoutFavicon } = current;
-            const next: PreviewTabState = { ...currentWithoutFavicon, webContentsId: null };
-            return [
-              Option.some(next),
-              replaceMap(tabs, (copy) => {
-                copy.set(tabId, next);
-              }),
-            ] as const;
-          });
-          if (Option.isSome(detached)) yield* emitIfCurrent(tabId, detached.value);
-        }),
-      );
+      yield* detachDestroyedWebContents(tabId, webContentsId);
       return;
     }
     yield* leaveBusyPage(wc);
@@ -2261,6 +2261,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       Effect.catchTags({
         PreviewTabNotFoundError: () => Effect.void,
         PreviewWebContentsNotFoundError: () => Effect.void,
+        PreviewWebviewNotInitializedError: () => Effect.void,
       }),
     );
 

@@ -286,48 +286,6 @@ describe("composerDraftStore addImages", () => {
     expect(draft?.images.map((image) => image.id)).toEqual(["img-a", "img-c"]);
     expect(revokeSpy).toHaveBeenCalledWith("blob:b");
   });
-
-  it("adds one image to a new-thread draft before it has a server thread mapping", () => {
-    const draftId = DraftId.make("draft-single-image");
-    const image = makeImage({
-      id: "img-draft",
-      previewUrl: "blob:draft",
-    });
-
-    expect(useComposerDraftStore.getState().addImage(draftId, image)).toBe(true);
-    expect(useComposerDraftStore.getState().getComposerDraft(draftId)?.images).toEqual([image]);
-  });
-
-  it("returns false when addImage receives an existing image id", () => {
-    const first = makeImage({ id: "img-same", previewUrl: "blob:first" });
-    const duplicate = makeImage({
-      id: "img-same",
-      previewUrl: "blob:duplicate",
-      name: "different.png",
-    });
-
-    expect(useComposerDraftStore.getState().addImage(threadRef, first)).toBe(true);
-    expect(useComposerDraftStore.getState().addImage(threadRef, duplicate)).toBe(false);
-    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.images).toEqual([first]);
-    expect(revokeSpy).toHaveBeenCalledWith("blob:duplicate");
-  });
-
-  it("does not revoke blob URLs that are still used by an accepted duplicate image", () => {
-    const first = makeImage({
-      id: "img-shared",
-      previewUrl: "blob:shared",
-    });
-    const duplicateSameUrl = makeImage({
-      id: "img-shared",
-      previewUrl: "blob:shared",
-    });
-
-    useComposerDraftStore.getState().addImages(threadRef, [first, duplicateSameUrl]);
-
-    const draft = draftFor(threadId, TEST_ENVIRONMENT_ID);
-    expect(draft?.images.map((image) => image.id)).toEqual(["img-shared"]);
-    expect(revokeSpy).not.toHaveBeenCalledWith("blob:shared");
-  });
 });
 
 describe("composerDraftStore copied attachments", () => {
@@ -1271,7 +1229,7 @@ describe("composerDraftStore project draft thread mapping", () => {
     });
   });
 
-  it("moves a pre-enrichment draft into the canonical clone group without reusing source uploads", () => {
+  it("clears stale upload metadata when retargeting a draft to another environment", () => {
     const store = useComposerDraftStore.getState();
     const hydratedFile: ComposerFileAttachment = {
       ...makeFile("file-cross-environment"),
@@ -1281,24 +1239,11 @@ describe("composerDraftStore project draft thread mapping", () => {
     };
 
     store.setProjectDraftThreadId(projectRef, draftId, { threadId });
-    store.setPrompt(draftId, "Continue on the new machine");
     store.addFiles(draftId, [hydratedFile]);
 
-    store.setLogicalProjectDraftThreadId("source-logical-project", remoteProjectRef, draftId, {
-      threadId,
-      environmentSelection: "manual",
-      loadBalancedEnvironmentId: null,
-    });
+    store.setProjectDraftThreadId(remoteProjectRef, draftId, { threadId });
 
     const file = store.getComposerDraft(draftId)?.files[0];
-    expect(store.getComposerDraft(draftId)?.prompt).toBe("Continue on the new machine");
-    expect(store.getDraftSessionByLogicalProjectKey("source-logical-project")).toMatchObject({
-      environmentId: OTHER_TEST_ENVIRONMENT_ID,
-      projectId: remoteProjectRef.projectId,
-      environmentSelection: "manual",
-      loadBalancedEnvironmentId: null,
-    });
-    expect(store.getDraftSessionByLogicalProjectKey(scopedProjectKey(projectRef))).toBeNull();
     expect(file).toMatchObject({
       id: hydratedFile.id,
       file: null,
@@ -2952,9 +2897,19 @@ describe("composerDraftStore checkout pull request", () => {
     store().setDraftThreadContext(draftId, { checkoutPullRequest: null });
     expect(store().getDraftSession(draftId)?.checkoutPullRequest).toBeUndefined();
 
-    store().setDraftThreadContext(draftId, { checkoutPullRequest: checkout });
+    store().setDraftThreadContext(draftId, {
+      checkoutPullRequest: checkout,
+      worktreeRepositories: ["/work/api"],
+    });
+    // An unrelated change keeps the repository choice; an empty choice is still a choice.
+    store().setDraftThreadContext(draftId, { envMode: "worktree" });
+    expect(store().getDraftSession(draftId)?.worktreeRepositories).toEqual(["/work/api"]);
+    store().setDraftThreadContext(draftId, { worktreeRepositories: [] });
+    expect(store().getDraftSession(draftId)?.worktreeRepositories).toEqual([]);
+
     store().setDraftThreadContext(draftId, { projectRef: otherProjectRef });
     expect(store().getDraftSession(draftId)?.checkoutPullRequest).toBeUndefined();
+    expect(store().getDraftSession(draftId)?.worktreeRepositories).toBeUndefined();
   });
 
   it("persists the pull request and still restores drafts saved without one", async () => {
@@ -2983,7 +2938,11 @@ describe("composerDraftStore checkout pull request", () => {
         state: {
           draftsByThreadKey: {},
           draftThreadsByThreadKey: {
-            [draftId]: { ...persistedDraftThread(threadId), checkoutPullRequest: checkout },
+            [draftId]: {
+              ...persistedDraftThread(threadId),
+              checkoutPullRequest: checkout,
+              worktreeRepositories: ["/work/api"],
+            },
             [legacyDraftId]: persistedDraftThread(ThreadId.make("thread-legacy")),
           },
           logicalProjectDraftThreadKeyByLogicalProjectKey: {
@@ -3001,7 +2960,8 @@ describe("composerDraftStore checkout pull request", () => {
       expect(checkoutPullRequestUrlToLink(legacy)).toBeNull();
       expect(
         partializeComposerDraftStoreState(store()).draftThreadsByThreadKey[draftId],
-      ).toMatchObject({ checkoutPullRequest: checkout });
+      ).toMatchObject({ checkoutPullRequest: checkout, worktreeRepositories: ["/work/api"] });
+      expect(legacy).not.toHaveProperty("worktreeRepositories");
     } finally {
       await useComposerDraftStore.persist.clearStorage();
       vi.useRealTimers();

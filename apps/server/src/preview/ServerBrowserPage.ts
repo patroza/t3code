@@ -198,7 +198,6 @@ const SNAPSHOT_SCRIPT = `(() => {
     title: document.title,
     loading: document.readyState !== "complete",
     visibleText: document.body?.innerText || "",
-    interactiveElements: [],
   };
 })()`;
 
@@ -519,7 +518,7 @@ const scaledSize = (size: { readonly width: number; readonly height: number }, s
  * A page's display ratio and CSS viewport, read in an isolated world since page script can
  * reassign `devicePixelRatio`, `innerWidth`, and `innerHeight` in its own, and its page zoom.
  */
-export const readPageMetrics = async (cdp: CDPSession) => {
+const readPageMetrics = async (cdp: CDPSession) => {
   const { frameTree } = await cdp.send("Page.getFrameTree");
   const { executionContextId } = await cdp.send("Page.createIsolatedWorld", {
     frameId: frameTree.frame.id,
@@ -555,28 +554,10 @@ export const captureViewport = async (
   cdp: CDPSession,
   options: { readonly format: "png" | "jpeg"; readonly quality?: number },
 ) => {
-  const captureWithRetry = async () => {
-    const parameters = {
-      format: options.format,
-      ...(options.quality === undefined ? {} : { quality: options.quality }),
-    };
-    const capture = () => cdp.send("Page.captureScreenshot", parameters);
-    try {
-      return await capture();
-    } catch (error) {
-      if (
-        !(error instanceof Error) ||
-        !error.message.endsWith(
-          "Protocol error (Page.captureScreenshot): Unable to capture screenshot",
-        )
-      ) {
-        throw error;
-      }
-      // Retry this transient Chromium capture error once; persistent failures still propagate.
-      await new Promise((resolve) => setTimeout(resolve, WAIT_POLL_MS));
-      return await capture();
-    }
-  };
+  const capture = cdp.send("Page.captureScreenshot", {
+    format: options.format,
+    ...(options.quality === undefined ? {} : { quality: options.quality }),
+  });
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<never>((_, reject) => {
     timer = setTimeout(
@@ -593,9 +574,7 @@ export const captureViewport = async (
   });
   // Hidden native guests can leave CDP captures pending forever. This deadline also
   // releases a viewer's still-capture lock, which an agent snapshot may be waiting for.
-  const { data } = await Promise.race([captureWithRetry(), expired]).finally(() =>
-    clearTimeout(timer),
-  );
+  const { data } = await Promise.race([capture, expired]).finally(() => clearTimeout(timer));
   return data;
 };
 
@@ -719,10 +698,7 @@ const capture = async (
       "page state",
       () =>
         input.page.evaluate(SNAPSHOT_SCRIPT) as Promise<
-          Pick<
-            PreviewAutomationSnapshot,
-            "url" | "title" | "loading" | "visibleText" | "interactiveElements"
-          >
+          Pick<PreviewAutomationSnapshot, "url" | "title" | "loading" | "visibleText">
         >,
     ),
     // A cheap real frame still sizes the screenshot; computing it from metrics drifted from the PNG.

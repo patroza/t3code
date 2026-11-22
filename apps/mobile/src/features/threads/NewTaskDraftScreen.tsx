@@ -64,7 +64,6 @@ import {
   getComposerDraftSnapshot,
   updateComposerDraftSettings,
   scheduleUnusedComposerAttachmentCleanup,
-  type ComposerDraftWorkspaceSelection,
 } from "../../state/use-composer-drafts";
 import { useEnvironmentServerConfig, useProjects } from "../../state/entities";
 import { useProjectClone } from "../../state/projectClones";
@@ -161,7 +160,6 @@ export function NewTaskDraftScreen(props: {
     readonly worktreePath?: string | null;
     readonly cloning?: boolean;
   };
-  readonly initialWorkspaceSelection?: ComposerDraftWorkspaceSelection;
   readonly draftId?: string;
   readonly incomingShareId?: string;
 }) {
@@ -523,26 +521,9 @@ export function NewTaskDraftScreen(props: {
     setProject,
   ]);
 
-  const appliedInitialWorkspaceSelectionRef = useRef<ComposerDraftWorkspaceSelection | undefined>(
-    undefined,
-  );
   const { loadBranches } = flow;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- requests the selected project's branch list from the server once per project
   useEffect(() => {
-    const selection = props.initialWorkspaceSelection;
-    const initialEnvironmentId = props.initialProjectRef?.environmentId;
-    const initialProjectId = props.initialProjectRef?.projectId;
-    if (
-      selection &&
-      flow.draftKey &&
-      selectedProject &&
-      selectedProject.environmentId === initialEnvironmentId &&
-      selectedProject.id === initialProjectId &&
-      appliedInitialWorkspaceSelectionRef.current !== selection
-    ) {
-      appliedInitialWorkspaceSelectionRef.current = selection;
-      updateComposerDraftSettings(flow.draftKey, { workspaceSelection: selection });
-    }
     if (!selectedProject) {
       loadedBranchesProjectKeyRef.current = null;
       return;
@@ -553,14 +534,7 @@ export function NewTaskDraftScreen(props: {
     }
     loadedBranchesProjectKeyRef.current = projectKey;
     loadBranches();
-  }, [
-    loadBranches,
-    selectedProject,
-    flow.draftKey,
-    props.initialProjectRef?.environmentId,
-    props.initialProjectRef?.projectId,
-    props.initialWorkspaceSelection,
-  ]);
+  }, [loadBranches, selectedProject]);
 
   const selectedEnvironmentLabel =
     flow.environments.find(
@@ -644,7 +618,7 @@ export function NewTaskDraftScreen(props: {
       !modelSelection ||
       (initialMessageText.length === 0 && draft.attachments.length === 0) ||
       flow.submitting ||
-      (workspaceMode === "worktree" && !selectedBranchName)
+      (workspaceMode === "worktree" && flow.isGitRepo && !selectedBranchName)
     ) {
       return null;
     }
@@ -754,7 +728,8 @@ export function NewTaskDraftScreen(props: {
         ? gt("Wait for the project clone to finish.")
         : flow.submitting
           ? gt("Starting the thread…")
-          : flow.workspaceMode === "worktree" && (!flow.selectedBranchName || !flow.isGitRepoKnown)
+          : flow.workspaceMode === "worktree" &&
+              (!flow.isGitRepoKnown || (flow.isGitRepo && !flow.selectedBranchName))
             ? gt("Choose a base branch before creating a worktree.")
             : null
       : gt("Wait for shared content to finish importing.");
@@ -766,7 +741,9 @@ export function NewTaskDraftScreen(props: {
     void KeyboardController.dismiss({ animated: true });
     navigation.navigate("NewTaskProject", { incomingShareId: props.incomingShareId });
   };
-  const openContextPicker = (routeName: "NewTaskBranch" | "NewTaskEnvironment") => {
+  const openContextPicker = (
+    routeName: "NewTaskBranch" | "NewTaskEnvironment" | "NewTaskRepositories",
+  ) => {
     if (isComposerInteractionLocked) {
       return;
     }
@@ -934,8 +911,11 @@ export function NewTaskDraftScreen(props: {
     </View>
   );
 
+  const startsNewWorktree = flow.workspaceMode === "worktree";
+  const offersRepositoryChoice =
+    startsNewWorktree && (flow.worktreeRepositoryChoices?.length ?? 0) > 0;
   const workspaceControls = (
-    <View className="flex-row items-center gap-1 px-2">
+    <View className="flex-row flex-wrap items-center gap-x-1 px-2">
       <ComposerInlineControl
         accessibilityHint={
           flow.workspaceMode === "local"
@@ -943,7 +923,7 @@ export function NewTaskDraftScreen(props: {
             : gt("Switches to the current checkout")
         }
         accessibilityLabel={workspaceLabel}
-        disabled={isComposerInteractionLocked || !flow.isGitRepo}
+        disabled={isComposerInteractionLocked || !(flow.isGitRepo || flow.tracksGitRepositories)}
         renderIcon={(size) => (
           <NewTaskWorkspaceIcon
             workspaceMode={flow.workspaceMode}
@@ -957,21 +937,46 @@ export function NewTaskDraftScreen(props: {
         showChevron={false}
       />
 
-      <View className="min-w-0 shrink">
-        <ComposerInlineControl
-          accessibilityLabel={
-            flow.workspaceMode === "worktree"
-              ? gt("Base branch: {branch}", { branch: selectedBranchLabel })
-              : gt("Branch: {branch}", { branch: selectedBranchLabel })
-          }
-          chevronDirection="right"
-          disabled={isComposerInteractionLocked || !flow.isGitRepo}
-          icon="arrow.triangle.branch"
-          label={showBranchLoading ? gt("Loading branches…") : selectedBranchLabel}
-          maxWidth="100%"
-          onPress={() => openContextPicker("NewTaskBranch")}
-        />
-      </View>
+      {offersRepositoryChoice ? (
+        <View className="min-w-0 shrink">
+          <ComposerInlineControl
+            accessibilityHint={gt("Chooses the repositories the new worktree holds")}
+            accessibilityLabel={gt("Repositories in the new worktree: {selection}", {
+              selection: flow.worktreeRepositorySelection.label,
+            })}
+            chevronDirection="right"
+            disabled={isComposerInteractionLocked}
+            icon="folder.badge.plus"
+            label={flow.worktreeRepositorySelection.label}
+            maxWidth="100%"
+            onPress={() => openContextPicker("NewTaskRepositories")}
+            {...(flow.worktreeRepositorySelection.needsChoice ? { tone: "warning" as const } : {})}
+          />
+        </View>
+      ) : null}
+      {startsNewWorktree && !flow.isGitRepo ? (
+        <View className="min-h-8 min-w-0 shrink justify-center px-2">
+          <Text className="text-sm text-foreground-muted" numberOfLines={1}>
+            <T>Each repository starts from its own default branch</T>
+          </Text>
+        </View>
+      ) : (
+        <View className="min-w-0 shrink">
+          <ComposerInlineControl
+            accessibilityLabel={
+              startsNewWorktree
+                ? gt("Base branch: {branch}", { branch: selectedBranchLabel })
+                : gt("Branch: {branch}", { branch: selectedBranchLabel })
+            }
+            chevronDirection="right"
+            disabled={isComposerInteractionLocked || !flow.isGitRepo}
+            icon="arrow.triangle.branch"
+            label={showBranchLoading ? gt("Loading branches…") : selectedBranchLabel}
+            maxWidth="100%"
+            onPress={() => openContextPicker("NewTaskBranch")}
+          />
+        </View>
+      )}
     </View>
   );
 

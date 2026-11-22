@@ -792,28 +792,6 @@ export class WindowsPackagedPayloadValidationError extends Schema.TaggedError<Wi
   }
 }
 
-export const promoteDesktopBuildArtifacts = Effect.fn("promoteDesktopBuildArtifacts")(function* (
-  stageDistDir: string,
-  outputDir: string,
-  platform: typeof BuildPlatform.Type,
-  arch: typeof BuildArch.Type,
-  includeDirectories = true,
-) {
-  const copiedArtifacts = yield* copyDesktopBuildArtifacts(
-    stageDistDir,
-    outputDir,
-    includeDirectories,
-  );
-  if (copiedArtifacts.length === 0) {
-    return yield* new DesktopBuildNoArtifactsProducedError({
-      distPath: stageDistDir,
-      platform,
-      arch,
-    });
-  }
-  return copiedArtifacts;
-});
-
 export class LinuxIconResizeError extends Schema.TaggedError<LinuxIconResizeError>()(
   "LinuxIconResizeError",
   {
@@ -1052,22 +1030,13 @@ export function resolveMacFileExclusions(arch?: typeof BuildArch.Type) {
 // Large ASAR sidecars avoid NSIS extracting thousands of loose files during installs and updates.
 export const WINDOWS_SERVER_ASAR_RESOURCE = "server.asar";
 // Native modules and executables need real paths, so place them in ASAR's .unpacked sibling.
-// Include basename and nested unpack patterns: asar match behavior differs across hosts.
 export const WINDOWS_NATIVE_ASAR_UNPACK_GLOB =
-  "{*.node,**/*.node,*.dll,**/*.dll,*.exe,**/*.exe,*.so,**/*.so,*.so.*,**/*.so.*,*.dylib,**/*.dylib}";
-
-// The server sidecar unpacks .node files separately, keeping only Windows ones.
-
+  "{**/*.node,**/*.dll,**/*.exe,**/*.so,**/*.so.*,**/*.dylib}";
 export const WINDOWS_SERVER_ASAR_UNPACK_GLOBS = [
-  "*.dll",
   "**/*.dll",
-  "*.exe",
   "**/*.exe",
-  "*.so",
   "**/*.so",
-  "*.so.*",
   "**/*.so.*",
-  "*.dylib",
   "**/*.dylib",
 ] as const;
 // Keep sidecar exclusions aligned with the app; .bin symlinks are unused and unsupported by ASAR extraction.
@@ -2985,21 +2954,18 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       category: "Development",
       synopsis: "Desktop GUI for coding agents",
       maintainer: "T3 Tools <hello@t3.codes>",
-      desktop: {
-        entry: {
-          StartupWMClass: "com.t3tools.T3Code",
-          // Register the external deep-link scheme so xdg-open can launch T3.
-          // electron-builder keeps %U on Exec when MimeType is present.
-          MimeType: "x-scheme-handler/t3code;x-scheme-handler/t3code-dev;",
-        },
-      },
-
       protocols: [
         {
           name: "T3 Code",
           schemes: ["t3code", "t3code-dev"],
         },
       ],
+      desktop: {
+        entry: {
+          // Match Electron's WM_CLASS from setDesktopName so docks use this launcher.
+          StartupWMClass: "com.t3tools.T3Code",
+        },
+      },
     };
     // electron-updater replaces an installed AppImage in place only when its name has no x.y.z version.
     if (buildConfig.publish) {
@@ -3129,13 +3095,6 @@ export const packWindowsServerAsar = Effect.fn("packWindowsServerAsar")(function
   const path = yield* Path.Path;
   // Unpack/sign only Windows PE addons; packages also carry foreign prebuilds that Authenticode cannot sign.
   const unpackGlobs: string[] = [...WINDOWS_SERVER_ASAR_UNPACK_GLOBS];
-  // asar matches unpack globs against absolute paths without dot matching.
-  // Anchor selected addons so hidden parent directories do not block unpacking.
-  const sourceGlobPath = path
-    .resolve(input.sourceDir)
-    .split(path.sep)
-    .join("/")
-    .replace(/[\\*?[\]{}(),]/g, "\\$&");
   for (const entry of yield* fs.readDirectory(input.sourceDir, { recursive: true })) {
     if (!entry.endsWith(".node")) continue;
     const addonPath = path.join(input.sourceDir, entry);
@@ -3150,7 +3109,7 @@ export const packWindowsServerAsar = Effect.fn("packWindowsServerAsar")(function
         cause: new Error(`native addon path contains glob syntax: ${posixPath}`),
       });
     }
-    unpackGlobs.push(`${sourceGlobPath}/${posixPath}`);
+    unpackGlobs.push(`**/${posixPath}`);
   }
   yield* Effect.tryPromise({
     try: () =>
@@ -4208,13 +4167,19 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     yield* validateMacPackagedPayload({ stageDistDir, verbose: options.verbose });
   }
 
-  const copiedArtifacts = yield* promoteDesktopBuildArtifacts(
+  const copiedArtifacts = yield* copyDesktopBuildArtifacts(
     stageDistDir,
     options.outputDir,
-    options.platform,
-    options.arch,
     options.target === "dir",
   );
+
+  if (copiedArtifacts.length === 0) {
+    return yield* new DesktopBuildNoArtifactsProducedError({
+      distPath: stageDistDir,
+      platform: options.platform,
+      arch: options.arch,
+    });
+  }
 
   yield* Effect.log("[desktop-artifact] Done. Artifacts:").pipe(
     Effect.annotateLogs({ artifacts: copiedArtifacts }),

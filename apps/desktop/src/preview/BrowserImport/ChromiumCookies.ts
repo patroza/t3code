@@ -273,26 +273,25 @@ export const readChromiumCookies = Effect.fn("ChromiumCookies.readChromiumCookie
   ChromiumCookieReadError,
   FileSystem.FileSystem | Path.Path | Scope.Scope | ChildProcessSpawner.ChildProcessSpawner
 > {
-  const toCookieReadError = (cause: ChromiumKeyError) =>
-    new ChromiumCookieReadError({
-      reason: cause.reason,
-      cookieDatabasePath: source.cookieDatabasePath,
-      cause,
-    });
-  // Two `yield*` paths — a ternary union of Effects is not iterable under
-  // `Effect.fn` (`never` / `Buffer<ArrayBuffer>` vs `Buffer<ArrayBufferLike>`).
-  const keys: ChromiumKeyMaterial =
+  const keys = yield* (
     source.platform === "win32" && source.windowsLocalStatePath
-      ? yield* readWindowsKey(source.windowsLocalStatePath).pipe(
-          Effect.map((gcmV10): ChromiumKeyMaterial => ({ gcmV10 })),
-          Effect.mapError(toCookieReadError),
-        )
-      : yield* resolveChromiumKeys({
+      ? readWindowsKey(source.windowsLocalStatePath).pipe(Effect.map((gcmV10) => ({ gcmV10 })))
+      : resolveChromiumKeys({
           platform: source.platform,
           keychainService: source.keychainService,
           keychainAccount: source.keychainAccount,
           linuxSecretApplication: source.linuxSecretApplication,
-        }).pipe(Effect.mapError(toCookieReadError));
+        })
+  ).pipe(
+    Effect.mapError(
+      (cause: ChromiumKeyError) =>
+        new ChromiumCookieReadError({
+          reason: cause.reason,
+          cookieDatabasePath: source.cookieDatabasePath,
+          cause,
+        }),
+    ),
+  );
 
   const snapshotPath = yield* snapshotCookieDatabase(source.cookieDatabasePath).pipe(
     Effect.mapError(

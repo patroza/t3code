@@ -199,7 +199,7 @@ export type GitHubAnswer<A> = {
   | { readonly _tag: "Failed"; readonly messages?: ReadonlyArray<string> | undefined }
 );
 
-export interface GitHubRequest extends GitHubCredentials.GitHubCredentialTarget {
+export interface GitHubRequest {
   readonly host: string;
   readonly operation: string;
   /** The quota the request spends: `core` for REST, `graphql` for GraphQL. */
@@ -230,7 +230,7 @@ export class GitHubRequestPolicy extends Context.Service<
      */
     readonly credential: (
       host: string,
-      options?: GitHubCredentials.GitHubCredentialTarget & { readonly personal?: boolean },
+      options?: { readonly personal?: boolean },
     ) => Effect.Effect<GitHubHeldCredential, GitHubApiError>;
     /** The app sign-in's own credential, whatever else outranks it; none when not signed in. */
     readonly appCredential: (
@@ -277,8 +277,8 @@ export const make = Effect.gen(function* () {
   const limits = yield* SourceControlRateLimit.SourceControlRateLimit;
   const slots = yield* Semaphore.make(CONCURRENCY);
 
-  const personalCredential = (host: string, target?: GitHubCredentials.GitHubCredentialTarget) =>
-    credentials.get(host, target).pipe(
+  const personalCredential = (host: string) =>
+    credentials.get(host).pipe(
       Effect.map((held): ChosenCredential => ({
         token: held.token,
         fingerprint: held.fingerprint,
@@ -299,11 +299,7 @@ export const make = Effect.gen(function* () {
     });
   });
 
-  const choose = Effect.fn("GitHubRest.credential")(function* (
-    host: string,
-    personal: boolean,
-    target?: GitHubCredentials.GitHubCredentialTarget,
-  ) {
+  const choose = Effect.fn("GitHubRest.credential")(function* (host: string, personal: boolean) {
     const pinned = yield* PinnedGitHubCredential;
     if (pinned !== null) {
       if (pinned.host !== host) {
@@ -325,18 +321,18 @@ export const make = Effect.gen(function* () {
         fromApp: false,
       };
     }
-    if (personal) return yield* personalCredential(host, target);
+    if (personal) return yield* personalCredential(host);
     const app = yield* Effect.result(appCredential(host));
     // An app session that cannot refresh right now steps aside for the user's own credential.
     if (Result.isFailure(app)) {
-      return yield* personalCredential(host, target).pipe(Effect.mapError(() => app.failure));
+      return yield* personalCredential(host).pipe(Effect.mapError(() => app.failure));
     }
-    if (Option.isNone(app.success)) return yield* personalCredential(host, target);
+    if (Option.isNone(app.success)) return yield* personalCredential(host);
     return { ...app.success.value, fromApp: true } satisfies ChosenCredential;
   });
 
   const credential: GitHubRequestPolicy["Service"]["credential"] = (host, options) =>
-    choose(normalizeHost(host), options?.personal === true, options).pipe(
+    choose(normalizeHost(host), options?.personal === true).pipe(
       Effect.map(({ token, fingerprint, source }) => ({
         token,
         fingerprint,
@@ -393,7 +389,7 @@ export const make = Effect.gen(function* () {
         case "Unauthorized":
           // The source may hold a newer token than the one that was refused.
           yield* appSignIn.invalidate(host, Redacted.value(held.token));
-          yield* credentials.invalidate(host, input);
+          yield* credentials.invalidate(host);
           return yield* new GitHubApiAuthenticationError(context);
         case "NotFound":
           return yield* new GitHubApiNotFoundError({
@@ -442,7 +438,7 @@ export const make = Effect.gen(function* () {
               }),
             );
             if (held.fromApp && refusedToApp(answer)) {
-              const personal = yield* Effect.option(personalCredential(host, input));
+              const personal = yield* Effect.option(personalCredential(host));
               if (Option.isSome(personal)) {
                 yield* quota.observe(host, answer.headers);
                 yield* limits.recordSuccess({ ...key, lease });
@@ -459,7 +455,7 @@ export const make = Effect.gen(function* () {
         );
 
     // Only an app credential is handed on, so this runs at most twice.
-    let held = yield* choose(host, false, input);
+    let held = yield* choose(host, false);
     while (true) {
       const outcome = yield* attempt(held);
       if (outcome._tag === "Done") return outcome.value;

@@ -3,8 +3,6 @@
  *
  * Pure presentation helpers for web/mobile — no network, no assets.
  * Real photo URLs can replace these later; seed stays `personId` / `username`.
- *
- * See docs/architecture/source-and-identity.md
  */
 
 export type IdentityAvatarColors = {

@@ -1,11 +1,7 @@
-import { useGT as useCopyTranslation } from "gt-react";
 import { copySnapshot as copySnapshotToClipboard } from "./copySnapshot";
 import { InlineAudioPreview } from "../files/InlineAudioPreview";
 import { filePreviewKind } from "@t3tools/shared/filePreview";
-import {
-  CHAT_USER_MARKDOWN_REMARK_PLUGINS,
-  remarkEnableOrderedListNumbers,
-} from "@t3tools/shared/markdownPipeline";
+import type { MarkdownExtensions } from "~/markdown/wordsHast";
 import { T, useGT, useMessages, Var } from "gt-react";
 import { findRevealRef } from "./markdownFindContext";
 import {
@@ -15,11 +11,8 @@ import {
   type ServerProviderSkill,
   ThreadId,
 } from "@t3tools/contracts";
-import {
-  resolveUserMessagePresentation,
-  userMessageSenderCaption,
-} from "@t3tools/client-runtime/user-message";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
 import { Link } from "@tanstack/react-router";
 import { useQuietThreadShell } from "../../state/entities";
 import { useEnvironment } from "../../state/environments";
@@ -102,6 +95,7 @@ import {
   resolvePreviewAnnotationImage,
   userMessageFileLabel,
 } from "./TimelineUserMessageRow.logic";
+import { MessageSenderCaption } from "./MessageSenderCaption";
 
 // Drawn inside the media so dark screenshots keep an edge on the dark background.
 const MEDIA_EDGE_CLASS_NAME =
@@ -465,20 +459,11 @@ function UserMessageProjectedStatus({ row }: { row: Extract<TimelineRow, { kind:
 }
 
 function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
-  const translateCopy = useCopyTranslation();
-
   const ctx = use(TimelineRowCtx);
   const gt = useGT();
   const m = useMessages();
   const { onImageExpand, onFileOpen } = ctx;
   const coarsePointer = useMediaQuery({ pointer: "coarse" });
-  const senderThreadId = row.message.senderThreadId;
-  const senderCaption = userMessageSenderCaption({
-    createdBy: row.message.createdBy,
-    source: row.message.source ?? ctx.messageSourceById?.get(row.message.id),
-    originSource: ctx.originSource,
-    viewer: ctx.messageViewer,
-  });
   // A linked environment's agent sent it from a thread there.
   const senderRef =
     row.message.linkedSender ??
@@ -928,24 +913,9 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
         >
           <T>Sent by T3 Code</T>
         </p>
-      ) : senderCaption ? (
-        <p
-          className="me-1 text-2xs text-muted-foreground/70"
-          data-user-message-attribution="sender"
-        >
-          {senderThreadId ? (
-            <InlineButton
-              onClick={() => ctx.onOpenThread(senderThreadId)}
-              tone="muted"
-              aria-label={translateCopy("Open sending thread")}
-            >
-              {senderCaption}
-            </InlineButton>
-          ) : (
-            senderCaption
-          )}
-        </p>
-      ) : null}
+      ) : (
+        <MessageSenderCaption message={row.message} />
+      )}
       {/* The row's heading already names the guest for screen readers. */}
       {userMessage.guestName !== undefined ? (
         <div aria-hidden>
@@ -1314,10 +1284,7 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
   );
 });
 
-const USER_MESSAGE_REMARK_PLUGINS = [
-  ...CHAT_USER_MARKDOWN_REMARK_PLUGINS,
-  remarkEnableOrderedListNumbers,
-];
+const USER_MESSAGE_MARKDOWN: MarkdownExtensions = { userMessage: true, leadingWhitespace: true };
 
 const UserMessageBody = memo(function UserMessageBody(props: {
   text: string;
@@ -1338,7 +1305,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
       className="text-message-foreground user-message-markdown"
       lineBreaks
       parseRawHtml={false}
-      extraRemarkPlugins={USER_MESSAGE_REMARK_PLUGINS}
+      extensions={USER_MESSAGE_MARKDOWN}
       renderContextReference={props.renderContextReference}
       headingLevelOffset={MESSAGE_HEADING_LEVEL}
     />

@@ -102,10 +102,14 @@ interface EnvironmentQueryAtomOptions<Input, A, E, R> extends Omit<
   readonly staleTimeMs?: number;
   readonly idleTtlMs?: number;
   readonly refreshIntervalMs?: number;
-  readonly refreshTrigger?: (target: {
-    readonly environmentId: EnvironmentIdType;
-    readonly input: Input;
-  }) => Atom.Atom<unknown> | undefined;
+  /** Each change of the returned signal refreshes the query; `query` is the data it refreshes. */
+  readonly refreshTrigger?: (
+    target: {
+      readonly environmentId: EnvironmentIdType;
+      readonly input: Input;
+    },
+    query: Atom.Atom<AsyncResult.AsyncResult<A, unknown>>,
+  ) => Atom.Atom<unknown> | undefined;
   readonly isFinal?: (value: A) => boolean;
   /**
    * Runs where each server answer lands, before readers see it, so derived records (summaries,
@@ -150,29 +154,6 @@ export interface AtomCommandOptions {
 export interface AtomCommandReporter {
   readonly warn: (message: string, cause: Cause.Cause<unknown>) => void;
   readonly error: (message: string, cause: Cause.Cause<unknown>) => void;
-}
-
-export function refreshQueryOnSuccess<A, E, B, E2>(
-  queryAtom: Atom.Atom<AsyncResult.AsyncResult<A, E>>,
-  signalAtom: Atom.Atom<AsyncResult.AsyncResult<B, E2>>,
-): Atom.Atom<AsyncResult.AsyncResult<A, E>> {
-  return Atom.transform(
-    queryAtom,
-    (get) => {
-      const current = get.once(queryAtom);
-      get.once(signalAtom);
-      get.subscribe(queryAtom, (result) => {
-        get.setSelf(result);
-      });
-      get.subscribe(signalAtom, (result) => {
-        if (AsyncResult.isSuccess(result)) {
-          get.refresh(queryAtom);
-        }
-      });
-      return current;
-    },
-    { initialValueTarget: queryAtom },
-  ).pipe(Atom.setIdleTTL(0));
 }
 
 export interface AtomCommand<W, A, E> {
@@ -928,7 +909,7 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
       options.refreshIntervalMs === undefined
         ? queryAtom
         : queryAtom.pipe(refreshEveryUntilFinal(options.refreshIntervalMs, isFinal));
-    const refreshTrigger = options.refreshTrigger?.(target);
+    const refreshTrigger = options.refreshTrigger?.(target, intervalQuery);
     return (
       refreshTrigger === undefined
         ? intervalQuery
@@ -1169,6 +1150,7 @@ export function createEnvironmentRpcCommand<
         readonly input: NoInfer<Input>;
       },
       registry: AtomRegistry.AtomRegistry,
+      exit: Exit.Exit<EnvironmentRpcSuccess<TTag>, unknown>,
     ) => Effect.Effect<void, never, R>;
   },
 ) {
@@ -1199,7 +1181,7 @@ export function createEnvironmentRpcCommand<
         Effect.tap(
           (result) => options.onSuccess?.(target, registry, result, started) ?? Effect.void,
         ),
-        Effect.ensuring(options.onSettled?.(target, registry) ?? Effect.void),
+        Effect.onExit((exit) => options.onSettled?.(target, registry, exit) ?? Effect.void),
       );
     },
   });

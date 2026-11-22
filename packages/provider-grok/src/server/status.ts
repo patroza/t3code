@@ -1,6 +1,5 @@
 import { resolveProviderProbeTimeoutMs } from "@t3tools/provider-core/server/snapshotProbe";
 import {
-  GROK_DEFAULT_MODEL,
   type CustomModelSetting,
   type ModelCapabilities,
   type ServerProvider,
@@ -11,7 +10,6 @@ import {
 import type { GrokSettings } from "../settings.ts";
 import type * as EffectAcpSchema from "effect-acp/compat";
 import { causeErrorTag } from "@t3tools/shared/observability";
-import * as Cause from "effect/Cause";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -28,7 +26,6 @@ import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import {
   AUTH_PROBE_TIMEOUT_MS,
-  buildSelectOptionDescriptor,
   buildServerProvider,
   COMPACT_SLASH_COMMAND,
   isCommandMissingCause,
@@ -42,6 +39,7 @@ import {
   type ProviderMaintenanceCapabilities,
 } from "@t3tools/provider-core/server/maintenanceResolver";
 import {
+  GROK_DEFAULT_MODEL_SLUG,
   GROK_SUPPORTED_RUNTIME_MODES,
   isValidGrokReasoningEffortToken,
   makeGrokAcpRuntime,
@@ -51,9 +49,6 @@ import { sessionModelStateFromInitialize } from "@t3tools/provider-acp/server/ru
 import { discoverGrokSkills } from "./skills.ts";
 import { grokProbeEnvironment } from "./probeEnvironment.ts";
 
-// No `requiresNewThreadForModelChange`: Grok's ACP accepts `session/set_model`
-// mid-session, and the adapter re-applies the requested model on every turn
-// (`applyGrokAcpModelSelection`).
 const GROK_PRESENTATION = {
   displayName: "Grok",
   supportsConversationRollback: false,
@@ -64,34 +59,6 @@ const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],
 });
 
-/** Fallback effort menu when ACP model meta is unavailable but Grok still supports effort. */
-const GROK_FALLBACK_REASONING_EFFORTS: ReadonlyArray<{
-  value: string;
-  label: string;
-  isDefault?: boolean;
-}> = [
-  { value: "high", label: "High", isDefault: true },
-  { value: "medium", label: "Medium" },
-  { value: "low", label: "Low" },
-];
-
-export function buildGrokReasoningEffortCapabilities(
-  efforts: ReadonlyArray<{ value: string; label: string; isDefault?: boolean }>,
-): ModelCapabilities {
-  if (efforts.length === 0) {
-    return EMPTY_CAPABILITIES;
-  }
-  return createModelCapabilities({
-    optionDescriptors: [
-      buildSelectOptionDescriptor({
-        id: "reasoningEffort",
-        label: "Reasoning",
-        options: efforts,
-      }),
-    ],
-  });
-}
-
 const VERSION_PROBE_TIMEOUT_MS = 10_000;
 // Grok writes the initialize result only after startup work (settings,
 // skill discovery, file watching). From a home directory that work measured
@@ -99,126 +66,14 @@ const VERSION_PROBE_TIMEOUT_MS = 10_000;
 const GROK_ACP_INITIALIZE_TIMEOUT_MS = 20_000;
 const GROK_API_KEY_ENV = "XAI_API_KEY";
 
-// Shown until ACP model discovery answers (and whenever it fails). Grok 1.0.3
-// rejects the old `grok-build` slug with "unknown model id", so offering it
-// here only produced sessions that could not start.
 const GROK_BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [
   {
-    slug: GROK_DEFAULT_MODEL,
-    name: "Grok 4.6",
+    slug: GROK_DEFAULT_MODEL_SLUG,
+    name: "Grok Build",
     isCustom: false,
-    isDefault: true,
-    capabilities: buildGrokReasoningEffortCapabilities(GROK_FALLBACK_REASONING_EFFORTS),
-  },
-  {
-    slug: "grok-4.5",
-    name: "Grok 4.5",
-    isCustom: false,
-    capabilities: buildGrokReasoningEffortCapabilities(GROK_FALLBACK_REASONING_EFFORTS),
+    capabilities: EMPTY_CAPABILITIES,
   },
 ];
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
-
-function effortLabel(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) return trimmed;
-  return trimmed.replace(/\s*effort\s*$/iu, "").trim() || trimmed;
-}
-
-/**
- * Builds reasoning-effort option descriptors from Grok ACP model `_meta`.
- * Grok advertises `supportsReasoningEffort`, `reasoningEffort` (current/default),
- * and `reasoningEfforts` (menu entries) on each available model.
- */
-export function buildGrokCapabilitiesFromModelMeta(
-  meta: EffectAcpSchema.ModelInfo["_meta"] | null | undefined,
-): ModelCapabilities {
-  const record = asRecord(meta);
-  if (!record) {
-    return EMPTY_CAPABILITIES;
-  }
-
-  const supports =
-    record.supportsReasoningEffort === true ||
-    record.supports_reasoning_effort === true ||
-    Array.isArray(record.reasoningEfforts) ||
-    Array.isArray(record.reasoning_efforts);
-
-  if (!supports) {
-    return EMPTY_CAPABILITIES;
-  }
-
-  const rawEfforts = Array.isArray(record.reasoningEfforts)
-    ? record.reasoningEfforts
-    : Array.isArray(record.reasoning_efforts)
-      ? record.reasoning_efforts
-      : null;
-
-  const defaultEffortRaw =
-    typeof record.reasoningEffort === "string"
-      ? record.reasoningEffort.trim()
-      : typeof record.reasoning_effort === "string"
-        ? record.reasoning_effort.trim()
-        : undefined;
-
-  const efforts: Array<{ value: string; label: string; isDefault?: boolean }> = [];
-  const seen = new Set<string>();
-
-  if (rawEfforts) {
-    for (const entry of rawEfforts) {
-      const item = asRecord(entry);
-      if (!item) continue;
-      const value =
-        (typeof item.value === "string" && item.value.trim()) ||
-        (typeof item.id === "string" && item.id.trim()) ||
-        "";
-      if (!value || seen.has(value)) continue;
-      seen.add(value);
-      const label =
-        (typeof item.label === "string" && item.label.trim()) ||
-        (typeof item.name === "string" && item.name.trim()) ||
-        value;
-      const isDefault =
-        item.default === true || (defaultEffortRaw !== undefined && defaultEffortRaw === value);
-      efforts.push({
-        value,
-        label: effortLabel(label),
-        ...(isDefault ? { isDefault: true } : {}),
-      });
-    }
-  }
-
-  if (efforts.length === 0) {
-    // Catalog claims support but did not list levels — use the known Grok menu.
-    return buildGrokReasoningEffortCapabilities(
-      GROK_FALLBACK_REASONING_EFFORTS.map((effort) =>
-        defaultEffortRaw && effort.value === defaultEffortRaw
-          ? { ...effort, isDefault: true }
-          : defaultEffortRaw
-            ? { value: effort.value, label: effort.label }
-            : effort,
-      ),
-    );
-  }
-
-  // Ensure exactly one default: prefer catalog default flag, else advertised current, else first.
-  if (!efforts.some((effort) => effort.isDefault)) {
-    const preferred =
-      (defaultEffortRaw && efforts.find((effort) => effort.value === defaultEffortRaw)) ||
-      efforts[0];
-    if (preferred) {
-      preferred.isDefault = true;
-    }
-  }
-
-  return buildGrokReasoningEffortCapabilities(efforts);
-}
 
 export const buildInitialGrokProviderSnapshot = Effect.fn(
   "GrokProviderStatus.buildInitialGrokProviderSnapshot",
@@ -369,18 +224,14 @@ export function buildGrokModelCapabilities(model: EffectAcpSchema.ModelInfo): Mo
     : EMPTY_CAPABILITIES;
 }
 
-export function buildGrokModelsFromSessionModelState(
+function buildGrokModelsFromSessionModelState(
   modelState: EffectAcpSchema.SessionModelState | null | undefined,
 ): ReadonlyArray<ServerProviderModel> {
   if (!modelState || modelState.availableModels.length === 0) {
     return [];
   }
-  const currentModelId = modelState.currentModelId?.trim() ?? "";
+  const currentModelId = modelState.currentModelId.trim();
   const seen = new Set<string>();
-  // Grok reports which model a fresh session starts on; mark it default so the
-  // picker agrees with what a new thread would actually run, rather than
-  // whichever model happens to come first in the ACP list.
-  const currentSlug = currentModelId ? resolveGrokAcpBaseModelId(currentModelId) : undefined;
   return modelState.availableModels.flatMap((model): ServerProviderModel[] => {
     const slug = resolveGrokAcpBaseModelId(model.modelId);
     if (!slug || seen.has(slug)) {
@@ -392,7 +243,7 @@ export function buildGrokModelsFromSessionModelState(
         slug,
         name: model.name.trim() || slug,
         isCustom: false,
-        ...(slug === currentSlug ? { isDefault: true } : {}),
+        ...(model.modelId.trim() === currentModelId ? { isDefault: true } : {}),
         capabilities: buildGrokModelCapabilities(model),
       },
     ];
@@ -683,7 +534,6 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
   if (acpFailed) {
     yield* Effect.logWarning("Grok ACP initialize probe failed or timed out.", {
       errorTag: Exit.isFailure(acpExit) ? causeErrorTag(acpExit.cause) : "Timeout",
-      ...(Exit.isFailure(acpExit) ? { causeDetail: Cause.pretty(acpExit.cause) } : {}),
     });
   }
 

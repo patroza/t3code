@@ -1,4 +1,3 @@
-import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -149,11 +148,6 @@ it.effect.each([
       const layerOrchestration = Layer.merge(
         layerOrchestrator,
         ThreadManagementService.layer.pipe(
-          Layer.provide(
-            Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({
-              get: () => Effect.succeed(null),
-            }),
-          ),
           Layer.provide(layerOrchestrator),
           Layer.provide(ServerSettings.layerTest()),
           Layer.provide(

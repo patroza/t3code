@@ -1,4 +1,4 @@
-// @effect-diagnostics anyUnknownInErrorContext:off globalErrorInEffectCatch:off globalErrorInEffectFailure:off globalPromise:off missingEffectContext:off tryCatchInEffectGen:off preferSchemaOverJson:off
+// @effect-diagnostics anyUnknownInErrorContext:off globalErrorInEffectCatch:off globalErrorInEffectFailure:off globalPromise:off missingEffectContext:off tryCatchInEffectGen:off preferSchemaOverJson:off globalJsonInEffect:off effectTryWithoutCatch:off
 import { App } from "@microsoft/teams.apps";
 import type * as Context from "effect/Context";
 import { ProviderUserInputAnswers } from "@t3tools/contracts";

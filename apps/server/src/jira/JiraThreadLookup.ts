@@ -1,13 +1,14 @@
 /**
- * Discord destinations for untrusted Jira context notes come from links.json.
- * These helpers do not choose the T3 thread for a Jira or Discord turn. Work-item
- * identity is only what a Jira or GitHub webhook recorded.
+ * Discord destinations for untrusted Jira context notes come from the Discord bot's
+ * links.json (apps/discord-bot/src/store/ThreadLinkStore.ts, v2 document). These helpers
+ * do not choose the T3 thread for a Jira turn: that is the upstream thread issue link.
  */
 
-import type { ThreadId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
+// The subset of the bot's ThreadLink this module reads; unknown keys are ignored.
 const DiscordThreadLink = Schema.Struct({
+  sourceKind: Schema.optional(Schema.String),
   discordThreadId: Schema.optional(Schema.String),
   t3ThreadId: Schema.String,
   channelId: Schema.optional(Schema.String),
@@ -24,11 +25,6 @@ const DiscordLinksFile = Schema.Struct({
 });
 
 const decodeLinksFile = Schema.decodeUnknownSync(Schema.fromJsonString(DiscordLinksFile));
-
-export type JiraThreadLookupResult =
-  | { readonly _tag: "unlinked" }
-  | { readonly _tag: "ambiguous"; readonly threadIds: ReadonlyArray<ThreadId> }
-  | { readonly _tag: "linked"; readonly threadId: ThreadId };
 
 export type JiraDiscordLinkLookupResult =
   | { readonly _tag: "unlinked" }
@@ -67,30 +63,10 @@ function activeLinksWithIssue(
 
   return decodeLinks(linksJson).filter((link) => {
     if (link.status !== undefined && link.status !== "active") return false;
+    // Teams conversations share the store but have no Discord thread to post into.
+    if ((link.sourceKind ?? "discord") !== "discord") return false;
     return linkIdentityKeys(link).some((key) => key.trim().toUpperCase() === issueKey);
   });
-}
-
-/** Legacy parse of Discord link rows. Jira resolution does not call this. */
-export function resolveThreadIdForJiraIssue(input: {
-  readonly issueKey: string;
-  readonly linksJson: string;
-}): JiraThreadLookupResult {
-  const matches = new Set<string>();
-  for (const link of activeLinksWithIssue(input.linksJson, input.issueKey)) {
-    const threadId = link.t3ThreadId.trim();
-    if (threadId.length > 0) matches.add(threadId);
-  }
-
-  if (matches.size === 0) return { _tag: "unlinked" };
-  if (matches.size > 1) {
-    return {
-      _tag: "ambiguous",
-      threadIds: [...matches] as ThreadId[],
-    };
-  }
-  const [only] = matches;
-  return { _tag: "linked", threadId: only as ThreadId };
 }
 
 /**

@@ -85,7 +85,7 @@ export function sourceRefFromOperateClaim(input: {
  * Resolve a map person from a ClientSourceHint channel + actor.
  * Unmapped actors still get a channel stamp without personId (v1 policy).
  */
-export function resolvePersonFromSourceHint(
+function resolvePersonFromSourceHint(
   people: ReadonlyArray<IdentityMapPerson>,
   hint: ClientSourceHint,
 ): IdentityMapPerson | null {
@@ -125,7 +125,7 @@ export function resolvePersonFromSourceHint(
   return null;
 }
 
-export function sourceRefFromHintAndMap(input: {
+function sourceRefFromHintAndMap(input: {
   readonly people: ReadonlyArray<IdentityMapPerson>;
   readonly hint: ClientSourceHint;
   readonly clientDeviceType?: AuthClientMetadataDeviceType | undefined;
@@ -151,45 +151,39 @@ export function sourceRefFromHintAndMap(input: {
 }
 
 /**
- * Attach server-authored source to turn.start commands.
+ * Server-authored source for a dispatched message.
  * Priority: session claim → sourceHint+map (integrations) → channel-only for bots.
  */
-export function stampOrchestrationCommandSource(input: {
-  readonly command: OrchestrationV2Command;
+export function resolveDispatchSource(input: {
+  readonly hint: ClientSourceHint | undefined;
   readonly claim: SessionIdentityClaim | null;
   readonly clientDeviceType?: AuthClientMetadataDeviceType | undefined;
   readonly people?: ReadonlyArray<IdentityMapPerson> | undefined;
-}): OrchestrationV2Command {
-  if (input.command.type !== "message.dispatch") {
-    return input.command;
-  }
-
-  const hint = input.command.sourceHint;
-  let source: SourceRef | undefined;
-
+}): SourceRef | undefined {
+  const hint = input.hint;
   if (input.claim !== null) {
-    source = sourceRefFromOperateClaim({
+    const source = sourceRefFromOperateClaim({
       claim: input.claim,
       clientDeviceType: input.clientDeviceType,
       channelHint: hint?.channel,
     });
     // Merge optional location/actor from hint (e.g. Discord guild) onto claim stamp.
-    if (hint?.location !== undefined || hint?.actor !== undefined) {
-      source = {
-        ...source,
-        ...(hint.location !== undefined ? { location: hint.location } : {}),
-        ...(hint.actor !== undefined ? { actor: hint.actor } : {}),
-      };
-    }
-  } else if (hint !== undefined && (input.people?.length ?? 0) > 0) {
-    source = sourceRefFromHintAndMap({
+    return {
+      ...source,
+      ...(hint?.location !== undefined ? { location: hint.location } : {}),
+      ...(hint?.actor !== undefined ? { actor: hint.actor } : {}),
+    };
+  }
+  if (hint !== undefined && (input.people?.length ?? 0) > 0) {
+    return sourceRefFromHintAndMap({
       people: input.people ?? [],
       hint,
       clientDeviceType: input.clientDeviceType,
     });
-  } else if (hint !== undefined) {
+  }
+  if (hint !== undefined) {
     // Map empty/off: still stamp channel + actor for provenance.
-    source = {
+    return {
       channel: resolveSourceChannel({
         deviceType: input.clientDeviceType,
         channelHint: hint.channel,
@@ -197,20 +191,29 @@ export function stampOrchestrationCommandSource(input: {
       ...(hint.location !== undefined ? { location: hint.location } : {}),
       ...(hint.actor !== undefined ? { actor: hint.actor } : {}),
     };
-  } else if (input.clientDeviceType === "bot") {
-    source = { channel: "bot" };
   }
+  return input.clientDeviceType === "bot" ? { channel: "bot" } : undefined;
+}
 
-  // Drop sourceHint from the command stored in the engine (source is authoritative).
-  const { sourceHint: _dropped, ...withoutHint } = input.command;
-  void _dropped;
-  if (source === undefined) {
-    return withoutHint as OrchestrationV2Command;
+/**
+ * Replace client-supplied provenance on a client command with the server's stamp.
+ * Clients never author `source` or `originSource`; only `sourceHint` survives as input.
+ */
+export function stampOrchestrationCommandSource(input: {
+  readonly command: OrchestrationV2Command;
+  readonly claim: SessionIdentityClaim | null;
+  readonly clientDeviceType?: AuthClientMetadataDeviceType | undefined;
+  readonly people?: ReadonlyArray<IdentityMapPerson> | undefined;
+}): OrchestrationV2Command {
+  const command = input.command;
+  if (command.type === "thread.create") {
+    const { originSource: _clientOrigin, ...rest } = command;
+    return rest;
   }
-  return {
-    ...withoutHint,
-    source,
-  } as OrchestrationV2Command;
+  if (command.type !== "message.dispatch") return command;
+  const { sourceHint, source: _clientSource, ...rest } = command;
+  const source = resolveDispatchSource({ ...input, hint: sourceHint });
+  return source === undefined ? rest : { ...rest, source };
 }
 
 /** Build a full SourceRef for in-process bridges (GitHub/Jira) with map resolution. */

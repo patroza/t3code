@@ -39,18 +39,10 @@ vi.mock("../state/session", async (original) => ({
   ...(await original<typeof import("../state/session")>()),
   readEnvironmentScope: () => true,
 }));
-vi.mock("gt-react", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("gt-react")>();
-  return { ...actual, useGT: () => actual.gtFallback, useMessages: () => actual.mFallback };
-});
-
 vi.mock("react", async (original) => ({
   ...(await original<typeof import("react")>()),
   useCallback: (callback: unknown) => callback,
-  useLayoutEffect: (effect: () => void) => effect(),
-  useInsertionEffect: (effect: () => void) => effect(),
   useMemo: (create: () => unknown) => create(),
-  useState: (initial: () => unknown) => [initial(), () => {}],
   useRef: (value: unknown) => ({ current: value }),
 }));
 vi.mock("@tanstack/react-router", () => ({ useRouter: () => router }));
@@ -63,11 +55,7 @@ vi.mock("./useHandleNewThread", () => ({
 vi.mock("../composerDraftStore", () => ({ useComposerDraftStore: () => vi.fn() }));
 vi.mock("../lib/composerDraftUploads", () => ({ releaseComposerDraftUploads: vi.fn() }));
 vi.mock("../terminalUiStateStore", () => ({ useTerminalUiStateStore: () => vi.fn() }));
-vi.mock("../uiStateStore", () => ({
-  useUiStateStore: Object.assign(() => vi.fn(), {
-    getState: () => ({ removeThread: vi.fn() }),
-  }),
-}));
+vi.mock("../uiStateStore", () => ({ useUiStateStore: () => vi.fn() }));
 vi.mock("../lib/announce", () => ({ announce: vi.fn(), cancelAnnouncement: vi.fn() }));
 vi.mock("../lib/archivedThreadsState", () => ({ refreshArchivedThreadsForEnvironment: vi.fn() }));
 const threadShell = vi.hoisted(() => ({

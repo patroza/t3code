@@ -2,7 +2,6 @@ import { useGT } from "gt-react";
 import { InfoIcon } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
-import { ErrorDetailText } from "../ui/errorDetailText";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { ComposerBanner, type ComposerBannerVariant } from "./ComposerBanner";
@@ -206,11 +205,7 @@ function NoticeCard({
               }
               className="w-0 min-w-0 grow truncate text-muted-foreground @max-[400px]:sr-only"
             >
-              {item.variant === "error" && typeof item.description === "string" ? (
-                <ErrorDetailText text={item.description} />
-              ) : (
-                item.description
-              )}
+              {item.description}
             </NoticeText>
           ) : null}
         </ComposerBanner.Content>

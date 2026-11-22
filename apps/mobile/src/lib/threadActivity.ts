@@ -5,6 +5,7 @@ import type {
 import { linkRequestTargetName } from "@t3tools/client-runtime/link-request";
 import { turnItemIsWorkspacePreparation } from "@t3tools/client-runtime/state/turn-item-presentation";
 import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
+import { turnHasChanges } from "@t3tools/client-runtime/state/thread-repositories";
 import { formatSubagentDisplayTitle } from "@t3tools/client-runtime/state/subagent-display";
 import {
   isLiveSubagentTurnItem,
@@ -56,7 +57,6 @@ import type {
   OrchestrationV2RunStatus,
   OrchestrationV2TurnItem,
   OrchestrationV2UserMessageInputIntent,
-  SourceRef,
   RunAttemptId,
   ScheduledTaskId,
   TurnItemId,
@@ -148,7 +148,6 @@ export interface ThreadFeedMessage {
   readonly inputIntent?: OrchestrationV2UserMessageInputIntent;
   readonly createdBy?: OrchestrationV2Actor;
   readonly creationSource?: OrchestrationV2CreationSource;
-  readonly source?: SourceRef | undefined;
   readonly scheduledTaskId?: ScheduledTaskId;
   readonly senderThreadId?: ThreadId;
   readonly linkedSender?: import("@t3tools/contracts").OrchestrationV2LinkedSender;
@@ -2494,6 +2493,7 @@ function checkpointSummariesEqual(
       summary.completedAt === other.completedAt &&
       summary.status === other.status &&
       summary.files === other.files &&
+      summary.repositories === other.repositories &&
       summary.assistantMessageId === other.assistantMessageId
     );
   });
@@ -2703,7 +2703,6 @@ export function buildThreadFeed(
                 inputIntent: item.inputIntent,
                 createdBy: item.createdBy,
                 creationSource: item.creationSource,
-                ...(item.source === undefined ? {} : { source: item.source }),
                 ...(item.scheduledTaskId ? { scheduledTaskId: item.scheduledTaskId } : {}),
                 ...(item.senderThreadId ? { senderThreadId: item.senderThreadId } : {}),
                 ...(item.linkedSender ? { linkedSender: item.linkedSender } : {}),
@@ -2786,7 +2785,12 @@ export function buildThreadFeed(
   }
   const checkpointByMessageId = new Map(
     (options?.checkpointSummaries ?? [])
-      .filter((checkpoint) => checkpoint.status === "ready" && checkpoint.files.length > 0)
+      // A plain folder holding repositories never has a ready checkpoint of its own.
+      .filter(
+        (checkpoint) =>
+          (checkpoint.status === "ready" || checkpoint.repositories !== undefined) &&
+          turnHasChanges(checkpoint),
+      )
       .map((checkpoint) => [checkpoint.assistantMessageId, checkpoint]),
   );
   const grouped = groupAdjacentActivities(

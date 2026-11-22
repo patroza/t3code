@@ -2,27 +2,16 @@ import type { UsageProviderKind } from "@t3tools/contracts";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { providerColors } from "./providerColors";
 
-/**
- * Series and table order. The chart stacks providers from the bottom in this
- * order, so it also fixes which band sits on top of the bars.
- */
-export const PROVIDER_ORDER = [
+export const PROVIDER_ORDER: readonly UsageProviderKind[] = [
   "codex",
   "claude",
   "grok",
-  "kimi",
   "cursor",
   "opencode",
   "antigravity",
   "pi",
   "muse",
-] as const satisfies readonly UsageProviderKind[];
-
-/** Every usage provider must have a chart position, or its summary would lack matching chart data. */
-type AssertNoUnorderedProvider<T extends never> = T;
-export type UsageProviderOrderIsExhaustive = AssertNoUnorderedProvider<
-  Exclude<UsageProviderKind, (typeof PROVIDER_ORDER)[number]>
->;
+];
 
 export function usageProviderKind(driver: string): UsageProviderKind | null {
   if (driver === "claudeAgent") return "claude";
@@ -33,7 +22,6 @@ export const PROVIDER_LABEL: Record<UsageProviderKind, string> = {
   claude: "Claude Code",
   codex: "Codex",
   grok: "Grok Build",
-  kimi: "Kimi",
   cursor: "Cursor",
   opencode: "OpenCode",
   antigravity: "Antigravity",

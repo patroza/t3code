@@ -2,17 +2,14 @@
 // @effect-diagnostics globalDate:off globalTimers:off
 import DOMPurify from "dompurify";
 import { marked } from "marked";
-import type {
-  AiUsageSnapshot,
-  AiUsageWindow,
-  ServerHostResourceSnapshot,
-} from "@t3tools/contracts";
+import type { HostResourcesSnapshot } from "@t3tools/contracts";
 import {
   formatHostResourceBytes,
-  formatHostResourcePercent,
-  getHostResourceMetrics,
-  getHostResourceRatioPressure,
-} from "@t3tools/client-runtime/state/hostResourcePresentation";
+  formatHostResourceRatio,
+  hostMemoryUsedBytes,
+  hostResourceMetrics,
+  hostResourcePressure,
+} from "./lib/hostResources.ts";
 import {
   EMPTY_COMPOSER_INPUT_HISTORY,
   navigateComposerInputHistory,
@@ -21,13 +18,12 @@ import {
   resolveComposerInputHistoryKeyAction,
   seedComposerInputHistoryFromConversation,
   type ComposerInputHistoryState,
-} from "@t3tools/shared/composerInputHistory";
-import type { ChangeRequestIndicator } from "@t3tools/shared/sourceControl";
-import { sendEntersSteeringQueue } from "@t3tools/shared/chatList";
+} from "./lib/composerInputHistory.ts";
+import type { ChangeRequestIndicator } from "./lib/changeRequest.ts";
+import { sendEntersSteeringQueue } from "./lib/steeringQueue.ts";
 
 import { conversationRenderRevision } from "./conversationRevision.ts";
 import { splitEditorContext } from "./editorContext.ts";
-import { compareModelUsage, usageForModel } from "./usagePresentation.ts";
 import { renderProviderIcon } from "./providerIcon.ts";
 
 interface VsCodeApi {
@@ -204,7 +200,6 @@ interface ViewState {
         }
     >;
   }>;
-  readonly aiUsage: AiUsageSnapshot | null;
   readonly favoriteProviderIds: ReadonlyArray<string>;
   readonly favoriteModelKeys: ReadonlyArray<string>;
   readonly contextEnabled: boolean;
@@ -253,7 +248,6 @@ const favoriteProvider = requiredElement<HTMLButtonElement>("favorite-provider")
 const model = requiredElement<HTMLSelectElement>("model");
 const favoriteModel = requiredElement<HTMLButtonElement>("favorite-model");
 const modelOptions = requiredElement<HTMLElement>("model-options");
-const usageDetails = requiredElement<HTMLElement>("usage-details");
 const tasksDetails = requiredElement<HTMLElement>("tasks-details");
 const tasksLabel = requiredElement<HTMLElement>("tasks-label");
 let currentState: ViewState | null = null;
@@ -273,7 +267,6 @@ interface PendingImage {
   readonly dataUrl: string;
 }
 let pendingImages: PendingImage[] = [];
-let usageExpanded = false;
 let tasksExpanded = false;
 let hasUnreadActivity = false;
 let renderedConversationRevision: string | null = null;
@@ -565,26 +558,6 @@ function formatTokens(value: number | null): string {
   if (value < 1_000) return `${Math.round(value)}`;
   if (value < 1_000_000) return `${Math.round(value / 1_000)}k`;
   return `${(value / 1_000_000).toFixed(1).replace(/\.0$/u, "")}m`;
-}
-
-function formatReset(resetsAt: number | null | undefined): string {
-  if (typeof resetsAt !== "number") return "";
-  const remainingMinutes = Math.max(0, Math.round((resetsAt * 1_000 - Date.now()) / 60_000));
-  if (remainingMinutes === 0) return "resetting";
-  const days = Math.floor(remainingMinutes / 1_440);
-  const hours = Math.floor((remainingMinutes % 1_440) / 60);
-  const minutes = remainingMinutes % 60;
-  if (days > 0) return `resets in ${days}d ${hours}h`;
-  if (hours > 0) return `resets in ${hours}h ${minutes}m`;
-  return `resets in ${minutes}m`;
-}
-
-function usageWindowValue(window: AiUsageWindow): string {
-  if (typeof window.percent === "number") return `${Math.round(window.percent)}%`;
-  if (typeof window.used === "number") {
-    return window.unit === "$" ? `$${window.used.toFixed(2)}` : `${window.used}`;
-  }
-  return "N/A";
 }
 
 function modelFavoriteKey(instanceId: string, modelSlug: string): string {
@@ -1267,15 +1240,7 @@ function render(next: ViewState): void {
     )) {
       const option = document.createElement("option");
       option.value = instanceId;
-      const instanceModels = next.models.filter((model) => model.instanceId === instanceId);
-      const comparedUsage = compareModelUsage(next.aiUsage, instanceModels);
-      const usage =
-        draftSelection === null
-          ? ""
-          : comparedUsage.varies
-            ? "Limits vary by model"
-            : (comparedUsage.commonSummary ?? "");
-      option.textContent = `${candidate.providerLabel}${usage === "" ? "" : ` · ${usage}`}`;
+      option.textContent = candidate.providerLabel;
       option.selected = instanceId === selection.instanceId;
       provider.append(option);
     }
@@ -1284,20 +1249,15 @@ function render(next: ViewState): void {
       next.models.filter((candidate) => candidate.instanceId === selection.instanceId),
       (candidate) => favoriteModelKeys.has(modelFavoriteKey(candidate.instanceId, candidate.model)),
     );
-    const comparedUsage = compareModelUsage(next.aiUsage, selectedProviderModels);
-    for (const [index, candidate] of selectedProviderModels.entries()) {
+    for (const candidate of selectedProviderModels) {
       const option = document.createElement("option");
       option.value = candidate.model;
-      const modelUsage = comparedUsage.varies
-        ? (comparedUsage.summaries[index] ?? "Usage unavailable")
-        : "";
-      option.textContent = `${candidate.modelLabel}${modelUsage === "" ? "" : ` · ${modelUsage}`}`;
+      option.textContent = candidate.modelLabel;
       option.selected = candidate.model === selection.model;
       model.append(option);
     }
   }
   renderModelOptions(next);
-  renderUsageDetails(next);
   renderProviderIdentity(next);
   renderFavoriteControls(next);
   provider.disabled = selection === null || draftSelection === null || next.busy;
@@ -1501,11 +1461,11 @@ function renderChangeRequest(state: ViewState): void {
 }
 
 function hostResourceMetricElement(
-  metric: ReturnType<typeof getHostResourceMetrics>[number],
+  metric: ReturnType<typeof hostResourceMetrics>[number],
 ): HTMLElement {
   const ratio = metric.ratio === null ? 0 : Math.min(1, Math.max(0, metric.ratio));
   const element = document.createElement("span");
-  element.className = `host-metric ${getHostResourceRatioPressure(ratio)}`;
+  element.className = `host-metric ${hostResourcePressure(ratio)}`;
   element.setAttribute("aria-label", metric.description);
   const meter = document.createElement("span");
   meter.className = "host-metric-meter";
@@ -1521,32 +1481,25 @@ function hostResourceMetricElement(
   return element;
 }
 
-function renderHostResources(snapshot: ServerHostResourceSnapshot | null): void {
-  hostResourcesToggle.hidden = snapshot === null || snapshot.status === "unavailable";
-  if (snapshot === null || snapshot.status === "unavailable") return;
+function renderHostResources(snapshot: HostResourcesSnapshot | null): void {
+  hostResourcesToggle.hidden = snapshot === null;
+  if (snapshot === null) return;
   hostResourcesToggle.replaceChildren(
-    ...getHostResourceMetrics(snapshot).map(hostResourceMetricElement),
+    ...hostResourceMetrics(snapshot).map(hostResourceMetricElement),
   );
   hostResourcesToggle.title = "Host resources, hover for details";
   hostResourcesToggle.setAttribute("aria-label", hostResourcesToggle.title);
-  const loadAverage = snapshot.loadAverage;
   const rows: ReadonlyArray<readonly [string, string]> = [
-    ["Host", snapshot.hostname ?? currentState?.environmentLabel ?? "Host"],
+    ["Host", currentState?.environmentLabel ?? "Host"],
     [
       "CPU",
-      `${formatHostResourcePercent(snapshot.cpuPercent)} across ${snapshot.logicalCores ?? "N/A"} logical cores`,
+      `${formatHostResourceRatio(snapshot.cpuUtilization)} across ${snapshot.cpuCount > 0 ? snapshot.cpuCount : "N/A"} logical cores`,
     ],
     [
       "Memory",
-      `${formatHostResourceBytes(snapshot.memoryUsedBytes)} / ${formatHostResourceBytes(snapshot.memoryTotalBytes)} used`,
+      `${formatHostResourceBytes(hostMemoryUsedBytes(snapshot))} / ${formatHostResourceBytes(snapshot.totalMemoryBytes)} used`,
     ],
-    [
-      "Load",
-      loadAverage
-        ? `${loadAverage.m1.toFixed(2)} / ${loadAverage.m5.toFixed(2)} / ${loadAverage.m15.toFixed(2)}`
-        : "N/A",
-    ],
-    ["Updated", new Date(snapshot.checkedAt).toLocaleTimeString()],
+    ["Updated", new Date(snapshot.sampledAt).toLocaleTimeString()],
   ];
   hostResourcesDetails.replaceChildren(
     ...rows.flatMap(([label, value]) => {
@@ -1559,85 +1512,6 @@ function renderHostResources(snapshot: ServerHostResourceSnapshot | null): void 
       return [labelElement, valueElement];
     }),
   );
-}
-
-function renderUsageDetails(state: ViewState): void {
-  usageDetails.replaceChildren();
-  const usageToggle = requiredElement<HTMLButtonElement>("usage-toggle");
-  const usageLabel = requiredElement<HTMLElement>("usage-label");
-  usageToggle.style.setProperty("--usage-primary", "0deg");
-  usageToggle.style.setProperty("--usage-secondary", "0deg");
-  usageToggle.className = "";
-  usageToggle.hidden = true;
-  usageLabel.textContent = "N/A";
-  usageToggle.title = "Provider usage unavailable";
-  usageToggle.setAttribute("aria-label", usageToggle.title);
-  const candidate = selectedModelCandidate(state);
-  if (candidate === undefined) return;
-  const usage = usageForModel(state.aiUsage, candidate.driver, candidate.model);
-  if (usage === null) return;
-  usageToggle.hidden = false;
-  usageToggle.title = "Provider usage, hover for details; click to pin";
-  usageToggle.setAttribute("aria-label", usageToggle.title);
-  if (!usage.ok) {
-    const unavailable = document.createElement("div");
-    unavailable.className = "usage-unavailable";
-    unavailable.textContent = usage.error ?? "Usage unavailable";
-    usageDetails.append(unavailable);
-    return;
-  }
-  const percentages = usage.windows
-    .map((window) => window.percent)
-    .filter((percent): percent is number => typeof percent === "number");
-  const primary = percentages[0] ?? 0;
-  const secondary = percentages[1] ?? primary;
-  const worst = percentages.length > 0 ? Math.max(...percentages) : null;
-  usageToggle.style.setProperty(
-    "--usage-primary",
-    `${Math.max(0, Math.min(100, primary)) * 3.6}deg`,
-  );
-  usageToggle.style.setProperty(
-    "--usage-secondary",
-    `${Math.max(0, Math.min(100, secondary)) * 3.6}deg`,
-  );
-  usageToggle.classList.toggle("warning", worst !== null && worst >= 80 && worst < 100);
-  usageToggle.classList.toggle("critical", worst !== null && worst >= 100);
-  usageLabel.textContent = worst === null ? "N/A" : `${Math.round(worst)}%`;
-  for (const window of usage.windows) {
-    const row = document.createElement("div");
-    row.className = "usage-window";
-    const heading = document.createElement("div");
-    heading.className = "usage-window-heading";
-    const label = document.createElement("span");
-    label.textContent = window.label;
-    const value = document.createElement("span");
-    value.textContent = usageWindowValue(window);
-    heading.append(label, value);
-    row.append(heading);
-    if (typeof window.percent === "number") {
-      const track = document.createElement("div");
-      track.className = "usage-track";
-      const fill = document.createElement("div");
-      fill.className = `usage-fill${window.percent >= 100 ? " critical" : window.percent >= 80 ? " warning" : ""}`;
-      fill.style.width = `${Math.max(0, Math.min(100, window.percent))}%`;
-      track.append(fill);
-      row.append(track);
-    }
-    const reset = formatReset(window.resets_at);
-    if (reset !== "") {
-      const resetLabel = document.createElement("div");
-      resetLabel.className = "usage-reset";
-      resetLabel.textContent = reset;
-      row.append(resetLabel);
-    }
-    usageDetails.append(row);
-  }
-  if (usage.stale) {
-    const stale = document.createElement("div");
-    stale.className = "usage-unavailable";
-    stale.textContent = "Showing last known usage";
-    usageDetails.append(stale);
-  }
 }
 
 function isRunning(): boolean {
@@ -2067,10 +1941,6 @@ function positionPopover(toggle: HTMLElement, panel: HTMLElement, maxWidth: numb
   panel.style.bottom = `${Math.max(viewportPadding, globalThis.innerHeight - toggleBounds.top + 7)}px`;
 }
 
-function positionUsageDetails(): void {
-  positionPopover(requiredElement("usage-toggle"), usageDetails, 270);
-}
-
 function positionTasksDetails(): void {
   positionPopover(requiredElement("tasks-toggle"), tasksDetails, 320);
 }
@@ -2083,7 +1953,7 @@ window.addEventListener("message", (event: MessageEvent<unknown>) => {
   if (typeof event.data !== "object" || event.data === null || !("type" in event.data)) return;
   if (event.data.type === "state" && "state" in event.data) render(event.data.state as ViewState);
   if (event.data.type === "hostResources" && "snapshot" in event.data) {
-    renderHostResources(event.data.snapshot as ServerHostResourceSnapshot | null);
+    renderHostResources(event.data.snapshot as HostResourcesSnapshot | null);
   }
   if (event.data.type === "promptStash" && "entries" in event.data) {
     promptStash = event.data.entries as ReadonlyArray<PromptStashEntry>;
@@ -2192,24 +2062,10 @@ favoriteModel.addEventListener("click", () => {
     });
   }
 });
-requiredElement("usage-toggle").addEventListener("click", () => {
-  positionUsageDetails();
-  usageExpanded = !usageExpanded;
-  requiredElement("usage-control").classList.toggle("pinned", usageExpanded);
-  if (usageExpanded) {
-    tasksExpanded = false;
-    requiredElement("tasks-control").classList.remove("pinned");
-  }
-});
-requiredElement("usage-control").addEventListener("pointerenter", positionUsageDetails);
 requiredElement("tasks-toggle").addEventListener("click", () => {
   positionTasksDetails();
   tasksExpanded = !tasksExpanded;
   requiredElement("tasks-control").classList.toggle("pinned", tasksExpanded);
-  if (tasksExpanded) {
-    usageExpanded = false;
-    requiredElement("usage-control").classList.remove("pinned");
-  }
 });
 requiredElement("tasks-control").addEventListener("pointerenter", positionTasksDetails);
 changeRequest.addEventListener("click", () => {
@@ -2226,22 +2082,15 @@ hostResourcesControl.addEventListener("pointerleave", () => {
   post({ type: "hostResourceLive", live: false });
 });
 function closeComposerPopovers(): void {
-  usageExpanded = false;
   tasksExpanded = false;
-  for (const id of ["usage-control", "tasks-control"]) {
-    const control = requiredElement(id);
-    control.classList.remove("pinned");
-    if (control.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
-  }
+  const control = requiredElement("tasks-control");
+  control.classList.remove("pinned");
+  if (control.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
 }
 document.addEventListener("pointerdown", (event) => {
   const target = event.target;
   if (!(target instanceof Node)) return;
-  if (
-    requiredElement("usage-control").contains(target) ||
-    requiredElement("tasks-control").contains(target)
-  )
-    return;
+  if (requiredElement("tasks-control").contains(target)) return;
   closeComposerPopovers();
 });
 document.addEventListener("keydown", (event) => {
@@ -2254,13 +2103,12 @@ document.addEventListener("keydown", (event) => {
     }
     return;
   }
-  if (event.key === "Escape" && (usageExpanded || tasksExpanded)) {
+  if (event.key === "Escape" && tasksExpanded) {
     closeComposerPopovers();
     event.preventDefault();
   }
 });
 globalThis.addEventListener("resize", () => {
-  positionUsageDetails();
   positionTasksDetails();
 });
 requiredElement("new").addEventListener("click", beginNewThread);

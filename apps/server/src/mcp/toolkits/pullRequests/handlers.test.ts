@@ -34,11 +34,10 @@ import {
   v2PullRequestThread,
 } from "../../../orchestration-v2/testkit/pullRequestFixtures.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
-import * as PullRequestService from "../../../pullRequest/PullRequestService.ts";
 import * as PullRequestWatchService from "../../../pullRequest/PullRequestWatchService.ts";
 import * as PullRequestReviewGuideService from "../../../pullRequest/PullRequestReviewGuideService.ts";
+import * as PullRequestService from "../../../pullRequest/PullRequestService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
-import { alreadyEndedWatchNext } from "./tools.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as McpToolAccessTestkit from "../../McpToolAccess.testkit.ts";
 import { listThreadPullRequests } from "./handlers.ts";
@@ -179,22 +178,8 @@ const makeHarness = Effect.fn("makePullRequestsToolkitHarness")(function* (
       yield* Ref.update(commands, (recorded) => [...recorded, command]);
       return { sequence: 1, storedEvents: [] };
     });
-  const serviceDependencies = Layer.mergeAll(
-    Layer.mock(PullRequestService.PullRequestService)({
-      summary: (input) =>
-        Effect.succeed({
-          ...input,
-          provider: SourceControlProviderKind.make("github"),
-          title: "Pull request",
-          url: `https://github.com/${input.repository}/pull/${input.number}`,
-          state: "open",
-          headBranch: "feature",
-          baseBranch: "main",
-          updatedAt: "2026-08-20T00:00:00.000Z",
-          checksState: "pending",
-        }),
-      ...options.pullRequests,
-    }),
+  const layerDependencies = Layer.mergeAll(
+    Layer.mock(PullRequestWatchService.PullRequestWatchService)({}),
     Layer.mock(ProjectService.ProjectService)({
       getShell: () => Effect.succeed(Option.fromNullishOr(project)),
       listShells: () => Effect.succeed(options.projects ?? (project ? [project] : [])),
@@ -222,12 +207,10 @@ const makeHarness = Effect.fn("makePullRequestsToolkitHarness")(function* (
         Effect.succeed(id === thread?.id ? v2PullRequestThread(thread) : null),
       dispatch,
     }),
+    Layer.mock(PullRequestService.PullRequestService)(options.pullRequests ?? {}),
     Layer.mock(GitManager.GitManager)(options.git ?? {}),
     Layer.succeed(SecureRandom.SecureRandom, testCrypto),
     McpToolAccessTestkit.liveThreadsLayer,
-  );
-  const layerDependencies = PullRequestWatchService.layer.pipe(
-    Layer.provideMerge(serviceDependencies),
   );
   const toolkit = yield* PullRequestsToolkit.pipe(
     Effect.provide(
@@ -309,101 +292,6 @@ describe("pull request toolkit handlers", () => {
           source: "agent",
         },
       ]);
-    }),
-  );
-
-  it.effect("watching an unlinked pull request links it first", () =>
-    Effect.gen(function* () {
-      const harness = yield* makeHarness();
-      const result = yield* harness.call("watch_pull_request", {
-        url: "https://github.com/t3tools/t3code/pull/9",
-      });
-      expect(result).toMatchObject({ number: 9, watching: false, wasWatching: false });
-      expect(yield* Ref.get(harness.commands)).toMatchObject([
-        {
-          type: "thread.pull-request.watch",
-          number: 9,
-          watching: true,
-          link: { url: "https://github.com/t3tools/t3code/pull/9", source: "agent" },
-        },
-      ]);
-    }),
-  );
-
-  it.effect(
-    "reports a merged pull request instead of watching it, and stops an existing watch",
-    () =>
-      Effect.gen(function* () {
-        const watch = {
-          startedAt: "2026-08-20T00:00:00.000Z",
-          headSha: null,
-          failedChecks: [],
-          passed: false,
-          passedChecks: [],
-          pendingChecks: [],
-          remarksThrough: "2026-08-20T00:00:00.000Z",
-          remarkIds: [],
-          conflicting: false,
-          wakes: 0,
-        };
-        const merged = makeLink(1, { headBranch: "done" });
-        const harness = yield* makeHarness({
-          thread: makeThread([
-            { ...merged, snapshot: merged.snapshot && { ...merged.snapshot, state: "merged" } },
-            makeLink(2, { headBranch: "idle" }),
-            makeLink(3, { headBranch: "watched", watch }),
-          ]),
-        });
-        expect(
-          yield* harness.call("watch_pull_request", { repository: "t3tools/t3code", number: 1 }),
-        ).toMatchObject({
-          number: 1,
-          watching: false,
-          wasWatching: false,
-          state: "merged",
-          next: alreadyEndedWatchNext("merged"),
-        });
-        expect(
-          yield* harness.call("unwatch_pull_request", { repository: "t3tools/t3code", number: 3 }),
-        ).toMatchObject({ wasWatching: true });
-        expect(yield* Ref.get(harness.commands)).toMatchObject([
-          { type: "thread.pull-request.watch", number: 3, watching: false },
-        ]);
-      }),
-  );
-
-  it.effect("watches a pull request saved as closed, since it may have reopened", () =>
-    Effect.gen(function* () {
-      const closed = makeLink(1, { headBranch: "closed" });
-      const harness = yield* makeHarness({
-        thread: makeThread([
-          { ...closed, snapshot: closed.snapshot && { ...closed.snapshot, state: "closed" } },
-        ]),
-      });
-      yield* harness.call("watch_pull_request", { repository: "t3tools/t3code", number: 1 });
-      expect(yield* Ref.get(harness.commands)).toMatchObject([
-        { type: "thread.pull-request.watch", number: 1, watching: true },
-      ]);
-    }),
-  );
-
-  it.effect("refuses a watch from a subagent thread, whose parent owns the pull request", () =>
-    Effect.gen(function* () {
-      const harness = yield* makeHarness({
-        thread: {
-          ...makeThread([makeLink(1, { headBranch: "feature" })]),
-          lineage: {
-            rootThreadId: ThreadId.make("parent"),
-            parentThreadId: ThreadId.make("parent"),
-            relationshipToParent: "subagent",
-          },
-        },
-      });
-      const error = yield* harness
-        .call("watch_pull_request", { repository: "t3tools/t3code", number: 1 })
-        .pipe(Effect.flip);
-      expect(error).toMatchObject({ _tag: "PullRequestWatchFromSubagentError" });
-      expect(yield* Ref.get(harness.commands)).toEqual([]);
     }),
   );
 
@@ -949,6 +837,7 @@ describe("source control tools", () => {
     body: "Adds tools.",
     state: "open",
     isDraft: false,
+    visibility: "private",
     author: null,
     headBranch: "tools",
     baseBranch: "main",
@@ -1004,6 +893,7 @@ describe("source control tools", () => {
       });
       const compact = yield* harness.call("pull_request_read", {});
       expect(compact).toMatchObject({
+        visibility: "private",
         headSha: "abc123",
         checks: { passed: 2, pending: 1, failed: ["Lint", "E2E"], incomplete: true },
         unresolvedThreads: 1,
@@ -1256,7 +1146,6 @@ describe("source control tools", () => {
         failedChecks: ["test"],
         passed: false,
         passedChecks: [],
-        pendingChecks: [],
         remarksThrough: "2026-08-20T00:00:00.000Z",
         remarkIds: [],
         conflicting: false,
@@ -1291,7 +1180,11 @@ describe("source control tools", () => {
 
   it.effect("opens a PR from the thread's worktree and links it even if dismissed", () =>
     Effect.gen(function* () {
-      const opened: Array<{ readonly cwd: string; readonly draft: boolean | undefined }> = [];
+      const opened: Array<{
+        readonly cwd: string;
+        readonly draft: boolean | undefined;
+        readonly private: boolean | undefined;
+      }> = [];
       const harness = yield* makeHarness({
         thread: {
           ...makeThread([makeLink(43, { source: "stack-dismissed" })]),
@@ -1299,7 +1192,9 @@ describe("source control tools", () => {
         },
         git: {
           createPullRequest: (input) =>
-            Effect.sync(() => opened.push({ cwd: input.cwd, draft: input.draft })).pipe(
+            Effect.sync(() =>
+              opened.push({ cwd: input.cwd, draft: input.draft, private: input.private }),
+            ).pipe(
               Effect.as({
                 status: "created" as const,
                 url: "https://github.com/t3tools/t3code/pull/43",
@@ -1315,9 +1210,10 @@ describe("source control tools", () => {
         title: "Add tools",
         body: "Adds tools.",
         draft: true,
+        private: true,
       });
       expect(result).toMatchObject({ number: 43, created: true });
-      expect(opened).toEqual([{ cwd: "/workspace/worktree", draft: true }]);
+      expect(opened).toEqual([{ cwd: "/workspace/worktree", draft: true, private: true }]);
       expect(yield* Ref.get(harness.commands)).toMatchObject([
         { type: "thread.pull-request.link", number: 43, source: "created" },
       ]);

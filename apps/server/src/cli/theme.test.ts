@@ -165,9 +165,7 @@ describe("t3 theme", () => {
       const destination = NodePath.join(themesDir, "nightfall.json");
       const notes = NodePath.join(destination, "notes.txt");
       const { renameSync } = yield* Effect.promise(() => vi.importActual<typeof NodeFS>("node:fs"));
-      // `using` does not dispose if this generator is abandoned, and the spy then
-      // rewrites the next rename in the worker (provider process reaping).
-      const insertDirectory = vi.spyOn(NodeFS, "renameSync").mockImplementationOnce((from, to) => {
+      using _insertDirectory = vi.spyOn(NodeFS, "renameSync").mockImplementationOnce((from, to) => {
         NodeFS.mkdirSync(destination);
         NodeFS.writeFileSync(notes, "notes");
         renameSync(from, to);
@@ -175,7 +173,6 @@ describe("t3 theme", () => {
 
       const failure = yield* runCli(["theme", "set", themeFile, "--base-dir", baseDir]).pipe(
         Effect.flip,
-        Effect.ensuring(Effect.sync(() => insertDirectory.mockRestore())),
       );
 
       assert.include(String(failure), "is a directory");

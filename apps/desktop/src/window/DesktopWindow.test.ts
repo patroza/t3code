@@ -34,7 +34,6 @@ vi.mock("electron", async (importOriginal) => ({
   },
 }));
 
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import * as DesktopAssets from "../app/DesktopAssets.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
@@ -48,7 +47,7 @@ import * as ElectronMenu from "../electron/ElectronMenu.ts";
 import * as ElectronShell from "../electron/ElectronShell.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
-import { MENU_ACTION_CHANNEL, SNAP_SHOT_EVENT_CHANNEL } from "../ipc/channels.ts";
+import { SNAP_SHOT_EVENT_CHANNEL } from "../ipc/channels.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
 import * as DesktopWindow from "./DesktopWindow.ts";
 import {
@@ -230,7 +229,6 @@ const desktopWindowBoundsEquivalence = Schema.toEquivalence(
 
 function layerTest(input: {
   readonly window: Electron.BrowserWindow;
-  readonly webAuthnAvailable?: boolean;
   readonly createCount: Ref.Ref<number>;
   readonly mainWindow: Ref.Ref<Option.Option<Electron.BrowserWindow>>;
   readonly createdWindowOptions?: Electron.BrowserWindowConstructorOptions[];
@@ -363,9 +361,7 @@ function layerTest(input: {
           enabled: input.primaryPasteEnabled ?? true,
         }),
         Layer.mock(PreviewPasskeys.PreviewPasskeys)({
-          configure: Effect.void,
           bridgeEnabled: input.previewPasskeyBridgeEnabled ?? false,
-          webAuthnAvailable: input.webAuthnAvailable ?? true,
           installSessionHandlers: () => {},
           attachGuest: () => () => {},
         }),
@@ -386,10 +382,7 @@ function layerTest(input: {
   );
 }
 
-const makeSplashScenario = (
-  createOutcomes: readonly (Electron.BrowserWindow | null)[],
-  settings = DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
-) =>
+const makeSplashScenario = (createOutcomes: readonly (Electron.BrowserWindow | null)[]) =>
   Effect.gen(function* () {
     const createdWindows = yield* Ref.make<Electron.BrowserWindow[]>([]);
     const createCalls = yield* Ref.make(0);
@@ -456,7 +449,7 @@ const makeSplashScenario = (
     } satisfies ElectronWindow.ElectronWindow["Service"];
 
     const layer = DesktopWindow.layer.pipe(
-      Layer.provideMerge(
+      Layer.provide(
         Layer.mergeAll(
           layerDesktopAssets,
           Layer.succeed(DesktopRendererHistory.DesktopRendererHistory, {
@@ -465,7 +458,7 @@ const makeSplashScenario = (
             shutdown: Effect.void,
           }),
           layerDesktopEnvironment,
-          DesktopAppSettings.layerTest(settings),
+          DesktopAppSettings.layerTest(),
           layerDesktopClientSettings,
           layerDesktopServerExposure,
           DesktopState.layer,
@@ -480,17 +473,11 @@ const makeSplashScenario = (
           Layer.succeed(ElectronWindow.ElectronWindow, electronWindowShape),
           Layer.succeed(DesktopPrimaryPaste.DesktopPrimaryPaste, { enabled: true }),
           Layer.mock(PreviewPasskeys.PreviewPasskeys)({
-            configure: Effect.void,
             bridgeEnabled: false,
-            webAuthnAvailable: true,
             installSessionHandlers: () => {},
             attachGuest: () => () => {},
           }),
           Layer.mock(PreviewManager.PreviewManager)({
-            subscribeStateChanges: () => Effect.void,
-            subscribeRecordingInputs: () => Effect.void,
-            subscribePointerEvents: () => Effect.void,
-            subscribeOpenLinks: () => Effect.void,
             getBrowserSession: () => Effect.succeed({} as Electron.Session),
             setMainWindow: () => Effect.void,
             isBrowserPartition: (partition) => partition.startsWith("persist:t3code-preview-"),
@@ -1700,156 +1687,6 @@ describe("DesktopWindow", () => {
       }),
   );
 
-  it.effect(
-    "re-reveals the connecting splash on activate while the backend is still cold-booting",
-    () =>
-      Effect.gen(function* () {
-        const splash = makeFakeBrowserWindow();
-        const scenario = yield* makeSplashScenario([splash.window]);
-
-        yield* Effect.gen(function* () {
-          const desktopWindow = yield* DesktopWindow.DesktopWindow;
-
-          yield* desktopWindow.showConnectingSplash;
-          assert.equal(yield* Ref.get(scenario.createCalls), 1);
-
-          yield* desktopWindow.activate;
-          assert.equal(yield* Ref.get(scenario.createCalls), 1);
-          assert.deepEqual(yield* Ref.get(scenario.revealedWindows), [splash.window]);
-        }).pipe(Effect.provide(scenario.layer));
-      }),
-  );
-
-  it.effect("does not dispatch menu actions to the splash before the backend is ready", () =>
-    Effect.gen(function* () {
-      const splash = makeFakeBrowserWindow();
-      const main = makeFakeBrowserWindow();
-      const scenario = yield* makeSplashScenario([splash.window, main.window]);
-
-      yield* Effect.gen(function* () {
-        const desktopWindow = yield* DesktopWindow.DesktopWindow;
-
-        yield* desktopWindow.showConnectingSplash;
-        yield* desktopWindow.dispatchMenuAction("open-settings");
-
-        assert.equal(yield* Ref.get(scenario.createCalls), 1);
-        assert.equal(splash.send.mock.calls.length, 0);
-        assert.equal(main.send.mock.calls.length, 0);
-      }).pipe(Effect.provide(scenario.layer));
-    }),
-  );
-
-  it.effect("dispatches menu actions after backend readiness when no main window exists", () =>
-    Effect.gen(function* () {
-      const splash = makeFakeBrowserWindow();
-      const main = makeFakeBrowserWindow();
-      const scenario = yield* makeSplashScenario([splash.window, null, main.window]);
-
-      yield* Effect.gen(function* () {
-        const desktopWindow = yield* DesktopWindow.DesktopWindow;
-
-        yield* desktopWindow.showConnectingSplash;
-        const readyExit = yield* Effect.exit(
-          desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773")),
-        );
-        assert.equal(readyExit._tag, "Failure");
-
-        yield* desktopWindow.dispatchMenuAction("open-settings");
-
-        assert.equal(yield* Ref.get(scenario.createCalls), 3);
-        assert.deepEqual(main.send.mock.calls, [[MENU_ACTION_CHANNEL, "open-settings"]]);
-      }).pipe(Effect.provide(scenario.layer));
-    }),
-  );
-
-  it.effect("queues navigation before the main window is ready and applies it on create", () =>
-    Effect.gen(function* () {
-      const fakeWindow = makeFakeBrowserWindow();
-      const createCount = yield* Ref.make(0);
-      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
-      const layer = layerTest({
-        window: fakeWindow.window,
-        createCount,
-        mainWindow,
-      });
-
-      yield* Effect.gen(function* () {
-        const desktopWindow = yield* DesktopWindow.DesktopWindow;
-        yield* desktopWindow.navigateToThread({
-          environmentId: EnvironmentId.make("db6d1813-ace4-42bd-9bce-e04ee27e97ff"),
-          threadId: ThreadId.make("ebf3a84d-7f60-4809-a5e0-bbd574275463"),
-        });
-        assert.equal(yield* Ref.get(createCount), 0);
-        assert.equal(fakeWindow.loadURL.mock.calls.length, 0);
-
-        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
-        assert.equal(yield* Ref.get(createCount), 1);
-        assert.deepEqual(fakeWindow.loadURL.mock.calls[0], [
-          "t3code-dev://app/#/db6d1813-ace4-42bd-9bce-e04ee27e97ff/ebf3a84d-7f60-4809-a5e0-bbd574275463",
-        ]);
-      }).pipe(Effect.provide(layer));
-    }),
-  );
-
-  it.effect("navigates an existing main window to the encoded canonical route", () =>
-    Effect.gen(function* () {
-      const fakeWindow = makeFakeBrowserWindow();
-      const createCount = yield* Ref.make(0);
-      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
-      const layer = layerTest({
-        window: fakeWindow.window,
-        createCount,
-        mainWindow,
-      });
-
-      yield* Effect.gen(function* () {
-        const desktopWindow = yield* DesktopWindow.DesktopWindow;
-        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
-        fakeWindow.loadURL.mockClear();
-
-        yield* desktopWindow.navigateToThread({
-          environmentId: EnvironmentId.make("db6d1813-ace4-42bd-9bce-e04ee27e97ff"),
-          threadId: ThreadId.make("ebf3a84d-7f60-4809-a5e0-bbd574275463"),
-        });
-
-        assert.equal(yield* Ref.get(createCount), 1);
-        assert.deepEqual(fakeWindow.loadURL.mock.calls, [
-          [
-            "t3code-dev://app/#/db6d1813-ace4-42bd-9bce-e04ee27e97ff/ebf3a84d-7f60-4809-a5e0-bbd574275463",
-          ],
-        ]);
-      }).pipe(Effect.provide(layer));
-    }),
-  );
-
-  it.effect("navigates an existing main window to a project jump route", () =>
-    Effect.gen(function* () {
-      const fakeWindow = makeFakeBrowserWindow();
-      const createCount = yield* Ref.make(0);
-      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
-      const layer = layerTest({
-        window: fakeWindow.window,
-        createCount,
-        mainWindow,
-      });
-
-      yield* Effect.gen(function* () {
-        const desktopWindow = yield* DesktopWindow.DesktopWindow;
-        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
-        fakeWindow.loadURL.mockClear();
-
-        yield* desktopWindow.navigateToProject({
-          project: "macs-holding/scanner",
-          action: "latest",
-        });
-
-        assert.deepEqual(fakeWindow.loadURL.mock.calls, [
-          ["t3code-dev://app/#/jump?project=macs-holding%2Fscanner&action=latest"],
-        ]);
-      }).pipe(Effect.provide(layer));
-    }),
-  );
-
   it.effect("delivers capture completion and late errors without taking focus back", () =>
     Effect.gen(function* () {
       const operations: Array<string> = [];
@@ -1914,40 +1751,5 @@ describe("DesktopWindow", () => {
         assert.equal(onReveal.mock.calls.length, 0);
       }).pipe(Effect.provide(layer));
     }),
-  );
-  it.effect.each([false, true])(
-    "advertises only available browser authenticators (%s)",
-    (available) =>
-      Effect.gen(function* () {
-        const fake = makeFakeBrowserWindow();
-        const createCount = yield* Ref.make(0);
-        const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
-        const layer = layerTest({
-          window: fake.window,
-          createCount,
-          mainWindow,
-          webAuthnAvailable: available,
-          desktopSettings: {
-            ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
-            localEnvironmentEnabled: false,
-          },
-        });
-        yield* Effect.gen(function* () {
-          const desktop = yield* DesktopWindow.DesktopWindow;
-          yield* desktop.createMainIfBackendReady;
-          const preferences: Electron.WebPreferences = { disableBlinkFeatures: "ExistingFeature" };
-          const preventDefault = vi.fn();
-          fake.webContentsListeners.get("will-attach-webview")!({ preventDefault }, preferences, {
-            partition: "persist:t3code-preview-test",
-          });
-          assert.strictEqual(
-            preferences.disableBlinkFeatures,
-            available ? "ExistingFeature" : "ExistingFeature,WebAuth",
-          );
-          assert.isFalse(preferences.nodeIntegrationInSubFrames);
-          assert.isTrue(preferences.sandbox);
-          assert.strictEqual(preventDefault.mock.calls.length, 0);
-        }).pipe(Effect.provide(layer));
-      }),
   );
 });

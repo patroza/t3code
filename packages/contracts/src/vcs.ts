@@ -33,13 +33,6 @@ export const VcsRepositoryIdentity = Schema.Struct({
   kind: VcsDriverKind,
   rootPath: TrimmedNonEmptyString,
   metadataPath: Schema.NullOr(TrimmedNonEmptyString),
-  /**
-   * True when the repository has no working tree of its own (Git: `core.bare`).
-   * Such a repository is still a complete repository — fetch, ref, and worktree
-   * plumbing all work against it — so detection reports it rather than treating
-   * it as "no repository here". `rootPath` is then the metadata directory.
-   */
-  bare: Schema.Boolean,
   freshness: VcsFreshness,
 });
 export type VcsRepositoryIdentity = typeof VcsRepositoryIdentity.Type;
@@ -129,11 +122,6 @@ export class VcsProcessExitError extends Schema.TaggedError<VcsProcessExitError>
     retryable: Schema.optional(Schema.Boolean),
     stderrLength: Schema.optional(NonNegativeInt),
     stderrTruncated: Schema.optional(Schema.Boolean),
-    /**
-     * A guest-wrapper line that is safe to show. Raw provider stderr stays off
-     * `message` so tokens in GraphQL/REST failures cannot leak into logs.
-     */
-    publicDiagnostic: Schema.optional(Schema.String),
   },
 ) {
   override get message(): string {
@@ -144,11 +132,7 @@ export class VcsProcessExitError extends Schema.TaggedError<VcsProcessExitError>
     context: VcsProcessErrorContext,
     error: VcsProcessExitFailure,
     failureKind: VcsProcessExitFailureKind,
-    options?: {
-      readonly retryable?: boolean;
-      readonly notFoundDetail?: string;
-      readonly publicDiagnostic?: string | undefined;
-    },
+    options?: { readonly retryable?: boolean; readonly notFoundDetail?: string },
   ) {
     const detail =
       failureKind === "authentication"
@@ -167,9 +151,6 @@ export class VcsProcessExitError extends Schema.TaggedError<VcsProcessExitError>
       ...(options?.retryable === true ? { retryable: true } : {}),
       stderrLength: error.stderr.length,
       stderrTruncated: error.stderrTruncated,
-      ...(options?.publicDiagnostic !== undefined
-        ? { publicDiagnostic: options.publicDiagnostic }
-        : {}),
     });
   }
 }

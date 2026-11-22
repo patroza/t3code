@@ -1,5 +1,3 @@
-import { PullRequestAction } from "@t3tools/contracts";
-import { pullRequestActionNeedsHostRefresh } from "./pullRequestDetail.logic";
 import { SourceControlProviderKind } from "@t3tools/contracts";
 import {
   GitCommandError,
@@ -48,7 +46,6 @@ import {
   latestPullRequestReviewOutcomes,
   newestPullRequestCommitAt,
   mergePullRequestThreadComments,
-  repositoryFromChangeRequestUrl,
   orderPullRequestComments,
   pullRequestCheckoutCommand,
   checkoutFailureDescription,
@@ -979,7 +976,6 @@ describe("what to say when an action fails", () => {
   it("uses bounded git diagnostics and falls back when checkout has no useful detail", () => {
     const diagnostic = (detail: string, reason?: GitCommandError["reason"]) =>
       new GitCommandError({
-        failureKind: "unknown",
         cwd: "/workspace",
         operation: "GitVcsDriver.createWorktree",
         command: "git worktree add",
@@ -1284,6 +1280,15 @@ describe("adding a remark to the chat", () => {
     });
 
     expect(context?.text).toBe("octocat: This leaks the token.\n\n```html\n<!-- kept -->\n```");
+    // A stray backtick before the comment opens no code span across the paragraphs.
+    const stray = buildPullRequestCommentContext(pullRequest, {
+      kind: "comment",
+      comment: remark(
+        "c2",
+        "Avoid `foo.\n\n<!-- bot state -->\nSee `bar` and `` a ` <!-- b --> ``.",
+      ),
+    });
+    expect(stray?.text).toBe("octocat: Avoid `foo.\n\nSee `bar` and `` a ` <!-- b --> ``.");
   });
 
   it("keeps comments inside a quoted fence as code", () => {
@@ -1706,57 +1711,6 @@ describe("pull request panel context beside a thread", () => {
       ).toEqual(legacy(3));
       expect(threadPullRequestPanelTarget({ projectId: "proj-a", pullRequests: [] })).toBeNull();
     });
-  });
-});
-
-describe("repositoryFromChangeRequestUrl", () => {
-  it("reads owner/name from a GitHub pull request URL", () => {
-    expect(repositoryFromChangeRequestUrl("https://github.com/patroza/t3code/pull/410")).toBe(
-      "patroza/t3code",
-    );
-    expect(
-      repositoryFromChangeRequestUrl("https://github.com/pingdotgg/t3code/pull/6613/files"),
-    ).toBe("pingdotgg/t3code");
-  });
-
-  it("reads a nested GitLab path", () => {
-    expect(
-      repositoryFromChangeRequestUrl("https://gitlab.com/group/sub/service/-/merge_requests/12"),
-    ).toBe("group/sub/service");
-  });
-
-  it("returns null when the URL is not a change request", () => {
-    expect(repositoryFromChangeRequestUrl("https://github.com/patroza/t3code")).toBeNull();
-  });
-});
-
-describe("which actions need the host read again after they run", () => {
-  it("classifies every action the contract knows about", () => {
-    expect(PullRequestAction.literals.map(pullRequestActionNeedsHostRefresh)).toEqual(
-      PullRequestAction.literals.map(
-        (action) => action === "update-branch" || action === "approve-workflows",
-      ),
-    );
-  });
-
-  it("sends update-branch back to the host, having moved the head commit", () => {
-    expect(pullRequestActionNeedsHostRefresh("update-branch")).toBe(true);
-  });
-
-  it("leaves every action that only changes metadata to the cheaper detail refresh", () => {
-    for (const action of [
-      "ready",
-      "draft",
-      "close",
-      "reopen",
-      "enable-auto-merge",
-      "disable-auto-merge",
-      "merge",
-      "revert",
-      "delete-branch",
-    ] as const) {
-      expect(pullRequestActionNeedsHostRefresh(action)).toBe(false);
-    }
   });
 });
 

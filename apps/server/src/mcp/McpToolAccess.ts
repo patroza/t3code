@@ -1,5 +1,4 @@
 import {
-  AuthSessionId,
   type EnvironmentId,
   type OrchestrationV2LinkOrigin,
   OrchestratorMcpEnvironmentTarget,
@@ -23,8 +22,8 @@ import {
   DispatchModeLimit,
   type DispatchModeRefusal,
 } from "../orchestration-v2/DispatchModeLimit.ts";
-import * as IdentityService from "../identity/IdentityService.ts";
 import * as PeerForwarding from "../peer/PeerForwarding.ts";
+import { requireMcpClientIdentityClaim } from "../identity/mcpClientClaim.ts";
 import {
   assertFullAccessNamingLink,
   assertNotLinked,
@@ -132,27 +131,7 @@ const refuseReadOnlyClient = McpInvocationContext.McpInvocationContext.pipe(
         )
       : Effect.void,
   ),
-  Effect.andThen(
-    Effect.gen(function* () {
-      const scope = yield* McpInvocationContext.McpInvocationContext;
-      // Providers inherit their thread's source; peer links represent remote work.
-      // An outside OAuth client needs a claim on its own authenticated session.
-      if (scope.client === undefined || scope.client.linked) return;
-      const identity = yield* Effect.serviceOption(IdentityService.IdentityService);
-      if (Option.isNone(identity)) return;
-      yield* identity.value.requireOperateClaim(AuthSessionId.make(scope.client.sessionId)).pipe(
-        Effect.mapError(
-          (error) =>
-            new OrchestratorMcpFailure({
-              code: "capability_denied",
-              message:
-                error.message +
-                " Set this MCP client's identity in Settings → Connections before starting or changing work.",
-            }),
-        ),
-      );
-    }),
-  ),
+  Effect.andThen(requireMcpClientIdentityClaim),
 );
 
 const writingCaller = refuseReadOnlyClient.pipe(

@@ -80,7 +80,7 @@ function ThreadDetailsPrLinkRow({
   );
 }
 
-export function ThreadDetailsPrRows({
+function ThreadDetailsPrRows({
   threadRef,
   links,
   currentLink,

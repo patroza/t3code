@@ -19,7 +19,6 @@ import {
   ORCHESTRATION_PROTOCOL_VERSION_TEXT,
   DEFAULT_MODEL,
   DEFAULT_RUNTIME_MODE,
-  type AiUsageSnapshot,
   EnvironmentId,
   ORCHESTRATION_V2_WS_METHODS,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
@@ -37,15 +36,14 @@ import {
   type ApprovalRequestId,
   type ProviderApprovalDecision,
   type ProviderUserInputAnswers,
+  type HostResourcesSnapshot,
   type ServerConfig,
-  type ServerHostResourceSnapshot,
   type ThreadId,
   type UploadChatAttachment,
   type VcsStatusResult,
   WS_METHODS,
 } from "@t3tools/contracts";
-import { applyGitStatusStreamEvent } from "@t3tools/shared/git";
-import { appendOmegentT3ProductHandshake } from "@t3tools/shared/productFamily";
+import { applyVcsStatusStreamEvent } from "./lib/gitStatus.ts";
 import {
   PrimaryConnectionTarget,
   type PreparedConnection,
@@ -103,7 +101,7 @@ function localSocketUrl(httpBaseUrl: string): string {
   url.pathname = "/ws";
   url.search = "";
   url.hash = "";
-  return appendOmegentT3ProductHandshake(url.toString());
+  return url.toString();
 }
 
 function normalizedPath(path: string): string {
@@ -127,7 +125,6 @@ export class T3Client {
   #session: RpcSession | null = null;
   #shellFiber: Fiber.Fiber<void, unknown> | null = null;
   #threadFiber: Fiber.Fiber<void, unknown> | null = null;
-  #usageFiber: Fiber.Fiber<void, unknown> | null = null;
   #vcsStatusFiber: Fiber.Fiber<void, unknown> | null = null;
   #closedFiber: Fiber.Fiber<void, never> | null = null;
   #vcsStatus: VcsStatusResult | null = null;
@@ -139,14 +136,12 @@ export class T3Client {
   #activeThreadId: ThreadId | null = null;
   #serverConfig: ServerConfig | null = null;
   #serverCapabilities: ServerCapabilities = UPSTREAM_SERVER_CAPABILITIES;
-  #aiUsage: AiUsageSnapshot | null = null;
   #httpBaseUrl: string | null = null;
   #bearerToken: string | null = null;
   #connectionKey = "";
   #listeners = new Set<ThreadListener>();
   #shellListeners = new Set<ShellListener>();
   #connectionListeners = new Set<ConnectionListener>();
-  #usageListeners = new Set<(snapshot: AiUsageSnapshot | null) => void>();
   #vcsStatusListeners = new Set<VcsStatusListener>();
   #shellWaiters = new Set<(snapshot: OrchestrationShellSnapshot) => void>();
   #threadWaiters = new Set<(thread: OrchestrationThread) => void>();
@@ -169,10 +164,6 @@ export class T3Client {
     return this.#serverConfig;
   }
 
-  get aiUsage(): AiUsageSnapshot | null {
-    return this.#aiUsage;
-  }
-
   get serverCapabilities(): ServerCapabilities {
     return { ...this.#serverCapabilities, queuedMessages: true };
   }
@@ -190,11 +181,6 @@ export class T3Client {
   onConnectionChanged(listener: ConnectionListener): { dispose(): void } {
     this.#connectionListeners.add(listener);
     return { dispose: () => this.#connectionListeners.delete(listener) };
-  }
-
-  onAiUsageChanged(listener: (snapshot: AiUsageSnapshot | null) => void): { dispose(): void } {
-    this.#usageListeners.add(listener);
-    return { dispose: () => this.#usageListeners.delete(listener) };
   }
 
   /** Base URL of the connected server, for building deep links into the T3 web app. */
@@ -221,14 +207,11 @@ export class T3Client {
     void this.#restartVcsStatusSubscription();
   }
 
-  /**
-   * Host CPU/memory/load for the environment serving this session. Returns null
-   * while disconnected so callers can poll without guarding on connection state.
-   */
-  async hostResourceSnapshot(): Promise<ServerHostResourceSnapshot | null> {
+  /** Host CPU/memory for the connected environment; null while disconnected. */
+  async hostResourceSnapshot(): Promise<HostResourcesSnapshot | null> {
     const session = this.#session;
-    if (session === null || !this.#serverCapabilities.hostResources) return null;
-    return this.#runtime.runPromise(session.client[WS_METHODS.serverGetHostResourceSnapshot]({}));
+    if (session === null) return null;
+    return this.#runtime.runPromise(session.client[WS_METHODS.serverGetHostResources]({}));
   }
 
   async waitForShell(): Promise<OrchestrationShellSnapshot> {
@@ -348,7 +331,6 @@ export class T3Client {
       await this.#loadShellSnapshot(normalizedBaseUrl, bearerToken);
       this.#emitConnection(true);
       this.#startShellSubscription(session);
-      if (this.#serverCapabilities.aiUsage) this.#startUsageSubscription(session);
       if (this.#vcsStatusCwd !== null)
         this.#startVcsStatusSubscription(session, this.#vcsStatusCwd);
       if (this.#activeThreadId !== null)
@@ -822,23 +804,11 @@ export class T3Client {
     for (const listener of this.#shellListeners) listener(this.shell!);
   }
 
-  #startUsageSubscription(session: RpcSession): void {
-    const stream = session.client[WS_METHODS.subscribeAiUsage]({}).pipe(
-      Stream.runForEach((snapshot) =>
-        Effect.sync(() => {
-          this.#aiUsage = snapshot;
-          for (const listener of this.#usageListeners) listener(snapshot);
-        }),
-      ),
-    );
-    this.#usageFiber = this.#runtime.runFork(stream);
-  }
-
   #startVcsStatusSubscription(session: RpcSession, cwd: string): void {
     const stream = session.client[WS_METHODS.subscribeVcsStatus]({ cwd }).pipe(
       Stream.runForEach((event) =>
         Effect.sync(() => {
-          this.#vcsStatus = applyGitStatusStreamEvent(this.#vcsStatus, event);
+          this.#vcsStatus = applyVcsStatusStreamEvent(this.#vcsStatus, event);
           this.#emitVcsStatus();
         }),
       ),
@@ -965,12 +935,6 @@ export class T3Client {
   async #closeConnection(): Promise<void> {
     await this.#stopThreadSubscription();
     await this.#stopVcsStatusSubscription();
-    if (this.#usageFiber !== null) {
-      await this.#runtime.runPromise(Fiber.interrupt(this.#usageFiber));
-      this.#usageFiber = null;
-    }
-    this.#aiUsage = null;
-    for (const listener of this.#usageListeners) listener(null);
     if (this.#closedFiber !== null) {
       await this.#runtime.runPromise(Fiber.interrupt(this.#closedFiber));
       this.#closedFiber = null;

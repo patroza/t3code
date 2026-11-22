@@ -21,10 +21,7 @@ import {
 } from "./runtime.ts";
 import { waitForTitleRegenerationOutcome } from "./threadTitleRegeneration.ts";
 import {
-  type BeginQueuedRunEditInput,
-  type CancelQueuedRunEditInput,
   type InterruptThreadTurnInput,
-  type ReorderQueuedRunInput,
   type UpdateThreadMetadataInput,
   archiveThread,
   closeGuestShare,
@@ -33,15 +30,12 @@ import {
   createThread,
   deleteThread,
   editQueuedRun,
-  beginQueuedRunEdit,
-  cancelQueuedRunEdit,
   interruptThreadTurn,
   forkSideChat,
   forkThreadFromRun,
   markThreadUnread,
   mergeThreadBack,
   promoteQueuedRun,
-  reorderQueuedRun,
   resumeThreadQueue,
   retryWorkspacePreparation,
   linkThreadPullRequest,
@@ -432,12 +426,6 @@ export function createThreadEnvironmentAtoms<R, E>(
       scheduler,
       concurrency,
     }),
-    reorderQueuedRun: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:reorder-queued-run",
-      execute: (input: ReorderQueuedRunInput) => reorderQueuedRun(input),
-      scheduler,
-      concurrency,
-    }),
     promoteQueuedRun: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:promote-queued-run",
       execute: promoteQueuedRun,
@@ -459,18 +447,6 @@ export function createThreadEnvironmentAtoms<R, E>(
     editQueuedRun: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:edit-queued-run",
       execute: editQueuedRun,
-      scheduler,
-      concurrency,
-    }),
-    beginQueuedRunEdit: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:begin-queued-run-edit",
-      execute: (input: BeginQueuedRunEditInput) => beginQueuedRunEdit(input),
-      scheduler,
-      concurrency,
-    }),
-    cancelQueuedRunEdit: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:cancel-queued-run-edit",
-      execute: (input: CancelQueuedRunEditInput) => cancelQueuedRunEdit(input),
       scheduler,
       concurrency,
     }),

@@ -1,4 +1,3 @@
-import { useGT as useCopyTranslation } from "gt-react";
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { m as resolveMessage } from "~/i18n/messages";
 import { ProcessSignalActions } from "./ProcessSignalActions";
@@ -39,7 +38,6 @@ import { useRelativeTimeState } from "../../hooks/useRelativeTimeState";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
-import { HostResourceStatus } from "../HostResourceStatus";
 import { Button } from "../ui/button";
 import { ScrollArea } from "../ui/scroll-area";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
@@ -783,8 +781,6 @@ export function DiagnosticsSettingsPanel() {
 }
 
 function DiagnosticsSettingsBody() {
-  const translateCopy = useCopyTranslation();
-
   const gt = useGT();
   const m = useMessages();
   const { environment } = useSettingsScope();
@@ -1010,25 +1006,6 @@ function DiagnosticsSettingsBody() {
     <SettingsPageContainer width="expanded" className="gap-10">
       <ResourceTelemetryDiagnostics environmentId={environmentId} />
 
-      {environment ? (
-        <SettingsSection title={translateCopy("Host Resources")}>
-          <div className="space-y-2 px-4 py-3 sm:px-5">
-            <HostResourceStatus
-              environmentId={environment.environmentId}
-              environmentLabel={environment.label}
-              connected={environment.connection.phase === "connected"}
-              showRefresh
-              unavailableLabel
-            />
-            <p className="text-xs text-muted-foreground">
-              <T>
-                Advisory system-wide metrics from the host running this T3 server. They do not
-                affect connection or provider readiness.
-              </T>
-            </p>
-          </div>
-        </SettingsSection>
-      ) : null}
       <SettingsSection
         title={gt("Live Processes")}
         headerAction={

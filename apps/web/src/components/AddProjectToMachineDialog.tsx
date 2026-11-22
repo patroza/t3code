@@ -29,10 +29,6 @@ import { useAddProjectTargets } from "../hooks/useAddProjectTargets";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useLogicalProjectEnvironments } from "../hooks/useLogicalProjectEnvironments";
 import {
-  deriveLogicalProjectKeyFromSettings,
-  selectProjectGroupingSettings,
-} from "@t3tools/client-runtime/state/project-grouping";
-import {
   COPIED_FILES_MAX_COUNT,
   COPYABLE_FILE_MAX_BYTES,
   addProjectToMachine,
@@ -43,7 +39,6 @@ import { seedDraftModelSelection } from "../lib/seedDraftModelSelection";
 import { newProjectId } from "../lib/utils";
 import { readProject, subscribeProject, useProject } from "../state/entities";
 import { useEnvironments } from "../state/environments";
-import { useClientSettings } from "../hooks/useSettings";
 import { projectEnvironment } from "../state/projects";
 import { useDebouncedValue } from "../state/queries";
 import { useEnvironmentQuery } from "../state/query";
@@ -107,7 +102,6 @@ function AddProjectToMachineDialog({ request }: { request: AddProjectToMachineRe
   const project = useProject(request.projectRef);
   const handleNewThread = useNewThreadHandler();
   const { draftId: routeDraftId } = useParams({ strict: false });
-  const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const { environments } = useEnvironments();
   const targets = useAddProjectTargets(project, useLogicalProjectEnvironments(project, false));
   const [targetId, setTargetId] = useState(request.targetEnvironmentId);
@@ -197,8 +191,6 @@ function AddProjectToMachineDialog({ request }: { request: AddProjectToMachineRe
   // and holds sends until it finishes. A draft open on the source project moves
   // over with whatever was typed in it.
   const openClonedProject = (targetRef: ScopedProjectRef) => {
-    if (!project) return;
-    const logicalProjectKey = deriveLogicalProjectKeyFromSettings(project, projectGroupingSettings);
     const drafts = useComposerDraftStore.getState();
     const draftId = routeDraftId as DraftId | undefined;
     const draft = draftId ? drafts.getDraftSession(draftId) : null;
@@ -209,18 +201,15 @@ function AddProjectToMachineDialog({ request }: { request: AddProjectToMachineRe
       draft.environmentId === request.projectRef.environmentId &&
       draft.projectId === request.projectRef.projectId
     ) {
-      drafts.setLogicalProjectDraftThreadId(logicalProjectKey, targetRef, draftId, {
-        threadId: draft.threadId,
+      drafts.setDraftThreadContext(draftId, {
+        projectRef: targetRef,
         environmentSelection: "manual",
         loadBalancedEnvironmentId: null,
       });
       seedDraftModelSelection(draftId, targetRef);
       return;
     }
-    void handleNewThread(targetRef, {
-      logicalProjectKey,
-      environmentSelection: "manual",
-    });
+    void handleNewThread(targetRef);
   };
 
   const submit = async () => {

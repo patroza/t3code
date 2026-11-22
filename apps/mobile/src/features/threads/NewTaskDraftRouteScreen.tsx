@@ -8,7 +8,7 @@ import {
   type StaticScreenProps,
 } from "@react-navigation/native";
 import { msg, T, useGT } from "gt-react-native";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { View } from "react-native";
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -39,14 +39,8 @@ import { useWorkspaceBackNavigation } from "../layout/workspace/useAndroidWorksp
 import { ThreadScreenFallback } from "./ThreadScreenHost";
 import { NewTaskDraftScreen } from "./NewTaskDraftScreen";
 
-import type { ComposerDraftWorkspaceSelection } from "../../state/use-composer-drafts";
-
 import type { NewTaskDraftRouteParams } from "./thread-route-state";
 export type { NewTaskDraftRouteParams } from "./thread-route-state";
-
-function firstParam(value: string | string[] | null | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : (value ?? undefined);
-}
 
 const branchCheckouts = makeNewTaskBranchCheckouts({
   run: (request) =>
@@ -102,34 +96,7 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
   const currentRoute = useRoute();
   const goBack = useWorkspaceBackNavigation();
   const params = route.params ?? {};
-  const draftId = firstParam(params.draftId);
-  const workspaceMode = firstParam(params.workspaceMode);
-  const workspacePicker = workspaceMode === "local" || workspaceMode === "worktree";
-  const initialBranch = firstParam(params.branch) ?? null;
-  const initialWorktreePath = firstParam(params.worktreePath) ?? null;
-  // Catalog refreshes must not reapply route workspace intent over picker edits.
-  const [initialWorkspaceSelection, setInitialWorkspaceSelection] = useState<
-    ComposerDraftWorkspaceSelection | undefined
-  >(() =>
-    workspacePicker
-      ? { mode: workspaceMode, branch: initialBranch, worktreePath: initialWorktreePath }
-      : undefined,
-  );
-  if (workspacePicker) {
-    if (
-      initialWorkspaceSelection?.mode !== workspaceMode ||
-      initialWorkspaceSelection.branch !== initialBranch ||
-      initialWorkspaceSelection.worktreePath !== initialWorktreePath
-    ) {
-      setInitialWorkspaceSelection({
-        mode: workspaceMode,
-        branch: initialBranch,
-        worktreePath: initialWorktreePath,
-      });
-    }
-  } else if (initialWorkspaceSelection !== undefined) {
-    setInitialWorkspaceSelection(undefined);
-  }
+  const draftId = Array.isArray(params.draftId) ? params.draftId[0] : params.draftId;
   const projects = useProjects();
   const { state: catalogState } = useWorkspaceState();
 
@@ -138,8 +105,8 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
       ? params.environmentId[0]
       : params.environmentId,
     projectId: Array.isArray(params.projectId) ? params.projectId[0] : params.projectId,
-    branch: workspacePicker ? null : (firstParam(params.branch) ?? null),
-    worktreePath: workspacePicker ? null : (firstParam(params.worktreePath) ?? null),
+    branch: params.branch,
+    worktreePath: params.worktreePath,
     cloning: (Array.isArray(params.cloning) ? params.cloning[0] : params.cloning) === "1",
   };
 
@@ -219,18 +186,18 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
       : null;
   const preparedBranch = prepared ? prepared.branch : initialProjectRef.branch;
   const preparedWorktreePath = prepared ? prepared.worktreePath : initialProjectRef.worktreePath;
-  // Keep route intent stable while catalogs refresh or the user edits picker selections.
+  // NewTaskDraftScreen re-applies the route project (and rewrites the draft's
+  // workspace) whenever this object's identity changes. initialProjectRef is new
+  // every render, so read its fields first: the compiler then memoizes this
+  // object on them, instead of on initialProjectRef.
   const { environmentId, projectId, cloning } = initialProjectRef;
-  const preparedProjectRef = useMemo(
-    () => ({
-      environmentId,
-      projectId,
-      branch: preparedBranch,
-      worktreePath: preparedWorktreePath,
-      cloning,
-    }),
-    [environmentId, projectId, preparedBranch, preparedWorktreePath, cloning],
-  );
+  const preparedProjectRef = {
+    environmentId,
+    projectId,
+    branch: preparedBranch,
+    worktreePath: preparedWorktreePath,
+    cloning,
+  };
   const preparingBranch = checkoutPending || (needsPreparation && result?._tag !== "Success");
 
   return (
@@ -246,7 +213,6 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
       ) : (
         <NewTaskDraftScreen
           initialProjectRef={preparedProjectRef}
-          initialWorkspaceSelection={initialWorkspaceSelection}
           incomingShareId={
             Array.isArray(params.incomingShareId)
               ? params.incomingShareId[0]

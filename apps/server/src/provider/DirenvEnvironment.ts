@@ -1,16 +1,6 @@
 import {
   DirenvEnvironment,
   DirenvEnvironmentError,
-  identityDirenvEnvironmentResolver,
-  noopDirenvEnvironmentAllow,
-} from "@t3tools/provider-core/server/DirenvEnvironment";
-export {
-  DirenvEnvironment,
-  DirenvEnvironmentError,
-  identityDirenvEnvironmentResolver,
-  noopDirenvEnvironmentAllow,
-  resolveProviderSessionEnvironment,
-  resolveCurrentProviderEnvironment,
 } from "@t3tools/provider-core/server/DirenvEnvironment";
 import { resolveCommandPath } from "@t3tools/shared/shell";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
@@ -51,7 +41,7 @@ function conciseStderr(stderr: string, environment: NodeJS.ProcessEnv): string |
   return `${normalized.slice(0, STDERR_DETAIL_MAX_LENGTH)}…`;
 }
 
-export const make = Effect.fn("DirenvEnvironment.make")(function* () {
+const make = Effect.fn("DirenvEnvironment.make")(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const processRunner = yield* ProcessRunner.ProcessRunner;
@@ -127,21 +117,6 @@ export const make = Effect.fn("DirenvEnvironment.make")(function* () {
     return output;
   });
 
-  /** Approves only the `.envrc` at the root of a worktree T3 just created. */
-  const allow: DirenvEnvironment["Service"]["allow"] = Effect.fn("DirenvEnvironment.allow")(
-    function* (input) {
-      const cwd = path.resolve(input.cwd);
-      const envrcPath = path.join(cwd, ".envrc");
-      if (!(yield* envrcExists(envrcPath))) return;
-      yield* runDirenv({
-        commandLabel: "direnv allow",
-        args: ["allow", envrcPath],
-        cwd,
-        environment: input.environment,
-      });
-    },
-  );
-
   const findNearestEnvrc = Effect.fn("DirenvEnvironment.findNearestEnvrc")(function* (
     cwd: string,
   ): Effect.fn.Return<string | undefined, DirenvEnvironmentError> {
@@ -189,14 +164,9 @@ export const make = Effect.fn("DirenvEnvironment.make")(function* () {
     },
   );
 
-  return DirenvEnvironment.of({ allow, resolve });
+  return DirenvEnvironment.of({ resolve });
 });
 
 export const layer = Layer.effect(DirenvEnvironment, make());
 
 export const layerLive = layer.pipe(Layer.provide(ProcessRunner.layer));
-
-export const layerNoop = Layer.succeed(DirenvEnvironment, {
-  allow: noopDirenvEnvironmentAllow,
-  resolve: identityDirenvEnvironmentResolver,
-});

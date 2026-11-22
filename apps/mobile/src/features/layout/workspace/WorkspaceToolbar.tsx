@@ -1,5 +1,3 @@
-import { useGT as useCopyTranslation } from "gt-react-native";
-import { useSelectWorkspaceTab } from "./useSelectWorkspaceTab";
 import { msg, useGT, useMessages } from "gt-react-native";
 import { useActiveNewTask } from "../../../state/active-new-task";
 import { Toolbar } from "../../../components/ui/Toolbar";
@@ -36,12 +34,9 @@ export function WorkspaceToolbar(props: {
   readonly onNewTask: () => void;
   readonly sidebar?: boolean;
 }) {
-  const translateCopy = useCopyTranslation();
-
   const gt = useGT();
   const m = useMessages();
   const workspace = useWorkspaceTabs()!;
-  const selectTab = useSelectWorkspaceTab();
   const activeNewTask = useActiveNewTask();
   const deviceType = useDeviceType();
   const sidebarTabs = useSidebarWorkspaceTabs();
@@ -202,11 +197,6 @@ export function WorkspaceToolbar(props: {
         </Toolbar>
       ) : (
         <Toolbar placement="right">
-          <Toolbar.Button
-            accessibilityLabel={translateCopy("Open settings")}
-            icon="gearshape"
-            onPress={() => selectTab("settings")}
-          />
           {searchButton}
           {nativeToolbarCompose && foldedSearch ? <Toolbar.Spacer width={8} /> : null}
           {composeButton}

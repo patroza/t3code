@@ -40,6 +40,7 @@ import type {
   PullRequestPreview,
   PullRequestUpdateMethod,
   PullRequestViewerPermissions,
+  PullRequestVisibility,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
 import { SourceControlProviderKind as SourceControlProviderKindSchema } from "@t3tools/contracts";
@@ -108,6 +109,8 @@ export interface ProviderChangeRequest {
   readonly labels: ReadonlyArray<PullRequestLabel>;
   readonly reviewDecision?: PullRequestReviewDecision | null | undefined;
   readonly checksState?: PullRequestChecksState | null | undefined;
+  /** Absent where the host has no private change requests or names no visibility. */
+  readonly visibility?: PullRequestVisibility;
 }
 
 export interface ProviderChangeRequestSummary {
@@ -350,11 +353,8 @@ export interface ProviderRepositoryRef {
 
 export interface PullRequestProviderApi {
   readonly withVerifiedCredential?: <A, E, R>(
-    input: {
-      readonly cwd: string;
-      readonly host: string;
-      readonly repository?: string | undefined;
-    },
+    /** `repository` lets a host pick the credential that can reach it. */
+    input: { readonly cwd: string; readonly host: string; readonly repository?: string },
     use: (identity: {
       readonly accountId: string;
       readonly viewer: string;
@@ -362,7 +362,6 @@ export interface PullRequestProviderApi {
     }) => Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E | PullRequestProviderError, R>;
   readonly getRoutingIdentity?: (input: {
-    readonly repository?: string | undefined;
     readonly cwd: string;
     readonly host: string;
   }) => Effect.Effect<

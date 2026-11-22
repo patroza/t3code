@@ -85,7 +85,7 @@ export function isAcceptedJiraCommentEvent(
   return ACCEPTED_COMMENT_EVENTS.has(event.trim().toLowerCase());
 }
 
-export function normalizeJiraCommentEvent(event: string | undefined): JiraCommentWebhookEvent {
+function normalizeJiraCommentEvent(event: string | undefined): JiraCommentWebhookEvent {
   const normalized = event?.trim().toLowerCase();
   if (normalized === "comment_updated") return "comment_updated";
   return "comment_created";
@@ -191,7 +191,7 @@ function normalizeMentionToken(mention: string): string {
  * Primary mention plus optional aliases (e.g. bot accountId for wiki/ADF picker mentions).
  * Order is preserved; duplicates (case-insensitive) are dropped.
  */
-export function jiraMentionCandidates(
+function jiraMentionCandidates(
   mention: string,
   aliases: ReadonlyArray<string | null | undefined> = [],
 ): string[] {

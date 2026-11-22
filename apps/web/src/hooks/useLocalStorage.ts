@@ -78,18 +78,13 @@ export const removeLocalStorageItem = (key: string) => {
   }
 };
 
-/**
- * Same-tab companion to the `storage` event, which only fires in *other*
- * tabs. Exported so surfaces that persist a raw (non-JSON) value can take part
- * in the same subscription rather than inventing a second channel.
- */
-export const LOCAL_STORAGE_CHANGE_EVENT = "t3code:local_storage_change";
+const LOCAL_STORAGE_CHANGE_EVENT = "t3code:local_storage_change";
 
-export interface LocalStorageChangeDetail {
+interface LocalStorageChangeDetail {
   key: string;
 }
 
-export function dispatchLocalStorageChange(key: string) {
+function dispatchLocalStorageChange(key: string) {
   if (typeof window === "undefined") return;
   try {
     window.dispatchEvent(

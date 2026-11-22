@@ -1,5 +1,7 @@
 name: Mobile EAS Development
 
+# Fork-only. The fork's Expo identity comes from apps/mobile/eas.fork.json.
+#
 # Keep the installable development client current without rebuilding it for
 # JavaScript-only changes. Expo Fingerprint reuses a compatible native build
 # and publishes an OTA update; native changes produce a new internal build.
@@ -28,7 +30,7 @@ on:
         description: "Release branch that must contain the SHA"
         required: false
         type: string
-        default: fork/integration
+        default: fork/dev
 
 concurrency:
   group: mobile-eas-development
@@ -45,10 +47,6 @@ jobs:
       APP_VARIANT: development
       NODE_OPTIONS: --max-old-space-size=8192
       MOBILE_VERSION_POLICY: fingerprint
-      T3CODE_MOBILE_EAS_PROJECT_ID: ${{ vars.T3CODE_MOBILE_EAS_PROJECT_ID }}
-      T3CODE_MOBILE_EXPO_OWNER: ${{ vars.T3CODE_MOBILE_EXPO_OWNER }}
-      T3CODE_MOBILE_IOS_BUNDLE_IDENTIFIER: ${{ vars.T3CODE_MOBILE_IOS_BUNDLE_IDENTIFIER }}
-      T3CODE_MOBILE_IOS_TEAM_ID: ${{ vars.T3CODE_MOBILE_IOS_TEAM_ID }}
     steps:
       - id: expo-token
         name: Check for EXPO_TOKEN
@@ -69,7 +67,7 @@ jobs:
           ref: ${{ inputs.release_branch }}
           fetch-depth: 0
 
-      - name: Resolve approved integration source
+      - name: Resolve approved release source
         if: steps.expo-token.outputs.present == 'true'
         env:
           REQUESTED_SHA: ${{ inputs.sha }}
@@ -95,7 +93,9 @@ jobs:
           for path in \
             apps/mobile/scripts/eas-continuous-deploy.sh \
             apps/mobile/scripts/lib \
-            apps/mobile/app.config.ts \
+            apps/mobile/app.config.fork.ts \
+            apps/mobile/eas.fork.json \
+            scripts/apply-fork-eas-overlay.mjs \
             .easignore; do
             if git cat-file -e "${WORKFLOW_SHA}:${path}" 2>/dev/null; then
               git checkout "$WORKFLOW_SHA" -- "$path"
@@ -103,6 +103,11 @@ jobs:
             fi
           done
           chmod +x apps/mobile/scripts/eas-continuous-deploy.sh
+
+      # Before any eas command: they resolve the Expo project from the app config.
+      - name: Apply fork EAS overlay
+        if: steps.expo-token.outputs.present == 'true'
+        run: node scripts/apply-fork-eas-overlay.mjs
 
       - name: Setup Vite+
         if: steps.expo-token.outputs.present == 'true'

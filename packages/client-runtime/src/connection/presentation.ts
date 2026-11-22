@@ -93,10 +93,6 @@ export function presentConnectionState(
   }
 }
 
-function compactConnectionError(error: string): string {
-  return error.replace(/\.$/, "").trim();
-}
-
 /** The connection's error in the active language, or null when it has none. */
 export function connectionErrorText(
   connection: Pick<EnvironmentConnectionPresentation, "error" | "i18nError">,
@@ -125,7 +121,7 @@ export function connectionStatusText(
         return error ?? resolve(msg("Waiting for approval on the host"));
       }
       return error
-        ? resolve(msg("Reconnecting… · {error}", { error: compactConnectionError(error) }))
+        ? resolve(msg("Failed to connect. Reconnecting... Reason: {error}", { error }))
         : resolve(msg("Reconnecting..."));
     case "connected":
       return resolve(msg("Connected", { $context: "connection status" }));
@@ -133,7 +129,7 @@ export function connectionStatusText(
       return resolve(msg("Client not supported"));
     case "error":
       return error
-        ? resolve(msg("Connection failed · {error}", { error: compactConnectionError(error) }))
+        ? resolve(msg("Connection failed. Reason: {error}", { error }))
         : resolve(msg("Connection failed"));
   }
 }

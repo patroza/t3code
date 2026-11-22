@@ -17,7 +17,7 @@ import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/process";
 import * as Metric from "effect/Metric";
-import { assert, describe, it } from "@effect/vitest";
+import { assert, it } from "@effect/vitest";
 
 import { CheckpointRef, GitCommandError, VcsProcessExitError } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -27,7 +27,7 @@ import { gitCommandDuration, gitCommandsTotal } from "../observability/Metrics.t
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
-import * as VcsDriver from "./VcsDriver.ts";
+import type * as VcsDriver from "./VcsDriver.ts";
 import * as VcsDriverRegistry from "./VcsDriverRegistry.ts";
 import * as VcsProcess from "./VcsProcess.ts";
 import { runVcsDriverContractSuite } from "./testing/VcsDriverContractHarness.ts";
@@ -104,130 +104,6 @@ runVcsDriverContractSuite<GitVcsDriver.GitVcsDriver, GitContractError>({
   },
 });
 
-const withTempDir = <A, E, R>(use: (cwd: string) => Effect.Effect<A, E, R>) =>
-  Effect.gen(function* () {
-    const fileSystem = yield* FileSystem.FileSystem;
-    const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-git-bare-" });
-    return yield* use(cwd);
-  }).pipe(Effect.scoped, Effect.provide(layerGitContract));
-
-describe("GitVcsDriver bare repositories", () => {
-  it.effect("detects a bare repository instead of reporting no repository", () =>
-    withTempDir((cwd) =>
-      Effect.gen(function* () {
-        const path = yield* Path.Path;
-        const driver = yield* VcsDriver.VcsDriver;
-        yield* runGit(cwd, ["init", "--bare"]);
-
-        const identity = yield* driver.detectRepository(cwd);
-
-        assert.equal(identity?.kind, "git");
-        assert.equal(identity?.bare, true);
-        // A bare repository has no toplevel, so the metadata directory is the root.
-        assert.equal(identity?.rootPath, path.normalize(cwd));
-        assert.isFalse(yield* driver.isInsideWorkTree(cwd));
-      }),
-    ),
-  );
-
-  it.effect("detects a repository whose config marks an existing checkout bare", () =>
-    withTempDir((cwd) =>
-      Effect.gen(function* () {
-        const driver = yield* VcsDriver.VcsDriver;
-        yield* runGit(cwd, ["init"]);
-        // The shape a repository lands in when `core.bare` is flipped under a
-        // populated checkout: every Git route used to fail detection outright.
-        yield* runGit(cwd, ["config", "core.bare", "true"]);
-
-        const identity = yield* driver.detectRepository(cwd);
-
-        assert.equal(identity?.kind, "git");
-        assert.equal(identity?.bare, true);
-      }),
-    ),
-  );
-
-  it.effect("still reports no repository outside one", () =>
-    withTempDir((cwd) =>
-      Effect.gen(function* () {
-        const driver = yield* VcsDriver.VcsDriver;
-        assert.equal(yield* driver.detectRepository(cwd), null);
-      }),
-    ),
-  );
-
-  it.effect("does not opt a nested folder into its bare ancestor", () =>
-    withTempDir((cwd) =>
-      Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const driver = yield* VcsDriver.VcsDriver;
-        const gitDriver = yield* GitVcsDriver.GitVcsDriver;
-        yield* runGit(cwd, ["init", "--bare"]);
-        const nested = path.join(cwd, "nested");
-        yield* fileSystem.makeDirectory(nested);
-
-        assert.equal(yield* driver.detectRepository(nested), null);
-        const result = yield* gitDriver.execute({
-          operation: "test.implicit-bare-discovery",
-          cwd,
-          args: ["rev-parse", "--is-bare-repository"],
-          allowNonZeroExit: true,
-        });
-        assert.notEqual(result.exitCode, 0);
-        assert.include(result.stderr, "safe.bareRepository");
-      }),
-    ),
-  );
-
-  it.effect("does not classify an ordinary checkout's git directory as a bare source", () =>
-    withTempDir((cwd) =>
-      Effect.gen(function* () {
-        const path = yield* Path.Path;
-        const driver = yield* VcsDriver.VcsDriver;
-        yield* runGit(cwd, ["init"]);
-        assert.equal(yield* driver.detectRepository(path.join(cwd, ".git")), null);
-      }),
-    ),
-  );
-
-  it.effect("creates a usable worktree from a bare repository", () =>
-    withTempDir((root) =>
-      Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const driver = yield* VcsDriver.VcsDriver;
-        const gitDriver = yield* GitVcsDriver.GitVcsDriver;
-
-        const source = path.join(root, "source");
-        const bare = path.join(root, "bare.git");
-        const worktree = path.join(root, "worktree");
-        yield* fileSystem.makeDirectory(source, { recursive: true });
-        yield* runGit(source, ["init"]);
-        yield* runGit(source, ["config", "user.email", "test@test.com"]);
-        yield* runGit(source, ["config", "user.name", "Test"]);
-        yield* runGit(source, ["commit", "--allow-empty", "-m", "init"]);
-        // Explicit branch name: `git init` defaults vary by host config.
-        yield* runGit(source, ["branch", "t3-base"]);
-        yield* runGit(root, ["clone", "--bare", source, bare]);
-
-        const result = yield* gitDriver.createWorktree({
-          cwd: bare,
-          refName: "t3-base",
-          newRefName: "feature",
-          path: worktree,
-        });
-
-        assert.equal(result.worktree.path, worktree);
-        assert.equal(result.worktree.refName, "feature");
-        // The thread's checkout is a real working tree even though its source has none.
-        assert.isTrue(yield* driver.isInsideWorkTree(worktree));
-        const worktreeIdentity = yield* driver.detectRepository(worktree);
-        assert.equal(worktreeIdentity?.bare, false);
-      }),
-    ),
-  );
-});
 it.effect.each([
   {
     fetchUrl: "https://github.com/pingdotgg/t3code.git",
@@ -1739,6 +1615,66 @@ it.effect("a branch switch landing after the snapshot belongs to the next checkp
   }).pipe(Effect.scoped, Effect.provide(layerGitContract)),
 );
 
+it.effect.each([{ snapshot: "before the switch" }, { snapshot: "after the switch" }])(
+  "a turn that switched branches from a clean folder starts on the branch it landed on (snapshot $snapshot)",
+  ({ snapshot }) =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const driver = yield* GitVcsDriver.makeVcsDriverShape();
+      const cwd = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-checkpoint-clean-switch-",
+      });
+      const git = (args: ReadonlyArray<string>, at = 1_700_000_000) =>
+        driver.execute({
+          operation: "checkpoint-test",
+          cwd,
+          args,
+          env: { ...process.env, GIT_COMMITTER_DATE: `@${at} +0000` },
+        });
+      yield* git(["init"]);
+      yield* git(["config", "user.name", "Test"]);
+      yield* git(["config", "user.email", "test@test.com"]);
+      yield* fileSystem.writeFileString(path.join(cwd, "f.txt"), "base\n");
+      yield* git(["add", "."]);
+      yield* git(["commit", "-m", "base"]);
+      yield* git(["branch", "b"]);
+      yield* git(["checkout", "-b", "a"]);
+      yield* fileSystem.writeFileString(path.join(cwd, "a.txt"), "a\n");
+      yield* git(["add", "."]);
+      yield* git(["commit", "-m", "a"]);
+      const head = (yield* git(["rev-parse", "HEAD"])).stdout.trim();
+      const [first, second] = ["1", "2"].map((turn) =>
+        CheckpointRef.make(`refs/t3/checkpoints/clean-switch/${turn}`),
+      ) as [CheckpointRef, CheckpointRef];
+      const refs = { cwd, fromCheckpointRef: first, toCheckpointRef: second };
+
+      if (snapshot === "before the switch") {
+        yield* driver.checkpoints.captureHeadCheckpoint({ cwd, checkpointRef: first, head });
+      }
+      yield* git(["checkout", "b"], 1_700_002_000);
+      if (snapshot === "after the switch") {
+        yield* driver.checkpoints.captureHeadCheckpoint({
+          cwd,
+          checkpointRef: first,
+          head,
+          seenAt: 1_700_001_000,
+        });
+      }
+      yield* fileSystem.writeFileString(path.join(cwd, "b.txt"), "b\n");
+      yield* driver.checkpoints.captureCheckpoint({
+        cwd,
+        checkpointRef: second,
+        previousCheckpointRef: first,
+      });
+
+      const patch = yield* driver.checkpoints.diffCheckpoints({ ...refs, ignoreWhitespace: false });
+      assert.notInclude(patch, "a.txt");
+      assert.include(patch, "b/b.txt");
+      assert.isNull(yield* driver.checkpoints.listAuthoredPaths(refs));
+    }).pipe(Effect.scoped, Effect.provide(layerGitContract)),
+);
+
 it.effect("checkpoint capture preserves racy edits made after resetting the index", () =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
@@ -2401,7 +2337,7 @@ it.effect("GitVcsDriver fails repository probes when git cannot read the reposit
   }).pipe(Effect.scoped, Effect.provide(layerGitContract)),
 );
 
-it.effect("GitVcsDriver rejects deleted paths and preserves bare repository sources", () =>
+it.effect("GitVcsDriver reports no repository for a deleted cwd or a bare repository", () =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -2411,13 +2347,10 @@ it.effect("GitVcsDriver rejects deleted paths and preserves bare repository sour
     yield* runGit(bare, ["init", "--bare"]);
     const driver = yield* GitVcsDriver.makeVcsDriverShape();
 
-    const deleted = path.join(root, "deleted");
-    assert.equal(yield* driver.isInsideWorkTree(deleted), false);
-    assert.equal(yield* driver.detectRepository(deleted), null);
-    assert.equal(yield* driver.isInsideWorkTree(bare), false);
-    const repository = yield* driver.detectRepository(bare);
-    assert.equal(repository?.bare, true);
-    assert.equal(repository?.rootPath, bare);
+    for (const cwd of [path.join(root, "deleted"), bare]) {
+      assert.equal(yield* driver.isInsideWorkTree(cwd), false, cwd);
+      assert.equal(yield* driver.detectRepository(cwd), null, cwd);
+    }
   }).pipe(Effect.scoped, Effect.provide(layerGitContract)),
 );
 
@@ -2708,54 +2641,4 @@ it.effect("git metrics count fsync fallback and transient retry subprocesses sep
     Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     Effect.provideService(Metric.MetricRegistry, new Map()),
   ),
-);
-
-it.effect.each([
-  {
-    fetchUrl: "https://github.com/pingdotgg/t3code.git",
-    pushUrl: "git@github.com:octocat/t3code.git",
-    lineEnding: "\n",
-  },
-  { fetchUrl: "../team repos/shared.git", pushUrl: "../team repos/push.git", lineEnding: "\n" },
-  {
-    fetchUrl: " ../team repos/shared (fetch) [blob:none].git ",
-    pushUrl: "../team repos/push (push).git\t",
-    lineEnding: "\r\n",
-  },
-])(
-  "lists the fetch and push URLs of a partial clone remote (%j)",
-  ({ fetchUrl, pushUrl, lineEnding }) =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const cwd = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-partial-clone-remotes-",
-      });
-      const process = yield* VcsProcess.VcsProcess;
-      const driver = yield* GitVcsDriver.makeVcsDriverShape().pipe(
-        Effect.provideService(VcsProcess.VcsProcess, {
-          run: (input) =>
-            process.run(input).pipe(
-              Effect.map((result) => ({
-                ...result,
-                stdout: result.stdout.replace(/\r?\n/g, lineEnding),
-              })),
-            ),
-        }),
-      );
-      yield* runGit(cwd, ["init"]);
-      yield* runGit(cwd, ["remote", "add", "origin", fetchUrl]);
-      yield* runGit(cwd, ["remote", "set-url", "--push", "origin", pushUrl]);
-      yield* runGit(cwd, ["config", "remote.origin.promisor", "true"]);
-      yield* runGit(cwd, ["config", "remote.origin.partialclonefilter", "blob:none"]);
-
-      const result = yield* driver.listRemotes(cwd);
-      assert.deepEqual(result.remotes, [
-        {
-          name: "origin",
-          url: fetchUrl,
-          pushUrl: Option.some(pushUrl),
-          isPrimary: true,
-        },
-      ]);
-    }).pipe(Effect.scoped, Effect.provide(layerGitContract)),
 );

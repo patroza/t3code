@@ -7,13 +7,7 @@ import {
   DATABASE_MIGRATIONS_STARTED_MESSAGE,
 } from "@t3tools/shared/databaseMigrationLog";
 import { reconcileV2PreviewMigration } from "./reconcileV2PreviewMigration.ts";
-
-import {
-  forkMigrationEntries,
-  forkMigrationTable,
-  makeForkMigrationLoader,
-} from "./ForkMigrations.ts";
-import { bootstrapMigrationNamespaces, upstreamMigrationTable } from "./MigrationBootstrap.ts";
+import { withForkMigrations, withForkPendingMigrations } from "./ForkMigrations.ts";
 
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
 import Migration0002 from "./Migrations/002_OrchestrationCommandReceipts.ts";
@@ -118,8 +112,12 @@ import Migration0100 from "./Migrations/100_TurnStartReadIndexes.ts";
 import Migration0101 from "./Migrations/101_DelegatedTaskReadIndexes.ts";
 import Migration0102 from "./Migrations/102_ThreadItemCounts.ts";
 import Migration0103 from "./Migrations/103_IssueTrackerAdditionalScopes.ts";
+import Migration0104 from "./Migrations/104_ProjectionProjectsTrackedFolders.ts";
+import Migration0105 from "./Migrations/105_TaskFolders.ts";
+import Migration0106 from "./Migrations/106_WorktreePathKeyIndex.ts";
+import Migration0107 from "./Migrations/107_DeferredSlashCommandIndex.ts";
 
-export const migrationEntries = [
+const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
   [2, "OrchestrationCommandReceipts", Migration0002],
   [3, "CheckpointDiffBlobs", Migration0003],
@@ -224,11 +222,15 @@ export const migrationEntries = [
   [101, "DelegatedTaskReadIndexes", Migration0101],
   [102, "ThreadItemCounts", Migration0102],
   [103, "IssueTrackerAdditionalScopes", Migration0103],
+  [104, "ProjectionProjectsTrackedFolders", Migration0104],
+  [105, "TaskFolders", Migration0105],
+  [106, "WorktreePathKeyIndex", Migration0106],
+  [107, "DeferredSlashCommandIndex", Migration0107],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
 
-export const makeMigrationLoader = (throughId?: number) =>
+const makeMigrationLoader = (throughId?: number) =>
   Migrator.fromRecord(
     Object.fromEntries(
       migrationEntries
@@ -263,13 +265,13 @@ const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function*
 ) {
   const sql = yield* SqlClient.SqlClient;
   const tables = yield* sql`
-    SELECT name FROM sqlite_master WHERE type = 'table' AND name = ${upstreamMigrationTable}
+    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'
   `;
   if (tables.length === 0) return;
   const recorded = yield* sql<{
     readonly migration_id: number;
     readonly name: string;
-  }>`SELECT migration_id, name FROM ${sql(upstreamMigrationTable)}`;
+  }>`SELECT migration_id, name FROM effect_sql_migrations`;
   const skipped = skippedV2Migrations(
     recorded.map((row) => ({ id: row.migration_id, name: row.name })),
     throughId,
@@ -288,26 +290,18 @@ const latestMigrationId = Math.max(...migrationEntries.map(([id]) => id));
 export const hasPendingMigrations = Effect.fn("hasPendingMigrations")(function* () {
   const sql = yield* SqlClient.SqlClient;
   const tables = yield* sql`
-    SELECT name FROM sqlite_master WHERE type = 'table' AND name = ${upstreamMigrationTable}
+    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'
   `;
   if (tables.length === 0) return true;
   const rows = yield* sql<{ readonly latestId: number | null; readonly previewRows: number }>`
     SELECT
       MAX(migration_id) AS latestId,
       SUM(name = 'OrchestrationV2' AND migration_id IN (53, 54)) AS previewRows
-    FROM ${sql(upstreamMigrationTable)}
+    FROM effect_sql_migrations
   `;
-  const forkTables =
-    yield* sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ${forkMigrationTable}`;
-  if (forkTables.length === 0) return true;
-  const forkRows = yield* sql<{
-    readonly latestId: number | null;
-  }>`SELECT MAX(migration_id) AS latestId FROM ${sql(forkMigrationTable)}`;
-  if ((forkRows[0]?.latestId ?? 0) < Math.max(...forkMigrationEntries.map(([id]) => id)))
-    return true;
   const row = rows[0];
   return (row?.latestId ?? 0) < latestMigrationId || (row?.previewRows ?? 0) > 0;
-});
+}, withForkPendingMigrations);
 
 const run = Migrator.make({});
 
@@ -325,20 +319,19 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     toMigrationInclusive === undefined || toMigrationInclusive >= FIRST_V2_MIGRATION_ID;
   // The reconcile takes the write lock; CLI startup must not contend with the server for a no-op.
   const previewMigrations = includesV2 && hasPending ? yield* reconcileV2PreviewMigration() : [];
-  yield* bootstrapMigrationNamespaces();
   if (includesV2) {
     yield* assertV2MigrationsCanRun(toMigrationInclusive);
   }
   const sql = yield* SqlClient.SqlClient;
   const ledger = yield* sql`
-    SELECT name FROM sqlite_master WHERE type = 'table' AND name = ${upstreamMigrationTable}
+    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'
   `;
   const [latest] =
     ledger.length === 0
       ? []
       : yield* sql<{
           readonly id: number | null;
-        }>`SELECT MAX(migration_id) AS id FROM ${sql(upstreamMigrationTable)}`;
+        }>`SELECT MAX(migration_id) AS id FROM effect_sql_migrations`;
   const latestRecordedId = latest?.id ?? 0;
   const pending = migrationEntries.filter(
     ([id]) =>
@@ -356,20 +349,7 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
         }),
       );
     }
-    executedMigrations.push(
-      ...(yield* run({ loader: makeMigrationLoader(id), table: upstreamMigrationTable })),
-    );
-  }
-  const [forkLatest] = yield* sql<{ readonly id: number | null }>`
-    SELECT MAX(migration_id) AS id FROM ${sql(forkMigrationTable)}
-  `;
-  if (
-    toMigrationInclusive === undefined &&
-    (forkLatest?.id ?? 0) < Math.max(...forkMigrationEntries.map(([id]) => id))
-  ) {
-    executedMigrations.push(
-      ...(yield* run({ loader: makeForkMigrationLoader(), table: forkMigrationTable })),
-    );
+    executedMigrations.push(...(yield* run({ loader: makeMigrationLoader(id) })));
   }
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
   yield* migrations.length === 0
@@ -379,7 +359,7 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
   const recorded = yield* sql<{
     readonly migration_id: number;
     readonly name: string;
-  }>`SELECT migration_id, name FROM ${sql(upstreamMigrationTable)}`;
+  }>`SELECT migration_id, name FROM effect_sql_migrations`;
   const manifestNames = new Map<number, string>(migrationEntries.map(([id, name]) => [id, name]));
   const divergent = recorded.flatMap((row) => {
     const expected = manifestNames.get(row.migration_id);
@@ -396,4 +376,4 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     ).pipe(Effect.annotateLogs({ divergent }));
   }
   return executedMigrations;
-});
+}, withForkMigrations);

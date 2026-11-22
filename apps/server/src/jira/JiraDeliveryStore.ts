@@ -74,7 +74,7 @@ export class JiraDeliveryStore extends Context.Service<
   }
 >()("t3/jira/JiraDeliveryStore") {}
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const config = yield* ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;

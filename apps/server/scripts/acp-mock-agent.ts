@@ -17,7 +17,6 @@ import type * as AcpCompat from "effect-acp/compat";
 import { beginAcpMockPrompt } from "./acpMockCancellationState.ts";
 
 const requestLogPath = process.env.T3_ACP_REQUEST_LOG_PATH;
-const failLoadSessionCode = Number(process.env.T3_ACP_FAIL_LOAD_SESSION_CODE ?? -32603);
 const antigravityProfile = process.env.T3_ACP_ANTIGRAVITY === "1";
 // GitHub Copilot CLI advertises URL-shaped session mode ids.
 const copilotModesProfile = process.env.T3_ACP_COPILOT_MODES === "1";
@@ -719,10 +718,7 @@ const program = Effect.gen(function* () {
         }
       }
       if (failLoadSession) {
-        return yield* new AcpError.AcpRequestError({
-          code: failLoadSessionCode,
-          errorMessage: "Mock load session failure",
-        });
+        return yield* AcpError.AcpRequestError.internalError("Mock load session failure");
       }
       if (failLoadSessionAfterConfigReplay) {
         yield* agent.client.sessionUpdate({

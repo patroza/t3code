@@ -9,6 +9,7 @@
 - [Terminal history](./user/terminal.md)
 - [Source control](./user/source-control.md)
 - [Project settings](./user/project-settings.md)
+- [Projects with several repositories](./user/multi-repo-projects.md)
 - [Appearance and themes](./user/appearance.md)
 - [Keyboard shortcuts](./user/keybindings.md)
 - [Voice input](./user/voice-input.md)
@@ -35,8 +36,7 @@
 ## Working on T3 Code
 
 Start with the [development runbook](./operations/development.md) and
-[contribution policy](../CONTRIBUTING.md). Fork branch model, agent rules, and the ship gate live in
-[AGENTS.md](../AGENTS.md).
+[contribution policy](../CONTRIBUTING.md).
 
 Internal notes preserve architectural decisions, constraints, and implementation traps that the
 source alone does not explain. Most code changes do not need an internal documentation update. Follow the
@@ -68,7 +68,6 @@ source alone does not explain. Most code changes do not need an internal documen
 - [Development and local builds](./operations/development.md)
 - [Scenarios: real-app proof for a fix](./operations/scenarios.md)
 - [T3 Connect setup](./operations/connect-setup.md)
-- [CI quality gates](./operations/ci.md)
 - [Release](./operations/release.md)
 - [Observability](./operations/observability.md)
 - [Relay observability](./operations/relay-observability.md)

@@ -13,7 +13,6 @@ import { useEnvironments, type EnvironmentPresentation } from "../../state/envir
 import { identityEnvironment } from "../../state/identity";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { resolveIdentityClaimCandidate } from "./identityClaimCandidate";
 
 /** Probe connected remotes before the primary environment, showing one claim modal at a time. */
 export function IdentityClaimGate() {
@@ -39,7 +38,7 @@ export function IdentityClaimGate() {
     setSelection((current) => ({ ...current, index: current.index + 1 }));
   }, []);
 
-  const environment = resolveIdentityClaimCandidate(candidates, activeIndex);
+  const environment = candidates[activeIndex];
   if (environment === undefined) {
     return null;
   }

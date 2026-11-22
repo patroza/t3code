@@ -68,7 +68,6 @@ import {
   resolveSettledDiscordThreadTitleUpgrade,
   resolveSilentDiscordThreadPrBadge,
   resolveTemporaryDiscordThreadTitleBadge,
-  resolveThreadChangeRequestLookupCwds,
   mergeStickyTitlePr,
   nextMirroredThreadTitleAfterApply,
   planDiscordThreadTitleApply,
@@ -3219,25 +3218,5 @@ describe("mergeStickyTitlePr / resolveDiscordTitlePrEvidence", () => {
         canApplyNoPrBadge: true,
       }),
     ).toBe("▫️ Sync recent scanner learnings");
-  });
-});
-
-describe("resolveThreadChangeRequestLookupCwds", () => {
-  it("tries the thread worktree before the project root", () => {
-    expect(
-      resolveThreadChangeRequestLookupCwds(
-        { worktreePath: "/tmp/worktree" },
-        { workspaceRoot: "/tmp/project" },
-      ),
-    ).toEqual(["/tmp/worktree", "/tmp/project"]);
-  });
-
-  it("deduplicates identical worktree and project paths", () => {
-    expect(
-      resolveThreadChangeRequestLookupCwds(
-        { worktreePath: "/tmp/project" },
-        { workspaceRoot: "/tmp/project" },
-      ),
-    ).toEqual(["/tmp/project"]);
   });
 });

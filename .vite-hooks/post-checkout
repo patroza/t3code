@@ -1,0 +1,48 @@
+# Fork-only. Runs after branch checkouts (third argument 1); file checkouts are ignored.
+#
+# 1. Drop TypeScript project emit (dist / tsbuildinfo). After a branch switch, composite and
+#    incremental emit from the other tree produces phantom type errors (typescript-go#2666,
+#    #4664, #4262). apps/server/dist stays: a running `t3 serve` reads dist/client per request.
+# 2. Reinstall when package.json or pnpm-lock.yaml changed. Skipped when a worktree is created
+#    (previous HEAD is the null SHA): the t3.json setup script installs those.
+[ "${3:-0}" = "1" ] || exit 0
+
+root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+[ -n "$root" ] || exit 0
+
+removed=0
+for d in "$root"/apps/*/dist "$root"/apps/*/dist-electron "$root"/packages/*/dist; do
+  [ -e "$d" ] || continue
+  case "$d" in
+    */apps/server/dist) continue ;;
+  esac
+  rm -rf "$d"
+  removed=1
+done
+tsbuild_files=$(find "$root" \( -name node_modules -o -name .git -o -name .vite-plus -o -name .repos \) -prune \
+  -o -type f -name '*.tsbuildinfo' -print 2>/dev/null || true)
+if [ -n "$tsbuild_files" ]; then
+  printf '%s\n' "$tsbuild_files" | while IFS= read -r f; do
+    [ -n "$f" ] && rm -f "$f"
+  done
+  removed=1
+fi
+[ "$removed" = 1 ] && echo "post-checkout: cleared TypeScript project emit (dist / tsbuildinfo)" >&2
+
+case "${1:-}" in
+  0000000000000000000000000000000000000000 | "") exit 0 ;;
+esac
+[ -f "$root/pnpm-lock.yaml" ] && [ -d "$root/node_modules" ] || exit 0
+
+state_file="$root/node_modules/.fork-checkout-install-state"
+state=$(cksum "$root/package.json" "$root/pnpm-lock.yaml" | cksum | awk '{print $1 ":" $2}')
+[ "$(cat "$state_file" 2>/dev/null)" = "$state" ] && exit 0
+command -v vp >/dev/null 2>&1 || exit 0
+
+echo "post-checkout: dependencies changed; running vp i" >&2
+if (cd "$root" && CI=1 vp i --frozen-lockfile </dev/null); then
+  printf '%s\n' "$state" >"$state_file"
+else
+  echo "post-checkout: vp i failed; run it by hand once the lockfile is consistent" >&2
+fi
+exit 0

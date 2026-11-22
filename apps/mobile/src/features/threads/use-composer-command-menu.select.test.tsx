@@ -29,7 +29,6 @@ it("/model clears only its trigger and opens the model picker", async () => {
   const onOpenModelPicker = vi.fn();
   let menu: ReturnType<typeof useComposerCommandMenu> | undefined;
   function Probe() {
-    // oxlint-disable-next-line react/globals -- The test probe exposes the hook result to assertions.
     menu = useComposerCommandMenu({
       draftMessage: "fix this /mod",
       ownerKey: "draft",

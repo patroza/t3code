@@ -15,7 +15,6 @@ import {
   isDelegatedAppThread,
   isListedThreadLineage,
   MessageId,
-  OrchestrationDispatchCommandError,
   OrchestrationV2StopWorkflowError,
   type OrchestrationV2StopWorkflowInput,
   OrchestrationV2ForceStopThreadError,
@@ -41,14 +40,11 @@ import {
   resolveProjectProviderInstanceEnabled,
   RunId,
   type ScheduledTaskId,
-  type SourceRef,
   ThreadId,
   type TurnItemId,
 } from "@t3tools/contracts";
-import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import { delegatedTaskProgress } from "@t3tools/provider-core/server/subagentProjection";
 import { threadTranscriptHeader } from "@t3tools/shared/threadTranscript";
-
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -111,7 +107,7 @@ export function withCreationProvenance(
   }
 }
 
-export function existingThreadIdsForCommand(
+function existingThreadIdsForCommand(
   command: OrchestrationV2ServerCommand,
 ): ReadonlyArray<ThreadId> {
   switch (command.type) {
@@ -170,7 +166,7 @@ export interface ThreadManagementSendInput {
   readonly outputSchema?: Readonly<Record<string, Schema.Json>>;
   readonly createdBy: OrchestrationV2Actor;
   readonly creationSource: OrchestrationV2CreationSource;
-  readonly source?: SourceRef;
+  readonly source?: import("@t3tools/contracts").SourceRef;
 }
 
 export interface ThreadManagementSendResult {
@@ -400,7 +396,6 @@ export class ThreadManagementBackgroundWaitError extends Schema.TaggedError<Thre
 }
 
 export const ThreadManagementError = Schema.Union([
-  OrchestrationDispatchCommandError,
   ThreadManagementThreadNotFoundError,
   ThreadManagementRunNotFoundError,
   ThreadManagementThreadArchivedError,
@@ -418,9 +413,6 @@ export type ThreadManagementError = typeof ThreadManagementError.Type;
 type ThreadManagementFailure = ThreadManagementError | Orchestrator.OrchestratorV2Error;
 
 export interface ThreadManagementServiceShape {
-  readonly assertCommandReady: (
-    command: OrchestrationV2ServerCommand,
-  ) => Effect.Effect<void, Orchestrator.OrchestratorV2Error | OrchestrationDispatchCommandError>;
   readonly searchThreadStream: (
     input: OrchestrationV2SearchThreadInput,
   ) => Stream.Stream<OrchestrationV2SearchThreadResult, Orchestrator.OrchestratorV2Error>;
@@ -648,7 +640,6 @@ const isForceStopThreadError = Schema.is(OrchestrationV2ForceStopThreadError);
 const make = Effect.gen(function* () {
   const threadDispatch = yield* ThreadCommandExecutor.ThreadCommandExecutor;
   const orchestrator = yield* Orchestrator.OrchestratorV2;
-  const cloneTracker = yield* ProjectCloneTracker.ProjectCloneTracker;
   const sessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
   const layerScope = yield* Effect.scope;
   const agentScope = yield* AgentScope;
@@ -795,24 +786,6 @@ const make = Effect.gen(function* () {
       Effect.andThen(orchestrator.getThreadSnapshotWindow(threadId, options)),
     );
 
-  const assertCommandReady: ThreadManagementServiceShape["assertCommandReady"] = Effect.fn(
-    "ThreadManagementService.assertCommandReady",
-  )(function* (command) {
-    if (command.type === "thread.create") {
-      return yield* ProjectCloneTracker.rejectCommandsDuringClone(cloneTracker, command);
-    }
-    if (command.type === "message.dispatch") {
-      const shell = yield* orchestrator.getThreadShell(command.threadId);
-      if (shell !== null)
-        yield* ProjectCloneTracker.rejectCommandsDuringClone(cloneTracker, {
-          type: command.type,
-          projectId: shell.projectId,
-        });
-    }
-  });
-  // Every path that can start or wake a provider turn funnels through this
-  // dispatch, so resolving and checking the target instance here (instead of
-  // at each caller) is the one place "off" is enforced.
   const assertDispatchTargetEnabled = (command: OrchestrationV2ServerCommand) => {
     switch (command.type) {
       case "thread.metadata.update":
@@ -869,19 +842,9 @@ const make = Effect.gen(function* () {
   };
 
   const dispatch: ThreadManagementServiceShape["dispatch"] = (command) =>
-    assertCommandReady(command).pipe(
-      Effect.mapError((cause) =>
-        cause._tag === "OrchestrationDispatchCommandError"
-          ? new Orchestrator.OrchestratorCommandRejectedError({
-              commandId: command.commandId,
-              commandType: command.type,
-              cause,
-            })
-          : cause,
-      ),
-      Effect.andThen(() => ensureCommandTranscripts(command)),
-      Effect.andThen(() => assertDispatchTargetEnabled(command)),
-      Effect.andThen(() => orchestrator.dispatch(command)),
+    ensureCommandTranscripts(command).pipe(
+      Effect.andThen(assertDispatchTargetEnabled(command)),
+      Effect.andThen(orchestrator.dispatch(command)),
     );
 
   const getProjectThreadRecords: ThreadManagementServiceShape["getProjectThreadRecords"] = (
@@ -943,10 +906,6 @@ const make = Effect.gen(function* () {
         threadId: input.threadId,
       });
     }
-    yield* ProjectCloneTracker.rejectCommandsDuringClone(cloneTracker, {
-      type: "message.dispatch",
-      projectId: target.thread.projectId,
-    });
     const schemaProblem =
       input.outputSchema === undefined ? null : outputRequestProblem(input.outputSchema, input);
     if (schemaProblem !== null) {
@@ -1016,7 +975,7 @@ const make = Effect.gen(function* () {
       ...(input.senderThreadId === undefined ? {} : { senderThreadId: input.senderThreadId }),
       ...(input.linkedSender === undefined ? {} : { linkedSender: input.linkedSender }),
       text: input.text,
-      ...(input.source === undefined ? {} : { source: input.source }),
+      ...(input.source && { source: input.source }),
       attachments: input.attachments,
       ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
       ...(input.freshContext ? { freshContext: true } : {}),
@@ -1818,7 +1777,6 @@ const make = Effect.gen(function* () {
   });
 
   return ThreadManagementService.of({
-    assertCommandReady,
     ensureLegacyTranscript,
     searchThreadStream: (input) =>
       Stream.unwrap(
@@ -1954,7 +1912,6 @@ export const layer: Layer.Layer<
   never,
   | Orchestrator.OrchestratorV2
   | ProviderSessionManager.ProviderSessionManagerV2
-  | ProjectCloneTracker.ProjectCloneTracker
   | ServerSettings.ServerSettingsService
   | CommandReceiptStore.CommandReceiptStoreV2
 > = Layer.effect(ThreadManagementService, make).pipe(
@@ -1970,7 +1927,6 @@ export const layerWithLegacyImporter: Layer.Layer<
   | ThreadWorktreeRestore
   | Orchestrator.OrchestratorV2
   | ProviderSessionManager.ProviderSessionManagerV2
-  | ProjectCloneTracker.ProjectCloneTracker
   | ServerSettings.ServerSettingsService
   | CommandReceiptStore.CommandReceiptStoreV2
 > = Layer.effect(ThreadManagementService, make).pipe(Layer.provide(ThreadCommandExecutor.layer));

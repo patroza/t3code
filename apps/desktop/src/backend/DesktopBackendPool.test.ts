@@ -220,8 +220,6 @@ function layerPool(
           runMainContentsCommand:
             options.onMainContentsCommand ?? (() => Effect.die("unexpected main contents command")),
           syncAppearance: Effect.void,
-          navigateToThread: () => Effect.void,
-          navigateToProject: () => Effect.void,
         } satisfies DesktopWindow.DesktopWindow["Service"]),
       ),
     ),

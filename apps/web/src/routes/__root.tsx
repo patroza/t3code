@@ -23,20 +23,17 @@ import { UseInAnotherAppDialogHost } from "../components/mcp/UseInAnotherAppDial
 import { AddProjectToMachineDialogHost } from "../components/AddProjectToMachineDialog";
 import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
 import { DevReplayHost } from "../components/DevReplayHost";
+import { IdentityClaimGate } from "../components/identity/IdentityClaimGate";
 import { FirstRunGate } from "../components/onboarding/FirstRunGate";
 import { ConnectOnboardingDialog } from "../components/cloud/ConnectOnboardingDialog";
 import { RelayClientInstallDialog } from "../components/cloud/RelayClientInstallDialog";
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
-import { OmegentDeepLinkCoordinator } from "../components/OmegentDeepLinkCoordinator";
 import { SnapShotCoordinator } from "../components/desktop/SnapShotCoordinator";
 import { DesktopAppActivationCoordinator } from "../components/desktop/DesktopAppActivationCoordinator";
 import { DesktopWebLinkCoordinator } from "../components/desktop/DesktopWebLinkCoordinator";
 import { RunningThreadKeepAlive } from "../components/desktop/RunningThreadKeepAlive";
-import { IdentityClaimGate } from "../components/identity/IdentityClaimGate";
-
 import { ReopenClosedViewShortcut } from "../components/ReopenClosedViewShortcut";
 import { ProjectCloneToastCoordinator } from "../components/ProjectCloneToastCoordinator";
-import { hasThreadDeepLinkIntent } from "../deepLinkStore";
 import { ConnectDeviceApprovalCoordinator } from "../components/ConnectDeviceApprovalCoordinator";
 import { ChatGptWelcomeCoordinator } from "../components/settings/ChatGptWelcomeCoordinator";
 import { ThemeEditorHost } from "../components/settings/ThemeEditorHost";
@@ -209,10 +206,7 @@ function RootRouteBranch() {
       <ConnectDeviceApprovalCoordinator />
       <AddProjectToMachineDialogHost />
       <UseInAnotherAppDialogHost />
-      {primaryEnvironmentAuthenticated ? <OmegentDeepLinkCoordinator /> : null}
-      {primaryEnvironmentAuthenticated || authGateState.status === "hosted-static" ? (
-        <IdentityClaimGate />
-      ) : null}
+      <IdentityClaimGate />
       {import.meta.env.DEV && primaryEnvironmentAuthenticated ? <DevReplayHost /> : null}
     </>
   );
@@ -393,10 +387,6 @@ function EventRouter({
       useUiStateStore.getState().setProjectExpanded(bootstrapProjectKey, true);
 
       if (readPathname() !== "/") {
-        return;
-      }
-      // Do not steal `/?thread=` landings for the server's bootstrap thread.
-      if (hasThreadDeepLinkIntent()) {
         return;
       }
       if (skipInitialBootstrapNavigationRef.current) {

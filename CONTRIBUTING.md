@@ -6,7 +6,8 @@ modern AI tools.
 That said, it is also ours.
 
 T3 Code is built and maintained by a small team with a clear vision. We are explicitly NOT INTERESTED
-in unsolicited new feature addition PRs from people outside of said team.
+in new feature addition PRs from people outside of said team, with a small
+[exception for vouched contributors](#vouched-features).
 
 We are much more bottlenecked by review capacity than we are creativity, tokens or code. It takes more
 effort to review a PR than it does to create one in the vast majority of cases.
@@ -21,7 +22,7 @@ meaningful way.
 
 Things we are explicitly NOT interested in (and we will auto close):
 
-- New features
+- New features (vouched contributors have [an exception](#vouched-features))
 - UI overhauls
 - New providers
 - Architecture overhauls (extensions, plugins, new connection methods)
@@ -29,12 +30,8 @@ Things we are explicitly NOT interested in (and we will auto close):
 - Different auth methods
 - Support for additional platforms (I already regret Windows ARM)
 
-If you are an external contributor, expect `vouch:unvouched` until a maintainer vouches for you. This fork does not carry upstream's `.github/VOUCHED.td` roster.
-
-## Establish the problem and scope first
-
 In case we haven't made this clear: The reason to contribute is fixing bugs. If you want anything from
-the list above, the "issues" and "discussion" tabs are there for a reason :)
+the list above that the [vouched exception](#vouched-features) does not cover, the "issues" and "discussion" tabs are there for a reason :)
 
 Now that all of this has been said, let's discuss the best practices when contributing to T3 Code.
 
@@ -68,6 +65,15 @@ the product behaves is a feature, even when the PR calls it a fix.
 A small fix for an obvious bug needs no issue. For a larger fix, link the issue that shows the bug.
 
 A maintainer can ask you to open a PR that is not a bug fix. Link the request.
+
+<a id="vouched-features"></a>
+
+Vouched contributors in [.github/VOUCHED.td](.github/VOUCHED.td) can also open a small, focused
+feature PR without a request. Everything else on the list above is still closed: UI overhauls, new
+providers, architecture overhauls, source control, auth, and platforms.
+
+You can have 3 of these feature PRs open. A fourth is closed. Get one merged or closed, then open it
+again. Bug fix PRs do not count.
 
 <a id="one-problem"></a>
 
@@ -110,13 +116,8 @@ again.
 A PR that conflicts with its base branch gets a `needs-rebase` label. If it still conflicts after 7
 days with no activity, it is closed.
 
-PRs receive `vouch:*` contributor-status labels and `size:*` diff-size labels. These are context, not
-eligibility rules. Vouching is separate from permission to bypass triage; this fork does not carry
-upstream's `.github/VOUCHED.td` roster. Only the GitHub logins explicitly listed in
-[.github/TRIAGE_EXEMPTIONS.td](.github/TRIAGE_EXEMPTIONS.td) bypass triage. Organization membership,
-vouching, collaborator or bot status, repository write access, and previous successful PRs do not
-establish an exemption. Other contributors, including vouched contributors, go through triage.
-Passing once does not grant permanent trust.
+Vouched contributors in [.github/VOUCHED.td](.github/VOUCHED.td) are exempt from this rule and from
+the open PR limit. The [feature PR limit](#vouched-features) still applies to them.
 
 ## Bans
 

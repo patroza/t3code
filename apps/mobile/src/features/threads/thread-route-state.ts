@@ -2,13 +2,12 @@ export type NewTaskDraftRouteParams = {
   readonly requestId?: string;
   readonly environmentId?: string | string[];
   readonly projectId?: string | string[];
-  readonly branch?: string | string[] | null;
-  readonly worktreePath?: string | string[] | null;
+  readonly branch?: string | null;
+  readonly worktreePath?: string | null;
   readonly title?: string | string[];
   readonly cloning?: string | string[];
   readonly draftId?: string | string[];
   readonly incomingShareId?: string | string[];
-  readonly workspaceMode?: string | string[];
 };
 
 export function isDraftThreadRoute(
@@ -35,9 +34,8 @@ export function draftRouteIdentity(draft: NewTaskDraftRouteParams): string {
     first(draft.draftId),
     first(draft.environmentId),
     first(draft.projectId),
-    first(draft.workspaceMode),
-    first(draft.branch ?? undefined) ?? null,
-    first(draft.worktreePath ?? undefined) ?? null,
+    draft.branch ?? null,
+    draft.worktreePath ?? null,
     first(draft.incomingShareId),
   ]);
 }

@@ -7,7 +7,7 @@ import {
   previewWebhookBody,
   WebhookDebugLog,
   type WebhookDebugAppendInput,
-} from "../webhooks/WebhookDebugLog.ts";
+} from "./JiraWebhookDebugLog.ts";
 import { isMonitoredJiraProject, routeJiraWebhook } from "./JiraBugReport.ts";
 import { JiraAppConfig, isJiraProjectAllowed } from "./JiraAppConfig.ts";
 import { JiraIssueBridge } from "./JiraIssueBridge.ts";
@@ -21,7 +21,7 @@ import {
 } from "./JiraWebhookPayload.ts";
 import { verifyJiraWebhookSecret } from "./JiraWebhookSecurity.ts";
 
-export const JIRA_WEBHOOK_PATH = "/api/jira/webhook";
+const JIRA_WEBHOOK_PATH = "/api/jira/webhook";
 const MAX_WEBHOOK_BODY_BYTES = 1_024 * 1_024;
 const decodeCommentWebhook = Schema.decodeUnknownSync(Schema.fromJsonString(JiraCommentWebhook));
 

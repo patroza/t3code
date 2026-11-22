@@ -1,5 +1,3 @@
-import type { ContextWindowSnapshot } from "@t3tools/client-runtime/state/context-window";
-import { ContextWindowMeter, ContextWindowMeterPlaceholder } from "./ContextWindowMeter";
 import type { ModelSelection, ProviderInstanceId, RuntimeMode } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import { T, useGT, useMessages } from "gt-react";
@@ -195,12 +193,6 @@ export function ComposerPermissionsSection(props: {
 
 export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(props: {
   children?: React.ReactNode;
-  activeContextWindow: ContextWindowSnapshot | null;
-  reserveContextWindowMeter: boolean;
-  activeThreadModelDisplayName: string | null;
-  onCompactContext?: (() => void) | undefined;
-  compactDisabled: boolean;
-  compactDisabledReason: string | null;
   compact: boolean;
   canOperateThread: boolean;
   isPreparingWorktree: boolean;
@@ -219,6 +211,7 @@ export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryA
   alternateShortcutLabel: string | null;
   voiceInputActive?: boolean;
   isSendBusy: boolean;
+  isSendHeld?: boolean;
   sendDisabledReason: string | null;
   isEnvironmentUnavailable: boolean;
   hasSendableContent: boolean;
@@ -236,17 +229,6 @@ export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryA
 }) {
   return (
     <>
-      {props.activeContextWindow ? (
-        <ContextWindowMeter
-          usage={props.activeContextWindow}
-          modelDisplayName={props.activeThreadModelDisplayName}
-          onCompact={props.onCompactContext}
-          compactDisabled={props.compactDisabled}
-          compactDisabledReason={props.compactDisabledReason}
-        />
-      ) : props.reserveContextWindowMeter ? (
-        <ContextWindowMeterPlaceholder />
-      ) : null}
       <ComposerPrimaryActions
         compact={props.compact}
         canOperateThread={props.canOperateThread}
@@ -259,6 +241,7 @@ export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryA
         alternateShortcutLabel={props.alternateShortcutLabel}
         voiceInputActive={props.voiceInputActive ?? false}
         isSendBusy={props.isSendBusy}
+        isSendHeld={props.isSendHeld ?? false}
         sendDisabledReason={props.sendDisabledReason}
         isEnvironmentUnavailable={props.isEnvironmentUnavailable}
         isPreparingWorktree={props.isPreparingWorktree}

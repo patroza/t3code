@@ -10,7 +10,6 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as Random from "effect/Random";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
@@ -19,7 +18,6 @@ import type * as Types from "effect/Types";
 import { AiError, McpProtocol, McpSchema, McpServer, Tool, Toolkit } from "effect/ai";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import {
-  CommandId,
   DeviceToolError,
   OrchestratorMcpFailure,
   PreviewAutomationError,
@@ -53,7 +51,7 @@ import {
 import { advertisedJsonSchema } from "./advertisedJsonSchema.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
-import { assertLiveCaller, unavailable } from "./threadAccess.ts";
+import { forkMcpTools } from "./forkMcpTools.ts";
 import * as McpToolExposure from "./McpToolExposure.ts";
 import { MCP_TOOL_EXPOSURE_HEADER } from "@t3tools/provider-core/server/mcpSession";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
@@ -72,7 +70,6 @@ import * as ThreadHandlers from "./toolkits/thread/handlers.ts";
 import * as ThreadMetadataMcpService from "./ThreadMetadataMcpService.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
-import * as DiscordLinkedChannelTool from "./DiscordLinkedChannelTool.ts";
 import * as OrchestratorHandlers from "./toolkits/orchestrator/handlers.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
 import * as PreviewHandlers from "./toolkits/preview/handlers.ts";
@@ -377,7 +374,6 @@ export const MAX_SNAPSHOT_TEXT_BYTES = 20_000;
 const MAX_SNAPSHOT_VISIBLE_TEXT_CHARS = 8_000;
 // Page text and the ARIA tree both shrink to this before either drops below it.
 const SNAPSHOT_TEXT_FLOOR_CHARS = 2_000;
-const MAX_SNAPSHOT_ELEMENT_NAME_CHARS = 200;
 const MAX_SNAPSHOT_LOG_ENTRIES = 40;
 const MAX_SNAPSHOT_LOG_TEXT_CHARS = 500;
 const MAX_SNAPSHOT_IDENTIFIER_CHARS = 2_048;
@@ -410,10 +406,6 @@ type SnapshotMetadata = {
   readonly url: string;
   readonly title: string;
   readonly visibleText: string;
-  readonly interactiveElements: ReadonlyArray<{
-    readonly name: string;
-    readonly [key: string]: unknown;
-  }>;
   readonly consoleEntries: ReadonlyArray<unknown>;
   readonly networkEntries: ReadonlyArray<unknown>;
   readonly actionTimeline: ReadonlyArray<unknown>;
@@ -430,7 +422,7 @@ const boundSnapshotMetadata = (metadata: SnapshotMetadata) => {
   const { accessibilityTree, ...withoutTree } = metadata;
   const ariaTree = typeof accessibilityTree === "string" ? accessibilityTree : undefined;
   if (accessibilityTree !== undefined && ariaTree === undefined) {
-    omitted.push("accessibilityTree (use interactiveElements locators or preview_evaluate)");
+    omitted.push("accessibilityTree (use preview_evaluate)");
   }
   const tail = <A>(entries: ReadonlyArray<A>, label: string) => {
     if (entries.length > MAX_SNAPSHOT_LOG_ENTRIES) {
@@ -448,41 +440,23 @@ const boundSnapshotMetadata = (metadata: SnapshotMetadata) => {
   ) {
     omitted.push(`url or title after ${MAX_SNAPSHOT_IDENTIFIER_CHARS} characters`);
   }
-  if (
-    metadata.interactiveElements.some(
-      (element) => element.name.length > MAX_SNAPSHOT_ELEMENT_NAME_CHARS,
-    )
-  ) {
-    omitted.push(`element names longer than ${MAX_SNAPSHOT_ELEMENT_NAME_CHARS} characters`);
-  }
   const bounded = {
     ...withoutTree,
     url: cutText(metadata.url, MAX_SNAPSHOT_IDENTIFIER_CHARS),
     title: cutText(metadata.title, MAX_SNAPSHOT_IDENTIFIER_CHARS),
-    interactiveElements: metadata.interactiveElements.map((element) => ({
-      ...element,
-      name: cutText(element.name, MAX_SNAPSHOT_ELEMENT_NAME_CHARS),
-    })),
     consoleEntries: tail(metadata.consoleEntries, "console entries"),
     networkEntries: tail(metadata.networkEntries, "network entries"),
     actionTimeline: tail(metadata.actionTimeline, "action timeline entries"),
   };
 
   // Per-field character caps can still exceed the total byte ceiling.
-  const shedOrder = [
-    "actionTimeline",
-    "networkEntries",
-    "consoleEntries",
-    "interactiveElements",
-  ] as const;
+  const shedOrder = ["actionTimeline", "networkEntries", "consoleEntries"] as const;
   const lists: Record<(typeof shedOrder)[number], ReadonlyArray<unknown>> = {
-    interactiveElements: bounded.interactiveElements,
     consoleEntries: bounded.consoleEntries,
     networkEntries: bounded.networkEntries,
     actionTimeline: bounded.actionTimeline,
   };
   const dropped: Record<(typeof shedOrder)[number], number> = {
-    interactiveElements: 0,
     consoleEntries: 0,
     networkEntries: 0,
     actionTimeline: 0,
@@ -497,22 +471,18 @@ const boundSnapshotMetadata = (metadata: SnapshotMetadata) => {
   });
   let text = encodeJsonText(value());
   while (utf8Length(text) > MAX_SNAPSHOT_TEXT_BYTES) {
-    // Logs shed first, oldest first. Below the floors, locator-bearing elements and tree go last.
+    // Logs shed first, oldest first. Below the floors, the locator-bearing tree goes last.
     const key =
-      shedOrder.find(
-        (candidate) => candidate !== "interactiveElements" && lists[candidate].length > 0,
-      ) ??
+      shedOrder.find((candidate) => lists[candidate].length > 0) ??
       (visibleTextChars > SNAPSHOT_TEXT_FLOOR_CHARS
         ? "visibleText"
         : ariaTreeChars > SNAPSHOT_TEXT_FLOOR_CHARS
           ? "accessibilityTree"
           : visibleTextChars > 0
             ? "visibleText"
-            : lists.interactiveElements.length > 0
-              ? "interactiveElements"
-              : ariaTreeChars > 0
-                ? "accessibilityTree"
-                : undefined);
+            : ariaTreeChars > 0
+              ? "accessibilityTree"
+              : undefined);
     if (key === undefined) break;
     if (key === "visibleText") {
       visibleTextChars = halveToFloor(visibleTextChars);
@@ -521,12 +491,7 @@ const boundSnapshotMetadata = (metadata: SnapshotMetadata) => {
     } else {
       const keep = Math.floor(lists[key].length / 2);
       dropped[key] += lists[key].length - keep;
-      lists[key] =
-        keep === 0
-          ? []
-          : key === "interactiveElements"
-            ? lists[key].slice(0, keep)
-            : lists[key].slice(-keep);
+      lists[key] = keep === 0 ? [] : lists[key].slice(-keep);
     }
     text = encodeJsonText(value());
   }
@@ -727,7 +692,6 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
                   readonly data?: string;
                   readonly width: number;
                   readonly height: number;
-                  readonly path?: string;
                 };
                 readonly fullScreenshot?: { readonly data: string };
               };
@@ -771,7 +735,6 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
                   mimeType: "image/png" as const,
                   width: screenshot.width,
                   height: screenshot.height,
-                  ...(screenshot.path === undefined ? {} : { path: screenshot.path }),
                 },
                 ...(screenshotPath === undefined ? {} : { screenshotPath }),
               };
@@ -1326,168 +1289,6 @@ const layerPreviewSnapshotRegistration = imageToolRegistration(
   PreviewHandlers.layerSnapshot,
 );
 
-const registerDiscordRenameThread = Effect.fn("McpHttpServer.registerDiscordRenameThread")(
-  function* () {
-    const server = yield* McpServer.McpServer;
-    const engine = yield* ThreadManagementService.ThreadManagementService;
-
-    yield* server.addTool({
-      tool: new McpSchema.Tool({
-        name: "discord_rename_thread",
-        description:
-          "Rename the current T3 thread. When this thread is linked to a Discord thread through the Discord bot, the bot mirrors the new title onto that Discord thread automatically.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            title: {
-              type: "string",
-              description: "New concise title for the current linked thread.",
-            },
-          },
-          required: ["title"],
-          additionalProperties: false,
-        },
-        annotations: {
-          title: "Rename linked Discord thread",
-          destructiveHint: false,
-          idempotentHint: true,
-          openWorldHint: false,
-        },
-      }),
-      annotations: Context.empty(),
-      handle: (payload) =>
-        Effect.withFiber((fiber) => {
-          const invocation = Context.getUnsafe(
-            fiber.context,
-            McpInvocationContext.McpInvocationContext,
-          );
-          const rawTitle =
-            typeof payload === "object" && payload !== null && "title" in payload
-              ? payload.title
-              : undefined;
-          const title = typeof rawTitle === "string" ? rawTitle.trim().replace(/\s+/g, " ") : "";
-          if (title.length === 0) {
-            return Effect.succeed(
-              new McpSchema.CallToolResult({
-                isError: true,
-                structuredContent: {
-                  error: { _tag: "InvalidTitle", message: "Title cannot be empty." },
-                },
-                content: [{ type: "text", text: "Title cannot be empty." }],
-              }),
-            );
-          }
-
-          const threadId = invocation.thread?.threadId;
-          if (threadId === undefined) {
-            return Effect.succeed(
-              new McpSchema.CallToolResult({
-                isError: true,
-                structuredContent: {
-                  error: {
-                    _tag: "ThreadNotFound",
-                    message: "Renaming needs an agent running inside a T3 thread.",
-                  },
-                },
-                content: [
-                  {
-                    type: "text",
-                    text: "Renaming needs an agent running inside a T3 thread.",
-                  },
-                ],
-              }),
-            );
-          }
-
-          return Effect.gen(function* () {
-            // Same gate as Discord posting: a credential that outlived its run cannot rename.
-            if (invocation.client?.access === "read-only") {
-              return yield* new OrchestratorMcpFailure({
-                code: "capability_denied",
-                message:
-                  "This tool changes the environment, and this MCP client was approved for read-only access.",
-              });
-            }
-            const shell = yield* engine
-              .getThreadShell(threadId)
-              .pipe(Effect.mapError(() => unavailable()));
-            if (shell === null || shell.deletedAt !== null) {
-              return yield* new OrchestratorMcpFailure({
-                code: "thread_not_found",
-                message: "The calling thread was not found.",
-              });
-            }
-            yield* assertLiveCaller({
-              scope: invocation,
-              threads: engine,
-              caller: shell,
-              limits: {
-                runtimeMode: shell.runtimeMode,
-                interactionMode: shell.interactionMode,
-              },
-            });
-            const millis = yield* Clock.currentTimeMillis;
-            const random = yield* Random.nextInt;
-            const commandId = CommandId.make(
-              `server:mcp-discord-rename-thread:${millis}:${String(Math.abs(random))}`,
-            );
-            yield* engine.dispatch({
-              type: "thread.metadata.update",
-              commandId,
-              threadId,
-              title,
-            });
-            return new McpSchema.CallToolResult({
-              isError: false,
-              structuredContent: {
-                threadId,
-                title,
-                discordMirrorRequested: true,
-              },
-              content: [
-                {
-                  type: "text",
-                  text: `Renamed the T3 thread to "${title}". A linked Discord bot will mirror the title.`,
-                },
-              ],
-            });
-          }).pipe(
-            Effect.matchCause({
-              onFailure: (cause) => {
-                const failure = Cause.findErrorOption(cause);
-                const rejected =
-                  Option.isSome(failure) && isOrchestratorMcpFailure(failure.value)
-                    ? failure.value
-                    : undefined;
-                const message = rejected?.message ?? "Failed to rename the linked thread.";
-                return new McpSchema.CallToolResult({
-                  isError: true,
-                  structuredContent: {
-                    error: {
-                      _tag: rejected?.code ?? "ThreadRenameFailed",
-                      message,
-                    },
-                  },
-                  content: [{ type: "text", text: message }],
-                });
-              },
-              onSuccess: (result) => result,
-            }),
-          );
-        }),
-    });
-  },
-);
-
-export const DiscordThreadToolkitRegistrationLive = Layer.effectDiscard(
-  registerDiscordRenameThread(),
-);
-
-const layerDiscordLinkedChannelRegistration = toolkitRegistration(
-  DiscordLinkedChannelTool.DiscordLinkedChannelToolkit,
-  DiscordLinkedChannelTool.layer,
-);
-
 export const layerPreviewToolkit = Layer.mergeAll(
   layerPreviewStandardToolkitRegistration,
   layerPreviewSnapshotRegistration,
@@ -1593,8 +1394,6 @@ export const layerTools = Layer.mergeAll(
   layerPullRequestsToolkit,
   layerIssuesToolkit,
   layerDeviceToolkit,
-  DiscordThreadToolkitRegistrationLive,
-  layerDiscordLinkedChannelRegistration,
   layerHtmlToolkit,
   layerMessageToolkit,
 );
@@ -1639,4 +1438,6 @@ export const layerToolSearch = Layer.mergeAll(
   layerDeferredListing,
 ).pipe(Layer.provide(layerToolExposure));
 
-export const layer = layerMcpTransport(Layer.mergeAll(layerTools, layerToolSearch));
+export const layer = layerMcpTransport(
+  Layer.mergeAll(layerTools, layerToolSearch, forkMcpTools(toolkitRegistration)),
+);

@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 
 import * as NetService from "@t3tools/shared/Net";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -15,7 +16,6 @@ import { installDesktopIpcHandlers } from "../ipc/DesktopIpcHandlers.ts";
 import * as DesktopAppActivation from "./DesktopAppActivation.ts";
 import * as DesktopAppIdentity from "./DesktopAppIdentity.ts";
 import * as DesktopClerk from "./DesktopClerk.ts";
-import * as DesktopDeepLinks from "./DesktopDeepLinks.ts";
 import * as DesktopCliShim from "./DesktopCliShim.ts";
 import * as DesktopCliCommand from "./DesktopCliCommand.ts";
 import * as DesktopApplicationMenu from "../window/DesktopApplicationMenu.ts";
@@ -33,7 +33,6 @@ import * as DesktopObservability from "./DesktopObservability.ts";
 import * as DesktopPreReadyPlatform from "./DesktopPreReadyPlatform.ts";
 import * as DesktopShutdown from "./DesktopShutdown.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
-import { readLiveExistingBackend } from "../backend/DesktopExistingBackend.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
 import * as DesktopStartupRecovery from "./DesktopStartupRecovery.ts";
@@ -88,24 +87,6 @@ const { logInfo: logBootstrapInfo, logWarning: logBootstrapWarning } =
 
 const { logInfo: logStartupInfo, logError: logStartupError } =
   DesktopObservability.makeComponentLogger("desktop-startup");
-
-export function resolveDesktopBackendPortHint(
-  existingBackendHttpBaseUrl: string | undefined,
-  configuredPort: Option.Option<number>,
-): Option.Option<number> {
-  if (existingBackendHttpBaseUrl !== undefined) {
-    try {
-      const port = Number.parseInt(new URL(existingBackendHttpBaseUrl).port, 10);
-      if (Number.isSafeInteger(port) && port > 0 && port <= MAX_TCP_PORT) {
-        return Option.some(port);
-      }
-    } catch {
-      // Fall through to the configured port when the live marker is malformed.
-    }
-  }
-
-  return configuredPort;
-}
 
 const resolveDesktopBackendPort = Effect.fn("resolveDesktopBackendPort")(function* (
   configuredPort: Option.Option<number>,
@@ -193,6 +174,31 @@ const stopAllPoolInstances = Effect.fn("desktop.app.stopAllPoolInstances")(
 );
 
 // Spawns the local backend as soon as the protocol, IPC, and legacy storage that every window needs exist.
+/**
+ * The server reads T3CODE_FEATURE_FLAGS once at start, from the value cached at the last
+ * discovery. When the login shell now sets different flags, restart it so they apply.
+ */
+const restartOnFeatureFlagChange = Effect.fn("desktop.restartOnFeatureFlagChange")(function* (
+  backend: DesktopBackendManager.DesktopBackendInstance,
+) {
+  const state = yield* DesktopState.DesktopState;
+  const shellEnvironment = yield* DesktopShellEnvironment.DesktopShellEnvironment;
+  let startedWith = (yield* HostProcess.Environment).T3CODE_FEATURE_FLAGS;
+  yield* shellEnvironment.updates.pipe(
+    Stream.filter((snapshot) => snapshot.discovered),
+    Stream.runForEach(
+      Effect.fnUntraced(function* (snapshot) {
+        const flags = snapshot.environment.T3CODE_FEATURE_FLAGS ?? undefined;
+        if (flags === startedWith || (yield* Ref.get(state.quitting))) return;
+        startedWith = flags;
+        yield* logBootstrapInfo("restarting backend for changed T3CODE_FEATURE_FLAGS");
+        yield* backend.stop();
+        yield* backend.start;
+      }),
+    ),
+  );
+});
+
 const startLocalBackend = Effect.gen(function* () {
   const state = yield* DesktopState.DesktopState;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
@@ -228,10 +234,8 @@ const startLocalBackend = Effect.gen(function* () {
     return yield* new DesktopDevelopmentBackendPortRequiredError();
   }
 
-  const existingBackend = readLiveExistingBackend(environment.stateDir);
   // A backend started while another server holds this home's lock can only exit with code 78.
   if (
-    !existingBackend &&
     !(settings.wslOnly && settings.wslBackendEnabled) &&
     !(yield* DesktopHomeOwner.awaitHomeOwnershipRelease())
   ) {
@@ -247,9 +251,7 @@ const startLocalBackend = Effect.gen(function* () {
     return false;
   }
 
-  const backendPortSelection = yield* resolveDesktopBackendPort(
-    resolveDesktopBackendPortHint(existingBackend?.httpBaseUrl, environment.configuredBackendPort),
-  );
+  const backendPortSelection = yield* resolveDesktopBackendPort(environment.configuredBackendPort);
   const backendPort = backendPortSelection.port;
   yield* logBootstrapInfo(
     backendPortSelection.selectedByScan
@@ -260,13 +262,6 @@ const startLocalBackend = Effect.gen(function* () {
       ...(backendPortSelection.selectedByScan ? { startPort: DEFAULT_DESKTOP_BACKEND_PORT } : {}),
     },
   );
-  if (existingBackend) {
-    yield* logBootstrapInfo("reusing existing backend for shared T3 home", {
-      pid: existingBackend.pid,
-      httpBaseUrl: existingBackend.httpBaseUrl,
-      stateDir: existingBackend.stateDir,
-    });
-  }
 
   if (settings.serverExposureMode !== environment.defaultDesktopSettings.serverExposureMode) {
     yield* logBootstrapInfo("bootstrap restoring persisted server exposure mode", {
@@ -299,6 +294,7 @@ const startLocalBackend = Effect.gen(function* () {
   }
   yield* primaryBackend.start;
   yield* logBootstrapInfo("bootstrap backend start requested");
+  yield* Effect.forkScoped(restartOnFeatureFlagChange(primaryBackend));
   // The renderer asks for this token first; minting it at readiness saves a round trip.
   yield* Effect.forkScoped(
     (yield* DesktopLocalEnvironmentAuth.DesktopLocalEnvironmentAuth).getBearerToken.pipe(
@@ -324,7 +320,6 @@ const bootstrap = Effect.fn("desktop.bootstrap")(function* (backendStarted: bool
     return;
   }
 
-  yield* (yield* DesktopDeepLinks.DesktopDeepLinks).start;
   yield* snapShot.initialize;
   // Only the user's own login shell PATH shows every t3 a new terminal runs; a fresh install has
   // no cached one. Without it, the command is left to Settings.

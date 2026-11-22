@@ -12,8 +12,6 @@ export interface ProjectScriptInput {
   readonly command: ProjectScript["command"];
   readonly icon: ProjectScript["icon"];
   readonly runOnWorktreeCreate: ProjectScript["runOnWorktreeCreate"];
-  readonly runOnWorktreeRemove: boolean;
-  readonly runOnPrMerged: boolean;
   readonly waitForSetup: boolean;
   readonly runOnSettle: boolean;
   readonly stopOnSettle?: boolean;
@@ -28,8 +26,6 @@ export function buildProjectScript(id: string, input: ProjectScriptInput): Proje
     command: input.command,
     icon: input.icon,
     runOnWorktreeCreate: input.runOnWorktreeCreate,
-    ...(input.runOnWorktreeRemove ? { runOnWorktreeRemove: true } : {}),
-    ...(input.runOnPrMerged ? { runOnPrMerged: true } : {}),
     ...(input.runOnWorktreeCreate && input.waitForSetup ? { async: false } : {}),
     ...(input.runOnSettle ? { runOnSettle: true } : {}),
     ...(input.stopOnSettle ? { stopOnSettle: true } : {}),
@@ -106,48 +102,7 @@ export function nextProjectScriptId(name: string, existingIds: Iterable<string>)
   return `${baseId}-${Date.now()}`.slice(0, MAX_SCRIPT_ID_LENGTH);
 }
 
-export function isLifecycleProjectScript(script: ProjectScript): boolean {
-  return (
-    script.runOnWorktreeCreate ||
-    script.runOnWorktreeRemove === true ||
-    script.runOnPrMerged === true ||
-    script.runOnSettle === true
-  );
-}
-
-export function projectScriptMenuLabel(script: ProjectScript): string {
-  const tags: string[] = [];
-  if (script.runOnWorktreeCreate) tags.push("setup");
-  if (script.runOnWorktreeRemove === true) tags.push("teardown");
-  if (script.runOnPrMerged === true) tags.push("pr-merged");
-  if (script.runOnSettle === true) tags.push("on settle");
-  return tags.length > 0 ? `${script.name} (${tags.join(", ")})` : script.name;
-}
-
-/**
- * At most one script may own each lifecycle hook. When `input` claims a hook,
- * strip that flag from other scripts so only the latest owner remains.
- */
-export function clearConflictingLifecycleFlags(
-  script: ProjectScript,
-  input: Pick<ProjectScriptInput, "runOnWorktreeCreate" | "runOnWorktreeRemove" | "runOnPrMerged">,
-): ProjectScript {
-  let next = script;
-  if (input.runOnWorktreeCreate && next.runOnWorktreeCreate) {
-    next = { ...next, runOnWorktreeCreate: false };
-  }
-  if (input.runOnWorktreeRemove && next.runOnWorktreeRemove === true) {
-    const { runOnWorktreeRemove: _removed, ...rest } = next;
-    next = rest;
-  }
-  if (input.runOnPrMerged && next.runOnPrMerged === true) {
-    const { runOnPrMerged: _removed, ...rest } = next;
-    next = rest;
-  }
-  return next;
-}
-
 export function primaryProjectScript(scripts: ReadonlyArray<ProjectScript>): ProjectScript | null {
-  const regular = scripts.find((script) => !isLifecycleProjectScript(script));
+  const regular = scripts.find((script) => !script.runOnWorktreeCreate && !script.runOnSettle);
   return regular ?? scripts.find((script) => !script.runOnSettle) ?? null;
 }

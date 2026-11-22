@@ -36,7 +36,9 @@ describe("orderDiffFilesForReview", () => {
       "src/api.generated.ts",
       "src/app.test.ts.snap",
     ];
-    expect(order([...generated, ...tests, ...source].reverse().map((path) => file(path)))).toEqual([
+    expect(
+      order([...generated, ...tests, ...source].toReversed().map((path) => file(path))),
+    ).toEqual([
       ...source,
       ...tests.slice(0, 3),
       // Generated files under src/ stay in src/ so the list matches the tree.

@@ -16,7 +16,6 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { FetchHttpClient } from "effect/http";
@@ -38,9 +37,6 @@ import {
   persistServerRuntimeState,
   type PersistedServerRuntimeState,
 } from "../serverRuntimeState.ts";
-import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
-import * as ServerConfig from "../config.ts";
-import { resolveCliAuthConfig } from "./config.ts";
 import { resolveHostCliCommand } from "./invocation.ts";
 import {
   DevServerNotProxiableError,
@@ -907,87 +903,6 @@ describe("auth scope options", () => {
       assert.equal(scopeError.option, "scope");
       assert.equal(scopeError.value, "admin");
     }),
-  );
-});
-
-describe("auth session issue --runtime-mode-ceiling", () => {
-  const mcpClientArgs = [
-    "--subject",
-    "mcp-client",
-    "--scope",
-    "orchestration:read",
-    "--scope",
-    "orchestration:operate",
-  ];
-
-  const authenticateMcpClient = (baseDir: string, token: string) =>
-    Effect.gen(function* () {
-      const config = yield* resolveCliAuthConfig({ baseDir: Option.some(baseDir) }, Option.none());
-      return yield* Effect.gen(function* () {
-        const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
-        return yield* environmentAuth.authenticateMcpClient({
-          cookies: {},
-          headers: { authorization: `Bearer ${token}` },
-        } as unknown as Parameters<typeof environmentAuth.authenticateMcpClient>[0]);
-      }).pipe(
-        Effect.provide(
-          EnvironmentAuth.layerRuntime.pipe(Layer.provideMerge(ServerConfig.layer(config))),
-        ),
-      );
-    });
-
-  it.effect.each([
-    { label: "the given ceiling", extra: ["--runtime-mode-ceiling", "auto"], access: "auto" },
-    { label: "approval-required without the flag", extra: [], access: "approval-required" },
-  ] as const)("issues an MCP client token with $label", ({ extra, access }) =>
-    provideCliTestLayers(
-      Effect.gen(function* () {
-        const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-cli-rtc-test-"));
-        const token = yield* captureStdout(
-          runCli([
-            "auth",
-            "session",
-            "issue",
-            "--base-dir",
-            baseDir,
-            "--token-only",
-            ...mcpClientArgs,
-            ...extra,
-          ]),
-        );
-        const client = yield* authenticateMcpClient(baseDir, token);
-        assert.equal(client.access, access);
-      }),
-    ),
-  );
-
-  it.effect.each([
-    { label: "without the mcp-client subject", args: ["--scope", "orchestration:operate"] },
-    {
-      label: "without the operate scope",
-      args: ["--subject", "mcp-client", "--scope", "orchestration:read"],
-    },
-  ])("refuses the flag $label without issuing a token", ({ args }) =>
-    provideCliTestLayers(
-      Effect.gen(function* () {
-        const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-cli-rtc-test-"));
-        const error = yield* runCli([
-          "auth",
-          "session",
-          "issue",
-          "--base-dir",
-          baseDir,
-          ...args,
-          "--runtime-mode-ceiling",
-          "full-access",
-        ]).pipe(Effect.flip);
-        assert.isTrue(CliError.isCliError(error) && error._tag === "UserError");
-        const listOutput = yield* captureStdout(
-          runCli(["auth", "session", "list", "--base-dir", baseDir, "--json"]),
-        );
-        assert.deepEqual(JSON.parse(listOutput), []);
-      }),
-    ),
   );
 });
 

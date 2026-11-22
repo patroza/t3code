@@ -3,6 +3,7 @@ import { EnvironmentId } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { StrictMode } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
+import { page, userEvent } from "vite-plus/test/browser";
 
 vi.mock(import("~/state/session"), async (original) => ({
   ...(await original()),
@@ -44,11 +45,6 @@ const open = (screen: Screen, nextRequest: ProjectScriptEditorRequest) =>
   );
 
 const submit = () => document.querySelector("form")!.requestSubmit();
-const fieldset = () => document.querySelector<HTMLFieldSetElement>("fieldset")!;
-const button = (label: string) =>
-  [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-    (element) => element.textContent?.trim() === label,
-  )!;
 const saveButton = () => document.querySelector<HTMLButtonElement>('button[type="submit"]')!;
 
 function deferredSave() {
@@ -68,47 +64,6 @@ function setup() {
 }
 
 describe("project action editor save lifecycle", () => {
-  it("blocks repeated submits and edits until the current save completes", async () => {
-    setup();
-    await using screen = await render(null);
-    const save = deferredSave();
-    onSubmit.mockReturnValue(save.promise);
-    await open(screen, request("build"));
-
-    await act(async () => {
-      submit();
-      submit();
-    });
-
-    expect(onSubmit).toHaveBeenCalledTimes(1);
-    expect(saveButton().disabled).toBe(true);
-    expect(saveButton().textContent).toBe("Saving…");
-    expect(fieldset().disabled).toBe(true);
-    expect(button("Cancel").disabled).toBe(false);
-
-    await act(async () => save.resolve(AsyncResult.success(undefined)));
-    expect(onClose).toHaveBeenCalledTimes(1);
-  });
-
-  it("requires a new delete confirmation when the editor switches actions", async () => {
-    setup();
-    await using screen = await render(null);
-    await open(screen, request("build"));
-    await act(async () => button("Delete").click());
-    expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain('"build"');
-    const staleConfirm = button("Delete action");
-
-    await open(screen, request("test"));
-    await vi.waitFor(() => expect(document.querySelector('[role="alertdialog"]')).toBeNull());
-    await act(async () => staleConfirm.click());
-    expect(onDelete).not.toHaveBeenCalled();
-
-    await act(async () => button("Delete").click());
-    expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain('"test"');
-    await act(async () => button("Delete action").click());
-    expect(onDelete).toHaveBeenCalledExactlyOnceWith("test");
-  });
-
   it("does not close a replacement request or release its in-flight save", async () => {
     setup();
     await using screen = await render(null);
@@ -130,5 +85,18 @@ describe("project action editor save lifecycle", () => {
     await act(async () => second.resolve(AsyncResult.success(undefined)));
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(onSubmit.mock.calls.map(([scriptId]) => scriptId)).toEqual(["build", "test"]);
+  });
+});
+
+describe("project action editor dismissal", () => {
+  it("stays open when the user clicks outside the editor", async () => {
+    setup();
+    await using screen = await render(null);
+    await open(screen, { scriptId: null, initial: EMPTY_PROJECT_SCRIPT_INPUT });
+    await expect.element(page.getByRole("dialog")).toBeVisible();
+
+    await userEvent.click(document.body, { position: { x: 1, y: 1 } });
+
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

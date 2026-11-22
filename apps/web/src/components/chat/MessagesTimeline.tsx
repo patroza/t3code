@@ -1,7 +1,3 @@
-import type {
-  MessageSenderSource,
-  MessageSenderViewer,
-} from "@t3tools/client-runtime/user-message";
 import { T, useGT, useMessages, Var } from "gt-react";
 import type { SideThreadOpenIntent } from "@t3tools/client-runtime/side-thread";
 import { threadErrorText } from "@t3tools/client-runtime/state/threads";
@@ -279,14 +275,9 @@ interface MessagesTimelineProps {
     /** How the click asked to open a subagent or side chat; a plain click when absent. */
     intent?: SideThreadOpenIntent,
   ) => void;
-  /** This client's claim and source channel. Same person and channel stays unlabeled. */
-  messageViewer?: MessageSenderViewer | undefined;
-  /** Thread origin, used when an agent message has no sender of its own. */
-  originSource?: MessageSenderSource | null | undefined;
-  /** Conversation-message senders, for history whose turn item has no source. */
-  messageSourceById?: ReadonlyMap<string, MessageSenderSource> | undefined;
   renderHtmlRender?: TimelineRowSharedState["renderHtmlRender"];
   turnItemSource?: TimelineRowSharedState["turnItemSource"];
+  messageSender?: TimelineRowSharedState["messageSender"];
   /**
    * The thread this one is a subagent or side chat of; `open` is absent when it cannot be
    * opened from here.
@@ -328,7 +319,6 @@ interface MessagesTimelineProps {
   contentInsetEndAdjustment: number;
   onIsAtEndChange: (isAtEnd: boolean) => void;
   /** Disable while reading history to prevent LegendList re-pinning near the bottom. */
-  onToolOutputCollapsedAtEnd?: () => void;
   liveFollowEnabled: boolean;
   /** Receives the list's viewport when it mounts; the returned cleanup runs when it goes away. */
   onViewportAttach?: (viewport: TimelineViewport) => () => void;
@@ -402,11 +392,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
   onOpenToolDiff,
   onOpenTurnDiff,
   onOpenThread,
-  messageViewer,
-  originSource,
-  messageSourceById,
   renderHtmlRender,
   turnItemSource,
+  messageSender,
   parentThreadLink = null,
   workflowOpening = null,
   onForkFromRun,
@@ -433,7 +421,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
   onAnchorSizeChanged,
   contentInsetEndAdjustment,
   onIsAtEndChange,
-  onToolOutputCollapsedAtEnd,
   liveFollowEnabled,
   onViewportAttach,
   onFooterGrow,
@@ -578,33 +565,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
     list.anchorVisibleContent({ key: anchorKey });
   };
 
-  const collapseNotificationPendingRef = useRef<string | null>(null);
-  const notifyToolOutputCollapsedAtEnd = useStableCallback(() => {
-    if (collapseNotificationPendingRef.current !== listIdentityKey) {
-      collapseNotificationPendingRef.current = null;
-      return;
-    }
-    if (resolveTimelineIsAtEnd(listRef.current?.getState()) !== true) return;
-    // Size/scroll signals can lag the disclosure commit. Keep the intent until end is confirmed.
-    collapseNotificationPendingRef.current = null;
-    onToolOutputCollapsedAtEnd?.();
-  });
-  const onToggleWorkEntry = useStableCallback(
-    (anchorKey: string, collapsed: boolean = false, entryId?: string) => {
-      collapseNotificationPendingRef.current = collapsed ? listIdentityKey : null;
-      preserveDisclosurePosition(anchorKey, collapsed ? undefined : { entryId });
-      if (collapsed) notifyToolOutputCollapsedAtEnd();
-    },
-  );
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Notify after layout settles; this is an imperative event, not derived state.
-  useLayoutEffect(() => {
-    if (collapseNotificationPendingRef.current !== listIdentityKey) {
-      collapseNotificationPendingRef.current = null;
-      return;
-    }
-    notifyToolOutputCollapsedAtEnd();
-  });
-
   // Turn and attempt folds reveal later rows rather than growing their own row.
   const onToggleTurnFold = (runId: RunId) => {
     preserveDisclosurePosition(`turn-fold:${runId}`);
@@ -618,14 +578,11 @@ const ConversationTimeline = memo(function ConversationTimeline({
       return next;
     });
   };
-  const onToggleWorkGroup = useStableCallback((groupId: string, anchorKey: string) => {
-    const collapsed = expandedWorkGroupIds.has(groupId);
-    collapseNotificationPendingRef.current = collapsed ? listIdentityKey : null;
+  const onToggleWorkGroup = (groupId: string, anchorKey: string) => {
     preserveDisclosurePosition(
       anchorKey,
-      collapsed ? undefined : { contentKey: `${groupId}:details` },
+      expandedWorkGroupIds.has(groupId) ? undefined : { contentKey: `${groupId}:details` },
     );
-    if (collapsed) notifyToolOutputCollapsedAtEnd();
     setExpandedWorkGroupIds((existing) => {
       const next = new Set(existing);
       if (next.has(groupId)) {
@@ -635,7 +592,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
       }
       return next;
     });
-  });
+  };
   const onToggleAttemptFold = (attemptId: RunAttemptId) => {
     preserveDisclosurePosition(`attempt-fold:${attemptId}`);
     setExpandedAttemptIds((existing) => {
@@ -1113,7 +1070,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
     // The first laid-out content of a newly shown thread ends its settling; a
     // frame the previous thread scheduled laid out the previous thread's rows.
     if (laidOutData === rows) {
-      // End-follow must stay suspended until the expanded rows have actually been measured.
       setSettlingListIdentity((current) => (current === listIdentityKey ? null : current));
     }
     handleScroll();
@@ -1153,6 +1109,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
       .map((approval) => [approval.requestId, approval]),
   );
   const sharedState: TimelineRowSharedState = {
+    messageSender,
     pendingApprovals: pendingApprovalsByRequestId,
     respondingRequestIds,
     canOperateThread,
@@ -1182,9 +1139,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
     onOpenToolDiff,
     onOpenTurnDiff,
     onOpenThread,
-    messageViewer,
-    originSource,
-    messageSourceById,
     renderHtmlRender,
     turnItemSource,
     workflowOpening,
@@ -1192,7 +1146,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
     onToggleTurnFold,
     onToggleAttemptFold,
     onToggleWorkGroup,
-    onToggleWorkEntry,
+    onToggleWorkEntry: (anchorKey, collapsed, entryId) =>
+      preserveDisclosurePosition(anchorKey, collapsed ? undefined : { entryId }),
     onWorkEntryContentReady: (anchorKey, entryId) => {
       const pending = disclosureRevealRef.current;
       if (
@@ -1340,10 +1295,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
     const stopListeningToContentSize = list
       ?.getState()
       .listen("totalSize", () => scheduleContentSizeChanged());
-    const stopListeningToEnd = list?.getState().listen("isAtEnd", notifyToolOutputCollapsedAtEnd);
     scheduleContentSizeChanged();
     return () => {
-      stopListeningToEnd?.();
       stopListeningToContentSize?.();
       stopRememberingRelease?.();
       stopDisclosureReveal?.();
@@ -1468,7 +1421,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
       return (
         <>
           {activityAnnouncer}
-          <div className="h-full min-h-0 bg-background" data-timeline-loading="true" />
+          <div className="h-full min-h-0" data-timeline-loading="true" />
         </>
       );
     }

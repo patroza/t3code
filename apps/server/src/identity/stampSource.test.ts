@@ -142,6 +142,30 @@ describe("stampOrchestrationCommandSource", () => {
     }
   });
 
+  it("drops client-authored sources instead of trusting them", () => {
+    const forged = {
+      channel: "discord" as const,
+      personId: PersonId.make("someone-else"),
+      username: IdentityUsername.make("someone-else"),
+    };
+    const dispatched = stampOrchestrationCommandSource({
+      claim: null,
+      clientDeviceType: "desktop",
+      command: { ...baseCommand, source: forged },
+    });
+    expect(dispatched.type === "message.dispatch" && dispatched.source).toBeUndefined();
+    const created = stampOrchestrationCommandSource({
+      claim,
+      command: {
+        type: "thread.create",
+        commandId: baseCommand.commandId,
+        threadId: baseCommand.threadId,
+        originSource: forged,
+      } as unknown as Parameters<typeof stampOrchestrationCommandSource>[0]["command"],
+    });
+    expect(created.type === "thread.create" && created.originSource).toBeUndefined();
+  });
+
   it("stamps Teams requesters on bot-dispatched messages", () => {
     const stamped = stampOrchestrationCommandSource({
       claim: null,

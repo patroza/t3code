@@ -8,6 +8,7 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Keep the native socket path within the temporary directory.
 import * as NodePath from "node:path";
+import * as FeatureFlags from "@t3tools/shared/FeatureFlags";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -46,14 +47,12 @@ function harness(respond: (request: HttpClientRequest.HttpClientRequest) => Resp
   let tokens = ["first", "second"];
   let invalidations = 0;
   let credentialReads = 0;
-  const targets: Array<GitHubCredentials.GitHubCredentialTarget | undefined> = [];
   const credentials = Layer.succeed(
     GitHubCredentials.GitHubCredentials,
     GitHubCredentials.GitHubCredentials.of({
-      get: (host, target) =>
+      get: (host) =>
         Effect.sync(() => {
           credentialReads++;
-          targets.push(target);
           return {
             host,
             token: Redacted.make(tokens[0]!),
@@ -85,7 +84,6 @@ function harness(respond: (request: HttpClientRequest.HttpClientRequest) => Resp
   return {
     layer,
     requests,
-    targets,
     invalidations: () => invalidations,
     credentialReads: () => credentialReads,
   };
@@ -116,22 +114,6 @@ describe("environmentToken", () => {
 });
 
 describe("GitHubRest", () => {
-  it.effect("selects repository credentials for a REST read", () => {
-    const { layer, targets } = harness(() => json({ ok: true }));
-    return Effect.gen(function* () {
-      const api = yield* GitHubRest.GitHubRest;
-      yield* api.rest({
-        host: "github.com",
-        repository: "organization/scanner",
-        cwd: "/scanner",
-        operation: "detail",
-        path: "repos/organization/scanner/pulls/1",
-      });
-      expect(targets).toEqual([
-        expect.objectContaining({ repository: "organization/scanner", cwd: "/scanner" }),
-      ]);
-    }).pipe(Effect.provide(layer));
-  });
   it.live("routes REST and GraphQL through gh's plain HTTP Unix socket", () =>
     Effect.gen(function* () {
       const directory = yield* Effect.acquireRelease(
@@ -246,16 +228,6 @@ describe("GitHubRest", () => {
             if (input.args[0] === "config") {
               expect(input.args).toEqual(["config", "get", "http_unix_socket"]);
               return Effect.succeed(TestSourceControlHost.processOutput(`${socketPath}\n`));
-            }
-            if (input.args[0] === "pr") {
-              expect(input.args).toEqual([
-                "pr",
-                "checks",
-                "https://github.com/acme/web/pull/7",
-                "--json",
-                "bucket,state",
-              ]);
-              return Effect.succeed(TestSourceControlHost.processOutput("[]\n"));
             }
             expect(input.args.slice(0, 2)).toEqual(["auth", "token"]);
             return Effect.succeed(TestSourceControlHost.processOutput("placeholder\n"));
@@ -389,7 +361,10 @@ describe("GitHubRest", () => {
         const media = yield* instance.fetchMedia!({ url: mediaUrl, headers: {} });
         expect(media?.status).toBe(401);
         expect(directRequests).toEqual([mediaUrl]);
-      }).pipe(Effect.provide(layer), Effect.provideService(HostProcess.Environment, {}));
+      }).pipe(
+        Effect.provide(layer.pipe(Layer.provideMerge(FeatureFlags.layerTest()))),
+        Effect.provideService(HostProcess.Environment, {}),
+      );
     }),
   );
 

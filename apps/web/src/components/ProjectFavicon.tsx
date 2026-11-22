@@ -115,7 +115,7 @@ function AutomaticProjectFavicon(input: Parameters<typeof ProjectFavicon>[0]) {
   );
 }
 
-export function ProjectFaviconFallback({
+function ProjectFaviconFallback({
   className,
   icon: Icon,
   emoji,

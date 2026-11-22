@@ -612,7 +612,7 @@ export const upsertThreadInfoPin = Effect.fn("ThreadInfoPin.upsertThreadInfoPin"
     }
 
     // Keys seen in Discord stay on the pin. They do not become work-item identity.
-    // Jira and GitHub webhooks are what attach a key or PR to a T3 thread.
+    // Server thread issue / pull request links (Jira webhook, agent, manual) attach them.
 
     let sentryIssueUrls = mergeSentryIssueUrls(
       existing?.sentryIssueUrls,

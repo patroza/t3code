@@ -4,7 +4,17 @@ import {
   getModelSelectionBooleanOptionValue,
   getModelSelectionStringOptionValue,
 } from "./model.ts";
-import { formatDuration, formatElapsed } from "./orchestrationTiming.ts";
+import { formatDuration } from "./orchestrationTiming.ts";
+
+function formatElapsed(startIso: string, endIso: string | undefined): string | null {
+  if (!endIso) return null;
+  const startedAt = Date.parse(startIso);
+  const endedAt = Date.parse(endIso);
+  if (Number.isNaN(startedAt) || Number.isNaN(endedAt) || endedAt < startedAt) {
+    return null;
+  }
+  return formatDuration(endedAt - startedAt);
+}
 
 /** Minimal activity shape — plain turnId so callers need not brand strings. */
 export type TurnStatsActivity = {
@@ -82,7 +92,7 @@ function isFastMode(modelSelection: ModelSelection | null | undefined): boolean 
  * Prefer turn-scoped last* token fields; fall back to cumulative input/output on the snapshot.
  * Output includes reasoning tokens when reported separately.
  */
-export function deriveTurnTokenUsageFromActivities(
+function deriveTurnTokenUsageFromActivities(
   activities: ReadonlyArray<TurnStatsActivity>,
   turnId: string | null | undefined = null,
 ): TurnTokenUsageFields | null {

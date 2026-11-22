@@ -7,7 +7,6 @@ import {
   createAssetEnvironmentAtoms,
   createProjectFaviconUrlAtomFamily,
   EMPTY_ASSET_URL_ATOM,
-  resolveAssetUrl,
   makeRevisionedAssetUrlFamily,
 } from "@t3tools/client-runtime/state/assets";
 import { executeAtomQuery, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
@@ -18,7 +17,6 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { Atom, AsyncResult } from "effect/reactivity";
-import { useMemo } from "react";
 
 import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
@@ -41,10 +39,6 @@ export const projectFaviconUrlAtom = createProjectFaviconUrlAtomFamily({
   preparedConnection: environmentSession.preparedConnectionValueAtom,
   projectClones: environmentProjectCloneListAtom,
 });
-
-const EMPTY_ASSET_URLS_ATOM = Atom.make([] as Array<AsyncResult.AsyncResult<never, never>>).pipe(
-  Atom.withLabel("mobile-asset-urls:empty"),
-);
 
 const revisionedAssetUrl = makeRevisionedAssetUrlFamily(assetEnvironment.createUrl);
 
@@ -99,34 +93,6 @@ export function useAssetUrl(
 ): string | null {
   const state = useAssetUrlState(environmentId, resource);
   return state._tag === "Success" ? state.url : null;
-}
-
-/**
- * Batch sibling of {@link useAssetUrl}, for a set of resources whose size is
- * only known at render time (a thread's attachments, say) and so cannot be
- * resolved with one hook call each.
- */
-export function useAssetUrls(
-  environmentId: EnvironmentId | null,
-  resources: ReadonlyArray<AssetResource>,
-): ReadonlyArray<string | null> {
-  const preparedConnection = usePreparedConnection(environmentId);
-  const results = useAtomValue(
-    environmentId === null || resources.length === 0
-      ? EMPTY_ASSET_URLS_ATOM
-      : assetEnvironment.createUrls({ environmentId, resources }),
-  );
-  return useMemo(
-    () =>
-      preparedConnection._tag === "None"
-        ? resources.map(() => null)
-        : results.map((result) =>
-            AsyncResult.isSuccess(result)
-              ? resolveAssetUrl(preparedConnection.value.httpBaseUrl, result.value.relativeUrl)
-              : null,
-          ),
-    [preparedConnection, resources, results],
-  );
 }
 
 /** Explicit playback and sharing must reauthorize files that may have been replaced on disk. */

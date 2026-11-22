@@ -63,10 +63,6 @@
       "types": "./src/model.ts",
       "import": "./src/model.ts"
     },
-    "./providerModelSelection": {
-      "types": "./src/providerModelSelection.ts",
-      "import": "./src/providerModelSelection.ts"
-    },
     "./advertisedEndpoint": {
       "types": "./src/advertisedEndpoint.ts",
       "import": "./src/advertisedEndpoint.ts"
@@ -75,25 +71,9 @@
       "types": "./src/agentAwareness.ts",
       "import": "./src/agentAwareness.ts"
     },
-    "./agentRulesPointer": {
-      "types": "./src/agentRulesPointer.ts",
-      "import": "./src/agentRulesPointer.ts"
-    },
-    "./sessionWake": {
-      "types": "./src/sessionWake.ts",
-      "import": "./src/sessionWake.ts"
-    },
     "./git": {
       "types": "./src/git.ts",
       "import": "./src/git.ts"
-    },
-    "./discordProjectTopic": {
-      "types": "./src/discordProjectTopic.ts",
-      "import": "./src/discordProjectTopic.ts"
-    },
-    "./githubMedia": {
-      "types": "./src/githubMedia.ts",
-      "import": "./src/githubMedia.ts"
     },
     "./sourceControl": {
       "types": "./src/sourceControl.ts",
@@ -147,10 +127,6 @@
       "types": "./src/KeyedCoalescingWorker.ts",
       "import": "./src/KeyedCoalescingWorker.ts"
     },
-    "./KeyedDrainableWorker": {
-      "types": "./src/KeyedDrainableWorker.ts",
-      "import": "./src/KeyedDrainableWorker.ts"
-    },
     "./KeyedLock": {
       "types": "./src/KeyedLock.ts",
       "import": "./src/KeyedLock.ts"
@@ -195,13 +171,13 @@
       "types": "./src/backgroundActivitySettings.ts",
       "import": "./src/backgroundActivitySettings.ts"
     },
-    "./serverRuntime": {
-      "types": "./src/serverRuntime.ts",
-      "import": "./src/serverRuntime.ts"
-    },
     "./String": {
       "types": "./src/String.ts",
       "import": "./src/String.ts"
+    },
+    "./discordProjectTopic": {
+      "types": "./src/discordProjectTopic.ts",
+      "import": "./src/discordProjectTopic.ts"
     },
     "./identityAvatar": {
       "types": "./src/identityAvatar.ts",
@@ -215,9 +191,29 @@
       "types": "./src/sourceAttribution.ts",
       "import": "./src/sourceAttribution.ts"
     },
-    "./threadAttributeSearch": {
-      "types": "./src/threadAttributeSearch.ts",
-      "import": "./src/threadAttributeSearch.ts"
+    "./integrationThreadView": {
+      "types": "./src/integrationThreadView.ts",
+      "import": "./src/integrationThreadView.ts"
+    },
+    "./jiraBareKeyProjects": {
+      "types": "./src/jiraBareKeyProjects.ts",
+      "import": "./src/jiraBareKeyProjects.ts"
+    },
+    "./turnResponseStats": {
+      "types": "./src/turnResponseStats.ts",
+      "import": "./src/turnResponseStats.ts"
+    },
+    "./integrationPendingInteractions": {
+      "types": "./src/integrationPendingInteractions.ts",
+      "import": "./src/integrationPendingInteractions.ts"
+    },
+    "./integrationTasks": {
+      "types": "./src/integrationTasks.ts",
+      "import": "./src/integrationTasks.ts"
+    },
+    "./sessionWake": {
+      "types": "./src/sessionWake.ts",
+      "import": "./src/sessionWake.ts"
     },
     "./projectScripts": {
       "types": "./src/projectScripts.ts",
@@ -230,10 +226,6 @@
     "./t3ProjectFile": {
       "types": "./src/t3ProjectFile.ts",
       "import": "./src/t3ProjectFile.ts"
-    },
-    "./jiraBareKeyProjects": {
-      "types": "./src/jiraBareKeyProjects.ts",
-      "import": "./src/jiraBareKeyProjects.ts"
     },
     "./orchestrationTiming": {
       "types": "./src/orchestrationTiming.ts",
@@ -339,10 +331,6 @@
       "types": "./src/composerInlineTokens.ts",
       "import": "./src/composerInlineTokens.ts"
     },
-    "./composerInputHistory": {
-      "types": "./src/composerInputHistory.ts",
-      "import": "./src/composerInputHistory.ts"
-    },
     "./assistantCitations": {
       "types": "./src/assistantCitations.ts",
       "import": "./src/assistantCitations.ts"
@@ -370,10 +358,6 @@
     "./terminalLabels": {
       "types": "./src/terminalLabels.ts",
       "import": "./src/terminalLabels.ts"
-    },
-    "./threadTitle": {
-      "types": "./src/threadTitle.ts",
-      "import": "./src/threadTitle.ts"
     },
     "./relayClient": {
       "types": "./src/relayClient.ts",
@@ -415,10 +399,6 @@
       "types": "./src/chatList.ts",
       "import": "./src/chatList.ts"
     },
-    "./userInputTranscript": {
-      "types": "./src/userInputTranscript.ts",
-      "import": "./src/userInputTranscript.ts"
-    },
     "./nodeRuntime": {
       "types": "./src/nodeRuntime.ts",
       "import": "./src/nodeRuntime.ts"
@@ -430,6 +410,10 @@
     "./managedPolicyFile": {
       "types": "./src/managedPolicyFile.ts",
       "import": "./src/managedPolicyFile.ts"
+    },
+    "./FeatureFlags": {
+      "types": "./src/FeatureFlags.ts",
+      "import": "./src/FeatureFlags.ts"
     },
     "./HostProcess": {
       "types": "./src/HostProcess.ts",
@@ -462,22 +446,6 @@
     "./devProxy": {
       "types": "./src/devProxy.ts",
       "import": "./src/devProxy.ts"
-    },
-    "./steerTimeline": {
-      "types": "./src/steerTimeline.ts",
-      "import": "./src/steerTimeline.ts"
-    },
-    "./proposedPlan": {
-      "types": "./src/proposedPlan.ts",
-      "import": "./src/proposedPlan.ts"
-    },
-    "./turnResponseStats": {
-      "types": "./src/turnResponseStats.ts",
-      "import": "./src/turnResponseStats.ts"
-    },
-    "./productFamily": {
-      "types": "./src/productFamily.ts",
-      "import": "./src/productFamily.ts"
     },
     "./usageMerge": {
       "types": "./src/usageMerge.ts",
@@ -571,10 +539,6 @@
       "types": "./src/codexAuthHandoff.ts",
       "import": "./src/codexAuthHandoff.ts"
     },
-    "./integrationThreadView": {
-      "types": "./src/integrationThreadView.ts",
-      "import": "./src/integrationThreadView.ts"
-    },
     "./oauthCallback": {
       "types": "./src/oauthCallback.ts",
       "import": "./src/oauthCallback.ts"
@@ -594,6 +558,10 @@
     "./markdownGithubAlerts": {
       "types": "./src/markdownGithubAlerts.ts",
       "import": "./src/markdownGithubAlerts.ts"
+    },
+    "./markdownHast": {
+      "types": "./src/markdownHast.ts",
+      "import": "./src/markdownHast.ts"
     },
     "./markdownFrontmatter": {
       "types": "./src/markdownFrontmatter.ts",
@@ -722,6 +690,18 @@
     "./paletteSearchCopy": {
       "types": "./src/paletteSearchCopy.ts",
       "import": "./src/paletteSearchCopy.ts"
+    },
+    "./markdownTaskEdits": {
+      "types": "./src/markdownTaskEdits.ts",
+      "import": "./src/markdownTaskEdits.ts"
+    },
+    "./threadFindBlockTags": {
+      "types": "./src/threadFindBlockTags.ts",
+      "import": "./src/threadFindBlockTags.ts"
+    },
+    "./assistantInsights": {
+      "types": "./src/assistantInsights.ts",
+      "import": "./src/assistantInsights.ts"
     }
   },
   "scripts": {
@@ -736,6 +716,7 @@
     "ffi-rs": "1.3.2",
     "get-east-asian-width": "^1.6.0",
     "gt-i18n": "1.0.40",
+    "hast-util-sanitize": "^5.0.2",
     "mdast-util-directive": "catalog:",
     "mdast-util-to-hast": "^13.2.1",
     "micromark-extension-directive": "catalog:",
@@ -755,8 +736,10 @@
   "devDependencies": {
     "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
+    "@types/hast": "^3.0.5",
     "@types/mdast": "^4.0.4",
     "@types/node": "catalog:",
+    "hast-util-to-html": "^9.0.5",
     "micromark-util-types": "catalog:",
     "vite-plus": "catalog:"
   }

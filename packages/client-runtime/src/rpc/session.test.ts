@@ -1,4 +1,3 @@
-import * as TestClock from "effect/testing/TestClock";
 import {
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
@@ -24,9 +23,9 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as Socket from "effect/socket/Socket";
+import * as TestClock from "effect/testing/TestClock";
 
 import {
-  RelayConnectionTarget,
   AVAILABLE_CONNECTION_STATE,
   ConnectionBlockedError,
   ConnectionTransientError,
@@ -39,7 +38,6 @@ import * as RpcSession from "./session.ts";
 import { toServerClock } from "../clock.ts";
 import { makeEnvironmentServerConfigState } from "../state/server.ts";
 import { applyServerConfigProjection } from "../state/serverConfigProjection.ts";
-const isPing = Schema.is(Schema.TaggedStruct("Ping", {}));
 
 type SocketEventType = "open" | "message" | "close" | "error";
 type SocketEvent = {
@@ -293,6 +291,59 @@ const publishConfigEvents = Effect.fn("TestRpcSessionFactory.publishConfigEvents
 });
 
 describe("RpcSessionFactory", () => {
+  it.effect.each([
+    { established: false, closedWith: { _tag: "ConnectionBlockedError", reason: "unsupported" } },
+    {
+      established: true,
+      closedWith: { _tag: "ConnectionTransientError", reason: "remote-unavailable" },
+    },
+  ])(
+    "ends the session when config fails to decode, after readiness=$established",
+    ({ established, closedWith }) =>
+      Effect.gen(function* () {
+        const { factory, sockets } = yield* makeFactory();
+        const session = yield* factory.connect(PREPARED);
+        const ready = yield* session.ready.pipe(Effect.exit, Effect.forkChild);
+        const socket = yield* awaitSocket(sockets);
+        socket.open();
+        if (established) {
+          yield* completeInitialConfig(socket);
+          yield* Fiber.join(ready);
+          yield* completeInitialConfig(socket, { ...ENCODED_SERVER_CONFIG, cwd: 42 });
+        } else {
+          yield* completeInitialConfig(socket, { ...ENCODED_SERVER_CONFIG, cwd: 42 });
+          expect(yield* Fiber.join(ready)).toMatchObject({
+            _tag: "Failure",
+            cause: { reasons: [{ _tag: "Fail", error: { reason: "unsupported" } }] },
+          });
+        }
+
+        expect(yield* Effect.flip(session.closed)).toMatchObject({ ...closedWith, hop: "server" });
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "fails readiness with the disconnect when the socket closes before its first config",
+    () =>
+      Effect.gen(function* () {
+        const { factory, sockets } = yield* makeFactory();
+        const session = yield* factory.connect(PREPARED);
+        const ready = yield* Effect.forkChild(Effect.flip(session.ready));
+        const socket = yield* awaitSocket(sockets);
+        socket.open();
+        yield* awaitRequest(socket);
+        socket.close(1012, "service restart");
+
+        for (const error of [yield* Fiber.join(ready), yield* Effect.flip(session.closed)]) {
+          expect(error).toMatchObject({
+            _tag: "ConnectionTransientError",
+            reason: "transport",
+            detail: "Test environment disconnected.",
+          });
+        }
+      }).pipe(Effect.scoped),
+  );
+
   it.effect("connects while a large config snapshot downloads at 4000 bytes per second", () =>
     Effect.gen(function* () {
       const { factory, sockets } = yield* makeFactory();
@@ -376,64 +427,12 @@ describe("RpcSessionFactory", () => {
       expect(error).toBeInstanceOf(ConnectionTransientError);
       expect(error).toMatchObject({
         reason: "transport",
-        message: "Test environment closed (1012 service restart).",
+        message: "Test environment disconnected.",
       });
       expect(configStreamError).toMatchObject({ _tag: "RpcClientError" });
       yield* Effect.yieldNow;
       expect(sockets).toHaveLength(1);
     }),
-  );
-
-  it.effect("reports ping timeout instead of a bare disconnected message", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { factory, sockets } = yield* makeFactory();
-        const session = yield* factory.connect(PREPARED);
-        const readyFiber = yield* Effect.forkChild(session.ready);
-        const socket = yield* awaitSocket(sockets);
-
-        socket.open();
-        yield* completeInitialConfig(socket);
-        yield* Fiber.join(readyFiber);
-
-        // Patched Effect RPC pinger: a ping every 5s, closing only once two
-        // pong windows have been missed so the latch opens
-        // in the fourth window rather than the second.
-        yield* TestClock.adjust("20 seconds");
-        const error = yield* Effect.flip(session.closed);
-
-        expect(error).toBeInstanceOf(ConnectionTransientError);
-        expect(error).toMatchObject({
-          reason: "timeout",
-          message:
-            "Test environment stopped responding for 15s. It may be overloaded, asleep, or off the network.",
-        });
-      }),
-    ),
-  );
-
-  it.effect("reports abnormal close codes from the socket failure path", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { factory, sockets } = yield* makeFactory();
-        const session = yield* factory.connect(PREPARED);
-        const readyFiber = yield* Effect.forkChild(session.ready);
-        const socket = yield* awaitSocket(sockets);
-
-        socket.open();
-        yield* completeInitialConfig(socket);
-        yield* Fiber.join(readyFiber);
-
-        socket.close(1006, "");
-        const error = yield* Effect.flip(session.closed);
-
-        expect(error).toBeInstanceOf(ConnectionTransientError);
-        expect(error).toMatchObject({
-          reason: "transport",
-          message: "Test environment closed (1006 abnormal).",
-        });
-      }),
-    ),
   );
 
   it.effect("counts every inbound frame, including ones that answer no request", () =>
@@ -876,6 +875,33 @@ describe("RpcSessionFactory", () => {
     }),
   );
 
+  it.effect("closes the session when the server interrupts the config stream", () =>
+    Effect.gen(function* () {
+      const { factory, sockets } = yield* makeFactory();
+      const session = yield* factory.connect(PREPARED);
+      const readyFiber = yield* Effect.forkChild(session.ready);
+      const socket = yield* awaitSocket(sockets);
+      socket.open();
+      yield* completeInitialConfig(socket);
+      yield* Fiber.join(readyFiber);
+
+      const closedFiber = yield* Effect.forkChild(Effect.flip(session.closed));
+      const request = yield* awaitRequest(socket);
+      socket.serverMessage(
+        encodeJson({
+          _tag: "Exit",
+          requestId: request.id,
+          exit: { _tag: "Failure", cause: [{ _tag: "Interrupt", fiberId: null }] },
+        }),
+      );
+
+      expect(yield* Fiber.join(closedFiber)).toMatchObject({
+        reason: "remote-unavailable",
+        detail: "Test environment config subscription ended.",
+      });
+    }),
+  );
+
   it.effect.each([{ failure: "defect" as const }, { failure: "typed" as const }])(
     "keeps durable config state alive after an owned $failure failure",
     ({ failure }) =>
@@ -1060,51 +1086,6 @@ describe("RpcSessionFactory", () => {
     }),
   );
 
-  // Over T3 Connect too: the socket opened, so blaming DNS or a firewall misleads.
-  it.effect.each([
-    { relay: false, label: "direct" },
-    { relay: true, label: "relay" },
-  ])("closes the $label session after 15 seconds without a frame from the server", ({ relay }) =>
-    Effect.gen(function* () {
-      const { factory, sockets } = yield* makeFactory();
-      const session = yield* factory.connect({
-        ...PREPARED,
-        target: relay
-          ? new RelayConnectionTarget({
-              environmentId: TARGET.environmentId,
-              label: TARGET.label,
-            })
-          : TARGET,
-      });
-      const readyFiber = yield* Effect.forkChild(session.ready);
-      const closedFiber = yield* Effect.forkChild(Effect.flip(session.closed));
-      const socket = yield* awaitSocket(sockets);
-
-      socket.open();
-      yield* completeInitialConfig(socket);
-      yield* Fiber.join(readyFiber);
-
-      yield* TestClock.adjust("15 seconds");
-      expect(closedFiber.pollUnsafe()).toBeUndefined();
-      expect(socket.sent.map((message) => decodeJson(message)).filter(isPing)).toEqual([
-        { _tag: "Ping" },
-        { _tag: "Ping" },
-        { _tag: "Ping" },
-      ]);
-
-      yield* TestClock.adjust("5 seconds");
-      const error = yield* Fiber.join(closedFiber);
-      expect(error).toBeInstanceOf(ConnectionTransientError);
-      expect(error).toMatchObject({
-        reason: "timeout",
-        detail:
-          "Test environment stopped responding for 15s. It may be overloaded, asleep, or off the network.",
-        hop: relay ? "tunnel" : "server",
-        via: relay ? "relay" : "direct",
-      });
-    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
-  );
-
   it.effect("keeps reading replies after closing a stream with a full buffer", () =>
     Effect.gen(function* () {
       const { factory, sockets } = yield* makeFactory();
@@ -1203,40 +1184,5 @@ describe("RpcSessionFactory", () => {
       expect(config.issues).toEqual([]);
       expect(config.availableEditors).toEqual(["zed"]);
     }),
-  );
-
-  it.effect.each([
-    { relay: false, label: "direct" },
-    { relay: true, label: "relay" },
-  ])("fails readiness when the $label websocket never opens", ({ relay }) =>
-    Effect.gen(function* () {
-      const { factory, sockets } = yield* makeFactory();
-
-      const error = yield* Effect.scoped(
-        Effect.gen(function* () {
-          const session = yield* factory.connect({
-            ...PREPARED,
-            target: relay
-              ? new RelayConnectionTarget({
-                  environmentId: TARGET.environmentId,
-                  label: TARGET.label,
-                })
-              : TARGET,
-          });
-          const readyFiber = yield* Effect.forkChild(Effect.flip(session.ready));
-          yield* awaitSocket(sockets);
-
-          yield* TestClock.adjust("15 seconds");
-          return yield* Fiber.join(readyFiber);
-        }),
-      );
-
-      expect(error).toBeInstanceOf(ConnectionTransientError);
-      expect(error).toMatchObject({
-        reason: "timeout",
-        message: expect.stringContaining("could not open WebSocket"),
-      });
-      expect(sockets[0]?.readyState).toBe(TestWebSocket.CLOSED);
-    }).pipe(Effect.provide(TestClock.layer())),
   );
 });

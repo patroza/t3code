@@ -11,6 +11,7 @@ import {
   RuntimeMode,
   ProviderInteractionMode,
   SourceRef,
+  ThreadIssueLink,
   ThreadParticipantSummary,
   ThreadPullRequestLink,
   ThreadLinkedPullRequest,
@@ -18,6 +19,7 @@ import {
   type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 // External-platform renderers consume a compact presentation view. Runs remain
@@ -79,6 +81,8 @@ export const IntegrationThreadView = Schema.Struct({
   worktreePath: Schema.NullOr(Schema.String),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   pullRequests: Schema.Array(ThreadPullRequestLink),
+  // Defaulted so warm-cache rows written before issue links still decode.
+  issues: Schema.Array(ThreadIssueLink).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   createdAt: Schema.String,
   updatedAt: Schema.String,
@@ -150,14 +154,9 @@ const iso = (value: DateTime.Utc | null | undefined) =>
  * must not hide one of these, or chat adapters post each progress bubble as
  * its own final and drop the Working indicator.
  */
-export const INTEGRATION_LIVE_RUN_STATUSES = [
-  "preparing",
-  "starting",
-  "running",
-  "waiting",
-] as const;
+const INTEGRATION_LIVE_RUN_STATUSES = ["preparing", "starting", "running", "waiting"] as const;
 
-export function isIntegrationRunLive(status: string): boolean {
+function isIntegrationRunLive(status: string): boolean {
   return (INTEGRATION_LIVE_RUN_STATUSES as readonly string[]).includes(status);
 }
 
@@ -219,6 +218,7 @@ export function integrationThreadShellView(
     hasPendingUserInput: shell.pendingRuntimeRequest?.kind === "user_input",
     settledOverride: shell.settledOverride ?? null,
     pullRequests: shell.pullRequests ?? [],
+    issues: shell.issues ?? [],
     latestTurn,
     session:
       shell.activeRunId === null
@@ -376,6 +376,7 @@ export function integrationThreadView(
   return {
     ...thread,
     pullRequests: thread.pullRequests ?? [],
+    issues: thread.issues ?? [],
     createdAt: iso(thread.createdAt)!,
     updatedAt: iso(thread.updatedAt)!,
     archivedAt: iso(thread.archivedAt),

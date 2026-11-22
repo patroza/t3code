@@ -32,3 +32,23 @@ export const identityClaimPersonIdByEnvironmentAtom = Atom.make((get) => {
   }
   return out;
 }).pipe(Atom.withLabel("web-identity-claim-person-by-environment"));
+
+/** Environments whose server has an identity map; ownership UI only appears for them. */
+export const identityEnabledEnvironmentIdsAtom = Atom.make((get) => {
+  const catalog = get(environmentCatalog.catalogValueAtom);
+  const enabled = new Set<string>();
+  for (const environmentId of catalog.entries.keys()) {
+    const snapshot = Option.getOrNull(
+      AsyncResult.value(
+        get(
+          identityEnvironment.snapshot({
+            environmentId: environmentId as EnvironmentId,
+            input: EMPTY_CLAIM_INPUT,
+          }),
+        ),
+      ),
+    );
+    if (snapshot?.enabled === true) enabled.add(environmentId);
+  }
+  return enabled;
+}).pipe(Atom.withLabel("web-identity-enabled-environments"));

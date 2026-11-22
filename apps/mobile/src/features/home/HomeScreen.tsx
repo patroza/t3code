@@ -29,7 +29,6 @@ import {
 } from "react";
 import {
   Platform,
-  Text,
   ScrollView,
   useWindowDimensions,
   View,
@@ -92,8 +91,6 @@ import {
 } from "../threads/threadListV2";
 import { useThreadListV2ShelfPreferences } from "../threads/use-thread-list-v2-shelf-preferences";
 import type { HomeListFilterMenuEnvironment } from "./home-list-filter-menu";
-import type { OwnershipFilter, OwnershipRelation } from "./home-list-options";
-import { type HomeListMode, type HomeThreadGrouping } from "./homeListMode";
 import {
   buildHomeProjectScopes,
   findHomeProjectScope,
@@ -120,19 +117,12 @@ interface HomeScreenProps {
     HomeListFilterMenuEnvironment & Pick<WorkspaceEnvironment, "connectionState">
   >;
   readonly searchQuery: string;
-  readonly listMode: HomeListMode;
-  readonly threadGrouping: HomeThreadGrouping;
-  readonly selectedEnvironmentIds: readonly EnvironmentId[];
+  readonly selectedEnvironmentId: EnvironmentId | null;
   readonly selectedProjectKey: string | null;
-  readonly ownershipFilter: OwnershipFilter;
-  readonly ownershipRelation: OwnershipRelation;
-  readonly onOwnershipFilterChange: (filter: OwnershipFilter) => void;
-  readonly onOwnershipRelationChange: (relation: OwnershipRelation) => void;
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly projectGroupingMode: SidebarProjectGroupingMode;
   readonly onSearchQueryChange: (query: string) => void;
-  readonly onClearEnvironments: () => void;
-  readonly onToggleEnvironment: (environmentId: EnvironmentId) => void;
+  readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
   readonly onProjectChange: (projectKey: string | null) => void;
   readonly onAddConnection: () => void;
   readonly onOpenSettings: () => void;
@@ -247,16 +237,18 @@ export function HomeScreen(props: HomeScreenProps) {
     24,
     workspace?.bottomClearance ?? 0,
   );
-  const searchEnvironmentIds = (() => {
-    const connectedIds = props.environments
-      .filter((environment) => environment.connectionState === "connected")
-      .map((environment) => environment.environmentId);
-    if (props.selectedEnvironmentIds.length === 0) {
-      return connectedIds;
-    }
-    const selected = new Set(props.selectedEnvironmentIds);
-    return connectedIds.filter((environmentId) => selected.has(environmentId));
-  })();
+  const searchEnvironmentIds =
+    props.selectedEnvironmentId === null
+      ? props.environments
+          .filter((environment) => environment.connectionState === "connected")
+          .map((environment) => environment.environmentId)
+      : props.environments.some(
+            (environment) =>
+              environment.environmentId === props.selectedEnvironmentId &&
+              environment.connectionState === "connected",
+          )
+        ? [props.selectedEnvironmentId]
+        : [];
   const handleSwipeableWillOpen = (methods: SwipeableMethods) => {
     if (openSwipeableRef.current !== methods) {
       openSwipeableRef.current?.close();
@@ -329,18 +321,18 @@ export function HomeScreen(props: HomeScreenProps) {
     onScrollBeginDrag: handleScrollBeginDrag,
   });
 
-  const { projects, selectedEnvironmentIds, projectGroupingMode } = props;
+  const { projects, selectedEnvironmentId, projectGroupingMode } = props;
   const projectScopes = useMemo(
     () =>
       buildHomeProjectScopes(
         {
           projects,
-          selectedEnvironmentIds,
+          environmentId: selectedEnvironmentId,
           projectGroupingMode,
         },
         m,
       ),
-    [projects, selectedEnvironmentIds, projectGroupingMode, m],
+    [projects, selectedEnvironmentId, projectGroupingMode, m],
   );
   const hasSearchQuery = props.searchQuery.trim().length > 0;
   const projectByKey = (() => {
@@ -350,12 +342,6 @@ export function HomeScreen(props: HomeScreenProps) {
     }
     return map;
   })();
-  const projectCwdByKey = new Map(
-    props.projects.map((project) => [
-      scopedProjectKey(project.environmentId, project.id),
-      project.workspaceRoot,
-    ]),
-  );
 
   const v2ProjectScopeKey = props.selectedProjectKey;
   // An archived project's filter reads as all projects, matching the filter menu.
@@ -393,7 +379,7 @@ export function HomeScreen(props: HomeScreenProps) {
   const [settledVisibleCount, setSettledVisibleCount] = useState(
     THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
   );
-  const settledResetKey = `${props.selectedEnvironmentIds.join(",") || "all"}:${v2ProjectScopeKey ?? "all"}:${props.searchQuery.trim()}`;
+  const settledResetKey = `${props.selectedEnvironmentId ?? "all"}:${v2ProjectScopeKey ?? "all"}:${props.searchQuery.trim()}`;
   const [lastSettledResetKey, setLastSettledResetKey] = useState(settledResetKey);
   if (lastSettledResetKey !== settledResetKey) {
     setLastSettledResetKey(settledResetKey);
@@ -432,13 +418,10 @@ export function HomeScreen(props: HomeScreenProps) {
     items: threadListV2Items,
     contentOnlyThreadKeys,
     olderSettledShelf,
-    pendingTasks: v2PendingTasks,
   } = useThreadListV2({
     threads: props.threads,
     pendingTasks: props.pendingTasks,
-    environmentId: null,
-    selectedEnvironmentIds: props.selectedEnvironmentIds,
-    orderByRecency: props.threadGrouping === "recency",
+    environmentId: props.selectedEnvironmentId,
     projectRefs: v2ScopedProjectGroup === null ? null : v2ScopedProjectGroup.projectRefs,
     searchQuery: props.searchQuery,
     searchMatches: threadSearchMatchByKey,
@@ -544,12 +527,6 @@ export function HomeScreen(props: HomeScreenProps) {
         />
       );
     }
-    if (item.type === "v2-recency-header")
-      return (
-        <View className="bg-screen px-5 pb-1 pt-3">
-          <Text className="text-xs font-t3-medium text-foreground-muted">{item.label}</Text>
-        </View>
-      );
     const thread = item.item.thread;
     return (
       <ThreadListV2Row
@@ -614,9 +591,6 @@ export function HomeScreen(props: HomeScreenProps) {
         onUnpinThread={handleUnpinThread}
         onSetThreadAutoSettle={handleSetThreadAutoSettle}
         onMoveThread={handleMoveThread}
-        projectCwd={
-          projectCwdByKey.get(scopedProjectKey(thread.environmentId, thread.projectId)) ?? null
-        }
         onSwipeableClose={handleSwipeableClose}
         onSwipeableWillOpen={handleSwipeableWillOpen}
         simultaneousSwipeGesture={homeScrollGesture}
@@ -630,7 +604,6 @@ export function HomeScreen(props: HomeScreenProps) {
   const v2ExtraData = {
     activeNewTask,
     projectByKey,
-    projectCwdByKey,
     projectTitleByProjectKey: v2ProjectTitleByProjectKey,
     listEnvironments,
     savedConnectionsById: props.savedConnectionsById,
@@ -651,12 +624,10 @@ export function HomeScreen(props: HomeScreenProps) {
     return hasRowsToLayOut ? holdLaunchSplashForHomeRows() : undefined;
   }, [hasRowsToLayOut]);
   const selectedEnvironmentLabel =
-    props.selectedEnvironmentIds.length === 0
+    props.selectedEnvironmentId === null
       ? null
-      : props.selectedEnvironmentIds.length === 1
-        ? (props.savedConnectionsById[props.selectedEnvironmentIds[0]!]?.environmentLabel ??
-          "this environment")
-        : `${props.selectedEnvironmentIds.length} environments`;
+      : (props.savedConnectionsById[props.selectedEnvironmentId]?.environmentLabel ??
+        "this environment");
   const emptyState = deriveHomeEmptyState(props.catalogState, props.projects.length, m);
 
   if (!hasAnyThreads) {
@@ -727,22 +698,17 @@ export function HomeScreen(props: HomeScreenProps) {
             key: scope.key,
             label: scope.title,
           }))}
-          selectedEnvironmentIds={props.selectedEnvironmentIds}
+          selectedEnvironmentId={props.selectedEnvironmentId}
           selectedProjectKey={props.selectedProjectKey}
-          ownershipFilter={props.ownershipFilter}
-          ownershipRelation={props.ownershipRelation}
-          onToggleEnvironment={props.onToggleEnvironment}
-          onClearEnvironments={props.onClearEnvironments}
+          onEnvironmentChange={props.onEnvironmentChange}
           onProjectChange={props.onProjectChange}
-          onOwnershipFilterChange={props.onOwnershipFilterChange}
-          onOwnershipRelationChange={props.onOwnershipRelationChange}
         />
       ) : null}
     </>
   );
 
   const v2ListEmpty =
-    v2PendingTasks.length > 0 ? null : hasSearchQuery && threadSearch.isPending ? (
+    hasSearchQuery && threadSearch.isPending ? (
       <EmptyState
         title={gt("Searching thread messages…")}
         detail={gt('Looking for "{query}" in messages.', { query: props.searchQuery })}
@@ -838,7 +804,7 @@ export function HomeScreen(props: HomeScreenProps) {
                         showMoreSettled();
                       }}
                     />
-                  ) : undefined
+                  ) : null
                 }
                 ListEmptyComponent={v2ListEmpty}
                 style={{ flex: 1 }}

@@ -15,13 +15,13 @@ import {
   ThreadId,
   TurnItemId,
   AuthOrchestrationOperateScope,
-  ORCHESTRATION_V2_WS_METHODS,
   AuthOrchestrationReadScope,
   AuthSourceControlWriteScope,
   AuthTerminalReadScope,
   AuthTerminalOperateScope,
   CommandId,
   MessageId,
+  ORCHESTRATION_V2_WS_METHODS,
   RunId,
   WS_METHODS,
   WsRpcGroup,
@@ -41,38 +41,7 @@ import * as RpcAuthorization from "./RpcAuthorization.ts";
 
 describe("RPC authorization scopes", () => {
   it("declares exactly one scope for every RPC in the server group", () => {
-    // Single source of truth: ws.ts must call requiredScopeForRpcMethod / RPC_REQUIRED_SCOPES
-    // and must not keep a parallel Map (that drifted and broke identity.* RPCs in production).
     expect(new Set(Object.keys(RPC_REQUIRED_SCOPES))).toEqual(new Set(WsRpcGroup.requests.keys()));
-  });
-
-  it("resolves every registered RPC method through requiredScopeForRpcMethod", () => {
-    for (const method of WsRpcGroup.requests.keys()) {
-      expect(requiredScopeForRpcMethod(method)).toBe(
-        RPC_REQUIRED_SCOPES[method as keyof typeof RPC_REQUIRED_SCOPES],
-      );
-    }
-  });
-
-  it("requires operate access to stop a workflow", () => {
-    expect(requiredScopeForRpcMethod(ORCHESTRATION_V2_WS_METHODS.stopWorkflow)).toBe(
-      AuthOrchestrationOperateScope,
-    );
-  });
-
-  it("authorizes background policy reporting and observation deliberately", () => {
-    expect(requiredScopeForRpcMethod(WS_METHODS.serverReportClientActivity)).toBe(
-      AuthOrchestrationReadScope,
-    );
-    expect(requiredScopeForRpcMethod(WS_METHODS.serverReportHostPowerState)).toBe(
-      AuthEnvironmentMaintainScope,
-    );
-    expect(requiredScopeForRpcMethod(WS_METHODS.serverGetBackgroundPolicy)).toBe(
-      AuthOrchestrationReadScope,
-    );
-    expect(requiredScopeForRpcMethod(WS_METHODS.subscribeBackgroundPolicy)).toBe(
-      AuthOrchestrationReadScope,
-    );
   });
 
   it("keeps webhook delivery logs, which hold request bodies, behind operate scope", () => {
@@ -112,6 +81,13 @@ describe("RPC authorization scopes", () => {
     for (const method of [WS_METHODS.subscribeVcsBranch, WS_METHODS.vcsRefreshBranch]) {
       expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
     }
+  });
+
+  it("lets file readers see a task folder and takes source control to add a repository to it", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.workspaceTaskFolder)).toBe(AuthFilesystemReadScope);
+    expect(requiredScopeForRpcMethod(WS_METHODS.workspaceAddTaskFolderRepository)).toBe(
+      AuthSourceControlWriteScope,
+    );
   });
 
   it("still lets readers load settings the way installed Swift clients ask", () => {

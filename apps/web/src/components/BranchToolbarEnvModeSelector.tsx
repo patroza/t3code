@@ -9,7 +9,6 @@ import {
   resolveEnvModeLabel,
   resolveLockedWorkspaceLabel,
   type EnvMode,
-  type WorkspaceTarget,
 } from "./BranchToolbar.logic";
 import { useComposerMenuProps } from "./chat/composerEventScope";
 import { PreviousWorktreeItemContent } from "./PreviousWorktreeItemContent";
@@ -32,8 +31,6 @@ interface BranchToolbarEnvModeSelectorProps {
   forceNewWorktree?: boolean;
   envLocked: boolean;
   effectiveEnvMode: EnvMode;
-  workspaceTarget?: WorkspaceTarget;
-  onWorkspaceTargetChange?: (target: WorkspaceTarget) => void;
   activeWorktreePath: string | null;
   onEnvModeChange: (mode: EnvMode) => void;
   previousWorktreeLabel?: string | null;
@@ -45,8 +42,6 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
   forceNewWorktree = false,
   envLocked,
   effectiveEnvMode,
-  workspaceTarget,
-  onWorkspaceTargetChange,
   activeWorktreePath,
   onEnvModeChange,
   previousWorktreeLabel,
@@ -61,21 +56,16 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
     "composer.workspace",
   );
   const showPreviousWorktree = Boolean(previousWorktreeLabel && onUsePreviousWorktree);
-  const envModeItems = (() => [
+  const envModeItems = [
     {
       value: "local",
-      label: onWorkspaceTargetChange
-        ? resolveEnvModeLabel("local", m)
-        : resolveCurrentWorkspaceLabel(activeWorktreePath, m),
+      label: resolveCurrentWorkspaceLabel(activeWorktreePath, m),
     },
-    ...(onWorkspaceTargetChange && activeWorktreePath
-      ? [{ value: "current-worktree", label: resolveCurrentWorkspaceLabel(activeWorktreePath, m) }]
-      : []),
     { value: "worktree", label: resolveEnvModeLabel("worktree", m) },
     ...(showPreviousWorktree && previousWorktreeLabel
       ? [{ value: PREVIOUS_WORKTREE_SELECT_VALUE, label: previousWorktreeLabel }]
       : []),
-  ])();
+  ];
 
   const stopContextMenuMouseDown = (event: ReactMouseEvent) => {
     if (event.button !== 0 || event.ctrlKey) {
@@ -120,14 +110,13 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
   return (
     <Select
       modal={false}
-      value={workspaceTarget ?? effectiveEnvMode}
+      value={effectiveEnvMode}
       onValueChange={(value: string | null) => {
         if (value === PREVIOUS_WORKTREE_SELECT_VALUE) {
           onUsePreviousWorktree?.();
           return;
         }
-        if (onWorkspaceTargetChange) onWorkspaceTargetChange(value as WorkspaceTarget);
-        else onEnvModeChange(value as EnvMode);
+        onEnvModeChange(value as EnvMode);
       }}
       items={envModeItems}
     >
@@ -178,19 +167,9 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
               ) : (
                 <FolderIcon className="size-3" />
               )}
-              {onWorkspaceTargetChange
-                ? resolveEnvModeLabel("local", m)
-                : resolveCurrentWorkspaceLabel(activeWorktreePath, m)}
+              {resolveCurrentWorkspaceLabel(activeWorktreePath, m)}
             </span>
           </SelectItem>
-          {onWorkspaceTargetChange && activeWorktreePath ? (
-            <SelectItem value="current-worktree">
-              <span className="inline-flex items-center gap-1.5">
-                <FolderGitIcon className="size-3" />
-                {resolveCurrentWorkspaceLabel(activeWorktreePath)}
-              </span>
-            </SelectItem>
-          ) : null}
           <SelectItem value="worktree">
             <span className="inline-flex items-center gap-1.5">
               <FolderGit2Icon className="size-3" />

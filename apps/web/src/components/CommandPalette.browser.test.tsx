@@ -1,8 +1,7 @@
-import { userEvent } from "vite-plus/test/browser";
 import { threadKey } from "@t3tools/client-runtime/state/entities";
 import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { page } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
 
 import { act, render } from "../../test/render";
 import { openCommandPalette } from "../commandPaletteBus";
@@ -162,7 +161,11 @@ describe("CommandPalette open intents", () => {
     await expect
       .element(page.getByPlaceholder("Search commands, projects, and threads..."))
       .toHaveFocus();
-    await page.getByRole("option", { name: /^New thread in\.\.\./ }).click();
+    await userEvent.keyboard("{ArrowDown}");
+    await expect
+      .element(page.getByRole("option", { name: /^New thread in\.\.\./ }))
+      .toHaveAttribute("data-highlighted");
+    await userEvent.keyboard("{Enter}");
 
     await expect.element(page.getByPlaceholder("Search...")).toHaveFocus();
     await expect.element(page.getByRole("option").first()).toHaveAttribute("data-highlighted");

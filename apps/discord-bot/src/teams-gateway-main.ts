@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off globalDate:off globalPromise:off missingEffectContext:off anyUnknownInErrorContext:off unsafeEffectTypeAssertion:off layerMergeAllWithDependencies:off
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off globalPromise:off missingEffectContext:off anyUnknownInErrorContext:off unsafeEffectTypeAssertion:off layerMergeAllWithDependencies:off effectTryWithoutCatch:off
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import { ApiClient } from "@microsoft/teams.apps/dist/api.js";

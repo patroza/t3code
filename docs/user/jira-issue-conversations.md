@@ -9,10 +9,10 @@ An authorized Jira user can **@mention** the configured bot identity in an issue
 in a comment thread when Jira supplies a parent) and continue a T3 thread that is already linked to
 that issue key.
 
-Thread resolution uses the **server-native work-item store** (`thread-work-items.json` under the
-server state dir) keyed by Jira issue (**join-or-create**):
+Thread resolution uses the threads' **issue links** (the same links the thread header shows and
+`link_issue` creates) keyed by Jira site, project and issue (**join-or-create**):
 
-1. **Exactly one** store hit → continue that thread (Discord import is a migration fallback only).
+1. **Exactly one** linked thread → continue that thread.
 2. **Multiple** hits → fail closed with an ambiguous message (never guess).
 3. **Zero** hits → **auto-create** a T3 thread on a **new git worktree** (never the project main
    checkout), attach the issue key, and run the turn. Project pick order:
@@ -22,11 +22,14 @@ server state dir) keyed by Jira issue (**join-or-create**):
    Branch names are key-first (`SA-402-t3-<id>`) so GitHub-for-Jira can auto-link.
 
 Does **not** create projects or clone repositories. New threads always get a dedicated worktree
-sibling under the project's worktrees dir (same isolation model as Discord/GitHub create). Later
-surfaces join via the same work-item store.
+sibling under the project's worktrees dir (same isolation model as Discord create). Later
+surfaces join through the same issue link.
 
-Agent-side Jira read/write for general tooling remains the shared Jira MCP (`mcp-atlassian`). This
-bridge only owns **inbound webhooks** and **outbound response comments** for mention turns.
+Jira also registers as an issue tracker when `T3CODE_JIRA_URL` is set: connect it in
+**Settings → Connections** with an API token written as `email:token` (or a bare personal access
+token), then bind a project to a Jira project to list and read its issues in T3 Code and through
+the agent issue tools. Without a saved token the server's Jira app account is used. That tracker is
+read-only; writing to Jira stays with the bridge below and the shared Jira MCP (`mcp-atlassian`).
 
 ## User experience
 
@@ -87,14 +90,14 @@ edited the comment and treats the new text as authoritative.
 
 ## Link definition
 
-An issue is linked when **exactly one** T3 thread lists the issue key in the server
-`ThreadWorkItemStore` (`stateDir/thread-work-items.json`).
+An issue is linked when **exactly one** T3 thread (not deleted, not a side chat) carries a link to
+it. Unlinking the issue from the thread lets the next mention start a new thread.
 
-How associations get there:
+How links get there:
 
-1. **Jira webhook** — on a successful resolve/dispatch, the issue key is appended for that thread
-2. **GitHub webhook** — PR URLs are recorded the same way (shared store)
-3. **Discord** — does not create work-item identity. The thread-info pin may list Jira
+1. **Jira webhook** — on a successful create or dispatch, the issue is linked to that thread
+2. **Manually or by an agent** — the thread's issue link controls and the `link_issue` tool
+3. **Discord** — does not link issues. The thread-info pin may list Jira
    links, plus bare keys whose project is named in that repository's `t3.json`
    `jiraProjects` (a repository can name more than one). A token that only looks like a
    key is left off. Pin backfill uses the same rule. A later Discord mention does not
@@ -102,8 +105,6 @@ How associations get there:
    "start a new thread here anyway". Until that button is clicked, the Discord
    thread is not linked and no turn starts. The button starts a separate thread
    here. Mentioning the key in Discord does not retarget the existing conversation.
-   On a lookup miss, Discord-only rows are removed from the store.
-4. **Future** — authenticated API / web UI / agent tools to attach work items without Discord
 
 Fail closed when:
 
@@ -127,8 +128,7 @@ JiraIssueBridge
   project allowlist
   reply 👀 on the trigger comment so the author can see it was read
   parse mention + prompt (+ optional parent comment id)
-  resolve unique T3 thread via ThreadWorkItemStore
-    (optional Discord links.json import if still unlinked)
+  resolve the unique T3 thread linked to the issue
   join-or-create via PROJECT_MAP / DEFAULT_PROJECT_ID / sole project
   dispatch orchestration turn
   poll projection snapshot
@@ -137,24 +137,16 @@ JiraIssueBridge
 Jira REST comment create (markdown → ADF, parentId reply when possible)
 ```
 
-Work-item associations live in:
-
-```text
-${T3CODE stateDir}/thread-work-items.json
-```
-
 ## Webhook debug log
 
-Every inbound integration webhook writes one NDJSON row under the server state dir:
+Every inbound Jira webhook writes one NDJSON row under the server state dir:
 
 ```text
 ${T3CODE stateDir}/jira-webhook-debug.ndjson
-${T3CODE stateDir}/github-webhook-debug.ndjson
 ```
 
 Outcomes include `accepted_202`, `ignored_202`, `invalid_400`, `unauthorized_401`,
-`project_denied_202` / `repo_denied_202`, `too_large_413`, `missing_delivery_id_400`
-(GitHub), and `disabled_404`. Invalid rows store a capped `bodyPreview` plus a `reason`
+`project_denied_202`, `too_large_413`, `missing_delivery_id_400`, and `disabled_404`. Invalid rows store a capped `bodyPreview` plus a `reason`
 (`json_parse_failed` is common when Jira Automation injects unescaped newlines into
 Custom data JSON).
 
@@ -172,7 +164,8 @@ webhook.
 | `T3CODE_JIRA_USERNAME`           | yes\*    | —       | Service account email for REST replies                            |
 | `T3CODE_JIRA_API_TOKEN`          | yes\*    | —       | API token (Basic or Bearer per deployment)                        |
 | `T3CODE_JIRA_ALLOWED_PROJECTS`   | no       | empty   | Comma-separated project keys; empty = all                         |
-| `T3CODE_JIRA_DISCORD_LINKS_PATH` | no       | —       | Path to Discord bot `links.json` for issue→thread                 |
+| `T3CODE_JIRA_SITE_URL`           | no       | URL     | Site for issue links when `T3CODE_JIRA_URL` is a gateway          |
+| `T3CODE_JIRA_DISCORD_LINKS_PATH` | no       | —       | Discord bot `links.json`, for Jira context notes in Discord       |
 | `T3CODE_JIRA_TURN_TIMEOUT_MS`    | no       | 30m     | Max wait for turn completion before timeout comment               |
 | `T3CODE_JIRA_AUTH_MODE`          | no       | `basic` | `basic` (email+token) or `bearer` (scoped token)                  |
 | `T3CODE_JIRA_AUTO_CREATE_THREAD` | no       | `true`  | Create a T3 thread when the issue is unlinked                     |

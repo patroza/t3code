@@ -218,7 +218,6 @@ function watchesEqual(left: ThreadPullRequestWatch, right: ThreadPullRequestWatc
     left.failedChecks.join("\n") === right.failedChecks.join("\n") &&
     left.passed === right.passed &&
     left.passedChecks.join("\n") === right.passedChecks.join("\n") &&
-    left.pendingChecks.join("\n") === right.pendingChecks.join("\n") &&
     (left.owedChecks ?? []).join("\n") === (right.owedChecks ?? []).join("\n") &&
     (left.awaitingApproval ?? []).join("\n") === (right.awaitingApproval ?? []).join("\n") &&
     (left.approvalAnnounced ?? false) === (right.approvalAnnounced ?? false) &&
@@ -359,19 +358,29 @@ export const make = Effect.gen(function* () {
     });
   });
 
-  const giveUp = (target: WatchTarget) =>
-    record(target, null, {
-      text: `T3 Code stopped watching pull request #${target.link.number} (${target.link.url}) because it failed to read it from the host ${READ_FAILURE_LIMIT} times in a row. Check it yourself, and call watch_pull_request only if it is still open.`,
+  const giveUp = (target: WatchTarget, cause: Cause.Cause<PullRequestService.PullRequestError>) => {
+    const error = Option.getOrUndefined(Cause.findErrorOption(cause));
+    // The message is the host's own setup instruction, never the subprocess output in `cause`.
+    const unusable =
+      error?._tag === "PullRequestUnavailableError" && error.reason !== "provider-unsupported"
+        ? error.message
+        : null;
+    return record(target, null, {
+      text:
+        unusable === null
+          ? `T3 Code stopped watching pull request #${target.link.number} (${target.link.url}) because it failed to read it from the host ${READ_FAILURE_LIMIT} times in a row. Check it yourself, and call watch_pull_request only if it is still open.`
+          : `T3 Code stopped watching pull request #${target.link.number} (${target.link.url}) because the T3 Code server cannot use the host: ${unusable} Fix that on the server, then call watch_pull_request only if it is still open.`,
       notification: {
         source: { kind: "monitor" },
         outcome: "failed",
-        summary: `#${target.link.number}: stopped watching, could not read it`,
+        summary: `#${target.link.number}: stopped watching, ${unusable === null ? "could not read it" : "host not set up on the server"}`,
       },
     }).pipe(
       Effect.tap(() => woke(target)),
       Effect.catch(() => record(target, null)),
       Effect.tap(() => ended(target, "unreadable")),
     );
+  };
 
   const readRemarks = Effect.fn("PullRequestWatchReactor.readRemarks")(
     function* (
@@ -671,7 +680,10 @@ export const make = Effect.gen(function* () {
       }
       const failures = (readFailures.get(group.key) ?? 0) + 1;
       readFailures.set(group.key, failures);
-      if (failures >= READ_FAILURE_LIMIT && (yield* eachTarget(unended, giveUp))) {
+      if (
+        failures >= READ_FAILURE_LIMIT &&
+        (yield* eachTarget(unended, (target) => giveUp(target, detailRead.cause)))
+      ) {
         readFailures.delete(group.key);
       }
       return yield* Effect.failCause(detailRead.cause);
@@ -728,9 +740,7 @@ export const make = Effect.gen(function* () {
       fingerprint: group.fingerprint,
       inFlight:
         detail.mergeability === "unknown" ||
-        detail.checks.some(
-          (check) => check.status === "pending" || check.status === "action-required",
-        ),
+        detail.checks.some((check) => check.status === "pending"),
       remarksComplete: plan.activity ? remarks !== null : (last?.remarksComplete ?? false),
       watches: new Set(group.targets.map(watchKey)),
       status: fingerprint?.status ?? null,

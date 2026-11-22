@@ -259,8 +259,8 @@ export function matchesPullRequestFilters(
   filters: PullRequestListFilters,
   viewer?: string | null,
 ): boolean {
-  const labels = new Set(entry.labels.map((label) => label.name.trim().toLowerCase()));
-  const holds = (label: string) => labels.has(label.trim().toLowerCase());
+  const labels = entry.labels.map((label) => label.name.trim().toLowerCase());
+  const holds = (label: string) => labels.includes(label.trim().toLowerCase());
   return (
     (filters.draft === undefined || entry.isDraft === (filters.draft === "only")) &&
     (filters.review === undefined ||
@@ -587,6 +587,15 @@ export function mergePullRequestLists(
     nextCursors,
     truncatedEnvironments: [...truncatedEnvironments],
   };
+}
+
+/** Project errors do not count: the priority reads cover the same projects and are skipped here. */
+export function pullRequestListAnsweredEmpty(view: {
+  readonly data: MergedPullRequestList | null;
+  readonly isPending: boolean;
+  readonly error: unknown;
+}): boolean {
+  return view.data?.entries.length === 0 && !view.isPending && view.error === null;
 }
 
 export const pullRequestEnvironmentSetKey = (environmentIds: ReadonlyArray<string>): string =>

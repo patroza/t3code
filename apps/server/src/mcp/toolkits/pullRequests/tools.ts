@@ -16,6 +16,7 @@ import {
   PullRequestReviewGuideRun,
   PullRequestState,
   PullRequestUnavailableError,
+  PullRequestVisibility,
   PullRequestWatchUntil,
   ThreadPullRequestLinkSource,
   TrimmedNonEmptyString,
@@ -262,12 +263,16 @@ export const WatchPullRequestResult = Schema.Struct({
       description: "The PR already ended, so nothing was watched.",
     }),
   ),
+  checksState: Schema.optional(PullRequestChecksState),
   next: Schema.optional(Schema.String),
 });
 export type WatchPullRequestResult = typeof WatchPullRequestResult.Type;
 
 export const alreadyEndedWatchNext = (state: "merged" | "closed") =>
   `This PR is already ${state}, so there is nothing to watch. Report that and end your turn.`;
+
+export const CHECKS_ALREADY_PASSED_WATCH_NEXT =
+  "Checks already pass on this head, so no wake will come for them. Act on that now; the watch still wakes you on later changes.";
 
 export const ThreadPullRequestEntry = Schema.Struct({
   ...PullRequestIdentity,
@@ -398,7 +403,7 @@ const WatchPullRequestInput = Schema.Struct({
 
 const WatchPullRequestTool = Tool.make("watch_pull_request", {
   description:
-    "Have T3 Code watch an open pull request for this thread, linking it first if needed. T3 Code checks it every two minutes and wakes you with a message when a check fails, the required checks pass, a check that was still running finishes, someone else comments or reviews, the branch starts to conflict with its base, or once when the pull request merges or closes unless you did that from the CLI. Use this to monitor or babysit a pull request instead of polling, sleeping, or running a watcher. The watch stays on after each wake; do not call it again on a wake. Only comments posted after this call wake you, so handle the existing ones first, then end your turn. A wake is news, not a merge decision: check readiness yourself before merging. While T3 Code watches, the thread stays in the user's Working list, not their inbox. When you hand the work back to the user, call unwatch_pull_request first so the thread returns to their inbox. Watching ends when the pull request merges or closes, when its thread settles or is archived, when T3 Code fails to read it 8 times in a row (a host rate limit only delays it), when the user stops this thread, or when you call unwatch_pull_request. Unsettle the thread before starting a new watch. A subagent cannot watch: its parent thread owns the pull request.",
+    "Watch an open PR for this thread, linking it if needed. T3 wakes you on failed checks, passed required checks, new comments or reviews, conflicts, and once on merge or close unless you did it via CLI. Handle old comments first; only new ones wake you. After this call, end your turn. The watch stays on: do not call this again on a wake. A wake is not a merge decision. Check readiness yourself.",
   parameters: WatchPullRequestInput,
   success: WatchPullRequestResult,
   failure: PullRequestToolError,
@@ -517,6 +522,9 @@ export const ReadPullRequestResult = Schema.Struct({
   title: Schema.String,
   state: PullRequestState,
   isDraft: Schema.Boolean,
+  visibility: Schema.optional(PullRequestVisibility).annotate({
+    description: "Only on a host with private PRs.",
+  }),
   author: Schema.NullOr(Schema.String),
   headBranch: Schema.String,
   baseBranch: Schema.String,
@@ -675,6 +683,10 @@ const CreatePullRequestTool = Tool.make("pull_request_create", {
     body: Schema.String,
     base: Schema.optional(TrimmedNonEmptyString),
     draft: Schema.optional(Schema.Boolean),
+    private: Schema.optional(Schema.Boolean).annotate({
+      description:
+        "Visible to writers only; the branch never reaches origin. Fails on a host without private PRs.",
+    }),
   }),
   success: CreatePullRequestResult,
   failure: PullRequestToolError,

@@ -63,7 +63,7 @@ const ClaimDbRow = Schema.Struct({
 
 const decodeClaim = Schema.decodeUnknownEffect(ClaimDbRow);
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
   const getRow = SqlSchema.findOneOption({

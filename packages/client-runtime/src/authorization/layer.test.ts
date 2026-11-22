@@ -639,7 +639,7 @@ describe("RemoteEnvironmentAuthorization", () => {
       expect(yield* Ref.get(harness.bootstrapCalls)).toBe(0);
       // The descriptor is read beside the ticket, so the connect needs no later read.
       expect(authorized.descriptor).toMatchObject({ environmentId: ENVIRONMENT_ID });
-      expect(harness.fetch.calls.map(([url]) => String(url)).sort()).toEqual([
+      expect(harness.fetch.calls.map(([url]) => String(url)).toSorted()).toEqual([
         "https://environment.example.test/.well-known/t3/environment",
         "https://environment.example.test/api/auth/websocket-ticket/rpc",
       ]);

@@ -479,6 +479,11 @@ export interface ComposerDraftWorkspaceSelection {
    * included) until the user picks a branch, rather than pinning the first name refs reported.
    */
   readonly followsCurrentCheckout?: boolean;
+  /**
+   * Tracked repositories a new worktree takes, by path. Absent until the user chooses, so the
+   * server's default applies.
+   */
+  readonly repositories?: ReadonlyArray<string>;
 }
 
 export type ComposerDraftSettingsUpdate = Pick<
@@ -498,6 +503,7 @@ const ComposerDraftWorkspaceSelectionSchema = Schema.Struct({
   startFromOrigin: Schema.optional(Schema.Boolean),
   pullRequestReference: Schema.optional(Schema.String),
   followsCurrentCheckout: Schema.optional(Schema.Boolean),
+  repositories: Schema.optional(Schema.Array(Schema.String)),
 });
 
 const ComposerDraftProjectSchema = Schema.Struct({
@@ -693,17 +699,6 @@ export function isComposerDraftEmpty(draft: ComposerDraft): boolean {
   return isEmptyDraft(draft);
 }
 
-/**
- * Unsent composer content (text or attachments). Settings-only sticky draft
- * state does not count for list draft dots.
- */
-export function hasComposerDraftMessage(draft: ComposerDraft | null | undefined): boolean {
-  if (!draft) return false;
-  return draft.text.trim().length > 0 || draft.attachments.length > 0;
-}
-
-// The project stamp is identity, not content: a new-task draft with nothing
-// else in it is still empty and gets dropped like any other.
 function isEmptyDraft(draft: ComposerDraft): boolean {
   return (
     draft.text.length === 0 &&
@@ -1296,7 +1291,9 @@ export async function removeDeliveredCloudQueuedMessage(
             editor.workspaceSelection.pullRequestReference !==
               message.creation?.pullRequestReference ||
             (editor.workspaceSelection.startFromOrigin ?? false) !==
-              (message.creation?.startFromOrigin ?? false))))
+              (message.creation?.startFromOrigin ?? false) ||
+            JSON.stringify(editor.workspaceSelection.repositories) !==
+              JSON.stringify(message.creation?.repositories))))
     )
       continue;
     const drafts = { ...saved.drafts };
@@ -1434,7 +1431,9 @@ function isSameAttachment(a: DraftComposerAttachment, b: DraftComposerAttachment
     a.mimeType === b.mimeType &&
     a.sizeBytes === b.sizeBytes &&
     a.name === b.name &&
-    (a.type !== "image" || b.type !== "image" || a.dataUrl === b.dataUrl)
+    (a.type !== "image" ||
+      b.type !== "image" ||
+      (a.dataUrl === b.dataUrl && a.fileUri === b.fileUri))
   );
 }
 

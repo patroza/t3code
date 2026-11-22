@@ -1,11 +1,17 @@
 /** Session identity and attribution use server-map people; clients cannot claim free-form usernames.
  * Interactive claims check map membership only, so peers in trusted environments can spoof Mine.
- * Discord/Jira claims bind through platform IDs. See docs/architecture/source-and-identity.md.
+ * Discord/Jira claims bind through platform IDs.
  */
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
-import { AuthSessionId, ThreadId, TrimmedNonEmptyString, IsoDateTime } from "./baseSchemas.ts";
+import {
+  AuthSessionId,
+  CommandId,
+  ThreadId,
+  TrimmedNonEmptyString,
+  IsoDateTime,
+} from "./baseSchemas.ts";
 
 // ── Username / person ──────────────────────────────────────────
 
@@ -22,7 +28,7 @@ export const IDENTITY_CLAIM_TYPEAHEAD_MIN_CHARS = 3;
  * Handle charset: leading alnum, then alnum / `.` / `_` / `-`.
  * No spaces or control chars. No minimum length product rule (single char OK).
  */
-export const IDENTITY_HANDLE_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
+const IDENTITY_HANDLE_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 
 const normalizeHandle = (value: string) => value.trim().toLowerCase();
 
@@ -116,6 +122,41 @@ export const ThreadParticipantSummary = Schema.Struct({
   firstParticipatedAt: IsoDateTime,
 });
 export type ThreadParticipantSummary = typeof ThreadParticipantSummary.Type;
+
+// ── Orchestration field sets (spread into upstream orchestrationV2 schemas) ──
+
+/** Thread read models and shells: who started the thread and who has taken part. */
+export const ThreadAttributionFields = {
+  originSource: Schema.optional(Schema.NullOr(SourceRef)),
+  participantSummaries: Schema.optional(Schema.Array(ThreadParticipantSummary)),
+};
+
+/** User messages and their turn items: the server-stamped sender. */
+export const MessageSourceFields = {
+  source: Schema.optional(SourceRef),
+};
+
+export const ThreadCreateSourceFields = {
+  originSource: Schema.optional(SourceRef),
+};
+
+/** `source` is server-stamped; clients may only send `sourceHint`. */
+export const MessageDispatchSourceFields = {
+  source: Schema.optional(SourceRef),
+  sourceHint: Schema.optional(ClientSourceHint),
+};
+
+export const ThreadLaunchSourceHintFields = {
+  sourceHint: Schema.optional(ClientSourceHint),
+};
+
+/** Server-only: attribute an unattributed thread to the person now claimed on its MCP session. */
+export const ThreadAttributionRepairCommand = Schema.Struct({
+  type: Schema.Literal("thread.attribution.repair"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  source: SourceRef,
+});
 
 // ── Public identity map (client-safe) ──────────────────────────
 

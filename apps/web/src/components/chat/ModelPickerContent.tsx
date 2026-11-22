@@ -2,7 +2,6 @@ import { T, useGT, useLocale, useMessages } from "gt-react";
 import { useLegendListRef } from "~/hooks/useLegendListRef";
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
-  type AiUsageSnapshot,
   type ProviderInstanceId,
   type EnvironmentId,
   type ProviderDriverKind,
@@ -11,7 +10,10 @@ import {
 } from "@t3tools/contracts";
 import { resolveSelectableModel } from "@t3tools/shared/model";
 import { useAtomValue } from "@effect/atom-react";
-import { formatProviderUpdateRequiredNotice } from "@t3tools/client-runtime/providerUpdateRequiredModels";
+import {
+  formatProviderUpdateRequiredNotice,
+  providerUpdateChannelLags,
+} from "@t3tools/client-runtime/providerUpdateRequiredModels";
 import { groupModelsBySubProvider } from "@t3tools/client-runtime/providerSubProviders";
 import { useNavigate } from "@tanstack/react-router";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
@@ -72,8 +74,6 @@ import {
   type ProviderInstanceEntry,
 } from "../../providerInstances";
 import { providerModelKey, sortProviderModelItems } from "../../modelOrdering";
-import { resolveDriverUsages } from "../../aiUsageState";
-import { AiUsageStats } from "./AiUsageStats";
 import { hasRuntimeModelCatalog } from "../../providerModels";
 
 type ModelPickerItem = {
@@ -212,7 +212,11 @@ function ModelPickerProviderNotices({
 }: {
   setupEntries: ReadonlyArray<ProviderInstanceEntry>;
   emptyLabel: string;
-  updateRequiredNotices: ReadonlyArray<{ instanceId: ProviderInstanceId; notice: string }>;
+  updateRequiredNotices: ReadonlyArray<{
+    instanceId: ProviderInstanceId;
+    notice: string;
+    canUpdateInSettings: boolean;
+  }>;
   onRequestClose: (() => void) | undefined;
   onOpenProviderSetup: ((instanceId: ProviderInstanceId) => void) | undefined;
 }) {
@@ -245,20 +249,25 @@ function ModelPickerProviderNotices({
       ) : (
         <ComboboxEmpty className="empty:h-0">{emptyLabel}</ComboboxEmpty>
       )}
-      {updateRequiredNotices.map(({ instanceId, notice }) => (
+      {updateRequiredNotices.map(({ instanceId, notice, canUpdateInSettings }) => (
         <p
           key={instanceId}
           className="shrink-0 border-t border-border/70 px-3 py-2 text-xs leading-snug text-muted-foreground"
         >
-          {notice}{" "}
-          <InlineButton
-            onClick={() => {
-              onRequestClose?.();
-              void navigate({ to: "/settings/providers" });
-            }}
-          >
-            <T>Provider settings</T>
-          </InlineButton>
+          {notice}
+          {canUpdateInSettings ? (
+            <>
+              {" "}
+              <InlineButton
+                onClick={() => {
+                  onRequestClose?.();
+                  void navigate({ to: "/settings/providers" });
+                }}
+              >
+                <T>Provider settings</T>
+              </InlineButton>
+            </>
+          ) : null}
         </p>
       ))}
     </>
@@ -346,8 +355,6 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   lockedProvider: ProviderDriverKind | null;
   lockedContinuationGroupKey?: string | null;
   instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
-  /** Latest AI-usage snapshot for rail markers + per-provider stats. */
-  usageSnapshot?: AiUsageSnapshot | null;
   keybindings?: ResolvedKeybindingsConfig;
   modelOptionsByInstance: ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>>;
   terminalOpen: boolean;
@@ -690,13 +697,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     return [...available, ...disabled];
   })();
   const showSidebar = !isSearching && sidebarInstanceEntries.length > 0;
-  const selectedUsages = (() => {
-    const usageInstanceId =
-      selectedInstanceId === "favorites" ? props.activeInstanceId : selectedInstanceId;
-    const entry = entryByInstanceId.get(usageInstanceId);
-    return resolveDriverUsages(props.usageSnapshot, entry?.driverKind ?? null);
-  })();
-  const instanceOrder = (() => instanceEntries.map((entry) => entry.instanceId))();
+  const instanceOrder = instanceEntries.map((entry) => entry.instanceId);
 
   const filteredModels = (() => {
     let result = flatModels;
@@ -829,7 +830,15 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     const notice = shown
       ? formatProviderUpdateRequiredNotice(entry.snapshot, searchQuery, messages, locale)
       : null;
-    return notice ? [{ instanceId: entry.instanceId, notice }] : [];
+    return notice
+      ? [
+          {
+            instanceId: entry.instanceId,
+            notice,
+            canUpdateInSettings: !providerUpdateChannelLags(entry.snapshot, searchQuery),
+          },
+        ]
+      : [];
   });
 
   const modelJumpModelKeys = visibleModels
@@ -972,9 +981,6 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
             onSelectInstance={handleSelectInstance}
             onFocusSearch={focusSearchInput}
             instanceEntries={sidebarInstanceEntries}
-            usageSnapshot={props.usageSnapshot ?? null}
-            activeInstanceId={props.activeInstanceId}
-            activeModel={props.model}
             showFavorites
             {...(selectableUnavailableInstanceIds ? { selectableUnavailableInstanceIds } : {})}
             {...(lockedDisabledInstanceIds
@@ -1246,18 +1252,6 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
               onRequestClose={onRequestClose}
               onOpenProviderSetup={onOpenProviderSetup}
             />
-            {!isSearching && selectedUsages.length > 0 ? (
-              <div className="flex max-h-40 shrink-0 flex-col gap-2 overflow-y-auto border-t bg-muted/40 px-4 py-2 text-xs [scrollbar-width:thin]">
-                {selectedUsages.map((usage) => (
-                  <AiUsageStats
-                    key={usage.provider}
-                    item={usage.item}
-                    compact
-                    className="min-w-0"
-                  />
-                ))}
-              </div>
-            ) : null}
             {props.listFooter}
           </div>
         </Combobox>

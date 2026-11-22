@@ -10,10 +10,9 @@ import {
   GraphQLResolver,
 } from "effect/graphql";
 import * as Option from "effect/Option";
-import * as Redacted from "effect/Redacted";
 import * as RequestResolver from "effect/RequestResolver";
-import * as Schema from "effect/Schema";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import {
   SourceControlProviderError,
   TrimmedNonEmptyString,
@@ -424,25 +423,6 @@ function repositoryCloneUrls(
   return { nameWithOwner: raw.full_name, url: raw.html_url, sshUrl: raw.ssh_url };
 }
 
-const decodePullRequestChecks = decodeJsonResult(
-  Schema.Array(
-    Schema.Struct({
-      bucket: Schema.optional(Schema.NullOr(Schema.String)),
-      state: Schema.optional(Schema.NullOr(Schema.String)),
-    }),
-  ),
-);
-
-function pullRequestHasFailingChecks(raw: string): boolean {
-  const decoded = decodePullRequestChecks(raw.trim());
-  if (Result.isFailure(decoded)) return false;
-  return decoded.success.some((check) => {
-    const bucket = check.bucket?.trim().toLowerCase();
-    const state = check.state?.trim().toLowerCase();
-    return bucket === "fail" || state === "fail" || state === "failure" || state === "error";
-  });
-}
-
 const decodeViewerLogin = decodeJsonResult(Schema.Struct({ login: TrimmedNonEmptyString }));
 
 const decodeRestPullRequests = decodeJsonResult(Schema.Array(Schema.Unknown));
@@ -630,28 +610,12 @@ export const make = Effect.gen(function* () {
     ),
   ).pipe(Effect.provide(GitHubGraphQlClient.layer));
 
-  /**
-   * Runs a generated read against `target`. GitHub's refusals and `errors` fail the way REST
-   * ones do; an answer that does not decode is a `decodeDetail` failure.
-   */
-  const graphqlRead = Effect.fn("GitHubSourceControlProvider.graphqlRead")(function* <A, E, R>(
+  const graphqlRead = <A, E, R>(
     target: GitHubGraphQlClient.GitHubGraphQlTarget["Service"],
     decodeDetail: string,
     effect: Effect.Effect<A, E, R>,
-  ) {
-    const credential = yield* api
-      .credential(target.host, target)
-      .pipe(Effect.mapError((error) => fromGitHubApiError(error)));
-    const read = Redacted.value(credential.token).startsWith("ghs_")
-      ? effect.pipe(
-          Effect.provideService(GitHubRequestPolicy.PinnedGitHubCredential, {
-            host: target.host.toLowerCase(),
-            token: credential.token,
-            credentialFingerprint: credential.fingerprint,
-          }),
-        )
-      : effect;
-    return yield* read.pipe(
+  ) =>
+    effect.pipe(
       GitHubGraphQlClient.call(target),
       Effect.mapError((error) =>
         GraphQLClientError.isGraphQLClientError(error)
@@ -659,7 +623,6 @@ export const make = Effect.gen(function* () {
           : fromGitHubApiError(error as GitHubRequestPolicy.GitHubApiError),
       ),
     );
-  });
 
   const rest = (input: GitHubRest.GitHubRestInput, notFoundDetail?: string) =>
     api.rest(input).pipe(Effect.mapError((error) => fromGitHubApiError(error, notFoundDetail)));
@@ -683,9 +646,15 @@ export const make = Effect.gen(function* () {
     readonly limit: number;
     readonly context?: SourceControlProvider.SourceControlProviderContext | undefined;
     readonly host?: string | undefined;
+    readonly repository?: string | undefined;
     readonly allowReserve: boolean;
   }) {
-    const locator = yield* resolveRepository(input);
+    const base = yield* resolveRepository(input);
+    const locator =
+      input.repository === undefined
+        ? base
+        : parseGitHubRepositorySelector(input.repository, base.host);
+    if (locator === null) return yield* failure(`${input.repository} is not a GitHub repository.`);
     const limit = Math.min(Math.max(Math.trunc(input.limit), 1), 100);
     const ownerMatch = /^([^:/\s]+):(.+)$/u.exec(input.headSelector.trim());
     const headRefName = ownerMatch?.[2] ?? input.headSelector.trim();
@@ -720,8 +689,6 @@ export const make = Effect.gen(function* () {
     const result = yield* graphqlRead(
       {
         host: locator.host,
-        cwd: input.cwd,
-        repository: `${locator.owner}/${locator.name}`,
         operation: "listPullRequestsByHead",
         allowReserve: input.allowReserve,
         // 50 default-branch lookups can each match 100 fork PRs and exceed the usual cap.
@@ -775,13 +742,7 @@ export const make = Effect.gen(function* () {
       const locator = parsed.kind === "url" ? parsed.locator : yield* resolveRepository(input);
       const decodeDetail = "GitHub returned an invalid pull request.";
       const result = yield* graphqlRead(
-        {
-          host: locator.host,
-          cwd: input.cwd,
-          repository: `${locator.owner}/${locator.name}`,
-          operation: "getPullRequest",
-          allowReserve: true,
-        },
+        { host: locator.host, operation: "getPullRequest", allowReserve: true },
         decodeDetail,
         client.PullRequestByNumber({
           owner: locator.owner,
@@ -1128,6 +1089,7 @@ export const make = Effect.gen(function* () {
               limit: input.limit ?? (input.state === "open" ? 1 : 20),
               host: contextHost(input.context),
               context: input.context,
+              repository: input.repository,
               allowReserve,
             }),
           ),
@@ -1140,25 +1102,7 @@ export const make = Effect.gen(function* () {
     ),
     getChangeRequest: Effect.fn("GitHubSourceControlProvider.getChangeRequest")(function (input) {
       return readPullRequest({ ...input, host: contextHost(input.context) }).pipe(
-        Effect.flatMap((record) =>
-          process
-            .run({
-              operation: "GitHubSourceControlProvider.getPullRequestHasFailingChecks",
-              command: "gh",
-              args: ["pr", "checks", input.reference, "--json", "bucket,state"],
-              cwd: input.cwd,
-              timeoutMs: 30_000,
-              allowNonZeroExit: true,
-            })
-            .pipe(
-              Effect.map((result) => pullRequestHasFailingChecks(result.stdout)),
-              Effect.orElseSucceed(() => false),
-              Effect.map((hasFailingChecks) => ({
-                ...toChangeRequest(record),
-                ...(hasFailingChecks ? { hasFailingChecks } : {}),
-              })),
-            ),
-        ),
+        Effect.map(toChangeRequest),
         Effect.mapError(
           providerError("getChangeRequest", input.cwd, { reference: input.reference }),
         ),

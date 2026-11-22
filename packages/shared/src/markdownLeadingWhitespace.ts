@@ -366,7 +366,6 @@ const enabledProcessors = new WeakSet<object>();
  * and the agent received it; agent replies and files keep CommonMark's reading.
  */
 export function remarkEnableLeadingWhitespace(this: object): undefined {
-  // oxlint-disable-next-line oxc/no-this-in-exported-function -- Micromark binds the tokenizer context to this callback.
   enabledProcessors.add(this);
 }
 
@@ -377,7 +376,6 @@ export function keepsLeadingWhitespace(processor: object): boolean {
 /** Sits before plugins that split text without positions, and before list recovery. */
 export function remarkKeepLeadingWhitespace(this: object): Transformer<Root> {
   return (tree, file) => {
-    // oxlint-disable-next-line oxc/no-this-in-exported-function -- Micromark binds the tokenizer context to this callback.
     if (enabledProcessors.has(this)) keepLeadingWhitespace(tree, String(file));
   };
 }

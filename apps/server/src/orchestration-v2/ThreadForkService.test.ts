@@ -218,7 +218,6 @@ it.effect("preserves pull request context without inheriting any watches", () =>
       failedChecks: ["lint"],
       passed: false,
       passedChecks: [],
-      pendingChecks: [],
       remarksThrough: DateTime.formatIso(snoozedAt),
       remarkIds: ["review-1"],
       conflicting: true,

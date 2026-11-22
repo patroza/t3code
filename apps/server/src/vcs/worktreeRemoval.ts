@@ -74,7 +74,6 @@ export const removeLinkedWorktree = Effect.fn("WorktreeRemoval.removeLinkedWorkt
     new GitCommandError({
       operation: input.operation,
       command: "git worktree remove",
-      failureKind: "unknown",
       cwd: input.cwd,
       detail: `fatal: ${message}`,
       ...(cause === undefined ? {} : { cause }),

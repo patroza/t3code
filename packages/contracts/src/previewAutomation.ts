@@ -505,18 +505,6 @@ export const PreviewAutomationWaitForInput = Schema.Struct({
 );
 export type PreviewAutomationWaitForInput = typeof PreviewAutomationWaitForInput.Type;
 
-export const PreviewAutomationElement = Schema.Struct({
-  tag: Schema.String,
-  role: Schema.NullOr(Schema.String),
-  name: Schema.String,
-  selector: Schema.String,
-  x: Schema.Number,
-  y: Schema.Number,
-  width: Schema.Number,
-  height: Schema.Number,
-});
-export type PreviewAutomationElement = typeof PreviewAutomationElement.Type;
-
 export const PreviewAutomationConsoleEntry = Schema.Struct({
   level: Schema.String,
   text: Schema.String,
@@ -551,7 +539,6 @@ export const PreviewAutomationSnapshot = Schema.Struct({
   loading: Schema.Boolean,
   loadError: Schema.optional(PreviewAutomationLoadError),
   visibleText: Schema.String,
-  interactiveElements: Schema.Array(PreviewAutomationElement),
   accessibilityTree: Schema.Unknown,
   consoleEntries: Schema.Array(PreviewAutomationConsoleEntry),
   networkEntries: Schema.Array(PreviewAutomationNetworkEntry),
@@ -561,7 +548,6 @@ export const PreviewAutomationSnapshot = Schema.Struct({
     data: Schema.String,
     width: Schema.Int,
     height: Schema.Int,
-    path: Schema.optional(Schema.String),
   }),
   /** The capture before `screenshot` was capped for the agent, when requested and larger. */
   fullScreenshot: Schema.optional(
@@ -624,7 +610,6 @@ export const PreviewAutomationHostFocus = Schema.Struct({
   ...PreviewAutomationHostIdentity.fields,
   connectionId: PreviewAutomationConnectionId,
   focused: Schema.Boolean,
-  threadId: Schema.optional(ThreadId),
   liveTabs: Schema.optional(
     Schema.Array(
       Schema.Struct({

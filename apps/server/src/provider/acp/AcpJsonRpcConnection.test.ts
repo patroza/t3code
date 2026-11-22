@@ -13,7 +13,6 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
-
 import * as Scope from "effect/Scope";
 import * as Result from "effect/Result";
 import * as Scheduler from "effect/Scheduler";
@@ -24,9 +23,9 @@ import { describe, expect } from "vite-plus/test";
 
 import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 import { AgentScope } from "@t3tools/shared/AgentScope";
+import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/compat";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
-import * as EffectAcpErrors from "effect-acp/errors";
 
 const __dirname = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 const mockAgentPath = NodePath.join(__dirname, "../../../scripts/acp-mock-agent.ts");
@@ -610,6 +609,8 @@ describe("AcpSessionRuntime", () => {
       expect(created?.payload).toMatchObject({
         mcpServers: [{ type: "acp", name: "t3-code", serverId: "t3-code" }],
       });
+      // This agent does not advertise additional directories, so the thread's other folders stay out.
+      expect(created?.payload).not.toHaveProperty("additionalDirectories");
     }).pipe(
       Effect.provide(
         AcpSessionRuntime.layer({
@@ -623,6 +624,7 @@ describe("AcpSessionRuntime", () => {
           authMethodId: "test",
           mcpServers: [{ type: "stdio", name: "t3-code", command: "/usr/bin/node", args: [] }],
           acpMcpServers: [{ type: "acp", name: "t3-code", serverId: "t3-code" }],
+          extraRoots: ["/tmp/t3-tracked"],
           requestLogger: (event) =>
             Effect.sync(() => {
               requestEvents.push(event);
@@ -785,12 +787,9 @@ describe("AcpSessionRuntime", () => {
       });
       expect(promptResult).toMatchObject({ stopReason: "end_turn" });
 
-      const notes = Array.from(
-        yield* Stream.runCollect(
-          Stream.takeUntil(runtime.getEvents(), (note) => note._tag === "AssistantItemCompleted"),
-        ),
-      );
-      expect(notes.map((note) => note._tag).filter((tag) => tag !== "UsageUpdated")).toEqual([
+      const notes = Array.from(yield* Stream.runCollect(Stream.take(runtime.getEvents(), 4)));
+      expect(notes).toHaveLength(4);
+      expect(notes.map((note) => note._tag)).toEqual([
         "PlanUpdated",
         "AssistantItemStarted",
         "ContentDelta",
@@ -1114,7 +1113,7 @@ describe("AcpSessionRuntime", () => {
           requestEvents.find((event) => event.method === method && event.status === "started")
             ?.payload,
         ).toMatchObject({
-          additionalDirectories: ["/tmp/t3-attachments"],
+          additionalDirectories: ["/tmp/t3-attachments", "/tmp/t3-tracked"],
           _meta: { negotiated: "0.0.0" },
         });
       }
@@ -1130,6 +1129,7 @@ describe("AcpSessionRuntime", () => {
             },
           },
           additionalDirectories: ["/tmp/t3-attachments"],
+          extraRoots: ["/tmp/t3-tracked"],
           sessionMeta: (initializeResult) => ({
             negotiated: initializeResult.agentInfo?.version ?? "none",
           }),
@@ -1195,151 +1195,13 @@ describe("AcpSessionRuntime", () => {
     ),
   );
 
-  it.effect("skips no-op session config writes when the requested value is already active", () => {
-    const requestEvents: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
-    return Effect.gen(function* () {
+  // regression: #3156 harden ACP resume with replay-idle load readiness
+  it.effect("fails session startup when session/load returns an error", () =>
+    Effect.gen(function* () {
       const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
-      yield* runtime.start();
+      const error = yield* runtime.start().pipe(Effect.flip);
 
-      yield* runtime.setConfigOption("model", "default");
-      yield* runtime.setMode("ask");
-
-      expect(
-        requestEvents.some(
-          (event) => event.method === "session/set_config_option" && event.status === "started",
-        ),
-      ).toBe(false);
-    }).pipe(
-      Effect.provide(
-        AcpSessionRuntime.layer({
-          authMethodId: "test",
-          spawn: {
-            command: mockAgentCommand,
-            args: mockAgentArgs,
-          },
-          cwd: process.cwd(),
-          clientInfo: { name: "t3-test", version: "0.0.0" },
-          requestLogger: (event) =>
-            Effect.sync(() => {
-              requestEvents.push(event);
-            }),
-        }),
-      ),
-      Effect.scoped,
-      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
-    );
-  });
-
-  it.effect("uses session/set_mode when the agent has no mode config option", () => {
-    const requestEvents: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
-    return Effect.gen(function* () {
-      const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
-      yield* runtime.start();
-
-      yield* runtime.setMode("architect");
-
-      const setModeRequest = requestEvents.find(
-        (event) => event.method === "session/set_mode" && event.status === "succeeded",
-      );
-      expect(setModeRequest?.payload).toMatchObject({
-        sessionId: "mock-session-1",
-        modeId: "architect",
-      });
-      expect(
-        requestEvents.some(
-          (event) =>
-            event.method === "session/set_config_option" &&
-            (event.payload as { configId?: string } | undefined)?.configId === "mode",
-        ),
-      ).toBe(false);
-
-      const modeState = yield* runtime.getModeState;
-      expect(modeState?.currentModeId).toBe("architect");
-    }).pipe(
-      Effect.provide(
-        AcpSessionRuntime.layer({
-          authMethodId: "test",
-          spawn: {
-            command: mockAgentCommand,
-            args: [NodePath.join(__dirname, "../../../scripts/acp-legacy-mode-mock-agent.cjs")],
-          },
-          cwd: process.cwd(),
-          clientInfo: { name: "t3-test", version: "0.0.0" },
-          requestLogger: (event) =>
-            Effect.sync(() => {
-              requestEvents.push(event);
-            }),
-        }),
-      ),
-      Effect.scoped,
-      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
-    );
-  });
-
-  it.effect("emits low-level ACP protocol logs for raw and decoded messages", () => {
-    const protocolEvents: Array<EffectAcpProtocol.AcpProtocolLogEvent> = [];
-    return Effect.gen(function* () {
-      const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
-      yield* runtime.start();
-
-      yield* runtime.prompt({
-        prompt: [{ type: "text", text: "hi" }],
-      });
-
-      expect(
-        protocolEvents.some((event) => event.direction === "outgoing" && event.stage === "raw"),
-      ).toBe(true);
-      expect(
-        protocolEvents.some((event) => event.direction === "outgoing" && event.stage === "decoded"),
-      ).toBe(true);
-      expect(
-        protocolEvents.some((event) => event.direction === "incoming" && event.stage === "raw"),
-      ).toBe(true);
-      expect(
-        protocolEvents.some((event) => event.direction === "incoming" && event.stage === "decoded"),
-      ).toBe(true);
-    }).pipe(
-      Effect.provide(
-        AcpSessionRuntime.layer({
-          authMethodId: "test",
-          spawn: {
-            command: mockAgentCommand,
-            args: mockAgentArgs,
-          },
-          cwd: process.cwd(),
-          clientInfo: { name: "t3-test", version: "0.0.0" },
-          protocolLogging: {
-            logIncoming: true,
-            logOutgoing: true,
-            logger: (event) =>
-              Effect.sync(() => {
-                protocolEvents.push(event);
-              }),
-          },
-        }),
-      ),
-      Effect.scoped,
-      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
-    );
-  });
-
-  it.effect("falls back to a fresh session when session/load fails", () => {
-    const requests: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
-    return Effect.gen(function* () {
-      const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
-      const started = yield* runtime.start();
-
-      // session/load fails, but the resume is best-effort: startup recovers via
-      // session/new and yields the mock agent's fresh sessionId. This holds for
-      // a rejected saved session (without hiding transport or decode failures),
-      // matching how real agents reject a stale resume sessionId.
-      expect(started.sessionId).toBe("mock-session-1");
-      expect(
-        requests.filter((event) => event.method === "session/load" && event.status === "failed"),
-      ).toHaveLength(1);
-      expect(
-        requests.filter((event) => event.method === "session/new" && event.status === "succeeded"),
-      ).toHaveLength(1);
+      expect(error._tag).toBe("AcpRequestError");
     }).pipe(
       Effect.provide(
         AcpSessionRuntime.layer({
@@ -1352,48 +1214,14 @@ describe("AcpSessionRuntime", () => {
             },
           },
           cwd: process.cwd(),
-          requestLogger: (event) =>
-            Effect.sync(() => {
-              requests.push(event);
-            }),
           resumeSessionId: "stale-session-id",
           clientInfo: { name: "t3-test", version: "0.0.0" },
         }),
       ),
       Effect.scoped,
       Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
-    );
-  });
-
-  it.effect("preserves operational load failures without starting a duplicate session", () => {
-    const requests: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
-    return Effect.gen(function* () {
-      const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
-      const outcome = yield* runtime.start().pipe(Effect.result);
-      expect(Result.isFailure(outcome)).toBe(true);
-      if (Result.isFailure(outcome)) {
-        expect(outcome.failure).toMatchObject({ _tag: "AcpRequestError", code: -32099 });
-      }
-      expect(requests.filter((event) => event.method === "session/new")).toHaveLength(0);
-    }).pipe(
-      Effect.provide(
-        AcpSessionRuntime.layer({
-          ...mockRuntimeOptions,
-          spawn: {
-            ...mockRuntimeOptions.spawn,
-            env: { T3_ACP_FAIL_LOAD_SESSION: "1", T3_ACP_FAIL_LOAD_SESSION_CODE: "-32099" },
-          },
-          resumeSessionId: "stale-session-id",
-          requestLogger: (event) =>
-            Effect.sync(() => {
-              requests.push(event);
-            }),
-        }),
-      ),
-      Effect.scoped,
-      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
-    );
-  });
+    ),
+  );
 
   // Live clock: the replay-idle gap must elapse in real time against the mock agent process.
   it.live("adopts config options from a session/load response that arrives after replay idle", () =>
@@ -1589,12 +1417,8 @@ describe("AcpSessionRuntime", () => {
       yield* runtime.prompt({
         prompt: [{ type: "text", text: "hi" }],
       });
-      const notes = Array.from(
-        yield* Stream.runCollect(
-          Stream.takeUntil(runtime.getEvents(), (note) => note._tag === "AssistantItemCompleted"),
-        ),
-      );
-      expect(notes.map((note) => note._tag).filter((tag) => tag !== "UsageUpdated")).toEqual([
+      const notes = Array.from(yield* Stream.runCollect(Stream.take(runtime.getEvents(), 4)));
+      expect(notes.map((note) => note._tag)).toEqual([
         "PlanUpdated",
         "AssistantItemStarted",
         "ContentDelta",
@@ -1795,6 +1619,26 @@ describe("AcpSessionRuntime", () => {
           Exit.succeed({ stopReason: "cancelled", _meta: { nativeCancel: true } }),
         );
       }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  );
+
+  it.effect("fails startup when the agent never answers initialize", () =>
+    Effect.gen(function* () {
+      const initializeSent = yield* Deferred.make<void>();
+      const runtime = yield* AcpSessionRuntime.make({
+        ...mockRuntimeOptions,
+        // A live child that reads stdin and never replies, like one stuck in disk sleep.
+        spawn: { command: "node", args: ["-e", "process.stdin.resume()"] },
+        requestLogger: (event) =>
+          event.method === "initialize" && event.status === "started"
+            ? Deferred.succeed(initializeSent, undefined)
+            : Effect.void,
+      });
+      const startup = yield* runtime.start().pipe(Effect.forkChild);
+      yield* Deferred.await(initializeSent);
+      yield* TestClock.adjust("30 minutes");
+      const exit = yield* Fiber.await(startup);
+      expect(Exit.isFailure(exit)).toBe(true);
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("sends a cancel after the cancel timeout when its prompt never goes out", () =>

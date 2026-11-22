@@ -6,7 +6,7 @@ import * as NodePath from "node:path";
 import { expect, it } from "vite-plus/test";
 
 const workflow = NodeFS.readFileSync(
-  new URL("../.github/workflows/mobile-eas-production.yml", import.meta.url),
+  new URL("../.github/workflows/fork-mobile-eas-production.yml", import.meta.url),
   "utf8",
 );
 const step = workflow

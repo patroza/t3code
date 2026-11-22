@@ -85,28 +85,10 @@ describe("selectProjectForGithubRepository", () => {
       owner: "pingdotgg",
       name: "t3code",
       origin: { canonicalKey: "github.com/patroza/t3code", displayName: "patroza/t3code" },
-      remotes: [
-        {
-          remoteName: "upstream",
-          remoteUrl: "https://github.com/pingdotgg/t3code.git",
-          canonicalKey: "github.com/pingdotgg/t3code",
-          provider: SourceControlProviderKind.make("github"),
-          owner: "pingdotgg",
-          name: "t3code",
-        },
-        {
-          remoteName: "origin",
-          remoteUrl: "https://github.com/patroza/t3code.git",
-          canonicalKey: "github.com/patroza/t3code",
-          provider: SourceControlProviderKind.make("github"),
-          owner: "patroza",
-          name: "t3code",
-        },
-      ],
     }),
   };
 
-  it("matches the project's own repository ahead of a remote", () => {
+  it("matches the project's own repository ahead of its origin", () => {
     expect(
       selectProjectForGithubRepository([fork, scanner], { owner: "macs-holding", repo: "scanner" }),
     ).toMatchObject({ kind: "match", project: scanner, rank: "primary" });

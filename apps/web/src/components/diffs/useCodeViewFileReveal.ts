@@ -23,13 +23,7 @@ interface FileRevealHandle {
         }[];
       }
     | undefined;
-  getItem(id: string):
-    | {
-        collapsed?: boolean;
-        readonly type?: string;
-        readonly fileDiff?: { readonly cacheKey?: string | undefined };
-      }
-    | undefined;
+  getItem(id: string): { collapsed?: boolean } | undefined;
   scrollTo(target: CodeViewScrollTarget): void;
 }
 
@@ -79,13 +73,7 @@ export function createCodeViewFileReveal() {
   const flush = () => {
     if (pending === null || viewer === null) return;
     const item = viewer.getItem(pending.id);
-    if (
-      !viewer.getInstance() ||
-      item === undefined ||
-      item.collapsed === true ||
-      item.fileDiff?.cacheKey?.endsWith(":pending")
-    )
-      return;
+    if (!viewer.getInstance() || item === undefined || item.collapsed === true) return;
     const renderedItems = viewer.getInstance()?.getRenderedItems?.();
     if (pending.range && renderedItems) {
       const rendered = renderedItems.find((entry) => entry.id === pending?.id);

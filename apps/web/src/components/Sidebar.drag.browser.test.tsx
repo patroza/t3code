@@ -41,7 +41,6 @@ it("shows the titled preview inside and outside search results from a collapsed 
   __setClientSettingsForTests({
     ...DEFAULT_CLIENT_SETTINGS,
     boringSidebarEnabled: true,
-    sidebarThreadPreviewCount: 0,
     onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
   });
   const router = getRouter(

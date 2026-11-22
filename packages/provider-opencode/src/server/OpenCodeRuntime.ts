@@ -1,7 +1,7 @@
 import { resolveProviderProbeTimeoutMs } from "@t3tools/provider-core/server/snapshotProbe";
 import * as NodeURL from "node:url";
 
-import type { ChatAttachment, ProviderApprovalDecision } from "@t3tools/contracts";
+import type { ChatAttachment, ModelSelection, ProviderApprovalDecision } from "@t3tools/contracts";
 import {
   createOpencodeClient,
   type Agent,
@@ -37,6 +37,10 @@ import { collectStreamAsString } from "@t3tools/provider-core/server/snapshotPro
 import * as NetService from "@t3tools/shared/Net";
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import {
+  DEFAULT_VARIANT_CHOICE_ID,
+  getModelSelectionStringOptionValue,
+} from "@t3tools/shared/model";
 import { parseSemver } from "@t3tools/shared/semver";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
@@ -326,7 +330,6 @@ export class OpenCodeRuntime extends Context.Service<
       readonly directory: string;
       readonly serverPassword?: string;
       readonly environment?: NodeJS.ProcessEnv;
-      readonly cwd?: string;
       readonly port?: number;
       readonly hostname?: string;
       readonly timeoutMs?: number;
@@ -338,7 +341,6 @@ export class OpenCodeRuntime extends Context.Service<
       readonly serverUrl?: string | null;
       readonly serverPassword?: string;
       readonly environment?: NodeJS.ProcessEnv;
-      readonly cwd?: string;
       readonly port?: number;
       readonly hostname?: string;
       readonly timeoutMs?: number;
@@ -389,6 +391,11 @@ export function parseOpenCodeModelSlug(
     providerID: trimmed.slice(0, separator),
     modelID: trimmed.slice(separator + 1),
   };
+}
+
+export function openCodeVariant(selection: ModelSelection): string | undefined {
+  const variant = getModelSelectionStringOptionValue(selection, "variant");
+  return variant === DEFAULT_VARIANT_CHOICE_ID ? undefined : variant;
 }
 
 export function openCodeQuestionId(
@@ -621,7 +628,6 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
     const child = yield* spawner
       .spawn(
         ChildProcess.make(spawnCommand.command, spawnCommand.args, {
-          ...(input.cwd ? { cwd: input.cwd } : {}),
           detached: hostPlatform !== "win32",
           shell: spawnCommand.shell,
           env: {
@@ -841,7 +847,6 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       directory: input.directory,
       ...(input.serverPassword !== undefined ? { serverPassword: input.serverPassword } : {}),
       ...(input.environment !== undefined ? { environment: input.environment } : {}),
-      ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
       ...(input.port !== undefined ? { port: input.port } : {}),
       ...(input.hostname !== undefined ? { hostname: input.hostname } : {}),
       ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),

@@ -10,7 +10,6 @@ import { m } from "../../i18n/messages";
 import { writeTextToClipboard } from "../../hooks/useCopyToClipboard";
 import { Alert, AlertAction, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
-import { ErrorDetailCopyButton } from "../ui/errorDetailText";
 import { toastManager } from "../ui/toast";
 import { CircleAlertIcon, XIcon } from "lucide-react";
 import { OpenAI } from "../Icons";
@@ -119,10 +118,7 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
               ) : null}
             </div>
           ) : (
-            <div className="flex min-w-0 items-start gap-2">
-              <ExpandableText text={error} collapsedText={getThreadErrorBannerMessage(error)} />
-              <ErrorDetailCopyButton text={error} />
-            </div>
+            <ExpandableText text={error} collapsedText={getThreadErrorBannerMessage(error)} />
           )}
         </AlertDescription>
         {(chatGptLimit || onDismiss) && (

@@ -27,12 +27,11 @@ export interface GithubProjectCandidate {
   readonly repositoryIdentity?: RepositoryIdentity | null | undefined;
 }
 
-export type GithubProjectMatchRank = "primary" | "origin" | "remote";
+export type GithubProjectMatchRank = "primary" | "origin";
 
 const RANK_ORDER: Record<GithubProjectMatchRank, number> = {
   primary: 0,
   origin: 1,
-  remote: 2,
 };
 
 function githubRepositoryLabel(repository: GithubRepositoryRef): string {
@@ -138,7 +137,7 @@ function identityMatchesRepository(
 /**
  * How strongly a project is that GitHub repository.
  * Primary identity beats the checkout's own origin (a fork whose upstream is
- * the canonical remote) which beats any other configured remote.
+ * the canonical remote).
  */
 function githubRepositoryMatchRank(
   project: GithubProjectCandidate,
@@ -153,9 +152,6 @@ function githubRepositoryMatchRank(
     identityMatchesRepository({ canonicalKey: originKey }, repository)
   ) {
     return "origin";
-  }
-  for (const remote of identity.remotes ?? []) {
-    if (identityMatchesRepository(remote, repository)) return "remote";
   }
   return null;
 }
@@ -206,11 +202,5 @@ export function githubRepositoryRefsOf(
       ? null
       : refFromCanonicalKey(identity.origin.canonicalKey),
   );
-  for (const remote of identity.remotes ?? []) {
-    push(refFromCanonicalKey(remote.canonicalKey));
-    if (remote.provider === "github" && remote.owner && remote.name) {
-      push({ owner: remote.owner.toLowerCase(), repo: remote.name.toLowerCase() });
-    }
-  }
   return refs;
 }

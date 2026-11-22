@@ -1,4 +1,3 @@
-// @effect-diagnostics nodeBuiltinImport:off
 import * as NetService from "@t3tools/shared/Net";
 import {
   OtlpHeadersFromString,
@@ -7,9 +6,6 @@ import {
 } from "@t3tools/shared/observability";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
-import { LOCAL_BOOTSTRAP_CREDENTIAL_FILE } from "@t3tools/shared/serverRuntime";
-import * as NodeCrypto from "node:crypto";
-import * as NodeFS from "node:fs";
 import { DesktopBackendBootstrap, PortSchema } from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Duration from "effect/Duration";
@@ -31,26 +27,13 @@ import { resolveServiceLauncherMode } from "../cloud/serviceLauncherClient.ts";
 import * as ServerConfig from "../config.ts";
 import { expandHomePath, resolveBaseDir } from "../os-jank.ts";
 import { isProcessAlive, readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
+import { isServerOwnershipHeld } from "../serverOwnership.ts";
 import { resolveHostCliCommand } from "./invocation.ts";
 
 const modeFlag = Flag.Literals("mode", ServerConfig.RuntimeMode.literals).pipe(
   Flag.withDescription("Runtime mode. `desktop` keeps loopback defaults unless overridden."),
   Flag.optional,
 );
-
-function getOrCreateLocalBootstrapCredential(path: string): string {
-  try {
-    return NodeFS.readFileSync(path, "utf8").trim();
-  } catch {
-    const credential = NodeCrypto.randomBytes(24).toString("hex");
-    try {
-      NodeFS.writeFileSync(path, `${credential}\n`, { mode: 0o600, flag: "wx" });
-      return credential;
-    } catch {
-      return NodeFS.readFileSync(path, "utf8").trim();
-    }
-  }
-}
 const portFlag = Flag.Int("port").pipe(
   Flag.withSchema(PortSchema),
   Flag.withDescription("Port for the HTTP/WebSocket server."),
@@ -367,12 +350,15 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
   // and supervisor handoff are separate; this preflight cannot arbitrate two starts.
   if (options?.rejectRunningServer && mode === "web") {
     const runtime = yield* readPersistedServerRuntimeState(derivedPaths.serverRuntimeStatePath);
-    // A killed container can leave a record with the new server's own PID.
+    // A killed container can leave a record whose PID is now ours or an unrelated process's.
+    // Lock-aware records are live only while their owner still holds the lock.
     if (
       Option.isSome(runtime) &&
       runtime.value.pid > 0 &&
       runtime.value.pid !== process.pid &&
-      isProcessAlive(runtime.value.pid)
+      isProcessAlive(runtime.value.pid) &&
+      (runtime.value.ownerId === undefined ||
+        isServerOwnershipHeld(derivedPaths.serverRuntimeStatePath))
     ) {
       // Bare `t3 pair` prefers a linked worktree's `.t3`, so always name this home.
       const { command: pairCommand } = yield* resolveHostCliCommand("pair", [
@@ -402,11 +388,6 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
     ),
     () => mode === "desktop",
   );
-  const localBootstrapCredentialPath = path.join(
-    derivedPaths.stateDir,
-    LOCAL_BOOTSTRAP_CREDENTIAL_FILE,
-  );
-  getOrCreateLocalBootstrapCredential(localBootstrapCredentialPath);
   const desktopBootstrapToken = bootstrap?.desktopBootstrapToken;
   const desktopBootstrapSecret = bootstrap?.desktopBootstrapSecret;
   const shellEnvironmentPrepared = bootstrap?.shellEnvironmentPrepared;

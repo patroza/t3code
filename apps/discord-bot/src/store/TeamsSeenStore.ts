@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off preferSchemaOverJson:off tryCatchInEffectGen:off missingEffectError:off
+// @effect-diagnostics nodeBuiltinImport:off preferSchemaOverJson:off tryCatchInEffectGen:off missingEffectError:off globalJsonInEffect:off
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import * as Context from "effect/Context";

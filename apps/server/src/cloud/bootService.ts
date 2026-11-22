@@ -1422,6 +1422,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
           const plan = planForUnit(currentlyInstalled ? yield* readUnit() : "");
           yield* writeDurably(
             statePath,
+            // @effect-diagnostics-next-line globalJsonInEffect:off - fixed launcher-owned document.
             `${JSON.stringify(
               {
                 protocol: SERVICE_LAUNCHER_PROTOCOL,

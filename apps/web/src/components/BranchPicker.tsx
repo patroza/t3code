@@ -1,4 +1,3 @@
-import { useGT as useCopyTranslation } from "gt-react";
 import { useLegendListRef } from "~/hooks/useLegendListRef";
 import type { VcsRef } from "@t3tools/contracts";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
@@ -36,7 +35,6 @@ export function BranchPicker({
   statusText,
   notice,
   originControl,
-  reuseBaseControl,
   popupProps,
   renderItem,
   getItemType,
@@ -56,18 +54,14 @@ export function BranchPicker({
   statusText: string | null;
   notice?: string | null | undefined;
   originControl?: { checked: boolean; onCheckedChange: (checked: boolean) => void } | undefined;
-  reuseBaseControl?: { checked: boolean; onCheckedChange: (checked: boolean) => void } | undefined;
   popupProps: Omit<ComponentProps<typeof ComboboxPopup>, "children">;
   renderItem: (value: string, index: number) => ReactNode;
   getItemType?: ((value: string) => string) | undefined;
   children: ReactNode;
 }) {
-  const translateCopy = useCopyTranslation();
-
   const gt = useGT();
   const highlightedValueRef = useRef<string | null>(null);
   const startFromOriginSwitchId = useId();
-  const reuseBaseBranchSwitchId = useId();
   const handleOpenChange = (nextOpen: boolean) => {
     if (!nextOpen) highlightedValueRef.current = null;
     onOpenChange(nextOpen);
@@ -164,23 +158,6 @@ export function BranchPicker({
               />
             </ComboboxListVirtualized>
           </div>
-          {reuseBaseControl ? (
-            <label
-              htmlFor={reuseBaseBranchSwitchId}
-              className="flex cursor-pointer items-center justify-between gap-3 border-t border-border/60 px-3 py-2 text-xs"
-            >
-              <span className="font-medium text-muted-foreground">
-                <T>Reuse selected branch</T>
-              </span>
-              <Switch
-                id={reuseBaseBranchSwitchId}
-                checked={reuseBaseControl.checked}
-                size="sm"
-                aria-label={translateCopy("Reuse the selected branch in the worktree")}
-                onCheckedChange={(checked) => reuseBaseControl.onCheckedChange(Boolean(checked))}
-              />
-            </label>
-          ) : null}
           {originControl ? (
             <Tooltip>
               <TooltipTrigger
@@ -198,7 +175,6 @@ export function BranchPicker({
                     <Switch
                       id={startFromOriginSwitchId}
                       checked={originControl.checked}
-                      disabled={reuseBaseControl?.checked ?? false}
                       size="sm"
                       aria-label={gt("Start worktree from remote")}
                       onCheckedChange={(checked) => originControl.onCheckedChange(Boolean(checked))}

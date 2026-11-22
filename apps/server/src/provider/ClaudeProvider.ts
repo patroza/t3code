@@ -101,7 +101,6 @@ const CLAUDE_PRESENTATION = {
   showInteractionModeToggle: true,
   reportsContextWindow: true,
 } as const;
-
 function toTitleCaseWords(value: string): string {
   const parts: Array<string> = [];
   for (const part of value.split(/[\s_-]+/g)) {
@@ -233,7 +232,7 @@ const CAPABILITIES_PROBE_TIMEOUT_MS = 25_000;
 // Native CLI startup on Windows can exceed the shared probe deadline.
 const CLAUDE_VERSION_CHECK_TIMEOUT_MS = 20_000;
 
-export const CLAUDE_CAPABILITIES_PROBE_SETTING_SOURCES = [
+const CLAUDE_CAPABILITIES_PROBE_SETTING_SOURCES = [
   "user",
   "project",
   "local",

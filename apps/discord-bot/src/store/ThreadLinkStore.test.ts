@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off anyUnknownInErrorContext:off missingEffectError:off missingEffectContext:off
+// @effect-diagnostics nodeBuiltinImport:off anyUnknownInErrorContext:off missingEffectError:off missingEffectContext:off effectTryWithoutCatch:off
 /* oxlint-disable t3code/no-manual-effect-runtime-in-tests -- Legacy filesystem fixture uses a manually scoped runtime. */
 import type { ProjectId, ThreadId } from "@t3tools/contracts";
 import * as NodeFSP from "node:fs/promises";

@@ -124,7 +124,7 @@ describe("runLinkBatch", () => {
       },
       [id("e")]: { kind: "failed", failure: "no_code", detail: null },
     });
-    expect([...seen].sort()).toEqual(machines.map((entry) => entry.environmentId));
+    expect(seen.toSorted()).toEqual(machines.map((entry) => entry.environmentId));
     expect(linkBatchSummary(outcomes)).toEqual({
       linked: 1,
       failed: [id("b"), id("c"), id("d"), id("e")],

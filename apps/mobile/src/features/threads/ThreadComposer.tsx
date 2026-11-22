@@ -1,10 +1,6 @@
-import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
-
 import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
 import type { ComposerTextPaste } from "../../native/T3ComposerEditor.types";
-
-import { uuidv4 } from "../../lib/uuid";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
@@ -20,7 +16,6 @@ import {
   type EnvironmentId,
   type MessageId,
   type ModelSelection,
-  type ProviderDriverKind,
   type ServerConfig as T3ServerConfig,
   type UsageLimitsReport,
 } from "@t3tools/contracts";
@@ -32,7 +27,7 @@ import {
 import { StackActions, useFocusEffect, useNavigation } from "@react-navigation/native";
 import { msg, T, useGT, useMessages } from "gt-react-native";
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useEffectEvent, useRef, useState, type RefObject } from "react";
+import { useEffect, useEffectEvent, useRef, useState, type RefObject } from "react";
 import { Keyboard, Platform, View } from "react-native";
 import { composerImageGallery } from "../../lib/composerImageGallery";
 import { filePreviewGallery } from "../../lib/filePreviewGallery";
@@ -86,9 +81,6 @@ import {
   ComposerToolbarRow,
 } from "../../components/ComposerToolbar";
 import { formatTokens } from "@t3tools/shared/usageFormat";
-import { resolveDriverUsage } from "@t3tools/client-runtime/state/aiUsagePresentation";
-import { useAiUsageSnapshot } from "../../state/useAiUsageSnapshot";
-import { parseStandaloneComposerSlashCommand } from "@t3tools/shared/composerTrigger";
 import { ComposerModelControl } from "../../components/ComposerModelControl";
 import {
   composerStripAttachments,
@@ -474,7 +466,6 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
   const isVoiceInputPresented = voicePresentation.statusKind === "active";
   const isExpanded = isFocused || settingsSheetPresentation.keepsComposerExpanded;
   const { usesLargeControls, paddingVertical: surfacePaddingVertical } = useComposerChrome();
-  const selectDetail = useSelectWorkspaceDetail();
   const [compactRowWidth, setCompactRowWidth] = useState(0);
   const compactAttachmentLimit = compactRowWidth >= 500 ? 3 : 1;
   // Animate only while typing; a thread switch or restored draft lands in place.
@@ -565,25 +556,6 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
       if (openUsageLimits()) onChangeDraftMessage("");
       return;
     }
-    if (
-      parseStandaloneComposerSlashCommand(draftMessage) === "new" &&
-      draftAttachments.length === 0
-    ) {
-      onChangeDraftMessage("");
-      selectDetail({
-        name: "Thread",
-        params: {
-          draft: {
-            requestId: uuidv4(),
-            environmentId: String(props.environmentId),
-            projectId: String(props.selectedThread.projectId),
-            branch: props.selectedThread.branch,
-            worktreePath: props.selectedThread.worktreePath,
-          },
-        },
-      });
-      return;
-    }
     const threadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
     if (inFlightThreadIdsRef.current.has(threadKey)) return;
     inFlightThreadIdsRef.current.add(threadKey);
@@ -639,18 +611,6 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
         option.selection.instanceId === currentModelSelection.instanceId &&
         option.selection.model === currentModelSelection.model,
     ) ?? null;
-  const aiUsageSnapshot = useAiUsageSnapshot(props.environmentId);
-  const threadUsage = useMemo(
-    () =>
-      currentModelOption
-        ? resolveDriverUsage(
-            aiUsageSnapshot,
-            currentModelOption.providerDriver as ProviderDriverKind,
-            currentModelSelection.model,
-          )
-        : null,
-    [aiUsageSnapshot, currentModelOption, currentModelSelection.model],
-  );
   const openSettings = () => {
     settingsSheetPresentation.open();
   };
@@ -727,7 +687,6 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
       <ComposerModelControl
         size={usesLargeControls ? "large" : "regular"}
         modelOption={currentModelOption}
-        usageMarker={threadUsage?.marker ?? null}
         selection={currentModelSelection}
         provider={selectedProviderStatus?.driver}
         reportedSelection={props.reportedModelSelection}
@@ -901,7 +860,10 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
               <Animated.View
                 style={[
                   compactEditor.editorStyle,
-                  showsCompactDictation ? { display: "none" } : undefined,
+                  // iOS destroys a view under display: none; the editor would lose its focus and caret.
+                  Platform.OS === "android" && showsCompactDictation
+                    ? { display: "none" }
+                    : undefined,
                 ]}
               >
                 <ComposerEditor

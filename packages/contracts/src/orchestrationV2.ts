@@ -1,4 +1,11 @@
-import { ClientSourceHint, SourceRef, ThreadParticipantSummary } from "./identity.ts";
+import {
+  MessageDispatchSourceFields,
+  MessageSourceFields,
+  ThreadAttributionFields,
+  ThreadAttributionRepairCommand,
+  ThreadCreateSourceFields,
+  ThreadLaunchSourceHintFields,
+} from "./identity.ts";
 import { OrchestrationMessageContext } from "./composerContext.ts";
 import { withRecordIdTable } from "./orchestrationV2IdTable.ts";
 import * as DateTime from "effect/DateTime";
@@ -82,6 +89,7 @@ import {
 } from "./providerPolicy.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { OrchestrationProjectShell } from "./orchestrationProject.ts";
+import { PROJECT_TRACKED_FOLDERS_MAX } from "./project.ts";
 import {
   TurnTokenUsage,
   ToolActivitySurface,
@@ -473,8 +481,7 @@ const OrchestrationV2LastTitleRegeneration = Schema.Struct({
 });
 
 export const OrchestrationV2AppThread = Schema.Struct({
-  originSource: Schema.optional(Schema.NullOr(SourceRef)),
-  participantSummaries: Schema.optional(Schema.Array(ThreadParticipantSummary)),
+  ...ThreadAttributionFields,
   ...OrchestrationV2CreationFields,
   id: ThreadId,
   projectId: ProjectId,
@@ -540,7 +547,7 @@ export const OrchestrationV2AppThread = Schema.Struct({
     ),
   ),
   lastTitleRegeneration: Schema.optional(Schema.NullOr(OrchestrationV2LastTitleRegeneration)),
-  /** Set by a rename until a generated title replaces it; absent reads as false. */
+  /** Set by a rename or a naming launch until a generated title replaces it; absent reads false. */
   titleRenamed: Schema.optional(Schema.Boolean),
   rollbackRequestId: Schema.optional(CommandId),
   rollbackFailure: Schema.optional(
@@ -548,6 +555,15 @@ export const OrchestrationV2AppThread = Schema.Struct({
       Schema.Struct({
         requestId: CommandId,
         message: TrimmedNonEmptyString,
+      }),
+    ),
+  ),
+  /** Repositories a completed rewind left as they were: none had a snapshot to go back to. */
+  rollbackUnrestored: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        requestId: CommandId,
+        repositories: Schema.Array(TrimmedNonEmptyString),
       }),
     ),
   ),
@@ -761,6 +777,13 @@ export const OrchestrationV2ThreadLaunchWorkspaceStrategy = Schema.Union([
     baseRef: TrimmedNonEmptyString,
     branch: Schema.optional(TrimmedNonEmptyString),
     startFromOrigin: Schema.optional(Schema.Boolean),
+    repositories: Schema.optional(
+      Schema.Array(Schema.Struct({ path: TrimmedNonEmptyString }))
+        .check(Schema.isMaxLength(PROJECT_TRACKED_FOLDERS_MAX))
+        .annotate({
+          description: "Tracked Git folders to give a worktree. Default: all, or none above 8.",
+        }),
+    ),
   }),
 ]);
 export type OrchestrationV2ThreadLaunchWorkspaceStrategy =
@@ -789,7 +812,6 @@ export const OrchestrationV2Run = Schema.Struct({
   status: OrchestrationV2RunStatus,
   queuePosition: Schema.optional(Schema.NullOr(PositiveInt)),
   queueHeld: Schema.optional(Schema.Boolean),
-  queueEditId: Schema.optional(Schema.NullOr(CommandId)),
   steerWhenReadyRunId: Schema.optional(RunId),
   requestedAt: Schema.DateTimeUtc,
   startedAt: Schema.NullOr(Schema.DateTimeUtc),
@@ -1048,6 +1070,14 @@ export const OrchestrationV2CheckpointScope = Schema.Struct({
   ordinalWithinParent: NonNegativeInt,
   advancesAppRunCount: Schema.Boolean,
   cwd: TrimmedNonEmptyString,
+  /** Repository scopes: the folder's display name. */
+  label: Schema.optionalKey(TrimmedNonEmptyString),
+  /**
+   * Set on a repository scope: one tracked Git folder the thread reaches, a child of the root
+   * scope, holding the tracked path (it stays the same when `cwd` moves). Such a scope uses kind
+   * `manual`, because clients already released reject a kind they do not know.
+   */
+  repositoryPath: Schema.optionalKey(TrimmedNonEmptyString),
   createdAt: Schema.DateTimeUtc,
 });
 export type OrchestrationV2CheckpointScope = typeof OrchestrationV2CheckpointScope.Type;
@@ -1313,8 +1343,16 @@ export const OrchestrationV2ProviderTurn = Schema.Struct({
   turnTokenUsage: Schema.optional(TurnTokenUsage),
   /** The model the provider reported running this turn's root agent, which can differ from the requested one. */
   model: Schema.optional(TrimmedNonEmptyString),
+  /** True when the provider dropped this turn's request before persisting it to native history. */
+  promptDropped: Schema.optional(Schema.Literal(true)),
 });
 export type OrchestrationV2ProviderTurn = typeof OrchestrationV2ProviderTurn.Type;
+
+export function isDeliveredProviderTurn(
+  turn: Pick<OrchestrationV2ProviderTurn, "promptDropped">,
+): boolean {
+  return turn.promptDropped !== true;
+}
 
 /** Codex goals can span multiple native turns within one attempt. */
 export function latestProviderTurnForAttempt<
@@ -1457,11 +1495,11 @@ export const OrchestrationV2IdleCompaction = Schema.Literals(["beforeCacheExpire
 export type OrchestrationV2IdleCompaction = typeof OrchestrationV2IdleCompaction.Type;
 
 export const OrchestrationV2ConversationMessage = Schema.Struct({
-  source: Schema.optional(SourceRef),
+  ...MessageSourceFields,
   notification: Schema.optional(OrchestrationV2Notification),
   ...OrchestrationV2CreationFields,
   scheduledTaskId: Schema.optional(ScheduledTaskId),
-  /** A scheduled delivery that named no model; it runs on the thread's selection at start. */
+  /** A message that named no model; it runs on the thread's selection at start. */
   followsThreadSelection: Schema.optional(Schema.Literal(true)),
   senderThreadId: Schema.optional(ThreadId),
   linkedSender: Schema.optional(OrchestrationV2LinkedSender),
@@ -1577,6 +1615,36 @@ export const OrchestrationV2Checkpoint = Schema.Struct({
   capturedAt: Schema.DateTimeUtc,
 });
 export type OrchestrationV2Checkpoint = typeof OrchestrationV2Checkpoint.Type;
+
+/**
+ * The checkpoint a file rewind to run `targetOrdinal` restores a tracked repository to, given that
+ * repository scope's checkpoints. Its records are sparse: the first snapshot at or after the
+ * target is the target's own, or the baseline taken before the first later run that changed the
+ * repository. Null when no later run changed it, or when that state was never snapshotted.
+ */
+export function repositoryRewindCheckpoint<
+  Checkpoint extends Pick<OrchestrationV2Checkpoint, "ordinalWithinScope" | "runId" | "status">,
+>(checkpoints: ReadonlyArray<Checkpoint>, targetOrdinal: number): Checkpoint | null {
+  let first: Checkpoint | undefined;
+  for (const checkpoint of checkpoints) {
+    if (checkpoint.status !== "ready" || checkpoint.ordinalWithinScope < targetOrdinal) continue;
+    if (first === undefined || checkpoint.ordinalWithinScope < first.ordinalWithinScope)
+      first = checkpoint;
+  }
+  if (first === undefined) return null;
+  // A later run's own checkpoint holds that run's changes, not the state before them.
+  if (first.ordinalWithinScope !== targetOrdinal && first.runId !== null) return null;
+  // A run whose snapshot failed in between may have changed the repository unrecorded.
+  const end = first.ordinalWithinScope;
+  const unrecorded = checkpoints.some(
+    (checkpoint) =>
+      checkpoint.runId !== null &&
+      (checkpoint.status === "error" || checkpoint.status === "missing") &&
+      checkpoint.ordinalWithinScope > targetOrdinal &&
+      checkpoint.ordinalWithinScope < end,
+  );
+  return unrecorded ? null : first;
+}
 
 export const OrchestrationV2CheckpointRollbackRequest = Schema.Struct({
   scopeId: CheckpointScopeId,
@@ -1799,7 +1867,6 @@ export const OrchestrationV2TurnItem = Schema.Union([
     ...OrchestrationV2CreationFields,
     type: Schema.Literal("user_message"),
     messageId: MessageId,
-    source: Schema.optional(SourceRef),
     scheduledTaskId: Schema.optional(ScheduledTaskId),
     senderThreadId: Schema.optional(ThreadId),
     linkedSender: Schema.optional(OrchestrationV2LinkedSender),
@@ -2287,8 +2354,7 @@ export type OrchestrationV2LatestVisibleMessageSummary =
   typeof OrchestrationV2LatestVisibleMessageSummary.Type;
 
 export const OrchestrationV2ThreadShell = Schema.Struct({
-  originSource: Schema.optional(Schema.NullOr(SourceRef)),
-  participantSummaries: Schema.optional(Schema.Array(ThreadParticipantSummary)),
+  ...ThreadAttributionFields,
   ...OrchestrationV2CreationFields,
   id: ThreadId,
   projectId: ProjectId,
@@ -2699,7 +2765,6 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     ...OrchestrationV2CreationFields,
     type: Schema.Literal("user_message"),
     messageId: MessageId,
-    source: Schema.optional(SourceRef),
     scheduledTaskId: Schema.optional(ScheduledTaskId),
     senderThreadId: Schema.optional(ThreadId),
     linkedSender: Schema.optional(OrchestrationV2LinkedSender),
@@ -3193,12 +3258,13 @@ export const OrchestrationV2Command = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("thread.create"),
-    originSource: Schema.optional(SourceRef),
+    ...ThreadCreateSourceFields,
     ...OrchestrationV2CreationFields,
     commandId: CommandId,
     threadId: ThreadId,
     projectId: ProjectId,
     title: TrimmedNonEmptyString,
+    titleRenamed: Schema.optional(Schema.Boolean),
     modelSelection: ModelSelection,
     runtimeMode: RuntimeMode,
     interactionMode: ProviderInteractionMode,
@@ -3477,8 +3543,7 @@ export const OrchestrationV2Command = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("message.dispatch"),
-    source: Schema.optional(SourceRef),
-    sourceHint: Schema.optional(ClientSourceHint),
+    ...MessageDispatchSourceFields,
     notification: Schema.optional(OrchestrationV2Notification),
     /** Sends this pending guest message; the server uses the guest's text, not `text`. */
     guestMessageId: Schema.optional(GuestMessageId),
@@ -3604,29 +3669,13 @@ export const OrchestrationV2Command = Schema.Union([
     runId: RunId,
   }),
   Schema.Struct({
-    type: Schema.Literal("queued-run.edit.begin"),
-    commandId: CommandId,
-    threadId: ThreadId,
-    runId: RunId,
-    previousEditId: Schema.NullOr(CommandId),
-  }),
-  Schema.Struct({
-    type: Schema.Literal("queued-run.edit.cancel"),
-    commandId: CommandId,
-    threadId: ThreadId,
-    runId: RunId,
-    editId: CommandId,
-  }),
-  Schema.Struct({
     type: Schema.Literal("queued-run.edit"),
     context: Schema.optional(OrchestrationMessageContext),
     commandId: CommandId,
     threadId: ThreadId,
     runId: RunId,
     text: Schema.String,
-    editId: Schema.optional(CommandId),
-    // Full replacement list. Absent = leave the message's attachments as-is,
-    // so pre-attachment clients editing text keep the original attachments.
+    // Replaces all attachments; absent preserves them for older clients editing text.
     attachments: Schema.optional(Schema.Array(ChatAttachment)),
   }),
   Schema.Struct({
@@ -3731,12 +3780,7 @@ export type OrchestrationV2Command = typeof OrchestrationV2Command.Type;
 
 // Excluded from dispatchCommand so only the server can send these.
 const OrchestrationV2InternalCommand = Schema.Union([
-  Schema.Struct({
-    type: Schema.Literal("thread.attribution.repair"),
-    commandId: CommandId,
-    threadId: ThreadId,
-    source: SourceRef,
-  }),
+  ThreadAttributionRepairCommand,
   // The server issues this after checking the value against the run's declared schema.
   Schema.Struct({
     type: Schema.Literal("run.output.submit"),
@@ -3786,12 +3830,6 @@ const OrchestrationV2InternalCommand = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
   }),
-  /**
-   * Records PR watch state and optionally wakes the agent in the same transaction.
-   * Reject stale watches and wakes on settled or archived threads; ending a watch
-   * cancels its queued wakes, except for a wake included in this command.
-   */
-
   Schema.Struct({
     type: Schema.Literal("thread.pull-request-watch.sync"),
     commandId: CommandId,
@@ -4059,7 +4097,7 @@ export const OrchestrationV2ArchivedShellSnapshot = Schema.Struct({
 export type OrchestrationV2ArchivedShellSnapshot = typeof OrchestrationV2ArchivedShellSnapshot.Type;
 
 export const OrchestrationV2ThreadLaunchInput = Schema.Struct({
-  sourceHint: Schema.optional(ClientSourceHint),
+  ...ThreadLaunchSourceHintFields,
   commandId: CommandId,
   creationSource: Schema.optional(OrchestrationV2CreationSource),
   threadId: Schema.optional(ThreadId),

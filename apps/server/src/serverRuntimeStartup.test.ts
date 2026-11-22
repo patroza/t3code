@@ -211,7 +211,7 @@ it.effect.each([
       Layer.mock(GitVcsDriver.GitVcsDriver)({}),
       Layer.mock(AnalyticsService.AnalyticsService)({}),
       // No provider logins or Connect link, so startup records no owners.
-      FileSystem.layerNoop({ writeFileString: () => Effect.void }),
+      FileSystem.layerNoop({}),
       Layer.mock(ServerSecretStore.ServerSecretStore)({ get: () => Effect.succeedNone }),
       Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
       Layer.mock(ExternalLauncher.ExternalLauncher)({}),

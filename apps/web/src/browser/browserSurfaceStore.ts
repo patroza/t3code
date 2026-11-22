@@ -188,9 +188,19 @@ export const useBrowserSurfaceStore = create<BrowserSurfaceStoreState>()((set) =
     set((state) => {
       const current = state.byTabId[tabId];
       if (current?.owner !== owner) return state;
-      // Remove released surfaces so closed tabs do not accumulate in the store.
-      const { [tabId]: _released, ...byTabId } = state.byTabId;
-      return { byTabId };
+      return {
+        byTabId: {
+          ...state.byTabId,
+          [tabId]: {
+            ...current,
+            visible: false,
+            fittedSourceContent: null,
+            fitSourceContent: false,
+            updatedAt: Date.now(),
+            owner: null,
+          },
+        },
+      };
     }),
 }));
 

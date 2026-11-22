@@ -118,6 +118,7 @@ export const wakeUpFields = (content: string, threadId: string): BotMessageField
 
 export const idleFields = (content: string): BotMessageFields => ({ content, actions: [] });
 
+// @effect-diagnostics-next-line preferSchemaTaggedError:off -- carries the raw platform cause
 export class BotTransportError extends Data.TaggedError("BotTransportError")<{
   readonly cause: unknown;
   readonly reason?: "message-not-found";

@@ -8,7 +8,6 @@ import type {
   OrchestrationV2CreationSource,
   OrchestrationV2PlanArtifact,
   OrchestrationV2UserMessageInputIntent,
-  SourceRef,
   PlanId,
   ProjectScript as ContractProjectScript,
   ProviderInteractionMode,
@@ -83,7 +82,6 @@ export interface ChatMessage {
   readonly streaming: boolean;
   readonly createdBy?: OrchestrationV2Actor;
   readonly creationSource?: OrchestrationV2CreationSource;
-  readonly source?: SourceRef | undefined;
   readonly scheduledTaskId?: ScheduledTaskId;
   readonly senderThreadId?: ThreadId;
   readonly linkedSender?: OrchestrationV2LinkedSender;

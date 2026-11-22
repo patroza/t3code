@@ -21,11 +21,6 @@ import { connectionAtomRuntime } from "../connection/runtime";
 import { serverEnvironment } from "./server";
 import { environmentShell } from "./shell";
 
-type ThreadEnvironmentAtoms =
-  typeof connectionAtomRuntime extends Atom.AtomRuntime<infer R, infer E>
-    ? ReturnType<typeof createThreadEnvironmentAtoms<R, E>>
-    : never;
-
 export const threadFamilies = createThreadFamilyAtoms(
   connectionAtomRuntime,
   environmentShell.stateAtom,
@@ -34,7 +29,7 @@ export const olderSettledThreads = createOlderSettledThreadAtoms(
   connectionAtomRuntime,
   environmentShell.stateAtom,
 );
-export const threadEnvironment: ThreadEnvironmentAtoms = createThreadEnvironmentAtoms(
+export const threadEnvironment = createThreadEnvironmentAtoms(
   connectionAtomRuntime,
   threadFamilies.snapshotAtom,
 );

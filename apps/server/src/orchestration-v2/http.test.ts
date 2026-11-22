@@ -36,7 +36,6 @@ import * as ServerSettings from "../serverSettings.ts";
 
 import * as OrchestrationEventStore from "../persistence/OrchestrationEventStore.ts";
 import { ProjectEnrichmentService } from "../project/ProjectEnrichmentService.ts";
-import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as OrchestrationHttp from "./http.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import * as ProjectStore from "./ProjectStore.ts";
@@ -131,14 +130,7 @@ const serveOrchestrationHttp = (allowed: () => boolean) =>
         runtime,
         ThreadManagementService.layer.pipe(
           Layer.provide(
-            Layer.mergeAll(
-              runtime,
-              CommandReceiptStore.layer,
-              ServerSettings.layerTest({}),
-              Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({
-                get: () => Effect.succeed(null),
-              }),
-            ),
+            Layer.mergeAll(runtime, CommandReceiptStore.layer, ServerSettings.layerTest({})),
           ),
         ),
         OrchestrationEventStore.layer,

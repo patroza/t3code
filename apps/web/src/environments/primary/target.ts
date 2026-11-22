@@ -75,7 +75,6 @@ export interface PrimaryEnvironmentTarget {
   readonly target: {
     readonly httpBaseUrl: string;
     readonly wsBaseUrl: string;
-    readonly nativeServerBrowser?: boolean;
   };
 }
 
@@ -257,9 +256,6 @@ function resolveDesktopPrimaryTarget(): PrimaryEnvironmentTarget | null {
   return {
     source: "desktop-managed",
     target: {
-      ...(desktopBootstrap.nativeServerBrowser === undefined
-        ? {}
-        : { nativeServerBrowser: desktopBootstrap.nativeServerBrowser }),
       httpBaseUrl: normalizeBaseUrl(
         desktopBootstrap.httpBaseUrl,
         "desktop-managed",

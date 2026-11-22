@@ -46,7 +46,6 @@ function createEditor(value: string, extra: Extensions = []) {
         listItem: false,
         orderedList: false,
         trailingNode: false,
-        listKeymap: false,
       }),
       ComposerCodeBlockExtension,
       ...ComposerBlockExtensions,

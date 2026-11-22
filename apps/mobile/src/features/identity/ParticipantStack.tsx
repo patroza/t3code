@@ -4,6 +4,7 @@ import {
   claimPersonIdForEnvironment,
   isClaimedNonStarterParticipant,
 } from "@t3tools/client-runtime/state/identity";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import type { ThreadParticipantSummary } from "@t3tools/contracts";
 import { View } from "react-native";
 
@@ -151,6 +152,21 @@ export function ThreadIdentityMark(props: {
       environmentId={props.environmentId}
       participants={participants}
       channel={channel}
+      className={props.className}
+    />
+  );
+}
+
+/** Thread list hook: the identity mark for one thread shell. */
+export function ThreadShellIdentityMark(props: {
+  readonly thread: Pick<EnvironmentThreadShell, "environmentId" | "source">;
+  readonly className?: string | undefined;
+}) {
+  return (
+    <ThreadIdentityMark
+      environmentId={props.thread.environmentId}
+      originChannel={props.thread.source.originSource?.channel}
+      participants={props.thread.source.participantSummaries}
       className={props.className}
     />
   );

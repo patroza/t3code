@@ -1,40 +1,5 @@
-import { describe, expect, it } from "vite-plus/test";
-
-import { buildUnsignedCommitRetryInput } from "./gitActions.ts";
-
-describe("buildUnsignedCommitRetryInput", () => {
-  it("preserves the requested action, custom message, and files while removing featureBranch", () => {
-    const filePaths = ["src/a.ts", "src/b.ts"];
-
-    expect(
-      buildUnsignedCommitRetryInput({
-        action: "commit_push_pr",
-        commitMessage: "feat: preserve this message",
-        featureBranch: true,
-        filePaths,
-      }),
-    ).toEqual({
-      action: "commit_push_pr",
-      commitMessage: "feat: preserve this message",
-      filePaths,
-      disableCommitSigning: true,
-    });
-  });
-
-  it("leaves generated commit messages absent so they may be regenerated", () => {
-    expect(
-      buildUnsignedCommitRetryInput({
-        action: "commit",
-        featureBranch: true,
-      }),
-    ).toEqual({
-      action: "commit",
-      disableCommitSigning: true,
-    });
-  });
-});
-
 import { SourceControlProviderKind, type VcsStatusResult } from "@t3tools/contracts";
+import { describe, expect, it } from "vite-plus/test";
 
 import { sourceControlClients } from "../sourceControlClients.ts";
 import {
@@ -121,6 +86,23 @@ describe("git action copy", () => {
       action: "create_pr",
     });
     expect(resolveQuickAction({ ...pushed, isDefaultRef: true }, false, true).disabled).toBe(true);
+  });
+
+  it.each([
+    { tracking: "with an upstream", hasUpstream: true },
+    { tracking: "without an upstream", hasUpstream: false },
+  ])("pushes existing commits from a clean default branch $tracking", ({ hasUpstream }) => {
+    const cleanDefaultBranch = status({
+      refName: "main",
+      isDefaultRef: true,
+      hasUpstream,
+      aheadCount: 1,
+    });
+    expect(resolveQuickAction(cleanDefaultBranch, false, true)).toMatchObject({
+      disabled: false,
+      kind: "run_action",
+      action: "push",
+    });
   });
 
   it("names the host's change request in the default-branch dialog", () => {

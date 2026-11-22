@@ -202,7 +202,7 @@ describe("mergeUsage", () => {
       }),
     ];
 
-    for (const ordered of [environments, [...environments].reverse()]) {
+    for (const ordered of [environments, environments.toReversed()]) {
       const merged = mergeUsage(ordered, USAGE_CONTRACT_VERSION);
       expect(merged.costUsd).toBe(10);
       expect(merged.records).toBe(5);
@@ -581,7 +581,7 @@ describe("mergeUsage", () => {
         }),
       ];
 
-      for (const ordered of [environments, [...environments].reverse()]) {
+      for (const ordered of [environments, environments.toReversed()]) {
         const merged = mergeUsage(ordered, USAGE_CONTRACT_VERSION);
         expect(merged.sessions).toBe(142);
         expect(merged.records).toBe(22432);

@@ -47,7 +47,6 @@ const enabledProcessors = new WeakSet<object>();
  * showed and the agent received; agent replies and files keep CommonMark numbering.
  */
 export function remarkEnableOrderedListNumbers(this: object): undefined {
-  // oxlint-disable-next-line oxc/no-this-in-exported-function -- Micromark binds the tokenizer context to this callback.
   enabledProcessors.add(this);
 }
 
@@ -58,7 +57,6 @@ export function keepsOrderedListNumbers(processor: object): boolean {
 /** Sits before list recovery so offsets still point into the file. */
 export function remarkKeepOrderedListNumbers(this: object): Transformer<Root> {
   return (tree, file) => {
-    // oxlint-disable-next-line oxc/no-this-in-exported-function -- Micromark binds the tokenizer context to this callback.
     if (enabledProcessors.has(this)) keepOrderedListNumbers(tree, String(file));
   };
 }

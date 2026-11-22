@@ -23,7 +23,6 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-
 import * as Logger from "effect/Logger";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -31,7 +30,6 @@ import * as Tracer from "effect/Tracer";
 import { McpSchema, McpServer, Tool, Toolkit } from "effect/ai";
 import { HttpBody, HttpClient, HttpClientRequest, HttpRouter, HttpServer } from "effect/http";
 import * as NetAddress from "effect/net/NetAddress";
-import { vi } from "vite-plus/test";
 
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
@@ -69,8 +67,6 @@ import { PreviewControlsToolkit } from "./toolkits/previewControls/tools.ts";
 import { ProjectToolkit } from "./toolkits/project/tools.ts";
 import { ThreadToolkit } from "./toolkits/thread/tools.ts";
 
-const tabId = PreviewTabId.make("tab-mcp-test");
-
 const environmentId = EnvironmentId.make("environment-mcp-test");
 const threadId = ThreadId.make("thread-mcp-test");
 const alternateTabId = PreviewTabId.make("tab-mcp-alternate");
@@ -106,9 +102,6 @@ const layerTest = McpHttpServer.layerPreviewToolkit.pipe(
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-http-server-test-" })),
   Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
-const DiscordThreadToolTestLayer = McpHttpServer.DiscordThreadToolkitRegistrationLive.pipe(
-  Layer.provideMerge(McpServer.McpServer.layer),
-);
 const layerPullRequestsTest = McpHttpServer.layerPullRequestsToolkit.pipe(
   Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
   Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
@@ -131,7 +124,6 @@ const snapshotResult = {
   title: "Example",
   loading: false,
   visibleText: "Example",
-  interactiveElements: [],
   accessibilityTree: {},
   consoleEntries: [],
   networkEntries: [],
@@ -428,18 +420,6 @@ it.effect.each([
         url: "http://example.test/",
         loading: false,
         visibleText: "Save your changes",
-        interactiveElements: [
-          {
-            tag: "button",
-            role: "button",
-            name: "Save",
-            selector: "#save",
-            x: 0,
-            y: 0,
-            width: 20,
-            height: 10,
-          },
-        ],
         accessibilityTree: { role: "document", name: "Example" },
         consoleEntries: [],
         networkEntries: [],
@@ -489,7 +469,7 @@ it.effect.each([
         expect(snapshot.isError).toBe(false);
         expect(snapshot.structuredContent).toEqual({
           ...boundedMetadata,
-          omitted: ["accessibilityTree (use interactiveElements locators or preview_evaluate)"],
+          omitted: ["accessibilityTree (use preview_evaluate)"],
         });
         const [identity, text, ...rest] = snapshot.content;
         expect(identity?.type === "text" ? decodeJsonText(identity.text) : null).toEqual({
@@ -499,7 +479,7 @@ it.effect.each([
         expect(rest).toEqual([
           {
             type: "text",
-            text: "Snapshot text was bounded. Omitted: accessibilityTree (use interactiveElements locators or preview_evaluate).",
+            text: "Snapshot text was bounded. Omitted: accessibilityTree (use preview_evaluate).",
           },
           ...(images
             ? [
@@ -897,25 +877,9 @@ it.effect("keeps the snapshot text under the agent's output ceiling", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const pageText = "/Users/theo/Code/project\nClaude, Codex · 79 threads\n".repeat(600);
-      const element = (name: string, index: number) => ({
-        tag: "div",
-        role: "presentation",
-        name,
-        selector: `div:nth-of-type(${index})`,
-        x: 0,
-        y: 0,
-        width: 10,
-        height: 10,
-      });
       const oversized = {
         ...snapshotResult,
         visibleText: pageText,
-        interactiveElements: [
-          element(pageText, 1),
-          element(pageText, 2),
-          element(pageText, 3),
-          element("Continue", 4),
-        ],
         accessibilityTree: { nodes: Array.from({ length: 2_000 }, (_, i) => ({ nodeId: `${i}` })) },
         consoleEntries: Array.from({ length: 100 }, (_, i) => ({
           level: "log",
@@ -940,14 +904,10 @@ it.effect("keeps the snapshot text under the agent's output ceiling", () =>
       const parsed = decodeJsonText(body) as {
         readonly accessibilityTree?: unknown;
         readonly visibleText: string;
-        readonly interactiveElements: ReadonlyArray<{ readonly name: string }>;
         readonly consoleEntries: ReadonlyArray<{ readonly text: string }>;
       };
       expect(parsed.accessibilityTree).toBeUndefined();
       expect(parsed.visibleText.length).toBeLessThanOrEqual(8_001);
-      expect(parsed.interactiveElements).toHaveLength(4);
-      expect(parsed.interactiveElements[0]?.name.length).toBeLessThanOrEqual(201);
-      expect(parsed.interactiveElements[3]?.name).toBe("Continue");
       expect(parsed.consoleEntries).toHaveLength(40);
       expect(parsed.consoleEntries[0]?.text).toBe("entry 60");
       expect(notice?.type === "text" ? notice.text : "").toContain("accessibilityTree");
@@ -967,7 +927,6 @@ it.effect("bounds the snapshot text even when nothing but logs and the title are
       const oversized = {
         ...snapshotResult,
         title: `t${"😀".repeat(35_000)}`,
-        interactiveElements: [],
         consoleEntries: [{ level: "log", text: `x${"😀".repeat(35_000)}`, timestamp: "t" }],
       };
       yield* serveSnapshots("mcp-bounded-logs-client", oversized);
@@ -999,19 +958,14 @@ it.effect("bounds the snapshot text even when nothing but logs and the title are
 it.effect("bounds page text made of wide characters before dropping locators", () =>
   Effect.scoped(
     Effect.gen(function* () {
+      const accessibilityTree = Array.from(
+        { length: 20 },
+        (_, i) => `- button "Button ${i}" [ref=t3-1-e${i}]`,
+      ).join("\n");
       yield* serveSnapshots("mcp-wide-text-client", {
         ...snapshotResult,
         visibleText: "界".repeat(9_000),
-        interactiveElements: Array.from({ length: 20 }, (_, i) => ({
-          tag: "button",
-          role: "button",
-          name: `Button ${i}`,
-          selector: `#button-${i}`,
-          x: 0,
-          y: 0,
-          width: 10,
-          height: 10,
-        })),
+        accessibilityTree,
       });
 
       const snapshot = yield* callSnapshot({ includeImage: false });
@@ -1023,10 +977,10 @@ it.effect("bounds page text made of wide characters before dropping locators", (
       );
       const parsed = decodeJsonText(body) as {
         readonly visibleText: string;
-        readonly interactiveElements: ReadonlyArray<unknown>;
+        readonly accessibilityTree: string;
       };
       expect(parsed.visibleText).toMatch(/^界+…$/);
-      expect(parsed.interactiveElements).toHaveLength(20);
+      expect(parsed.accessibilityTree).toBe(accessibilityTree);
       expect(notice?.type === "text" ? notice.text : "").toContain(
         "visibleText after 4000 characters",
       );
@@ -1110,278 +1064,153 @@ it.effect("terminates HTTP MCP sessions with DELETE", () =>
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
 
-it.effect("registers annotated tools and preserves authenticated request context", () =>
+it.effect("answers 2026-07-28 discovery and keeps 2025-06-18 as the initialize fallback", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const server = yield* McpServer.McpServer;
-      const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
-      const toolIcon = {
-        _tag: "website" as const,
-        pageUrl: "http://example.test/",
-      };
-      const routedRequests: Array<{
-        readonly operation: string;
-        readonly tabId?: string | undefined;
-      }> = [];
-      const events = yield* broker.connect({
-        clientId: "mcp-test-client",
+      const token = "providerTokenWithoutDots";
+      const scope: McpInvocationContext.McpInvocationScope = {
         environmentId,
+        requestNamespace: "provider-session",
+        thread: {
+          threadId: ThreadId.make("thread-provider"),
+          providerSessionId: "provider-session",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+        },
+        client: undefined,
+        capabilities: new Set(["orchestration"]),
+        issuedAt: 1,
+      };
+      const ProbeToolkit = Toolkit.make(
+        Tool.make("probe", {
+          description: "Reports success.",
+          success: Schema.Struct({ ok: Schema.Boolean }),
+        }),
+      );
+      const layerServer = McpHttpServer.layerMcpTransport(
+        McpHttpServer.toolkitRegistration(
+          ProbeToolkit,
+          McpToolAccess.toLayer(ProbeToolkit, {
+            probe: McpToolAccess.reads(() => Effect.succeed({ ok: true })),
+          }),
+        ),
+      ).pipe(
+        Layer.provide(ServerSettings.layerTest()),
+        Layer.provide(
+          Layer.mock(McpSessionRegistry.McpSessionRegistry)({
+            resolve: (presented) =>
+              Effect.succeed(
+                presented === token
+                  ? (scope as McpInvocationContext.McpThreadInvocationScope)
+                  : undefined,
+              ),
+          }),
+        ),
+      );
+      yield* HttpRouter.serve(layerServer, {
+        disableListenLog: true,
+        disableLogger: true,
+      }).pipe(Layer.build);
+      const httpClient = (yield* HttpClient.HttpClient).pipe(
+        HttpClient.mapRequest(HttpClientRequest.bearerToken(token)),
+      );
+
+      const discoverResponse = yield* httpClient.post("/mcp", {
+        headers: {
+          accept: "application/json, text/event-stream",
+          "mcp-method": "server/discover",
+          "mcp-protocol-version": "2026-07-28",
+        },
+        body: HttpBody.text(
+          `{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{},"io.modelcontextprotocol/clientInfo":{"name":"mcp-test","version":"1.0.0"}}}}`,
+          "application/json",
+        ),
       });
-      yield* Stream.runForEach(events, (event) => {
-        if (event.type === "connected") return Effect.void;
-        routedRequests.push(event.request);
-        return broker.respond({
-          clientId: "mcp-test-client",
-          connectionId: event.connectionId,
-          requestId: event.request.requestId,
-          ok: true,
-          result:
-            event.request.operation === "snapshot"
-              ? snapshotResult
-              : event.request.operation === "evaluate"
-                ? ["Connect", "Continue"]
-                : event.request.operation === "press"
-                  ? undefined
-                  : {
-                      available: true,
-                      visible: true,
-                      tabId,
-                      url: "http://example.test/",
-                      title: "Example",
-                      loading: false,
-                    },
-        });
-      }).pipe(Effect.forkScoped);
-      yield* Effect.yieldNow;
+      expect(discoverResponse.status).toBe(200);
+      const discovered = (yield* discoverResponse.json) as {
+        result: { supportedVersions: ReadonlyArray<string> };
+      };
+      expect(discovered.result.supportedVersions).toEqual(
+        expect.arrayContaining(["2026-07-28", "2025-06-18"]),
+      );
 
-      const statusTool = server.tools.find(({ tool }) => tool.name === "preview_status");
-      expect(statusTool?.tool.annotations?.readOnlyHint).toBe(true);
-      expect(statusTool?.tool.annotations?.idempotentHint).toBe(true);
-      expect(statusTool?.tool.annotations?.destructiveHint).toBe(false);
+      const toolsResponse = yield* httpClient.post("/mcp", {
+        headers: {
+          accept: "application/json, text/event-stream",
+          "mcp-method": "tools/list",
+          "mcp-protocol-version": "2026-07-28",
+        },
+        body: HttpBody.text(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 3,
+            method: "tools/list",
+            params: {
+              _meta: {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {},
+                "io.modelcontextprotocol/clientInfo": { name: "mcp-test", version: "1.0.0" },
+              },
+            },
+          }),
+          "application/json",
+        ),
+      });
+      expect(toolsResponse.status).toBe(200);
+      const tools = (yield* toolsResponse.json) as {
+        error?: unknown;
+        result: { tools: ReadonlyArray<{ name: string }> };
+      };
+      expect(tools.error).toBeUndefined();
+      expect(tools.result.tools).toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: "probe" })]),
+      );
 
-      const snapshotTool = server.tools.find(({ tool }) => tool.name === "preview_snapshot");
-      expect(snapshotTool?.tool.annotations?.readOnlyHint).toBe(false);
-      expect(snapshotTool?.tool.annotations?.idempotentHint).toBe(false);
-      expect(snapshotTool?.tool.annotations?.openWorldHint).toBe(true);
-
-      const actTool = server.tools.find(({ tool }) => tool.name === "preview_act");
-      expect(actTool?.tool.annotations?.readOnlyHint).toBe(false);
-      expect(actTool?.tool.annotations?.destructiveHint).toBe(true);
-      expect(actTool?.tool.annotations?.openWorldHint).toBe(true);
-      expect(actTool?.tool.outputSchema).toMatchObject({
-        anyOf: [
-          {
-            type: "object",
-            additionalProperties: true,
-            properties: { selected: { type: "array", items: { type: "string" } } },
-            required: ["selected"],
+      // The Go MCP SDK sends this without request metadata, though 2026-07-28 does not define it.
+      const rootsChanged = (
+        client: HttpClient.HttpClient,
+        message: object = {},
+        headers: Record<string, string> = {},
+      ) =>
+        client.post("/mcp", {
+          headers: {
+            accept: "application/json, text/event-stream",
+            "mcp-method": "notifications/roots/list_changed",
+            "mcp-protocol-version": "2026-07-28",
+            ...headers,
           },
-          { type: "object", additionalProperties: true },
-        ],
-      });
-      expect(actTool?.tool.outputSchema).not.toHaveProperty("description");
-
-      const navigateTool = server.tools.find(({ tool }) => tool.name === "preview_navigate");
-      expect(navigateTool?.tool.annotations?.destructiveHint).toBe(false);
-      expect(navigateTool?.tool.annotations?.openWorldHint).toBe(true);
-
-      const status = yield* server
-        .callTool({ name: "preview_status", arguments: {} })
-        .pipe(
-          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
-          Effect.provideService(McpSchema.McpServerClient, client),
-        );
-      expect(status.isError).toBe(false);
-      expect(status.structuredContent).toMatchObject({
-        available: true,
-        tabId,
-      });
-
-      const malformed = yield* server
-        .callTool({ name: "preview_act", arguments: { action: "click", selector: "" } })
-        .pipe(
-          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
-          Effect.provideService(McpSchema.McpServerClient, client),
-          Effect.flip,
-        );
-      expect(malformed).toMatchObject({ _tag: "InvalidParams" });
-
-      const snapshot = yield* server
-        .callTool({
-          name: "preview_snapshot",
-          arguments: { tabId: alternateTabId, includeImage: true },
-        })
-        .pipe(
-          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
-          Effect.provideService(McpSchema.McpServerClient, client),
-        );
-      expect(snapshot.isError).toBe(false);
-      expect(snapshot.content.some((content) => content.type === "image")).toBe(true);
-      expect(snapshot.structuredContent).toMatchObject({
-        screenshot: { mimeType: "image/png", width: 10, height: 5 },
-      });
-      expect(routedRequests.find(({ operation }) => operation === "snapshot")?.tabId).toBe(
-        alternateTabId,
+          body: HttpBody.text(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              method: "notifications/roots/list_changed",
+              params: {},
+              ...message,
+            }),
+            "application/json",
+          ),
+        });
+      const acknowledged = yield* rootsChanged(httpClient);
+      expect(acknowledged.status).toBe(202);
+      expect(yield* acknowledged.text).toBe("");
+      expect((yield* rootsChanged(yield* HttpClient.HttpClient)).status).toBe(401);
+      expect((yield* rootsChanged(httpClient, { id: 7 })).status).toBe(400);
+      expect((yield* rootsChanged(httpClient, {}, { origin: "https://example.com" })).status).toBe(
+        403,
       );
 
-      // Arrays and primitives are wrapped so structuredContent stays a JSON object.
-      // Claude Code rejects the whole result otherwise.
-      const evaluateTool = server.tools.find(({ tool }) => tool.name === "preview_evaluate");
-      expect(evaluateTool?.tool.outputSchema).toMatchObject({ type: "object" });
-      const evaluated = yield* server
-        .callTool({ name: "preview_evaluate", arguments: { expression: "buttons()" } })
-        .pipe(
-          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
-          Effect.provideService(McpSchema.McpServerClient, client),
-        );
-      expect(evaluated.isError).toBe(false);
-      expect(evaluated.structuredContent).toEqual({ value: ["Connect", "Continue"], toolIcon });
-      const evaluatedText = evaluated.content[0];
-      expect(evaluatedText?.type === "text" ? decodeJsonText(evaluatedText.text) : null).toEqual({
-        toolIcon,
-        value: ["Connect", "Continue"],
+      const initializeResponse = yield* httpClient.post("/mcp", {
+        headers: { accept: "application/json, text/event-stream" },
+        body: HttpBody.text(
+          `{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"2099-01-01","capabilities":{},"clientInfo":{"name":"mcp-test","version":"1.0.0"}}}`,
+          "application/json",
+        ),
       });
-
-      const actionRequests = [
-        { name: "preview_act", arguments: { action: "click", x: 10, y: 10 } },
-        { name: "preview_act", arguments: { action: "type", text: "Hello" } },
-        { name: "preview_act", arguments: { action: "press", key: "Enter" } },
-        { name: "preview_act", arguments: { action: "scroll", deltaY: 100 } },
-        { name: "preview_wait_for", arguments: { text: "Example" } },
-      ];
-      for (const request of actionRequests) {
-        const result = yield* server
-          .callTool(request)
-          .pipe(
-            Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
-            Effect.provideService(McpSchema.McpServerClient, client),
-          );
-        expect(result.isError).toBe(false);
-        expect(result.structuredContent).toEqual({ toolIcon });
-        expect(routedRequests.at(-1)?.operation).toBe("status");
-        const text = result.content[0];
-        expect(text?.type === "text" ? decodeJsonText(text.text) : null).toEqual({ toolIcon });
-      }
+      expect(initializeResponse.status).toBe(200);
+      const initialized = (yield* initializeResponse.json) as {
+        result: { protocolVersion: string };
+      };
+      expect(initialized.result.protocolVersion).toBe("2025-06-18");
     }),
-  ).pipe(Effect.provide(layerTest)),
-);
-
-it.effect("renames the current thread through the Discord mirror tool", () => {
-  const dispatchCalls: Array<unknown> = [];
-  const dispatch = vi.fn((command: unknown) => {
-    dispatchCalls.push(command);
-    return Promise.resolve({ sequence: 1 });
-  });
-
-  return Effect.gen(function* () {
-    const server = yield* McpServer.McpServer;
-
-    const renamed = yield* server
-      .callTool({ name: "discord_rename_thread", arguments: { title: "Review PR #428" } })
-      .pipe(
-        Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
-        Effect.provideService(McpSchema.McpServerClient, client),
-      );
-
-    expect(renamed.isError).toBe(false);
-    expect(renamed.structuredContent).toMatchObject({
-      threadId,
-      title: "Review PR #428",
-      discordMirrorRequested: true,
-    });
-    expect(dispatchCalls).toHaveLength(1);
-    expect(dispatchCalls[0]).toMatchObject({
-      type: "thread.metadata.update",
-      threadId,
-      title: "Review PR #428",
-    });
-  }).pipe(
-    Effect.provide(
-      DiscordThreadToolTestLayer.pipe(
-        Layer.provideMerge(
-          Layer.mock(ThreadManagementService.ThreadManagementService, {
-            dispatch: (command) =>
-              Effect.promise(() => dispatch(command)).pipe(
-                Effect.as({ sequence: 0, storedEvents: [] }),
-              ),
-            getThreadShell: (id) => Effect.succeed(McpToolAccessTestkit.liveThreadShell(id)),
-          }),
-        ),
-      ),
-    ),
-  );
-});
-
-it.effect("rejects a Discord rename after the calling run has ended", () => {
-  const dispatch = vi.fn((_command: unknown) => Promise.resolve({ sequence: 1 }));
-
-  return Effect.gen(function* () {
-    const server = yield* McpServer.McpServer;
-    const result = yield* server
-      .callTool({ name: "discord_rename_thread", arguments: { title: "Review PR #428" } })
-      .pipe(
-        Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
-        Effect.provideService(McpSchema.McpServerClient, client),
-      );
-
-    expect(result.isError).toBe(true);
-    expect(result.structuredContent).toEqual({
-      error: {
-        _tag: "parent_not_active",
-        message: "The calling provider no longer owns an active thread run.",
-      },
-    });
-    expect(result.content).toEqual([
-      {
-        type: "text",
-        text: "The calling provider no longer owns an active thread run.",
-      },
-    ]);
-    expect(dispatch).not.toHaveBeenCalled();
-  }).pipe(
-    Effect.provide(
-      DiscordThreadToolTestLayer.pipe(
-        Layer.provideMerge(
-          Layer.mock(ThreadManagementService.ThreadManagementService, {
-            dispatch: (command) =>
-              Effect.promise(() => dispatch(command)).pipe(
-                Effect.as({ sequence: 0, storedEvents: [] }),
-              ),
-            getThreadShell: (id) =>
-              Effect.succeed(McpToolAccessTestkit.liveThreadShell(id, { activeRunId: null })),
-          }),
-        ),
-      ),
-    ),
-  );
-});
-
-it.effect("rejects empty Discord mirror thread titles", () =>
-  Effect.gen(function* () {
-    const server = yield* McpServer.McpServer;
-
-    const result = yield* server
-      .callTool({ name: "discord_rename_thread", arguments: { title: "   " } })
-      .pipe(
-        Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
-        Effect.provideService(McpSchema.McpServerClient, client),
-      );
-
-    expect(result.isError).toBe(true);
-    expect(result.structuredContent).toEqual({
-      error: { _tag: "InvalidTitle", message: "Title cannot be empty." },
-    });
-  }).pipe(
-    Effect.provide(
-      DiscordThreadToolTestLayer.pipe(
-        Layer.provideMerge(
-          Layer.mock(ThreadManagementService.ThreadManagementService, {
-            dispatch: () => Effect.die("unused"),
-          }),
-        ),
-      ),
-    ),
-  ),
+  ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
 
 it.effect("admits provider and OAuth client credentials and points only clients at OAuth", () =>
@@ -2279,155 +2108,6 @@ it.effect("lists optional tools to a deferring client only after tool_search loa
       ).toEqual({ tools: [{ name: "preview_open", description: "Opens a browser preview." }] });
       expect(yield* deferring.listed).toEqual(["delegate_task", "preview_open", "tool_search"]);
       expect(yield* other.listed).toEqual(["delegate_task", "preview_open", "schedule_task"]);
-    }),
-  ).pipe(Effect.provide(NodeHttpServer.layerTest)),
-);
-
-it.effect("answers 2026-07-28 discovery and keeps 2025-06-18 as the initialize fallback", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const token = "providerTokenWithoutDots";
-      const scope: McpInvocationContext.McpInvocationScope = {
-        environmentId,
-        requestNamespace: "provider-session",
-        thread: {
-          threadId: ThreadId.make("thread-provider"),
-          providerSessionId: "provider-session",
-          providerInstanceId: ProviderInstanceId.make("codex"),
-        },
-        client: undefined,
-        capabilities: new Set(["orchestration"]),
-        issuedAt: 1,
-      };
-      const ProbeToolkit = Toolkit.make(
-        Tool.make("probe", {
-          description: "Reports success.",
-          success: Schema.Struct({ ok: Schema.Boolean }),
-        }),
-      );
-      const layerServer = McpHttpServer.layerMcpTransport(
-        McpHttpServer.toolkitRegistration(
-          ProbeToolkit,
-          McpToolAccess.toLayer(ProbeToolkit, {
-            probe: McpToolAccess.reads(() => Effect.succeed({ ok: true })),
-          }),
-        ),
-      ).pipe(
-        Layer.provide(ServerSettings.layerTest()),
-        Layer.provide(
-          Layer.mock(McpSessionRegistry.McpSessionRegistry)({
-            resolve: (presented) =>
-              Effect.succeed(
-                presented === token
-                  ? (scope as McpInvocationContext.McpThreadInvocationScope)
-                  : undefined,
-              ),
-          }),
-        ),
-      );
-      yield* HttpRouter.serve(layerServer, {
-        disableListenLog: true,
-        disableLogger: true,
-      }).pipe(Layer.build);
-      const httpClient = (yield* HttpClient.HttpClient).pipe(
-        HttpClient.mapRequest(HttpClientRequest.bearerToken(token)),
-      );
-
-      const discoverResponse = yield* httpClient.post("/mcp", {
-        headers: {
-          accept: "application/json, text/event-stream",
-          "mcp-method": "server/discover",
-          "mcp-protocol-version": "2026-07-28",
-        },
-        body: HttpBody.text(
-          `{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{},"io.modelcontextprotocol/clientInfo":{"name":"mcp-test","version":"1.0.0"}}}}`,
-          "application/json",
-        ),
-      });
-      expect(discoverResponse.status).toBe(200);
-      const discovered = (yield* discoverResponse.json) as {
-        result: { supportedVersions: ReadonlyArray<string> };
-      };
-      expect(discovered.result.supportedVersions).toEqual(
-        expect.arrayContaining(["2026-07-28", "2025-06-18"]),
-      );
-
-      const toolsResponse = yield* httpClient.post("/mcp", {
-        headers: {
-          accept: "application/json, text/event-stream",
-          "mcp-method": "tools/list",
-          "mcp-protocol-version": "2026-07-28",
-        },
-        body: HttpBody.text(
-          JSON.stringify({
-            jsonrpc: "2.0",
-            id: 3,
-            method: "tools/list",
-            params: {
-              _meta: {
-                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                "io.modelcontextprotocol/clientCapabilities": {},
-                "io.modelcontextprotocol/clientInfo": { name: "mcp-test", version: "1.0.0" },
-              },
-            },
-          }),
-          "application/json",
-        ),
-      });
-      expect(toolsResponse.status).toBe(200);
-      const tools = (yield* toolsResponse.json) as {
-        error?: unknown;
-        result: { tools: ReadonlyArray<{ name: string }> };
-      };
-      expect(tools.error).toBeUndefined();
-      expect(tools.result.tools).toEqual(
-        expect.arrayContaining([expect.objectContaining({ name: "probe" })]),
-      );
-
-      // The Go MCP SDK sends this without request metadata, though 2026-07-28 does not define it.
-      const rootsChanged = (
-        client: HttpClient.HttpClient,
-        message: object = {},
-        headers: Record<string, string> = {},
-      ) =>
-        client.post("/mcp", {
-          headers: {
-            accept: "application/json, text/event-stream",
-            "mcp-method": "notifications/roots/list_changed",
-            "mcp-protocol-version": "2026-07-28",
-            ...headers,
-          },
-          body: HttpBody.text(
-            JSON.stringify({
-              jsonrpc: "2.0",
-              method: "notifications/roots/list_changed",
-              params: {},
-              ...message,
-            }),
-            "application/json",
-          ),
-        });
-      const acknowledged = yield* rootsChanged(httpClient);
-      expect(acknowledged.status).toBe(202);
-      expect(yield* acknowledged.text).toBe("");
-      expect((yield* rootsChanged(yield* HttpClient.HttpClient)).status).toBe(401);
-      expect((yield* rootsChanged(httpClient, { id: 7 })).status).toBe(400);
-      expect((yield* rootsChanged(httpClient, {}, { origin: "https://example.com" })).status).toBe(
-        403,
-      );
-
-      const initializeResponse = yield* httpClient.post("/mcp", {
-        headers: { accept: "application/json, text/event-stream" },
-        body: HttpBody.text(
-          `{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"2099-01-01","capabilities":{},"clientInfo":{"name":"mcp-test","version":"1.0.0"}}}`,
-          "application/json",
-        ),
-      });
-      expect(initializeResponse.status).toBe(200);
-      const initialized = (yield* initializeResponse.json) as {
-        result: { protocolVersion: string };
-      };
-      expect(initialized.result.protocolVersion).toBe("2025-06-18");
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );

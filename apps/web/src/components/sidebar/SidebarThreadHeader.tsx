@@ -12,6 +12,7 @@ import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { SidebarInput, SidebarMenuButton } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { SidebarOwnershipFilter } from "./SidebarOwnershipFilter";
 
 export interface SidebarThreadHeaderProps {
   hasProjects: boolean;
@@ -101,6 +102,7 @@ export function SidebarThreadHeader({
       <div className="flex shrink-0 items-center">
         {hasProjects ? (
           <>
+            <SidebarOwnershipFilter />
             {projectScope}
             <SidebarHeaderIconButton label={gt("Add project")} onClick={onNewProject}>
               <FolderPlusIcon />

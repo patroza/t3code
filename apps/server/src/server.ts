@@ -1,4 +1,3 @@
-import { WorktreeLifecycleLive } from "./orchestration-v2/WorktreeLifecycle.ts";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import type { RelayManagedEndpointRuntimeConfig } from "@t3tools/contracts/relay";
 import * as Random from "effect/Random";
@@ -18,6 +17,7 @@ import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentHttpApi, type RepositoryIdentity } from "@t3tools/contracts";
+import * as FeatureFlags from "@t3tools/shared/FeatureFlags";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
@@ -26,7 +26,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
-import { FetchHttpClient, HttpRouter, HttpServer, HttpServerRequest } from "effect/http";
+import { FetchHttpClient, HttpRouter, HttpServer } from "effect/http";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
@@ -69,8 +69,8 @@ import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as DelegatedTaskAnalytics from "./telemetry/DelegatedTaskAnalytics.ts";
 import * as ProviderUsageAnalytics from "./telemetry/ProviderUsageAnalytics.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
-import * as ResetCreditCoordinator from "./provider/resetCreditCoordinator.ts";
 import * as DirenvEnvironment from "./provider/DirenvEnvironment.ts";
+import * as ResetCreditCoordinator from "./provider/resetCreditCoordinator.ts";
 import * as EventNdjsonLogger from "./provider/EventNdjsonLogger.ts";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
@@ -105,7 +105,6 @@ import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import * as DeviceHubProxy from "./device/DeviceHubProxy.ts";
 import * as PreviewManager from "./preview/Manager.ts";
-import * as PortExposure from "./preview/PortExposure.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as PreviewTunnel from "./preview/PreviewTunnel.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
@@ -113,10 +112,8 @@ import * as PreviewAgentActivity from "./preview/PreviewAgentActivity.ts";
 import * as DesktopBrowserChannel from "./preview/DesktopBrowserChannel.ts";
 import * as ServerBrowserStream from "./preview/ServerBrowserStream.ts";
 import * as PreviewBrowser from "./preview/PreviewBrowser.ts";
-import * as AiUsageMonitor from "./aiUsage/AiUsageMonitor.ts";
 import * as ProcessRunner from "./processRunner.ts";
 import * as GitManager from "./git/GitManager.ts";
-import * as PrLookupFreeze from "./git/PrLookupFreeze.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
@@ -141,6 +138,9 @@ import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
+import * as WorkspaceFolders from "./workspace/WorkspaceFolders.ts";
+import * as TaskFolders from "./workspace/TaskFolders.ts";
+import * as TaskFolderStore from "./workspace/TaskFolderStore.ts";
 import * as KnownWorkspaces from "./workspace/KnownWorkspaces.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
@@ -158,7 +158,6 @@ import * as SourceControlProviderRegistry from "./sourceControl/SourceControlPro
 import * as PullRequestReadCache from "./pullRequest/PullRequestReadCache.ts";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
-import * as ProjectLifecycleScriptRunner from "./project/ProjectLifecycleScriptRunner.ts";
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import * as Observability from "./observability/Observability.ts";
 import * as HeapSnapshot from "./observability/HeapSnapshot.ts";
@@ -170,6 +169,8 @@ import * as AuthHttp from "./auth/http.ts";
 import * as ReplayMarkers from "./auth/replayMarkers.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as IdentityService from "./identity/IdentityService.ts";
+import * as JiraServerLayers from "./jira/JiraServerLayers.ts";
+import { exemptBootstrapPaths } from "./discord/commandReadinessExemption.ts";
 import * as CodexManagedTokenBroker from "./provider/CodexManagedTokenBroker.ts";
 import * as WebhookRoute from "./scheduledTasks/webhookRoute.ts";
 import * as RelayDeliveryProof from "./scheduledTasks/RelayDeliveryProof.ts";
@@ -210,17 +211,16 @@ import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as DesktopAppUpdate from "./desktopUpdate/DesktopAppUpdate.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
-import * as ResourceAttribution from "./resourceTelemetry/ResourceAttribution.ts";
-import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinary.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as TriageService from "./triage/TriageService.ts";
 import * as DesktopTelemetryReceiver from "./resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as NativeTelemetryClient from "./resourceTelemetry/NativeTelemetryClient.ts";
+import * as ResourceAttribution from "./resourceTelemetry/ResourceAttribution.ts";
+import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinary.ts";
 import * as ProcessGroupMetrics from "./resourceTelemetry/ProcessGroupMetrics.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
-import * as HostResourceProbe from "./diagnostics/HostResourceProbe.ts";
 import * as AntigravityUsage from "./provider/Drivers/AntigravityUsage.ts";
 import { MuseUsageHome } from "@t3tools/provider-muse/server";
 import * as CursorAccountReader from "@t3tools/provider-cursor/server/CursorAccountReader";
@@ -239,19 +239,6 @@ import * as RunFinalizationService from "./orchestration-v2/RunFinalizationServi
 import * as ProjectionMaintenance from "./orchestration-v2/ProjectionMaintenance.ts";
 import * as ProjectionStoreV2 from "./orchestration-v2/ProjectionStore.ts";
 import { makePersistedServerRuntimeState } from "./serverRuntimeState.ts";
-import * as GitHubAppClient from "./github/GitHubAppClient.ts";
-import * as GitHubAppConfig from "./github/GitHubAppConfig.ts";
-import * as GitHubDeliveryStore from "./github/GitHubDeliveryStore.ts";
-import * as GitHubPrBridge from "./github/GitHubPrBridge.ts";
-import { githubWebhookRouteLayer } from "./github/http.ts";
-import * as JiraAppClient from "./jira/JiraAppClient.ts";
-import * as JiraAppConfig from "./jira/JiraAppConfig.ts";
-import * as JiraDeliveryStore from "./jira/JiraDeliveryStore.ts";
-import * as JiraIssueBridge from "./jira/JiraIssueBridge.ts";
-import { jiraWebhookRouteLayer } from "./jira/http.ts";
-import * as WebhookDebugLog from "./webhooks/WebhookDebugLog.ts";
-import * as ThreadWorkItemStore from "./workItems/ThreadWorkItemStore.ts";
-
 import { closeNonPrivateNetworkConnections, loopbackUrlHostForAddress } from "./startupAccess.ts";
 import * as OrchestrationHttp from "./orchestration-v2/http.ts";
 import * as ProjectHttp from "./project/http.ts";
@@ -433,9 +420,6 @@ const layerPlatformServices = DocumentText.layer.pipe(
 
 const layerPersistence = Layer.empty.pipe(Layer.provideMerge(SqlitePersistence.layerConfig));
 
-/** Durable identity claims — residual-free once Persistence/SqlClient is in the graph. */
-const IdentityLayerLive = IdentityService.layerPersisted.pipe(Layer.provideMerge(layerPersistence));
-
 const layerVcsDriverRegistry = VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer));
 
 const layerSourceControlProviderRegistry = SourceControlProviderRegistry.layer.pipe(
@@ -443,10 +427,6 @@ const layerSourceControlProviderRegistry = SourceControlProviderRegistry.layer.p
   Layer.provideMerge(GitVcsDriver.layer),
   Layer.provideMerge(layerVcsDriverRegistry),
 );
-
-// Single process-wide freeze map: GitManager (skip PR API) and the
-// projection pipeline (settle/unsettle) must share the same instance.
-const PrLookupFreezeLive = PrLookupFreeze.layer;
 
 const layerRepositoryIdentityResolver = Layer.effect(
   RepositoryIdentityResolver.RepositoryIdentityResolver,
@@ -495,12 +475,6 @@ const layerGitManager = GitManager.layer.pipe(
   Layer.provideMerge(GitVcsDriver.layer),
   Layer.provideMerge(layerSourceControlProviderRegistry),
   Layer.provideMerge(TextGeneration.layer.pipe(Layer.provide(layerSourceControlProviderRegistry))),
-  Layer.provide(PrLookupFreezeLive),
-);
-
-const ProjectLifecycleScriptRunnerLayerLive = ProjectLifecycleScriptRunner.layer.pipe(
-  Layer.provide(Layer.merge(ProjectStore.layer, ProjectionStoreV2.layer)),
-  Layer.provide(ProcessRunner.layer),
 );
 
 const layerGit = Layer.empty.pipe(
@@ -511,7 +485,6 @@ const layerGit = Layer.empty.pipe(
 const layerGitWorkflow = GitWorkflowService.layer.pipe(
   Layer.provideMerge(layerVcsDriverRegistry),
   Layer.provideMerge(layerGit),
-  Layer.provideMerge(ProjectLifecycleScriptRunnerLayerLive),
 );
 
 const layerSourceControlRepositoryService = SourceControlRepositoryService.layer.pipe(
@@ -532,32 +505,6 @@ const layerReview = ReviewService.layer.pipe(
   Layer.provideMerge(layerKnownWorkspaces),
   Layer.provideMerge(GitVcsDriver.layer),
   Layer.provideMerge(layerVcsDriverRegistry),
-);
-
-/** Shared once for GitHub + Jira bridges (Jira keys / PR URLs → threads). */
-const ThreadWorkItemStoreLive = ThreadWorkItemStore.layer;
-
-const GitHubAppDependenciesLive = Layer.mergeAll(
-  GitHubAppClient.layer,
-  GitHubDeliveryStore.layer,
-).pipe(Layer.provideMerge(GitHubAppConfig.layer));
-
-const GitHubPrBridgeLive = GitHubPrBridge.layer.pipe(
-  Layer.provideMerge(GitHubAppDependenciesLive),
-  Layer.provideMerge(ThreadWorkItemStoreLive),
-  Layer.provideMerge(IdentityLayerLive),
-);
-
-const JiraAppDependenciesLive = Layer.mergeAll(JiraAppClient.layer, JiraDeliveryStore.layer).pipe(
-  Layer.provideMerge(JiraAppConfig.layer),
-);
-
-const JiraIssueBridgeLive = JiraIssueBridge.layer.pipe(
-  Layer.provideMerge(JiraAppDependenciesLive),
-  // Prefer the instance already provided by GitHubPrBridgeLive when merged below.
-  Layer.provideMerge(ThreadWorkItemStoreLive),
-  // Closed-set map for trusted vs context-only Jira actors.
-  Layer.provideMerge(IdentityLayerLive),
 );
 
 const layerVcs = Layer.empty.pipe(
@@ -599,18 +546,9 @@ const layerTerminal = TerminalManager.layer(
   Layer.provide(layerNativeTelemetry),
 );
 
-// Self-contained: the HTTP client is only used to prove a published port
-// answers, and the Net service only to notice a dev server that has exited.
-// Neither belongs in the requirements of everything that renders a preview.
-const PortExposureLayerLive = PortExposure.layer.pipe(
-  Layer.provide(FetchHttpClient.layer),
-  Layer.provide(NetService.layer),
-);
-
 const layerPreview = Layer.empty.pipe(
   Layer.provideMerge(PreviewTunnel.layer),
   Layer.provideMerge(PreviewManager.layer),
-  Layer.provideMerge(PortExposureLayerLive),
   Layer.provideMerge(layerPortScanner),
 );
 
@@ -632,6 +570,9 @@ const layerWorkspace = Layer.mergeAll(
   WorkspacePaths.layer,
   layerWorkspaceEntries,
   layerWorkspaceFileSystem,
+  WorkspaceFolders.layer.pipe(
+    Layer.provide(Layer.merge(ProjectStore.layer, TaskFolderStore.layer)),
+  ),
 );
 
 const layerProjectFaviconResolver = ProjectFaviconResolver.layer.pipe(
@@ -686,8 +627,21 @@ const layerScheduledTaskWebhookOrigin = Layer.effect(
   }),
 );
 
+const layerTaskFolders = TaskFolders.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      TaskFolderStore.layer,
+      ProjectStore.layer,
+      ProjectionStoreV2.layer,
+      VcsProcess.layer,
+    ),
+  ),
+  Layer.provide(layerGitWorkflow),
+);
+
 const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
   Layer.provide(UsageLimitSources.layerResetFallback),
+  Layer.provide(layerTaskFolders),
   Layer.provide(layerScheduledTaskWebhookOrigin),
   Layer.provide(ProviderUsageAnalytics.layer),
   Layer.provide(layerCheckpointStore),
@@ -765,8 +719,6 @@ const layerServerRestart = Layer.effect(
 );
 
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
-  AiUsageMonitor.layer,
-  WorktreeLifecycleLive,
   AgentAwarenessRelay.layer,
   HeldHooksWaker.layer,
   layerThreadSettlementWorker,
@@ -812,6 +764,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.effectDiscard(ProjectSettingsOverrideSweep.sweep),
 ).pipe(
   Layer.provideMerge(layerOrchestrationApplication),
+  Layer.provideMerge(layerTaskFolders),
   Layer.provideMerge(RuntimeLayer.layerEventInfrastructure),
   Layer.provideMerge(Layer.merge(ProjectStore.layer, ThreadSearch.layer)),
   Layer.provideMerge(SecretCheck.layer),
@@ -892,26 +845,12 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
   ),
 );
 
-const RuntimeCoreWithGitHubLive = GitHubPrBridgeLive.pipe(
-  Layer.provideMerge(layerRuntimeCoreDependencies),
-);
-
-const RuntimeCoreWithIntegrationsLive = JiraIssueBridgeLive.pipe(
-  Layer.provideMerge(RuntimeCoreWithGitHubLive),
-  // Shared 24h NDJSON debug logs for GitHub + Jira inbound webhooks.
-  Layer.provideMerge(WebhookDebugLog.layer),
-);
-
-const layerRuntimeDependencies = RuntimeCoreWithIntegrationsLive.pipe(
-  // Misc.
-  // Usage reads provider history through the ProviderHost, which needs the
-  // background policy below it.
+const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
   Layer.provideMerge(layerUsage),
   Layer.provideMerge(layerBackground),
   // The same layer the event sink uses; memoized, subscriptions and batch ranking share it.
   Layer.provideMerge(ThreadViewers.layer),
   Layer.provideMerge(layerResourceDiagnostics),
-  Layer.provideMerge(HostResourceProbe.layer),
   Layer.provideMerge(TraceDiagnostics.layer),
   Layer.provideMerge(TriageService.layer.pipe(Layer.provide(GitVcsDriver.layer))),
   // Layers memoize by reference, so this is the same policy the settings layer reads.
@@ -923,35 +862,15 @@ const layerRuntimeDependencies = RuntimeCoreWithIntegrationsLive.pipe(
   // GitVcsDriver.layer is memoized and some of its build sites live outside this file, so the
   // fetch interval goes in context here, before the first build captures it.
   Layer.provideMerge(VcsAutomaticFetchInterval.layer.pipe(Layer.provide(layerServerSettings))),
+  Layer.provideMerge(IdentityService.layerPersisted.pipe(Layer.provide(layerPersistence))),
   Layer.provide(NetService.layer),
 );
 
-/**
- * Bootstrap / liveness surfaces that must not wait for provider recovery or the
- * broader command-readiness gate. Discord bot token exchange and environment
- * discovery hang the whole client fleet if they sit behind a stuck recovery turn.
- */
-export function isCommandReadinessExemptPath(url: string): boolean {
-  const pathOnly = (url.split("?", 1)[0] ?? url).split("#", 1)[0] ?? url;
-  return (
-    pathOnly === "/oauth/token" ||
-    pathOnly === "/.well-known/t3/environment" ||
-    pathOnly === "/api/t3-connect/health" ||
-    pathOnly === "/api/connect/health"
-  );
-}
-
 const layerCommandReadiness = HttpRouter.middleware(
   (httpEffect) =>
-    Effect.gen(function* () {
-      const request = yield* HttpServerRequest.HttpServerRequest;
-      if (isCommandReadinessExemptPath(request.url)) {
-        return yield* httpEffect;
-      }
-      const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
-      yield* startup.awaitCommandReady.pipe(Effect.orDie);
-      return yield* httpEffect;
-    }),
+    Effect.flatMap(ServerRuntimeStartup.ServerRuntimeStartup, (startup) =>
+      startup.awaitCommandReady.pipe(Effect.orDie, Effect.andThen(httpEffect)),
+    ).pipe(exemptBootstrapPaths(httpEffect)),
   { global: true },
 );
 
@@ -981,6 +900,7 @@ const layerMakeRoutes = Layer.mergeAll(
     ServerHttp.layerStaticAndDevRoute,
     Ws.layer,
     speechStreamRouteLayer,
+    JiraServerLayers.layer,
   ),
   McpHttpServer.layer.pipe(
     Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
@@ -1030,12 +950,6 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.provide(layerCommandReadiness),
   Layer.provide(ServerHttp.layerBrowserApiCors),
   Layer.provide(ServerHttp.layerHttpCompression),
-);
-
-const productionRoutesLayer = Layer.mergeAll(
-  layerMakeRoutes,
-  githubWebhookRouteLayer,
-  jiraWebhookRouteLayer,
 );
 
 const layerMakeServer = Layer.unwrap(
@@ -1466,7 +1380,7 @@ const layerMakeServer = Layer.unwrap(
       ).pipe(Effect.asVoid),
     }).pipe(Layer.provideMerge(layerRuntimeDependencies), Layer.provide(layerLauncher));
 
-    const layerRoutes = HttpRouter.serve(productionRoutesLayer.pipe(Layer.provide(layerLauncher)), {
+    const layerRoutes = HttpRouter.serve(layerMakeRoutes.pipe(Layer.provide(layerLauncher)), {
       disableLogger: !config.logWebSocketEvents,
       routerConfig: HTTP_ROUTER_CONFIG,
     }).pipe(
@@ -1493,7 +1407,6 @@ const layerMakeServer = Layer.unwrap(
         ),
       ),
       Layer.provide(layerActivation),
-      Layer.provideMerge(IdentityLayerLive),
       Layer.provideMerge(
         RelayTracing.layerServerRelayBroker.pipe(Layer.provide(ManagedPolicy.layer)),
       ),
@@ -1503,6 +1416,7 @@ const layerMakeServer = Layer.unwrap(
       Layer.provide(VcsProcess.layer),
       Layer.provideMerge(AgentScopeLive.layer),
       Layer.provideMerge(layerPlatformServices),
+      Layer.provideMerge(FeatureFlags.layer),
       Layer.provide(Layer.succeed(HostProcess.InvokedAs, invokedAs)),
     );
   }),

@@ -1,4 +1,4 @@
-// @effect-diagnostics anyUnknownInErrorContext:off missingEffectContext:off globalFetch:off globalTimers:off missingEffectError:off globalDateInEffect:off globalDate:off globalErrorInEffectCatch:off globalErrorInEffectFailure:off globalFetchInEffect:off preferSchemaOverJson:off
+// @effect-diagnostics anyUnknownInErrorContext:off missingEffectContext:off globalFetch:off globalTimers:off missingEffectError:off globalDateInEffect:off globalDate:off globalErrorInEffectCatch:off globalErrorInEffectFailure:off globalFetchInEffect:off preferSchemaOverJson:off globalJsonInEffect:off
 import { DiscordConfig, DiscordREST } from "dfx";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";

@@ -15,17 +15,12 @@ import {
   isSettingsSearchScopeAvailable,
   movedSettingsPath,
   searchSettings,
-  SETTINGS_NAV_GROUPS,
+  settingsNavGroups,
   SETTINGS_SEARCH_ITEMS,
   sourceControlHostSearchItems,
   sourceControlHostSettingsSearchId,
   type SettingsSearchItem,
 } from "./settingsSearch";
-
-vi.mock("~/env", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("~/env")>()),
-  isSecretsFeatureEnabled: false,
-}));
 
 const ITEMS: ReadonlyArray<SettingsSearchItem> = [
   {
@@ -76,9 +71,27 @@ describe("searchSettings", () => {
     }
   });
 
-  it("hides the Secrets page from nav and search while the secrets feature is disabled", () => {
-    expect(SETTINGS_NAV_GROUPS.flatMap((group) => group.paths)).not.toContain("/settings/secrets");
-    expect(searchSettings("1password").map((item) => item.to)).not.toContain("/settings/secrets");
+  it("shows the Secrets page in nav and search only when an environment enables secret providers", () => {
+    const availability = {
+      hasCloudPublicConfig: false,
+      hasEnvironment: true,
+      hasProviderSettingsEnvironment: true,
+      canManageLocalBackend: false,
+      isWslSettingsRowVisible: false,
+      hasThreadAutoSettlement: false,
+    };
+    for (const enabled of [false, true]) {
+      const navPaths = settingsNavGroups(enabled).flatMap((group) => group.paths);
+      const searchPaths = searchSettings(
+        "1password",
+        filterAvailableSettingsSearchItems({
+          ...availability,
+          hasSecretProvidersEnvironment: enabled,
+        }),
+      ).map((item) => item.to);
+      expect(navPaths.includes("/settings/secrets")).toBe(enabled);
+      expect(searchPaths.includes("/settings/secrets")).toBe(enabled);
+    }
   });
 
   it("finds where subagents and side chats open by any of its names", () => {
@@ -96,39 +109,6 @@ describe("searchSettings", () => {
 
   it("matches normalized title substrings", () => {
     expect(searchSettings("  WORD   WRAP  ", ITEMS).map((item) => item.id)).toEqual(["word-wrap"]);
-    // The full catalog matches worktree settings, not the unrelated "Word wrap" label.
-    expect(
-      searchSettings("work", [{ id: "word-wrap", title: "Word wrap", to: "/settings/appearance" }]),
-    ).toEqual([]);
-    expect(searchSettings("work").map((item) => item.id)).toEqual([
-      "storage-worktrees",
-      "storage-worktrees-location",
-      "working-shelf",
-      "worktree-remove-confirmation",
-      "worktree-branch-naming",
-      "storage-worktree-keep-when",
-      "worktree-fast-checkout",
-      "keep-awake-while-agents-work",
-      "network-access",
-      "project-defaults",
-      "environment-identification",
-      "tool-call-visibility",
-      "screen-reader-window-title",
-      "linked-environments-beta",
-      "continue-threads-after-server-update",
-      "new-threads",
-      "worktree-submodules",
-      "start-from-origin",
-      "project-actions",
-      "linked-environments",
-      "keybinding-workspace.focusNext",
-      "keybinding-workspace.focusPrevious",
-      "keybinding-composer.previousWorktree",
-      "keybinding-composer.workspace",
-    ]);
-    expect(searchSettings("deploy").map((item) => item.id)).toContain(
-      "continue-threads-after-server-update",
-    );
     expect(searchSettings("glass").map((item) => item.id)).toEqual(["setting-glass-opacity"]);
     expect(searchSettings("panel animations").map((item) => item.id)).toEqual(["panel-animations"]);
     expect(searchSettings("thè\u{1ab0}mes")[0]?.id).toBe("theme");
@@ -151,42 +131,6 @@ describe("searchSettings", () => {
         .slice(0, 2)
         .map((item) => item.id),
     ).toEqual(["network-access", "connections-environment"]);
-  });
-
-  it("finds settings that used to be reachable only through their section", () => {
-    expect(searchSettings("pull request template")[0]?.id).toBe("follow-change-request-templates");
-    expect(searchSettings("git security keys")[0]?.id).toBe("git-fetch-interval");
-    expect(searchSettings("push notifications")[0]?.id).toBe("publish-agent-activity");
-    expect(searchSettings("battery saver")[0]?.id).toBe("background-activity");
-    expect(searchSettings("binary path")[0]?.id).toBe("providers");
-    expect(searchSettings("Antigravity")[0]?.id).toBe("providers");
-    expect(searchSettings("Google sign in")[0]?.id).toBe("providers");
-    expect(searchSettings("authorized clients")[0]?.id).toBe("connections-environment");
-    expect(searchSettings("administrative access")[0]?.id).toBe("connections-environment");
-  });
-
-  it("lists thread confirmations in panel order", () => {
-    expect(searchSettings("confirmation").map((item) => item.id)).toEqual([
-      "unpin-confirmation",
-      "archive-confirmation",
-      "delete-confirmation",
-      "terminal-close-confirmation",
-      "worktree-remove-confirmation",
-    ]);
-  });
-
-  it.each(["usage providers", "CLIProxyAPI", "CLI proxy hub", "management key"])(
-    "finds usage-provider management by %s",
-    (query) => {
-      expect(searchSettings(query)[0]).toMatchObject({
-        id: "usage-providers",
-        to: "/settings/providers",
-      });
-    },
-  );
-
-  it("returns no results for an empty query", () => {
-    expect(searchSettings("   ", ITEMS)).toEqual([]);
   });
 
   it("hides desktop-only settings from browser search", () => {

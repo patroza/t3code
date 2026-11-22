@@ -216,10 +216,6 @@ export function backgroundActivitySharedPolicySettings(
   };
 }
 
-// The update RPC takes ServerSettingsPatch. Partial<UnifiedSettings> is wider:
-// legacy provider fields such as antigravity.apiKey are secret references on
-// the client type and plain strings on the patch, so a wide return fails
-// exactOptionalPropertyTypes even when those fields are absent.
 export function buildProviderInstanceUpdatePatch(input: {
   readonly settings: Pick<ServerSettings, "providerInstances">;
   readonly instanceId: ProviderInstanceId;
@@ -227,10 +223,7 @@ export function buildProviderInstanceUpdatePatch(input: {
   readonly textGenerationModelSelection?:
     | ServerSettings["textGenerationModelSelection"]
     | undefined;
-}): {
-  readonly providerInstances: ServerSettings["providerInstances"];
-  readonly textGenerationModelSelection?: ServerSettings["textGenerationModelSelection"];
-} {
+}): Partial<UnifiedSettings> {
   return {
     providerInstances: {
       ...input.settings.providerInstances,

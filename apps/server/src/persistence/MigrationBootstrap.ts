@@ -3,11 +3,12 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import { MigrationError } from "effect/sql/Migrator";
 
-import { forkMigrationTable } from "./ForkMigrations.ts";
 import Migration0035 from "./Migrations/035_ProjectionThreadTitleRegeneration.ts";
 import Migration0036 from "./Migrations/036_ProjectionThreadsPinned.ts";
 
+// Splits legacy fork rows out of the shared upstream ledger once, so existing installs keep working.
 export const upstreamMigrationTable = "effect_sql_migrations";
+export const forkMigrationTable = "t3_fork_sql_migrations";
 export const legacyMigrationBackupTable = "effect_sql_migrations_backup_v1";
 
 const namespaceTable = "t3_migration_namespaces";
@@ -148,16 +149,16 @@ const bootstrapLegacyLedger = Effect.fn("MigrationBootstrap.bootstrapLegacyLedge
     FROM ${sql(upstreamMigrationTable)}
     ORDER BY migration_id
   `;
+  // A plain upstream ledger (fresh, or a database the fork never wrote) has nothing to move.
+  if (!legacyRows.some(({ name }) => knownForkNames.has(name) || knownRepairNames.has(name))) {
+    return;
+  }
   yield* createLedger(sql, legacyMigrationBackupTable);
   if (Arr.isReadonlyArrayNonEmpty(legacyRows)) {
     yield* sql`INSERT OR IGNORE INTO ${sql(legacyMigrationBackupTable)} ${sql.insert(
       Arr.map(legacyRows, ({ migration_id, name }) => ({ migration_id, name })),
     )}`;
   }
-  if (legacyRows.length === 0) {
-    return;
-  }
-
   let canonicalPrefix = 0;
   for (const row of legacyRows) {
     if (
@@ -239,6 +240,17 @@ const bootstrapLegacyLedger = Effect.fn("MigrationBootstrap.bootstrapLegacyLedge
       yield* sql`INSERT INTO ${sql(upstreamMigrationTable)} ${sql.insert(reconciledRows)}`;
     }
   }
+});
+
+export const isMigrationNamespaceBootstrapped = Effect.fn(
+  "MigrationBootstrap.isMigrationNamespaceBootstrapped",
+)(function* () {
+  if (!(yield* tableExists(namespaceTable))) return false;
+  const sql = yield* SqlClient.SqlClient;
+  const rows = yield* sql<{ readonly version: number }>`
+    SELECT version FROM ${sql(namespaceTable)} WHERE version = ${namespaceVersion}
+  `;
+  return rows.length > 0;
 });
 
 export const bootstrapMigrationNamespaces = Effect.fn("bootstrapMigrationNamespaces")(function* () {

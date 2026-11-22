@@ -45,6 +45,7 @@ import * as Schema from "effect/Schema";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcMiddleware from "effect/rpc/RpcMiddleware";
+import { IdentityRpcGroup } from "./identityRpc.ts";
 import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { SecretSourceCheckResult } from "./settingsSecretValue.ts";
 import { SecretReference } from "./secretReference.ts";
@@ -92,20 +93,7 @@ import {
   AuthAccessStreamEvent,
   EnvironmentAuthorizationError,
 } from "./auth.ts";
-import {
-  IdentityClaimInput,
-  IdentityClaimResult,
-  IdentityError,
-  IdentityListClientClaimsResult,
-  IdentitySessionClaimResult,
-  IdentitySetClientClaimInput,
-  IdentitySnapshot,
-} from "./identity.ts";
-import {
-  HostPowerSnapshot,
-  BackgroundPolicySnapshot,
-  ClientActivityReportInput,
-} from "./background.ts";
+import { ClientActivityReportInput } from "./background.ts";
 import {
   FilesystemGetMetadataInput,
   FilesystemGetMetadataResult,
@@ -113,6 +101,18 @@ import {
   FilesystemBrowseResult,
   FilesystemBrowseError,
 } from "./filesystem.ts";
+import {
+  WorkspaceFoldersError,
+  TaskFolder,
+  TaskFolderError,
+  WorkspaceAddTaskFolderRepositoryInput,
+  WorkspaceListFoldersInput,
+  WorkspaceListFoldersResult,
+  WorkspaceScanFoldersInput,
+  WorkspaceScanFoldersResult,
+  WorkspaceTaskFolderInput,
+  WorkspaceTaskFolderResult,
+} from "./workspaceFolders.ts";
 import {
   AgentSessionImportInput,
   AgentSessionImportProjectChangedError,
@@ -170,15 +170,8 @@ import {
   VcsStatusInput,
   VcsBranchStatus,
   VcsStatusSubscriptionInput,
-  VcsStatusResult,
+  VcsRefreshStatusResult,
   VcsStatusStreamEvent,
-  VcsResolveBranchChangeRequestInput,
-  VcsResolveBranchChangeRequestResult,
-  WorktreeCleanupInput,
-  WorktreeCleanupPreviewInput,
-  WorktreeCleanupPreviewResult,
-  WorktreeCleanupResult,
-  WorktreeLifecycleError,
 } from "./git.ts";
 import {
   ReviewBranchCommitsInput,
@@ -189,9 +182,7 @@ import {
   ReviewDiffPreviewInput,
   ReviewDiffPreviewResult,
 } from "./review.ts";
-import { AiUsageSnapshot } from "./aiUsage.ts";
 import { KeybindingsConfigError } from "./keybindings.ts";
-import { ServerHostResourceSnapshot } from "./hostResources.ts";
 import { OrchestrationSearchThreadsError } from "./threadSearch.ts";
 import {
   ProviderMcpSignInCompleteInput,
@@ -307,7 +298,6 @@ import {
   ProjectListEntriesError,
   ProjectListEntriesInput,
   ProjectListEntriesResult,
-  ProjectFileChangeEvent,
   ProjectListIgnoredFilesInput,
   ProjectListIgnoredFilesResult,
   ProjectReadFileError,
@@ -354,9 +344,6 @@ import {
   PreviewResizeInput,
   PreviewAdjustInput,
   PreviewSessionSnapshot,
-  PreviewPortResolveRequest,
-  PreviewPortResolution,
-  PreviewPortUnreachableError,
 } from "./preview.ts";
 import {
   DeviceActionInput,
@@ -379,13 +366,6 @@ import {
   DeviceSession,
   DeviceShutdownInput,
 } from "./device.ts";
-import {
-  PreviewAutomationError,
-  PreviewAutomationHost,
-  PreviewAutomationHostFocus,
-  PreviewAutomationResponse,
-  PreviewAutomationStreamEvent,
-} from "./previewAutomation.ts";
 import {
   ServerConfigStreamEvent,
   DesktopUpdateCommitInput,
@@ -488,17 +468,10 @@ import { VcsError } from "./vcs.ts";
 import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
 
 export const WS_METHODS = {
-  subscribeBackgroundPolicy: "subscribeBackgroundPolicy",
-
-  serverGetBackgroundPolicy: "server.getBackgroundPolicy",
-
-  serverReportHostPowerState: "server.reportHostPowerState",
-
   projectsListEntries: "projects.listEntries",
   projectsListIgnoredFiles: "projects.listIgnoredFiles",
   projectsReadFile: "projects.readFile",
   projectsSearchContents: "projects.searchContents",
-  projectsWatchFile: "projects.watchFile",
   projectsSearchEntries: "projects.searchEntries",
   projectsWriteFile: "projects.writeFile",
   projectsMutate: "projects.mutate",
@@ -509,6 +482,10 @@ export const WS_METHODS = {
   shellOpenInEditor: "shell.openInEditor",
 
   filesystemBrowse: "filesystem.browse",
+  workspaceListFolders: "workspace.listFolders",
+  workspaceScanFolders: "workspace.scanFolders",
+  workspaceTaskFolder: "workspace.taskFolder",
+  workspaceAddTaskFolderRepository: "workspace.addTaskFolderRepository",
   filesystemGetMetadata: "filesystem.getMetadata",
   agentSessionsScan: "agentSessions.scan",
   agentSessionsImport: "agentSessions.import",
@@ -574,9 +551,6 @@ export const WS_METHODS = {
   previewClearProfile: "preview.clearProfile",
   previewReportProfiles: "preview.reportProfiles",
   previewReportStatus: "preview.reportStatus",
-  previewAutomationConnect: "previewAutomation.connect",
-  previewAutomationRespond: "previewAutomation.respond",
-  previewAutomationFocusHost: "previewAutomation.focusHost",
   previewStopLocalServer: "preview.stopLocalServer",
 
   deviceConfigure: "device.configure",
@@ -657,15 +631,6 @@ export const WS_METHODS = {
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
   cloudInstallRelayClient: "cloud.installRelayClient",
 
-  // Session identity (closed-set map claim)
-  identityGetSnapshot: "identity.getSnapshot",
-  identityGetSessionClaim: "identity.getSessionClaim",
-  identityClaim: "identity.claim",
-  identityClearClaim: "identity.clearClaim",
-  identityListClientClaims: "identity.listClientClaims",
-  identitySetClientClaim: "identity.setClientClaim",
-  // Pull request methods
-
   pullRequestsList: "pullRequests.list",
   pullRequestsListStats: "pullRequests.listStats",
   pullRequestsFilterOptions: "pullRequests.filterOptions",
@@ -745,13 +710,6 @@ export const WS_METHODS = {
   subscribeServerLifecycle: "subscribeServerLifecycle",
   subscribeAuthAccess: "subscribeAuthAccess",
   subscribeResourceTelemetry: "subscribeResourceTelemetry",
-  // Fork-only methods
-  vcsResolveBranchChangeRequest: "vcs.resolveBranchChangeRequest",
-  vcsPreviewWorktreeCleanup: "vcs.previewWorktreeCleanup",
-  vcsCleanupThreadWorktree: "vcs.cleanupThreadWorktree",
-  previewResolvePort: "preview.resolvePort",
-  serverGetHostResourceSnapshot: "server.getHostResourceSnapshot",
-  subscribeAiUsage: "subscribeAiUsage",
 } as const;
 
 const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -1145,15 +1103,6 @@ const WsServerGetHostResourcesRpc = Rpc.make(WS_METHODS.serverGetHostResources, 
   error: EnvironmentAuthorizationError,
 });
 
-export const WsServerGetHostResourceSnapshotRpc = Rpc.make(
-  WS_METHODS.serverGetHostResourceSnapshot,
-  {
-    payload: Schema.Struct({}),
-    success: ServerHostResourceSnapshot,
-    error: EnvironmentAuthorizationError,
-  },
-);
-
 const WsServerGetProcessResourceHistoryRpc = Rpc.make(WS_METHODS.serverGetProcessResourceHistory, {
   payload: ServerProcessResourceHistoryInput,
   success: ServerProcessResourceHistoryResult,
@@ -1222,42 +1171,6 @@ const WsCloudInstallRelayClientRpc = Rpc.make(WS_METHODS.cloudInstallRelayClient
   success: RelayClientInstallProgressEventSchema,
   error: Schema.Union([RelayClientInstallFailedError, EnvironmentAuthorizationError]),
   stream: true,
-});
-
-export const WsIdentityGetSnapshotRpc = Rpc.make(WS_METHODS.identityGetSnapshot, {
-  payload: Schema.Struct({}),
-  success: IdentitySnapshot,
-  error: Schema.Union([IdentityError, EnvironmentAuthorizationError]),
-});
-
-export const WsIdentityGetSessionClaimRpc = Rpc.make(WS_METHODS.identityGetSessionClaim, {
-  payload: Schema.Struct({}),
-  success: IdentitySessionClaimResult,
-  error: Schema.Union([IdentityError, EnvironmentAuthorizationError]),
-});
-
-export const WsIdentityClaimRpc = Rpc.make(WS_METHODS.identityClaim, {
-  payload: IdentityClaimInput,
-  success: IdentityClaimResult,
-  error: Schema.Union([IdentityError, EnvironmentAuthorizationError]),
-});
-
-export const WsIdentityClearClaimRpc = Rpc.make(WS_METHODS.identityClearClaim, {
-  payload: Schema.Struct({}),
-  success: Schema.Struct({ cleared: Schema.Boolean }),
-  error: Schema.Union([IdentityError, EnvironmentAuthorizationError]),
-});
-
-export const WsIdentityListClientClaimsRpc = Rpc.make(WS_METHODS.identityListClientClaims, {
-  payload: Schema.Struct({}),
-  success: IdentityListClientClaimsResult,
-  error: Schema.Union([IdentityError, EnvironmentAuthorizationError]),
-});
-
-export const WsIdentitySetClientClaimRpc = Rpc.make(WS_METHODS.identitySetClientClaim, {
-  payload: IdentitySetClientClaimInput,
-  success: IdentitySessionClaimResult,
-  error: Schema.Union([IdentityError, EnvironmentAuthorizationError]),
 });
 
 const WsServerReportClientActivityRpc = Rpc.make(WS_METHODS.serverReportClientActivity, {
@@ -1711,13 +1624,6 @@ const WsProjectsReadFileRpc = Rpc.make(WS_METHODS.projectsReadFile, {
   error: Schema.Union([ProjectReadFileError, EnvironmentAuthorizationError]),
 });
 
-export const WsProjectsWatchFileRpc = Rpc.make(WS_METHODS.projectsWatchFile, {
-  payload: ProjectReadFileInput,
-  success: ProjectFileChangeEvent,
-  error: Schema.Union([ProjectReadFileError, EnvironmentAuthorizationError]),
-  stream: true,
-});
-
 const WsProjectsWriteFileRpc = Rpc.make(WS_METHODS.projectsWriteFile, {
   payload: ProjectWriteFileInput,
   success: ProjectWriteFileResult,
@@ -1764,6 +1670,33 @@ const WsFilesystemBrowseRpc = Rpc.make(WS_METHODS.filesystemBrowse, {
   success: FilesystemBrowseResult,
   error: Schema.Union([FilesystemBrowseError, EnvironmentAuthorizationError]),
 });
+
+const WsWorkspaceListFoldersRpc = Rpc.make(WS_METHODS.workspaceListFolders, {
+  payload: WorkspaceListFoldersInput,
+  success: WorkspaceListFoldersResult,
+  error: Schema.Union([WorkspaceFoldersError, EnvironmentAuthorizationError]),
+});
+
+const WsWorkspaceScanFoldersRpc = Rpc.make(WS_METHODS.workspaceScanFolders, {
+  payload: WorkspaceScanFoldersInput,
+  success: WorkspaceScanFoldersResult,
+  error: Schema.Union([WorkspaceFoldersError, EnvironmentAuthorizationError]),
+});
+
+const WsWorkspaceTaskFolderRpc = Rpc.make(WS_METHODS.workspaceTaskFolder, {
+  payload: WorkspaceTaskFolderInput,
+  success: WorkspaceTaskFolderResult,
+  error: Schema.Union([TaskFolderError, EnvironmentAuthorizationError]),
+});
+
+const WsWorkspaceAddTaskFolderRepositoryRpc = Rpc.make(
+  WS_METHODS.workspaceAddTaskFolderRepository,
+  {
+    payload: WorkspaceAddTaskFolderRepositoryInput,
+    success: TaskFolder,
+    error: Schema.Union([TaskFolderError, EnvironmentAuthorizationError]),
+  },
+);
 
 const WsAgentSessionsScanRpc = Rpc.make(WS_METHODS.agentSessionsScan, {
   payload: AgentSessionScanInput,
@@ -1877,7 +1810,7 @@ const WsVcsRefreshStatusRpc = Rpc.make(WS_METHODS.vcsRefreshStatus, {
     ...VcsStatusInput.fields,
     localOnly: Schema.optional(Schema.Boolean),
   }),
-  success: VcsStatusResult,
+  success: VcsRefreshStatusResult,
   error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
 });
 
@@ -1929,27 +1862,6 @@ const WsVcsCreateWorktreeRpc = Rpc.make(WS_METHODS.vcsCreateWorktree, {
 const WsVcsRemoveWorktreeRpc = Rpc.make(WS_METHODS.vcsRemoveWorktree, {
   payload: VcsRemoveWorktreeInput,
   error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
-});
-
-export const WsVcsResolveBranchChangeRequestRpc = Rpc.make(
-  WS_METHODS.vcsResolveBranchChangeRequest,
-  {
-    payload: VcsResolveBranchChangeRequestInput,
-    success: VcsResolveBranchChangeRequestResult,
-    error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
-  },
-);
-
-export const WsVcsPreviewWorktreeCleanupRpc = Rpc.make(WS_METHODS.vcsPreviewWorktreeCleanup, {
-  payload: WorktreeCleanupPreviewInput,
-  success: WorktreeCleanupPreviewResult,
-  error: Schema.Union([WorktreeLifecycleError, EnvironmentAuthorizationError]),
-});
-
-export const WsVcsCleanupThreadWorktreeRpc = Rpc.make(WS_METHODS.vcsCleanupThreadWorktree, {
-  payload: WorktreeCleanupInput,
-  success: WorktreeCleanupResult,
-  error: Schema.Union([WorktreeLifecycleError, EnvironmentAuthorizationError]),
 });
 
 const WsVcsCreateRefRpc = Rpc.make(WS_METHODS.vcsCreateRef, {
@@ -2069,29 +1981,6 @@ const WsPreviewReportProfilesRpc = Rpc.make(WS_METHODS.previewReportProfiles, {
 const WsPreviewReportStatusRpc = Rpc.make(WS_METHODS.previewReportStatus, {
   payload: PreviewReportStatusInput,
   error: Schema.Union([PreviewError, EnvironmentAuthorizationError]),
-});
-
-export const WsPreviewResolvePortRpc = Rpc.make(WS_METHODS.previewResolvePort, {
-  payload: PreviewPortResolveRequest,
-  success: PreviewPortResolution,
-  error: Schema.Union([PreviewPortUnreachableError, EnvironmentAuthorizationError]),
-});
-
-const WsPreviewAutomationConnectRpc = Rpc.make(WS_METHODS.previewAutomationConnect, {
-  payload: PreviewAutomationHost,
-  success: PreviewAutomationStreamEvent,
-  error: Schema.Union([PreviewAutomationError, EnvironmentAuthorizationError]),
-  stream: true,
-});
-
-const WsPreviewAutomationRespondRpc = Rpc.make(WS_METHODS.previewAutomationRespond, {
-  payload: PreviewAutomationResponse,
-  error: Schema.Union([PreviewAutomationError, EnvironmentAuthorizationError]),
-});
-
-const WsPreviewAutomationFocusHostRpc = Rpc.make(WS_METHODS.previewAutomationFocusHost, {
-  payload: PreviewAutomationHostFocus,
-  error: EnvironmentAuthorizationError,
 });
 
 const WsSubscribePreviewEventsRpc = Rpc.make(WS_METHODS.subscribePreviewEvents, {
@@ -2470,31 +2359,6 @@ const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess, {
   stream: true,
 });
 
-export const WsSubscribeAiUsageRpc = Rpc.make(WS_METHODS.subscribeAiUsage, {
-  payload: Schema.Struct({}),
-  success: AiUsageSnapshot,
-  error: EnvironmentAuthorizationError,
-  stream: true,
-});
-
-const WsServerReportHostPowerStateRpc = Rpc.make(WS_METHODS.serverReportHostPowerState, {
-  payload: HostPowerSnapshot,
-  error: EnvironmentAuthorizationError,
-});
-
-const WsServerGetBackgroundPolicyRpc = Rpc.make(WS_METHODS.serverGetBackgroundPolicy, {
-  payload: Schema.Struct({}),
-  success: BackgroundPolicySnapshot,
-  error: EnvironmentAuthorizationError,
-});
-
-const WsSubscribeBackgroundPolicyRpc = Rpc.make(WS_METHODS.subscribeBackgroundPolicy, {
-  payload: Schema.Struct({}),
-  success: BackgroundPolicySnapshot,
-  error: EnvironmentAuthorizationError,
-  stream: true,
-});
-
 const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeResourceTelemetry, {
   payload: Schema.Struct({}),
   success: ResourceTelemetrySnapshot,
@@ -2507,7 +2371,7 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
   { error: EnvironmentAuthorizationError },
 ) {}
 
-export const WsEnvironmentRpcGroup = RpcGroup.make(
+export const WsRpcGroup = RpcGroup.make(
   WsIssuesListRpc,
   WsIssuesDetailRpc,
   WsIssuesCommentsRpc,
@@ -2581,7 +2445,6 @@ export const WsEnvironmentRpcGroup = RpcGroup.make(
   WsServerGetProcessDiagnosticsRpc,
   WsServerGetHostResourcesRpc,
   WsServerGetProcessResourceHistoryRpc,
-  WsServerGetHostResourceSnapshotRpc,
   WsServerGetResourceTelemetryHistoryRpc,
   WsServerRetryResourceTelemetryRpc,
   WsServerCheckOtlpEndpointRpc,
@@ -2602,15 +2465,6 @@ export const WsEnvironmentRpcGroup = RpcGroup.make(
   WsServerReportClientActivityRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
-  WsIdentityGetSnapshotRpc,
-  WsIdentityGetSessionClaimRpc,
-  WsIdentityClaimRpc,
-  WsIdentityClearClaimRpc,
-  WsIdentityListClientClaimsRpc,
-  WsIdentitySetClientClaimRpc,
-).middleware(RpcScopeAuthorization);
-
-export const WsPullRequestsRpcGroup = RpcGroup.make(
   WsPullRequestsListRpc,
   WsPullRequestsListStatsRpc,
   WsPullRequestsFilterOptionsRpc,
@@ -2646,9 +2500,6 @@ export const WsPullRequestsRpcGroup = RpcGroup.make(
   WsPullRequestsRequestReviewersRpc,
   WsPullRequestsLabelCandidatesRpc,
   WsPullRequestsSetLabelsRpc,
-).middleware(RpcScopeAuthorization);
-
-export const WsWorkspaceRpcGroup = RpcGroup.make(
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,
@@ -2666,7 +2517,6 @@ export const WsWorkspaceRpcGroup = RpcGroup.make(
   WsProjectsListIgnoredFilesRpc,
   WsProjectsReadFileRpc,
   WsProjectsSearchContentsRpc,
-  WsProjectsWatchFileRpc,
   WsProjectsSearchEntriesRpc,
   WsProjectsEnsureScratchRpc,
   WsProjectsCreateNewRpc,
@@ -2675,6 +2525,10 @@ export const WsWorkspaceRpcGroup = RpcGroup.make(
   WsProjectsMutateRpc,
   WsShellOpenInEditorRpc,
   WsFilesystemBrowseRpc,
+  WsWorkspaceListFoldersRpc,
+  WsWorkspaceScanFoldersRpc,
+  WsWorkspaceTaskFolderRpc,
+  WsWorkspaceAddTaskFolderRepositoryRpc,
   WsFilesystemGetMetadataRpc,
   WsAgentSessionsScanRpc,
   WsAgentSessionsImportRpc,
@@ -2702,18 +2556,12 @@ export const WsWorkspaceRpcGroup = RpcGroup.make(
   WsVcsListRefsRpc,
   WsVcsCreateWorktreeRpc,
   WsVcsRemoveWorktreeRpc,
-  WsVcsResolveBranchChangeRequestRpc,
-  WsVcsPreviewWorktreeCleanupRpc,
-  WsVcsCleanupThreadWorktreeRpc,
   WsVcsCreateRefRpc,
   WsVcsSwitchRefRpc,
   WsVcsInitRpc,
   WsReviewGetBranchCommitsRpc,
   WsReviewGetDiffPreviewRpc,
   WsReviewGetDiffFileContentsRpc,
-).middleware(RpcScopeAuthorization);
-
-export const WsInteractiveRpcGroup = RpcGroup.make(
   WsTerminalOpenRpc,
   WsTerminalAttachRpc,
   WsTerminalObserveRpc,
@@ -2730,10 +2578,6 @@ export const WsInteractiveRpcGroup = RpcGroup.make(
   WsPreviewClearProfileRpc,
   WsPreviewReportProfilesRpc,
   WsPreviewReportStatusRpc,
-  WsPreviewResolvePortRpc,
-  WsPreviewAutomationConnectRpc,
-  WsPreviewAutomationRespondRpc,
-  WsPreviewAutomationFocusHostRpc,
   WsSubscribePreviewEventsRpc,
   WsPreviewStopLocalServerRpc,
   WsSubscribeDiscoveredLocalServersRpc,
@@ -2751,10 +2595,6 @@ export const WsInteractiveRpcGroup = RpcGroup.make(
   WsSubscribeServerConfigRpc,
   WsSubscribeServerLifecycleRpc,
   WsSubscribeAuthAccessRpc,
-  WsSubscribeAiUsageRpc,
-  WsSubscribeBackgroundPolicyRpc,
-  WsServerReportHostPowerStateRpc,
-  WsServerGetBackgroundPolicyRpc,
   WsSubscribeResourceTelemetryRpc,
   WsOrchestrationV2DispatchCommandRpc,
   WsOrchestrationV2GetWorkflowScriptRpc,
@@ -2779,10 +2619,6 @@ export const WsInteractiveRpcGroup = RpcGroup.make(
   WsOrchestrationV2SubscribeThreadRpc,
   WsOrchestrationV2SubscribeCommandOutputRpc,
   WsOrchestrationV2SubscribePromptSuggestionRpc,
-).middleware(RpcScopeAuthorization);
-
-export const WsRpcGroup = WsEnvironmentRpcGroup.merge(
-  WsPullRequestsRpcGroup,
-  WsWorkspaceRpcGroup,
-  WsInteractiveRpcGroup,
-);
+)
+  .merge(IdentityRpcGroup)
+  .middleware(RpcScopeAuthorization);

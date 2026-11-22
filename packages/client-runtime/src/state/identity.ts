@@ -2,7 +2,7 @@
  * Per-environment session identity (closed-set claim against the server map).
  */
 import {
-  WS_METHODS,
+  IDENTITY_WS_METHODS,
   type IdentityClaimInput,
   type IdentitySnapshot,
   type IdentitySessionClaimResult,
@@ -18,38 +18,38 @@ export function createIdentityEnvironmentAtoms<R, E>(
 ) {
   const snapshot = createEnvironmentRpcQueryAtomFamily(runtime, {
     label: "identity-snapshot",
-    tag: WS_METHODS.identityGetSnapshot,
+    tag: IDENTITY_WS_METHODS.identityGetSnapshot,
     staleTimeMs: 30_000,
     idleTtlMs: 60_000,
   });
 
   const sessionClaim = createEnvironmentRpcQueryAtomFamily(runtime, {
     label: "identity-session-claim",
-    tag: WS_METHODS.identityGetSessionClaim,
+    tag: IDENTITY_WS_METHODS.identityGetSessionClaim,
     staleTimeMs: 5_000,
     idleTtlMs: 60_000,
   });
 
   const claim = createEnvironmentRpcCommand(runtime, {
     label: "identity-claim",
-    tag: WS_METHODS.identityClaim,
+    tag: IDENTITY_WS_METHODS.identityClaim,
   });
 
   const clearClaim = createEnvironmentRpcCommand(runtime, {
     label: "identity-clear-claim",
-    tag: WS_METHODS.identityClearClaim,
+    tag: IDENTITY_WS_METHODS.identityClearClaim,
   });
 
   const clientClaims = createEnvironmentRpcQueryAtomFamily(runtime, {
     label: "identity-client-claims",
-    tag: WS_METHODS.identityListClientClaims,
+    tag: IDENTITY_WS_METHODS.identityListClientClaims,
     staleTimeMs: 5_000,
     idleTtlMs: 60_000,
   });
 
   const setClientClaim = createEnvironmentRpcCommand(runtime, {
     label: "identity-set-client-claim",
-    tag: WS_METHODS.identitySetClientClaim,
+    tag: IDENTITY_WS_METHODS.identitySetClientClaim,
   });
 
   return {

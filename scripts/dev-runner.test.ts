@@ -354,7 +354,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           checkPortAvailability: (port) => Effect.succeed(!taken.has(port)),
         });
 
-        assert.deepStrictEqual(offsets, { serverOffset: 1, webOffset: 1, mobileOffset: 1 });
+        assert.deepStrictEqual(offsets, { serverOffset: 1, webOffset: 1 });
       }),
     );
 
@@ -369,7 +369,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           checkPortAvailability: (port) => Effect.succeed(!taken.has(port)),
         });
 
-        assert.deepStrictEqual(offsets, { serverOffset: 0, webOffset: 1, mobileOffset: 0 });
+        assert.deepStrictEqual(offsets, { serverOffset: 0, webOffset: 1 });
       }),
     );
 
@@ -384,7 +384,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           checkPortAvailability: (port) => Effect.succeed(!taken.has(port)),
         });
 
-        assert.deepStrictEqual(offsets, { serverOffset: 1, webOffset: 1, mobileOffset: 0 });
+        assert.deepStrictEqual(offsets, { serverOffset: 1, webOffset: 1 });
       }),
     );
 
@@ -398,7 +398,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           checkPortAvailability: () => Effect.succeed(false),
         });
 
-        assert.deepStrictEqual(offsets, { serverOffset: 0, webOffset: 0, mobileOffset: 0 });
+        assert.deepStrictEqual(offsets, { serverOffset: 0, webOffset: 0 });
       }),
     );
   });
@@ -711,10 +711,6 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
       { mode: "dev", share: false },
       { mode: "dev:web", share: true },
       { mode: "dev:desktop", share: true },
-      { mode: "dev:mobile", share: true },
-      { mode: "dev:mobile:client", share: true },
-      { mode: "run:mobile:ios", share: true },
-      { mode: "run:mobile:android", share: true },
     ] as const)("rejects --built for $mode with share=$share", ({ mode, share }) => {
       const spawnerLayer = Layer.succeed(
         ChildProcessSpawner.ChildProcessSpawner,

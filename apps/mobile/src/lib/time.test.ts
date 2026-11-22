@@ -13,7 +13,7 @@ describe("timestamp order", () => {
       "2026-07-05T00:30:00Z",
     ];
 
-    expect([...dates].sort(compareTimestamps)).toEqual([
+    expect(dates.toSorted(compareTimestamps)).toEqual([
       "",
       "2026-07-05T01:00:00+02:00",
       "2026-07-05T00:30:00Z",
@@ -27,7 +27,7 @@ describe("timestamp order", () => {
       { id: "older", date: "2026-07-04T00:00:00Z" },
     ];
     const ids = (newestFirst: boolean) =>
-      [...rows].sort(byTimestamp(newestFirst)).map((row) => row.id);
+      rows.toSorted(byTimestamp(newestFirst)).map((row) => row.id);
 
     expect(ids(false)).toEqual(["older", "comment", "commit"]);
     expect(ids(true)).toEqual(["comment", "commit", "older"]);

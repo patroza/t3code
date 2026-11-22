@@ -411,8 +411,8 @@ it.layer(NodeServices.layer)("writeFileStringAtomically", (it) => {
       assert.strictEqual(yield* fs.readFileString(filePath), "after");
       assert.strictEqual(removeAttempts.length, 1);
       assert.deepStrictEqual(
-        [...(yield* fs.readDirectory(root))].sort(),
-        [path.basename(removeAttempts[0]!), "settings.json"].sort(),
+        (yield* fs.readDirectory(root)).toSorted(),
+        [path.basename(removeAttempts[0]!), "settings.json"].toSorted(),
       );
     }),
   );

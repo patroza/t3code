@@ -24,7 +24,6 @@ import type { SourceControlProcessInput } from "@t3tools/source-control-core/ser
 
 import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../observability/Metrics.ts";
 import * as ProcessRunner from "../processRunner.ts";
-import { ExplicitGitDirectory } from "./GitRepositoryProbe.ts";
 
 export interface VcsProcessInput {
   readonly operation: string;
@@ -195,21 +194,6 @@ const classifyNonZeroExit = (
   return commandKind ?? "command-failed";
 };
 
-/** Guest App-wrapper lines are written for operators; they do not carry tokens. */
-const WRAPPER_DIAGNOSTIC = /^(?:t3-github-app-token|gh-app-wrapper):.+/i;
-const PUBLIC_DIAGNOSTIC_MAX = 240;
-
-export function publicDiagnosticFromStderr(stderr: string): string | undefined {
-  for (const line of stderr.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!WRAPPER_DIAGNOSTIC.test(trimmed)) continue;
-    return trimmed.length > PUBLIC_DIAGNOSTIC_MAX
-      ? `${trimmed.slice(0, PUBLIC_DIAGNOSTIC_MAX - 1)}…`
-      : trimmed;
-  }
-  return undefined;
-}
-
 // Classify before discarding stderr; keep paths and process output out of errors.
 const isTransientGitExit = (stderr: string) =>
   /unable to create [^\n]*\.lock['"]?: file exists/i.test(stderr) ||
@@ -246,9 +230,6 @@ export const make = Effect.gen(function* () {
     input: VcsProcessInput,
     baseError: VcsProcessErrorContext,
   ) {
-    const explicitDirectory = yield* ExplicitGitDirectory;
-    const gitDirectoryEnv =
-      explicitDirectory?.cwd === input.cwd ? { GIT_DIR: explicitDirectory.gitDir } : {};
     let failedExit = false;
     const execution = processRunner
       .run({
@@ -267,11 +248,7 @@ export const make = Effect.gen(function* () {
           // LANGUAGE leaves LC_CTYPE, which hooks inherit, alone.
           ...(input.command === "git" ? { LANGUAGE: "C" } : {}),
           ...input.env,
-          ...gitDirectoryEnv,
-          ...explicitBareRepositoryEnv(
-            { ...process.env, ...input.env, ...gitDirectoryEnv },
-            hostPlatform,
-          ),
+          ...explicitBareRepositoryEnv({ ...process.env, ...input.env }, hostPlatform),
         },
         timeout: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         maxOutputBytes: input.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
@@ -375,7 +352,6 @@ export const make = Effect.gen(function* () {
         },
         failureKind,
         {
-          publicDiagnostic: publicDiagnosticFromStderr(result.stderr),
           retryable:
             input.command === "git" &&
             failureKind === "command-failed" &&

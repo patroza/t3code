@@ -1,12 +1,10 @@
-import { registerAssemblyExtensions } from "@t3tools/client-runtime/assembly-highlighting";
+import "@t3tools/client-runtime/assembly-highlighting";
 import {
   getFiletypeFromFileName,
   setCustomExtension,
 } from "@pierre/diffs/utils/getFiletypeFromFileName";
 
 import { HIGHLIGHTS_LANGUAGE_IDS } from "./highlights.generated";
-
-registerAssemblyExtensions(setCustomExtension);
 
 // Highlights has no lexer for these dialects, so they use their base language's.
 setCustomExtension("luau", "lua");

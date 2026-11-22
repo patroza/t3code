@@ -1,7 +1,6 @@
 import {
   AntigravitySettings,
   ClaudeSettings,
-  KimiSettings,
   CodexSettings,
   defaultInstanceIdForDriver,
   disallowedProviderMessage,
@@ -72,7 +71,6 @@ const PIN_BYPASS_FIELDS: ReadonlyMap<
 const KNOWN_DRIVERS: ReadonlyMap<ProviderDriverKind, KnownDriver> = new Map([
   known("codex", "Codex", CodexSettings),
   known("claudeAgent", "Claude", ClaudeSettings),
-  known("kimi", "Kimi", KimiSettings),
   known("antigravity", "Antigravity", AntigravitySettings),
   ...PACKAGED_CLIENTS.map((client) =>
     known(client.driverKind, client.label, client.settingsSchema, client.hasDefaultInstance),
@@ -178,14 +176,13 @@ export const providerHostEnvironment = (
       enumerable: true,
       configurable: true,
       get: () => environment.PATH ?? environment.Path ?? environment.path,
-      set: (value) => {
+      set: (value) =>
         Object.defineProperty(next, "PATH", {
           value,
           enumerable: true,
           writable: true,
           configurable: true,
-        });
-      },
+        }),
     });
   }
   return next;

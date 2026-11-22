@@ -1,4 +1,3 @@
-import * as Deferred from "effect/Deferred";
 import * as NodeEvents from "node:events";
 import * as NodeVM from "node:vm";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - Playwright download mocks perform real file operations outside the Effect runtime.
@@ -19,7 +18,7 @@ import {
   type PreviewAutomationSnapshot,
   type PreviewAutomationStatus,
 } from "@t3tools/contracts";
-
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Scope from "effect/Scope";
@@ -31,7 +30,6 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
-
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { chromium, type BrowserContext, type Page } from "playwright-core";
@@ -44,7 +42,6 @@ import * as DesktopChannel from "./DesktopBrowserChannel.ts";
 import * as Manager from "./Manager.ts";
 import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
-
 import * as PreviewBrowser from "./PreviewBrowser.ts";
 
 vi.mock("./ServerBrowserContexts.ts", () => ({
@@ -57,7 +54,6 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
     async contextFor(profileId: string, isolationKey?: string) {
       if (realContextOverride) return realContextOverride;
       contextRequests.push({ profileId, isolated: isolationKey !== undefined });
-      contextRequested.resolve();
       if (contextFailure) throw contextFailure;
       await contextGate?.promise;
       const context = makeContext(this.onClose);
@@ -78,7 +74,6 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
       context.page.viewportSize.mockReturnValue(null);
       const browser = { close: vi.fn(async () => {}) };
       desktopConnections.push({ endpoint, context, browser });
-      desktopConnected.resolve();
       desktopConnectionStarted?.resolve();
       await desktopConnectionGate?.promise;
       return { browser, page: context.page as unknown as Page };
@@ -240,7 +235,6 @@ function makeContext(onClose?: (context: BrowserContext) => void, initialUrl = "
       title: "test page",
       loading: false,
       visibleText: "delete",
-      interactiveElements: [],
     })),
     ariaSnapshot: vi.fn(async () => '- button "delete" [ref=e1]'),
     locator: vi.fn((): unknown => {
@@ -399,12 +393,6 @@ const encoderStreams: Array<{ frameRate: number | undefined; bitsPerSecond: numb
 let decodeGate: PromiseWithResolvers<void> | null = null;
 const contextRequests: Array<{ profileId: string; isolated: boolean }> = [];
 let contextGate: PromiseWithResolvers<void> | null = null;
-let contextRequested = Promise.withResolvers<void>();
-let desktopConnected = Promise.withResolvers<void>();
-let desktopReleased = Promise.withResolvers<void>();
-let detachSubscribed = Promise.withResolvers<void>();
-let attachSubscribed = Promise.withResolvers<void>();
-let desktopAttachmentReceived = Promise.withResolvers<void>();
 let heldStill: (() => Promise<void>) | null = null;
 let pageCopy = "";
 let keyCopy = "";
@@ -420,7 +408,7 @@ let desktopConnectionStarted: PromiseWithResolvers<void> | null = null;
 let desktopSizeAnswer: (() => Promise<Record<string, unknown>>) | null = null;
 const desktopDetaches = new NodeEvents.EventEmitter();
 let desktopDetachReady = Promise.withResolvers<void>();
-
+let desktopReleased = Promise.withResolvers<void>();
 const desktopTabs = new Set<string>();
 const desktopRenders = (tabId: string) => {
   if (desktopRendersNext) {
@@ -508,7 +496,6 @@ const dependencies = Layer.mergeAll(
             Queue.offerUnsafe(queue, key);
           desktopDetaches.on("detach", onDetach);
           desktopDetachReady.resolve();
-          detachSubscribed.resolve();
           return onDetach;
         }),
         (onDetach) => Effect.sync(() => desktopDetaches.off("detach", onDetach)),
@@ -520,12 +507,11 @@ const dependencies = Layer.mergeAll(
           const onAttach = (key: { threadId: string; tabId: string }) =>
             Queue.offerUnsafe(queue, key);
           desktopDetaches.on("attach", onAttach);
-          attachSubscribed.resolve();
           return onAttach;
         }),
         (onAttach) => Effect.sync(() => desktopDetaches.off("attach", onAttach)),
       ),
-    ).pipe(Stream.tap(() => Effect.sync(() => desktopAttachmentReceived.resolve()))),
+    ),
     isAttached: (key) => Effect.sync(() => desktopRenders(key.tabId)),
     isShown: (key) => shownDesktopTabs.has(key.tabId),
     awaitShown: (key, timeout) =>
@@ -612,12 +598,6 @@ beforeEach(() => {
   decodeGate = null;
   contextRequests.length = 0;
   contextGate = null;
-  contextRequested = Promise.withResolvers<void>();
-  desktopConnected = Promise.withResolvers<void>();
-  desktopReleased = Promise.withResolvers<void>();
-  detachSubscribed = Promise.withResolvers<void>();
-  attachSubscribed = Promise.withResolvers<void>();
-  desktopAttachmentReceived = Promise.withResolvers<void>();
   heldStill = null;
   contextFailure = null;
   pageSetupFailure = null;
@@ -3088,6 +3068,55 @@ it.effect("a desktop tab reports the size the desktop draws after a resize", () 
         height: 760,
       });
       expect(yield* status).toEqual({ width: 560, height: 760 });
+      const unpainted = Promise.withResolvers<void>();
+      heldStill = () => unpainted.promise;
+      // Fill asks for no size, so a page that keeps its size without a resize is not undrawn.
+      const kept = yield* broker
+        .invoke<PreviewAutomationResizeResult>({
+          scope,
+          tabId,
+          operation: "resize",
+          input: { mode: "fill" },
+        })
+        .pipe(Effect.forkScoped);
+      let keptEvent = yield* PubSub.take(events);
+      while (keptEvent.type !== "resized" || keptEvent.tabId !== tabId) {
+        keptEvent = yield* PubSub.take(events);
+      }
+      yield* TestClock.adjust("1 second");
+      expect((yield* Fiber.join(kept)).viewport).toEqual({ width: 560, height: 760 });
+      // A desktop that never draws the new size, such as a minimized window, fails the resize.
+      const undrawn = yield* broker
+        .invoke<PreviewAutomationResizeResult>({
+          scope,
+          tabId,
+          operation: "resize",
+          input: { mode: "freeform", width: 1440, height: 900 },
+        })
+        .pipe(Effect.exit, Effect.forkScoped);
+      let undrawnEvent = yield* PubSub.take(events);
+      while (undrawnEvent.type !== "resized" || undrawnEvent.tabId !== tabId) {
+        undrawnEvent = yield* PubSub.take(events);
+      }
+      yield* TestClock.adjust("1 second");
+      expect(Exit.isFailure(yield* Fiber.join(undrawn))).toBe(true);
+      // The same size again still waits for a draw rather than reporting the old size.
+      const retried = yield* broker
+        .invoke<PreviewAutomationResizeResult>({
+          scope,
+          tabId,
+          operation: "resize",
+          input: { mode: "freeform", width: 1440, height: 900 },
+        })
+        .pipe(Effect.exit, Effect.forkScoped);
+      let retriedEvent = yield* PubSub.take(events);
+      while (retriedEvent.type !== "resized" || retriedEvent.tabId !== tabId) {
+        retriedEvent = yield* PubSub.take(events);
+      }
+      yield* TestClock.adjust("1 second");
+      expect(Exit.isFailure(yield* Fiber.join(retried))).toBe(true);
+      heldStill = null;
+      unpainted.resolve();
       expect(yield* resize({ mode: "fill" }, 1234, 700)).toEqual({ width: 1234, height: 700 });
       // No page resize or load since that read, so status answers without reading again.
       let reads = 0;
@@ -3497,144 +3526,202 @@ it.effect(
     ).pipe(Effect.provide(layer)),
 );
 
-it.live("an agent tab keeps throwaway storage when no client reported profiles", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      yield* ready;
-      expect(contextRequests).toEqual([{ profileId: "default", isolated: true }]);
+// Holds the next profile save at its temp-file cleanup, after the rename, until released.
+const gateSaveCleanup = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const cleanupStarted = yield* Deferred.make<void>();
+  const releaseCleanup = yield* Deferred.make<void>();
+  let paused = false;
+  return {
+    cleanupStarted,
+    releaseCleanup,
+    pauseNext: () => {
+      paused = true;
+    },
+    fs: FileSystem.FileSystem.of({
+      ...fs,
+      remove: (target, options) =>
+        fs.remove(target, options).pipe(
+          Effect.tap(() => {
+            if (!paused) return Effect.void;
+            paused = false;
+            return Deferred.succeed(cleanupStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseCleanup)),
+            );
+          }),
+        ),
     }),
-  ).pipe(Effect.provide(layer)),
+  };
+});
+
+it.effect(
+  "an agent opens a reported profile after a restart, before any client reports again",
+  () =>
+    Effect.gen(function* () {
+      const gate = yield* gateSaveCleanup;
+      const persistent = (name: string) =>
+        ({ id: `profile-${name.toLowerCase()}`, name, kind: "persistent" }) as const;
+      // Together the two clients report more profiles than one report may hold.
+      const fromA = [
+        persistent("Work"),
+        ...Array.from({ length: 12 }, (_, n) => persistent(`A${n}`)),
+      ];
+      const fromB = [
+        persistent("Shared"),
+        ...Array.from({ length: 12 }, (_, n) => persistent(`B${n}`)),
+      ];
+      yield* Effect.gen(function* () {
+        const browser = yield* ServerBrowser.ServerBrowser;
+        const clientA = yield* Scope.make();
+        const reportFromA = yield* browser.profileReporter.pipe(
+          Effect.provideService(Scope.Scope, clientA),
+        );
+        const reportFromB = yield* browser.profileReporter;
+        const reportFromC = yield* browser.profileReporter;
+        yield* reportFromA({ profiles: fromA, defaultProfileId: "profile-work" });
+        gate.pauseNext();
+        const savingB = yield* reportFromB({
+          profiles: fromB,
+          defaultProfileId: "profile-shared",
+        }).pipe(Effect.forkScoped({ startImmediately: true }));
+        // A save that ends without reaching the gate fails the test instead of hanging it.
+        yield* Effect.raceFirst(
+          Deferred.await(gate.cleanupStarted),
+          Fiber.join(savingB).pipe(
+            Effect.andThen(Effect.die("save finished before the cleanup gate")),
+          ),
+        );
+        // C's save waits behind B's while the client that reported Work disconnects, as at shutdown.
+        const savingC = yield* reportFromC({
+          profiles: [],
+          defaultProfileId: "profile-shared",
+        }).pipe(Effect.forkScoped({ startImmediately: true }));
+        yield* Scope.close(clientA, Exit.void);
+        yield* Deferred.succeed(gate.releaseCleanup, undefined);
+        yield* Fiber.join(savingB);
+        yield* Fiber.join(savingC);
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          Layer.fresh(ServerBrowser.layer).pipe(
+            Layer.provide(Layer.succeed(FileSystem.FileSystem, gate.fs)),
+          ),
+        ),
+      );
+
+      const restarted = yield* Effect.gen(function* () {
+        const broker = yield* Broker.PreviewAutomationBroker;
+        yield* ServerBrowser.ServerBrowser;
+        yield* Effect.yieldNow;
+        return yield* broker.invoke<PreviewAutomationStatus>({
+          scope,
+          operation: "open",
+          input: { reuseExistingTab: false, show: false, profileId: "Work" },
+        });
+      }).pipe(Effect.provide(Layer.fresh(ServerBrowser.layer)));
+
+      expect(contextRequests).toEqual([{ profileId: "profile-work", isolated: false }]);
+      expect(restarted.tabs).toMatchObject([{ profileId: "profile-work" }]);
+      expect(restarted).toMatchObject({
+        defaultProfileId: "profile-shared",
+        profiles: [
+          { id: "default", name: "Default" },
+          { id: "incognito", name: "Incognito", incognito: true },
+          ...[...fromA, ...fromB].map(({ id, name }) => ({ id, name })),
+        ],
+      });
+    }).pipe(Effect.provide(dependencies)),
 );
 
-it.live("a desktop page that comes back reconnects without waiting for a viewer", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const manager = yield* Manager.PreviewManager;
+it.effect("warns at startup about a saved profile catalog it cannot read or decode", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const { stateDir } = yield* ServerConfig.ServerConfig;
+    const savedPath = path.join(stateDir, "server-browser", "reported-profiles.json");
+    const startupWarnings = (saved: "missing" | "empty" | "invalid" | "unreadable") =>
+      Effect.gen(function* () {
+        const messages: string[] = [];
+        yield* fs.remove(savedPath, { recursive: true, force: true });
+        yield* fs.makeDirectory(path.dirname(savedPath), { recursive: true });
+        if (saved === "empty") yield* fs.writeFileString(savedPath, "");
+        if (saved === "invalid") yield* fs.writeFileString(savedPath, "{");
+        if (saved === "unreadable") yield* fs.makeDirectory(savedPath);
+        const logger = Logger.make(({ message }) => {
+          messages.push(String(message));
+        });
+        yield* ServerBrowser.ServerBrowser.pipe(
+          Effect.provide(
+            Layer.fresh(ServerBrowser.layer).pipe(
+              Layer.provide(Logger.layer([logger], { mergeWithExisting: false })),
+            ),
+          ),
+        );
+        return messages.filter((message) => message.includes("saved browser profiles"));
+      });
+
+    expect(yield* startupWarnings("missing")).toEqual([]);
+    expect(yield* startupWarnings("empty")).toEqual([]);
+    expect(yield* startupWarnings("invalid")).toEqual([
+      expect.stringContaining("ignoring invalid saved browser profiles"),
+    ]);
+    expect(yield* startupWarnings("unreadable")).toEqual([
+      expect.stringContaining("failed to read saved browser profiles"),
+    ]);
+  }).pipe(Effect.provide(dependencies)),
+);
+
+it.effect("a report interrupted while an earlier save holds the lock is still saved", () =>
+  Effect.gen(function* () {
+    const gate = yield* gateSaveCleanup;
+    const work = { id: "profile-work", name: "Work", kind: "persistent" } as const;
+    const late = { id: "profile-late", name: "Late", kind: "persistent" } as const;
+    yield* Effect.gen(function* () {
+      const report = yield* (yield* ServerBrowser.ServerBrowser).profileReporter;
+      gate.pauseNext();
+      const saving = yield* report({ profiles: [work], defaultProfileId: "profile-work" }).pipe(
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      yield* Effect.raceFirst(
+        Deferred.await(gate.cleanupStarted),
+        Fiber.join(saving).pipe(
+          Effect.andThen(Effect.die("save finished before the cleanup gate")),
+        ),
+      );
+      // The client disconnects while its report waits for the save in progress.
+      const waiting = yield* report({
+        profiles: [work, late],
+        defaultProfileId: "profile-late",
+      }).pipe(Effect.forkScoped({ startImmediately: true }));
+      waiting.interruptUnsafe();
+      yield* Deferred.succeed(gate.releaseCleanup, undefined);
+      yield* Fiber.join(saving);
+      yield* Fiber.await(waiting);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.fresh(ServerBrowser.layer).pipe(
+          Layer.provide(Layer.succeed(FileSystem.FileSystem, gate.fs)),
+        ),
+      ),
+    );
+
+    const restarted = yield* Effect.gen(function* () {
+      const broker = yield* Broker.PreviewAutomationBroker;
       yield* ServerBrowser.ServerBrowser;
       yield* Effect.yieldNow;
-      desktopRendersNext = true;
-      const opened = yield* manager.open({ threadId: scope.thread.threadId, runtime: "server" });
-      yield* Effect.promise(() => desktopConnected.promise);
-      yield* Effect.promise(() => detachSubscribed.promise);
-      desktopConnected = Promise.withResolvers<void>();
-      desktopDetaches.emit("detach", { threadId: scope.thread.threadId, tabId: opened.tabId });
-      yield* Effect.promise(() => desktopReleased.promise);
-      desktopDetaches.emit("attach", { threadId: scope.thread.threadId, tabId: opened.tabId });
-      yield* Effect.promise(() => desktopConnected.promise);
-      expect(desktopConnections).toHaveLength(2);
-    }),
-  ).pipe(Effect.provide(layer)),
-);
-
-// Native capture uses the current viewport; shrinking happens afterward in an isolated world.
-it.live.each([
-  {
-    name: "desktop at display ratio 1.5",
-    desktop: true,
-    page: { ratio: 1.5, width: 1280, height: 800, zoom: 1 },
-    scrollY: 0,
-    size: { width: 1280, height: 800 },
-  },
-  {
-    name: "desktop resized to a phone",
-    desktop: true,
-    page: { ratio: 1, width: 390, height: 844, zoom: 1 },
-    scrollY: 0,
-    size: { width: 390, height: 844 },
-  },
-  {
-    name: "desktop zoom changes during a scrolled snapshot",
-    desktop: true,
-    page: { ratio: 3, width: 640, height: 400, zoom: 2 },
-    scrollY: 100,
-    size: { width: 1280, height: 800 },
-  },
-  {
-    name: "headless",
-    desktop: false,
-    page: { ratio: 2, width: 1280, height: 800, zoom: 1 },
-    scrollY: 0,
-    size: { width: 640, height: 400 },
-  },
-])("snapshot captures the page's own viewport: $name", ({ desktop, page, scrollY, size }) =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      desktopRendersNext = desktop;
-      const { browser, broker, tabId } = yield* ready;
-      yield* browser.attachViewer(viewerInput(tabId, false));
-      const context = desktop ? desktopConnections[0]!.context : contexts[0]!;
-      const display = desktop ? page.ratio / page.zoom : 1;
-      let zoom = 1;
-      const captures: unknown[] = [];
-      const shrinks: Array<{ width: number; height: number; contextId: number }> = [];
-      let metricsReads = 0;
-      for (const session of context.sessions) {
-        const send = session.send.getMockImplementation()!;
-        session.send.mockImplementation(async (method, input) => {
-          if (
-            method === "Runtime.evaluate" &&
-            String((input as { expression?: string })?.expression).includes("devicePixelRatio")
-          ) {
-            metricsReads += 1;
-            const value = {
-              ratio: page.ratio * (zoom / page.zoom),
-              width: page.width * (page.zoom / zoom),
-              height: page.height * (page.zoom / zoom),
-            };
-            // Desktop zoom applies after this renderer read, before the next layout reply.
-            zoom = page.zoom;
-            return { result: { value } };
-          }
-          if (method === "Page.getLayoutMetrics") {
-            return { cssVisualViewport: { pageX: 0, pageY: scrollY, zoom } };
-          }
-          if (method === "Page.captureScreenshot") {
-            captures.push(input);
-            const header = Buffer.alloc(24);
-            header.write("IHDR", 12);
-            header.writeUInt32BE(Math.round(page.width * page.zoom * display), 16);
-            header.writeUInt32BE(Math.round(page.height * page.zoom * display), 20);
-            return { data: header.toString("base64") };
-          }
-          if (method === "Runtime.callFunctionOn") {
-            const resize = input as {
-              functionDeclaration: string;
-              executionContextId: number;
-              awaitPromise: boolean;
-              returnByValue: boolean;
-              arguments: [{ value: string }, { value: number }, { value: number }];
-            };
-            expect(resize.functionDeclaration).toContain("createImageBitmap");
-            expect(resize.awaitPromise).toBe(true);
-            expect(resize.returnByValue).toBe(true);
-            const width = resize.arguments[1].value;
-            const height = resize.arguments[2].value;
-            shrinks.push({ width, height, contextId: resize.executionContextId });
-            const header = Buffer.alloc(24);
-            header.write("IHDR", 12);
-            header.writeUInt32BE(width, 16);
-            header.writeUInt32BE(height, 20);
-            return { result: { value: header.toString("base64") } };
-          }
-          return send(method, input);
-        });
-      }
-      const result = yield* broker.invoke<PreviewAutomationSnapshot>({
+      return yield* broker.invoke<PreviewAutomationStatus>({
         scope,
-        tabId,
-        operation: "snapshot",
-        input: {},
+        operation: "open",
+        input: { reuseExistingTab: false, show: false, profileId: "Late" },
       });
-      const png = Buffer.from(result.screenshot.data, "base64");
-      expect(result.screenshot).toMatchObject(size);
-      expect({ width: png.readUInt32BE(16), height: png.readUInt32BE(20) }).toEqual(size);
-      expect(captures).toEqual([{ format: "jpeg", quality: 70 }, { format: "png" }]);
-      expect(shrinks).toEqual(
-        desktop && page.width * page.zoom * display <= 1280 ? [] : [{ ...size, contextId: 7 }],
-      );
-      if (!desktop) expect(metricsReads).toBe(0);
-    }),
-  ).pipe(Effect.provide(layer)),
+    }).pipe(Effect.provide(Layer.fresh(ServerBrowser.layer)));
+
+    expect(restarted).toMatchObject({
+      defaultProfileId: "profile-late",
+      tabs: [{ profileId: "profile-late" }],
+    });
+  }).pipe(Effect.provide(dependencies)),
 );
 
 it.effect("profiles reported by one client survive another client's report", () =>
@@ -4132,204 +4219,6 @@ it.effect("reports a desktop tab's load failure from before the server connected
       expect(yield* snapshot()).not.toHaveProperty("loadError");
     }),
   ).pipe(Effect.provide(layer)),
-);
-
-// Holds the next profile save at its temp-file cleanup, after the rename, until released.
-const gateSaveCleanup = Effect.gen(function* () {
-  const fs = yield* FileSystem.FileSystem;
-  const cleanupStarted = yield* Deferred.make<void>();
-  const releaseCleanup = yield* Deferred.make<void>();
-  let paused = false;
-  return {
-    cleanupStarted,
-    releaseCleanup,
-    pauseNext: () => {
-      paused = true;
-    },
-    fs: FileSystem.FileSystem.of({
-      ...fs,
-      remove: (target, options) =>
-        fs.remove(target, options).pipe(
-          Effect.tap(() => {
-            if (!paused) return Effect.void;
-            paused = false;
-            return Deferred.succeed(cleanupStarted, undefined).pipe(
-              Effect.andThen(Deferred.await(releaseCleanup)),
-            );
-          }),
-        ),
-    }),
-  };
-});
-
-it.effect("a report interrupted while an earlier save holds the lock is still saved", () =>
-  Effect.gen(function* () {
-    const gate = yield* gateSaveCleanup;
-    const work = { id: "profile-work", name: "Work", kind: "persistent" } as const;
-    const late = { id: "profile-late", name: "Late", kind: "persistent" } as const;
-    yield* Effect.gen(function* () {
-      const report = yield* (yield* ServerBrowser.ServerBrowser).profileReporter;
-      gate.pauseNext();
-      const saving = yield* report({ profiles: [work], defaultProfileId: "profile-work" }).pipe(
-        Effect.forkScoped({ startImmediately: true }),
-      );
-      yield* Effect.raceFirst(
-        Deferred.await(gate.cleanupStarted),
-        Fiber.join(saving).pipe(
-          Effect.andThen(Effect.die("save finished before the cleanup gate")),
-        ),
-      );
-      // The client disconnects while its report waits for the save in progress.
-      const waiting = yield* report({
-        profiles: [work, late],
-        defaultProfileId: "profile-late",
-      }).pipe(Effect.forkScoped({ startImmediately: true }));
-      waiting.interruptUnsafe();
-      yield* Deferred.succeed(gate.releaseCleanup, undefined);
-      yield* Fiber.join(saving);
-      yield* Fiber.await(waiting);
-    }).pipe(
-      Effect.scoped,
-      Effect.provide(
-        Layer.fresh(ServerBrowser.layer).pipe(
-          Layer.provide(Layer.succeed(FileSystem.FileSystem, gate.fs)),
-        ),
-      ),
-    );
-
-    const restarted = yield* Effect.gen(function* () {
-      const broker = yield* Broker.PreviewAutomationBroker;
-      yield* ServerBrowser.ServerBrowser;
-      yield* Effect.yieldNow;
-      return yield* broker.invoke<PreviewAutomationStatus>({
-        scope,
-        operation: "open",
-        input: { reuseExistingTab: false, show: false, profileId: "Late" },
-      });
-    }).pipe(Effect.provide(Layer.fresh(ServerBrowser.layer)));
-
-    expect(restarted).toMatchObject({
-      defaultProfileId: "profile-late",
-      tabs: [{ profileId: "profile-late" }],
-    });
-  }).pipe(Effect.provide(dependencies)),
-);
-
-it.effect("warns at startup about a saved profile catalog it cannot read or decode", () =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const { stateDir } = yield* ServerConfig.ServerConfig;
-    const savedPath = path.join(stateDir, "server-browser", "reported-profiles.json");
-    const startupWarnings = (saved: "missing" | "empty" | "invalid" | "unreadable") =>
-      Effect.gen(function* () {
-        const messages: string[] = [];
-        yield* fs.remove(savedPath, { recursive: true, force: true });
-        yield* fs.makeDirectory(path.dirname(savedPath), { recursive: true });
-        if (saved === "empty") yield* fs.writeFileString(savedPath, "");
-        if (saved === "invalid") yield* fs.writeFileString(savedPath, "{");
-        if (saved === "unreadable") yield* fs.makeDirectory(savedPath);
-        const logger = Logger.make(({ message }) => {
-          messages.push(String(message));
-        });
-        yield* ServerBrowser.ServerBrowser.pipe(
-          Effect.provide(
-            Layer.fresh(ServerBrowser.layer).pipe(
-              Layer.provide(Logger.layer([logger], { mergeWithExisting: false })),
-            ),
-          ),
-        );
-        return messages.filter((message) => message.includes("saved browser profiles"));
-      });
-
-    expect(yield* startupWarnings("missing")).toEqual([]);
-    expect(yield* startupWarnings("empty")).toEqual([]);
-    expect(yield* startupWarnings("invalid")).toEqual([
-      expect.stringContaining("ignoring invalid saved browser profiles"),
-    ]);
-    expect(yield* startupWarnings("unreadable")).toEqual([
-      expect.stringContaining("failed to read saved browser profiles"),
-    ]);
-  }).pipe(Effect.provide(dependencies)),
-);
-
-it.effect(
-  "an agent opens a reported profile after a restart, before any client reports again",
-  () =>
-    Effect.gen(function* () {
-      const gate = yield* gateSaveCleanup;
-      const persistent = (name: string) =>
-        ({ id: `profile-${name.toLowerCase()}`, name, kind: "persistent" }) as const;
-      // Together the two clients report more profiles than one report may hold.
-      const fromA = [
-        persistent("Work"),
-        ...Array.from({ length: 12 }, (_, n) => persistent(`A${n}`)),
-      ];
-      const fromB = [
-        persistent("Shared"),
-        ...Array.from({ length: 12 }, (_, n) => persistent(`B${n}`)),
-      ];
-      yield* Effect.gen(function* () {
-        const browser = yield* ServerBrowser.ServerBrowser;
-        const clientA = yield* Scope.make();
-        const reportFromA = yield* browser.profileReporter.pipe(
-          Effect.provideService(Scope.Scope, clientA),
-        );
-        const reportFromB = yield* browser.profileReporter;
-        const reportFromC = yield* browser.profileReporter;
-        yield* reportFromA({ profiles: fromA, defaultProfileId: "profile-work" });
-        gate.pauseNext();
-        const savingB = yield* reportFromB({
-          profiles: fromB,
-          defaultProfileId: "profile-shared",
-        }).pipe(Effect.forkScoped({ startImmediately: true }));
-        // A save that ends without reaching the gate fails the test instead of hanging it.
-        yield* Effect.raceFirst(
-          Deferred.await(gate.cleanupStarted),
-          Fiber.join(savingB).pipe(
-            Effect.andThen(Effect.die("save finished before the cleanup gate")),
-          ),
-        );
-        // C's save waits behind B's while the client that reported Work disconnects, as at shutdown.
-        const savingC = yield* reportFromC({
-          profiles: [],
-          defaultProfileId: "profile-shared",
-        }).pipe(Effect.forkScoped({ startImmediately: true }));
-        yield* Scope.close(clientA, Exit.void);
-        yield* Deferred.succeed(gate.releaseCleanup, undefined);
-        yield* Fiber.join(savingB);
-        yield* Fiber.join(savingC);
-      }).pipe(
-        Effect.scoped,
-        Effect.provide(
-          Layer.fresh(ServerBrowser.layer).pipe(
-            Layer.provide(Layer.succeed(FileSystem.FileSystem, gate.fs)),
-          ),
-        ),
-      );
-
-      const restarted = yield* Effect.gen(function* () {
-        const broker = yield* Broker.PreviewAutomationBroker;
-        yield* ServerBrowser.ServerBrowser;
-        yield* Effect.yieldNow;
-        return yield* broker.invoke<PreviewAutomationStatus>({
-          scope,
-          operation: "open",
-          input: { reuseExistingTab: false, show: false, profileId: "Work" },
-        });
-      }).pipe(Effect.provide(Layer.fresh(ServerBrowser.layer)));
-
-      expect(contextRequests).toEqual([{ profileId: "profile-work", isolated: false }]);
-      expect(restarted.tabs).toMatchObject([{ profileId: "profile-work" }]);
-      expect(restarted).toMatchObject({
-        defaultProfileId: "profile-shared",
-        profiles: [
-          { id: "default", name: "Default" },
-          { id: "incognito", name: "Incognito", incognito: true },
-          ...[...fromA, ...fromB].map(({ id, name }) => ({ id, name })),
-        ],
-      });
-    }).pipe(Effect.provide(dependencies)),
 );
 
 it.effect("a popup opens in its opener's appearance", () =>

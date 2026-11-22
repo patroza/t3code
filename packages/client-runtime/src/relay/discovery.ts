@@ -370,11 +370,9 @@ export const make = Effect.fn("RelayEnvironmentDiscovery.make")(function* () {
     ),
   );
 
-  // Resume rechecks connectivity after suspension; only changed status triggers a refresh.
-  yield* Connectivity.followNetworkStatus({
-    connectivity,
-    wakeups,
-    apply: (networkStatus) =>
+  yield* connectivity.changes.pipe(
+    Stream.changes,
+    Stream.runForEach((networkStatus) =>
       networkStatus === "offline"
         ? SubscriptionRef.update(state, (current) => ({
             ...current,
@@ -384,7 +382,9 @@ export const make = Effect.fn("RelayEnvironmentDiscovery.make")(function* () {
         : Ref.get(hasRefreshed).pipe(
             Effect.flatMap((shouldRefresh) => (shouldRefresh ? refresh : Effect.void)),
           ),
-  });
+    ),
+    Effect.forkScoped,
+  );
   yield* wakeups.changes.pipe(
     Stream.runForEach((reason) =>
       reason === "credentials-changed"

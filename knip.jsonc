@@ -26,6 +26,8 @@
       // release-desktop.yml runs the desktop launch check through xvfb-run, which knip
       // does not trace.
       "entry": [
+        // Fork: the .tools/bin/gh shim runs this by path.
+        "agent-gh.mjs",
         // These fixture scripts are injected into a browser page by path.
         "fixtures/*/*.js",
         "knip-schemas.ts",

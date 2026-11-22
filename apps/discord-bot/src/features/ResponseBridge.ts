@@ -4,15 +4,9 @@ import { type IntegrationThreadView as OrchestrationThread } from "@t3tools/shar
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
-import type {
-  ChatImageAttachment,
-  ThreadId,
-  VcsStatusChangeRequest,
-  VcsStatusResult,
-} from "@t3tools/contracts";
+import type { ChatImageAttachment, ThreadId, VcsStatusResult } from "@t3tools/contracts";
 import { applyGitStatusStreamEvent } from "@t3tools/shared/git";
 import { sessionNeedsWakeUp } from "@t3tools/shared/sessionWake";
-import { resolveThreadChangeRequest } from "@t3tools/shared/sourceControl";
 import {
   appendStatsToMessageChunks,
   formatTurnResponseStatsLine,
@@ -86,13 +80,14 @@ import {
 import {
   derivePendingInteractions,
   type PendingApproval,
-} from "../presentation/pendingInteractions.ts";
+} from "@t3tools/shared/integrationPendingInteractions";
 import {
   planBackgroundDigestAppend,
   pullRequestWatchIsActive,
   turnFoldsIntoWatchDigest,
 } from "../presentation/backgroundDigest.ts";
-import { formatTasksForDiscord, presentTasks } from "../presentation/tasks.ts";
+import { presentTasks } from "@t3tools/shared/integrationTasks";
+import { formatTasksForDiscord } from "../presentation/tasks.ts";
 import { countTurnToolCalls } from "../presentation/toolCalls.ts";
 import { ThreadLinkStore, type ChatDeliveryReceipt } from "../store/ThreadLinkStore.ts";
 import { ThreadWarmCacheStore } from "../store/ThreadWarmCacheStore.ts";
@@ -1869,24 +1864,19 @@ export function nextMirroredThreadTitleAfterApply(input: {
   };
 }
 
+type VcsStatusChangeRequest = NonNullable<VcsStatusResult["pr"]>;
+
+/**
+ * The checkout may have moved on while the thread still names the branch its change
+ * request was opened from, so a head-ref match counts even when the live ref differs.
+ */
 export function resolveThreadTitleChangeRequestFromStatus(
   thread: Pick<OrchestrationThread, "branch">,
   status: VcsStatusResult | null,
 ): VcsStatusChangeRequest | null {
-  return resolveThreadChangeRequest(thread.branch, status);
-}
-
-export function resolveThreadChangeRequestLookupCwds(
-  thread: Pick<OrchestrationThread, "worktreePath">,
-  project: { readonly workspaceRoot: string },
-): ReadonlyArray<string> {
-  return [
-    ...new Set(
-      [thread.worktreePath, project.workspaceRoot].filter(
-        (value): value is string => value !== null,
-      ),
-    ),
-  ];
+  const pr = status?.pr ?? null;
+  if (thread.branch === null || pr === null) return null;
+  return status?.refName === thread.branch || pr.headRef === thread.branch ? pr : null;
 }
 
 /**
@@ -4595,57 +4585,14 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
             const project = yield* t3.getProjectShell(thread.projectId);
             const branch = thread.branch;
 
-            // Prefer warm VCS stream. Only cold-start GH lookup when remote is unknown
-            // and sticky is empty — never dual-source every snapshot.
-            let branchLookupPr: StickyTitlePrEvidence | null = null;
-            let branchLookupCompleted = false;
-            let prSource: "vcs-status-stream" | "sticky" | "branch-lookup" | "none" = "none";
-            let lookupCwds: ReadonlyArray<string> = [];
+            // The PR comes from the VCS status stream or the sticky cache; the server has no
+            // branch-to-PR lookup RPC for a cold start.
+            let prSource: "vcs-status-stream" | "sticky" | "none" = "none";
 
             if (statusPr !== null) {
               prSource = "vcs-status-stream";
             } else if (stickyBefore !== null) {
               prSource = "sticky";
-            } else if (!remoteObserved && branch !== null && project !== null) {
-              lookupCwds = resolveThreadChangeRequestLookupCwds(thread, project);
-              for (const cwd of lookupCwds) {
-                const resolved = yield* t3
-                  .resolveBranchChangeRequest({
-                    cwd,
-                    refName: branch,
-                  })
-                  .pipe(
-                    Effect.catchCause((cause) =>
-                      Effect.logWarning("Discord thread title PR lookup failed", {
-                        discordChannelId: input.discordChannelId,
-                        t3ThreadId: input.t3ThreadId,
-                        title: thread.title,
-                        branch,
-                        cwd,
-                        cause: formatAlertCause(cause, 400),
-                      }).pipe(Effect.as({ pr: null })),
-                    ),
-                  );
-                yield* Effect.logInfo("Discord thread title PR lookup result", {
-                  discordChannelId: input.discordChannelId,
-                  t3ThreadId: input.t3ThreadId,
-                  title: thread.title,
-                  branch,
-                  cwd,
-                  prNumber: resolved.pr?.number ?? null,
-                  prState: resolved.pr?.state ?? null,
-                  prHeadRef: resolved.pr?.headRef ?? null,
-                  prBaseRef: resolved.pr?.baseRef ?? null,
-                });
-                if (resolved.pr !== null) {
-                  branchLookupPr = toStickyTitlePrEvidence(resolved.pr);
-                  prSource = "branch-lookup";
-                  break;
-                }
-              }
-              // Completed the cold-start lookup path (possibly with no PR).
-              branchLookupCompleted = true;
-              if (prSource === "none") prSource = "branch-lookup";
             } else if (branch === null || project === null) {
               yield* Effect.logInfo("Discord thread title sync skipping PR lookup", {
                 discordChannelId: input.discordChannelId,
@@ -4661,12 +4608,10 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
               stickyPr: stickyBefore,
               statusPr,
               remoteStatusObserved: remoteObserved,
-              branchLookupPr,
-              branchLookupCompleted,
             });
             yield* Ref.set(stickyTitlePrRef, evidence.stickyPr);
 
-            // Re-read after slow GH lookup — settle may have landed mid-wait.
+            // Re-read: a settle may have landed while this sync waited.
             const threadAfterLookup = (yield* Ref.get(latestThreadRef)) ?? thread;
             if (threadAfterLookup !== thread && attempt < 2) {
               continue;
@@ -4741,7 +4686,6 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
               branch,
               worktreePath: threadAfterLookup.worktreePath,
               projectWorkspaceRoot: project?.workspaceRoot ?? null,
-              lookupCwds,
               cachedStatusRefName: cachedStatus?.refName ?? null,
               prNumber: evidence.effectivePr?.number ?? null,
               prState: effectivePrState,

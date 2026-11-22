@@ -58,7 +58,6 @@ function setup() {
   const root = createRoot(document.createElement("div"));
   let latest: ReturnType<typeof useComposerPathSearch> | null = null;
   function Probe({ target }: { readonly target: ComposerPathSearchTarget }) {
-    // oxlint-disable-next-line react/globals -- The test probe exposes the hook result to assertions.
     latest = useComposerPathSearch(target);
     return null;
   }

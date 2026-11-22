@@ -36,13 +36,11 @@ const mocks = vi.hoisted(() => ({
     ),
 }));
 
-vi.mock("@t3tools/client-runtime/state/runtime", async (importOriginal) => {
+vi.mock("@t3tools/client-runtime/state/runtime", async () => {
   const Effect = await import("effect/Effect");
   return {
-    ...(await importOriginal<Record<string, unknown>>()),
     awaitAtomResult: (...args: ReadonlyArray<unknown>) =>
       mocks.settledEffect(Effect, () => mocks.executeAtomQuery(...args)),
-    executeAtomQuery: mocks.executeAtomQuery,
     runAtomCommand: mocks.runAtomCommand,
     squashAtomCommandFailure: (result: { readonly error: unknown }) => result.error,
   };

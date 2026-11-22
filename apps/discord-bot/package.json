@@ -4,13 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "browser-profile": "node --import tsx src/browserProfileCli.ts",
-    "dev": "node --watch --import tsx src/main.ts",
-    "dev:teams": "node --watch --import tsx src/teams-main.ts",
-    "start": "node --import tsx src/main.ts",
-    "start:teams-gateway": "node --import tsx src/teams-gateway-main.ts",
-    "start:teams": "node --import tsx src/teams-main.ts",
-    "typecheck": "tsc --noEmit",
+    "dev": "node --watch src/main.ts",
+    "dev:teams": "node --watch src/teams-main.ts",
+    "start": "node src/main.ts",
+    "start:teams-gateway": "node src/teams-gateway-main.ts",
+    "start:teams": "node src/teams-main.ts",
+    "typecheck": "effect-tsgo tsrs --noEmit",
     "test": "vp test run"
   },
   "dependencies": {
@@ -21,16 +20,14 @@
     "@t3tools/shared": "workspace:*",
     "dfx": "catalog:",
     "effect": "catalog:",
-    "playwright-core": "1.64.1",
     "yaml": "catalog:"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
     "@types/node": "catalog:",
-    "tsx": "^4.20.5",
     "vite-plus": "catalog:"
   },
   "engines": {
-    "node": "^22.16 || ^23.11 || >=24.10"
+    "node": "^22.18 || ^23.11 || >=24.10"
   }
 }

@@ -1,14 +1,15 @@
 import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
-  type EnvironmentId,
+  DEFAULT_MODEL,
+  type ModelSelection,
+  ProviderInstanceId,
   MessageId,
   ProjectId,
   ThreadId,
   type SourceRef,
   type TurnId,
 } from "@t3tools/contracts";
-import { buildAgentAwarenessDeepLink } from "@t3tools/shared/agentAwareness";
 import type { IdentityMapPerson } from "@t3tools/shared/identityMap";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -23,11 +24,6 @@ import * as Semaphore from "effect/Semaphore";
 import { hostedAppUrlConfig } from "../cloud/publicConfig.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
-import {
-  discoverGitHubTargetTurnId,
-  githubFinalAnswerWithStats,
-  resolveGitHubBridgeTurnOutcome,
-} from "../github/GitHubPrBridge.ts";
 import * as IdentityService from "../identity/IdentityService.ts";
 import { buildIntegrationSourceRef } from "../identity/stampSource.ts";
 import { ProjectStoreV2 } from "../orchestration-v2/ProjectStore.ts";
@@ -38,11 +34,7 @@ import {
   type IntegrationThreadView as OrchestrationThread,
 } from "@t3tools/shared/integrationThreadView";
 import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
-import { getAutoBootstrapThreadModelSelection } from "../serverRuntimeStartup.ts";
-import {
-  ThreadWorkItemStore,
-  type WorkItemLookupResult,
-} from "../workItems/ThreadWorkItemStore.ts";
+import { ThreadIssueService } from "../orchestration-v2/ThreadIssueService.ts";
 import { JiraAppClient } from "./JiraAppClient.ts";
 import {
   buildJiraBugReportPrompt,
@@ -66,6 +58,11 @@ import {
 import { jiraOverflowNotice, partitionJiraComment } from "./JiraMarkdown.ts";
 import { JiraDeliveryStore, type StoredJiraDelivery } from "./JiraDeliveryStore.ts";
 import { resolveDiscordLinkForJiraIssue } from "./JiraThreadLookup.ts";
+import {
+  jiraIssueBrowseUrl,
+  jiraThreadIssueKey,
+  jiraThreadLookupFromLinkedThreads,
+} from "./jiraIssueLinks.ts";
 import { classifyJiraActorTrust, type JiraActorTrustDecision } from "./jiraActorTrust.ts";
 import {
   formatDiscordJiraContextNote,
@@ -77,6 +74,16 @@ import {
   type JiraAdfMention,
   type JiraIssueInvocation,
 } from "./JiraWebhookPayload.ts";
+import {
+  discoverJiraTargetTurnId,
+  jiraFinalAnswerWithStats,
+  resolveJiraBridgeTurnOutcome,
+} from "./jiraTurnOutcome.ts";
+
+const JIRA_FALLBACK_MODEL_SELECTION: ModelSelection = {
+  instanceId: ProviderInstanceId.make("codex"),
+  model: DEFAULT_MODEL,
+};
 
 const NOT_LINKED_RESPONSE =
   "not yet linked. No T3 thread lists this issue, and auto-create could not pick a project (set T3CODE_JIRA_PROJECT_MAP for this Jira key, T3CODE_JIRA_DEFAULT_PROJECT_ID, or ensure exactly one T3 project exists).";
@@ -145,13 +152,8 @@ export function buildJiraT3ThreadUrl(input: {
   readonly environmentId: string;
   readonly threadId: string;
 }): string {
-  return new URL(
-    buildAgentAwarenessDeepLink({
-      environmentId: input.environmentId as EnvironmentId,
-      threadId: input.threadId as ThreadId,
-    }),
-    input.hostedAppUrl,
-  ).toString();
+  const path = `/threads/${encodeURIComponent(input.environmentId)}/${encodeURIComponent(input.threadId)}`;
+  return new URL(path, input.hostedAppUrl).toString();
 }
 
 export function appendJiraT3ThreadLink(
@@ -211,7 +213,7 @@ type JiraWorkTarget = {
 const make = Effect.gen(function* () {
   const config = yield* JiraAppConfig;
   const deliveries = yield* JiraDeliveryStore;
-  const workItems = yield* ThreadWorkItemStore;
+  const threadIssues = yield* ThreadIssueService;
   const jira = yield* JiraAppClient;
   const engine = yield* OrchestratorV2;
   const engineProjection = yield* OrchestratorV2;
@@ -378,30 +380,50 @@ const make = Effect.gen(function* () {
     });
   });
 
-  /**
-   * Resolve issue → thread from associations Jira or GitHub recorded.
-   * A miss also drops Discord-only rows so an old pin import cannot keep matching.
-   */
+  /** Resolve issue → thread from the issue links on threads (upstream thread ↔ issue links). */
   const resolveLinkedThreadId = Effect.fn("JiraIssueBridge.resolveLinkedThreadId")(function* (
-    issueKey: string,
+    target: Pick<JiraWorkTarget, "issueKey" | "projectKey">,
   ) {
-    const primary = yield* workItems.resolveJiraIssue(issueKey);
-    if (primary._tag !== "unlinked") return primary;
+    if (!config.enabled) return jiraThreadLookupFromLinkedThreads({ threads: [] });
+    const linked = yield* threadIssues
+      .linkedThreads(jiraThreadIssueKey({ siteUrl: config.siteUrl, ...target }))
+      .pipe(
+        Effect.tapError((cause) =>
+          Effect.logWarning("Could not read threads linked to the Jira issue", {
+            issueKey: target.issueKey,
+            cause,
+          }),
+        ),
+        Effect.orElseSucceed(() => ({ threads: [] })),
+      );
+    return jiraThreadLookupFromLinkedThreads(linked);
+  });
 
-    const linksPath = config.enabled ? config.discordLinksPath : null;
-    const raw =
-      linksPath === null || linksPath.length === 0
-        ? ""
-        : yield* fileSystem.readFileString(linksPath).pipe(Effect.orElseSucceed(() => ""));
-    if (raw.trim().length === 0) {
-      return { _tag: "unlinked" } satisfies WorkItemLookupResult;
-    }
-
-    const imported = yield* workItems.importDiscordLinksJson(raw);
-    if (imported.threadsTouched > 0) {
-      yield* Effect.logInfo("Dropped Discord-only work-item associations", imported);
-    }
-    return yield* workItems.resolveJiraIssue(issueKey);
+  /** Links the issue to the thread so later mentions join it; linking twice is a no-op. */
+  const linkIssueToThread = Effect.fn("JiraIssueBridge.linkIssueToThread")(function* (
+    threadId: ThreadId,
+    projectId: ProjectId,
+    target: JiraWorkTarget,
+  ) {
+    if (!config.enabled) return;
+    yield* threadIssues
+      .link({
+        threadId,
+        ref: { ...jiraThreadIssueKey({ siteUrl: config.siteUrl, ...target }), projectId },
+        url: jiraIssueBrowseUrl(config.siteUrl, target.issueKey),
+        displayKey: target.issueKey,
+        title: target.issueSummary?.trim() || target.issueKey,
+        source: "agent",
+      })
+      .pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Could not link the Jira issue to its thread", {
+            issueKey: target.issueKey,
+            threadId,
+            cause,
+          }),
+        ),
+      );
   });
 
   /**
@@ -451,7 +473,7 @@ const make = Effect.gen(function* () {
   /**
    * First surface for this issue: create a dedicated worktree + thread, attach the Jira key.
    * Never opens on the project main checkout — same isolation as Discord/GitHub create paths.
-   * Later surfaces join via ThreadWorkItemStore.
+   * Later surfaces join through the thread issue link.
    */
   const createThreadForIssue = Effect.fn("JiraIssueBridge.createThreadForIssue")(function* (
     invocation: JiraWorkTarget,
@@ -459,7 +481,7 @@ const make = Effect.gen(function* () {
     return yield* createLock.withPermit(
       Effect.gen(function* () {
         // Another delivery may have created while we waited.
-        const again = yield* resolveLinkedThreadId(invocation.issueKey);
+        const again = yield* resolveLinkedThreadId(invocation);
         if (again._tag === "linked") {
           const existing = yield* projection
             .getThreadDetailById(again.threadId)
@@ -484,8 +506,7 @@ const make = Effect.gen(function* () {
         const threadId = ThreadId.make(yield* crypto.uuidV4());
         const title =
           invocation.issueSummary?.trim() || `${invocation.issueKey} · Jira` || invocation.issueKey;
-        const modelSelection =
-          project.defaultModelSelection ?? getAutoBootstrapThreadModelSelection();
+        const modelSelection = project.defaultModelSelection ?? JIRA_FALLBACK_MODEL_SELECTION;
         const branchName = buildJiraAutoCreateBranchName(
           invocation.issueKey,
           (yield* crypto.uuidV4()).slice(0, 8),
@@ -570,11 +591,7 @@ const make = Effect.gen(function* () {
             ),
           );
 
-        yield* workItems.appendForThread({
-          threadId,
-          jiraIssueKeys: [invocation.issueKey],
-          source: "jira-webhook",
-        });
+        yield* linkIssueToThread(threadId, ProjectId.make(project.id), invocation);
 
         const created = yield* projection
           .getThreadDetailById(threadId)
@@ -613,7 +630,7 @@ const make = Effect.gen(function* () {
         previousTurnId: tracked.previousTurnId,
         knownTargetTurnId: tracked.targetTurnId,
       };
-      const discoveredTurnId = discoverGitHubTargetTurnId(thread, resolveOptions);
+      const discoveredTurnId = discoverJiraTargetTurnId(thread, resolveOptions);
       if (discoveredTurnId !== null && discoveredTurnId !== tracked.targetTurnId) {
         tracked = {
           ...delivery,
@@ -623,7 +640,7 @@ const make = Effect.gen(function* () {
         yield* deliveries.put(tracked);
       }
 
-      const outcome = resolveGitHubBridgeTurnOutcome(thread, {
+      const outcome = resolveJiraBridgeTurnOutcome(thread, {
         ...resolveOptions,
         knownTargetTurnId: tracked.targetTurnId,
       });
@@ -631,7 +648,7 @@ const make = Effect.gen(function* () {
         const body =
           outcome.status === "completed"
             ? outcome.body ||
-              githubFinalAnswerWithStats(thread, outcome.targetTurnId) ||
+              jiraFinalAnswerWithStats(thread, outcome.targetTurnId) ||
               FAILED_RESPONSE
             : outcome.body || FAILED_RESPONSE;
         yield* finishDelivery(tracked, body, outcome.status);
@@ -740,7 +757,7 @@ const make = Effect.gen(function* () {
       personId: trust.person?.personId ?? null,
     });
 
-    const link = yield* resolveLinkedThreadId(input.invocation.issueKey);
+    const link = yield* resolveLinkedThreadId(input.invocation);
     if (link._tag === "ambiguous") {
       yield* finishDelivery(acknowledged, AMBIGUOUS_RESPONSE, "rejected");
       return;
@@ -824,7 +841,7 @@ const make = Effect.gen(function* () {
         .getThreadDetailById(link.threadId)
         .pipe(Effect.orElseSucceed(() => Option.none()));
       if (Option.isNone(snapshot)) {
-        // Stale store entry — try create if enabled.
+        // Stale link — try create if enabled.
         if (!config.enabled || !config.autoCreateThread) {
           yield* finishDelivery(acknowledged, NOT_LINKED_RESPONSE, "rejected");
           return;
@@ -853,13 +870,7 @@ const make = Effect.gen(function* () {
     }
 
     // Keep the server-native association durable once a turn is accepted.
-    yield* workItems
-      .appendForThread({
-        threadId: thread.id,
-        jiraIssueKeys: [input.invocation.issueKey],
-        source: "jira-webhook",
-      })
-      .pipe(Effect.ignore);
+    yield* linkIssueToThread(thread.id, thread.projectId, input.invocation);
 
     // Always dispatch. When the thread is mid-turn, orchestration queues the
     // message (thread.message-queued) — do not short-circuit with a busy reply.
@@ -1038,7 +1049,7 @@ const make = Effect.gen(function* () {
         previousTurnId: tracked.previousTurnId,
         knownTargetTurnId: tracked.targetTurnId,
       };
-      const discoveredTurnId = discoverGitHubTargetTurnId(thread, resolveOptions);
+      const discoveredTurnId = discoverJiraTargetTurnId(thread, resolveOptions);
       if (discoveredTurnId !== null && discoveredTurnId !== tracked.targetTurnId) {
         tracked = {
           deliveryId: tracked.deliveryId,
@@ -1087,7 +1098,7 @@ const make = Effect.gen(function* () {
         }
       }
 
-      const outcome = resolveGitHubBridgeTurnOutcome(thread, {
+      const outcome = resolveJiraBridgeTurnOutcome(thread, {
         ...resolveOptions,
         knownTargetTurnId: tracked.targetTurnId,
       });
@@ -1187,14 +1198,6 @@ const make = Effect.gen(function* () {
       });
       return;
     }
-
-    yield* workItems
-      .appendForThread({
-        threadId: thread.id,
-        jiraIssueKeys: [report.issueKey],
-        source: "jira-webhook",
-      })
-      .pipe(Effect.ignore);
 
     const commandId = CommandId.make(yield* crypto.uuidV4());
     const messageId = MessageId.make(yield* crypto.uuidV4());

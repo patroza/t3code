@@ -5,7 +5,6 @@ import {
   EnvironmentId,
   type EnvironmentId as EnvironmentIdType,
   GitActionProgressPhase,
-  GitActionFailureKind,
   type GitActionProgressEvent,
   type GitRunStackedActionInput,
   type GitRunStackedActionResult,
@@ -82,7 +81,6 @@ export interface RunVcsStackedActionInput {
   readonly action: GitStackedAction;
   readonly commitMessage?: string;
   readonly featureBranch?: boolean;
-  readonly disableCommitSigning?: boolean;
   readonly filePaths?: ReadonlyArray<string>;
   readonly threadId?: ThreadId;
   readonly projectId?: ProjectId;
@@ -119,7 +117,6 @@ export class VcsActionRemoteFailureError extends Schema.TaggedError<VcsActionRem
     environmentId: EnvironmentId,
     cwd: Schema.String,
     phase: Schema.NullOr(GitActionProgressPhase),
-    failureKind: GitActionFailureKind,
     remoteMessageLength: Schema.Number,
   },
 ) {
@@ -181,14 +178,6 @@ export const VcsActionExecutionError = Schema.Union([
   VcsActionMissingTerminalEventError,
 ]);
 export type VcsActionExecutionError = typeof VcsActionExecutionError.Type;
-
-const isVcsActionRemoteFailureError = Schema.is(VcsActionRemoteFailureError);
-
-export function isCommitSigningFailure(
-  error: unknown,
-): error is VcsActionRemoteFailureError & { readonly failureKind: "commit_signing_failed" } {
-  return isVcsActionRemoteFailureError(error) && error.failureKind === "commit_signing_failed";
-}
 
 export const EMPTY_VCS_ACTION_STATE = Object.freeze<VcsActionState>({
   isRunning: false,
@@ -344,19 +333,6 @@ export function consumeVcsActionProgress<E, R>(
 ): Effect.Effect<GitRunStackedActionResult, E | VcsActionExecutionError, R> {
   return Effect.suspend(() => {
     let terminalEvent: GitActionProgressEvent | null = null;
-    const remoteFailure = (
-      event: Extract<GitActionProgressEvent, { kind: "action_failed" }>,
-    ): VcsActionRemoteFailureError =>
-      new VcsActionRemoteFailureError({
-        actionId: input.actionId,
-        transportActionId: input.transportActionId,
-        action: event.action,
-        environmentId: input.target.environmentId,
-        cwd: input.target.cwd,
-        phase: event.phase,
-        failureKind: event.failureKind,
-        remoteMessageLength: event.message.length,
-      });
     return stream.pipe(
       Stream.runForEach((event) => {
         const normalized = normalizeVcsActionProgressEvent(
@@ -373,18 +349,22 @@ export function consumeVcsActionProgress<E, R>(
         }
         return input.onProgress(normalized);
       }),
-      Effect.catch((error) => {
-        const terminal = terminalEvent;
-        const failure: E | VcsActionRemoteFailureError =
-          terminal?.kind === "action_failed" ? remoteFailure(terminal) : error;
-        return Effect.fail<E | VcsActionRemoteFailureError>(failure);
-      }),
       Effect.flatMap(() => {
         if (terminalEvent?.kind === "action_finished") {
           return Effect.succeed(terminalEvent.result);
         }
         if (terminalEvent?.kind === "action_failed") {
-          return Effect.fail<VcsActionExecutionError>(remoteFailure(terminalEvent));
+          return Effect.fail<VcsActionExecutionError>(
+            new VcsActionRemoteFailureError({
+              actionId: input.actionId,
+              transportActionId: input.transportActionId,
+              action: terminalEvent.action,
+              environmentId: input.target.environmentId,
+              cwd: input.target.cwd,
+              phase: terminalEvent.phase,
+              remoteMessageLength: terminalEvent.message.length,
+            }),
+          );
         }
         return Effect.fail<VcsActionExecutionError>(
           new VcsActionMissingTerminalEventError({
@@ -554,7 +534,6 @@ export function createVcsActionManager<R, E>(
           action: input.action,
           ...(input.commitMessage ? { commitMessage: input.commitMessage } : {}),
           ...(input.featureBranch ? { featureBranch: true } : {}),
-          ...(input.disableCommitSigning ? { disableCommitSigning: true } : {}),
           ...(input.filePaths?.length ? { filePaths: [...input.filePaths] } : {}),
           ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
           ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),

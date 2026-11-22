@@ -392,22 +392,17 @@ NODE
 }
 
 ensure_remote_node_path() {
-  prepend_path_if_dir "$HOME/.local/bin"
-  prepend_path_if_dir "$HOME/bin"
-
   if command -v node >/dev/null 2>&1 && remote_node_satisfies_engine >/dev/null 2>&1; then
     return 0
   fi
 
+  prepend_path_if_dir "$HOME/.local/bin"
+  prepend_path_if_dir "$HOME/bin"
   prepend_path_if_dir "/opt/homebrew/bin"
   prepend_path_if_dir "/home/linuxbrew/.linuxbrew/bin"
   prepend_path_if_dir "/usr/local/bin"
   prepend_path_if_dir "/usr/bin"
   prepend_path_if_dir "/bin"
-
-  if command -v node >/dev/null 2>&1 && remote_node_satisfies_engine >/dev/null 2>&1; then
-    return 0
-  fi
 
   if [ -z "\${VOLTA_HOME:-}" ]; then
     VOLTA_HOME="$HOME/.volta"
@@ -1194,7 +1189,7 @@ export function buildRemoteLaunchScript(input?: RemoteT3RunnerOptions): string {
   });
 }
 
-export function buildRemotePairingScript(stateKey: string, input?: RemoteT3RunnerOptions): string {
+function buildRemotePairingScript(stateKey: string, input?: RemoteT3RunnerOptions): string {
   return applyScriptPlaceholders(REMOTE_PAIRING_SCRIPT, {
     T3_STATE_KEY: stateKey,
     T3_ENSURE_T3_HOME_SCRIPT: REMOTE_ENSURE_T3_HOME_SCRIPT,
@@ -1202,7 +1197,7 @@ export function buildRemotePairingScript(stateKey: string, input?: RemoteT3Runne
   });
 }
 
-export function buildRemoteStopScript(stateKey: string): string {
+function buildRemoteStopScript(stateKey: string): string {
   return applyScriptPlaceholders(REMOTE_STOP_SCRIPT, {
     T3_STATE_KEY: stateKey,
     T3_MANAGED_SERVER_RUNNING_SCRIPT: REMOTE_MANAGED_SERVER_RUNNING_SCRIPT,

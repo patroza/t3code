@@ -80,7 +80,7 @@ const BLOCK_TYPES = new Set([
 ]);
 
 /** Plain text of a Jira description. ADF is walked as data. Nothing is evaluated. */
-export function plainTextFromJiraBody(body: unknown): string {
+function plainTextFromJiraBody(body: unknown): string {
   if (typeof body === "string") return body.trim();
   if (body === null || body === undefined) return "";
   const parts: string[] = [];
@@ -267,7 +267,7 @@ function sliceFrom(text: string, start: number, end: number | null): string {
 }
 
 /** Pull analysis and fix sections out of one assistant message. */
-export function milestonesInText(text: string): BugMilestones {
+function milestonesInText(text: string): BugMilestones {
   const markers = statusMarkers(text);
   if (markers.length === 0) return { analysis: null, fix: null };
   const analysisAt = markers.find((marker) => marker.kind === "analysis");

@@ -7,11 +7,13 @@ import type * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcMiddleware from "effect/rpc/RpcMiddleware";
 
 import { rpcRequestDuration, rpcRequestsTotal, withMetrics } from "./Metrics.ts";
+import { identityRpcAggregates } from "../identity/identityWsHandlers.ts";
 
 type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup>["_tag"];
 
 // Trace queries and dashboards depend on these labels, including deviations from method prefixes.
 const RPC_AGGREGATES = {
+  ...identityRpcAggregates,
   [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: "orchestrationV2",
   [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.getNativeChildWork]: "orchestration",
@@ -95,7 +97,6 @@ const RPC_AGGREGATES = {
   [WS_METHODS.serverGetTraceDiagnostics]: "server",
   [WS_METHODS.serverGetProcessDiagnostics]: "server",
   [WS_METHODS.serverGetHostResources]: "server",
-  [WS_METHODS.serverGetHostResourceSnapshot]: "server",
   [WS_METHODS.serverGetProcessResourceHistory]: "server",
   [WS_METHODS.serverGetResourceTelemetryHistory]: "server",
   [WS_METHODS.serverRetryResourceTelemetry]: "server",
@@ -105,8 +106,6 @@ const RPC_AGGREGATES = {
   [WS_METHODS.serverGetUsageSummary]: "server",
   [WS_METHODS.serverRefreshUsageRates]: "server",
   [WS_METHODS.serverSignalProcess]: "server",
-  [WS_METHODS.serverReportHostPowerState]: "server",
-  [WS_METHODS.serverGetBackgroundPolicy]: "server",
   [WS_METHODS.serverReportClientActivity]: "server",
   [WS_METHODS.scheduledTasksSubscribe]: "scheduledTasks",
   [WS_METHODS.scheduledTasksUpsert]: "scheduledTasks",
@@ -120,12 +119,6 @@ const RPC_AGGREGATES = {
   [WS_METHODS.guestShareCreate]: "guest-share",
   [WS_METHODS.cloudGetRelayClientStatus]: "cloud",
   [WS_METHODS.cloudInstallRelayClient]: "cloud",
-  [WS_METHODS.identityGetSnapshot]: "identity",
-  [WS_METHODS.identityGetSessionClaim]: "identity",
-  [WS_METHODS.identityClaim]: "identity",
-  [WS_METHODS.identityClearClaim]: "identity",
-  [WS_METHODS.identityListClientClaims]: "identity",
-  [WS_METHODS.identitySetClientClaim]: "identity",
   [WS_METHODS.pullRequestsList]: "pull-requests",
   [WS_METHODS.pullRequestsListStats]: "pull-requests",
   [WS_METHODS.pullRequestsFilterOptions]: "pull-requests",
@@ -192,7 +185,6 @@ const RPC_AGGREGATES = {
   [WS_METHODS.projectsListIgnoredFiles]: "workspace",
   [WS_METHODS.projectsReadFile]: "workspace",
   [WS_METHODS.projectsSearchContents]: "workspace",
-  [WS_METHODS.projectsWatchFile]: "workspace",
   [WS_METHODS.projectsSearchEntries]: "workspace",
   [WS_METHODS.projectsWriteFile]: "workspace",
   [WS_METHODS.projectsEnsureScratch]: "orchestration",
@@ -200,6 +192,10 @@ const RPC_AGGREGATES = {
   [WS_METHODS.projectsCreateFromThread]: "orchestration",
   [WS_METHODS.shellOpenInEditor]: "workspace",
   [WS_METHODS.filesystemBrowse]: "workspace",
+  [WS_METHODS.workspaceListFolders]: "workspace",
+  [WS_METHODS.workspaceScanFolders]: "workspace",
+  [WS_METHODS.workspaceTaskFolder]: "workspace",
+  [WS_METHODS.workspaceAddTaskFolderRepository]: "workspace",
   [WS_METHODS.filesystemGetMetadata]: "workspace",
   [WS_METHODS.agentSessionsScan]: "workspace",
   [WS_METHODS.agentSessionsImport]: "workspace",
@@ -226,9 +222,6 @@ const RPC_AGGREGATES = {
   [WS_METHODS.vcsListRefs]: "vcs",
   [WS_METHODS.vcsCreateWorktree]: "vcs",
   [WS_METHODS.vcsRemoveWorktree]: "vcs",
-  [WS_METHODS.vcsResolveBranchChangeRequest]: "vcs",
-  [WS_METHODS.vcsPreviewWorktreeCleanup]: "vcs",
-  [WS_METHODS.vcsCleanupThreadWorktree]: "vcs",
   [WS_METHODS.vcsCreateRef]: "vcs",
   [WS_METHODS.vcsSwitchRef]: "vcs",
   [WS_METHODS.vcsInit]: "vcs",
@@ -251,10 +244,6 @@ const RPC_AGGREGATES = {
   [WS_METHODS.previewClearProfile]: "preview",
   [WS_METHODS.previewReportProfiles]: "preview",
   [WS_METHODS.previewReportStatus]: "preview",
-  [WS_METHODS.previewResolvePort]: "preview",
-  [WS_METHODS.previewAutomationConnect]: "preview",
-  [WS_METHODS.previewAutomationRespond]: "preview",
-  [WS_METHODS.previewAutomationFocusHost]: "preview",
   [WS_METHODS.subscribePreviewEvents]: "preview",
   [WS_METHODS.subscribeDiscoveredLocalServers]: "preview",
   [WS_METHODS.previewStopLocalServer]: "preview",
@@ -272,8 +261,6 @@ const RPC_AGGREGATES = {
   [WS_METHODS.subscribeServerConfig]: "server",
   [WS_METHODS.subscribeServerLifecycle]: "server",
   [WS_METHODS.subscribeAuthAccess]: "auth",
-  [WS_METHODS.subscribeAiUsage]: "server",
-  [WS_METHODS.subscribeBackgroundPolicy]: "server",
 } as const satisfies Readonly<Record<WsRpcMethod, string>>;
 
 const RPC_SPAN_PREFIX = "ws.rpc";

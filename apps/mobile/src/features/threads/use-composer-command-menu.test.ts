@@ -158,7 +158,7 @@ describe("mobile model mentions", () => {
       "gpt",
       ["traex", "opencode", "hidden", "gone", "old"].map((id) => provider(id)),
     );
-    expect(items.map((item) => [item.id, item.description]).sort()).toEqual([
+    expect(items.map((item) => [item.id, item.description]).toSorted()).toEqual([
       ["model:opencode:traex/gpt-6.1", "OpenCode · Traex"],
       ["model:traex:gpt-6.1", "Traex"],
     ]);

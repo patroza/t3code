@@ -11,10 +11,7 @@ import { environmentCatalog } from "~/connection/catalog";
 import { isElectron } from "~/env";
 import { isPreviewSupportedInRuntime } from "~/previewStateStore";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
-import {
-  primaryEnvironmentIdAtom,
-  primaryEnvironmentNativeBrowserAtom,
-} from "~/state/primaryEnvironment";
+import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
 import {
   readEnvironmentSupportsServerBrowser,
   useEnvironmentSupportsServerBrowser,
@@ -33,10 +30,6 @@ const desktopLoadsLoopbackAtom = Atom.family((environmentId: EnvironmentId) =>
   }).pipe(Atom.withLabel(`preview:desktop-loads-loopback:${environmentId}`)),
 );
 
-/**
- * Reused local servers stream shared tabs; remote tabs default to this desktop’s browser.
- * Users can move tabs to the environment when only it can reach the page.
- */
 export function previewRuntimeFor(environmentId: EnvironmentId): PreviewRuntime | undefined {
   if (!readEnvironmentSupportsServerBrowser(environmentId)) return undefined;
   // Without its tunnel, another environment's tabs stream from it, as on the web.
@@ -76,20 +69,13 @@ export function usePreviewAvailable(environmentId: EnvironmentId | null): boolea
   return isPreviewSupportedInRuntime() || serverBrowser;
 }
 
-/**
- * Whether this client draws a server tab with its own `<webview>`. Primary
- * environments can reuse an independent server without a desktop browser
- * channel; those must stream just like remote environments.
- */
 export function rendersServerTabNatively(
   environmentId: EnvironmentId,
   primaryEnvironmentId: EnvironmentId | null,
   snapshot: Pick<PreviewSessionSnapshot, "runtime" | "headless"> | null | undefined,
-  nativeServerBrowser = false,
 ): boolean {
   return (
     isElectron &&
-    nativeServerBrowser &&
     snapshot?.runtime === "server" &&
     !snapshot.headless &&
     primaryEnvironmentId !== null &&
@@ -101,10 +87,5 @@ export function useRendersServerTabNatively(
   environmentId: EnvironmentId,
   snapshot: Pick<PreviewSessionSnapshot, "runtime" | "headless"> | null | undefined,
 ): boolean {
-  return rendersServerTabNatively(
-    environmentId,
-    useAtomValue(primaryEnvironmentIdAtom),
-    snapshot,
-    useAtomValue(primaryEnvironmentNativeBrowserAtom),
-  );
+  return rendersServerTabNatively(environmentId, useAtomValue(primaryEnvironmentIdAtom), snapshot);
 }

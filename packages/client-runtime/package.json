@@ -95,6 +95,10 @@
       "types": "./src/userMessage.ts",
       "default": "./src/userMessage.ts"
     },
+    "./message-sender": {
+      "types": "./src/messageSender.ts",
+      "default": "./src/messageSender.ts"
+    },
     "./prompt-links": {
       "types": "./src/promptLinks.ts",
       "default": "./src/promptLinks.ts"
@@ -203,21 +207,13 @@
       "types": "./src/relay/index.ts",
       "default": "./src/relay/index.ts"
     },
-    "./state/ai-usage": {
-      "types": "./src/state/aiUsage.ts",
-      "default": "./src/state/aiUsage.ts"
-    },
-    "./state/aiUsagePresentation": {
-      "types": "./src/state/aiUsagePresentation.ts",
-      "default": "./src/state/aiUsagePresentation.ts"
+    "./state/auth": {
+      "types": "./src/state/auth.ts",
+      "default": "./src/state/auth.ts"
     },
     "./state/identity": {
       "types": "./src/state/identity.ts",
       "default": "./src/state/identity.ts"
-    },
-    "./state/auth": {
-      "types": "./src/state/auth.ts",
-      "default": "./src/state/auth.ts"
     },
     "./state/assets": {
       "types": "./src/state/assets.ts",
@@ -423,14 +419,6 @@
       "types": "./src/state/subagentRuntime.ts",
       "default": "./src/state/subagentRuntime.ts"
     },
-    "./state/thread-reducer": {
-      "types": "./src/state/threadReducer.ts",
-      "default": "./src/state/threadReducer.ts"
-    },
-    "./state/older-thread-activities": {
-      "types": "./src/state/olderThreadActivities.ts",
-      "default": "./src/state/olderThreadActivities.ts"
-    },
     "./state/thread-sort": {
       "types": "./src/state/threadSort.ts",
       "default": "./src/state/threadSort.ts"
@@ -446,6 +434,10 @@
     "./state/thread-checkpoints": {
       "types": "./src/state/threadCheckpoints.ts",
       "default": "./src/state/threadCheckpoints.ts"
+    },
+    "./state/thread-repositories": {
+      "types": "./src/state/threadRepositories.ts",
+      "default": "./src/state/threadRepositories.ts"
     },
     "./state/thread-execution": {
       "types": "./src/state/threadExecution.ts",
@@ -498,10 +490,6 @@
     "./state/vcs": {
       "types": "./src/state/vcs.ts",
       "default": "./src/state/vcs.ts"
-    },
-    "./state/worktreeCleanup": {
-      "types": "./src/state/worktreeCleanup.ts",
-      "default": "./src/state/worktreeCleanup.ts"
     },
     "./work-log/user-input": {
       "types": "./src/work-log/userInput.ts",
@@ -591,14 +579,6 @@
       "types": "./src/device/duoControl.ts",
       "default": "./src/device/duoControl.ts"
     },
-    "./state/hostResourcePresentation": {
-      "types": "./src/state/hostResourcePresentation.ts",
-      "default": "./src/state/hostResourcePresentation.ts"
-    },
-    "./state/thread-recency-groups": {
-      "types": "./src/state/threadRecencyGroups.ts",
-      "default": "./src/state/threadRecencyGroups.ts"
-    },
     "./diff-count": {
       "types": "./src/diffCount.ts",
       "default": "./src/diffCount.ts"
@@ -682,6 +662,10 @@
     "./provider-instance-ids": {
       "types": "./src/providerInstanceIds.ts",
       "default": "./src/providerInstanceIds.ts"
+    },
+    "./pull-request-references": {
+      "types": "./src/pullRequestReferences.ts",
+      "default": "./src/pullRequestReferences.ts"
     }
   },
   "scripts": {
@@ -708,27 +692,16 @@
     "effect": "catalog:",
     "gt-i18n": "1.0.40",
     "jszip": "3.10.1",
-    "remark-gfm": "catalog:",
-    "remark-parse": "catalog:",
     "three": "0.180.0",
-    "unbash": "^5.0.0",
-    "unified": "catalog:"
+    "unbash": "^5.0.0"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
     "@types/mdast": "^4.0.4",
-    "@types/react": "~19.2.14",
     "@types/three": "0.180.0",
-    "micromark-util-types": "^2.0.2",
-    "react": "19.2.6",
+    "remark-gfm": "catalog:",
+    "remark-parse": "catalog:",
+    "unified": "catalog:",
     "vite-plus": "catalog:"
-  },
-  "peerDependencies": {
-    "react": "^19.0.0"
-  },
-  "peerDependenciesMeta": {
-    "react": {
-      "optional": true
-    }
   }
 }

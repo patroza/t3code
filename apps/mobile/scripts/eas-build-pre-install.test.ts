@@ -7,6 +7,8 @@ import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import { expect, it } from "vite-plus/test";
 
+import { applyForkEasOverlay } from "../../../scripts/apply-fork-eas-overlay.mjs";
+
 const repositoryRoot = NodePath.join(
   NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)),
   "..",
@@ -70,9 +72,12 @@ it("runs the hook before EAS installs dependencies", () => {
   expect(manifest.scripts["eas-build-pre-install"]).toBe("node scripts/eas-build-pre-install.mjs");
 });
 
-it("uses the same development runtime policy in CI and the remote build profile", () => {
-  const profiles = JSON.parse(
-    NodeFS.readFileSync(NodePath.join(repositoryRoot, "apps/mobile/eas.json"), "utf8"),
+it("uses the same development runtime policy in CI and the overlaid remote build profile", () => {
+  const read = (path: string) =>
+    JSON.parse(NodeFS.readFileSync(NodePath.join(repositoryRoot, path), "utf8"));
+  const profiles = applyForkEasOverlay(
+    read("apps/mobile/eas.json"),
+    read("apps/mobile/eas.fork.json"),
   );
   const workflow = NodeFS.readFileSync(
     NodePath.join(repositoryRoot, ".github/workflows/mobile-eas-development.yml"),

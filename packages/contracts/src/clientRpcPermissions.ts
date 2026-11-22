@@ -14,9 +14,11 @@ import {
 } from "./auth.ts";
 import { ORCHESTRATION_V2_WS_METHODS } from "./orchestrationV2.ts";
 import { WS_METHODS } from "./rpc.ts";
+import { IDENTITY_GUARDED_RPC_SCOPES } from "./identityRpc.ts";
 
 /** Incremental client enforcement; the server still authorizes every request. */
 export const CLIENT_GUARDED_RPC_SCOPES = {
+  ...IDENTITY_GUARDED_RPC_SCOPES,
   [WS_METHODS.providerAuthRemoveMethod]: AuthProvidersManageScope,
   // An MCP sign-in stores a credential for the agent, as an account sign-in does.
   [WS_METHODS.providerMcpSignInStart]: AuthProvidersManageScope,
@@ -28,7 +30,6 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   // Restarts the server, as an update does.
   [WS_METHODS.serverReclaimDatabaseSpace]: AuthEnvironmentMaintainScope,
   [WS_METHODS.serverCheckOtlpEndpoint]: AuthSettingsWriteScope,
-  [WS_METHODS.deviceEasAccount]: AuthSettingsWriteScope,
   [WS_METHODS.serverCheckSecretSource]: AuthSettingsWriteScope,
   // Listing models spends the stored API key, so only those who can choose a model may.
   [WS_METHODS.serverListTextGeneratorModels]: AuthSettingsWriteScope,
@@ -70,6 +71,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.gitPreparePullRequestThread]: AuthSourceControlWriteScope,
   [WS_METHODS.vcsCreateWorktree]: AuthSourceControlWriteScope,
   [WS_METHODS.vcsRemoveWorktree]: AuthSourceControlWriteScope,
+  [WS_METHODS.workspaceAddTaskFolderRepository]: AuthSourceControlWriteScope,
   [WS_METHODS.vcsCreateRef]: AuthSourceControlWriteScope,
   [WS_METHODS.vcsSwitchRef]: AuthSourceControlWriteScope,
   [WS_METHODS.vcsInit]: AuthSourceControlWriteScope,

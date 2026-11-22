@@ -1,5 +1,4 @@
 import {
-  CommandId,
   TurnItemId,
   NodeId,
   MessageId,
@@ -33,10 +32,12 @@ import {
   deriveThreadActivityRun,
   deriveThreadRuntime,
   formatModelSelectionEffort,
+  formatSubagentEffort,
   isBackgroundWorkStopPending,
   presentPendingBackgroundWork,
   presentProviderGoal,
   presentRunStop,
+  readSelectedEffortValue,
   threadRuntimeHasInterruptibleRun,
 } from "./threadExecution.ts";
 
@@ -462,53 +463,6 @@ describe("thread execution presentation", () => {
     expect(deriveThreadRuntime(onlyHeld)).toBeNull();
   });
 
-  it("settles behind an edit hold without hiding a genuinely executing run", () => {
-    const completed = { ...run("done", 1, "completed"), completedAt: now };
-    const edited = { ...run("edited", 2, "queued"), queueEditId: CommandId.make("edit") };
-    const later = run("later", 3, "queued");
-    const projection = { ...v2Projection, runs: [completed, edited, later], updatedAt: now };
-    expect(deriveLatestThreadRun(projection)?.runId).toBe(completed.id);
-    expect(deriveThreadRuntime(projection)).toMatchObject({
-      status: "completed",
-      activeRunId: null,
-    });
-    expect(
-      deriveThreadRuntime({
-        ...projection,
-        runs: [{ ...completed, status: "running" }, edited, later],
-      }),
-    ).toMatchObject({ status: "running", activeRunId: completed.id });
-    expect(
-      deriveThreadRuntime({
-        ...projection,
-        runs: [completed, { ...edited, queueEditId: null }, later],
-      }),
-    ).toMatchObject({ status: "queued" });
-    expect(
-      deriveThreadRuntime({
-        ...projection,
-        runs: [completed, { ...edited, queuePosition: 4 }, later],
-      }),
-    ).toMatchObject({ status: "queued" });
-  });
-
-  it("does not expose a queued-only run as interruptible", () => {
-    const queuedRun = run("run-queued", 1, "queued");
-    const projection = { ...v2Projection, runs: [queuedRun], updatedAt: now };
-
-    expect(deriveThreadActivityRun(projection)).toMatchObject({
-      runId: queuedRun.id,
-      status: "queued",
-    });
-
-    const runtime = deriveThreadRuntime(projection);
-    expect(runtime).toMatchObject({
-      status: "queued",
-      activeRunId: null,
-    });
-    expect(threadRuntimeHasInterruptibleRun(runtime)).toBe(false);
-  });
-
   it.each([
     { name: "no requests", requests: [], runId: "run-stopped", held: false, expected: true },
     {
@@ -548,6 +502,23 @@ describe("thread execution presentation", () => {
         held,
       ),
     ).toBe(expected);
+  });
+
+  it("does not expose a queued-only run as interruptible", () => {
+    const queuedRun = run("run-queued", 1, "queued");
+    const projection = { ...v2Projection, runs: [queuedRun], updatedAt: now };
+
+    expect(deriveThreadActivityRun(projection)).toMatchObject({
+      runId: queuedRun.id,
+      status: "queued",
+    });
+
+    const runtime = deriveThreadRuntime(projection);
+    expect(runtime).toMatchObject({
+      status: "queued",
+      activeRunId: null,
+    });
+    expect(threadRuntimeHasInterruptibleRun(runtime)).toBe(false);
   });
 });
 
@@ -791,6 +762,74 @@ describe("formatModelSelectionEffort", () => {
     );
 
     expect(formatModelSelectionEffort(selection, models)).toBe("Extra High");
+  });
+
+  it("reads ACP thought_level and role: reasoning controls for cataloged and uncataloged models", () => {
+    const models = [
+      {
+        slug: "gemini-4-neon",
+        name: "Gemini 4 Neon",
+        isCustom: false,
+        capabilities: createModelCapabilities({
+          optionDescriptors: [
+            {
+              id: "thought_level",
+              label: "Thinking",
+              type: "select",
+              role: "reasoning",
+              options: [
+                { id: "medium", label: "Medium", isDefault: true },
+                { id: "high", label: "High" },
+              ],
+            },
+          ],
+        }),
+      },
+      {
+        slug: "acp-custom-agent",
+        name: "ACP Custom Agent",
+        isCustom: false,
+        capabilities: createModelCapabilities({
+          optionDescriptors: [
+            {
+              id: "custom_thinking_mode",
+              label: "Thinking",
+              type: "select",
+              role: "reasoning",
+              options: [{ id: "deep", label: "Deep" }],
+            },
+          ],
+        }),
+      },
+    ];
+    const antigravitySelection = createModelSelection(
+      ProviderInstanceId.make("antigravity"),
+      "gemini-4-neon",
+      [{ id: "thought_level", value: "high" }],
+    );
+    const customSelection = createModelSelection(
+      ProviderInstanceId.make("acpRegistry"),
+      "acp-custom-agent",
+      [{ id: "custom_thinking_mode", value: "deep" }],
+    );
+    const uncatalogedSelection = createModelSelection(
+      ProviderInstanceId.make("antigravity"),
+      "gemini-4-neon-preview",
+      [{ id: "thought_level", value: "high" }],
+    );
+
+    expect(formatModelSelectionEffort(antigravitySelection, models)).toBe("High");
+    expect(formatModelSelectionEffort(customSelection, models)).toBe("Deep");
+    expect(
+      formatSubagentEffort({
+        modelSlug: "gemini-4-neon-preview",
+        modelSelection: uncatalogedSelection,
+        provider: { driver: ProviderDriverKind.make("antigravity"), models },
+      }),
+    ).toBe("high");
+    expect(
+      readSelectedEffortValue(customSelection, models[1]?.capabilities?.optionDescriptors),
+    ).toBe("deep");
   });
 });
 

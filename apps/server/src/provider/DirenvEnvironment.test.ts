@@ -4,10 +4,16 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Sink from "effect/Sink";
+import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/process";
 
 import * as ProcessRunner from "../processRunner.ts";
-import { DirenvEnvironment, DirenvEnvironmentError, layer } from "./DirenvEnvironment.ts";
+import {
+  DirenvEnvironment,
+  DirenvEnvironmentError,
+} from "@t3tools/provider-core/server/DirenvEnvironment";
+import { layer } from "./DirenvEnvironment.ts";
 
 const successfulOutput = (
   stdout: string,
@@ -54,49 +60,6 @@ const setupDirenvProject = Effect.fn("setupDirenvProject")(function* () {
 });
 
 describe("DirenvEnvironment", () => {
-  describe("new worktree approval", () => {
-    it.effect("approves the exact .envrc in a newly created worktree", () => {
-      const run = vi.fn<ProcessRunner.ProcessRunner["Service"]["run"]>(() =>
-        Effect.succeed(successfulOutput("")),
-      );
-      return Effect.gen(function* () {
-        const { cwd, envrcPath, binDirectory, executable } = yield* setupDirenvProject();
-        const environment = { PATH: binDirectory, KEEP: "value" };
-        const direnvEnvironment = yield* DirenvEnvironment;
-
-        yield* direnvEnvironment.allow({ cwd, environment });
-
-        expect(run).toHaveBeenCalledOnce();
-        expect(run.mock.calls[0]?.[0]).toMatchObject({
-          command: executable,
-          args: ["allow", envrcPath],
-          cwd,
-          env: environment,
-          extendEnv: false,
-        });
-      }).pipe(Effect.provide(testLayer(run)));
-    });
-
-    it.effect("does not approve an ancestor .envrc outside the new worktree", () => {
-      const run = vi.fn<ProcessRunner.ProcessRunner["Service"]["run"]>();
-      return Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const parent = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "t3-direnv-worktree-parent-",
-        });
-        const cwd = path.join(parent, "worktree");
-        yield* fileSystem.makeDirectory(cwd);
-        yield* fileSystem.writeFileString(path.join(parent, ".envrc"), "export VALUE=parent\n");
-        const direnvEnvironment = yield* DirenvEnvironment;
-
-        yield* direnvEnvironment.allow({ cwd, environment: { PATH: "/not-used" } });
-
-        expect(run).not.toHaveBeenCalled();
-      }).pipe(Effect.provide(testLayer(run)));
-    });
-  });
-
   it.effect(
     "returns the environment unchanged without inspecting PATH when no .envrc exists",
     () => {
@@ -234,5 +197,51 @@ describe("DirenvEnvironment", () => {
         expect(error.cause).toBeUndefined();
       }
     }).pipe(Effect.provide(testLayer(run)));
+  });
+});
+
+describe("ProcessRunner extendEnv", () => {
+  it.effect("spawns direnv with exactly the provider environment", () => {
+    const spawned: Array<{ env?: NodeJS.ProcessEnv; extendEnv?: boolean }> = [];
+    const spawner = ChildProcessSpawner.make((command) =>
+      Effect.sync(() => {
+        spawned.push((command as unknown as { options: (typeof spawned)[number] }).options);
+        return ChildProcessSpawner.makeHandle({
+          pid: ChildProcessSpawner.ProcessId(1),
+          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+          isRunning: Effect.succeed(false),
+          kill: () => Effect.void,
+          unref: Effect.succeed(Effect.void),
+          stdin: Sink.drain,
+          stdout: Stream.empty,
+          stderr: Stream.empty,
+          all: Stream.empty,
+          getInputFd: () => Sink.drain,
+          getOutputFd: () => Stream.empty,
+        });
+      }),
+    );
+    const environment = { PATH: "/project/bin", KEEP: "value" };
+    return Effect.gen(function* () {
+      const runner = yield* ProcessRunner.ProcessRunner;
+      yield* runner.run({
+        command: "/project/bin/direnv",
+        args: [],
+        env: environment,
+        extendEnv: false,
+      });
+      yield* runner.run({ command: "/project/bin/direnv", args: [], env: environment });
+
+      expect(spawned.map((options) => [options.env, options.extendEnv])).toEqual([
+        [environment, false],
+        [environment, true],
+      ]);
+    }).pipe(
+      Effect.provide(
+        ProcessRunner.layer.pipe(
+          Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner)),
+        ),
+      ),
+    );
   });
 });

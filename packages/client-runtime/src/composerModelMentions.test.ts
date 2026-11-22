@@ -43,7 +43,7 @@ describe("rankComposerModelMentions", () => {
   );
 
   it("finds a model under every provider that serves it", () => {
-    expect(rank("gpt").sort()).toEqual(["opencode:traex-gpt", "traex:gpt"]);
+    expect(rank("gpt").toSorted()).toEqual(["opencode:traex-gpt", "traex:gpt"]);
   });
 
   it("splits words a mention joins with :, / or -", () => {
@@ -53,7 +53,7 @@ describe("rankComposerModelMentions", () => {
   });
 
   it("keeps a hyphenated model name whole when it matches", () => {
-    expect(rank("gpt-6.1").sort()).toEqual(["opencode:traex-gpt", "traex:gpt"]);
+    expect(rank("gpt-6.1").toSorted()).toEqual(["opencode:traex-gpt", "traex:gpt"]);
   });
 
   it.each(["src", "g", "agent", "pus"])(

@@ -14,14 +14,14 @@
   "main": "./dist/extension.cjs",
   "scripts": {
     "build": "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node20 --external:vscode --outfile=dist/extension.cjs && esbuild src/webview.ts --bundle --platform=browser --format=iife --target=es2022 --outfile=dist/webview.js",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "effect-tsgo tsrs --noEmit",
     "test": "vp test run"
   },
   "dependencies": {
     "@t3tools/client-runtime": "workspace:*",
     "@t3tools/contracts": "workspace:*",
     "@t3tools/shared": "workspace:*",
-    "dompurify": "^3.2.6",
+    "dompurify": "^3.4.17",
     "effect": "catalog:",
     "marked": "^15.0.12"
   },

@@ -1,12 +1,12 @@
 import { PASTED_TEXT_ATTACHMENT_THRESHOLD_BYTES } from "@t3tools/client-runtime/text-paste";
 import { PROVIDER_SEND_TURN_MAX_INPUT_CHARS } from "@t3tools/contracts";
 import { collectComposerInlineTokens } from "@t3tools/shared/composerInlineTokens";
+import { markdownMathRanges } from "@t3tools/shared/markdownMath";
 import { composerContextEditorTokens, composerSkillLabels } from "../lib/composerContext";
 import { DEFAULT_COMPOSER_ENTER_BEHAVIOR } from "../lib/composerEnterBehavior";
 import { useComposerModelTokens } from "./useComposerModelTokens";
 import { requireNativeView } from "expo";
 import { TextInputWrapper } from "expo-paste-input";
-import { useNativePaste } from "../lib/useNativePaste";
 import {
   useCallback,
   useEffect,
@@ -28,6 +28,7 @@ import {
 } from "../lib/composerChipPresentation";
 import { contextChipIconUri, modelChipIcon, modelChipIconUri } from "../lib/contextChipIconSource";
 import { MOBILE_TYPOGRAPHY } from "../lib/typography";
+import { useNativePaste } from "../lib/useNativePaste";
 import { FONT_FAMILIES } from "../lib/fontFamilies";
 import { useAppearancePreferences } from "../features/settings/appearance/AppearancePreferencesProvider";
 import { useUniwindTheme } from "../lib/useUniwindTheme";
@@ -156,11 +157,12 @@ export function ComposerEditor({
   // an abandoned render from leaking a trailing token into the next one.
   const [confirmedTokens, setConfirmedTokens] = useState(() => ({
     value: props.value,
-    tokens: collectComposerInlineTokens(props.value),
+    tokens: collectComposerInlineTokens(props.value, { findMath: markdownMathRanges }),
   }));
   let tokens = confirmedTokens.tokens;
   if (confirmedTokens.value !== props.value) {
     tokens = collectComposerInlineTokens(props.value, {
+      findMath: markdownMathRanges,
       preserveTrailingFrom: confirmedTokens.tokens,
     });
     setConfirmedTokens({ value: props.value, tokens });

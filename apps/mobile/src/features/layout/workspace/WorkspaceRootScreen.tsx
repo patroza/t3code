@@ -1,5 +1,3 @@
-import { CompactBrandTitle } from "../../../components/CompactBrandTitle";
-import { AppText as Text } from "../../../components/ui/AppText";
 import { WorkspaceNoTabs } from "./WorkspaceNoTabs";
 import { isSharedSlotTab } from "./navigation-tab-order";
 import { SharedSlotTitle } from "./SharedSlotTitle";
@@ -14,8 +12,7 @@ import { View, useWindowDimensions } from "react-native";
 import { useKeyboardState } from "react-native-keyboard-controller";
 import { SafeAreaInsetsContext, useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { useHomeListMode } from "../../home/home-list-options";
-import { HOME_LIST_MODE_TITLES } from "../../home/homeListMode";
+import { CompactBrandTitle } from "../../../components/CompactBrandTitle";
 import { HeaderItemsWidthContext } from "../../../native/header-items-width";
 import { NativeStackScreenOptions } from "../../../native/StackHeader";
 import {
@@ -41,7 +38,7 @@ import {
 } from "./WorkspaceTabsContext";
 import { WorkspaceToolbar } from "./WorkspaceToolbar";
 import { WORKSPACE_DOCK, workspaceDockBottomClearance } from "./workspace-tabs-state";
-import { WorkspaceSidebarTabs } from "./WorkspaceSidebarTabs";
+import { WorkspaceTabDock } from "./WorkspaceTabDock";
 import {
   useCompactWorkspaceTabs,
   useSidebarWorkspaceTabs,
@@ -52,7 +49,6 @@ import { openSettings } from "../../settings/settings-navigation";
 const TAB_TITLES = WORKSPACE_TAB_LABELS;
 
 function WorkspaceRootTitle(props: {
-  readonly title: string;
   readonly columnWidth: number;
   readonly onOpenEnvironments: () => void;
 }) {
@@ -72,10 +68,6 @@ function WorkspaceRootTitle(props: {
         brand={
           !settingsOpen && isSharedSlotTab(state.selectedTab) ? (
             <SharedSlotTitle tab={state.selectedTab} />
-          ) : !settingsOpen && state.selectedTab === "threads" ? (
-            <Text className="text-[18px] font-t3-bold text-foreground" numberOfLines={1}>
-              {props.title}
-            </Text>
           ) : (
             <CompactBrandTitle
               accessibilityLabel={gt("{product}, {title}", { product: "T3 Code", title: tabTitle })}
@@ -115,21 +107,11 @@ function WorkspaceRootContent() {
   const keyboardHeight = useKeyboardState((keyboard) => keyboard.height);
   const workspace = useWorkspaceTabs()!;
   const { state } = workspace;
-  const listMode = useHomeListMode();
-  const title = workspace.settingsOpen
-    ? gt("Settings")
-    : enabled.length === 0
-      ? gt("Navigation")
-      : state.selectedTab === "threads"
-        ? m(HOME_LIST_MODE_TITLES[listMode])
-        : m(TAB_TITLES[state.selectedTab]);
-  const solidHeader = deviceType === "duo-folded" || state.selectedTab === "usage";
   // Settings is a workspace tab too; its list takes the place of the selected tab's.
   const settingsOpen = workspace.settingsOpen;
   const headerOnly = use(NativeWorkspaceTabActivityContext)?.headerOnly === true;
   const renderHeaderTitle = () => (
     <WorkspaceRootTitle
-      title={title}
       columnWidth={width}
       onOpenEnvironments={() => openSettings(navigation, "SettingsEnvironments")}
     />
@@ -158,8 +140,6 @@ function WorkspaceRootContent() {
           optionsVersion={[
             settingsOpen,
             state.selectedTab,
-            state.selectionRevision,
-            title,
             width,
             sidebarNavigation,
             enabled.length,
@@ -173,11 +153,10 @@ function WorkspaceRootContent() {
                     $context: "screen title when every navigation tab is hidden",
                   }),
             headerShown: true,
-            headerTransparent: NATIVE_LIQUID_GLASS_SUPPORTED && !solidHeader,
-            headerStyle:
-              NATIVE_LIQUID_GLASS_SUPPORTED && !solidHeader
-                ? { backgroundColor: "transparent" }
-                : undefined,
+            headerTransparent: NATIVE_LIQUID_GLASS_SUPPORTED,
+            headerStyle: NATIVE_LIQUID_GLASS_SUPPORTED
+              ? { backgroundColor: "transparent" }
+              : undefined,
             contentStyle: undefined,
             ...(enabled.length === 0
               ? { headerSearchBarOptions: undefined, unstable_headerRightItems: () => [] }
@@ -208,7 +187,7 @@ function WorkspaceRootContent() {
           )}
         </SafeAreaInsetsContext>
         {deviceType !== "pad" && deviceType !== "phone" && sidebarPicker ? (
-          <WorkspaceSidebarTabs />
+          <WorkspaceTabDock placement="column" />
         ) : null}
         {enabled.length === 0 && !settingsOpen ? null : settingsOpen ||
           state.selectedTab !== "usage" ? (

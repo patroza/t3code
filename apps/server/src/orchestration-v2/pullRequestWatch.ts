@@ -17,7 +17,6 @@ const SNIPPET_LENGTH = 200;
 export type PullRequestWatchChange =
   | { readonly kind: "checks-failed"; readonly failed: ReadonlyArray<PullRequestCheck> }
   | { readonly kind: "checks-passed"; readonly count: number; readonly required: boolean }
-  | { readonly kind: "checks-settled"; readonly checks: ReadonlyArray<PullRequestCheck> }
   | {
       readonly kind: "checks-finished";
       readonly passed: number;
@@ -69,7 +68,6 @@ export function evaluatePullRequestWatch(
   let failedChecks = headMoved ? [] : watch.failedChecks;
   let passed = headMoved ? false : watch.passed;
   let passedChecks = headMoved ? [] : watch.passedChecks;
-  let pendingChecks = headMoved ? [] : watch.pendingChecks;
   let owedChecks = headMoved ? [] : (watch.owedChecks ?? []);
   const owedBefore = owedChecks;
   let awaitingApproval = headMoved ? [] : (watch.awaitingApproval ?? []);
@@ -142,84 +140,53 @@ export function evaluatePullRequestWatch(
     const told = passed && passedChecks.length === 0 ? gateNames : passedChecks;
     // Required checks can finish between sweeps; detect new names. With no required checks, ignore advisory gate growth.
     const gateGrew = required.length > 0 && gateNames.some((name) => !told.includes(name));
-    const passedThisPass = passedNow && (!passed || gateGrew);
-    // A failed gate never sends the passed wake. A failure seen while other checks still run, or
-    // a failed check that ran again, owes one wake once every check has finished.
-    const rerun = failedBefore.some((name) => !failedChecks.includes(name));
-    const gateFailed = gate.some(isFailedCheck);
-    const running =
-      unread ||
-      awaitingApproval.length > 0 ||
-      checks.some((check) => check.status === "pending" || check.status === "action-required");
-    const finishOwed = gateFailed && !running && (owedBefore.length > 0 || rerun);
-    if (passedThisPass) {
-      if (!checksBaseline)
+    // Other checks still pending when required ones passed are owed one wake when all settle.
+    // Only those are owed, so later advisory churn never wakes. One turned required is gate news.
+    const owed =
+      passedNow && passed
+        ? checks
+            .filter((check) => check.required !== true && owedChecks.includes(check.name))
+            .map((check) => check.name)
+        : [];
+    const settled =
+      failed.length === 0 &&
+      awaitingApproval.length === 0 &&
+      checks.every((check) => check.status !== "pending");
+    owedChecks = owed;
+    if (passedNow && (!passed || gateGrew)) {
+      if (!checksBaseline) {
         changes.push({ kind: "checks-passed", count: gate.length, required: required.length > 0 });
-    } else if (finishOwed) {
-      changes.push({
-        kind: "checks-finished",
-        passed: checks.filter((check) => check.status === "success").length,
-        failing: failed,
-      });
-    }
-    passed = passedNow;
-    passedChecks = passedNow ? gateNames : [];
-
-    const seen = new Set(checks.map((check) => check.name));
-    const stillPending = new Set(
-      checks
-        .filter((check) => check.status === "pending" || check.status === "action-required")
-        .map((check) => check.name),
-    );
-    const failedNames = new Set(failed.map((check) => check.name));
-    // A pending or previously failing check that then succeeds is its own wake, unless this pass
-    // already reported the gate passing or every check finishing after a failure. While the gate
-    // is still failing, those completions wait for that one checks-finished wake.
-    const reportSettled = !finishOwed && !gateFailed;
-    const settledNames = reportSettled
-      ? [...new Set([...pendingChecks, ...owedChecks, ...failedBefore])].filter(
-          (name) =>
-            seen.has(name) &&
-            !stillPending.has(name) &&
-            !failedNames.has(name) &&
-            !(passedThisPass && gateNames.includes(name)),
-        )
-      : [];
-    const settled = settledNames.flatMap((name) => {
-      const check = checks.find(
-        (candidate) =>
-          candidate.name === name &&
-          (candidate.status === "success" ||
-            candidate.status === "skipped" ||
-            candidate.status === "neutral"),
-      );
-      return check === undefined ? [] : [check];
-    });
-    if (!checksBaseline && settled.length > 0)
-      changes.push({ kind: "checks-settled", checks: settled });
-    if (passedThisPass) {
+      }
       owedChecks =
         required.length > 0
           ? checks
               .filter((check) => check.required !== true && check.status === "pending")
               .map((check) => check.name)
           : [];
-    } else if (
-      gateFailed &&
-      running &&
-      (owedBefore.length > 0 || rerun || newlyFailed.length > 0)
-    ) {
-      owedChecks = failedChecks;
-    } else if (finishOwed) {
+    } else if (settled && owed.length > 0) {
+      changes.push({ kind: "checks-passed", count: checks.length, required: false });
       owedChecks = [];
-    } else {
-      owedChecks = owedChecks.filter(
-        (name) => !settledNames.includes(name) && !required.some((check) => check.name === name),
-      );
+    } else if (gate.some(isFailedCheck)) {
+      // A failed gate never sends the passed wake. A failure seen while other checks still run, or
+      // a failed check that ran again, owes one wake once every check has finished. Only whether
+      // the list is empty matters here, and the failed checks are never empty.
+      const rerun = failedBefore.some((name) => !failedChecks.includes(name));
+      const running =
+        unread ||
+        awaitingApproval.length > 0 ||
+        checks.some((check) => check.status === "pending" || check.status === "action-required");
+      if (running) {
+        if (owedBefore.length > 0 || rerun || newlyFailed.length > 0) owedChecks = failedChecks;
+      } else if (owedBefore.length > 0 || rerun) {
+        changes.push({
+          kind: "checks-finished",
+          passed: checks.filter((check) => check.status === "success").length,
+          failing: failed,
+        });
+      }
     }
-    pendingChecks = [
-      ...new Set([...stillPending, ...pendingChecks.filter((name) => !seen.has(name))]),
-    ];
+    passed = passedNow;
+    passedChecks = passedNow ? gateNames : [];
   }
 
   // Only a head never read with checks waits for them; a legacy watch's clock starts at its next
@@ -312,7 +279,6 @@ export function evaluatePullRequestWatch(
       rebaseRequired,
       mergeQueueRemovalId,
       wakes,
-      pendingChecks,
       // Only a read that cannot be trusted to show the checks leaves the baseline to the next one.
       ...(checksBaseline &&
         (unread || (detail.headSha === undefined && checks.length === 0)) && {
@@ -440,11 +406,6 @@ function changeLines(
       return [
         `- All ${change.count} ${change.required ? "required " : ""}${change.count === 1 ? "check" : "checks"} passed${context.commit}.`,
       ];
-    case "checks-settled":
-      return [
-        `- Checks that were still running have finished${context.commit}:`,
-        ...listed(change.checks, (check) => `  - ${check.name}${check.url ? ` ${check.url}` : ""}`),
-      ];
     case "remarks":
       return [
         `- ${change.remarks.length} new ${change.remarks.length === 1 ? "comment" : "comments"}:`,
@@ -473,7 +434,6 @@ function changeLines(
 const SUMMARY: Record<PullRequestWatchChange["kind"], string> = {
   "checks-failed": "checks failed",
   "checks-passed": "checks passed",
-  "checks-settled": "checks finished",
   "checks-finished": "checks finished",
   "checks-awaiting-approval": "checks await approval",
   remarks: "new comments",
@@ -583,9 +543,7 @@ export function pullRequestWatchMessage(input: {
       source: { kind: "monitor" },
       outcome: failed
         ? "failed"
-        : changes.every(
-              (change) => change.kind === "checks-passed" || change.kind === "checks-settled",
-            )
+        : changes.every((change) => change.kind === "checks-passed")
           ? "completed"
           : "updated",
       summary: `#${input.number}: ${summary.join(", ")}`,

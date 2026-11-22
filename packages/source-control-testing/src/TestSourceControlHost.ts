@@ -191,7 +191,6 @@ export const layerWithRealGit = (
               Effect.mapError(
                 (cause) =>
                   new GitCommandError({
-                    failureKind: "unknown",
                     operation: input.operation,
                     command: "git",
                     cwd: input.cwd,

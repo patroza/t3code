@@ -2,12 +2,14 @@ import {
   type EnvironmentId,
   type VcsListRefsInput,
   type VcsListRefsResult,
+  type VcsRefreshStatusResult,
   type VcsStatusResult,
   WS_METHODS,
 } from "@t3tools/contracts";
 import { applyGitStatusStreamEvent } from "@t3tools/shared/git";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schedule from "effect/Schedule";
@@ -26,19 +28,17 @@ import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import * as Persistence from "../platform/persistence.ts";
 import {
   request,
+  requestGuarded,
   subscribe,
   subscribeVcsBranch,
   refreshVcsBranch,
   type EnvironmentRpcInput,
 } from "../rpc/client.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
-import {
-  vcsCommandConcurrency,
-  vcsCommandScheduler,
-  vcsThreadCommandConcurrency,
-} from "./vcsCommandScheduler.ts";
+import { vcsCommandConcurrency, vcsCommandScheduler } from "./vcsCommandScheduler.ts";
 import {
   invalidateCachedVcsRefs,
+  invalidateCachedVcsRefsIfChanged,
   vcsRefsCacheStateAtom,
   withVcsRefsPersistenceLock,
 } from "./vcsRefInvalidation.ts";
@@ -296,23 +296,19 @@ export function createVcsEnvironmentAtoms<R, E>(
       cwd: target.input.cwd,
     });
 
-  const statusStream = (input: EnvironmentRpcInput<typeof WS_METHODS.subscribeVcsStatus>) =>
-    subscribe(WS_METHODS.subscribeVcsStatus, input).pipe(
-      Stream.mapAccum(
-        () => null as VcsStatusResult | null,
-        (current, event) => {
-          const next = applyGitStatusStreamEvent(current, event);
-          return [next, [next]] as const;
-        },
-      ),
+  const invalidateRefsIfChanged = (
+    target: { readonly environmentId: EnvironmentId; readonly input: { readonly cwd: string } },
+    registry: AtomRegistry.AtomRegistry,
+    exit: Exit.Exit<VcsRefreshStatusResult, unknown>,
+  ) =>
+    invalidateCachedVcsRefsIfChanged(
+      registry,
+      { environmentId: target.environmentId, cwd: target.input.cwd },
+      Exit.isSuccess(exit) ? exit.value.refsDigest : undefined,
     );
 
   return {
     listRefs,
-    /**
-     * Full VCS status (includes server remote poller). Use for the active thread /
-     * git chrome only — not for high-cardinality lists.
-     */
     // An uncached read for decisions that must match the repository now, not
     // the persisted list a picker renders from.
     readRefs: createEnvironmentRpcCommand(runtime, {
@@ -335,21 +331,16 @@ export function createVcsEnvironmentAtoms<R, E>(
     status: createEnvironmentSubscriptionAtomFamily(runtime, {
       label: "environment-data:vcs:status",
       idleTtlMs: VCS_STATUS_IDLE_TTL_MS,
-      subscribe: statusStream,
-    }),
-    /**
-     * List/badge VCS status: shared budgeted remote refresh on the server (keeps PR
-     * state fresh without per-row pollers). Shorter idle TTL so off-screen rows drop.
-     * Prefer for sidebar/thread rows; use `status` for active git chrome.
-     */
-    listStatus: createEnvironmentSubscriptionAtomFamily(runtime, {
-      label: "environment-data:vcs:status-list",
-      idleTtlMs: 60_000,
       subscribe: (input: EnvironmentRpcInput<typeof WS_METHODS.subscribeVcsStatus>) =>
-        statusStream({
-          ...input,
-          mode: "list",
-        }),
+        subscribe(WS_METHODS.subscribeVcsStatus, input).pipe(
+          Stream.mapAccum(
+            () => null as VcsStatusResult | null,
+            (current, event) => {
+              const next = applyGitStatusStreamEvent(current, event);
+              return [next, [next]] as const;
+            },
+          ),
+        ),
     }),
     pull: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:vcs:pull",
@@ -363,14 +354,16 @@ export function createVcsEnvironmentAtoms<R, E>(
       tag: WS_METHODS.vcsRefreshStatus,
       scheduler: vcsCommandScheduler,
       concurrency: vcsCommandConcurrency,
-      onSettled: invalidateRefs,
+      onSettled: invalidateRefsIfChanged,
     }),
     // Outside the serial queue: it only reads status, and a checkout picked right after opening
     // the picker must not wait behind that read.
     refreshLocalStatusForPicker: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:vcs:refresh-local-status-for-picker",
       tag: WS_METHODS.vcsRefreshStatus,
-      onSettled: invalidateRefs,
+      execute: (input: { readonly cwd: string }) =>
+        requestGuarded(WS_METHODS.vcsRefreshStatus, { cwd: input.cwd, localOnly: true }),
+      onSettled: invalidateRefsIfChanged,
     }),
     createWorktree: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:vcs:create-worktree",
@@ -394,18 +387,6 @@ export function createVcsEnvironmentAtoms<R, E>(
       scheduler: vcsCommandScheduler,
       concurrency: vcsCommandConcurrency,
       onSettled: invalidateRefs,
-    }),
-    previewWorktreeCleanup: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:vcs:preview-worktree-cleanup",
-      tag: WS_METHODS.vcsPreviewWorktreeCleanup,
-      scheduler: vcsCommandScheduler,
-      concurrency: vcsThreadCommandConcurrency,
-    }),
-    cleanupThreadWorktree: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:vcs:cleanup-thread-worktree",
-      tag: WS_METHODS.vcsCleanupThreadWorktree,
-      scheduler: vcsCommandScheduler,
-      concurrency: vcsThreadCommandConcurrency,
     }),
     createRef: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:vcs:create-ref",

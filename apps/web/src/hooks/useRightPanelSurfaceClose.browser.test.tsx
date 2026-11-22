@@ -27,10 +27,7 @@ vi.mock("../previewStateStore", () => ({
 vi.mock("../browser/previewRuntime", () => ({ rendersServerTabNatively: () => false }));
 vi.mock("../state/primaryEnvironment", async () => {
   const { Atom } = await import("effect/reactivity");
-  return {
-    primaryEnvironmentIdAtom: Atom.make(null),
-    primaryEnvironmentNativeBrowserAtom: Atom.make(false),
-  };
+  return { primaryEnvironmentIdAtom: Atom.make(null) };
 });
 vi.mock("../state/session", () => ({
   useEnvironmentScope: (id: string) => fixture.allowed.has(id),

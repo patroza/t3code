@@ -8,7 +8,6 @@ import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import { migrationManifest, runMigrations } from "./Migrations.ts";
-import { forkMigrationManifest } from "./ForkMigrations.ts";
 
 const v2Migrations = migrationManifest.filter(([id]) => id >= 55);
 const newerMigrationId = Math.max(...migrationManifest.map(([id]) => id)) + 1;
@@ -74,7 +73,7 @@ describe("runMigrations", () => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* runMigrations({ toMigrationInclusive: 54 });
-      assert.deepStrictEqual(yield* runMigrations(), [...v2Migrations, ...forkMigrationManifest]);
+      assert.deepStrictEqual(yield* runMigrations(), v2Migrations);
       assert.deepStrictEqual(yield* history, migrationManifest);
       assert.isAbove(yield* v2TableCount, 0);
 
@@ -131,7 +130,7 @@ describe("runMigrations", () => {
         UPDATE effect_sql_migrations SET name = 'SiteLocalMigration' WHERE migration_id = ${id}
       `;
 
-      assert.deepStrictEqual(yield* runMigrations(), [...v2Migrations, ...forkMigrationManifest]);
+      assert.deepStrictEqual(yield* runMigrations(), v2Migrations);
       assert.isAbove(yield* v2TableCount, 0);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
@@ -180,10 +179,10 @@ describe("runMigrations", () => {
       yield* runMigrations({ toMigrationInclusive: 72 });
       yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id BETWEEN 70 AND 72`;
 
-      assert.deepStrictEqual(yield* runMigrations(), [
-        ...migrationManifest.filter(([id]) => id >= 70),
-        ...forkMigrationManifest,
-      ]);
+      assert.deepStrictEqual(
+        yield* runMigrations(),
+        migrationManifest.filter(([id]) => id >= 70),
+      );
       assert.deepStrictEqual(yield* history, migrationManifest);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
@@ -203,28 +202,18 @@ describe("runMigrations", () => {
 });
 
 // The npm launcher reads the highest migration id from these file names.
-it.effect("registers every upstream migration file", () =>
+it.effect("registers every migration file", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const dir = path.join(import.meta.dirname, "Migrations");
     const files = (yield* fs.readDirectory(dir)).flatMap((name) => {
       const match = /^(\d+)_(\w+)\.ts$/.exec(name);
-      if (!match?.[1] || !match[2]) return [];
-      return [[Number(match[1]), match[2]] as const];
+      return match ? [[Number(match[1]), match[2]] as const] : [];
     });
-    // Historical fork files retain their names but run through the separate fork ledger.
-    const forkNames = new Set<string>(forkMigrationManifest.map(([, name]) => name));
     assert.deepStrictEqual(
-      files.filter(([, name]) => !forkNames.has(name)).toSorted(([a], [b]) => a - b),
+      files.toSorted(([a], [b]) => a - b),
       migrationManifest,
-    );
-    assert.deepStrictEqual(
-      files
-        .filter(([, name]) => forkNames.has(name))
-        .map(([, name]) => name)
-        .toSorted(),
-      [...forkNames].toSorted(),
     );
   }).pipe(Effect.provide(NodeServices.layer)),
 );

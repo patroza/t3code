@@ -1,4 +1,3 @@
-import { useGT as useCopyTranslation } from "gt-react";
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { m as resolveMessage } from "~/i18n/messages";
 import { useAtomValue } from "@effect/atom-react";
@@ -487,7 +486,7 @@ export function useSettingsRestore(onRestored?: () => void) {
   );
   const isBackgroundActivityDirty = hasChangedBackgroundActivitySettings(settings);
 
-  const changedSettingLabels = (() => [
+  const changedSettingLabels = [
     ...(theme !== "system" ? [gt("Theme")] : []),
     ...(!followSystem ? [gt("Follow system")] : []),
     ...(themeHalves !== null ? [gt("Theme mix")] : []),
@@ -616,9 +615,6 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.addProjectBaseDirectory !== DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory
       ? [gt("Add project base directory")]
       : []),
-    ...(settings.terminalShell !== DEFAULT_UNIFIED_SETTINGS.terminalShell
-      ? ["Terminal shell"]
-      : []),
     ...(settings.ghqCloneLayout !== DEFAULT_UNIFIED_SETTINGS.ghqCloneLayout
       ? [gt("Clone into host folders")]
       : []),
@@ -634,9 +630,6 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.confirmThreadDelete !== DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete
       ? [gt("Delete confirmation")]
       : []),
-    ...(settings.confirmWorktreeRemoval !== DEFAULT_UNIFIED_SETTINGS.confirmWorktreeRemoval
-      ? ["Worktree remove confirmation"]
-      : []),
     ...(settings.confirmQuit !== DEFAULT_UNIFIED_SETTINGS.confirmQuit ? [gt("Quit shortcut")] : []),
     ...(isTextGenerationModelDirty ? [gt("Text generation model")] : []),
     ...(settings.threadTitleInstructions !== DEFAULT_UNIFIED_SETTINGS.threadTitleInstructions
@@ -646,7 +639,7 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.enableAgentBrowserAccess !== DEFAULT_UNIFIED_SETTINGS.enableAgentBrowserAccess
       ? [gt("Agent browser access")]
       : []),
-  ])();
+  ];
 
   const restoreDefaults = async () => {
     if (changedSettingLabels.length === 0) return;
@@ -748,11 +741,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       newWorktreesStartFromOrigin: DEFAULT_UNIFIED_SETTINGS.newWorktreesStartFromOrigin,
       addProjectBaseDirectory: DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory,
       ghqCloneLayout: DEFAULT_UNIFIED_SETTINGS.ghqCloneLayout,
-      terminalShell: DEFAULT_UNIFIED_SETTINGS.terminalShell,
       confirmThreadArchive: DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive,
       confirmTerminalClose: DEFAULT_UNIFIED_SETTINGS.confirmTerminalClose,
       confirmThreadDelete: DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete,
-      confirmWorktreeRemoval: DEFAULT_UNIFIED_SETTINGS.confirmWorktreeRemoval,
       confirmThreadUnpin: DEFAULT_UNIFIED_SETTINGS.confirmThreadUnpin,
       confirmQuit: DEFAULT_UNIFIED_SETTINGS.confirmQuit,
       textGenerationModelSelection: DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
@@ -837,8 +828,6 @@ function AutoSettleDaysInput({
 }
 
 export function GeneralSettingsPanel() {
-  const translateCopy = useCopyTranslation();
-
   const gt = useGT();
   const m = useMessages();
   const setting = useSearchableSetting();
@@ -983,35 +972,6 @@ export function GeneralSettingsPanel() {
       </SettingsSection>
 
       <SettingsSection id="confirmations" title={gt("Confirmations")}>
-        <SettingsRow
-          title={translateCopy("Terminal shell")}
-          description={translateCopy(
-            "Shell used for integrated terminals. Leave empty to use your OS login shell. Agent providers are unaffected.",
-          )}
-          resetAction={
-            settings.terminalShell !== DEFAULT_UNIFIED_SETTINGS.terminalShell ? (
-              <SettingResetButton
-                ariaLabel={translateCopy("Reset terminal shell to default")}
-                onClick={() =>
-                  updateSettings({
-                    terminalShell: DEFAULT_UNIFIED_SETTINGS.terminalShell,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <DraftInput
-              className="w-full sm:w-72"
-              value={settings.terminalShell}
-              onCommit={(next) => updateSettings({ terminalShell: next })}
-              placeholder="/bin/zsh"
-              spellCheck={false}
-              aria-label={translateCopy("Terminal shell")}
-            />
-          }
-        />
-
         <SettingsRow
           {...setting("unpin-confirmation")}
           description={<T>Ask before unpinning a thread from the pinned section.</T>}
@@ -1255,8 +1215,6 @@ export function GeneralSettingsPanel() {
 }
 
 export function ChatSettingsPanel() {
-  const translateCopy = useCopyTranslation();
-
   const setting = useSearchableSetting();
   const gt = useGT();
   const modifierLabel = isMacPlatform(navigator.platform) ? "⌘" : "Ctrl";
@@ -1274,21 +1232,6 @@ export function ChatSettingsPanel() {
   return (
     <SettingsPageContainer>
       <SettingsSection id="composer" title={gt("Composer")}>
-        <SettingsRow
-          title={translateCopy("Collapse composer while scrolling")}
-          description={translateCopy(
-            "Keep more of the conversation visible while reading. Return to the end or edit the prompt to expand it.",
-          )}
-          control={
-            <Switch
-              aria-label={translateCopy("Collapse composer while scrolling")}
-              checked={settings.composerCollapseOnScroll}
-              onCheckedChange={(checked) =>
-                updateSettings({ composerCollapseOnScroll: Boolean(checked) })
-              }
-            />
-          }
-        />
         <SettingsRow
           {...setting("composer-rich-text")}
           description={gt("Show formatted Markdown as you type.")}
@@ -1886,7 +1829,6 @@ export function DiffsSettingsPanel() {
             />
           }
         />
-
         <PullRequestLinksOpenInAppSetting />
       </SettingsSection>
     </SettingsPageContainer>
@@ -1975,8 +1917,6 @@ function ScopedCompactIdleThreadsRow() {
 }
 
 export function ThreadsSettingsPanel() {
-  const translateCopy = useCopyTranslation();
-
   const setting = useSearchableSetting();
   const messages = useMessages();
   const gt = useGT();
@@ -2252,35 +2192,6 @@ export function ThreadsSettingsPanel() {
       ) : null}
 
       <SettingsSection id="text-generation" title={gt("Text generation")}>
-        <SettingsRow
-          {...setting("worktree-remove-confirmation")}
-          title={translateCopy("Worktree remove confirmation")}
-          description={translateCopy(
-            "Ask before removing a worktree when its last linked thread is archived or deleted.",
-          )}
-          resetAction={
-            settings.confirmWorktreeRemoval !== DEFAULT_UNIFIED_SETTINGS.confirmWorktreeRemoval ? (
-              <SettingResetButton
-                ariaLabel={translateCopy("Reset worktree remove confirmation to default")}
-                onClick={() =>
-                  updateSettings({
-                    confirmWorktreeRemoval: DEFAULT_UNIFIED_SETTINGS.confirmWorktreeRemoval,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.confirmWorktreeRemoval}
-              onCheckedChange={(checked) =>
-                updateSettings({ confirmWorktreeRemoval: Boolean(checked) })
-              }
-              aria-label={translateCopy("Confirm worktree removal")}
-            />
-          }
-        />
-
         <SettingsRow
           serverScoped
           settingKeys={["textGenerationModelSelection"]}

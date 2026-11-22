@@ -1,19 +1,9 @@
 import { codeToTokens } from "@pierre/highlights";
 import { pierreDark, pierreLight } from "@pierre/highlights/themes";
-import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { resolveHighlightLanguage } from "./highlightLanguage";
-import {
-  highlightCode,
-  highlightCommand,
-  nativeHighlightsReady,
-  tokenizeCode,
-  type HighlightedLines,
-} from "./highlights";
-
-beforeEach(async () => {
-  await nativeHighlightsReady;
-});
+import { highlightCode, highlightCommand, tokenizeCode, type HighlightedLines } from "./highlights";
 
 vi.mock("react-native-nitro-modules", async () => {
   const { createWasmHighlightsModule } = await import("./highlights.testing");

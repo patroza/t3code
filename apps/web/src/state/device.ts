@@ -6,10 +6,10 @@ import {
 } from "@t3tools/client-runtime/state/deviceHubAccess";
 import { createEnvironmentRpcQueryAtomFamily } from "@t3tools/client-runtime/state/runtime";
 import {
-  WS_METHODS,
   type DeviceDetail,
   type DeviceServiceState,
   type EnvironmentId,
+  WS_METHODS,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import { useMessages } from "gt-react";
@@ -158,6 +158,17 @@ export const deviceHostProbeAtom = Atom.family((environmentId: EnvironmentId) =>
 export const NO_DEVICE_PROBE_ATOM = Atom.make(AsyncResult.initial<void, never>()).pipe(
   Atom.withLabel("device-host-probe:none"),
 );
+
+/**
+ * The Expo account an Expo host editor shows as it opens, for the saved
+ * credential. Each open checks again; edits and manual checks use the command.
+ */
+export const deviceEasAccountCheck = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
+  label: "environment-data:device:eas-account-check",
+  tag: WS_METHODS.deviceEasAccount,
+  staleTimeMs: 0,
+  idleTtlMs: 0,
+});
 
 /** Who a Simlock token is, checked as the host editor's URL and token fields change. */
 export const deviceSimlockIdentityCheck = createEnvironmentRpcQueryAtomFamily(

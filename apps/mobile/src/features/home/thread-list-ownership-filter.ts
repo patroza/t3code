@@ -10,12 +10,12 @@ import {
 import {
   DEFAULT_OWNERSHIP_FILTER,
   isOwnershipFilter,
-  OWNERSHIP_FILTER_LABELS,
   OWNERSHIP_FILTERS,
-  OWNERSHIP_RELATION_LABELS,
   OWNERSHIP_RELATIONS,
+  ownershipFilterLabel,
+  ownershipRelationLabel,
   type OwnershipFilter,
-} from "./home-list-filter-options";
+} from "../identity/ownershipFilterOptions";
 
 /** Chip text for the ownership entry beside environment and project filters. */
 export function ownershipFilterChipLabel(
@@ -26,9 +26,9 @@ export function ownershipFilterChipLabel(
     (filter === "mine" || filter === "mine-only" || filter === "theirs") &&
     relation !== DEFAULT_OWNERSHIP_RELATION
   ) {
-    return `${OWNERSHIP_FILTER_LABELS[filter]} · ${OWNERSHIP_RELATION_LABELS[relation]}`;
+    return `${ownershipFilterLabel(filter)} · ${ownershipRelationLabel(relation)}`;
   }
-  return OWNERSHIP_FILTER_LABELS[filter];
+  return ownershipFilterLabel(filter);
 }
 
 /** True when ownership differs from the persisted default (Mine, created or participated). */
@@ -50,7 +50,7 @@ export function ownershipFilterMenuActions(
       title: resolveCopy(msg("Ownership")),
       subactions: OWNERSHIP_FILTERS.map((value) => ({
         id: `ownership:${value}`,
-        title: OWNERSHIP_FILTER_LABELS[value],
+        title: ownershipFilterLabel(value),
         state: filter === value ? "on" : "off",
       })),
     },
@@ -64,7 +64,7 @@ export function ownershipFilterMenuActions(
           : resolveCopy(msg("Theirs includes")),
       subactions: OWNERSHIP_RELATIONS.map((value) => ({
         id: `relation:${value}`,
-        title: OWNERSHIP_RELATION_LABELS[value],
+        title: ownershipRelationLabel(value),
         state: relation === value ? "on" : "off",
       })),
     });

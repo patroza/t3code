@@ -5,6 +5,7 @@ import {
   OrchestratorMcpFailure,
   type OrchestrationV2ThreadLaunchWorkspaceStrategy,
   ProjectId,
+  type TaskFolderError,
   type Project as ProjectRecord,
   type ServerProvider,
   T3_PROJECT_FILE_NAME,
@@ -39,7 +40,6 @@ import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
 import { resolveRuntimeMode } from "../../delegatedTaskModes.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
-import { sourceRefForMcpCaller } from "../../../identity/stampSource.ts";
 import * as OrchestrationMcp from "../../OrchestratorMcpService.ts";
 import { newCommandId, readCaller, resolveProjectId, unavailable } from "../../threadAccess.ts";
 import { ProjectToolkit } from "./tools.ts";
@@ -64,9 +64,12 @@ function worktreeCheckHint(
     | ThreadLaunch.ThreadLaunchBaseRefError
     | ThreadLaunch.ThreadLaunchBranchExistsError
     | ThreadLaunch.ThreadLaunchBranchConflictError
-    | ThreadLaunch.ThreadLaunchNotRepositoryError,
+    | ThreadLaunch.ThreadLaunchNotRepositoryError
+    | TaskFolderError,
   strategy: { readonly startFromOrigin?: boolean | undefined },
 ) {
+  if (error._tag === "TaskFolderError")
+    return "Pass `repositories` paths from the project's tracked Git folders.";
   if (error._tag === "ThreadLaunchNotRepositoryError")
     return `Use workspaceStrategy: {type: "root"}, or pass the projectId of a Git repository.`;
   if (error._tag === "ThreadLaunchBranchExistsError")
@@ -173,6 +176,7 @@ const launchCommandId = Effect.fn("mcp.launchCommandId")(function* (
   key: string,
 ) {
   const crypto = yield* Digest.Digest;
+  // @effect-diagnostics-next-line globalJsonInEffect:off - a JSON pair keeps the caller apart from the key.
   const bytes = new TextEncoder().encode(JSON.stringify([namespace, key]));
   const digest = yield* crypto.digest(Digest.sha256, bytes).pipe(Effect.mapError(unavailable));
   return CommandId.make(`mcp:launch:${Hex.encode(digest)}`);
@@ -212,16 +216,16 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
     (input) => input,
     (input, { runtimeMode, interactionMode, linkOrigin }) =>
       Effect.gen(function* () {
-        const invocation = yield* McpInvocationContext.McpInvocationContext;
+        const scope = yield* McpInvocationContext.McpInvocationContext;
         const context = yield* readCaller();
-        const { caller, scope } = context;
+        const { caller } = context;
         // A retry with the same key replays the first launch: the ids derive
         // from the caller and the key, and the launch service replays a
         // command it already accepted.
         const commandId =
           input.clientRequestId === undefined
             ? yield* newCommandId()
-            : yield* launchCommandId(invocation.requestNamespace, input.clientRequestId);
+            : yield* launchCommandId(scope.requestNamespace, input.clientRequestId);
         const threadId = ThreadId.make(commandId);
         const messageId = MessageId.make(commandId);
         const attachments = input.attachments ?? [];
@@ -413,10 +417,6 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
             message:
               "Pass modelSelection: the project has no default model. orchestrator_capabilities lists providers and models.",
           });
-        const attribution = yield* sourceRefForMcpCaller({
-          parentOrigin: caller?.originSource,
-          clientSessionId: scope.client?.sessionId,
-        });
         let startedRuntimeMode =
           projectDefaults !== undefined && input.runtimeMode === undefined
             ? yield* resolveRuntimeMode(runtimeMode, projectDefaults.defaultRuntimeMode).pipe(
@@ -438,18 +438,17 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
           projectId,
           title: input.title,
           ...(input.generateTitle === undefined ? {} : { generateTitle: input.generateTitle }),
+          ...(input.generateTitle === true ? {} : { titleRenamed: true }),
           modelSelection,
           runtimeMode: startedRuntimeMode,
           interactionMode,
           workspaceStrategy: strategy ?? { type: "root" },
-          ...(attribution === undefined ? {} : { originSource: attribution }),
           ...(input.message === undefined && attachments.length === 0
             ? {}
             : {
                 initialMessage: {
                   messageId,
                   ...(caller === undefined ? {} : { senderThreadId: caller.id }),
-                  ...(attribution === undefined ? {} : { source: attribution }),
                   text: input.message ?? "",
                   attachments,
                   ...(input.outputSchema === undefined ? {} : { outputSchema: input.outputSchema }),
@@ -528,6 +527,7 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
           // Only updates record model defaults; reject defaults that creation would silently drop.
           if (
             input.scripts !== undefined ||
+            input.trackedFolders !== undefined ||
             input.createWorkspaceRootIfMissing !== undefined ||
             input.defaultModelSelection !== undefined
           )

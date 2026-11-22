@@ -82,11 +82,6 @@ export interface DesktopBackendStartConfig extends BackendProcessContext {
   readonly httpBaseUrl: URL;
   readonly captureOutput: boolean;
   readonly preflightFailure: Option.Option<PreflightFailure>;
-  /** Connect to this already-running backend without owning or terminating its process. */
-  readonly reuseExisting?: { readonly pid: number };
-  // Present for a WSL run after the configured/default distro has been
-  // resolved to the concrete distro passed to wsl.exe.
-
   readonly runningDistro?: string;
   readonly wslRuntimeId?: string;
   readonly wslT3Home?: string | null;
@@ -439,33 +434,6 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
   options: RunBackendProcessOptions,
 ): Effect.fn.Return<BackendProcessExit, BackendProcessError, BackendProcessRunRequirements> {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  if (options.reuseExisting) {
-    const existingPid = options.reuseExisting.pid;
-    yield* waitForHttpReady({
-      executablePath: options.executablePath,
-      entryPath: options.entryPath,
-      cwd: options.cwd,
-      httpBaseUrl: options.httpBaseUrl,
-      timeout: options.readinessTimeout ?? DEFAULT_BACKEND_READINESS_TIMEOUT,
-    }).pipe(
-      Effect.matchEffect({
-        onFailure: (error) => options.onReadinessFailure?.(error) ?? Effect.void,
-        onSuccess: () => options.onReady?.(existingPid) ?? Effect.void,
-      }),
-    );
-
-    // We do not own the reused backend process, so there is no child exit to
-    // await. Park until stop()/quit closes this run scope. Keeping the run
-    // active also prevents a later config resolve from falling back to the
-    // embedded backend if the external process disappears.
-    const released = yield* Deferred.make<void>();
-    yield* Effect.addFinalizer(() => Deferred.succeed(released, undefined));
-    yield* Deferred.await(released);
-    return {
-      code: Option.none(),
-      reason: "reused backend released",
-    };
-  }
   const bootstrapJson = yield* encodeBootstrapJson(options.bootstrap).pipe(
     Effect.mapError(
       (cause) =>

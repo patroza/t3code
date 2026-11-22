@@ -10,10 +10,7 @@ import { rendersServerTabNatively } from "~/browser/previewRuntime";
 import { useClosedViewStore } from "~/closedViewStore";
 import { beginPreviewSessionClose, cancelPreviewSessionClose } from "~/previewStateStore";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
-import {
-  primaryEnvironmentIdAtom,
-  primaryEnvironmentNativeBrowserAtom,
-} from "~/state/primaryEnvironment";
+import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
 
 interface ClosePreviewSessionInput<E> {
   readonly closePreview: (input: {
@@ -34,7 +31,6 @@ export async function closePreviewSession<E>(
     input.threadRef.environmentId,
     appAtomRegistry.get(primaryEnvironmentIdAtom),
     input.snapshot,
-    appAtomRegistry.get(primaryEnvironmentNativeBrowserAtom),
   );
   if (!keepMounted) beginPreviewSessionClose(input.threadRef, input.tabId);
   const result = await input.closePreview({

@@ -1,5 +1,9 @@
 name: Fork CI
 
+# Fork-only. The fork's required checks (Check / Test / Mobile Native Static Analysis /
+# Release Smoke) on GitHub-hosted runners. Upstream's ci.yml runs on Blacksmith runners the fork
+# does not have and stays disabled_manually; mirror its steps here when upstream adds a gate.
+
 env:
   # Install dependencies without downloading Electron in every job. The desktop jobs
   # fetch and verify the runtime explicitly below; mobile lint and release smoke do not need it.
@@ -8,50 +12,25 @@ env:
 on:
   workflow_dispatch:
     inputs:
-      # Tim/candidates provenance tips do not carry fork-ci.yml (only upstream
-      # Blacksmith ci.yml). Dispatch against fork/changes (or any ref that has
-      # this workflow) and set checkout_ref to the tip under test so checks
-      # attach to that SHA / permanent draft PR.
       checkout_ref:
         description: "Git ref or SHA to check out and test (default: dispatch ref)"
         required: false
         type: string
         default: ""
-  # Full PR CI for product layers. Job names match required checks (Check / Test /
-  # Mobile Native Static Analysis / Release Smoke) on protected bases.
-  #
-  # Permanent stack PRs (bases):
-  # - #255 base → main (dispatch only; do not list main here)
-  # - #1 tim → fork/base
-  # - #27 candidates → fork/tim
-  # - #2 changes → fork/candidates
-  #
-  # Upstream Blacksmith CI must stay disabled_manually. fork/base supplies
-  # GitHub-hosted runners + fork-ci.yml for all layers above it.
-  #
-  # integrationOverlays is empty: the overlays were drained into fork/dev at
-  # cutover. Re-add bases here if one is ever registered again.
   pull_request:
     # Explicit, to add ready_for_review: a PR marked ready without a new commit
     # would otherwise sit forever on required checks that can never report.
     #
-    # "edited" is deliberately absent. It was added to cover retargeting, but it
-    # also fires for title and body edits, and a job-level guard that skips those
-    # is worse than not triggering: a skipped job still publishes a check run,
-    # GitHub counts a skipped required check as satisfied, and the skipped run
-    # supersedes the real one. Editing the title of a red PR would clear its
-    # failures. Retarget without a push is rarer and recoverable -- close and
-    # reopen fires "reopened", which is watched.
+    # "edited" is deliberately absent. It also fires for title and body edits, and
+    # a skipped required check counts as satisfied and supersedes the real run, so
+    # editing the title of a red PR would clear its failures. A retarget without a
+    # push is recoverable: close and reopen fires "reopened".
     types: [opened, synchronize, reopened, ready_for_review]
     branches:
-      - fork/base
-      - fork/tim
-      - fork/candidates
-      - fork/changes
-      # Stable contributor and release branch (docs/stable-dev-release-branch-handover.md).
       - fork/dev
-  # fork/dev is never rebased, so its merge commits are the release candidates.
-  # Deployment promotes an exact green SHA, so every merge still produces a run.
+      # The rebuild branch that replaces fork/dev's tree.
+      - fork/next
+  # Deployment promotes an exact green fork/dev SHA, so every merge still produces a run.
   # When the pull request recorded tree evidence and this push is that same tree
   # and the same workflow file, Verify tree evidence succeeds and the heavy jobs
   # skip. A skipped heavy job is not evidence: only a pull_request run whose
@@ -105,6 +84,29 @@ jobs:
           fi
           node scripts/fork-ci-tree-evidence.mjs verify
 
+  # Cheap and dependency-free, so it always runs, also on pushes that reuse tree evidence.
+  fork_seams:
+    name: Fork Seams
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || github.sha }}
+          # The merge base with upstream needs history; blob ids are enough to compare files.
+          fetch-depth: 0
+          filter: blob:none
+          sparse-checkout: |
+            /fork-seams.txt
+            /scripts/check-fork-seams.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Check upstream files carry only listed seams
+        run: node scripts/check-fork-seams.mjs --fetch
+
   check:
     name: Check
     needs: verify_tree_evidence
@@ -133,11 +135,42 @@ jobs:
           restore-keys: |
             vite-task-check-${{ runner.os }}-${{ runner.arch }}-
 
+      # electron's install.js (run by ensure:electron) reads this cache before it downloads.
+      - name: Cache Electron download
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/electron
+          key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('node_modules/.pnpm/electron@*/node_modules/electron/package.json') }}
+
       - name: Ensure Electron runtime is installed
         run: vp run --filter @t3tools/desktop ensure:electron
 
       - name: Install browser secret helper build libraries
         run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
+
+      - name: Reject repository-owned PR assets
+        run: |
+          files="$(git ls-files .github/pr-assets)"
+          if test -n "$files"; then
+            printf 'PR evidence must be uploaded to GitHub, not committed:\n%s\n' "$files" >&2
+            exit 1
+          fi
+
+      # The same gates as upstream ci.yml's Lint job.
+      - name: Check unused code
+        run: vp run knip:check
+
+      - name: Check generated GitHub GraphQL operations
+        run: vp run --filter @t3tools/source-control-github generate --check
+
+      - name: Check generated Expo GraphQL operations
+        run: vp run --filter t3 generate --check
+
+      - name: Check generated Linear GraphQL operations
+        run: vp run --filter @t3tools/issue-tracker-linear generate --check
+
+      - name: Check i18n catalogs
+        run: vp run i18n:check
 
       - name: Check
         run: vp check
@@ -149,10 +182,7 @@ jobs:
         run: vp run --cache build:desktop
 
       - name: Verify preload bundle output
-        run: |
-          test -f apps/desktop/dist-electron/preload.cjs
-          grep -nE "desktopBridge|getLocalEnvironmentBootstrap|PICK_FOLDER_CHANNEL|wsUrl" apps/desktop/dist-electron/preload.cjs
-          grep -n "__clerk_internal_electron_passkeys" apps/desktop/dist-electron/preload.cjs
+        run: node apps/desktop/scripts/verify-preload-bundle.mjs
 
       - name: Save Vite Task check cache
         if: success()
@@ -180,11 +210,23 @@ jobs:
           cache: true
           run-install: true
 
+      - name: Cache Electron download
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/electron
+          key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('node_modules/.pnpm/electron@*/node_modules/electron/package.json') }}
+
       - name: Ensure Electron runtime is installed
         run: vp run --filter @t3tools/desktop ensure:electron
 
       - name: Install browser secret helper build libraries
         run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
+
+      - name: Test preview artifact validation
+        run: python3 -B .github/scripts/stage-preview-bundle.test.py
+
+      - name: Test release checks
+        run: node --test .github/scripts/check-nightly-release.test.cjs .github/scripts/vercel-deployment-output.test.cjs .github/scripts/mobile-preview-comment.test.cjs .github/scripts/mobile-ios-preview-record.test.cjs .github/scripts/test-delta.test.cjs
 
       - name: Test
         run: vp run --parallel --concurrency-limit 4 --filter '!t3' --filter '!@t3tools/monorepo' --filter '!@t3tools/web' test
@@ -283,18 +325,6 @@ jobs:
           # A clean install is faster and has deterministic completion time.
           cache: false
           run-install: true
-
-      - name: Ensure Electron runtime is installed
-        run: vp run --filter @t3tools/desktop ensure:electron
-
-      - name: Test macOS Open With integration
-        # Present from Tim onward; fork/base is CI plumbing only and lacks this path.
-        run: |
-          if [[ -f apps/desktop/src/shell/DesktopOpenWith.test.ts ]]; then
-            vp test run apps/desktop/src/shell/DesktopOpenWith.test.ts
-          else
-            echo "DesktopOpenWith tests not on this tip; skipping."
-          fi
 
       - name: Install mobile native static analysis tools
         run: brew bundle install --file apps/mobile/Brewfile

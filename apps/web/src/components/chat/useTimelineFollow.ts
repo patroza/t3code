@@ -51,11 +51,6 @@ interface TimelineFollowVisit {
   readonly followEnd: boolean;
 }
 
-interface TimelineFollowPill {
-  readonly visit: TimelineFollowVisit;
-  readonly show: boolean;
-}
-
 /**
  * Scroll bookkeeping that belongs to one visit. Handlers fetch it for the
  * current visit, so a thread switch leaves the old one behind instead of
@@ -63,21 +58,14 @@ interface TimelineFollowPill {
  */
 function createVisitScrollState(
   visit: TimelineFollowVisit,
-  currentScroll: RefObject<{ readonly visit: TimelineFollowVisit } | null>,
-  setPill: Dispatch<SetStateAction<TimelineFollowPill>>,
+  showScrollToBottom: (visit: TimelineFollowVisit) => void,
 ) {
   return {
     visit,
     // Debounce *showing* the scroll-to-bottom pill so it doesn't flash during
     // thread switches. LegendList fires scroll events with isAtEnd=false while
     // initialScrollAtEnd is settling; hiding is always immediate.
-    // Construct this callback outside the hook's render scope, which also holds the projection.
-    showScrollDebouncer: new Debouncer(
-      () => {
-        if (currentScroll.current?.visit === visit) setPill({ visit, show: true });
-      },
-      { wait: 150 },
-    ),
+    showScrollDebouncer: new Debouncer(() => showScrollToBottom(visit), { wait: 150 }),
     positionedAnchor: null as MessageId | null,
     settledAnchor: null as MessageId | null,
     releaseAnchorScrollHold: null as (() => void) | null,
@@ -155,10 +143,6 @@ function sameRunObservation(
 }
 
 interface TimelineFollowInput {
-  readonly composerRef?: RefObject<{
-    restoreAfterTimelineReachedEnd: () => void;
-    collapseForTimelineScrollKey: (key: string) => void;
-  } | null>;
   readonly legendListRef: RefObject<LegendListRef | null>;
   readonly composerTimelineInset: number;
   readonly routeThreadKey: string;
@@ -208,7 +192,9 @@ export function useTimelineFollow(input: TimelineFollowInput) {
   }
   // Keyed by visit, so a pill decision from the previous thread (a pending
   // debounce) never shows here.
-  const [pill, setPill] = useState<TimelineFollowPill>({ visit, show: false });
+  const [pill, setPill] = useState<{ readonly visit: TimelineFollowVisit; readonly show: boolean }>(
+    { visit, show: false },
+  );
   const showScrollToBottom = pill.visit === visit ? pill.show : !visit.followEnd;
   // Called on every streamed chunk while following; an unchanged pill must
   // bail out instead of re-rendering ChatView.
@@ -221,23 +207,6 @@ export function useTimelineFollow(input: TimelineFollowInput) {
   const follow =
     followSnapshot.visit === visit ? followSnapshot.follow : initialTimelineFollow(visit.followEnd);
   const timelineLiveFollowEnabled = follow.mode === "following";
-  const [activity, setActivity] = useState({ visit, entries: timelineEntries, unread: false });
-  const hasUnreadTimelineActivity =
-    activity.visit === visit && activity.unread && !timelineLiveFollowEnabled;
-  if (
-    activity.visit !== visit ||
-    activity.entries !== timelineEntries ||
-    (activity.unread && timelineLiveFollowEnabled)
-  ) {
-    setActivity({
-      visit,
-      entries: timelineEntries,
-      unread:
-        activity.visit === visit &&
-        !timelineLiveFollowEnabled &&
-        (activity.unread || (activity.entries !== timelineEntries && !follow.atEnd)),
-    });
-  }
   const readFollow = () => followStore.read(visit);
   // Async settles outlive their render; this reads the visit shown now.
   const readCurrentFollow = useStableCallback(readFollow);
@@ -252,7 +221,11 @@ export function useTimelineFollow(input: TimelineFollowInput) {
   /** Only from handlers: the bookkeeping of the visit they run in. */
   const visitScroll = () => {
     if (visitScrollRef.current?.visit !== visit) {
-      visitScrollRef.current = createVisitScrollState(visit, visitScrollRef, setPill);
+      visitScrollRef.current = createVisitScrollState(visit, (shownVisit) => {
+        // A debounce that outlived its visit must not overwrite the current one's pill.
+        if (visitScrollRef.current?.visit === shownVisit)
+          setPill({ visit: shownVisit, show: true });
+      });
     }
     return visitScrollRef.current;
   };
@@ -318,7 +291,6 @@ export function useTimelineFollow(input: TimelineFollowInput) {
     }
   });
   const onComposerPageScrollKeyDown = (key: PageScrollKey) => {
-    input.composerRef?.current?.collapseForTimelineScrollKey(key);
     pageScrollControllerRef.current?.handleKeyDown(key);
   };
   const onComposerPageScrollKeyDownStable = useStableCallback(onComposerPageScrollKeyDown);
@@ -496,7 +468,6 @@ export function useTimelineFollow(input: TimelineFollowInput) {
   const onTimelineFooterGrowStable = useStableCallback(onTimelineFooterGrow);
 
   const onIsAtEndChange = (isAtEnd: boolean) => {
-    if (isAtEnd) input.composerRef?.current?.restoreAfterTimelineReachedEnd();
     const scroll = visitScroll();
     if (!isAtEnd && readFollow().mode === "following") {
       scroll.showScrollDebouncer.cancel();
@@ -559,21 +530,8 @@ export function useTimelineFollow(input: TimelineFollowInput) {
     setTimelineAnchor({ threadKey, messageId });
   };
 
-  const anchorMessageForNavigationStable = useStableCallback(
-    (threadKey: string | null, messageId: MessageId) => {
-      releaseFollowForNavigation();
-      const scroll = visitScroll();
-      scroll.positionedAnchor = null;
-      scroll.settledAnchor = null;
-      setLaidOutAnchor(null);
-      setShowScrollToBottom(false);
-      setTimelineAnchor({ threadKey, messageId });
-    },
-  );
-
   return {
     showScrollToBottom,
-    hasUnreadTimelineActivity,
     timelineLiveFollowEnabled,
     onComposerPageScrollKeyDownStable,
     onComposerPageScrollKeyUpStable,
@@ -584,7 +542,6 @@ export function useTimelineFollow(input: TimelineFollowInput) {
     onTimelineFooterGrowStable,
     onIsAtEndChangeStable,
     anchorNewTurn,
-    anchorMessageForNavigationStable,
     attachTimelineViewport,
     attachComposerOverlay: followStore.attachComposerOverlay,
   };

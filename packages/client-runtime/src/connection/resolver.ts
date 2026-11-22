@@ -1,4 +1,3 @@
-import { appendOmegentT3ProductHandshake } from "@t3tools/shared/productFamily";
 import { msg } from "gt-i18n";
 import { translatableDetail } from "../errors/translatable.ts";
 import type {
@@ -88,7 +87,7 @@ function primarySocketUrl(
     url.pathname = "/ws";
   }
   appendClientConnectionParams(url, clientMetadata, "direct", owners);
-  return appendOmegentT3ProductHandshake(url.toString());
+  return url.toString();
 }
 
 const makePrimaryBroker = Effect.fn("clientRuntime.connection.broker.makePrimary")(function* () {

@@ -14,16 +14,9 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import {
-  GraphQL,
-  GraphQLClient,
-  GraphQLClientError,
-  GraphQLGroup,
-  GraphQLResolver,
-} from "effect/graphql";
+import { GraphQLClient, GraphQLClientError, GraphQLGroup, GraphQLResolver } from "effect/graphql";
 import { HttpClient } from "effect/http";
 import * as RequestResolver from "effect/RequestResolver";
-import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
@@ -512,11 +505,7 @@ export class GitHubPullRequestApi extends Context.Service<
   GitHubPullRequestApi,
   {
     readonly withVerifiedCredential: <A, E, R>(
-      input: {
-        readonly cwd: string;
-        readonly host: string;
-        readonly repository?: string | undefined;
-      },
+      input: { readonly cwd: string; readonly host: string; readonly repository?: string },
       use: (identity: {
         readonly accountId: string;
         readonly viewer: string;
@@ -526,7 +515,6 @@ export class GitHubPullRequestApi extends Context.Service<
     readonly getRoutingIdentity: (input: {
       readonly cwd: string;
       readonly host: string;
-      readonly repository?: string | undefined;
     }) => Effect.Effect<
       { readonly accountId: string; readonly viewer: string },
       GitHubPullRequestApiError
@@ -534,7 +522,6 @@ export class GitHubPullRequestApi extends Context.Service<
     readonly getViewerLogin: (input: {
       readonly cwd: string;
       readonly host: string;
-      readonly repository?: string | undefined;
     }) => Effect.Effect<string, GitHubPullRequestApiError>;
 
     readonly listPullRequests: (input: {
@@ -889,6 +876,29 @@ const decodeRunJobs = Schema.decodeEffect(
     }),
   ),
 );
+const decodeCheckRun = Schema.decodeEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      conclusion: Schema.optional(Schema.NullOr(Schema.String)),
+      output: Schema.optional(
+        Schema.Struct({
+          title: Schema.optional(Schema.NullOr(Schema.String)),
+          summary: Schema.optional(Schema.NullOr(Schema.String)),
+        }),
+      ),
+    }),
+  ),
+);
+const decodeCheckRunAnnotations = Schema.decodeEffect(
+  Schema.fromJsonString(
+    Schema.Array(
+      Schema.Struct({
+        annotation_level: Schema.optional(Schema.NullOr(Schema.String)),
+        message: Schema.String,
+      }),
+    ),
+  ),
+);
 const FAILED_CONCLUSIONS = new Set(["failure", "cancelled", "timed_out", "startup_failure"]);
 const ONE_JOB_AT_A_TIME =
   "GitHub re-runs one job of a run at a time. Re-run this one after the other finishes.";
@@ -1044,17 +1054,7 @@ const GRAPHQL_MERGE_METHODS: Partial<
   Record<PullRequestMergeMethod, "MERGE" | "SQUASH" | "REBASE">
 > = { merge: "MERGE", squash: "SQUASH", rebase: "REBASE" };
 
-/** Every GraphQL read and write this module makes, through GitHub's auth and rate limits. */
-const RoutingIdentity = GraphQL.query("RoutingIdentity", {
-  document: "query RoutingIdentity { viewer { databaseId login } }",
-  variables: {},
-  result: Schema.Struct({
-    viewer: Schema.Struct({ databaseId: PositiveInt, login: TrimmedNonEmptyString }),
-  }),
-});
-
 const PullRequestGraphQLGroup = GraphQLGroup.merge(
-  GraphQLGroup.make(RoutingIdentity),
   PullRequestBatchesGraphQLGroup,
   GraphQLGroup.make(LenientPullRequestSearch, LenientPullRequestList),
   PullRequestReadsGraphQLGroup,
@@ -1063,7 +1063,6 @@ const PullRequestGraphQLGroup = GraphQLGroup.merge(
 ).middleware(GitHubGraphQlClient.GitHubGraphQlAuth);
 
 interface RestReadInput<A> {
-  readonly repository?: string | undefined;
   readonly cwd: string;
   readonly host: string;
   readonly operation: string;
@@ -1101,15 +1100,15 @@ export const make = Effect.gen(function* () {
     function* (input: {
       readonly cwd: string;
       readonly host: string;
-      readonly repository?: string | undefined;
+      readonly repository?: string;
     }) {
       const unavailable = () => new GitHubViewerLoginUnavailableError({ cwd: input.cwd });
       const host = input.host.toLowerCase();
       // A pinned credential is never handed on to another, so pick one that reaches the repository.
       const { token, fingerprint: key } =
         input.repository === undefined
-          ? yield* api.credential(host, input)
-          : yield* appAccess.credentialFor(host, input.repository, input);
+          ? yield* api.credential(host)
+          : yield* appAccess.credentialFor(host, input.repository);
       const credential = { host, token, credentialFingerprint: key };
       return yield* Effect.acquireUseRelease(
         Effect.sync(() => {
@@ -1126,60 +1125,35 @@ export const make = Effect.gen(function* () {
               if (cached !== undefined && now - cached.at < 10 * 60_000)
                 return { ...credential, ...cached.value };
               // Pin verification so an auth switch cannot poison its cache entry.
-              const identity = yield* (
-                Redacted.value(token).startsWith("ghs_")
-                  ? client.RoutingIdentity({}).pipe(
-                      GitHubGraphQlClient.call({
-                        ...input,
-                        operation: "getRoutingIdentity",
-                        allowReserve: true,
-                      }),
-                      Effect.flatMap(({ viewer }) =>
-                        decodeViewerIdentity({ id: viewer.databaseId, login: viewer.login }).pipe(
-                          Effect.mapError(unavailable),
-                        ),
-                      ),
-                      Effect.catchIf(GraphQLClientError.isGraphQLClientError, () =>
-                        Effect.fail(unavailable()),
-                      ),
-                    )
-                  : api
-                      .rest({
-                        ...input,
-                        host,
-                        operation: "getRoutingIdentity",
-                        path: "user",
-                        allowReserve: true,
-                      })
-                      .pipe(
-                        Effect.flatMap((response) =>
-                          decodeRoutingIdentity(response.body).pipe(Effect.mapError(unavailable)),
-                        ),
-                        Effect.catchTags({
-                          GitHubApiResponseError: Effect.fnUntraced(function* (error) {
-                            if (error.status !== 403) return yield* error;
-                            const { viewer } = yield* client.RoutingIdentityViewer({}).pipe(
-                              GitHubGraphQlClient.call({
-                                ...input,
-                                host,
-                                operation: "getRoutingIdentity",
-                                allowReserve: true,
-                              }),
-                              Effect.catchTags({
-                                GraphQLClientError: () => Effect.fail(unavailable()),
-                              }),
-                            );
-                            return yield* decodeViewerIdentity({
-                              id: viewer.databaseId,
-                              login: viewer.login,
-                            }).pipe(Effect.mapError(unavailable));
-                          }),
+              const identity = yield* api
+                .rest({ host, operation: "getRoutingIdentity", path: "user", allowReserve: true })
+                .pipe(
+                  Effect.flatMap((response) =>
+                    decodeRoutingIdentity(response.body).pipe(Effect.mapError(unavailable)),
+                  ),
+                  Effect.catchTags({
+                    // The enclosing operation owns the span for this inline handler.
+                    GitHubApiResponseError: Effect.fnUntraced(function* (error) {
+                      if (error.status !== 403) return yield* error;
+                      const { viewer } = yield* client.RoutingIdentityViewer({}).pipe(
+                        GitHubGraphQlClient.call({
+                          host,
+                          operation: "getRoutingIdentity",
+                          allowReserve: true,
                         }),
-                      )
-              ).pipe(
-                Effect.provideService(GitHubRequestPolicy.PinnedGitHubCredential, credential),
-                Effect.provideService(SourceControlRateLimit.CredentialScope, key),
-              );
+                        Effect.catchTags({
+                          GraphQLClientError: () => Effect.fail(unavailable()),
+                        }),
+                      );
+                      return yield* decodeViewerIdentity({
+                        id: viewer.databaseId,
+                        login: viewer.login,
+                      }).pipe(Effect.mapError(unavailable));
+                    }),
+                  }),
+                  Effect.provideService(GitHubRequestPolicy.PinnedGitHubCredential, credential),
+                  Effect.provideService(SourceControlRateLimit.CredentialScope, key),
+                );
               const value = { accountId: String(identity.id), viewer: identity.login };
               if (routingIdentities.size >= 128)
                 routingIdentities.delete(routingIdentities.keys().next().value!);
@@ -1223,7 +1197,6 @@ export const make = Effect.gen(function* () {
     (input: {
       readonly cwd: string;
       readonly host: string;
-      readonly repository?: string | undefined;
       readonly operation: string;
       readonly allowReserve?: boolean | undefined;
     }) =>
@@ -1240,8 +1213,6 @@ export const make = Effect.gen(function* () {
       effect.pipe(
         GitHubGraphQlClient.call({
           host: input.host,
-          cwd: input.cwd,
-          repository: input.repository,
           operation: input.operation,
           ...(input.allowReserve === true ? { allowReserve: true } : {}),
         }),
@@ -1369,12 +1340,7 @@ export const make = Effect.gen(function* () {
   /** A REST read whose JSON answer is decoded the same way. */
   const restRead = <A>(input: RestReadInput<A>): Effect.Effect<A, GitHubPullRequestApiError> =>
     api
-      .rest({
-        host: input.host,
-        repository: input.repository,
-        operation: input.operation,
-        path: input.path,
-      })
+      .rest({ host: input.host, operation: input.operation, path: input.path })
       .pipe(
         Effect.flatMap((response) =>
           decodeWith(input.cwd, input.operation, input.decode, response.body),
@@ -1437,7 +1403,6 @@ export const make = Effect.gen(function* () {
     return api
       .rest({
         host: input.host,
-        repository: input.repository,
         operation: "getPullRequestDiff",
         path:
           input.commit === undefined
@@ -1488,7 +1453,6 @@ export const make = Effect.gen(function* () {
       const { owner, name } = parseRepositorySelector(input.repository);
       const refsResponse = yield* api.rest({
         host: input.host,
-        repository: input.repository,
         operation: "getPullRequestDiffFileContents",
         path:
           input.commit === undefined
@@ -1548,7 +1512,6 @@ export const make = Effect.gen(function* () {
         api
           .rest({
             host: input.host,
-            repository: input.repository,
             operation: "getPullRequestDiffFileContents",
             accept: "application/vnd.github.raw+json",
             path: `repos/${owner}/${name}/contents/${filePath
@@ -1760,7 +1723,6 @@ export const make = Effect.gen(function* () {
         const read: GitHubWorkflowRunPage = yield* restRead({
           cwd: input.cwd,
           host: input.host,
-          repository: input.repository,
           operation: "listWorkflowRunsRequiringApproval",
           path: `repos/${owner}/${name}/actions/runs?head_sha=${encodeURIComponent(input.headSha)}&branch=${encodeURIComponent(input.headBranch)}&event=pull_request&status=action_required&per_page=100&page=${page}`,
           decode: decodeWorkflowRunsJson,
@@ -1872,72 +1834,34 @@ export const make = Effect.gen(function* () {
 
   /** Preserve policy errors; map not-found per lookup and other failures to read errors. */
   const batchedRead = <A, E, R>(
-    input: {
-      readonly cwd: string;
-      readonly host: string;
-      readonly repository?: string | undefined;
-      readonly operation: string;
-    },
+    input: { readonly cwd: string; readonly host: string; readonly operation: string },
     effect: Effect.Effect<A, E, R>,
   ): Effect.Effect<
     A,
     | Exclude<E, GraphQLClientError.GraphQLClientError>
     | GitHubPullRequestReadError
-    | GitHubRequestPolicy.GitHubApiError,
+    | GitHubRequestPolicy.GitHubApiNotFoundError,
     Exclude<R, GitHubGraphQlClient.GitHubGraphQlTarget>
   > =>
-    withBatchCredential(
-      input,
-      effect.pipe(
-        Effect.provideService(GitHubGraphQlClient.GitHubGraphQlTarget, {
-          ...input,
-        }),
-        Effect.mapError((error) =>
-          !isGraphQlClientError(error)
-            ? (error as Exclude<E, GraphQLClientError.GraphQLClientError>)
-            : isNotFoundOnly(error)
-              ? new GitHubRequestPolicy.GitHubApiNotFoundError({
-                  host: input.host,
-                  operation: input.operation,
-                  githubErrors: GitHubGraphQlClient.describeErrors(error),
-                })
-              : readError(input.cwd, input.operation, error),
-        ),
+    effect.pipe(
+      Effect.provideService(GitHubGraphQlClient.GitHubGraphQlTarget, {
+        host: input.host,
+        operation: input.operation,
+      }),
+      Effect.mapError((error) =>
+        !isGraphQlClientError(error)
+          ? (error as Exclude<E, GraphQLClientError.GraphQLClientError>)
+          : isNotFoundOnly(error)
+            ? new GitHubRequestPolicy.GitHubApiNotFoundError({
+                host: input.host,
+                operation: input.operation,
+                githubErrors: GitHubGraphQlClient.describeErrors(error),
+              })
+            : readError(input.cwd, input.operation, error),
       ),
     );
 
-  // App tokens can cover one repository. Capture them before enqueueing so the resolver's
-  // existing credential grouping never combines repositories served by different tokens.
-  const withBatchCredential = Effect.fn("GitHubPullRequestApi.withBatchCredential")(function* <
-    A,
-    E,
-    R,
-  >(
-    input: {
-      readonly cwd: string;
-      readonly host: string;
-      readonly repository?: string | undefined;
-    },
-    read: Effect.Effect<A, E, R>,
-  ) {
-    if (input.repository === undefined) return yield* read;
-    const credential = yield* api.credential(input.host, input);
-    if (!Redacted.value(credential.token).startsWith("ghs_")) return yield* read;
-    return yield* read.pipe(
-      Effect.provideService(GitHubRequestPolicy.PinnedGitHubCredential, {
-        host: input.host.toLowerCase(),
-        token: credential.token,
-        credentialFingerprint: credential.fingerprint,
-      }),
-    );
-  });
-
-  /**
-   * Summaries asked for together, on one host under one credential, share aliased GraphQL reads
-   * of twenty-five: the background sync reads every linked pull request each minute, and one read
-   * apiece is most of what it spends. A pull request GitHub cannot find fails on its own; the
-   * rest of its batch still answers.
-   */
+  // Batch by host/credential; isolate missing PRs.
   const summaryResolver = GraphQLResolver.aliased(client.PullRequestSummary, {
     batchKey: GitHubGraphQlClient.batchKey,
   }).pipe(
@@ -2029,7 +1953,7 @@ export const make = Effect.gen(function* () {
           }),
         );
       }
-      const target = { ...input, operation: "listPullRequests" };
+      const target = { cwd: input.cwd, host: input.host, operation: "listPullRequests" };
       const toPage = (
         page: ReturnType<typeof toPullRequestRows>,
       ): GitHubPullRequestListPage & { readonly pageInfo: GraphQLClient.PageInfo } => ({
@@ -2129,7 +2053,6 @@ export const make = Effect.gen(function* () {
                     const stack = pullRequest == null ? undefined : toStackMembership(pullRequest);
                     return stack === undefined ? item : { ...item, stack };
                   }),
-                  // Optional badges must not take down a listing that already read successfully.
                   Effect.catch((error) =>
                     Effect.logWarning("Pull request stack membership enrichment failed", {
                       operation: "listPullRequestStackMemberships",
@@ -2143,8 +2066,6 @@ export const make = Effect.gen(function* () {
             ).pipe(
               Effect.provideService(GitHubGraphQlClient.GitHubGraphQlTarget, {
                 host: input.host,
-                repository: input.repository,
-                cwd: input.cwd,
                 operation: "listPullRequestStackMemberships",
               }),
               Effect.map((items) => ({ ...batch, items })),
@@ -2179,17 +2100,6 @@ export const make = Effect.gen(function* () {
           operation: "searchPullRequests",
         });
       }
-      const credential = yield* api.credential(input.host, {
-        cwd: input.cwd,
-        repository: input.repositories[0],
-      });
-      if (input.repositories.length > 1 && Redacted.value(credential.token).startsWith("ghs_")) {
-        return yield* readError(
-          input.cwd,
-          "searchPullRequests",
-          new Error("Repository-scoped installation credentials require per-repository reads."),
-        );
-      }
       // Search cannot exclude numbers, so the rows already delivered at the boundary come back
       // first; read past them so they do not use up the limit.
       const seenAt = new Set(
@@ -2209,11 +2119,7 @@ export const make = Effect.gen(function* () {
           client
             .PullRequestSearch({ q: query, first: pageRows(rows), after, stacks, stats: false })
             .pipe(
-              graphql({
-                ...input,
-                repository: input.repositories[0],
-                operation: "searchPullRequests",
-              }),
+              graphql({ ...input, operation: "searchPullRequests" }),
               Effect.map(({ search }) => {
                 const page = toPullRequestRows(search);
                 // A short page that says it has more is where this read stops, not a gap to read past.
@@ -2256,22 +2162,14 @@ export const make = Effect.gen(function* () {
         const stats = yield* Effect.forEach(
           lookups,
           ({ changeRequest, lookup }) =>
-            withBatchCredential(
-              { ...input, repository: changeRequest.repository },
-              GraphQLResolver.request(lookup!, statsResolver).pipe(
-                Effect.map((result) => {
-                  const pullRequest = result.repository?.pullRequest;
-                  return pullRequest == null
-                    ? []
-                    : [{ ...changeRequest, ...pullRequest } satisfies GitHubPullRequestStat];
-                }),
-                Effect.catchIf(isNotFoundOnly, () => Effect.succeed([])),
-                Effect.provideService(GitHubGraphQlClient.GitHubGraphQlTarget, {
-                  ...input,
-                  repository: changeRequest.repository,
-                  operation: "listPullRequestStats",
-                }),
-              ),
+            GraphQLResolver.request(lookup!, statsResolver).pipe(
+              Effect.map((result) => {
+                const pullRequest = result.repository?.pullRequest;
+                return pullRequest == null
+                  ? []
+                  : [{ ...changeRequest, ...pullRequest } satisfies GitHubPullRequestStat];
+              }),
+              Effect.catchIf(isNotFoundOnly, () => Effect.succeed([])),
             ),
           { concurrency: "unbounded" },
         );
@@ -2322,7 +2220,6 @@ export const make = Effect.gen(function* () {
       return revalidatedRestRead({
         cwd: input.cwd,
         host: input.host,
-        repository: input.repository,
         operation: "getPullRequestStack",
         path: `repos/${owner}/${name}/stacks?pull_request=${input.number}`,
         decode: decodePullRequestStacksJson,
@@ -2333,7 +2230,6 @@ export const make = Effect.gen(function* () {
           return restRead({
             cwd: input.cwd,
             host: input.host,
-            repository: input.repository,
             operation: "getPullRequestStack",
             path: `repos/${owner}/${name}/stacks/${stack.number}`,
             decode: (raw) => decodePullRequestStacksJson(`[${raw}]`),
@@ -2657,7 +2553,6 @@ export const make = Effect.gen(function* () {
       return api
         .rest({
           host: input.host,
-          repository: input.repository,
           operation: "setReviewerRequest",
           method: input.requested ? "POST" : "DELETE",
           path: `repos/${owner}/${name}/pulls/${input.number}/requested_reviewers`,
@@ -2737,7 +2632,6 @@ export const make = Effect.gen(function* () {
         return api
           .rest({
             host: input.host,
-            repository: input.repository,
             operation: "setLabels",
             method: "POST",
             path: issue,
@@ -2750,7 +2644,6 @@ export const make = Effect.gen(function* () {
         (label) =>
           api.rest({
             host: input.host,
-            repository: input.repository,
             operation: "setLabels",
             method: "DELETE",
             path: `${issue}/${encodeURIComponent(label)}`,
@@ -2922,7 +2815,6 @@ export const make = Effect.gen(function* () {
                           ? api
                               .rest({
                                 host: input.host,
-                                repository: input.repository,
                                 operation: "approveWorkflowRun",
                                 method: "POST",
                                 path: `repos/${owner}/${name}/actions/runs/${run.id}/approve`,
@@ -3043,6 +2935,43 @@ export const make = Effect.gen(function* () {
 
     readCheckLogs: Effect.fn("GitHubPullRequestApi.readCheckLogs")(function* (input) {
       const { owner, name } = parseRepositorySelector(input.repository);
+      const readCheckRun = <A, E>(path: string, decode: (body: string) => Effect.Effect<A, E>) =>
+        api
+          .rest({ host: input.host, operation: "readCheckRun", path })
+          .pipe(Effect.flatMap((response) => decode(response.body)));
+      // A job that never started (billing block, skipped) or whose log expired has no log;
+      // its check run (an Actions job id is its check run id) says why.
+      const missingLog = (check: ProviderCheckReference, jobId: string, fallback: string) =>
+        Effect.all(
+          [
+            readCheckRun(`repos/${owner}/${name}/check-runs/${jobId}`, decodeCheckRun),
+            readCheckRun(
+              `repos/${owner}/${name}/check-runs/${jobId}/annotations?per_page=50`,
+              decodeCheckRunAnnotations,
+            ),
+          ],
+          { concurrency: 2 },
+        ).pipe(
+          Effect.map(([run, annotations]) =>
+            [
+              `GitHub returned no log for this job${run.conclusion ? `; it concluded ${run.conclusion}` : ""}.`,
+              run.output?.title,
+              run.output?.summary,
+              ...annotations.map(
+                (annotation) =>
+                  `${annotation.annotation_level ? `${annotation.annotation_level}: ` : ""}${annotation.message}`,
+              ),
+            ]
+              .filter((line) => typeof line === "string" && line.trim() !== "")
+              .join("\n"),
+          ),
+          Effect.catchTags({
+            GitHubApiNotFoundError: () => Effect.succeed(fallback),
+            GitHubApiResponseError: () => Effect.succeed(fallback),
+            SchemaError: () => Effect.succeed(fallback),
+          }),
+          Effect.map((detail) => ({ ...check, log: null, truncated: false, detail })),
+        );
       return yield* Effect.forEach(
         input.checks,
         (check) => {
@@ -3078,10 +3007,8 @@ export const make = Effect.gen(function* () {
               }),
               // Sign-in and rate-limit failures fail the call; the rest are this check's.
               Effect.catchTags({
-                GitHubApiNotFoundError: (error) =>
-                  Effect.succeed({ ...check, log: null, truncated: false, detail: error.message }),
-                GitHubApiResponseError: (error) =>
-                  Effect.succeed({ ...check, log: null, truncated: false, detail: error.message }),
+                GitHubApiNotFoundError: (error) => missingLog(check, jobId, error.message),
+                GitHubApiResponseError: (error) => missingLog(check, jobId, error.message),
               }),
             );
         },
@@ -3185,7 +3112,6 @@ export const make = Effect.gen(function* () {
       return api
         .rest({
           host: input.host,
-          repository: input.repository,
           operation: "submitReview",
           method: "POST",
           path: `repos/${owner}/${name}/pulls/${input.number}/reviews`,

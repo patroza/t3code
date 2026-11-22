@@ -1,11 +1,9 @@
-import { useGT as useCopyTranslation } from "gt-react-native";
 import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
 import type { ThreadMoveDestination } from "../threads/threadOrder";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import * as ThreadUndo from "@t3tools/client-runtime/state/thread-undo";
 import { showThreadUndoNotice } from "./thread-undo-notice";
 import { canSnooze } from "@t3tools/client-runtime/state/thread-settled";
-import { runArchiveWithWorktreeCleanup } from "@t3tools/client-runtime/state/worktreeCleanup";
 import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Haptics from "expo-haptics";
@@ -36,7 +34,6 @@ import {
   getPendingThreadOrder,
   threadDropBusyAtom,
 } from "../../state/thread-order";
-import { vcsEnvironment } from "../../state/vcs";
 import {
   createPendingThreadOrder,
   createThreadMovePlanner,
@@ -45,12 +42,6 @@ import {
 import { getThreadListV2OrderedSection } from "../threads/threadListV2";
 import { threadCanArchive } from "./threadArchive";
 import { resolveThreadTitleRename } from "../threads/thread-title-rename";
-import {
-  actionFailureMessage,
-  actionFailureTitle,
-  type ThreadListAction,
-} from "./threadActionMessages";
-import { presentWorktreeCleanupConfirmation } from "./worktreeCleanupPrompt";
 
 function environmentConfigLoaded(environmentId: EnvironmentThreadShell["environmentId"]) {
   return appAtomRegistry.get(environmentServerConfigsAtom).has(environmentId);
@@ -65,8 +56,34 @@ function environmentSupportsAutoSettleOptOut(
   );
 }
 
+type ThreadListAction = "archive" | "unarchive" | "delete" | "settle" | "unsettle";
+
+const ACTION_FAILURES: Record<ThreadListAction, string> = {
+  archive: msg("The thread could not be archived."),
+  unarchive: msg("The thread could not be unarchived."),
+  delete: msg("The thread could not be deleted."),
+  settle: msg("The thread could not be settled."),
+  unsettle: msg("The thread could not be un-settled."),
+};
+
+function actionFailureMessage(action: ThreadListAction, cause: Cause.Cause<unknown>): string {
+  const error = Cause.squash(cause);
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+  return m(ACTION_FAILURES[action]);
+}
+
 function selectionHaptic(): void {
   void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+}
+
+function actionFailureTitle(action: ThreadListAction): string {
+  if (action === "archive") return m(msg("Could not archive thread"));
+  if (action === "unarchive") return m(msg("Could not unarchive thread"));
+  if (action === "settle") return m(msg("Could not settle thread"));
+  if (action === "unsettle") return m(msg("Could not un-settle thread"));
+  return m(msg("Could not delete thread"));
 }
 
 function checkThreadOperationPermission(thread: EnvironmentThreadShell, title: string): boolean {
@@ -230,8 +247,6 @@ export function useThreadListActions(): {
   readonly renameThread: (thread: EnvironmentThreadShell) => void;
   readonly regenerateThreadTitle: (thread: EnvironmentThreadShell) => Promise<boolean>;
 } {
-  const translateCopy = useCopyTranslation();
-
   const executeAction = useThreadActionExecutor();
   const snoozeMutation = useAtomCommand(threadEnvironment.snooze, { reportFailure: false });
   const unsnoozeMutation = useAtomCommand(threadEnvironment.unsnooze, { reportFailure: false });
@@ -247,95 +262,9 @@ export function useThreadListActions(): {
     reportFailure: false,
   });
   const snoozeInFlightThreadKeys = useRef(new Set<string>());
-  const previewWorktreeCleanup = useAtomCommand(vcsEnvironment.previewWorktreeCleanup, {
-    reportFailure: false,
-  });
-  const cleanupThreadWorktree = useAtomCommand(vcsEnvironment.cleanupThreadWorktree, {
-    reportFailure: false,
-  });
   const titleRegenerationInFlightThreadKeys = useRef(new Set<string>());
 
-  const archiveThread = async (thread: EnvironmentThreadShell) => {
-    // Await cleanup while preserving the action API's success/failure result.
-    const outcome = await runArchiveWithWorktreeCleanup({
-      // Server-authoritative preview; a failure (old server, transient
-      // error) degrades to a plain archive without a prompt. A thread
-      // mid-turn keeps the original archive guard: executeAction re-checks
-      // and surfaces the alert, so it must not be prompted for cleanup.
-      previewCandidate: async () => {
-        if (thread.runtime?.status === "running" && thread.runtime.activeRunId !== null) {
-          return null;
-        }
-        const preview = await previewWorktreeCleanup({
-          environmentId: thread.environmentId,
-          input: { threadId: thread.id },
-        });
-        return preview._tag === "Success" ? preview.value.candidate : null;
-      },
-      removalPolicy: "confirm",
-      confirmRemoval: ({ displayWorktreePath }) =>
-        presentWorktreeCleanupConfirmation({
-          isIos: process.env.EXPO_OS === "ios",
-          displayWorktreePath,
-          presentAlert: (buttons) => {
-            Dialog.alert(buttons.title, buttons.message, [
-              { text: translateCopy("Keep"), style: "cancel", onPress: buttons.onKeep },
-              { text: translateCopy("Remove"), style: "destructive", onPress: buttons.onRemove },
-            ]);
-          },
-          presentConfirmDialog: (buttons) => {
-            Dialog.confirm({
-              title: buttons.title,
-              message: buttons.message,
-              cancelText: translateCopy("Keep"),
-              confirmText: translateCopy("Remove"),
-              destructive: true,
-              onConfirm: buttons.onRemove,
-              onCancel: buttons.onKeep,
-            });
-          },
-        }),
-      archive: () => executeAction("archive", thread),
-      isArchiveSuccess: (archived) => archived,
-      cleanup: async () => {
-        const result = await cleanupThreadWorktree({
-          environmentId: thread.environmentId,
-          input: { threadId: thread.id },
-        });
-        if (result._tag === "Failure") {
-          const error = Cause.squash(result.cause);
-          return {
-            kind: "failed",
-            message:
-              error instanceof Error && error.message.trim().length > 0
-                ? error.message
-                : translateCopy("The worktree could not be removed."),
-          } as const;
-        }
-        return { kind: "done", status: result.value.status } as const;
-      },
-      // Cleanup problems are nonfatal: the archive itself already
-      // succeeded.
-      onCleanupFailed: (displayWorktreePath, message) => {
-        Dialog.alert(
-          translateCopy("Thread archived, but worktree removal failed"),
-          translateCopy("Could not remove {value0}. {value1}", {
-            value0: displayWorktreePath,
-            value1: message,
-          }),
-        );
-      },
-      onCleanupRetained: (displayWorktreePath) => {
-        Dialog.alert(
-          translateCopy("Worktree kept"),
-          translateCopy("{value0} is still used by another active thread.", {
-            value0: displayWorktreePath,
-          }),
-        );
-      },
-    });
-    return outcome.kind === "archived" && outcome.result;
-  };
+  const archiveThread = (thread: EnvironmentThreadShell) => executeAction("archive", thread);
   const offerUndo = (
     thread: EnvironmentThreadShell,
     action: "Settled" | "Snoozed" | "Unpinned",

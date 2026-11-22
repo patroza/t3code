@@ -1,9 +1,4 @@
-import type {
-  RepositoryIdentity,
-  RepositoryIdentityRemote,
-  SourceControlProviderError,
-  SourceControlProviderKind,
-} from "@t3tools/contracts";
+import type { RepositoryIdentity, SourceControlProviderError } from "@t3tools/contracts";
 import { parseGitRemoteHost } from "@t3tools/source-control-core/shared/definition";
 import { repositoryPathFromRemoteUrl } from "@t3tools/source-control-core/server/SourceControlProvider";
 import { canonicalRepositoryPath, normalizeGitRemoteUrl } from "@t3tools/shared/git";
@@ -195,30 +190,6 @@ function buildRepositoryOrigin(
   return { canonicalKey: originKey, remoteUrl: originUrl, ...(displayName ? { displayName } : {}) };
 }
 
-function describeRemote(input: {
-  readonly remoteName: string;
-  readonly remoteUrl: string;
-  readonly keyUrl?: string;
-}): RepositoryIdentityRemote & { readonly provider?: SourceControlProviderKind } {
-  const canonicalKey = sourceControlDefinitions.repositoryKeyFromRemote(
-    input.keyUrl ?? input.remoteUrl,
-  );
-  const sourceControlProvider = sourceControlDefinitions.recognizeRemote(input.remoteUrl);
-  const repositoryPath = repositoryPathOf(canonicalKey, input.remoteUrl);
-  const repositoryPathSegments = repositoryPath.split("/").filter((segment) => segment.length > 0);
-  const [owner] = repositoryPathSegments;
-  const repositoryName = repositoryPathSegments.at(-1);
-
-  return {
-    remoteName: input.remoteName,
-    remoteUrl: input.remoteUrl,
-    canonicalKey,
-    ...(sourceControlProvider ? { provider: sourceControlProvider.kind } : {}),
-    ...(owner ? { owner } : {}),
-    ...(repositoryName ? { name: repositoryName } : {}),
-  };
-}
-
 function buildRepositoryIdentity(input: {
   readonly remoteName: string;
   readonly remoteUrl: string;
@@ -226,42 +197,28 @@ function buildRepositoryIdentity(input: {
   readonly originUrl: string | undefined;
   readonly originKeyUrl: string | undefined;
   readonly rootPath: string;
-  readonly remotes: ReadonlyMap<string, string>;
 }): RepositoryIdentity {
-  const primary = describeRemote({
-    remoteName: input.remoteName,
-    remoteUrl: input.remoteUrl,
-    keyUrl: input.keyUrl,
-  });
-  const repositoryPath = repositoryPathOf(primary.canonicalKey, input.remoteUrl);
-  const origin = buildRepositoryOrigin(input.originUrl, input.originKeyUrl, primary.canonicalKey);
+  const canonicalKey = sourceControlDefinitions.repositoryKeyFromRemote(input.keyUrl);
+  const sourceControlProvider = sourceControlDefinitions.recognizeRemote(input.remoteUrl);
+  const repositoryPath = repositoryPathOf(canonicalKey, input.remoteUrl);
+  const repositoryPathSegments = repositoryPath.split("/").filter((segment) => segment.length > 0);
+  const [owner] = repositoryPathSegments;
+  const repositoryName = repositoryPathSegments.at(-1);
+  const origin = buildRepositoryOrigin(input.originUrl, input.originKeyUrl, canonicalKey);
 
   return {
-    canonicalKey: primary.canonicalKey,
-    ...(origin ? { origin } : {}),
+    canonicalKey,
     locator: {
       source: "git-remote",
-      remoteName: primary.remoteName,
-      remoteUrl: primary.remoteUrl,
+      remoteName: input.remoteName,
+      remoteUrl: input.remoteUrl,
     },
     rootPath: input.rootPath,
     ...(repositoryPath ? { displayName: repositoryPath } : {}),
-    ...(primary.provider ? { provider: primary.provider } : {}),
-    ...(primary.owner ? { owner: primary.owner } : {}),
-    ...(primary.name ? { name: primary.name } : {}),
-    remotes: [...input.remotes].map(([remoteName, remoteUrl]) => {
-      const keyUrl =
-        input.originUrl !== undefined && remoteUrl === input.originUrl
-          ? input.originKeyUrl
-          : remoteUrl === input.remoteUrl
-            ? input.keyUrl
-            : undefined;
-      return describeRemote({
-        remoteName,
-        remoteUrl,
-        ...(keyUrl !== undefined ? { keyUrl } : {}),
-      });
-    }),
+    ...(sourceControlProvider ? { provider: sourceControlProvider.kind } : {}),
+    ...(owner ? { owner } : {}),
+    ...(repositoryName ? { name: repositoryName } : {}),
+    ...(origin ? { origin } : {}),
   };
 }
 
@@ -403,7 +360,6 @@ const resolveRepositoryIdentityFromCacheKey = Effect.fn(
     originUrl,
     originKeyUrl,
     rootPath: cacheKey.rootPath,
-    remotes,
   });
 });
 

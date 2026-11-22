@@ -60,7 +60,6 @@ export function threadCreated(
       forkedFrom: null,
       createdBy: "user",
       creationSource: "web",
-      originSource: null,
       createdAt: now,
       updatedAt: now,
       archivedAt: null,

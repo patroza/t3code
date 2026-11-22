@@ -1,0 +1,83 @@
+# Upstream files this fork modifies or deletes. Everything else that exists upstream stays
+# byte-identical to the upstream merge base; scripts/check-fork-seams.mjs (Fork CI: Fork Seams)
+# fails on any unlisted difference and warns about entries that no longer differ.
+#
+# Fork logic belongs in fork-only files. An upstream file gets at most a hook (an import plus a
+# single call, spread, registration, or layer entry). One line per file, sorted:
+#   <path>  # <feature>: <why>
+.github/workflows/mobile-fingerprint-check.yml  # tooling: runs-on ubuntu-24.04; the fork has no Blacksmith runners, so upstream's job would queue forever
+.github/workflows/pr-size.yml  # tooling: deleted; upstream's PR size labeler (pull_request_target) is not wanted on fork PRs
+.github/workflows/pr-vouch.yml  # tooling: deleted; upstream's contributor vouch gate (pull_request_target) would act on fork PRs
+AGENTS.md  # tooling: one line importing AGENTS.fork.md
+apps/mobile/app.config.ts  # tooling: wraps the default export in applyForkMobileConfig (app.config.fork.ts)
+apps/mobile/package.json  # tooling: eas-build-pre-install script for the trimmed EAS archive (.easignore)
+apps/mobile/src/App.tsx  # identity: mounts IdentityClaimGate
+apps/mobile/src/features/home/HomeRouteScreen.tsx  # identity: ownership-filters the home thread list and adds ownership to its filter menu (features/identity/OwnershipFilter.tsx)
+apps/mobile/src/features/home/ThreadListFilters.tsx  # identity: Mine/Theirs chip beside the environment and project chips
+apps/mobile/src/features/threads/ThreadFeed.tsx  # identity: labels user messages someone else sent (features/identity/MessageSenderCaption.tsx)
+apps/mobile/src/features/threads/ThreadNavigationSidebar.tsx  # identity: ownership-filters the sidebar thread list and adds ownership to its filter menu
+apps/mobile/src/features/threads/thread-list-v2-items.tsx  # identity: thread rows show the creator/participant mark (features/identity/ParticipantStack.tsx)
+apps/mobile/src/i18n/translations/de.json  # identity: mobile identity strings
+apps/mobile/src/i18n/translations/en.json  # identity: mobile identity strings
+apps/mobile/src/i18n/translations/es.json  # identity: mobile identity strings
+apps/mobile/src/i18n/translations/fr.json  # identity: mobile identity strings
+apps/mobile/src/i18n/translations/ja.json  # identity: mobile identity strings
+apps/mobile/src/i18n/translations/ko.json  # identity: mobile identity strings
+apps/mobile/src/i18n/translations/pt-BR.json  # identity: mobile identity strings
+apps/mobile/src/i18n/translations/ru.json  # identity: mobile identity strings
+apps/mobile/src/i18n/translations/sv.json  # identity: mobile identity strings
+apps/mobile/src/i18n/translations/zh.json  # identity: mobile identity strings
+apps/mobile/src/persistence/mobile-preferences.ts  # identity: persists the Mine/Theirs ownership choice (features/identity/ownershipFilterOptions.ts)
+apps/server/src/auth/EnvironmentAuth.ts  # identity + mcp-tokens: exports MCP_CLIENT_SUBJECT; issueSession passes a runtimeModeCeiling through
+apps/server/src/auth/RpcAuthorization.ts  # identity: spreads IDENTITY_READ_RPC_SCOPES into RPC_REQUIRED_SCOPES
+apps/server/src/cli/auth.ts  # mcp-tokens: --runtime-mode-ceiling flag on auth session issue (cli/mcpClientTokenCeiling.ts)
+apps/server/src/issue/IssueTrackerRegistry.ts  # jira: registers the Jira tracker when a site URL is configured (jira/JiraIssueDriver.ts)
+apps/server/src/mcp/McpHttpServer.ts  # mcp-tools: merges fork-registered toolkits (mcp/forkMcpTools.ts) into the served MCP layer, beside layerTools so upstream budget/mock tests do not see them
+apps/server/src/mcp/McpToolAccess.ts  # identity: writing tools require an identity claim on outside MCP clients (identity/mcpClientClaim.ts)
+apps/server/src/mcp/OrchestratorMcpService.ts  # identity: MCP-created threads and sends carry the caller's source (sourceRefForMcpCaller)
+apps/server/src/observability/RpcInstrumentation.ts  # identity: spreads identity RPC aggregates
+apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts  # direnv: resolve the query environment through resolveCurrentProviderEnvironment
+apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts  # direnv: resolve the app-server environment through resolveCurrentProviderEnvironment (error mapped to open-session error)
+apps/server/src/orchestration-v2/Orchestrator.ts  # identity: emit stamps command source on events, dispatch records participants, delegated children inherit the person, thread.attribution.repair case (sourceAttribution.ts)
+apps/server/src/orchestration-v2/ProjectionStore.ts  # identity: thread decode resolves stored attribution against the map; shells carry attribution fields
+apps/server/src/orchestration-v2/ThreadLaunchService.ts  # identity: a launch's initial message may carry a server-stamped source
+apps/server/src/orchestration-v2/ThreadManagementService.ts  # identity: sendToThread may carry a server-stamped source
+apps/server/src/persistence/Migrations.ts  # migrations: runMigrations/hasPendingMigrations take the fork ledger hooks (ForkMigrations.ts)
+apps/server/src/processRunner.ts  # direnv: optional extendEnv so direnv runs with exactly the provider environment
+apps/server/src/server.ts  # identity: provides the persisted IdentityService layer; direnv: DirenvEnvironment.layerLive in the runtime core layer merge; jira: adds the /api/jira/webhook route layer (jira/JiraServerLayers.ts); discord: the command-readiness middleware lets the bot's token exchange and discovery through (discord/commandReadinessExemption.ts)
+apps/server/src/ws.ts  # identity: spreads identity.* handlers and wraps dispatch/launch so operate commands carry the session's source (identity/identityWsHandlers.ts)
+apps/web/src/components/ChatView.tsx  # identity: passes message sender context to the timeline (chat/MessageSenderCaption.tsx)
+apps/web/src/components/Sidebar.tsx  # identity: thread list follows the ownership filter (ownershipFilter.ts)
+apps/web/src/components/chat/MessagesTimeline.tsx  # identity: forwards messageSender into the row context
+apps/web/src/components/chat/TimelineUserMessageRow.tsx  # identity: user messages show the sender caption
+apps/web/src/components/chat/timelineRowContext.ts  # identity: row context carries messageSender
+apps/web/src/components/settings/AuthorizedClientsSettings.tsx  # identity: MCP client rows show and assign who the client acts as (McpClientIdentityControl.tsx)
+apps/web/src/components/sidebar/SidebarThreadHeader.tsx  # identity: renders the ownership filter menu (SidebarOwnershipFilter.tsx)
+apps/web/src/components/sidebar/SidebarThreadRow.tsx  # identity: rows show the origin/participant mark (identity/ParticipantStack.tsx)
+apps/web/src/i18n/translations/de.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
+apps/web/src/i18n/translations/en.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
+apps/web/src/i18n/translations/es.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
+apps/web/src/i18n/translations/fr.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
+apps/web/src/i18n/translations/ja.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
+apps/web/src/i18n/translations/ko.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
+apps/web/src/i18n/translations/pt-BR.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
+apps/web/src/i18n/translations/ru.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
+apps/web/src/i18n/translations/sv.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
+apps/web/src/i18n/translations/zh.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
+apps/web/src/routes/__root.tsx  # identity: mounts IdentityClaimGate
+docs/user/outside-agents.md  # mcp-tokens: documents headless MCP bearer tokens and --runtime-mode-ceiling
+knip.jsonc  # tooling: entry for scripts/agent-gh.mjs, which only the generated gh shim runs
+package.json  # tooling: prepare runs scripts/fork-prepare.mjs; pr:ready and dist:desktop:linux:dir scripts
+packages/client-runtime/package.json  # identity: subpath exports for state/identity and message-sender
+packages/client-runtime/src/rpc/index.ts  # vscode + discord: re-exports RpcSessionFactory/rpcSessionFactoryLayer and applyServerConfigProjection so headless clients (extension, bot) open and follow their own RPC session
+packages/contracts/src/clientRpcPermissions.ts  # identity: spreads IDENTITY_GUARDED_RPC_SCOPES (identityRpc.ts) into CLIENT_GUARDED_RPC_SCOPES
+packages/contracts/src/index.ts  # identity: exports identity.ts and identityRpc.ts
+packages/contracts/src/orchestrationV2.ts  # identity: spreads identity field sets (identity.ts) into thread/message/turn-item/command schemas and adds the internal thread.attribution.repair command; optional fields must live inside the upstream structs
+packages/contracts/src/rpc.ts  # identity: merges IdentityRpcGroup (identityRpc.ts) into WsRpcGroup
+packages/contracts/src/t3ProjectFile.ts  # jira: spreads the jiraProjects key (t3ProjectFileJira.ts); a t3.json key must live inside the upstream struct
+packages/provider-acp/src/server/adapter.ts  # direnv: wrap the flavor with withDirenvRuntime (direnvRuntime.ts) so every ACP runtime starts with the direnv environment
+packages/provider-core/package.json  # direnv: export ./server/DirenvEnvironment
+packages/provider-opencode/src/server/adapter.ts  # direnv: resolve the OpenCode server environment through resolveCurrentProviderEnvironment
+packages/shared/package.json  # identity: subpath exports for identityAvatar, identityMap, sourceAttribution; jira: subpath exports for integrationThreadView, jiraBareKeyProjects, turnResponseStats (server, bot, extension); discord + vscode: discordProjectTopic, integrationPendingInteractions, integrationTasks, sessionWake exports shared by the bot, the extension and the server MCP tool
+pnpm-lock.yaml  # vscode + discord: importers for the fork-only apps/vscode and apps/discord-bot, and the patched dfx catalog entry; regenerate with CI= pnpm install --no-frozen-lockfile, never take a side
+pnpm-workspace.yaml  # discord: dfx catalog entry and its patchedDependencies line (patches/dfx@1.0.16.patch)

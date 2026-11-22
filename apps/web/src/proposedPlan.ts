@@ -46,14 +46,6 @@ export function buildCollapsedProposedPlanPreviewMarkdown(
   return previewLines.join("\n");
 }
 
-export {
-  buildPlanImplementationPrompt,
-  buildPlanImplementationThreadTitle,
-  resolvePlanFollowUpSubmission,
-} from "@t3tools/shared/proposedPlan";
-export { proposedPlanTitle, stripDisplayedPlanMarkdown };
-export const PLAN_IMPLEMENTATION_PROMPT_PREFIX = "PLEASE IMPLEMENT THIS PLAN:\n";
-
 function sanitizePlanFileSegment(input: string): string {
   const sanitized = input
     .toLowerCase()
@@ -62,6 +54,8 @@ function sanitizePlanFileSegment(input: string): string {
     .replace(/^-+|-+$/g, "");
   return sanitized.length > 0 ? sanitized : "plan";
 }
+
+export const PLAN_IMPLEMENTATION_PROMPT_PREFIX = "PLEASE IMPLEMENT THIS PLAN:\n";
 
 export function buildProposedPlanMarkdownFilename(planMarkdown: string): string {
   const title = proposedPlanTitle(planMarkdown);

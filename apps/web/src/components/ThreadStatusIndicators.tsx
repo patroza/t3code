@@ -1,4 +1,3 @@
-import { useGT as useCopyTranslation } from "gt-react";
 import { pipe } from "effect/Function";
 import { changeRequestTermKind, type ChangeRequestTermKind } from "./pullRequest/changeRequestTerm";
 import {
@@ -20,7 +19,7 @@ import {
   type VcsStatusResult,
 } from "@t3tools/contracts";
 import { msg, T, useGT, useMessages } from "gt-react";
-import { FolderGit2Icon, TerminalIcon } from "lucide-react";
+import { TerminalIcon } from "lucide-react";
 import { m, type MessageResolver } from "../i18n/messages";
 import { useEnvironment, usePrimaryEnvironmentId } from "../state/environments";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
@@ -33,7 +32,6 @@ import {
   type ThreadPullRequestBadge,
   visibleThreadPullRequests,
 } from "@t3tools/client-runtime/thread-pull-requests";
-import { CircleCheckIcon, CircleDashedIcon, FolderPlusIcon, PencilRulerIcon } from "lucide-react";
 import { useRender } from "@base-ui/react/use-render";
 import { type ReactNode, type AnimationEvent, type MouseEvent, type ReactElement } from "react";
 import { cn } from "../lib/utils";
@@ -49,14 +47,12 @@ import {
   pullRequestMatchesSearchQuery,
   resolveThreadLastVisitedAt,
   resolveThreadStatusPill,
-  type SidebarV2TopStatus,
   type ThreadStatusPill,
   useRetainedValue,
   useSidebarRowSubscriptionLease,
 } from "./Sidebar.logic";
 
 import type { SidebarThreadSummary } from "../types";
-import { formatWorktreePathForDisplay } from "../worktreeCleanup";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import {
   PULL_REQUEST_STATE_PRESENTATION,
@@ -773,162 +769,7 @@ export function ThreadTerminalStatusButton({
   );
 }
 
-export function ThreadWorktreeIndicator({
-  thread,
-  onCreateSession,
-}: {
-  thread: Pick<SidebarThreadSummary, "id" | "branch" | "worktreePath">;
-  onCreateSession?: (event: React.MouseEvent<HTMLButtonElement>) => void;
-}) {
-  const translateCopy = useCopyTranslation();
-
-  const worktreePath = thread.worktreePath?.trim();
-  if (!worktreePath && !onCreateSession) {
-    return null;
-  }
-
-  const tooltip = worktreePath
-    ? thread.branch
-      ? `Worktree: ${formatWorktreePathForDisplay(worktreePath)} (${thread.branch})`
-      : `Worktree: ${formatWorktreePathForDisplay(worktreePath)}`
-    : thread.branch
-      ? `New worktree from ${thread.branch}`
-      : "New worktree";
-
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          onCreateSession ? (
-            <button
-              type="button"
-              aria-label={worktreePath ? translateCopy("New session on this worktree") : tooltip}
-              data-testid={`thread-worktree-new-session-${thread.id}`}
-              className="inline-flex cursor-pointer items-center justify-center rounded-sm text-muted-foreground/55 outline-hidden transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
-              onPointerDown={(event) => {
-                event.stopPropagation();
-              }}
-              onClick={onCreateSession}
-            />
-          ) : (
-            <span
-              role="img"
-              aria-label={tooltip}
-              data-testid={`thread-worktree-${thread.id}`}
-              className="inline-flex items-center justify-center"
-            />
-          )
-        }
-      >
-        {onCreateSession ? (
-          <FolderPlusIcon className="size-3" />
-        ) : (
-          <FolderGit2Icon className="size-3 text-muted-foreground/40" />
-        )}
-      </TooltipTrigger>
-      <TooltipPopup side="top">{tooltip}</TooltipPopup>
-    </Tooltip>
-  );
-}
-
-export function ThreadPlanModeIndicator({
-  thread,
-}: {
-  thread: Pick<SidebarThreadSummary, "id" | "interactionMode">;
-}) {
-  const translateCopy = useCopyTranslation();
-
-  if (thread.interactionMode !== "plan") {
-    return null;
-  }
-
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <span
-            role="img"
-            aria-label={translateCopy("Plan-only thread")}
-            data-testid={`thread-plan-mode-${thread.id}`}
-            className="inline-flex items-center justify-center"
-          />
-        }
-      >
-        <PencilRulerIcon className="size-3 text-primary" />
-      </TooltipTrigger>
-      <TooltipPopup side="top">
-        <T>Plan-only thread</T>
-      </TooltipPopup>
-    </Tooltip>
-  );
-}
-
-export function ThreadSettledIndicator({ thread }: { thread: Pick<SidebarThreadSummary, "id"> }) {
-  const translateCopy = useCopyTranslation();
-
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <span
-            aria-label={translateCopy("Settled thread")}
-            data-testid={`thread-settled-${thread.id}`}
-            className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground/60"
-          />
-        }
-      >
-        <CircleCheckIcon className="size-4 shrink-0" />
-        <span className="hidden md:inline">
-          <T>Settled</T>
-        </span>
-      </TooltipTrigger>
-      <TooltipPopup side="top">
-        <T>Settled</T>
-      </TooltipPopup>
-    </Tooltip>
-  );
-}
-
-export function ThreadStatusV2Indicator({
-  status,
-  className,
-}: {
-  status: SidebarV2TopStatus;
-  className?: string;
-}) {
-  return (
-    <span
-      role="status"
-      className={cn(
-        "inline-flex items-center gap-1 text-xs font-medium",
-        status.className,
-        className,
-      )}
-    >
-      {status.icon === "working" ? (
-        <CircleDashedIcon aria-hidden className="size-4 shrink-0" />
-      ) : status.icon === "done" ? (
-        <CircleCheckIcon aria-hidden className="size-4 shrink-0" />
-      ) : null}
-      {status.label}
-    </span>
-  );
-}
-
-/** Sidebar cue for an unsent composer draft on a thread row. */
-export function ComposerDraftDot({ className }: { className?: string }) {
-  const translateCopy = useCopyTranslation();
-
-  return (
-    <span
-      aria-label={translateCopy("Unsent draft")}
-      data-testid="composer-draft-dot"
-      className={cn("size-1.5 shrink-0 rounded-full bg-primary", className)}
-    />
-  );
-}
-
-export function ThreadStatusLabel({
+function ThreadStatusLabel({
   status,
   compact = false,
 }: {
@@ -1236,20 +1077,4 @@ export function ThreadSearchPullRequestNumber({
       <span>{presentation.text}</span>
     </span>
   );
-}
-
-export function resolveThreadPr(input: {
-  threadBranch: string | null;
-  gitStatus: VcsStatusResult | null;
-}): ThreadPr | null {
-  const { threadBranch, gitStatus } = input;
-  if (gitStatus === null) {
-    return null;
-  }
-
-  if (threadBranch === null || gitStatus.refName !== threadBranch) {
-    return null;
-  }
-
-  return gitStatus.pr ?? null;
 }

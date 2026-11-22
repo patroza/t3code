@@ -1,7 +1,3 @@
-// @effect-diagnostics nodeBuiltinImport:off
-import * as NodeFS from "node:fs";
-import * as NodePath from "node:path";
-
 import {
   AuthAdministrativeClientScopes,
   AuthStandardClientScopes,
@@ -17,7 +13,6 @@ import {
   type ServerAuthBootstrapMethod,
   connectDeviceVerificationCode,
 } from "@t3tools/contracts";
-import { LOCAL_BOOTSTRAP_CREDENTIAL_FILE } from "@t3tools/shared/serverRuntime";
 import {
   DESKTOP_BOOTSTRAP_TOKEN_WINDOW_MS,
   isValidDesktopBootstrapToken,
@@ -38,18 +33,6 @@ import * as Stream from "effect/Stream";
 import * as ServerConfig from "../config.ts";
 import * as AuthConnectDevices from "../persistence/AuthConnectDevices.ts";
 import * as AuthPairingLinks from "../persistence/AuthPairingLinks.ts";
-
-function readLocalBootstrapCredential(stateDir: string): string | undefined {
-  try {
-    const credential = NodeFS.readFileSync(
-      NodePath.join(stateDir, LOCAL_BOOTSTRAP_CREDENTIAL_FILE),
-      "utf8",
-    ).trim();
-    return credential.length > 0 ? credential : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 export interface BootstrapGrant {
   readonly method: ServerAuthBootstrapMethod;
@@ -359,7 +342,6 @@ const toPairingLink = (row: AuthPairingLinks.AuthPairingLinkRecord): AuthPairing
     : {}),
 });
 const DESKTOP_BOOTSTRAP_TTL_HOURS = Duration.hours(24);
-const LOCAL_BOOTSTRAP_TTL = Duration.days(3650);
 const DEV_STARTUP_TTL_HOURS = Duration.hours(24);
 const PAIRING_TOKEN_REJECTION_LIMIT =
   Math.floor(256 / PAIRING_CODE_ALPHABET.length) * PAIRING_CODE_ALPHABET.length;
@@ -369,7 +351,7 @@ const PAIRING_TOKEN_PATTERN = new RegExp(
   "i",
 );
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const random = yield* SecureRandom.SecureRandom;
   const config = yield* ServerConfig.ServerConfig;
   const pairingLinks = yield* AuthPairingLinks.AuthPairingLinkRepository;
@@ -419,30 +401,15 @@ export const make = Effect.gen(function* () {
       id,
     }).pipe(Effect.asVoid);
 
-  // Desktop secrets and local-bootstrap-credential files derive rotating renderer tokens.
-  // Accept the current derived token; older clients may still send the seeded file token.
+  // Accept tokens derived from the rotating desktop secret; older desktops send only a token.
   const desktopBootstrapSecret = config.desktopBootstrapSecret;
   const mac = yield* Mac.Mac;
-  const localCredential = readLocalBootstrapCredential(config.stateDir);
-  const consumeRotatingDesktopToken = Effect.fn("PairingGrantStore.consumeRotatingDesktopToken")(
-    function* (credential: string, nowMs: number) {
-      if (
-        desktopBootstrapSecret !== undefined &&
-        (yield* isValidDesktopBootstrapToken(desktopBootstrapSecret, credential, nowMs))
-      ) {
-        return true;
-      }
-      if (
-        localCredential !== undefined &&
-        localCredential !== desktopBootstrapSecret &&
-        (yield* isValidDesktopBootstrapToken(localCredential, credential, nowMs))
-      ) {
-        return true;
-      }
-      return false;
-    },
-    Effect.provideService(Mac.Mac, mac),
-  );
+  const consumeRotatingDesktopToken = (credential: string, nowMs: number) =>
+    desktopBootstrapSecret === undefined
+      ? Effect.succeed(false)
+      : isValidDesktopBootstrapToken(desktopBootstrapSecret, credential, nowMs).pipe(
+          Effect.provideService(Mac.Mac, mac),
+        );
 
   if (config.desktopBootstrapToken && desktopBootstrapSecret === undefined) {
     const now = yield* DateTime.now;
@@ -454,18 +421,6 @@ export const make = Effect.gen(function* () {
         milliseconds: Duration.toMillis(DESKTOP_BOOTSTRAP_TTL_HOURS),
       }),
       // Reloads and expired bearer sessions must be able to re-exchange the desktop seed.
-      remainingUses: "unbounded",
-    });
-  }
-  if (localCredential !== undefined && localCredential !== config.desktopBootstrapToken) {
-    const now = yield* DateTime.now;
-    yield* seedGrant(localCredential, {
-      method: "desktop-bootstrap",
-      scopes: AuthStandardClientScopes,
-      subject: "local-bootstrap",
-      expiresAt: DateTime.add(now, {
-        milliseconds: Duration.toMillis(LOCAL_BOOTSTRAP_TTL),
-      }),
       remainingUses: "unbounded",
     });
   }

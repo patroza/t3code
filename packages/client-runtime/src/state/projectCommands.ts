@@ -27,8 +27,6 @@ import {
   createEnvironmentCommand,
   createEnvironmentRpcCommand,
   createEnvironmentRpcQueryAtomFamily,
-  createEnvironmentRpcSubscriptionAtomFamily,
-  refreshQueryOnSuccess,
 } from "./runtime.ts";
 import { createProject, deleteProject, updateProject } from "../operations/commands.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
@@ -102,14 +100,11 @@ export function createProjectEnvironmentAtoms<R, E>(
       Atom.withLabel(`environment-data:projects:optimistic-file:${key}`),
     ),
   );
-  const projectConcurrency = {
-    mode: "serial" as const,
-    key: ({ environmentId, input }: { environmentId: string; input: { projectId: string } }) =>
-      JSON.stringify([environmentId, input.projectId]),
-  };
-  const readFileQuery = createEnvironmentRpcQueryAtomFamily(runtime, {
-    label: "environment-data:projects:read-file-query",
+  const readFile = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:projects:read-file",
     tag: WS_METHODS.projectsReadFile,
+    staleTimeMs: 30_000,
+    idleTtlMs: 5 * 60_000,
     onAnswer: (target, _value, registry): Effect.Effect<void> =>
       Effect.sync(() => {
         const atom = optimisticFileFamily(
@@ -127,28 +122,11 @@ export function createProjectEnvironmentAtoms<R, E>(
             ? Effect.void
             : fileMetadata.rememberFile(input.cwd, result, isCurrent),
       ),
-    // Workspace files can change outside T3 Code, so always revalidate cached reads on mount.
-    staleTimeMs: 0,
-    idleTtlMs: 0,
   });
-  const fileChanges = createEnvironmentRpcSubscriptionAtomFamily(runtime, {
-    label: "environment-data:projects:file-changes",
-    tag: WS_METHODS.projectsWatchFile,
-    idleTtlMs: 0,
-  });
-  type ReadFileAtom = ReturnType<typeof readFileQuery>;
-  const liveReadFileAtoms = new WeakMap<ReadFileAtom, ReadFileAtom>();
-  const readFile = (target: Parameters<typeof readFileQuery>[0]): ReadFileAtom => {
-    const queryAtom = readFileQuery(target);
-    const cached = liveReadFileAtoms.get(queryAtom);
-    if (cached) return cached;
-
-    const changesAtom = fileChanges(target);
-    const liveAtom = refreshQueryOnSuccess(queryAtom, changesAtom).pipe(
-      Atom.withLabel(`environment-data:projects:read-file:${target.input.relativePath}`),
-    );
-    liveReadFileAtoms.set(queryAtom, liveAtom);
-    return liveAtom;
+  const projectConcurrency = {
+    mode: "serial" as const,
+    key: ({ environmentId, input }: { environmentId: string; input: { projectId: string } }) =>
+      JSON.stringify([environmentId, input.projectId]),
   };
   return {
     fileMetadata: fileMetadata.metadata,

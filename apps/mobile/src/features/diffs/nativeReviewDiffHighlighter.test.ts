@@ -1,10 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { highlightCode, nativeHighlightsReady } from "../../lib/highlights";
-
-beforeEach(async () => {
-  await nativeHighlightsReady;
-});
+import { highlightCode } from "../../lib/highlights";
 
 import type { NativeReviewDiffRow } from "./nativeReviewDiffSurface";
 import type { NativeReviewDiffFile } from "./nativeReviewDiffTypes";

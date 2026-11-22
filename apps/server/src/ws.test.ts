@@ -1,8 +1,3 @@
-import * as AiUsageMonitor from "./aiUsage/AiUsageMonitor.ts";
-import * as HostResourceProbe from "./diagnostics/HostResourceProbe.ts";
-import * as IdentityService from "./identity/IdentityService.ts";
-import * as PortExposure from "./preview/PortExposure.ts";
-import * as WorktreeLifecycle from "./orchestration-v2/WorktreeLifecycleService.ts";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { WebSocket } from "@effect/platform-node/NodeWS";
@@ -156,6 +151,8 @@ import * as UsageService from "./usage/UsageService.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
+import * as WorkspaceFolders from "./workspace/WorkspaceFolders.ts";
+import * as TaskFolders from "./workspace/TaskFolders.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
@@ -168,6 +165,7 @@ import * as SecretCheck from "./secrets/SecretCheck.ts";
 import * as ServerConfigModule from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
 import { USAGE_LIMITS_COMMAND } from "@t3tools/shared/usageLimits";
+import * as FeatureFlags from "@t3tools/shared/FeatureFlags";
 import * as ServerSettings from "./serverSettings.ts";
 import * as ManagedPolicy from "./policy/ManagedPolicy.ts";
 
@@ -822,11 +820,6 @@ it.effect("shell snapshots omit idle children and older settled threads only on 
 
 // Build the production RPC layer; unrelated capabilities fail if this test calls them.
 const layerUnusedConfigRpcServices = Layer.mergeAll(
-  Layer.mock(AiUsageMonitor.AiUsageMonitor)({}),
-  Layer.mock(HostResourceProbe.HostResourceProbe)({}),
-  Layer.mock(IdentityService.IdentityService)({}),
-  Layer.mock(PortExposure.PreviewPortExposure)({}),
-  Layer.mock(WorktreeLifecycle.WorktreeLifecycle)({}),
   Layer.mock(DocumentText.DocumentText)({}),
   Layer.mock(ServerSecretStore.ServerSecretStore)({}),
   Layer.mock(SecretCheck.SecretCheck)({}),
@@ -910,8 +903,11 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(VcsProvisioningService.VcsProvisioningService)({}),
   Layer.mock(VcsStatusBroadcaster.VcsStatusBroadcaster)({}),
   Layer.mock(WorkspaceEntries.WorkspaceEntries)({}),
+  Layer.mock(WorkspaceFolders.WorkspaceFolders)({}),
+  Layer.mock(TaskFolders.TaskFolders)({}),
   Layer.mock(WorkspaceFileSystem.WorkspaceFileSystem)({}),
   Layer.mock(WorktreeSetupTracker.WorktreeSetupTracker)({}),
+  FeatureFlags.layerTest(),
 );
 
 const layerConfigSources = Layer.mergeAll(
@@ -954,7 +950,6 @@ it.live.each([
               scopes: [],
             }),
         }),
-        Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
         Layer.mock(SessionStore.SessionStore)({
           cookieName: "compression-test",
           legacyCookieName: undefined,
@@ -1162,9 +1157,6 @@ it.effect.each([
               scopes: [],
             },
             {},
-            {},
-            yield* PreviewAutomationBroker.PreviewAutomationBroker,
-            true,
             yield* ServerBrowser.ServerBrowser,
             () => Effect.void,
             { secretReferences: true },
@@ -1320,9 +1312,6 @@ it.effect("access changes made while the snapshot loads reach the client after i
             scopes: [],
           },
           {},
-          {},
-          yield* PreviewAutomationBroker.PreviewAutomationBroker,
-          true,
           yield* ServerBrowser.ServerBrowser,
           () => Effect.void,
           { secretReferences: true },
@@ -1539,9 +1528,6 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
             scopes: [],
           },
           {},
-          {},
-          yield* PreviewAutomationBroker.PreviewAutomationBroker,
-          true,
           yield* ServerBrowser.ServerBrowser,
           () => Effect.void,
           { secretReferences: true },
@@ -1903,9 +1889,6 @@ it.effect("a missing thread worktree gets its project's skills in the cwd snapsh
             scopes: [],
           },
           {},
-          {},
-          yield* PreviewAutomationBroker.PreviewAutomationBroker,
-          true,
           yield* ServerBrowser.ServerBrowser,
           () => Effect.void,
           { secretReferences: true },
@@ -1985,9 +1968,6 @@ it.effect("a git action that fails partway still refreshes the repository status
             scopes: [AuthSourceControlWriteScope],
           },
           {},
-          {},
-          yield* PreviewAutomationBroker.PreviewAutomationBroker,
-          true,
           yield* ServerBrowser.ServerBrowser,
           () => Effect.void,
           { secretReferences: true },
@@ -2068,9 +2048,6 @@ it.effect("a publish whose push fails still refreshes the new remote", () =>
             scopes: [AuthSourceControlWriteScope],
           },
           {},
-          {},
-          yield* PreviewAutomationBroker.PreviewAutomationBroker,
-          true,
           yield* ServerBrowser.ServerBrowser,
           () => Effect.void,
           { secretReferences: true },
@@ -2604,9 +2581,6 @@ it.effect("ACP session RPCs list a thread missing its history and repair it on i
             scopes: [],
           },
           {},
-          {},
-          yield* PreviewAutomationBroker.PreviewAutomationBroker,
-          true,
           yield* ServerBrowser.ServerBrowser,
           () => Effect.void,
           { secretReferences: true },

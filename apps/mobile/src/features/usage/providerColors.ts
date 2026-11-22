@@ -5,7 +5,6 @@ export function providerColors(scheme: "light" | "dark"): Record<UsageProviderKi
     claude: "#d97757",
     codex: scheme === "dark" ? "#e6e6e6" : "#3c3c43",
     grok: scheme === "dark" ? "#a1a1aa" : "#52525b",
-    kimi: "#ff6a3d",
     cursor: "#8b8b8b",
     opencode: "#5b9bbd",
     antigravity: "#8c7bd1",

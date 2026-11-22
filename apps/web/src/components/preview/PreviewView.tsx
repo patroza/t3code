@@ -49,7 +49,6 @@ import {
 import {
   resolveDiscoveredServerUrl,
   resolveExternalServerUrl,
-  resolveNavigableUrl,
 } from "~/browser/browserTargetResolver";
 import { useEnvironmentSupportsServerBrowser } from "~/state/entities";
 import {
@@ -314,13 +313,7 @@ export function PreviewView({
   const handleSubmitUrl = async (next: string) => {
     try {
       const resolved = resolveAddressBarInput(next, resolveSearchUrlTemplate(getClientSettings()));
-      if (
-        isHistoryProfile(
-          await navigateToResolvedUrl(
-            await resolveNavigableUrl(threadRef.environmentId, { kind: "url", url: resolved }),
-          ),
-        )
-      ) {
+      if (isHistoryProfile(await navigateToResolvedUrl(resolved))) {
         recordVisitForThread(threadRef, resolved);
       }
     } catch (error) {

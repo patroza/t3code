@@ -8,11 +8,9 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
 import { describe, it, assert, expect } from "@effect/vitest";
-
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -26,7 +24,6 @@ import * as Scope from "effect/Scope";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-
 import {
   EnvironmentId,
   ClaudeSettings,
@@ -43,7 +40,6 @@ import {
   type ServerProviderVersionAdvisoryStatus,
   type ServerSettings as ContractServerSettings,
 } from "@t3tools/contracts";
-import * as PlatformError from "effect/PlatformError";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -59,11 +55,9 @@ import {
 } from "./CodexProvider.ts";
 import { BUNDLED_CLAUDE_MODEL_CATALOG } from "./ClaudeModelCatalog.ts";
 import { checkClaudeProviderStatus } from "./ClaudeProvider.ts";
-
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as AntigravityInstallation from "./AntigravityInstallation.ts";
 import * as ModelManifest from "./ModelManifest.ts";
-
 import { applyProviderCompatibility } from "./providerCompatibility.ts";
 import * as ResetCreditCoordinator from "./resetCreditCoordinator.ts";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
@@ -93,44 +87,6 @@ import * as ProviderRegistry from "./ProviderRegistry.ts";
 import { ProviderDriverError } from "@t3tools/provider-core/server/errors";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "@t3tools/provider-core/server/maintenanceResolver";
-
-function layerFailingSpawner(description: string) {
-  return Layer.succeed(
-    ChildProcessSpawner.ChildProcessSpawner,
-    ChildProcessSpawner.make(() =>
-      Effect.fail(
-        PlatformError.systemError({
-          _tag: "NotFound",
-          module: "ChildProcess",
-          method: "spawn",
-          description,
-        }),
-      ),
-    ),
-  );
-}
-
-function layerMockCommandSpawner(
-  handler: (
-    command: string,
-    args: ReadonlyArray<string>,
-  ) => { stdout: string; stderr: string; code: number },
-) {
-  return Layer.succeed(
-    ChildProcessSpawner.ChildProcessSpawner,
-    ChildProcessSpawner.make((command) => {
-      const cmd = command as unknown as {
-        command: string;
-        args: ReadonlyArray<string>;
-      };
-      return Effect.succeed(mockHandle(handler(cmd.command, cmd.args)));
-    }),
-  );
-}
-
-const disabledCodexSettings: CodexSettings = Schema.decodeSync(CodexSettings)({
-  enabled: false,
-});
 vi.mock("@anthropic-ai/claude-agent-sdk", { spy: true });
 
 const decodeServerProvider = Schema.decodeSync(ServerProvider);
@@ -139,7 +95,9 @@ const decodeServerSettings = Schema.decodeSync(ServerSettings);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const encodedDefaultServerSettings = encodeServerSettings(DEFAULT_SERVER_SETTINGS);
 
-const disabledDefaultSlots = (...drivers: ReadonlyArray<string>) =>
+const disabledDefaultSlots = (
+  ...drivers: ReadonlyArray<string>
+): ContractServerSettings["providerInstances"] =>
   Object.fromEntries(
     drivers.map((driver) => [
       ProviderInstanceId.make(driver),
@@ -607,6 +565,11 @@ const layerTestNodeServices = Layer.mergeAll(
   Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
     getEnvironmentId: Effect.succeed(EnvironmentId.make("00000000-0000-4000-8000-000000000001")),
   }),
+  // A login shell that prints nothing, so refreshes never take PATH from the developer's profile.
+  Layer.effect(
+    HostProcess.Environment,
+    Effect.sync(() => ({ ...process.env, SHELL: "/usr/bin/true" })),
+  ),
   // An empty home, so the developer's own Claude settings never reach provider probes.
   Layer.effect(
     HostProcess.HomeDirectory,
@@ -2604,10 +2567,37 @@ it.layer(
         }),
     );
 
-    it.effect(
-      "rebuilds only instances missing their CLI when a refresh finds a new Windows PATH",
-      () => {
-        const env: NodeJS.ProcessEnv = { PATH: "C:\\Windows" };
+    // A login shell stand-in that prints the capture with one more PATH entry, as a profile edited
+    // after launch would.
+    const withLateLoginShell = <A, E, R>(effect: (shell: string) => Effect.Effect<A, E, R>) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const dir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-login-shell-" });
+        const shell = `${dir}/sh`;
+        yield* fs.writeFileString(
+          shell,
+          '#!/bin/sh\nPATH=/opt/late:/usr/bin exec /bin/sh -c "$2"\n',
+        );
+        yield* fs.chmod(shell, 0o755);
+        return yield* effect(shell);
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
+
+    it.effect.each([
+      {
+        name: "Windows PATH",
+        platform: "win32" as const,
+        path: "C:\\Windows",
+        expectedPath: "C:\\Windows;C:\\Tools",
+      },
+      {
+        name: "login-shell PATH",
+        platform: "linux" as const,
+        path: "/usr/bin",
+        expectedPath: "/opt/late:/usr/bin",
+      },
+    ])("rebuilds only instances missing their CLI when a refresh finds a new $name", (host) =>
+      withLateLoginShell((shell) => {
+        const env: NodeJS.ProcessEnv = { PATH: host.path, SHELL: shell };
         return Effect.gen(function* () {
           const driver = ProviderDriverKind.make("codex");
           const makeInstance = (id: string, installed: boolean): ProviderInstance => {
@@ -2669,7 +2659,9 @@ it.layer(
                   }),
                 ),
                 Layer.provideMerge(
-                  ServerConfig.layerTest(process.cwd(), { prefix: "t3-provider-registry-path-" }),
+                  ServerConfig.layerTest(process.cwd(), {
+                    prefix: "t3-provider-registry-path-",
+                  }),
                 ),
                 Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
               ),
@@ -2678,16 +2670,16 @@ it.layer(
 
           yield* registry.refresh();
 
-          assert.strictEqual(env.PATH, "C:\\Windows;C:\\Tools");
+          assert.strictEqual(env.PATH, host.expectedPath);
           assert.deepStrictEqual(rebuilt, [[ProviderInstanceId.make("missing")]]);
         }).pipe(
-          Effect.provideService(HostProcess.Platform, "win32"),
+          Effect.provideService(HostProcess.Platform, host.platform),
           Effect.provideService(HostProcess.Environment, env),
           Effect.provideService(WindowsShellEnvironment, () =>
             Effect.succeed({ PATH: "C:\\Windows;C:\\Tools" }),
           ),
         );
-      },
+      }),
     );
 
     it.effect("rescans a requested cwd whose snapshot is still current", () =>
@@ -4098,14 +4090,7 @@ it.layer(
           decodeServerSettings(
             deepMerge(encodedDefaultServerSettings, {
               providerInstances: {
-                ...disabledDefaultSlots(
-                  "claudeAgent",
-                  "cursor",
-                  "grok",
-                  "kimi",
-                  "muse",
-                  "opencode",
-                ),
+                ...disabledDefaultSlots("claudeAgent", "cursor", "grok", "opencode"),
                 [ProviderInstanceId.make("codex")]: {
                   driver: ProviderDriverKind.make("codex"),
                   enabled: true,
@@ -4208,7 +4193,7 @@ it.layer(
           );
           yield* serverSettings.updateSettings({
             providerInstances: {
-              ...disabledDefaultSlots("claudeAgent", "cursor", "grok", "kimi", "muse", "opencode"),
+              ...disabledDefaultSlots("claudeAgent", "cursor", "grok", "opencode"),
               [ProviderInstanceId.make("codex")]: {
                 driver: ProviderDriverKind.make("codex"),
                 enabled: true,
@@ -4457,129 +4442,6 @@ it.layer(
           assert.include(unavailable, "ghost_current");
           assert.notInclude(unavailable, "ghost_stale");
         }),
-    );
-
-    it.effect(
-      "keeps Cursor disabled and skips provider probing when settings use their defaults",
-      () =>
-        Effect.gen(function* () {
-          const serverSettings = yield* makeMutableServerSettingsService(
-            decodeServerSettings(
-              deepMerge(encodedDefaultServerSettings, {
-                providerInstances: disabledDefaultSlots("codex", "grok"),
-              }),
-            ),
-          );
-          let cursorSpawned = false;
-          const scope = yield* Scope.make();
-          yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
-          const layerProviderRegistry = ProviderRegistry.layer.pipe(
-            Layer.provideMerge(
-              ProviderInstanceRegistryHydration.layer.pipe(
-                Layer.provide(
-                  Layer.mock(PortScanner.PortDiscovery)({ trackAgent: () => () => undefined }),
-                ),
-              ),
-            ),
-            Layer.provideMerge(AntigravityInstallation.AntigravityInstallation.layer),
-            Layer.provideMerge(
-              Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),
-            ),
-            Layer.provideMerge(ServerSecretStore.layer),
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), {
-                prefix: "t3-provider-registry-",
-              }),
-            ),
-            Layer.provideMerge(layerTestHttpClient),
-            Layer.provideMerge(
-              Layer.succeed(
-                ProviderEventLoggers.ProviderEventLoggers,
-                ProviderEventLoggers.NoOpProviderEventLoggers,
-              ),
-            ),
-            Layer.provideMerge(ProviderLatestVersions.layer),
-            Layer.provideMerge(McpProviderSessions.layer),
-            Layer.provideMerge(ModelManifest.layerTest),
-            Layer.provideMerge(ResetCreditCoordinator.layerTest),
-            Layer.provideMerge(
-              OpenCodeRuntime.layer.pipe(Layer.provide(OpenCodeServerLedger.layerTest)),
-            ),
-            Layer.provideMerge(layerBackgroundPolicyAlwaysRun),
-            Layer.provideMerge(
-              layerMockCommandSpawner((command, args) => {
-                if (command === "cursor-agent") {
-                  cursorSpawned = true;
-                }
-                const joined = args.join(" ");
-                if (joined === "--version") {
-                  return {
-                    stdout: `${command} 1.0.0\n`,
-                    stderr: "",
-                    code: 0,
-                  };
-                }
-                if (joined === "auth status") {
-                  return {
-                    stdout: '{"authenticated":true}\n',
-                    stderr: "",
-                    code: 0,
-                  };
-                }
-                throw new Error(`Unexpected args: ${command} ${joined}`);
-              }),
-            ),
-            Layer.provideMerge(ProviderInstallationGate.layer),
-            Layer.provideMerge(SqlitePersistence.layerMemory),
-          );
-          const runtimeServices = yield* Layer.build(
-            Layer.mergeAll(
-              Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),
-              layerProviderRegistry,
-            ),
-          ).pipe(Scope.provide(scope));
-
-          yield* Effect.gen(function* () {
-            const registry = yield* ProviderRegistry.ProviderRegistry;
-            const providers = yield* registry.getProviders;
-            const cursorProvider = providers.find(
-              (provider) => provider.instanceId === ProviderInstanceId.make("cursor"),
-            );
-
-            assert.deepStrictEqual(providers.map((provider) => provider.instanceId).toSorted(), [
-              "antigravity",
-              "claudeAgent",
-              "codex",
-              "cursor",
-              "fx",
-              "grok",
-              "kimi",
-              "kiro",
-              "muse",
-              "opencode",
-              "pi",
-            ]);
-            assert.strictEqual(cursorProvider?.enabled, false);
-            assert.strictEqual(cursorProvider?.status, "disabled");
-            assert.strictEqual(cursorProvider?.message, "Cursor is disabled in T3 Code settings.");
-            const museProvider = providers.find((provider) => provider.driver === "muse");
-            assert.strictEqual(museProvider?.enabled, false);
-            assert.strictEqual(museProvider?.status, "disabled");
-            assert.strictEqual(cursorSpawned, false);
-          }).pipe(Effect.provide(runtimeServices));
-        }),
-    );
-
-    it.effect("skips codex probes entirely when the provider is disabled", () =>
-      Effect.gen(function* () {
-        const status = yield* checkCodexProviderStatus(disabledCodexSettings).pipe(
-          Effect.provide(layerFailingSpawner("spawn codex ENOENT")),
-        );
-        assert.strictEqual(status.enabled, false);
-        assert.strictEqual(status.status, "disabled");
-        assert.strictEqual(status.installed, false);
-        assert.strictEqual(status.message, "Codex is disabled in T3 Code settings.");
-      }),
     );
   });
 

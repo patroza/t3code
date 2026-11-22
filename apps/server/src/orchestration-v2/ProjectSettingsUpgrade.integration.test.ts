@@ -1,4 +1,3 @@
-import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
@@ -30,6 +29,7 @@ import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
+import { layerNoTaskFolders } from "./ProviderTurnStartService.testkit.ts";
 import * as RuntimeLayer from "./runtimeLayer.ts";
 
 const projectId = ProjectId.make("project:upgrade");
@@ -137,12 +137,7 @@ const layerRuntime = (dbPath: string) => {
     ),
   );
   return Layer.mergeAll(
-    RuntimeLayer.layer.pipe(
-      Layer.provide(RuntimeLayer.layerProjectService),
-      Layer.provide(
-        Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({ get: () => Effect.succeed(null) }),
-      ),
-    ),
+    RuntimeLayer.layer.pipe(Layer.provide(RuntimeLayer.layerProjectService)),
     RuntimeLayer.layerProjectService,
   ).pipe(
     Layer.provide(
@@ -178,6 +173,7 @@ const layerRuntime = (dbPath: string) => {
         pruneWorktrees: () => Effect.void,
       }),
     ),
+    Layer.provide(layerNoTaskFolders),
     Layer.provide(layerPlatform),
   );
 };

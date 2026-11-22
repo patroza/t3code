@@ -94,11 +94,18 @@ export const OmittedWhenNull = <Value extends Schema.Top>(value: Value) => {
   );
 };
 
+const UnknownArrayElement = Schema.Unknown.pipe(
+  Schema.decodeTo(Schema.Undefined, {
+    decode: SchemaGetter.succeed(undefined),
+    encode: SchemaGetter.passthrough(),
+  }),
+);
+
 /** Prefer {@link ForwardCompatibleUnion} for tagged unions so malformed known members still fail. */
 export const ForwardCompatibleArray = <Element extends Schema.Top>(element: Element) =>
+  // Exit derives its wire codec from the encoded shape, which keeps the union but drops recovery middleware.
   Schema.Array(
-    Schema.UndefinedOr(element).pipe(
-      Schema.catchDecoding(() => Effect.succeedSome(undefined)),
+    Schema.Union([element, UnknownArrayElement]).pipe(
       Schema.catchEncoding(() => Effect.succeedSome(undefined)),
     ),
   ).pipe(
@@ -310,12 +317,6 @@ export const ProviderTurnId = makeEntityId("ProviderTurnId");
 export type ProviderTurnId = typeof ProviderTurnId.Type;
 export const TurnItemId = makeEntityId("TurnItemId");
 export type TurnItemId = typeof TurnItemId.Type;
-export const RuntimeSessionId = makeEntityId("RuntimeSessionId");
-export type RuntimeSessionId = typeof RuntimeSessionId.Type;
-export const RuntimeItemId = makeEntityId("RuntimeItemId");
-export type RuntimeItemId = typeof RuntimeItemId.Type;
-export const RuntimeTaskId = makeEntityId("RuntimeTaskId");
-export type RuntimeTaskId = typeof RuntimeTaskId.Type;
 export const RuntimeRequestId = makeEntityId("RuntimeRequestId");
 export type RuntimeRequestId = typeof RuntimeRequestId.Type;
 export const ScheduledTaskId = makeEntityId("ScheduledTaskId");

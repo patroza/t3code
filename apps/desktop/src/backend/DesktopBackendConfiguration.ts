@@ -1,13 +1,9 @@
-// @effect-diagnostics nodeBuiltinImport:off
 import * as NodeOS from "node:os";
 
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
 import { currentDesktopBootstrapToken } from "@t3tools/shared/desktopBootstrapToken";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Clock from "effect/Clock";
-import { LOCAL_BOOTSTRAP_CREDENTIAL_FILE } from "@t3tools/shared/serverRuntime";
-import * as NodeFS from "node:fs";
-import * as NodePath from "node:path";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Mac from "effect/crypto/Mac";
@@ -31,7 +27,6 @@ import * as DesktopServerExposure from "./DesktopServerExposure.ts";
 import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
-import { readLiveExistingBackend } from "./DesktopExistingBackend.ts";
 import * as DesktopWslServerTree from "../wsl/DesktopWslServerTree.ts";
 
 export class DesktopBackendObservabilitySettingsReadError extends Schema.TaggedError<DesktopBackendObservabilitySettingsReadError>()(
@@ -94,7 +89,7 @@ const WSL_FORWARDED_ENV_NAMES = [
   "OPENAI_API_KEY",
   "ANTHROPIC_API_KEY",
   "T3CODE_TELEMETRY_ENABLED",
-  "T3CODE_GITHUB_APP_CLIENT_ID",
+  "T3CODE_FEATURE_FLAGS",
   // Otherwise the WSL server keeps exporting to endpoints from the bootstrap.
   "T3CODE_OTEL_SDK_DISABLED",
   "OTEL_SDK_DISABLED",
@@ -249,25 +244,6 @@ interface SharedBootstrapInput {
   readonly bootstrapSecret: string;
   readonly observabilitySettings: BackendObservabilitySettings;
   readonly hostScope: string;
-}
-
-function readLocalBootstrapCredential(path: string): string | undefined {
-  try {
-    const token = NodeFS.readFileSync(path, "utf8").trim();
-    return token.length > 0 ? token : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function installLocalBootstrapCredential(path: string, token: string): string {
-  NodeFS.mkdirSync(NodePath.dirname(path), { recursive: true });
-  try {
-    NodeFS.writeFileSync(path, `${token}\n`, { mode: 0o600, flag: "wx" });
-    return token;
-  } catch {
-    return NodeFS.readFileSync(path, "utf8").trim();
-  }
 }
 
 // Matches the server's DESKTOP_HOST_SCOPE_ENV.
@@ -558,7 +534,6 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
     const backendExposure = yield* serverExposure.backendConfig;
-    const existingBackend = readLiveExistingBackend(environment.stateDir);
 
     const bootstrap = {
       mode: "desktop" as const,
@@ -604,12 +579,9 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       extendEnv: true,
       bootstrap,
       bootstrapDelivery: "fd3",
-      httpBaseUrl: existingBackend
-        ? new URL(existingBackend.httpBaseUrl)
-        : backendExposure.httpBaseUrl,
+      httpBaseUrl: backendExposure.httpBaseUrl,
       captureOutput: true,
       preflightFailure: Option.none(),
-      ...(existingBackend ? { reuseExisting: { pid: existingBackend.pid } } : {}),
     } satisfies DesktopBackendManager.DesktopBackendStartConfig;
   },
 );
@@ -814,14 +786,13 @@ export const make = Effect.gen(function* () {
   const getOrCreateBootstrapSecret = SynchronizedRef.modifyEffect(secretRef, (current) =>
     Option.match(current, {
       onSome: (secret) => Effect.succeed([secret, current] as const),
-      onNone: Effect.fnUntraced(function* () {
-        const credentialPath = NodePath.join(environment.stateDir, LOCAL_BOOTSTRAP_CREDENTIAL_FILE);
-        const persisted = readLocalBootstrapCredential(credentialPath);
-        if (persisted !== undefined) return [persisted, Option.some(persisted)] as const;
-        const token = Hex.encode(yield* random.randomBytes(32));
-        const installed = installLocalBootstrapCredential(credentialPath, token);
-        return [installed, Option.some(installed)] as const;
-      }),
+      onNone: () =>
+        random.randomBytes(32).pipe(
+          Effect.map((bytes) => {
+            const secret = Hex.encode(bytes);
+            return [secret, Option.some(secret)] as const;
+          }),
+        ),
     }),
   );
 

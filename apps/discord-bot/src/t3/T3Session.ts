@@ -29,7 +29,6 @@ import {
   type ThreadId,
   type UploadChatAttachment,
   type VcsListRefsResult,
-  type VcsResolveBranchChangeRequestResult,
   type VcsStatusStreamEvent,
 } from "@t3tools/contracts";
 import { applyFastModeSelection } from "../presentation/fastMode.ts";
@@ -49,7 +48,6 @@ import {
 } from "@t3tools/client-runtime/authorization";
 import { fetchRemoteEnvironmentDescriptor } from "@t3tools/client-runtime/environment";
 import { modelSelectionCommandType } from "@t3tools/shared/model";
-import { appendOmegentT3ProductHandshake } from "@t3tools/shared/productFamily";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -70,10 +68,6 @@ const decodeThreadDetailSnapshot = Schema.decodeUnknownEffect(
 
 import type { DiscordBotConfig } from "../config.ts";
 import { preferredModelSelection } from "../config.ts";
-import {
-  BrowserAutomationHost,
-  browserResponseAfterDeliveryFailure,
-} from "../browser/BrowserAutomationHost.ts";
 import { formatThreadTitle } from "../presentation/messages.ts";
 import { normalizeWorkspacePath } from "../presentation/mentions.ts";
 import { followOrchestrationThread } from "./DiscordThreadFollower.ts";
@@ -101,7 +95,7 @@ function localSocketUrl(httpBaseUrl: string): string {
   url.search = "";
   url.hash = "";
   url.searchParams.set("orchestrationProtocol", "2");
-  return appendOmegentT3ProductHandshake(url.toString());
+  return url.toString();
 }
 
 function messageFromCause(cause: unknown): string {
@@ -335,10 +329,6 @@ export interface T3SessionService {
     { readonly snapshotSequence: number; readonly thread: OrchestrationThread } | null,
     T3SessionError
   >;
-  readonly resolveBranchChangeRequest: (input: {
-    readonly cwd: string;
-    readonly refName: string;
-  }) => Effect.Effect<VcsResolveBranchChangeRequestResult, T3SessionError>;
   readonly subscribeVcsStatus: (
     cwd: string,
     onStatus: (event: VcsStatusStreamEvent) => Effect.Effect<void, unknown, unknown>,
@@ -397,8 +387,6 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
     let serverConfig: ServerConfig | null = null;
     let shellFiber: Fiber.Fiber<void, unknown> | null = null;
     let configFiber: Fiber.Fiber<void, unknown> | null = null;
-    let browserFiber: Fiber.Fiber<void, unknown> | null = null;
-    let browserHost: BrowserAutomationHost | null = null;
     let reconnecting = false;
     let onReconnected: (() => Promise<void>) | null = null;
     const threadFibers = new Map<string, Fiber.Fiber<void, unknown>>();
@@ -417,8 +405,7 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
      */
     const teardown = async () => {
       const previousScope = scope;
-      const previousFibers = [shellFiber, configFiber, browserFiber, ...threadFibers.values()];
-      const previousBrowserHost = browserHost;
+      const previousFibers = [shellFiber, configFiber, ...threadFibers.values()];
       scope = null;
       session = null;
       httpBaseUrl = null;
@@ -427,8 +414,6 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
       serverConfig = null;
       shellFiber = null;
       configFiber = null;
-      browserFiber = null;
-      browserHost = null;
       // Drop thread subscriptions so subscribeThread() re-subscribes on the new session
       // instead of holding fibers that will never emit again.
       threadFibers.clear();
@@ -443,9 +428,6 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
       }
       if (previousScope !== null) {
         await runtime.runPromise(Scope.close(previousScope, Exit.void)).catch(() => {});
-      }
-      if (previousBrowserHost !== null) {
-        await previousBrowserHost.close().catch(() => {});
       }
     };
 
@@ -553,24 +535,6 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
         },
       }).pipe(Effect.asVoid);
 
-    const claimBrowserHost = Effect.fn("T3Session.claimBrowserHost")(function* (
-      threadId: ThreadId,
-    ) {
-      yield* Effect.gen(function* () {
-        const claim = browserHost?.claim(threadId);
-        if (claim === null || claim === undefined) return;
-        yield* requireSession().client[WS_METHODS.previewAutomationFocusHost](claim);
-        yield* Effect.logInfo("Claimed Discord browser host for thread", { threadId });
-      }).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("Could not claim Discord browser host for thread", {
-            threadId,
-            cause,
-          }),
-        ),
-      );
-    });
-
     // Parameter must not be named `httpBaseUrl` — that shadows the outer
     // connection-state binding, so `httpBaseUrl = normalizedBaseUrl` would only
     // mutate the parameter and leave outer state null forever. Snapshot reads
@@ -601,7 +565,7 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
             );
             const protocolSocketUrl = new URL(socketUrl);
             protocolSocketUrl.searchParams.set("orchestrationProtocol", "2");
-            socketUrl = appendOmegentT3ProductHandshake(protocolSocketUrl.toString());
+            socketUrl = protocolSocketUrl.toString();
             label = descriptor.label;
             environmentId = descriptor.environmentId;
           }
@@ -654,86 +618,6 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
               ),
             );
             shellFiber = runtime.runFork(stream);
-
-            if (botConfig.browserEnabled) {
-              try {
-                const host = await BrowserAutomationHost.launch(botConfig, environmentId);
-                browserHost = host;
-                browserFiber = runtime.runFork(
-                  connected.client[WS_METHODS.previewAutomationConnect](host.registration()).pipe(
-                    Stream.runForEach((event) =>
-                      Effect.gen(function* () {
-                        const startedAt = yield* Clock.currentTimeMillis;
-                        const response = yield* Effect.tryPromise({
-                          try: () => host.consume(event),
-                          catch: (cause) =>
-                            new T3SessionError(
-                              `Browser operation failed: ${messageFromCause(cause)}`,
-                              { cause },
-                            ),
-                        });
-                        if (event.type === "request") {
-                          yield* Effect.logInfo("Discord browser operation completed", {
-                            operation: event.request.operation,
-                            requestId: event.request.requestId,
-                            tabId: event.request.tabId ?? null,
-                            elapsedMs: (yield* Clock.currentTimeMillis) - startedAt,
-                            ok: response?.ok ?? false,
-                            errorTag: response?.error?._tag ?? null,
-                          });
-                        }
-                        return response;
-                      }).pipe(
-                        Effect.flatMap((response) => {
-                          if (response === null) return Effect.void;
-                          const respond = connected.client[WS_METHODS.previewAutomationRespond];
-                          // A single result that fails schema encoding must not end the
-                          // host stream. The broker would drop the thread claim and the
-                          // next call would land on a different browser.
-                          return respond(response).pipe(
-                            Effect.catchCause((cause) =>
-                              Effect.logWarning(
-                                "Discord browser response was not delivered; returning an error for this call.",
-                                { requestId: response.requestId, cause },
-                              ).pipe(
-                                Effect.andThen(
-                                  respond(browserResponseAfterDeliveryFailure(response, cause)),
-                                ),
-                              ),
-                            ),
-                          );
-                        }),
-                      ),
-                    ),
-                    Effect.catchCause((cause) =>
-                      Effect.sync(() => {
-                        if (browserHost === host) browserHost = null;
-                      }).pipe(
-                        Effect.andThen(Effect.promise(() => host.close())),
-                        Effect.ignore,
-                        Effect.andThen(
-                          Effect.logError(
-                            `Discord browser automation host stopped: ${messageFromCause(cause)}`,
-                          ),
-                        ),
-                      ),
-                    ),
-                    Effect.asVoid,
-                  ),
-                );
-                await runtime.runPromise(
-                  Effect.logInfo("Discord browser automation host active", {
-                    profile: botConfig.browserProfile,
-                  }),
-                );
-              } catch (cause) {
-                await runtime.runPromise(
-                  Effect.logError(
-                    `Discord browser automation unavailable: ${messageFromCause(cause)}`,
-                  ),
-                );
-              }
-            }
 
             // `shell` is updated by the concurrently running subscription fiber.
             for (let attempt = 0; attempt < SHELL_SNAPSHOT_MAX_ATTEMPTS; attempt += 1) {
@@ -1048,19 +932,6 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
           ),
         ),
       ),
-      resolveBranchChangeRequest: Effect.fn("T3Session.resolveBranchChangeRequest")((input) =>
-        Effect.tryPromise({
-          try: () =>
-            runtime.runPromise(
-              requireSession().client[WS_METHODS.vcsResolveBranchChangeRequest](input),
-            ),
-          catch: (cause) =>
-            new T3SessionError(
-              `Could not resolve branch change request for ${input.refName}: ${messageFromCause(cause)}`,
-              { cause },
-            ),
-        }),
-      ),
       startTurnWithWorktree: Effect.fn("T3Session.startTurnWithWorktree")(function* (input) {
         const threadId = newThreadId();
         const messageId = newMessageId();
@@ -1080,7 +951,6 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
             ),
           );
         }
-        yield* claimBrowserHost(threadId);
         const attachments = yield* persistAttachments(threadId, messageId, input.attachments ?? []);
         yield* Effect.tryPromise({
           try: () =>
@@ -1120,7 +990,6 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
         // modelSelection is optional on message.dispatch; omit when unknown so the
         // server keeps the thread's existing selection (Grok refuses mid-thread switches).
         const modelSelection = input.modelSelection ?? thread?.modelSelection;
-        yield* claimBrowserHost(input.threadId);
         const attachments = yield* persistAttachments(
           input.threadId,
           messageId,

@@ -1,13 +1,3 @@
-import { THREAD_LIST_ROW_LAYOUT } from "./threadListAnimations";
-import { useGT as useCopyTranslation } from "gt-react-native";
-import { AsyncResult } from "effect/reactivity";
-import { identityClaimPersonIdByEnvironmentAtom } from "../../state/identity";
-import {
-  resolveHideSettledOnProjects,
-  resolveHideSettledOnRecent,
-} from "../../persistence/mobile-preferences";
-import { mobilePreferencesAtom, saveMobilePreferences } from "../../state/preferences";
-import { useAtomCommand } from "../../state/use-atom-command";
 import { useGT, useMessages } from "gt-react-native";
 import { useActiveNewTask } from "../../state/active-new-task";
 import { ThreadUndoNotice } from "../home/ThreadUndoNotice";
@@ -21,15 +11,11 @@ import type {
   EnvironmentProject,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
-import {
-  claimPersonIdForEnvironment,
-  threadMatchesMine,
-} from "@t3tools/client-runtime/state/identity";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { AnimatedLegendList } from "@legendapp/list/reanimated";
-
+import { THREAD_LIST_ROW_LAYOUT } from "./threadListAnimations";
 import { useAtomValue } from "@effect/atom-react";
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Platform, StyleSheet, View } from "react-native";
 import { GestureDetector, useNativeGesture } from "react-native-gesture-handler";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
@@ -59,16 +45,16 @@ import { useSidebarRowThreadKey } from "./useSidebarRowThreadKey";
 import { useThreadJumpShortcuts } from "../keyboard/threadKeyboardShortcuts";
 import { requestThreadMessageJump } from "./threadMessageJump";
 import { useThreadListSearchMatches } from "./useThreadListSearchMatches";
+import { useHomeListOptions } from "../home/home-list-options";
 import {
-  DEFAULT_OWNERSHIP_FILTER,
-  DEFAULT_OWNERSHIP_RELATION,
-  useHomeListOptions,
-} from "../home/home-list-options";
-import { buildHomeListFilterMenuItems } from "../home/home-list-filter-menu";
-import { DEFAULT_HOME_THREAD_GROUPING } from "../home/homeListMode";
-import { buildHomeProjectScopes, resolveHomeProjectFilterScope } from "../home/homeThreadList";
-import { homeListFilterEnvironments } from "../home/home-list-filter-menu";
-
+  buildHomeListFilterMenuItems,
+  homeListFilterEnvironments,
+} from "../home/home-list-filter-menu";
+import {
+  buildHomeProjectScopes,
+  resolveHomeProjectFilterScope,
+  sortHomeProjectScopes,
+} from "../home/homeThreadList";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "../home/thread-swipe-actions";
 import { usePendingTaskListActions } from "../home/usePendingTaskListActions";
 import { useThreadListActions } from "../home/useThreadListActions";
@@ -94,6 +80,7 @@ import {
   type ThreadListV2ListItem,
 } from "./threadListV2";
 import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
+import { useOwnershipFilteredThreads, useOwnershipFilterMenu } from "../identity/OwnershipFilter";
 import { NativeScrollView } from "../../native/NativeScrollViewMarker";
 
 type SidebarListItem =
@@ -135,8 +122,6 @@ export function ThreadNavigationSidebar(props: ThreadNavigationSidebarProps) {
 }
 
 function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
-  const translateCopy = useCopyTranslation();
-
   const gt = useGT();
   const messages = useMessages();
   const floatingTabsEnabled = useAndroidFloatingTabs();
@@ -146,7 +131,8 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
   const insets = useSafeAreaInsets();
   const { fabClearance, fabSize } = useAndroidControlSizing();
   const projects = useProjects();
-  const threads = useAtomValue(steadyNavigationThreadShellsAtom);
+  const threads = useOwnershipFilteredThreads(useAtomValue(steadyNavigationThreadShellsAtom));
+  const withOwnershipFilter = useOwnershipFilterMenu();
   const selectedThreadKey = useSidebarRowThreadKey(props.selectedThreadKey);
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();
@@ -166,9 +152,8 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     renameThread,
     regenerateThreadTitle,
   } = useThreadListActions();
-  const preferencesResult = useAtomValue(mobilePreferencesAtom);
-  const savePreferences = useAtomCommand(saveMobilePreferences);
   const pendingTasks = usePendingNewTasks();
+  const launchingThreads = useLaunchingThreads(threads);
   const activeNewTask = useActiveNewTask();
   const queuedThreadKeys = useQueuedThreadKeys();
   const selectDetail = useSelectWorkspaceDetail();
@@ -179,68 +164,58 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
   const availableEnvironmentIds = new Set(
     environments.map((environment) => environment.environmentId),
   );
-  const {
-    options,
-    setSelectedProjectKey,
-    toggleSelectedEnvironmentId,
-    clearSelectedEnvironments,
-    setOwnershipFilter,
-    setOwnershipRelation,
-    setThreadGrouping,
-  } = useHomeListOptions(availableEnvironmentIds);
-  const claimPersonIdByEnvironment = useAtomValue(identityClaimPersonIdByEnvironmentAtom);
-  const searchEnvironmentIds = (() => {
-    const connectedIds = workspaceEnvironments
-      .filter((environment) => environment.connectionState === "connected")
-      .map((environment) => environment.environmentId);
-    if (options.selectedEnvironmentIds.length === 0) {
-      return connectedIds;
-    }
-    const selected = new Set(options.selectedEnvironmentIds);
-    return connectedIds.filter((environmentId) => selected.has(environmentId));
-  })();
-  const hideSettledOnRecent = AsyncResult.isSuccess(preferencesResult)
-    ? resolveHideSettledOnRecent(preferencesResult.value)
-    : true;
-  const hideSettledOnProjects = AsyncResult.isSuccess(preferencesResult)
-    ? resolveHideSettledOnProjects(preferencesResult.value)
-    : false;
-  const hideSettledThreads =
-    options.threadGrouping === "project" ? hideSettledOnProjects : hideSettledOnRecent;
-  const setHideSettledThreads = (hide: boolean) => {
-    if (options.threadGrouping === "project") {
-      savePreferences({ hideSettledOnProjects: hide });
-      return;
-    }
-    savePreferences({ hideSettledOnRecent: hide });
-  };
-
-  const projectScopes = (() =>
-    buildHomeProjectScopes(
-      {
-        projects,
-        selectedEnvironmentIds: options.selectedEnvironmentIds,
-        projectGroupingMode: options.projectGroupingMode,
-      },
-      messages,
-    ))();
-  const projectFilterOptions = (() =>
-    pickableProjectGroups(projectScopes).map((scope) => ({
-      key: scope.key,
-      label: scope.title,
-    })))();
-  const projectTitleByProjectKey = (() =>
-    new Map(
-      projectScopes.flatMap((scope) =>
-        scope.projectRefs.map(
-          (projectRef) =>
-            [
-              scopedProjectKey(projectRef.environmentId, projectRef.projectId),
-              scope.title,
-            ] as const,
+  const { options, setSelectedEnvironmentId, setSelectedProjectKey } =
+    useHomeListOptions(availableEnvironmentIds);
+  const searchEnvironmentIds =
+    options.selectedEnvironmentId === null
+      ? workspaceEnvironments
+          .filter((environment) => environment.connectionState === "connected")
+          .map((environment) => environment.environmentId)
+      : workspaceEnvironments.some(
+            (environment) =>
+              environment.environmentId === options.selectedEnvironmentId &&
+              environment.connectionState === "connected",
+          )
+        ? [options.selectedEnvironmentId]
+        : [];
+  const projectScopes = useMemo(
+    () =>
+      buildHomeProjectScopes(
+        {
+          projects,
+          environmentId: options.selectedEnvironmentId,
+          projectGroupingMode: options.projectGroupingMode,
+        },
+        messages,
+      ),
+    [projects, options.selectedEnvironmentId, options.projectGroupingMode, messages],
+  );
+  const projectFilterOptions = pickableProjectGroups(
+    sortHomeProjectScopes({
+      scopes: projectScopes,
+      threads,
+      pendingTasks: [],
+      projectSortOrder: "updated_at",
+    }),
+  ).map((scope) => ({
+    key: scope.key,
+    label: scope.title,
+  }));
+  const projectTitleByProjectKey = useMemo(
+    () =>
+      new Map(
+        projectScopes.flatMap((scope) =>
+          scope.projectRefs.map(
+            (projectRef) =>
+              [
+                scopedProjectKey(projectRef.environmentId, projectRef.projectId),
+                scope.title,
+              ] as const,
+          ),
         ),
       ),
-    ))();
+    [projectScopes],
+  );
   const selectedProjectScope = resolveHomeProjectFilterScope(projectScopes, projects, options);
   const threadSearch = useThreadSearch(
     searchEnvironmentIds,
@@ -249,46 +224,22 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
       ? {}
       : { projectIds: selectedProjectScope.projectRefs.map((ref) => ref.projectId) },
   );
-  const selectedProjectRefs =
-    selectedProjectScope === null
-      ? null
-      : new Set(
-          selectedProjectScope.projectRefs.map((ref) =>
-            scopedProjectKey(ref.environmentId, ref.projectId),
-          ),
-        );
-  const scopedThreads = threads.filter(
-    (thread) =>
-      (selectedProjectRefs === null ||
-        selectedProjectRefs.has(scopedProjectKey(thread.environmentId, thread.projectId))) &&
-      threadMatchesMine({
-        claimPersonId: claimPersonIdForEnvironment(
-          claimPersonIdByEnvironment,
-          thread.environmentId,
-        ),
-        originPersonId: thread.originSource?.personId ?? null,
-        participantPersonIds: (thread.participantSummaries ?? []).map(
-          (participant) => participant.personId,
-        ),
-        mode: options.ownershipFilter,
-        relation: options.ownershipRelation,
-      }),
-  );
-  const launchingThreads = useLaunchingThreads(scopedThreads);
-  const threadSearchMatchByKey = useThreadListSearchMatches(scopedThreads, threadSearch);
+  // This map reaches LegendList's extraData, which re-renders every row whenever it changes
+  // identity; the hook keeps it stable.
+  const threadSearchMatchByKey = useThreadListSearchMatches(threads, threadSearch);
   const selectedProjectKey = selectedProjectScope?.key ?? null;
-  const projectByKey = (() => {
+  const projectByKey = useMemo(() => {
     const map = new Map<string, EnvironmentProject>();
     for (const project of projects) {
       map.set(scopedProjectKey(project.environmentId, project.id), project);
     }
     return map;
-  })();
+  }, [projects]);
 
   const [settledVisibleCount, setSettledVisibleCount] = useState(
     THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
   );
-  const settledResetKey = `${options.selectedEnvironmentIds.join(",") || "all"}:${selectedProjectKey ?? "all"}:${props.searchQuery.trim()}`;
+  const settledResetKey = `${options.selectedEnvironmentId ?? "all"}:${selectedProjectKey ?? "all"}:${props.searchQuery.trim()}`;
   const [lastSettledResetKey, setLastSettledResetKey] = useState(settledResetKey);
   if (lastSettledResetKey !== settledResetKey) {
     setLastSettledResetKey(settledResetKey);
@@ -328,11 +279,9 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     contentOnlyThreadKeys,
     olderSettledShelf,
   } = useThreadListV2({
-    threads: options.listMode === "threads" ? launchingThreads : [],
-    pendingTasks: options.listMode === "threads" ? pendingTasks : [],
-    environmentId: null,
-    selectedEnvironmentIds: options.selectedEnvironmentIds,
-    orderByRecency: options.threadGrouping === "recency",
+    threads: launchingThreads,
+    pendingTasks,
+    environmentId: options.selectedEnvironmentId,
     projectRefs: selectedProjectScope === null ? null : selectedProjectScope.projectRefs,
     searchQuery: props.searchQuery,
     searchMatches: threadSearchMatchByKey,
@@ -427,9 +376,6 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     }
     if (previous.type === "v2-show-more" && item.type === "v2-show-more") {
       return previous.hiddenCount === item.hiddenCount && previous.state === item.state;
-    }
-    if (previous.type === "v2-recency-header" && item.type === "v2-recency-header") {
-      return previous.key === item.key && previous.label === item.label;
     }
     return false;
   };
@@ -546,12 +492,6 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
           />
         );
       }
-      case "v2-recency-header":
-        return (
-          <View className="px-3 pb-1 pt-3">
-            <Text className="text-xs font-t3-medium text-foreground-muted">{item.label}</Text>
-          </View>
-        );
       case "v2-working-shelf":
         return (
           <ThreadListV2WorkingShelfHeader
@@ -596,9 +536,6 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
         );
     }
   };
-  // Snoozed threads need no special case: the shelf header is a list row
-  // even while collapsed.
-  const snoozedCount = threadListV2Layout.snoozedCount;
   const header = (
     <WorkspaceListHeader
       accessibilityLabel={gt("{appName}, Threads", { appName: "T3 Code" })}
@@ -610,35 +547,20 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
         placeholder: gt("Search", { $context: "search field placeholder" }),
         accessibilityLabel: gt("Search threads"),
       }}
-      filter={{
-        customized:
-          options.selectedEnvironmentIds.length > 0 ||
-          options.ownershipFilter !== DEFAULT_OWNERSHIP_FILTER ||
-          options.ownershipRelation !== DEFAULT_OWNERSHIP_RELATION ||
-          selectedProjectKey !== null ||
-          options.threadGrouping !== DEFAULT_HOME_THREAD_GROUPING ||
-          hideSettledThreads !== (options.threadGrouping !== "project"),
+      filter={withOwnershipFilter({
+        customized: options.selectedEnvironmentId !== null || selectedProjectKey !== null,
         items: buildHomeListFilterMenuItems(
           {
             environments,
             projects: projectFilterOptions,
-            selectedEnvironmentIds: options.selectedEnvironmentIds,
+            selectedEnvironmentId: options.selectedEnvironmentId,
             selectedProjectKey,
-            ownershipFilter: options.ownershipFilter,
-            ownershipRelation: options.ownershipRelation,
-            threadGrouping: options.threadGrouping,
-            hideSettledThreads,
-            onClearEnvironments: clearSelectedEnvironments,
-            onToggleEnvironment: toggleSelectedEnvironmentId,
+            onEnvironmentChange: setSelectedEnvironmentId,
             onProjectChange: setSelectedProjectKey,
-            onOwnershipFilterChange: setOwnershipFilter,
-            onOwnershipRelationChange: setOwnershipRelation,
-            onThreadGroupingChange: setThreadGrouping,
-            onHideSettledThreadsChange: setHideSettledThreads,
           },
           messages,
         ),
-      }}
+      })}
       sidebar={{
         width: props.width,
         visible: props.visible,
@@ -668,18 +590,10 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
                 ? gt("Searching thread messages…")
                 : threadSearch.failed
                   ? gt("Couldn't search thread messages")
-                  : snoozedCount > 0
-                    ? snoozedCount === 1
-                      ? translateCopy("1 matching thread snoozed")
-                      : translateCopy("All matching threads snoozed")
-                    : translateCopy("No matching threads")
-              : snoozedCount > 0
-                ? snoozedCount === 1
-                  ? translateCopy("1 thread snoozed")
-                  : translateCopy("{value0} threads snoozed", { value0: snoozedCount })
-                : selectedProjectScope !== null
-                  ? translateCopy("No threads in {value0}", { value0: selectedProjectScope.title })
-                  : translateCopy("No threads yet")}
+                  : gt("No matching threads")
+              : selectedProjectScope !== null
+                ? gt("No threads in {project}", { project: selectedProjectScope.title })
+                : gt("No threads yet")}
       </Text>
       {showAddEnvironment ? (
         <View className={Platform.OS === "android" ? "self-center" : "px-2"}>

@@ -1,10 +1,5 @@
-export type ComposerTriggerKind =
-  | "path"
-  | "pull-request"
-  | "slash-command"
-  | "slash-model"
-  | "skill";
-export type ComposerSlashCommand = "new" | "model" | "plan" | "default";
+export type ComposerTriggerKind = "path" | "pull-request" | "slash-command" | "skill";
+export type ComposerSlashCommand = "model" | "plan" | "default";
 
 export interface ComposerTrigger {
   kind: ComposerTriggerKind;
@@ -130,19 +125,6 @@ export function detectComposerTrigger(
   };
 }
 
-export function parseStandaloneComposerSlashCommand(
-  text: string,
-): Exclude<ComposerSlashCommand, "model"> | null {
-  const match = /^\/(new|plan|default)\s*$/i.exec(text.trim());
-  if (!match) {
-    return null;
-  }
-  const command = match[1]?.toLowerCase();
-  if (command === "new") return "new";
-  if (command === "plan") return "plan";
-  return "default";
-}
-
 export function replaceTextRange(
   text: string,
   rangeStart: number,
@@ -153,6 +135,14 @@ export function replaceTextRange(
   const safeEnd = Math.max(safeStart, Math.min(text.length, rangeEnd));
   const nextText = `${text.slice(0, safeStart)}${replacement}${text.slice(safeEnd)}`;
   return { text: nextText, cursor: safeStart + replacement.length };
+}
+
+/** A message that only invokes a slash command, such as `/context all`, not a path like `/src/a.ts`. */
+export function isSlashCommand(message: {
+  readonly text: string;
+  readonly attachments: ReadonlyArray<unknown>;
+}): boolean {
+  return message.attachments.length === 0 && /^\/[\w:-]+(?:\s|$)/u.test(message.text.trim());
 }
 
 /** `/clear` as the whole message arms a fresh session instead of sending. */

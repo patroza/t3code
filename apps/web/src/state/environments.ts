@@ -50,7 +50,7 @@ export function useEnvironments() {
   );
 
   return {
-    isReady: catalog?.isReady ?? false,
+    isReady: catalog.isReady,
     networkStatus,
     environments,
     presentationById,
@@ -136,8 +136,4 @@ export function useEnvironmentMachines() {
 
 export function useConnectedEnvironmentIds() {
   return useAtomValue(environmentSummaries.connectedEnvironmentIdsAtom);
-}
-
-export function useEnvironmentConnectionSummaries() {
-  return useAtomValue(environmentSummaries.environmentsAtom);
 }

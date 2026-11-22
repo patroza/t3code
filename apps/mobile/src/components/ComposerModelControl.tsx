@@ -1,4 +1,3 @@
-import type { ComponentProps } from "react";
 import type { ModelSelection, ProviderDriverKind } from "@t3tools/contracts";
 import { useGT, useMessages } from "gt-react-native";
 import {
@@ -9,8 +8,7 @@ import type { ModelOption } from "../lib/modelOptions";
 import { resolveProviderOptionDescriptors } from "../lib/providerOptions";
 import { AppText as Text } from "./ui/AppText";
 import { ComposerInlineControl } from "./ComposerToolbar";
-import { ProviderUsageIcon } from "./ProviderUsageIcon";
-import { ProviderInstanceIcon, providerInstanceNameLabel } from "./ProviderIcon";
+import { ProviderIcon, ProviderInstanceIcon, providerInstanceNameLabel } from "./ProviderIcon";
 
 export function ComposerModelControl(props: {
   readonly modelOption: ModelOption | null;
@@ -19,7 +17,6 @@ export function ComposerModelControl(props: {
   readonly reportedSelection?: ModelSelection | null | undefined;
   readonly prompt: string;
   readonly surfaceColor: string;
-  readonly usageMarker?: ComponentProps<typeof ProviderUsageIcon>["marker"];
   readonly disabled?: boolean;
   readonly size?: "regular" | "large";
   readonly iconOnly?: boolean;
@@ -80,8 +77,7 @@ export function ComposerModelControl(props: {
             size={size}
           />
         ) : (
-          <ProviderUsageIcon
-            marker={props.usageMarker}
+          <ProviderIcon
             iconUrl={props.modelOption?.providerIconUrl}
             provider={props.modelOption?.providerDriver}
             size={size}

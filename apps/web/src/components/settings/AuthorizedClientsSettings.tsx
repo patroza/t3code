@@ -1,4 +1,3 @@
-import { useGT as useCopyTranslation } from "gt-react";
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { m as resolveMessage } from "~/i18n/messages";
 import { managedCapabilityDenial } from "@t3tools/client-runtime/contract-labels";
@@ -25,6 +24,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
+
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { cn } from "../../lib/utils";
 import { formatElapsedDurationLabel, formatExpiresInLabel } from "../../timestampFormat";
@@ -54,6 +54,7 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
+import { McpClientIdentityControl } from "./McpClientIdentityControl";
 import {
   type ServerClientSessionRecord,
   type ServerPairingLinkRecord,
@@ -76,10 +77,7 @@ import {
   isHostedAppPairingUrl,
   endpointShareHint,
 } from "./ConnectionsSettings.logic";
-import { IdentityUsername } from "@t3tools/contracts";
-import { useEnvironmentQuery } from "~/state/query";
-import { usePrimaryEnvironmentId } from "~/state/environments";
-import { identityEnvironment } from "~/state/identity";
+
 function AccessScopeSummary({
   scopes,
   label,
@@ -512,92 +510,6 @@ type ConnectedClientListRowProps = {
   canRevoke: boolean;
 };
 
-const MCP_CLIENT_SUBJECT = "mcp-client";
-
-function McpClientIdentityControl(props: {
-  readonly sessionId: ServerClientSessionRecord["sessionId"];
-  readonly clientLabel: string;
-  readonly canAssign: boolean;
-}) {
-  const translateCopy = useCopyTranslation();
-
-  const environmentId = usePrimaryEnvironmentId();
-  const target = (() => (environmentId === null ? null : { environmentId, input: {} as const }))();
-  const snapshotQuery = useEnvironmentQuery(
-    target === null ? null : identityEnvironment.snapshot(target),
-  );
-  const claimsQuery = useEnvironmentQuery(
-    target === null ? null : identityEnvironment.clientClaims(target),
-  );
-  const setClaim = useAtomCommand(identityEnvironment.setClientClaim, {
-    label: "identity-set-client-claim",
-  });
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const snapshot = snapshotQuery.data;
-  if (snapshot === null || !snapshot.enabled) return null;
-
-  const people = [...snapshot.people].toSorted((left, right) =>
-    (left.name ?? left.username).localeCompare(right.name ?? right.username),
-  );
-  const claimed =
-    claimsQuery.data?.claims.find((claim) => claim.sessionId === props.sessionId)?.username ?? "";
-
-  return (
-    <label className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-      <span className="shrink-0">
-        <T>Identity</T>
-      </span>
-      <select
-        aria-label={translateCopy("Identity for {value0}", { value0: props.clientLabel })}
-        className="h-7 max-w-44 min-w-0 rounded-md border border-border/70 bg-background px-2 text-xs text-foreground disabled:opacity-60"
-        data-mcp-client-identity={props.sessionId}
-        disabled={!props.canAssign || pending || environmentId === null}
-        value={claimed}
-        onChange={(event) => {
-          if (environmentId === null) return;
-          const username = event.currentTarget.value;
-          setPending(true);
-          setError(null);
-          void setClaim({
-            environmentId,
-            input: {
-              sessionId: props.sessionId,
-              username: username.length === 0 ? null : IdentityUsername.make(username),
-            },
-          }).then(
-            (result) => {
-              setPending(false);
-              if (result._tag === "Failure") {
-                setError(translateCopy("Could not save identity."));
-                return;
-              }
-              claimsQuery.refresh();
-            },
-            () => {
-              setPending(false);
-              setError(translateCopy("Could not save identity."));
-            },
-          );
-        }}
-      >
-        <option value="">
-          <T>Unassigned</T>
-        </option>
-        {claimed.length > 0 && !people.some((person) => person.username === claimed) ? (
-          <option value={claimed}>{claimed}</option>
-        ) : null}
-        {people.map((person) => (
-          <option key={person.personId} value={person.username}>
-            {person.name ?? person.username}
-          </option>
-        ))}
-      </select>
-      {error ? <span className="text-destructive">{error}</span> : null}
-    </label>
-  );
-}
-
 const ConnectedClientListRow = memo(function ConnectedClientListRow({
   clientSession,
   revokingClientSessionId,
@@ -659,13 +571,11 @@ const ConnectedClientListRow = memo(function ConnectedClientListRow({
           </p>
         </div>
         <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
-          {clientSession.subject === MCP_CLIENT_SUBJECT ? (
-            <McpClientIdentityControl
-              sessionId={clientSession.sessionId}
-              clientLabel={primaryLabel}
-              canAssign={canRevoke}
-            />
-          ) : null}
+          <McpClientIdentityControl
+            clientSession={clientSession}
+            clientLabel={primaryLabel}
+            canAssign={canRevoke}
+          />
           {!clientSession.current ? (
             <Button
               size="xs"

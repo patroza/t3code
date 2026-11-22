@@ -1,4 +1,3 @@
-import { useGT as useCopyTranslation } from "gt-react-native";
 import { useComposerAttachmentActions } from "./use-composer-attachment-actions";
 import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
 import * as Effect from "effect/Effect";
@@ -26,7 +25,7 @@ import {
   deriveThreadRuntime,
   threadRuntimeHasInterruptibleRun,
 } from "@t3tools/client-runtime/state/thread-execution";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   CommandId,
@@ -41,9 +40,7 @@ import {
 } from "@t3tools/contracts";
 
 import {
-  EMPTY_ENVIRONMENT_THREAD_STATE,
   parseCodexFeedbackCommand,
-  queuedRunEditOwnership,
   submitCodexFeedback,
   type CodexFeedbackSubmission,
 } from "@t3tools/client-runtime/state/threads";
@@ -146,7 +143,6 @@ import { useAtomCommand } from "./use-atom-command";
 const EMPTY_QUEUE_WORKFLOW_ATOM = Atom.make<null>(null).pipe(
   Atom.withLabel("mobile-thread-queue-workflow:empty"),
 );
-const EMPTY_THREAD_STATE_ATOM = Atom.make(EMPTY_ENVIRONMENT_THREAD_STATE);
 // Threads whose next send keeps the full history instead of compacting first.
 const fullHistoryThreadKeysAtom = Atom.make<Readonly<Record<string, true>>>({}).pipe(
   Atom.keepAlive,
@@ -233,8 +229,6 @@ export function useThreadComposerState(input: {
     settings: { readonly runtimeMode: RuntimeMode; readonly modelSelection: ModelSelection },
   ) => Promise<boolean>;
 }) {
-  const translateCopy = useCopyTranslation();
-
   const {
     selectedThread: selectedThreadShell,
     selectedThreadCreation,
@@ -244,14 +238,6 @@ export function useThreadComposerState(input: {
   const resolve = useMessages();
   const locale = useLocale();
   const selectedThreadProjection = useSelectedThreadProjection();
-  const selectedThreadState = useAtomValue(
-    selectedThreadShell === null
-      ? EMPTY_THREAD_STATE_ATOM
-      : environmentThreadDetails.stateAtom({
-          environmentId: selectedThreadShell.environmentId,
-          threadId: selectedThreadShell.id,
-        }),
-  );
   const selectedThreadVisibleTurnItems = useSelectedThreadVisibleTurnItems();
   const acknowledgedMessages = useAtomValue(acknowledgedThreadMessagesAtom);
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
@@ -266,7 +252,6 @@ export function useThreadComposerState(input: {
     label: "edit queued message",
     reportFailure: false,
   });
-  const cancelQueuedEdit = useAtomCommand(threadEnvironment.cancelQueuedRunEdit);
   const [isSavingQueuedEdit, setIsSavingQueuedEdit] = useState(false);
   const savingQueuedEditRef = useRef(false);
   const startingSideChatRef = useRef(false);
@@ -474,41 +459,6 @@ export function useThreadComposerState(input: {
     ? deriveProviderSubagentStatus(selectedThreadProjection.projection)
     : null;
 
-  // Another client can start or cancel the run, or end or take over its edit,
-  // while its message is open. Leave edit mode rather than saving into a run the
-  // server will refuse, and keep whatever was typed if there is room for it.
-  const editedRunId = queuedRunEdit?.runId ?? null;
-  const editOwnership =
-    queuedRunEdit === null ? null : queuedRunEditOwnership(selectedThreadState, queuedRunEdit);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reconciles the external queued-edit draft store when its server-side lease is lost
-  useEffect(() => {
-    if (selectedThreadKey === null || editedRunId === null || editOwnership !== "lost") {
-      return;
-    }
-    if (isSavingQueuedEdit || savingQueuedEditRef.current) return;
-    const editDraftKey = queuedEditDraftKey(selectedThreadKey, editedRunId);
-    const editDraft = getComposerDraftSnapshot(editDraftKey);
-    const threadDraft = getComposerDraftSnapshot(selectedThreadKey);
-    const keepable =
-      editDraft.text.trim().length > 0 &&
-      threadDraft.text.trim().length === 0 &&
-      threadDraft.attachments.length === 0;
-    if (keepable) {
-      void mergeComposerDraftContent(selectedThreadKey, {
-        text: editDraft.text,
-        attachments: editDraft.attachments,
-        ...(editDraft.context ? { context: editDraft.context } : {}),
-      });
-    }
-    endQueuedRunEdit(selectedThreadKey, { deferAttachmentCleanup: keepable });
-    setThreadComposerError(
-      selectedThreadKey,
-      keepable
-        ? translateCopy("That queued message edit ended. Your edit is back in the composer.")
-        : translateCopy("That queued message edit ended, so the edit was discarded."),
-    );
-  }, [editedRunId, editOwnership, isSavingQueuedEdit, selectedThreadKey, translateCopy]);
-
   const activeThreadBusy = threadRuntimeIsActive(selectedThreadRuntime);
   const resumeCompactionTokens = (selection: ModelSelection | null, text: string, now: string) =>
     selectedEnvironmentRuntime?.connectionState === "connected" &&
@@ -542,29 +492,10 @@ export function useThreadComposerState(input: {
     ? (selectedThreadRuntime?.activeRunId ?? null)
     : null;
 
-  const cancelQueuedRunEdit = useCallback(async () => {
-    if (selectedThreadKey === null || !selectedThreadShell || savingQueuedEditRef.current) return;
-    const edit = getQueuedRunEdit(selectedThreadKey);
-    if (edit === null) return;
-    savingQueuedEditRef.current = true;
-    setIsSavingQueuedEdit(true);
-    const result = await settlePromise(async () =>
-      queuedRunEditOwnership(selectedThreadState, edit) === "lost"
-        ? null
-        : await cancelQueuedEdit({
-            environmentId: selectedThreadShell.environmentId,
-            input: { threadId: selectedThreadShell.id, runId: edit.runId, editId: edit.editId },
-          }),
-    );
-    savingQueuedEditRef.current = false;
-    setIsSavingQueuedEdit(false);
-    if (
-      AsyncResult.isSuccess(result) &&
-      (result.value === null || result.value._tag === "Success")
-    ) {
-      endQueuedRunEdit(selectedThreadKey);
-    }
-  }, [cancelQueuedEdit, selectedThreadKey, selectedThreadState, selectedThreadShell]);
+  const cancelQueuedRunEdit = () => {
+    if (selectedThreadKey === null || savingQueuedEditRef.current) return;
+    endQueuedRunEdit(selectedThreadKey);
+  };
 
   const onRemoveQueuedEditAttachment = (attachmentId: string) => {
     if (selectedThreadKey === null) return;
@@ -658,7 +589,6 @@ export function useThreadComposerState(input: {
       input: {
         threadId: thread.id,
         runId: edit.runId,
-        editId: edit.editId,
         text: restoreAttachmentOnlyBootstrapPrompt(text, payload.attachments.length > 0),
         edit: {
           messageId: edit.messageId,
@@ -940,7 +870,6 @@ export function useThreadComposerState(input: {
     }
 
     // Resolve at send time because outbox delivery may be delayed.
-    // Steering uses "auto" so an ended turn queues a run instead of restoring the draft.
     // An approval redirect must steer the waiting turn instead of queueing behind it.
     const activeTurnDefault = beforeDispatch !== undefined ? "steer" : followUpBehavior;
     const followUpAction = resolveComposerDispatchMode({
@@ -955,9 +884,7 @@ export function useThreadComposerState(input: {
       ? "queue"
       : followUpAction === "auto"
         ? null
-        : followUpAction === "queue"
-          ? "queue"
-          : "auto";
+        : followUpAction;
 
     // A redirect belongs to the approval it answers; the armed session waits for the next message.
     const freshContext = beforeDispatch === undefined && isFreshSessionPending(threadKey);

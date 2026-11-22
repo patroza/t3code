@@ -160,7 +160,7 @@ it.effect("parks automatic pull until activation without delaying command readin
       }),
       Layer.mock(AnalyticsService.AnalyticsService)({ record: () => Effect.void }),
       // No provider logins or Connect link, so startup records no owners.
-      FileSystem.layerNoop({ writeFileString: () => Effect.void }),
+      FileSystem.layerNoop({}),
       Layer.mock(ServerSecretStore.ServerSecretStore)({ get: () => Effect.succeedNone }),
       NodeCrypto.layer,
       Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
@@ -175,10 +175,7 @@ it.effect("parks automatic pull until activation without delaying command readin
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       yield* startup.markHttpListening;
 
-      yield* Effect.raceFirst(
-        Effect.raceFirst(Deferred.await(prepared), Deferred.await(statusCalled)),
-        startup.awaitCommandReady,
-      );
+      yield* Effect.raceFirst(Deferred.await(prepared), Deferred.await(statusCalled));
       expect(yield* Deferred.isDone(activation)).toBe(false);
       expect(yield* Deferred.isDone(statusCalled)).toBe(false);
       expect(yield* Deferred.isDone(prepared)).toBe(true);

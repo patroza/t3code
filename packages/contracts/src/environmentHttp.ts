@@ -116,9 +116,6 @@ export const EnvironmentRequestInvalidReason = Schema.Literals([
   "invalid_scope",
   "scope_not_granted",
   "invalid_command",
-  "identity_claim_required",
-  "identity_unknown_person",
-  "identity_map_invalid",
   "invalid_history_cursor",
   "thread_transcript_too_large",
   "invalid_audio",
@@ -260,6 +257,8 @@ export class EnvironmentInternalError extends Schema.TaggedError<EnvironmentInte
   {
     code: Schema.Literal("internal_error"),
     reason: EnvironmentInternalErrorReason,
+    /** A reason safe to show the user, when the failure has one. */
+    detail: Schema.optionalKey(Schema.String),
     traceId: TrimmedNonEmptyString,
   },
   { httpApiStatus: 500 },

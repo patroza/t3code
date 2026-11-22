@@ -5,6 +5,7 @@ import {
   claimPersonIdForEnvironment,
   isClaimedNonStarterParticipant,
 } from "@t3tools/client-runtime/state/identity";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import type { ThreadParticipantSummary } from "@t3tools/contracts";
 import { identityClaimPersonIdByEnvironmentAtom } from "../../state/identity";
 import { IdentityAvatar } from "./IdentityAvatar";
@@ -16,7 +17,7 @@ import { cn } from "~/lib/utils";
  * Creator face + +N extras for thread list rows.
  * Hover/focus expands remaining participants (design: participant stack).
  */
-export function ParticipantStack(props: {
+function ParticipantStack(props: {
   readonly environmentId: string;
   readonly participants: ReadonlyArray<ThreadParticipantSummary>;
   readonly channel?: string | null | undefined;
@@ -46,9 +47,16 @@ export function ParticipantStack(props: {
   const extras = people.slice(1);
   const label =
     extras.length === 0
-      ? `Started by ${lead.username}`
-      : `Started by ${lead.username}, ${extras.length} other participant${extras.length === 1 ? "" : "s"}`;
-  const accessibleLabel = youParticipated ? `${label}. You participated` : label;
+      ? translateCopy("Started by {username}", { username: lead.username })
+      : extras.length === 1
+        ? translateCopy("Started by {username}, 1 other participant", { username: lead.username })
+        : translateCopy("Started by {username}, {count} other participants", {
+            username: lead.username,
+            count: extras.length,
+          });
+  const accessibleLabel = youParticipated
+    ? translateCopy("{label}. You participated", { label })
+    : label;
 
   const stack = (
     <span
@@ -120,7 +128,7 @@ export function ParticipantStack(props: {
   );
 }
 
-export function SourceChannelGlyph(props: {
+function SourceChannelGlyph(props: {
   readonly channel: string | null | undefined;
   readonly overlay?: boolean;
   readonly className?: string | undefined;
@@ -151,7 +159,7 @@ export function SourceChannelGlyph(props: {
         props.className,
       )}
       data-testid="source-channel-glyph"
-      aria-label={translateCopy("Source {value0}", { value0: props.channel })}
+      aria-label={translateCopy("Source {channel}", { channel: props.channel })}
     >
       {short}
     </span>
@@ -163,7 +171,7 @@ export function SourceChannelGlyph(props: {
  * title so identity-capable and identity-unavailable hosts keep the same title
  * alignment and row geometry.
  */
-export function ThreadIdentityMark(props: {
+function ThreadIdentityMark(props: {
   readonly environmentId: string;
   readonly originChannel?: string | null | undefined;
   readonly participants?: ReadonlyArray<ThreadParticipantSummary> | null | undefined;
@@ -183,6 +191,21 @@ export function ThreadIdentityMark(props: {
       channel={channel}
       className={props.className}
       interactive={props.interactive}
+    />
+  );
+}
+
+/** Sidebar row hook: the thread's origin channel and participants, from its shell. */
+export function SidebarThreadIdentityMark(props: {
+  readonly thread: Pick<EnvironmentThreadShell, "environmentId" | "source">;
+}) {
+  const { originSource, participantSummaries } = props.thread.source;
+  if (originSource == null && (participantSummaries?.length ?? 0) === 0) return null;
+  return (
+    <ThreadIdentityMark
+      environmentId={props.thread.environmentId}
+      originChannel={originSource?.channel}
+      participants={participantSummaries}
     />
   );
 }

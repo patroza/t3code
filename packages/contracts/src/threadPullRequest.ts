@@ -3,7 +3,6 @@ import * as Schema from "effect/Schema";
 
 import {
   IsoDateTime,
-  MessageId,
   NonNegativeInt,
   PositiveInt,
   ProjectId,
@@ -90,20 +89,10 @@ export const ThreadPullRequestWatch = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   /**
-   * Checks that were pending on the last pass. One that then finishes without
-   * failing is news, including a check the base branch does not require. A
-   * check that first appears already passed is not in this list. Empty on
-   * watches saved before this field existed.
-   */
-  pendingChecks: Schema.Array(TrimmedNonEmptyString).pipe(
-    Schema.withDecodingDefault(Effect.succeed([])),
-  ),
-  /**
    * Marks one wake owed once every check has finished: the checks still pending when the required
    * ones passed early, or the failed ones while a failure keeps the required ones from passing.
    */
   owedChecks: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
-  /** Remarks from others created up to this host time were reported. */
   /** Approval holds keyed by workflow run URL, or check name when no run URL is known. */
   awaitingApproval: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   /** The agent was told checks await approval on this head, so later ones stay quiet. */
@@ -117,11 +106,6 @@ export const ThreadPullRequestWatch = Schema.Struct({
   mergeQueueRemovalId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   /** Consecutive comment-only wakes; limited to prevent bot loops. */
   wakes: NonNegativeInt,
-  /**
-   * Wakes for this watch that may still be queued. Ending the watch cancels those
-   * runs. A wake that already started is not in this list's concern.
-   */
-  pendingWakeMessageIds: Schema.optional(Schema.Array(MessageId)),
   /**
    * What is already on the pull request is recorded, not reported: conflicts on the first read, and
    * checks on the first read that can be trusted to show them (one with a head and a full check read).
