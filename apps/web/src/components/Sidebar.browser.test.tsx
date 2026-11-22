@@ -81,6 +81,18 @@ function project(id: string): Project {
   };
 }
 
+// Composer drafts persist in browser storage shared across test files, so drafts left by other
+// suites (ChatView) would show up as sidebar rows and take jump slots here.
+function withoutComposerDrafts(): Disposable {
+  const before = useComposerDraftStore.getState();
+  useComposerDraftStore.setState({
+    draftsByThreadKey: {},
+    draftThreadsByThreadKey: {},
+    logicalProjectDraftThreadKeyByLogicalProjectKey: {},
+  });
+  return { [Symbol.dispose]: () => useComposerDraftStore.setState(before, true) };
+}
+
 describe("sidebar header new thread", () => {
   it.each([
     { mode: "normal", count: 2, shift: false, picker: true },
@@ -135,6 +147,7 @@ describe("sidebar header new thread", () => {
 // regression: #38623 unsent drafts are listed above threads but mod+1..9 skipped them
 describe("sidebar numbered jumps", () => {
   it("numbers the unsent draft at the top before the threads below it", async () => {
+    using _drafts = withoutComposerDrafts();
     const initial = useComposerDraftStore.getState();
     using stack = new DisposableStack();
     stack.defer(() => useComposerDraftStore.setState(initial, true));
@@ -207,6 +220,7 @@ describe("sidebar render isolation", () => {
   // regression: #33100 Cmd+J re-rendered every sidebar row, which took hundreds of ms with many threads
   it("does not re-render thread rows when a quick Mod shortcut opens and focuses the terminal", async () => {
     using stack = new DisposableStack();
+    using _drafts = withoutComposerDrafts();
     const activeProject = project("active");
     const threads = Array.from({ length: 5 }, (_, index) => threadShell(activeProject.id, index));
     const routeThreadRef: ScopedThreadRef = {
