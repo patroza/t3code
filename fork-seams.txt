@@ -1,1 +1,6 @@
 apps/server/src/persistence/Migrations.ts  # migrations: runMigrations/hasPendingMigrations take the fork ledger hooks (ForkMigrations.ts)
+packages/contracts/src/clientRpcPermissions.ts  # identity: spreads IDENTITY_RPC_SCOPES (identityRpc.ts) into CLIENT_GUARDED_RPC_SCOPES
+packages/contracts/src/index.ts  # identity: exports identity.ts and identityRpc.ts
+packages/contracts/src/orchestrationV2.ts  # identity: spreads identity field sets (identity.ts) into thread/message/turn-item/command schemas and adds the internal thread.attribution.repair command; optional fields must live inside the upstream structs
+packages/contracts/src/rpc.ts  # identity: merges IdentityRpcGroup (identityRpc.ts) into WsRpcGroup
+packages/shared/package.json  # identity: subpath exports for identityAvatar, identityMap, sourceAttribution
