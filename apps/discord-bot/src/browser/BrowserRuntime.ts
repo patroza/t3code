@@ -27,10 +27,25 @@ const MAX_SCREENSHOT_WIDTH = 1_600;
 export const MAX_RETAINED_BROWSER_TABS_PER_THREAD = 4;
 export const MAX_RETAINED_BROWSER_TABS_TOTAL = 12;
 
+type SnapshotInteractiveElement = {
+  readonly tag: string;
+  readonly role: string | null;
+  readonly name: string;
+  readonly selector: string;
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+};
+
+// interactiveElements is collected for the bot page script. It is not a field
+// on PreviewAutomationSnapshot; the snapshot spread keeps it at runtime.
 type SnapshotPageState = Pick<
   PreviewAutomationSnapshot,
-  "url" | "title" | "loading" | "visibleText" | "interactiveElements"
->;
+  "url" | "title" | "loading" | "visibleText"
+> & {
+  readonly interactiveElements: ReadonlyArray<SnapshotInteractiveElement>;
+};
 
 // Keep this as browser-native source. Runtime transpilers otherwise inject
 // helpers into nested callbacks that are unavailable in the page context.
