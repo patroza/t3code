@@ -46,6 +46,7 @@ import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcMiddleware from "effect/rpc/RpcMiddleware";
 import { IdentityRpcGroup } from "./identityRpc.ts";
+import { PreviewAutomationHostRpcGroup } from "./previewAutomationHostRpc.ts";
 import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { SecretSourceCheckResult } from "./settingsSecretValue.ts";
 import { SecretReference } from "./secretReference.ts";
@@ -2620,5 +2621,5 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2SubscribeCommandOutputRpc,
   WsOrchestrationV2SubscribePromptSuggestionRpc,
 )
-  .merge(IdentityRpcGroup)
+  .merge(IdentityRpcGroup, PreviewAutomationHostRpcGroup)
   .middleware(RpcScopeAuthorization);
