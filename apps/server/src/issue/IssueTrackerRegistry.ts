@@ -9,6 +9,7 @@ import {
   type StandaloneIssueTrackerApi,
 } from "@t3tools/source-control-core/server/IssueTracker";
 
+import * as JiraIssueDriver from "../jira/JiraIssueDriver.ts";
 import * as BuiltInDrivers from "../sourceControl/builtInDrivers.ts";
 import * as IssueTrackerHostLive from "./IssueTrackerHostLive.ts";
 
@@ -41,7 +42,11 @@ const STANDALONE_TRACKERS = [LinearDriver.make];
 const make = Effect.gen(function* () {
   const drivers = yield* BuiltInDrivers.SourceControlDrivers;
   const standalone = yield* Effect.all(STANDALONE_TRACKERS);
-  return fromTrackers([...drivers.flatMap(({ instance }) => instance.issues ?? []), ...standalone]);
+  return fromTrackers([
+    ...drivers.flatMap(({ instance }) => instance.issues ?? []),
+    ...standalone,
+    ...(yield* JiraIssueDriver.trackers),
+  ]);
 });
 
 export const layer = Layer.effect(IssueTrackerRegistry, make).pipe(
