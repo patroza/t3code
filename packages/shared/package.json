@@ -191,6 +191,10 @@
       "types": "./src/integrationThreadView.ts",
       "import": "./src/integrationThreadView.ts"
     },
+    "./jiraBareKeyProjects": {
+      "types": "./src/jiraBareKeyProjects.ts",
+      "import": "./src/jiraBareKeyProjects.ts"
+    },
     "./turnResponseStats": {
       "types": "./src/turnResponseStats.ts",
       "import": "./src/turnResponseStats.ts"

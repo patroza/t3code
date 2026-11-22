@@ -69,7 +69,8 @@ packages/contracts/src/clientRpcPermissions.ts  # identity: spreads IDENTITY_GUA
 packages/contracts/src/index.ts  # identity: exports identity.ts and identityRpc.ts
 packages/contracts/src/orchestrationV2.ts  # identity: spreads identity field sets (identity.ts) into thread/message/turn-item/command schemas and adds the internal thread.attribution.repair command; optional fields must live inside the upstream structs
 packages/contracts/src/rpc.ts  # identity: merges IdentityRpcGroup (identityRpc.ts) into WsRpcGroup
+packages/contracts/src/t3ProjectFile.ts  # jira: spreads the jiraProjects key (t3ProjectFileJira.ts); a t3.json key must live inside the upstream struct
 packages/provider-acp/src/server/adapter.ts  # direnv: wrap the flavor with withDirenvRuntime (direnvRuntime.ts) so every ACP runtime starts with the direnv environment
 packages/provider-core/package.json  # direnv: export ./server/DirenvEnvironment
 packages/provider-opencode/src/server/adapter.ts  # direnv: resolve the OpenCode server environment through resolveCurrentProviderEnvironment
-packages/shared/package.json  # identity: subpath exports for identityAvatar, identityMap, sourceAttribution; jira: subpath exports for integrationThreadView, turnResponseStats
+packages/shared/package.json  # identity: subpath exports for identityAvatar, identityMap, sourceAttribution; jira: subpath exports for integrationThreadView, jiraBareKeyProjects, turnResponseStats
