@@ -1,4 +1,4 @@
-import { parseProviderModelFlags } from "../shared/providerModelSelection.ts";
+import { parseProviderModelFlags } from "@t3tools/shared/providerModelSelection";
 
 import { topicRequestsQueue } from "./fastMode.ts";
 import { parseLinkThreadCommand, type LinkThreadCommand } from "./t3ThreadRef.ts";

@@ -7,7 +7,7 @@ import {
   previewWebhookBody,
   WebhookDebugLog,
   type WebhookDebugAppendInput,
-} from "./JiraWebhookDebugLog.ts";
+} from "../webhooks/WebhookDebugLog.ts";
 import { isMonitoredJiraProject, routeJiraWebhook } from "./JiraBugReport.ts";
 import { JiraAppConfig, isJiraProjectAllowed } from "./JiraAppConfig.ts";
 import { JiraIssueBridge } from "./JiraIssueBridge.ts";
@@ -82,8 +82,8 @@ export const jiraWebhookRouteLayer = HttpRouter.add(
     const config = yield* JiraAppConfig;
     const debugLog = yield* WebhookDebugLog;
 
-    const logDebug = (input: Omit<WebhookDebugAppendInput, "source">) =>
-      debugLog.append({ ...input, source: "jira" }).pipe(Effect.ignore, Effect.forkDetach);
+    const logDebug = (input: WebhookDebugAppendInput) =>
+      debugLog.append(input).pipe(Effect.ignore, Effect.forkDetach);
 
     if (!config.enabled) {
       yield* logDebug({

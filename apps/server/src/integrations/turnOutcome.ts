@@ -27,7 +27,7 @@ function assistantMessagesForTurn(
 }
 
 // Prefer assistants from the dispatched turn; after-last-user fallback can select an unrelated later wake.
-function jiraFinalAnswerText(thread: OrchestrationThread, turnId: string | null = null): string {
+export function finalAnswerText(thread: OrchestrationThread, turnId: string | null = null): string {
   const texts = assistantMessagesForTurn(thread, turnId)
     .map((message) => message.text.trimEnd())
     .filter((text) => text.trim() !== "");
@@ -39,11 +39,11 @@ function jiraFinalAnswerText(thread: OrchestrationThread, turnId: string | null 
 }
 
 /** Final comment body: assistant answer + small italic turn stats footer when available. */
-export function jiraFinalAnswerWithStats(
+export function finalAnswerWithStats(
   thread: OrchestrationThread,
   turnId: string | null = null,
 ): string {
-  const answer = jiraFinalAnswerText(thread, turnId);
+  const answer = finalAnswerText(thread, turnId);
   if (answer.trim() === "") return "";
   return appendTurnResponseStatsFooter(
     answer,
@@ -58,7 +58,7 @@ export function jiraFinalAnswerWithStats(
 
 // Recover targetTurnId from its persisted value, then the dispatched message, then the first turn after previousTurnId.
 // Only use latestTurn without later history, so a later wake cannot steal an older delivery.
-export function discoverJiraTargetTurnId(
+export function discoverTargetTurnId(
   thread: OrchestrationThread,
   options: {
     readonly userMessageId: string | null;
@@ -124,7 +124,7 @@ export function discoverJiraTargetTurnId(
   return null;
 }
 
-export type JiraBridgeTurnOutcome =
+export type BridgeTurnOutcome =
   | { readonly _tag: "waiting" }
   | {
       readonly _tag: "terminal";
@@ -137,15 +137,15 @@ export type JiraBridgeTurnOutcome =
  * Decide whether the delivery's target turn is done without requiring latestTurn to still
  * point at that turn (session-set used to clear latest_turn_id; later turns can also move it).
  */
-export function resolveJiraBridgeTurnOutcome(
+export function resolveBridgeTurnOutcome(
   thread: OrchestrationThread,
   options: {
     readonly userMessageId: string | null;
     readonly previousTurnId: string | null;
     readonly knownTargetTurnId: string | null;
   },
-): JiraBridgeTurnOutcome {
-  const targetTurnId = discoverJiraTargetTurnId(thread, options);
+): BridgeTurnOutcome {
+  const targetTurnId = discoverTargetTurnId(thread, options);
   if (targetTurnId === null) return { _tag: "waiting" };
 
   const nativeRun = thread.runStatuses?.find((run) => run.id === targetTurnId);
@@ -157,7 +157,7 @@ export function resolveJiraBridgeTurnOutcome(
       _tag: "terminal",
       status: completed ? "completed" : "rejected",
       body: completed
-        ? jiraFinalAnswerWithStats(thread, targetTurnId) || FAILED_RESPONSE
+        ? finalAnswerWithStats(thread, targetTurnId) || FAILED_RESPONSE
         : FAILED_RESPONSE,
       targetTurnId,
     };
@@ -182,7 +182,7 @@ export function resolveJiraBridgeTurnOutcome(
       return {
         _tag: "terminal",
         status: "completed",
-        body: jiraFinalAnswerWithStats(thread, targetTurnId) || FAILED_RESPONSE,
+        body: finalAnswerWithStats(thread, targetTurnId) || FAILED_RESPONSE,
         targetTurnId,
       };
     }
@@ -208,7 +208,7 @@ export function resolveJiraBridgeTurnOutcome(
     );
 
   if (assistants.length > 0 || hasCheckpoint || laterTurnObserved) {
-    const body = jiraFinalAnswerWithStats(thread, targetTurnId);
+    const body = finalAnswerWithStats(thread, targetTurnId);
     if (body.trim() !== "" || hasCheckpoint || laterTurnObserved) {
       return {
         _tag: "terminal",

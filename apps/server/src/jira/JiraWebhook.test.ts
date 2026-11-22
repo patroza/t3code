@@ -21,7 +21,7 @@ import {
   previewWebhookBody,
   pruneWebhookDebugRecords,
   type WebhookDebugRecord,
-} from "./JiraWebhookDebugLog.ts";
+} from "../webhooks/WebhookDebugLog.ts";
 import {
   bodyMentionsIdentity,
   buildJiraTurnPrompt,

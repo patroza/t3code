@@ -215,6 +215,10 @@
       "types": "./src/sessionWake.ts",
       "import": "./src/sessionWake.ts"
     },
+    "./providerModelSelection": {
+      "types": "./src/providerModelSelection.ts",
+      "import": "./src/providerModelSelection.ts"
+    },
     "./projectScripts": {
       "types": "./src/projectScripts.ts",
       "import": "./src/projectScripts.ts"

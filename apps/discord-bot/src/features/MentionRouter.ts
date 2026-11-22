@@ -8,7 +8,7 @@ import {
   type UploadChatAttachment,
 } from "@t3tools/contracts";
 import { readJiraBareKeyProjects } from "@t3tools/shared/jiraBareKeyProjects";
-import { DISCORD_LINK_REQUEST_MARKER } from "../shared/providerModelSelection.ts";
+import { DISCORD_LINK_REQUEST_MARKER } from "@t3tools/shared/providerModelSelection";
 import { makeKeyedDrainableWorker } from "../shared/KeyedDrainableWorker.ts";
 import { makeInteractionBackground } from "./interactionBackground.ts";
 import { Discord, DiscordConfig, DiscordREST, Ix } from "dfx";

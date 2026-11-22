@@ -75,10 +75,10 @@ import {
   type JiraIssueInvocation,
 } from "./JiraWebhookPayload.ts";
 import {
-  discoverJiraTargetTurnId,
-  jiraFinalAnswerWithStats,
-  resolveJiraBridgeTurnOutcome,
-} from "./jiraTurnOutcome.ts";
+  discoverTargetTurnId,
+  finalAnswerWithStats,
+  resolveBridgeTurnOutcome,
+} from "../integrations/turnOutcome.ts";
 
 const JIRA_FALLBACK_MODEL_SELECTION: ModelSelection = {
   instanceId: ProviderInstanceId.make("codex"),
@@ -630,7 +630,7 @@ const make = Effect.gen(function* () {
         previousTurnId: tracked.previousTurnId,
         knownTargetTurnId: tracked.targetTurnId,
       };
-      const discoveredTurnId = discoverJiraTargetTurnId(thread, resolveOptions);
+      const discoveredTurnId = discoverTargetTurnId(thread, resolveOptions);
       if (discoveredTurnId !== null && discoveredTurnId !== tracked.targetTurnId) {
         tracked = {
           ...delivery,
@@ -640,16 +640,14 @@ const make = Effect.gen(function* () {
         yield* deliveries.put(tracked);
       }
 
-      const outcome = resolveJiraBridgeTurnOutcome(thread, {
+      const outcome = resolveBridgeTurnOutcome(thread, {
         ...resolveOptions,
         knownTargetTurnId: tracked.targetTurnId,
       });
       if (outcome._tag === "terminal") {
         const body =
           outcome.status === "completed"
-            ? outcome.body ||
-              jiraFinalAnswerWithStats(thread, outcome.targetTurnId) ||
-              FAILED_RESPONSE
+            ? outcome.body || finalAnswerWithStats(thread, outcome.targetTurnId) || FAILED_RESPONSE
             : outcome.body || FAILED_RESPONSE;
         yield* finishDelivery(tracked, body, outcome.status);
         return;
@@ -1049,7 +1047,7 @@ const make = Effect.gen(function* () {
         previousTurnId: tracked.previousTurnId,
         knownTargetTurnId: tracked.targetTurnId,
       };
-      const discoveredTurnId = discoverJiraTargetTurnId(thread, resolveOptions);
+      const discoveredTurnId = discoverTargetTurnId(thread, resolveOptions);
       if (discoveredTurnId !== null && discoveredTurnId !== tracked.targetTurnId) {
         tracked = {
           deliveryId: tracked.deliveryId,
@@ -1098,7 +1096,7 @@ const make = Effect.gen(function* () {
         }
       }
 
-      const outcome = resolveJiraBridgeTurnOutcome(thread, {
+      const outcome = resolveBridgeTurnOutcome(thread, {
         ...resolveOptions,
         knownTargetTurnId: tracked.targetTurnId,
       });

@@ -9,13 +9,13 @@ import * as JiraAppClient from "./JiraAppClient.ts";
 import * as JiraAppConfig from "./JiraAppConfig.ts";
 import * as JiraDeliveryStore from "./JiraDeliveryStore.ts";
 import * as JiraIssueBridge from "./JiraIssueBridge.ts";
-import * as JiraWebhookDebugLog from "./JiraWebhookDebugLog.ts";
 import { jiraWebhookRouteLayer } from "./http.ts";
+import * as WebhookDebugLog from "../webhooks/WebhookDebugLog.ts";
 
 const layerDependencies = Layer.mergeAll(
   JiraAppClient.layer,
   JiraDeliveryStore.layer,
-  JiraWebhookDebugLog.layer,
+  WebhookDebugLog.layer("jira"),
 ).pipe(Layer.provideMerge(JiraAppConfig.layer));
 
 export const layer = jiraWebhookRouteLayer.pipe(
