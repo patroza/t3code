@@ -84,11 +84,11 @@ describe("fork CI tree evidence", () => {
       /not a pull request/,
     );
     const jobs = succeededJobs().map((job) =>
-      job.name === "Test Web" ? { ...job, conclusion: "skipped" } : job,
+      job.name === "Test Web 1" ? { ...job, conclusion: "skipped" } : job,
     );
     assert.equal(
       shortCircuitReason(matching({ run: { ...matching().run, jobs } })),
-      "job Test Web was skipped",
+      "job Test Web 1 was skipped",
     );
     assert.equal(
       shortCircuitReason(matching({ run: { ...matching().run, jobsTruncated: true } })),
@@ -99,10 +99,10 @@ describe("fork CI tree evidence", () => {
   it("uses the latest attempt when a job was rerun", () => {
     const jobs = [
       ...succeededJobs(),
-      { name: "Test Web", conclusion: "failure", run_attempt: 1 },
-      { name: "Test Web", conclusion: "success", run_attempt: 2 },
+      { name: "Test Web 1", conclusion: "failure", run_attempt: 1 },
+      { name: "Test Web 1", conclusion: "success", run_attempt: 2 },
     ];
-    assert.equal(latestJobConclusions(jobs).get("Test Web")?.conclusion, "success");
+    assert.equal(latestJobConclusions(jobs).get("Test Web 1")?.conclusion, "success");
     assert.equal(shortCircuitReason(matching({ run: { ...matching().run, jobs } })), null);
     const failedLatest = [
       { name: "Check", conclusion: "success", run_attempt: 1 },
@@ -122,7 +122,6 @@ describe("fork CI tree evidence", () => {
     for (const name of [
       "Check",
       "Test Packages",
-      "Test Web",
       "Test",
       "Mobile Native Static Analysis",
       "Release Smoke",
@@ -130,6 +129,7 @@ describe("fork CI tree evidence", () => {
       assert.equal(workflow.includes(`name: ${name}`), true, name);
     }
     assert.equal(workflow.includes("name: Test Server ${{ matrix.shard }}"), true);
+    assert.equal(workflow.includes("name: Test Web ${{ matrix.shard }}"), true);
     assert.equal(workflow.includes("shard: [1, 2, 3, 4, 5, 6]"), true);
     assert.equal(workflow.includes("name: Verify tree evidence"), true);
     assert.equal(workflow.includes("name: Record tree evidence"), true);
