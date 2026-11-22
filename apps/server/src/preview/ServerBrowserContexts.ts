@@ -68,6 +68,8 @@ interface Options {
   /** Closes the shared browser once it has held no context for this long. */
   readonly idleBrowserMs?: number;
   readonly onContextClose?: (context: BrowserContext) => void;
+  /** Runs before a profile or isolated context is handed out. */
+  readonly prepareContext?: (context: BrowserContext) => Promise<void>;
 }
 
 const UA_PLATFORMS: Partial<Record<NodeJS.Platform, string>> = {
@@ -250,6 +252,7 @@ export class ServerBrowserContexts {
           await context.close().catch(constVoid);
           throw new Error("The preview browser is closed.");
         }
+        await this.options.prepareContext?.(context);
         return context;
       });
     this.contexts.set(key, pending);

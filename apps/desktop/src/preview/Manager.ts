@@ -73,6 +73,7 @@ import {
 } from "../ipc/channels.ts";
 import * as DesktopBrowserHost from "./DesktopBrowserHost.ts";
 import * as PreviewPasskeys from "./Passkeys.ts";
+import { installWebAuthnSessionPolicy, previewPopupWindowOptions } from "./WebAuthnPolicy.ts";
 import * as BrowserSession from "./BrowserSession.ts";
 import {
   ANNOTATION_CAPTURED_CHANNEL,
@@ -1679,7 +1680,13 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.setWindowOpenHandler((details) => {
           const action = previewWindowOpenAction(details);
           if (action === "popup") {
-            return { action: "allow", overrideBrowserWindowOptions: POPUP_WINDOW_OPTIONS };
+            return {
+              action: "allow",
+              overrideBrowserWindowOptions: previewPopupWindowOptions(
+                passkeys,
+                POPUP_WINDOW_OPTIONS,
+              ),
+            };
           }
           if (action === "deny") return { action: "deny" };
           if (action === "new-tab") {
@@ -4124,6 +4131,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
           );
         placeServerDownloads(session);
         passkeys.installSessionHandlers(session);
+        installWebAuthnSessionPolicy(passkeys, session);
         return session;
       },
     ),
