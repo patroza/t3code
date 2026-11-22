@@ -18,16 +18,9 @@ const WEBHOOK_DEBUG_MAX_RECORDS = 5_000;
 /** Cap stored request body previews (invalid/ignored diagnosis). */
 const WEBHOOK_DEBUG_BODY_PREVIEW_CHARS = 4_000;
 
-/** Inbound integration webhook sources that write debug NDJSON. */
-export type WebhookSource = "jira";
+/** Inbound integration webhook sources; each writes its own `<source>-webhook-debug.ndjson`. */
+export type WebhookSource = "github" | "jira";
 
-const WEBHOOK_DEBUG_SOURCES = ["jira"] as const satisfies ReadonlyArray<WebhookSource>;
-
-function webhookDebugFilename(source: WebhookSource): string {
-  return `${source}-webhook-debug.ndjson`;
-}
-
-/** Outcome tags for the Jira webhook handler. */
 export type WebhookDebugOutcome =
   | "disabled_404"
   | "too_large_413"
@@ -35,6 +28,7 @@ export type WebhookDebugOutcome =
   | "invalid_400"
   | "missing_delivery_id_400"
   | "ignored_202"
+  | "repo_denied_202"
   | "project_denied_202"
   | "accepted_202";
 
@@ -49,6 +43,8 @@ export interface WebhookDebugRecord {
   readonly deliveryId?: string;
   readonly webhookEvent?: string;
   readonly mention?: string;
+  readonly repository?: string;
+  readonly pullRequestNumber?: number;
   readonly commentSurface?: string;
   readonly issueKey?: string;
   readonly projectKey?: string;
@@ -59,7 +55,7 @@ export interface WebhookDebugRecord {
   readonly actorAccountId?: string | null;
 }
 
-export type WebhookDebugAppendInput = Omit<WebhookDebugRecord, "ts"> & {
+export type WebhookDebugAppendInput = Omit<WebhookDebugRecord, "ts" | "source"> & {
   readonly ts?: string;
 };
 
@@ -152,36 +148,27 @@ export class WebhookDebugLog extends Context.Service<
   {
     readonly append: (input: WebhookDebugAppendInput) => Effect.Effect<void>;
   }
->()("t3/jira/JiraWebhookDebugLog/WebhookDebugLog") {}
+>()("t3/webhooks/WebhookDebugLog") {}
 
-const make = Effect.gen(function* () {
+// One instance per source: each webhook route provides its own, and only that source's file is touched.
+const make = Effect.fn("WebhookDebugLog.make")(function* (source: WebhookSource) {
   const config = yield* ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const bootNowMs = yield* Clock.currentTimeMillis;
-
-  type SourceState = {
-    readonly filePath: string;
-    readonly records: Ref.Ref<WebhookDebugRecord[]>;
-  };
-
-  const sources = new Map<WebhookSource, SourceState>();
-  for (const source of WEBHOOK_DEBUG_SOURCES) {
-    const filePath = path.join(config.stateDir, webhookDebugFilename(source));
-    const initial = yield* fileSystem.readFileString(filePath).pipe(
+  const filePath = path.join(config.stateDir, `${source}-webhook-debug.ndjson`);
+  const records = yield* Ref.make(
+    yield* fileSystem.readFileString(filePath).pipe(
       Effect.map((raw) => pruneWebhookDebugRecords(parseDebugNdjson(raw), bootNowMs)),
       Effect.orElseSucceed((): WebhookDebugRecord[] => []),
-    );
-    const records = yield* Ref.make(initial);
-    sources.set(source, { filePath, records });
-  }
-
+    ),
+  );
   const lock = yield* Semaphore.make(1);
 
-  const persist = (filePath: string, records: ReadonlyArray<WebhookDebugRecord>) =>
+  const persist = (next: ReadonlyArray<WebhookDebugRecord>) =>
     writeFileStringAtomically({
       filePath,
-      contents: encodeDebugNdjson(records),
+      contents: encodeDebugNdjson(next),
     }).pipe(
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
@@ -193,12 +180,10 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  // Drop anything already past retention on boot (per source file).
-  for (const state of sources.values()) {
-    const current = yield* Ref.get(state.records);
-    if (current.length > 0) {
-      yield* persist(state.filePath, current);
-    }
+  // Drop anything already past retention on boot.
+  const initial = yield* Ref.get(records);
+  if (initial.length > 0) {
+    yield* persist(initial);
   }
 
   return WebhookDebugLog.of({
@@ -206,27 +191,20 @@ const make = Effect.gen(function* () {
       lock
         .withPermit(
           Effect.gen(function* () {
-            const state = sources.get(input.source);
-            if (state === undefined) {
-              yield* Effect.logWarning("Webhook debug log: unknown source", {
-                source: input.source,
-              });
-              return;
-            }
             const ts = input.ts ?? DateTime.formatIso(yield* DateTime.now);
-            const record: WebhookDebugRecord = { ...input, ts };
+            const record: WebhookDebugRecord = { ...input, source, ts };
             const parsedTs = Date.parse(ts);
             const nowMs = Number.isNaN(parsedTs) ? yield* Clock.currentTimeMillis : parsedTs;
-            const next = yield* Ref.updateAndGet(state.records, (existing) =>
+            const next = yield* Ref.updateAndGet(records, (existing) =>
               pruneWebhookDebugRecords([...existing, record], nowMs),
             );
-            yield* persist(state.filePath, next);
+            yield* persist(next);
           }),
         )
         .pipe(
           Effect.catchCause((cause) =>
             Effect.logWarning("Webhook debug append failed", {
-              source: input.source,
+              source,
               cause,
             }),
           ),
@@ -235,4 +213,4 @@ const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(WebhookDebugLog, make);
+export const layer = (source: WebhookSource) => Layer.effect(WebhookDebugLog, make(source));

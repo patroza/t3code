@@ -4,7 +4,7 @@ import {
   type ProviderInstanceId,
   type RuntimeMode,
 } from "@t3tools/contracts";
-import { resolveProviderModelSelection } from "./shared/providerModelSelection.ts";
+import { resolveProviderModelSelection } from "@t3tools/shared/providerModelSelection";
 import { jiraSiteHostFromUrl } from "./store/ServerWorkItemJoin.ts";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
