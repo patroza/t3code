@@ -64,12 +64,16 @@ export const IdentityRpcGroup = RpcGroup.make(
   }),
 );
 
-/** Spread into `CLIENT_GUARDED_RPC_SCOPES`; the server authorizes from the same map. */
-export const IDENTITY_RPC_SCOPES = {
-  [IDENTITY_WS_METHODS.identityGetSnapshot]: AuthOrchestrationReadScope,
-  [IDENTITY_WS_METHODS.identityGetSessionClaim]: AuthOrchestrationReadScope,
+/** Mutations, spread into `CLIENT_GUARDED_RPC_SCOPES` so clients can gate their UI. */
+export const IDENTITY_GUARDED_RPC_SCOPES = {
   [IDENTITY_WS_METHODS.identityClaim]: AuthOrchestrationOperateScope,
   [IDENTITY_WS_METHODS.identityClearClaim]: AuthOrchestrationOperateScope,
-  [IDENTITY_WS_METHODS.identityListClientClaims]: AuthAccessReadScope,
   [IDENTITY_WS_METHODS.identitySetClientClaim]: AuthAccessWriteScope,
+} as const;
+
+/** Reads, spread into the server's `RPC_REQUIRED_SCOPES`; clients query them as atoms. */
+export const IDENTITY_READ_RPC_SCOPES = {
+  [IDENTITY_WS_METHODS.identityGetSnapshot]: AuthOrchestrationReadScope,
+  [IDENTITY_WS_METHODS.identityGetSessionClaim]: AuthOrchestrationReadScope,
+  [IDENTITY_WS_METHODS.identityListClientClaims]: AuthAccessReadScope,
 } as const;

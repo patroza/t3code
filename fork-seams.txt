@@ -1,4 +1,5 @@
 apps/server/src/auth/EnvironmentAuth.ts  # identity + mcp-tokens: exports MCP_CLIENT_SUBJECT; issueSession passes a runtimeModeCeiling through
+apps/server/src/auth/RpcAuthorization.ts  # identity: spreads IDENTITY_READ_RPC_SCOPES into RPC_REQUIRED_SCOPES
 apps/server/src/cli/auth.ts  # mcp-tokens: --runtime-mode-ceiling flag on auth session issue (cli/mcpClientTokenCeiling.ts)
 apps/server/src/mcp/McpHttpServer.ts  # mcp-tools: merges fork-registered toolkits (mcp/forkMcpTools.ts) into layerTools
 apps/server/src/mcp/McpToolAccess.ts  # identity: writing tools require an identity claim on outside MCP clients (identity/mcpClientClaim.ts)
@@ -12,7 +13,8 @@ apps/server/src/persistence/Migrations.ts  # migrations: runMigrations/hasPendin
 apps/server/src/server.ts  # identity: provides the persisted IdentityService layer
 apps/server/src/ws.ts  # identity: spreads identity.* handlers and wraps dispatch/launch so operate commands carry the session's source (identity/identityWsHandlers.ts)
 docs/user/outside-agents.md  # mcp-tokens: documents headless MCP bearer tokens and --runtime-mode-ceiling
-packages/contracts/src/clientRpcPermissions.ts  # identity: spreads IDENTITY_RPC_SCOPES (identityRpc.ts) into CLIENT_GUARDED_RPC_SCOPES
+packages/client-runtime/package.json  # identity: subpath exports for state/identity and message-sender
+packages/contracts/src/clientRpcPermissions.ts  # identity: spreads IDENTITY_GUARDED_RPC_SCOPES (identityRpc.ts) into CLIENT_GUARDED_RPC_SCOPES
 packages/contracts/src/index.ts  # identity: exports identity.ts and identityRpc.ts
 packages/contracts/src/orchestrationV2.ts  # identity: spreads identity field sets (identity.ts) into thread/message/turn-item/command schemas and adds the internal thread.attribution.repair command; optional fields must live inside the upstream structs
 packages/contracts/src/rpc.ts  # identity: merges IdentityRpcGroup (identityRpc.ts) into WsRpcGroup
