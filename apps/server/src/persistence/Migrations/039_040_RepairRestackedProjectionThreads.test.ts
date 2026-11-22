@@ -139,6 +139,7 @@ layer("b18 desktop migration namespace repair", (it) => {
           { migration_id: 100, name: "TurnStartReadIndexes" },
           { migration_id: 101, name: "DelegatedTaskReadIndexes" },
           { migration_id: 102, name: "ThreadItemCounts" },
+          { migration_id: 103, name: "IssueTrackerAdditionalScopes" },
         ],
       );
 
