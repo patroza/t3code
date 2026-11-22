@@ -17,7 +17,7 @@ export { forkMigrationTable };
  * migration to the upstream manifest in Migrations.ts, and never renumber:
  * id 1 (ProjectionQueuedMessages) was dropped, so existing ledgers keep it as history.
  */
-export const forkMigrationEntries = [
+const forkMigrationEntries = [
   [2, "SessionIdentityClaims", Migration0002],
   [3, "ProjectionThreadSourceAttribution", Migration0003],
 ] as const;

@@ -17,7 +17,7 @@ import { cn } from "~/lib/utils";
  * Creator face + +N extras for thread list rows.
  * Hover/focus expands remaining participants (design: participant stack).
  */
-export function ParticipantStack(props: {
+function ParticipantStack(props: {
   readonly environmentId: string;
   readonly participants: ReadonlyArray<ThreadParticipantSummary>;
   readonly channel?: string | null | undefined;
@@ -128,7 +128,7 @@ export function ParticipantStack(props: {
   );
 }
 
-export function SourceChannelGlyph(props: {
+function SourceChannelGlyph(props: {
   readonly channel: string | null | undefined;
   readonly overlay?: boolean;
   readonly className?: string | undefined;
@@ -171,7 +171,7 @@ export function SourceChannelGlyph(props: {
  * title so identity-capable and identity-unavailable hosts keep the same title
  * alignment and row geometry.
  */
-export function ThreadIdentityMark(props: {
+function ThreadIdentityMark(props: {
   readonly environmentId: string;
   readonly originChannel?: string | null | undefined;
   readonly participants?: ReadonlyArray<ThreadParticipantSummary> | null | undefined;

@@ -85,7 +85,7 @@ export function sourceRefFromOperateClaim(input: {
  * Resolve a map person from a ClientSourceHint channel + actor.
  * Unmapped actors still get a channel stamp without personId (v1 policy).
  */
-export function resolvePersonFromSourceHint(
+function resolvePersonFromSourceHint(
   people: ReadonlyArray<IdentityMapPerson>,
   hint: ClientSourceHint,
 ): IdentityMapPerson | null {
@@ -125,7 +125,7 @@ export function resolvePersonFromSourceHint(
   return null;
 }
 
-export function sourceRefFromHintAndMap(input: {
+function sourceRefFromHintAndMap(input: {
   readonly people: ReadonlyArray<IdentityMapPerson>;
   readonly hint: ClientSourceHint;
   readonly clientDeviceType?: AuthClientMetadataDeviceType | undefined;

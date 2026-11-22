@@ -28,7 +28,7 @@ export const IDENTITY_CLAIM_TYPEAHEAD_MIN_CHARS = 3;
  * Handle charset: leading alnum, then alnum / `.` / `_` / `-`.
  * No spaces or control chars. No minimum length product rule (single char OK).
  */
-export const IDENTITY_HANDLE_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
+const IDENTITY_HANDLE_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 
 const normalizeHandle = (value: string) => value.trim().toLowerCase();
 

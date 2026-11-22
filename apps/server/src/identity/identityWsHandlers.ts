@@ -68,7 +68,9 @@ export const makeIdentityWsSession = Effect.fn("identity.makeWsSession")(functio
   const mcpClientSession = Effect.fn("identity.mcpClientSession")(function* (
     sessionId: AuthSessionId,
   ) {
-    const clientSessions = yield* serverAuth.listClientSessions(currentSessionId).pipe(Effect.orDie);
+    const clientSessions = yield* serverAuth
+      .listClientSessions(currentSessionId)
+      .pipe(Effect.orDie);
     const target = clientSessions.find((session) => session.sessionId === sessionId);
     if (target === undefined || target.subject !== EnvironmentAuth.MCP_CLIENT_SUBJECT) {
       return yield* new IdentityError({
@@ -94,54 +96,56 @@ export const makeIdentityWsSession = Effect.fn("identity.makeWsSession")(functio
           .listClientSessions(currentSessionId)
           .pipe(Effect.orDie);
         const claims = yield* Effect.forEach(
-          clientSessions.filter((session) => session.subject === EnvironmentAuth.MCP_CLIENT_SUBJECT),
+          clientSessions.filter(
+            (session) => session.subject === EnvironmentAuth.MCP_CLIENT_SUBJECT,
+          ),
           (session) => identity.getSessionClaim(session.sessionId),
           { concurrency: 1 },
         );
         return { claims: claims.flatMap(({ claim }) => (claim === null ? [] : [claim])) };
       },
     ),
-    [IDENTITY_WS_METHODS.identitySetClientClaim]: Effect.fn("identity.setClientClaim")(
-      function* (payload: IdentitySetClientClaimInput) {
-        yield* mcpClientSession(payload.sessionId);
-        if (payload.username === null) {
-          yield* identity.clearClaim(payload.sessionId);
-          return { claim: null };
-        }
-        const result = yield* identity.claim(payload.sessionId, {
-          username: payload.username,
-          method: "settings",
-        });
-        const threadIds = payload.repairThreadIds ?? [];
-        if (threadIds.length === 0) return result;
-        const projections = new Map(
-          (yield* Effect.forEach(threadIds, readProjection, { concurrency: 1 })).map(
-            (projection) => [projection.thread.id, projection] as const,
-          ),
-        );
-        for (const rootId of new Set(
-          [...projections.values()].map((projection) => projection.thread.lineage.rootThreadId),
-        )) {
-          if (!projections.has(rootId)) projections.set(rootId, yield* readProjection(rootId));
-        }
-        const repairs = yield* Effect.try({
-          try: () => planThreadAttributionRepair({ claim: result.claim, projections, threadIds }),
-          catch: repairRejected,
-        });
-        for (const repair of repairs) {
-          yield* orchestrator
-            .dispatch({
-              type: "thread.attribution.repair",
-              commandId: CommandId.make(
-                `identity-repair:${payload.sessionId}:${result.claim.personId}:${repair.threadId}`,
-              ),
-              ...repair,
-            })
-            .pipe(Effect.mapError(repairRejected));
-        }
-        return result;
-      },
-    ),
+    [IDENTITY_WS_METHODS.identitySetClientClaim]: Effect.fn("identity.setClientClaim")(function* (
+      payload: IdentitySetClientClaimInput,
+    ) {
+      yield* mcpClientSession(payload.sessionId);
+      if (payload.username === null) {
+        yield* identity.clearClaim(payload.sessionId);
+        return { claim: null };
+      }
+      const result = yield* identity.claim(payload.sessionId, {
+        username: payload.username,
+        method: "settings",
+      });
+      const threadIds = payload.repairThreadIds ?? [];
+      if (threadIds.length === 0) return result;
+      const projections = new Map(
+        (yield* Effect.forEach(threadIds, readProjection, { concurrency: 1 })).map(
+          (projection) => [projection.thread.id, projection] as const,
+        ),
+      );
+      for (const rootId of new Set(
+        [...projections.values()].map((projection) => projection.thread.lineage.rootThreadId),
+      )) {
+        if (!projections.has(rootId)) projections.set(rootId, yield* readProjection(rootId));
+      }
+      const repairs = yield* Effect.try({
+        try: () => planThreadAttributionRepair({ claim: result.claim, projections, threadIds }),
+        catch: repairRejected,
+      });
+      for (const repair of repairs) {
+        yield* orchestrator
+          .dispatch({
+            type: "thread.attribution.repair",
+            commandId: CommandId.make(
+              `identity-repair:${payload.sessionId}:${result.claim.personId}:${repair.threadId}`,
+            ),
+            ...repair,
+          })
+          .pipe(Effect.mapError(repairRejected));
+      }
+      return result;
+    }),
   };
 
   /** Wraps the dispatch handler: the command it sees carries the server's source, never the client's. */

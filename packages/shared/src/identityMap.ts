@@ -86,7 +86,7 @@ function asDiscordSnowflake(value: unknown): string | undefined {
 const TEAMS_AAD_OBJECT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 /** Normalize an Azure AD object id. Returns null when the value is not a GUID. */
-export function normalizeTeamsAadObjectId(value: string | null | undefined): string | null {
+function normalizeTeamsAadObjectId(value: string | null | undefined): string | null {
   if (value === null || value === undefined) return null;
   const trimmed = value.trim().replace(/^\{|\}$/gu, "");
   if (!TEAMS_AAD_OBJECT_ID.test(trimmed)) return null;
@@ -328,35 +328,6 @@ export function findPersonByDiscordId(
   const id = discordId.trim();
   if (id.length === 0) return null;
   return people.find((person) => person.discord?.id === id) ?? null;
-}
-
-/** Resolve the canonical person stamped onto interactive and integration turns. */
-export function findPersonByPersonId(
-  people: ReadonlyArray<IdentityMapPerson>,
-  personId: string,
-): IdentityMapPerson | null {
-  const normalized = personId.trim().toLowerCase();
-  if (normalized.length === 0) return null;
-  return people.find((person) => person.personId.toLowerCase() === normalized) ?? null;
-}
-
-/** Full Git trailer for a mapped person, when GitHub attribution is configured. */
-export function formatCoAuthoredByTrailer(person: IdentityMapPerson): string | null {
-  const github = person.github;
-  if (github === undefined) return null;
-  const explicitEmail = github.email?.trim();
-  const id = github.id?.trim();
-  const login = github.login.trim();
-  const email =
-    explicitEmail && explicitEmail.length > 0
-      ? explicitEmail
-      : id && id.length > 0 && login.length > 0
-        ? `${id}+${login}@users.noreply.github.com`
-        : null;
-  if (email === null) return null;
-  const rawName = github.name ?? person.name ?? person.username;
-  const name = rawName.replace(/[\r\n]+/gu, " ").trim();
-  return name.length > 0 ? `Co-authored-by: ${name} <${email}>` : null;
 }
 
 export function findPersonByGithubLogin(

@@ -190,7 +190,7 @@ export function nextOriginSource(input: {
  * `actor.platformId` without a person because the map was empty at create
  * time; Mine then treated them as unattributed.
  */
-export function resolvePersonForSource(
+function resolvePersonForSource(
   source: SourceRefLike,
   people: ReadonlyArray<IdentityMapPerson>,
 ): IdentityMapPerson | null {
