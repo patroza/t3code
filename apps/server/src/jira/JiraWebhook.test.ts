@@ -15,7 +15,7 @@ import {
   formatJiraComment,
   jiraReadReceiptText,
 } from "./JiraIssueBridge.ts";
-import { resolveDiscordLinkForJiraIssue, resolveThreadIdForJiraIssue } from "./JiraThreadLookup.ts";
+import { resolveDiscordLinkForJiraIssue } from "./JiraThreadLookup.ts";
 import {
   classifyWebhookBodyFailure,
   previewWebhookBody,
@@ -567,8 +567,8 @@ describe("parseJiraAssignmentInvocation", () => {
   });
 });
 
-describe("Jira thread lookup", () => {
-  it("resolves a unique active link by issue key", () => {
+describe("Jira Discord link lookup", () => {
+  it("resolves the unique active Discord link for an issue key", () => {
     const linksJson = JSON.stringify({
       version: 2,
       links: [
@@ -584,19 +584,30 @@ describe("Jira thread lookup", () => {
           status: "tombstone",
           jiraIssueKeys: ["SA-402"],
         },
+        {
+          sourceKind: "teams",
+          t3ThreadId: "thread-c",
+          discordThreadId: "teams-root",
+          status: "active",
+          jiraIssueKeys: ["SA-402"],
+        },
       ],
     });
-    expect(resolveThreadIdForJiraIssue({ issueKey: "SA-402", linksJson })).toEqual({
+    expect(resolveDiscordLinkForJiraIssue({ issueKey: "SA-402", linksJson })).toEqual({
       _tag: "linked",
-      threadId: "thread-a",
+      discordThreadId: "discord-a",
+      t3ThreadId: "thread-a",
+      channelId: null,
+      guildId: null,
     });
     expect(
-      resolveThreadIdForJiraIssue({
+      resolveDiscordLinkForJiraIssue({
         issueKey: "SA-465",
         linksJson: JSON.stringify({
           links: [
             {
               t3ThreadId: "thread-a",
+              discordThreadId: "discord-a",
               status: "active",
               jiraIssueKeys: ["SA-465"],
               linkedJiraIssueKeys: [],
@@ -606,34 +617,15 @@ describe("Jira thread lookup", () => {
         }),
       }),
     ).toEqual({ _tag: "unlinked" });
-    expect(resolveDiscordLinkForJiraIssue({ issueKey: "SA-402", linksJson })).toEqual({
-      _tag: "linked",
-      discordThreadId: "discord-a",
-      t3ThreadId: "thread-a",
-      channelId: null,
-      guildId: null,
-    });
   });
 
   it("reports unlinked and ambiguous cases", () => {
     expect(
-      resolveThreadIdForJiraIssue({
+      resolveDiscordLinkForJiraIssue({
         issueKey: "SA-1",
         linksJson: JSON.stringify({ links: [] }),
       }),
     ).toEqual({ _tag: "unlinked" });
-
-    expect(
-      resolveThreadIdForJiraIssue({
-        issueKey: "SA-1",
-        linksJson: JSON.stringify({
-          links: [
-            { t3ThreadId: "a", status: "active", jiraIssueKeys: ["SA-1"] },
-            { t3ThreadId: "b", status: "active", jiraIssueKeys: ["sa-1"] },
-          ],
-        }),
-      }),
-    ).toMatchObject({ _tag: "ambiguous" });
 
     expect(
       resolveDiscordLinkForJiraIssue({
@@ -650,7 +642,7 @@ describe("Jira thread lookup", () => {
               t3ThreadId: "b",
               discordThreadId: "d2",
               status: "active",
-              jiraIssueKeys: ["SA-1"],
+              jiraIssueKeys: ["sa-1"],
             },
           ],
         }),

@@ -137,10 +137,7 @@ import {
   NEW_THREAD_OFFER_HOLD_MESSAGE,
   START_NEW_THREAD_ANYWAY_CUSTOM_ID_PREFIX,
 } from "../presentation/existingThreadOffer.ts";
-import {
-  findUniqueExternalWorkItemThread,
-  serverWorkItemsPathFromStateSqlite,
-} from "../store/ServerWorkItemJoin.ts";
+import { findUniqueExternalWorkItemThread } from "../store/ServerWorkItemJoin.ts";
 import {
   assignPullRequestAssignees,
   formatAssignSlashReply,
@@ -1301,10 +1298,12 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
       );
       if (joinJiraKeys.length > 0 || joinPrUrls.length > 0) {
         const allLinks = yield* links.list();
+        const shellSnapshot = yield* t3.shell();
         const existingThreadId = findUniqueExternalWorkItemThread({
           jiraIssueKeys: joinJiraKeys,
           prUrls: joinPrUrls,
-          serverWorkItemsPath: serverWorkItemsPathFromStateSqlite(botConfig.stateSqlitePath),
+          threads: shellSnapshot?.threads ?? [],
+          jiraSiteHost: botConfig.jiraSiteHost,
         });
         if (existingThreadId !== null) {
           const existingShell = yield* t3.getThreadShell(existingThreadId);
