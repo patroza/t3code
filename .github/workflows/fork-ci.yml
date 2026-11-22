@@ -291,6 +291,11 @@ jobs:
         run: node apps/web/node_modules/playwright/cli.js install --with-deps --only-shell chromium
 
       - name: Test
+        # Vitest drops retired Chromium test frames per file only when temp disk runs low,
+        # so a long shard otherwise grows the renderer until Chromium closes the page.
+        # https://github.com/vitest-dev/vitest/pull/10912
+        env:
+          VITEST_CHROMIUM_GC_DISK_THRESHOLD_GB: Infinity
         run: vp run --filter @t3tools/web test --shard ${{ matrix.shard }}/${{ strategy.job-total }}
 
   # Preserve the required Test check. Run even after failures or cancellation,
