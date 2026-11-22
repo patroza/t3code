@@ -1,3 +1,4 @@
+import { resolveCurrentProviderEnvironment } from "@t3tools/provider-core/server/DirenvEnvironment";
 import * as DocumentText from "../../provider/DocumentText.ts";
 import {
   compactDynamicToolOutput,
@@ -13315,7 +13316,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               ? {}
               : { sdkSettings: claudeSdkLaunchArgSettings(launchArgSettings) }),
             environment: claudeQueryEnvironment(
-              adapterOptions.environment,
+              yield* resolveCurrentProviderEnvironment(
+                turnInput.runtimePolicy.cwd ?? process.cwd(),
+                adapterOptions.environment,
+              ),
               turnInput.appThread,
               turnInput.appThread.lineage.relationshipToParent === "subagent"
                 ? yield* resolveSubagentPromptCacheTtl(turnInput.runtimePolicy.cwd)
