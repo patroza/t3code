@@ -3659,6 +3659,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
               operation: "GitVcsDriver.commit.mergeHead",
               command: "git commit",
               cwd,
+              failureKind: "unknown",
               detail: "Could not check whether a merge is in progress.",
               cause,
             }),

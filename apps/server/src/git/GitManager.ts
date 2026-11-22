@@ -2815,7 +2815,8 @@ export const make = Effect.gen(function* () {
       .pipe(
         Effect.tapError((error) =>
           finalizeUnattributedOutput(
-            sawCommitHook && error.failureKind !== "commit_signing_failed",
+            sawCommitHook &&
+              (error._tag !== "GitCommandError" || error.failureKind !== "commit_signing_failed"),
           ),
         ),
         Effect.catchTags({ GitNothingToCommitError: () => Effect.succeed(null) }),
