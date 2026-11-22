@@ -29,6 +29,7 @@ allowBuilds:
   workerd: false
 
 catalog:
+  dfx: 1.0.16
   "@alchemy.run/axiom": 2.0.0-beta.85
   "@alchemy.run/cloudflare": 2.0.0-beta.85
   "@alchemy.run/drizzle": 2.0.0-beta.85
@@ -229,6 +230,7 @@ packageExtensions:
       vite-plus: "catalog:"
 
 patchedDependencies:
+  dfx@1.0.16: patches/dfx@1.0.16.patch
   react-native-image-viewing@0.2.2: patches/react-native-image-viewing@0.2.2.patch
   mdast-util-math@3.0.0: patches/mdast-util-math@3.0.0.patch
   micromark-extension-llm-math@3.1.0: patches/micromark-extension-llm-math@3.1.0.patch
