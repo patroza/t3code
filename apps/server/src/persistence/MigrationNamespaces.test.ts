@@ -60,6 +60,7 @@ describe("migration namespaces", () => {
         [100, "TurnStartReadIndexes"],
         [101, "DelegatedTaskReadIndexes"],
         [102, "ThreadItemCounts"],
+        [103, "IssueTrackerAdditionalScopes"],
       ],
     );
     assert.deepStrictEqual(forkMigrationManifest, [
