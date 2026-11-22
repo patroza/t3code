@@ -290,13 +290,22 @@ jobs:
       - name: Install Chromium for web browser tests
         run: node apps/web/node_modules/playwright/cli.js install --with-deps --only-shell chromium
 
-      - name: Test
+      # Unit and browser files run one after the other here, unlike upstream's 8 vCPU runners:
+      # on 4 vCPU, unit workers starve Chromium, and browser tests that boot extra documents
+      # (browserHistoryStore.browser.test.ts) run past the 15s test timeout.
+      - name: Test unit
+        working-directory: apps/web
+        run: vp test run --passWithNoTests --project unit --shard ${{ matrix.shard }}/${{ strategy.job-total }}
+
+      - name: Test browser
+        if: ${{ !cancelled() }}
+        working-directory: apps/web
         # Vitest drops retired Chromium test frames per file only when temp disk runs low,
         # so a long shard otherwise grows the renderer until Chromium closes the page.
         # https://github.com/vitest-dev/vitest/pull/10912
         env:
           VITEST_CHROMIUM_GC_DISK_THRESHOLD_GB: Infinity
-        run: vp run --filter @t3tools/web test --shard ${{ matrix.shard }}/${{ strategy.job-total }}
+        run: vp test run --passWithNoTests --project browser --shard ${{ matrix.shard }}/${{ strategy.job-total }}
 
   # Preserve the required Test check. Run even after failures or cancellation,
   # and fail unless every test job (including every server shard) succeeded.
