@@ -1396,7 +1396,6 @@ export const layerTools = Layer.mergeAll(
   layerDeviceToolkit,
   layerHtmlToolkit,
   layerMessageToolkit,
-  forkMcpTools(toolkitRegistration),
 );
 
 const layerToolExposure = Layer.effect(
@@ -1439,4 +1438,6 @@ export const layerToolSearch = Layer.mergeAll(
   layerDeferredListing,
 ).pipe(Layer.provide(layerToolExposure));
 
-export const layer = layerMcpTransport(Layer.mergeAll(layerTools, layerToolSearch));
+export const layer = layerMcpTransport(
+  Layer.mergeAll(layerTools, layerToolSearch, forkMcpTools(toolkitRegistration)),
+);

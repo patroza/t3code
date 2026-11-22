@@ -170,6 +170,7 @@ import * as ReplayMarkers from "./auth/replayMarkers.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as IdentityService from "./identity/IdentityService.ts";
 import * as JiraServerLayers from "./jira/JiraServerLayers.ts";
+import { exemptBootstrapPaths } from "./discord/commandReadinessExemption.ts";
 import * as CodexManagedTokenBroker from "./provider/CodexManagedTokenBroker.ts";
 import * as WebhookRoute from "./scheduledTasks/webhookRoute.ts";
 import * as RelayDeliveryProof from "./scheduledTasks/RelayDeliveryProof.ts";
@@ -869,7 +870,7 @@ const layerCommandReadiness = HttpRouter.middleware(
   (httpEffect) =>
     Effect.flatMap(ServerRuntimeStartup.ServerRuntimeStartup, (startup) =>
       startup.awaitCommandReady.pipe(Effect.orDie, Effect.andThen(httpEffect)),
-    ),
+    ).pipe(exemptBootstrapPaths(httpEffect)),
   { global: true },
 );
 
