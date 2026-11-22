@@ -29,7 +29,7 @@ apps/server/src/auth/EnvironmentAuth.ts  # identity + mcp-tokens: exports MCP_CL
 apps/server/src/auth/RpcAuthorization.ts  # identity: spreads IDENTITY_READ_RPC_SCOPES into RPC_REQUIRED_SCOPES
 apps/server/src/cli/auth.ts  # mcp-tokens: --runtime-mode-ceiling flag on auth session issue (cli/mcpClientTokenCeiling.ts)
 apps/server/src/issue/IssueTrackerRegistry.ts  # jira: registers the Jira tracker when a site URL is configured (jira/JiraIssueDriver.ts)
-apps/server/src/mcp/McpHttpServer.ts  # mcp-tools: merges fork-registered toolkits (mcp/forkMcpTools.ts) into layerTools; mcp-tools: merges fork-registered toolkits (mcp/forkMcpTools.ts) into the served MCP layer, beside layerTools so upstream budget/mock tests do not see them
+apps/server/src/mcp/McpHttpServer.ts  # mcp-tools: merges fork-registered toolkits (mcp/forkMcpTools.ts) into the served MCP layer, beside layerTools so upstream budget/mock tests do not see them
 apps/server/src/mcp/McpToolAccess.ts  # identity: writing tools require an identity claim on outside MCP clients (identity/mcpClientClaim.ts)
 apps/server/src/mcp/OrchestratorMcpService.ts  # identity: MCP-created threads and sends carry the caller's source (sourceRefForMcpCaller)
 apps/server/src/observability/RpcInstrumentation.ts  # identity: spreads identity RPC aggregates
@@ -76,5 +76,5 @@ packages/provider-acp/src/server/adapter.ts  # direnv: wrap the flavor with with
 packages/provider-core/package.json  # direnv: export ./server/DirenvEnvironment
 packages/provider-opencode/src/server/adapter.ts  # direnv: resolve the OpenCode server environment through resolveCurrentProviderEnvironment
 packages/shared/package.json  # identity: subpath exports for identityAvatar, identityMap, sourceAttribution; jira: subpath exports for integrationThreadView, jiraBareKeyProjects, turnResponseStats (server, bot, extension); discord + vscode: discordProjectTopic, integrationPendingInteractions, integrationTasks, sessionWake exports shared by the bot, the extension and the server MCP tool
-pnpm-lock.yaml  # workspace: importers for fork-only apps (apps/vscode); regenerate with CI= pnpm install --no-frozen-lockfile, never take a side; discord: lockfile regenerated for apps/discord-bot dependencies
+pnpm-lock.yaml  # vscode + discord: importers for the fork-only apps/vscode and apps/discord-bot, and the patched dfx catalog entry; regenerate with CI= pnpm install --no-frozen-lockfile, never take a side
 pnpm-workspace.yaml  # discord: dfx catalog entry and its patchedDependencies line (patches/dfx@1.0.16.patch)
