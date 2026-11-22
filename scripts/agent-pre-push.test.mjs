@@ -425,5 +425,6 @@ it("runs the gate's tests without the fork's GH_REPO, a dot-directory TMPDIR, or
   assert.strictEqual(env.TMPDIR, "/tmp");
   assert.strictEqual(env.XDG_CONFIG_HOME, NodePath.join("/tmp/t3-gate-xdg-x", "config"));
   assert.strictEqual(env.XDG_DATA_HOME, NodePath.join("/tmp/t3-gate-xdg-x", "data"));
+  assert.strictEqual(env.VITEST_CHROMIUM_GC_DISK_THRESHOLD_GB, "Infinity");
   assert.strictEqual(testEnv({ TMPDIR: "/var/tmp" }, { platform: "linux" }).TMPDIR, "/var/tmp");
 });

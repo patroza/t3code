@@ -160,9 +160,11 @@ if (invokedAs === thisFile) {
 // Tests run as CI does: .envrc's GH_REPO points gh-backed tests at the fork, asar skips sources
 // under a dot-directory (a TMPDIR such as ~/.cache/tmp), and provider tests read the developer's
 // own XDG config and data (OpenCode's ~/.local/share/opencode) unless those folders are empty.
+// Fork CI's Test Web step sets the same Chromium collection threshold.
 export function testEnv(env, { xdgRoot, platform = NodeProcess.platform } = {}) {
   const next = { ...env };
   delete next.GH_REPO;
+  next.VITEST_CHROMIUM_GC_DISK_THRESHOLD_GB ??= "Infinity";
   if (next.TMPDIR && /(^|[/\\])\./.test(next.TMPDIR) && platform !== "win32") {
     next.TMPDIR = "/tmp";
   }
