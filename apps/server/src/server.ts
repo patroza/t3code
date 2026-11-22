@@ -170,6 +170,7 @@ import * as ReplayMarkers from "./auth/replayMarkers.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as IdentityService from "./identity/IdentityService.ts";
 import * as JiraServerLayers from "./jira/JiraServerLayers.ts";
+import * as GitHubServerLayers from "./github/GitHubServerLayers.ts";
 import { exemptBootstrapPaths } from "./discord/commandReadinessExemption.ts";
 import * as CodexManagedTokenBroker from "./provider/CodexManagedTokenBroker.ts";
 import * as WebhookRoute from "./scheduledTasks/webhookRoute.ts";
@@ -901,6 +902,7 @@ const layerMakeRoutes = Layer.mergeAll(
     Ws.layer,
     speechStreamRouteLayer,
     JiraServerLayers.layer,
+    GitHubServerLayers.layer,
   ),
   McpHttpServer.layer.pipe(
     Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
