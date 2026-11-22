@@ -41,7 +41,7 @@ function conciseStderr(stderr: string, environment: NodeJS.ProcessEnv): string |
   return `${normalized.slice(0, STDERR_DETAIL_MAX_LENGTH)}…`;
 }
 
-export const make = Effect.fn("DirenvEnvironment.make")(function* () {
+const make = Effect.fn("DirenvEnvironment.make")(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const processRunner = yield* ProcessRunner.ProcessRunner;
