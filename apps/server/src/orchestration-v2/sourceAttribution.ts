@@ -20,9 +20,7 @@ import { makeIdentityMapPeopleReader } from "../identity/IdentityService.ts";
 
 /** Identity hooks for the orchestrator: commands carry a server-stamped source; events record it. */
 
-const decodeParticipantSummaries = Schema.decodeUnknownSync(
-  Schema.Array(ThreadParticipantSummary),
-);
+const decodeParticipantSummaries = Schema.decodeUnknownSync(Schema.Array(ThreadParticipantSummary));
 
 type UnidentifiedEvent = OrchestrationV2DomainEvent extends infer Event
   ? Event extends OrchestrationV2DomainEvent
@@ -37,10 +35,13 @@ type EmitThreadUpdate<E, R> = (event: {
 }) => Effect.Effect<unknown, E, R>;
 
 /**
- * `emit` hook. A dispatched user message and its turn item record the dispatch's source,
+ * `emit` hook. A dispatched user message records the dispatch's source,
  * and a created thread records its origin as the first participant.
  */
-export function withCommandSource<Event>(command: OrchestrationV2ServerCommand, input: Event): Event {
+export function withCommandSource<Event>(
+  command: OrchestrationV2ServerCommand,
+  input: Event,
+): Event {
   // `emit` is generic over one event type; narrow on the distributed union and hand back that type.
   const event = input as UnidentifiedEvent;
   if (command.type === "message.dispatch" && command.source !== undefined) {
@@ -49,14 +50,6 @@ export function withCommandSource<Event>(command: OrchestrationV2ServerCommand, 
       event.type === "message.updated" &&
       event.payload.role === "user" &&
       event.payload.id === command.messageId &&
-      event.payload.source === undefined
-    ) {
-      return { ...event, payload: { ...event.payload, source } } as Event;
-    }
-    if (
-      event.type === "turn-item.updated" &&
-      event.payload.type === "user_message" &&
-      event.payload.messageId === command.messageId &&
       event.payload.source === undefined
     ) {
       return { ...event, payload: { ...event.payload, source } } as Event;
@@ -86,35 +79,37 @@ export function withCommandSource<Event>(command: OrchestrationV2ServerCommand, 
 }
 
 /** `dispatchMessage` hook: a sender joins the thread's participants (and becomes its origin if it has none). */
-export const recordSourceParticipant = Effect.fn("Orchestrator.recordSourceParticipant")(
-  function* <Projection extends Pick<OrchestrationV2ThreadProjection, "thread">, E, R>(
-    command: { readonly source?: SourceRef | undefined },
-    projection: Projection,
-    emitThreadUpdate: EmitThreadUpdate<E, R>,
-  ) {
-    if (command.source === undefined) return projection;
-    const now = yield* DateTime.now;
-    const thread: OrchestrationV2AppThread = {
-      ...projection.thread,
-      originSource: projection.thread.originSource ?? command.source,
-      participantSummaries: decodeParticipantSummaries(
-        mergeParticipantSummaries({
-          existing: projection.thread.participantSummaries ?? [],
-          source: command.source,
-          participatedAt: DateTime.formatIso(now),
-          originPersonId: projection.thread.originSource?.personId,
-        }),
-      ),
-    };
-    yield* emitThreadUpdate({
-      type: "thread.metadata-updated",
-      threadId: thread.id,
-      occurredAt: now,
-      payload: thread,
-    });
-    return { ...projection, thread };
-  },
-);
+export const recordSourceParticipant = Effect.fn("Orchestrator.recordSourceParticipant")(function* <
+  Projection extends Pick<OrchestrationV2ThreadProjection, "thread">,
+  E,
+  R,
+>(
+  command: { readonly source?: SourceRef | undefined },
+  projection: Projection,
+  emitThreadUpdate: EmitThreadUpdate<E, R>,
+) {
+  if (command.source === undefined) return projection;
+  const now = yield* DateTime.now;
+  const thread: OrchestrationV2AppThread = {
+    ...projection.thread,
+    originSource: projection.thread.originSource ?? command.source,
+    participantSummaries: decodeParticipantSummaries(
+      mergeParticipantSummaries({
+        existing: projection.thread.participantSummaries ?? [],
+        source: command.source,
+        participatedAt: DateTime.formatIso(now),
+        originPersonId: projection.thread.originSource?.personId,
+      }),
+    ),
+  };
+  yield* emitThreadUpdate({
+    type: "thread.metadata-updated",
+    threadId: thread.id,
+    occurredAt: now,
+    payload: thread,
+  });
+  return { ...projection, thread };
+});
 
 /** A delegated child inherits its parent's person, so the child is attributed to the same human. */
 export function delegatedChildSource(parent: OrchestrationV2AppThread): {
@@ -131,7 +126,10 @@ export const dispatchThreadAttributionRepair = Effect.fn("Orchestrator.repairThr
     thread: OrchestrationV2AppThread,
     emitThreadUpdate: EmitThreadUpdate<E, R>,
   ) {
-    if (thread.originSource?.personId != null && thread.originSource.personId !== command.source.personId) {
+    if (
+      thread.originSource?.personId != null &&
+      thread.originSource.personId !== command.source.personId
+    ) {
       return;
     }
     yield* emitThreadUpdate({

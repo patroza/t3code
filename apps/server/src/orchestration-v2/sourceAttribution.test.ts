@@ -11,7 +11,7 @@ import {
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "@effect/vitest";
 
 import {
   delegatedChildSource,
@@ -47,36 +47,26 @@ const dispatch = {
 
 const event = (value: unknown) => value as Omit<OrchestrationV2DomainEvent, "id">;
 
-const runCollecting = <A>(
-  program: (emit: (event: unknown) => Effect.Effect<void>) => Effect.Effect<A>,
-) => {
+const collect = () => {
   const emitted: Array<{ readonly payload: OrchestrationV2AppThread }> = [];
-  const result = Effect.runSync(
-    program((value) =>
-      Effect.sync(() => {
-        emitted.push(value as { readonly payload: OrchestrationV2AppThread });
-      }),
-    ),
-  );
-  return { result, emitted };
+  const emit = (value: unknown) =>
+    Effect.sync(() => {
+      emitted.push(value as { readonly payload: OrchestrationV2AppThread });
+    });
+  return { emitted, emit };
 };
 
 describe("withCommandSource", () => {
-  it("stamps only the dispatched user message and its turn item", () => {
+  it("stamps only the dispatched user message", () => {
     const own = withCommandSource(
       dispatch,
       event({ type: "message.updated", payload: { id: messageId, role: "user" } }),
-    );
-    const item = withCommandSource(
-      dispatch,
-      event({ type: "turn-item.updated", payload: { type: "user_message", messageId } }),
     );
     const unrelated = withCommandSource(
       dispatch,
       event({ type: "message.updated", payload: { id: MessageId.make("other"), role: "user" } }),
     );
     expect((own.payload as { source?: SourceRef }).source).toEqual(source);
-    expect((item.payload as { source?: SourceRef }).source).toEqual(source);
     expect((unrelated.payload as { source?: SourceRef }).source).toBeUndefined();
   });
 
@@ -92,25 +82,29 @@ describe("withCommandSource", () => {
 });
 
 describe("recordSourceParticipant", () => {
-  it("adds a sender to the participants without replacing the origin", () => {
-    const { result, emitted } = runCollecting((emit) =>
-      recordSourceParticipant(
+  it.effect("adds a sender to the participants without replacing the origin", () =>
+    Effect.gen(function* () {
+      const { emitted, emit } = collect();
+      const result = yield* recordSourceParticipant(
         { source: other },
         { thread: thread({ originSource: source }) },
         emit,
-      ),
-    );
-    expect(result.thread.originSource).toEqual(source);
-    expect(result.thread.participantSummaries?.map(({ personId }) => personId)).toContain("grace");
-    expect(emitted).toHaveLength(1);
-  });
+      );
+      expect(result.thread.originSource).toEqual(source);
+      expect(result.thread.participantSummaries?.map(({ personId }) => personId)).toContain(
+        "grace",
+      );
+      expect(emitted).toHaveLength(1);
+    }),
+  );
 
-  it("emits nothing for an unattributed message", () => {
-    const { emitted } = runCollecting((emit) =>
-      recordSourceParticipant({}, { thread: thread() }, emit),
-    );
-    expect(emitted).toHaveLength(0);
-  });
+  it.effect("emits nothing for an unattributed message", () =>
+    Effect.gen(function* () {
+      const { emitted, emit } = collect();
+      yield* recordSourceParticipant({}, { thread: thread() }, emit);
+      expect(emitted).toHaveLength(0);
+    }),
+  );
 });
 
 describe("dispatchThreadAttributionRepair", () => {
@@ -121,19 +115,21 @@ describe("dispatchThreadAttributionRepair", () => {
     source,
   };
 
-  it("attributes an unattributed thread", () => {
-    const { emitted } = runCollecting((emit) =>
-      dispatchThreadAttributionRepair(repair, thread(), emit),
-    );
-    expect(emitted[0]?.payload.originSource).toMatchObject({ personId: "ada" });
-  });
+  it.effect("attributes an unattributed thread", () =>
+    Effect.gen(function* () {
+      const { emitted, emit } = collect();
+      yield* dispatchThreadAttributionRepair(repair, thread(), emit);
+      expect(emitted[0]?.payload.originSource).toMatchObject({ personId: "ada" });
+    }),
+  );
 
-  it("leaves a thread attributed to someone else alone", () => {
-    const { emitted } = runCollecting((emit) =>
-      dispatchThreadAttributionRepair(repair, thread({ originSource: other }), emit),
-    );
-    expect(emitted).toHaveLength(0);
-  });
+  it.effect("leaves a thread attributed to someone else alone", () =>
+    Effect.gen(function* () {
+      const { emitted, emit } = collect();
+      yield* dispatchThreadAttributionRepair(repair, thread({ originSource: other }), emit);
+      expect(emitted).toHaveLength(0);
+    }),
+  );
 });
 
 it("hands a delegated child its parent's person only", () => {
