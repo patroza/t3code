@@ -1,3 +1,20 @@
+apps/mobile/src/App.tsx  # identity: mounts IdentityClaimGate
+apps/mobile/src/features/home/HomeRouteScreen.tsx  # identity: ownership-filters the home thread list and adds ownership to its filter menu (features/identity/OwnershipFilter.tsx)
+apps/mobile/src/features/home/ThreadListFilters.tsx  # identity: Mine/Theirs chip beside the environment and project chips
+apps/mobile/src/features/threads/ThreadFeed.tsx  # identity: labels user messages someone else sent (features/identity/MessageSenderCaption.tsx)
+apps/mobile/src/features/threads/thread-list-v2-items.tsx  # identity: thread rows show the creator/participant mark (features/identity/ParticipantStack.tsx)
+apps/mobile/src/features/threads/ThreadNavigationSidebar.tsx  # identity: ownership-filters the sidebar thread list and adds ownership to its filter menu
+apps/mobile/src/i18n/translations/de.json  # identity: mobile identity strings
+apps/mobile/src/i18n/translations/en.json  # identity: mobile identity strings
+apps/mobile/src/i18n/translations/es.json  # identity: mobile identity strings
+apps/mobile/src/i18n/translations/fr.json  # identity: mobile identity strings
+apps/mobile/src/i18n/translations/ja.json  # identity: mobile identity strings
+apps/mobile/src/i18n/translations/ko.json  # identity: mobile identity strings
+apps/mobile/src/i18n/translations/pt-BR.json  # identity: mobile identity strings
+apps/mobile/src/i18n/translations/ru.json  # identity: mobile identity strings
+apps/mobile/src/i18n/translations/sv.json  # identity: mobile identity strings
+apps/mobile/src/i18n/translations/zh.json  # identity: mobile identity strings
+apps/mobile/src/persistence/mobile-preferences.ts  # identity: persists the Mine/Theirs ownership choice (features/identity/ownershipFilterOptions.ts)
 apps/server/src/auth/EnvironmentAuth.ts  # identity + mcp-tokens: exports MCP_CLIENT_SUBJECT; issueSession passes a runtimeModeCeiling through
 apps/server/src/auth/RpcAuthorization.ts  # identity: spreads IDENTITY_READ_RPC_SCOPES into RPC_REQUIRED_SCOPES
 apps/server/src/cli/auth.ts  # mcp-tokens: --runtime-mode-ceiling flag on auth session issue (cli/mcpClientTokenCeiling.ts)

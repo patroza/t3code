@@ -25,6 +25,10 @@ import type { FollowUpBehavior } from "../lib/followUpBehavior";
 import { isMicrophoneKind, type MicrophoneEntry } from "../lib/microphonePriority";
 import { MOBILE_THEME_IDS, type MobileThemeId, type MobileThemeMode } from "../lib/mobileTheme";
 import * as MobileDatabase from "./mobile-database";
+import {
+  sanitizeOwnershipPreferences,
+  type OwnershipPreferences,
+} from "../features/identity/ownershipFilterOptions";
 import * as MobileSecureStorage from "./mobile-secure-storage";
 import { MobileStorageDecodeError, MobileStorageEncodeError } from "./mobile-storage";
 
@@ -133,7 +137,7 @@ const ThreadProject = Schema.Struct({
 });
 const isThreadProject = Schema.is(ThreadProject);
 
-export interface Preferences {
+export interface Preferences extends OwnershipPreferences {
   readonly navigationTabOrder?: readonly string[];
   readonly hiddenNavigationTabs?: readonly string[];
   /** Whether pull requests or issues last held the tab bar slot they share. */
@@ -435,7 +439,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   if (Array.isArray(parsed.issueSavedViews)) {
     preferences.issueSavedViews = parsed.issueSavedViews.filter(isIssueSavedView);
   }
-  return preferences;
+  return { ...preferences, ...sanitizeOwnershipPreferences(parsed) };
 }
 
 const make = Effect.fn("MobilePreferencesStore.make")(function* () {
