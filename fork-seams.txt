@@ -8,5 +8,62 @@
 AGENTS.md  # tooling: one line importing AGENTS.fork.md
 apps/mobile/app.config.ts  # tooling: wraps the default export in applyForkMobileConfig (app.config.fork.ts)
 apps/mobile/package.json  # tooling: eas-build-pre-install script for the trimmed EAS archive (.easignore)
+apps/mobile/src/App.tsx  # identity: mounts IdentityClaimGate
+apps/mobile/src/features/home/HomeRouteScreen.tsx  # identity: ownership-filters the home thread list and adds ownership to its filter menu (features/identity/OwnershipFilter.tsx)
+apps/mobile/src/features/home/ThreadListFilters.tsx  # identity: Mine/Theirs chip beside the environment and project chips
+apps/mobile/src/features/threads/ThreadFeed.tsx  # identity: labels user messages someone else sent (features/identity/MessageSenderCaption.tsx)
+apps/mobile/src/features/threads/ThreadNavigationSidebar.tsx  # identity: ownership-filters the sidebar thread list and adds ownership to its filter menu
+apps/mobile/src/features/threads/thread-list-v2-items.tsx  # identity: thread rows show the creator/participant mark (features/identity/ParticipantStack.tsx)
+apps/mobile/src/i18n/translations/de.json  # identity: mobile identity strings
+apps/mobile/src/i18n/translations/en.json  # identity: mobile identity strings
+apps/mobile/src/i18n/translations/es.json  # identity: mobile identity strings
+apps/mobile/src/i18n/translations/fr.json  # identity: mobile identity strings
+apps/mobile/src/i18n/translations/ja.json  # identity: mobile identity strings
+apps/mobile/src/i18n/translations/ko.json  # identity: mobile identity strings
+apps/mobile/src/i18n/translations/pt-BR.json  # identity: mobile identity strings
+apps/mobile/src/i18n/translations/ru.json  # identity: mobile identity strings
+apps/mobile/src/i18n/translations/sv.json  # identity: mobile identity strings
+apps/mobile/src/i18n/translations/zh.json  # identity: mobile identity strings
+apps/mobile/src/persistence/mobile-preferences.ts  # identity: persists the Mine/Theirs ownership choice (features/identity/ownershipFilterOptions.ts)
+apps/server/src/auth/EnvironmentAuth.ts  # identity + mcp-tokens: exports MCP_CLIENT_SUBJECT; issueSession passes a runtimeModeCeiling through
+apps/server/src/auth/RpcAuthorization.ts  # identity: spreads IDENTITY_READ_RPC_SCOPES into RPC_REQUIRED_SCOPES
+apps/server/src/cli/auth.ts  # mcp-tokens: --runtime-mode-ceiling flag on auth session issue (cli/mcpClientTokenCeiling.ts)
+apps/server/src/mcp/McpHttpServer.ts  # mcp-tools: merges fork-registered toolkits (mcp/forkMcpTools.ts) into layerTools
+apps/server/src/mcp/McpToolAccess.ts  # identity: writing tools require an identity claim on outside MCP clients (identity/mcpClientClaim.ts)
+apps/server/src/mcp/OrchestratorMcpService.ts  # identity: MCP-created threads and sends carry the caller's source (sourceRefForMcpCaller)
+apps/server/src/observability/RpcInstrumentation.ts  # identity: spreads identity RPC aggregates
+apps/server/src/orchestration-v2/Orchestrator.ts  # identity: emit stamps command source on events, dispatch records participants, delegated children inherit the person, thread.attribution.repair case (sourceAttribution.ts)
+apps/server/src/orchestration-v2/ProjectionStore.ts  # identity: thread decode resolves stored attribution against the map; shells carry attribution fields
+apps/server/src/orchestration-v2/ThreadLaunchService.ts  # identity: a launch's initial message may carry a server-stamped source
+apps/server/src/orchestration-v2/ThreadManagementService.ts  # identity: sendToThread may carry a server-stamped source
+apps/server/src/persistence/Migrations.ts  # migrations: runMigrations/hasPendingMigrations take the fork ledger hooks (ForkMigrations.ts)
+apps/server/src/server.ts  # identity: provides the persisted IdentityService layer
+apps/server/src/ws.ts  # identity: spreads identity.* handlers and wraps dispatch/launch so operate commands carry the session's source (identity/identityWsHandlers.ts)
+apps/web/src/components/ChatView.tsx  # identity: passes message sender context to the timeline (chat/MessageSenderCaption.tsx)
+apps/web/src/components/Sidebar.tsx  # identity: thread list follows the ownership filter (ownershipFilter.ts)
+apps/web/src/components/chat/MessagesTimeline.tsx  # identity: forwards messageSender into the row context
+apps/web/src/components/chat/TimelineUserMessageRow.tsx  # identity: user messages show the sender caption
+apps/web/src/components/chat/timelineRowContext.ts  # identity: row context carries messageSender
+apps/web/src/components/settings/AuthorizedClientsSettings.tsx  # identity: MCP client rows show and assign who the client acts as (McpClientIdentityControl.tsx)
+apps/web/src/components/sidebar/SidebarThreadHeader.tsx  # identity: renders the ownership filter menu (SidebarOwnershipFilter.tsx)
+apps/web/src/components/sidebar/SidebarThreadRow.tsx  # identity: rows show the origin/participant mark (identity/ParticipantStack.tsx)
+apps/web/src/i18n/translations/de.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
+apps/web/src/i18n/translations/en.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
+apps/web/src/i18n/translations/es.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
+apps/web/src/i18n/translations/fr.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
+apps/web/src/i18n/translations/ja.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
+apps/web/src/i18n/translations/ko.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
+apps/web/src/i18n/translations/pt-BR.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
+apps/web/src/i18n/translations/ru.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
+apps/web/src/i18n/translations/sv.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
+apps/web/src/i18n/translations/zh.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
+apps/web/src/routes/__root.tsx  # identity: mounts IdentityClaimGate
+docs/user/outside-agents.md  # mcp-tokens: documents headless MCP bearer tokens and --runtime-mode-ceiling
 knip.jsonc  # tooling: entry for scripts/agent-gh.mjs, which only the generated gh shim runs
 package.json  # tooling: prepare runs scripts/fork-prepare.mjs; pr:ready and dist:desktop:linux:dir scripts
+packages/client-runtime/package.json  # identity: subpath exports for state/identity and message-sender
+packages/contracts/src/clientRpcPermissions.ts  # identity: spreads IDENTITY_GUARDED_RPC_SCOPES (identityRpc.ts) into CLIENT_GUARDED_RPC_SCOPES
+packages/contracts/src/index.ts  # identity: exports identity.ts and identityRpc.ts
+packages/contracts/src/orchestrationV2.ts  # identity: spreads identity field sets (identity.ts) into thread/message/turn-item/command schemas and adds the internal thread.attribution.repair command; optional fields must live inside the upstream structs
+packages/contracts/src/rpc.ts  # identity: merges IdentityRpcGroup (identityRpc.ts) into WsRpcGroup
+packages/shared/package.json  # identity: subpath exports for identityAvatar, identityMap, sourceAttribution

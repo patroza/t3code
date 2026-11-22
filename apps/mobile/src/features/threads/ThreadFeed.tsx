@@ -57,6 +57,7 @@ import * as Haptics from "expo-haptics";
 import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 import { useViewabilityAmount, type LegendListRef } from "@legendapp/list/react-native";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { MessageSenderCaption } from "../identity/MessageSenderCaption";
 import type { HandoffEndpoints } from "@t3tools/client-runtime/handoff";
 import {
   IDLE_COMPACTING_LABELS,
@@ -2404,6 +2405,13 @@ function renderFeedEntry(
             <Text className="mb-1 pr-1 font-t3-medium text-2xs text-foreground-muted opacity-60">
               {m(msg("Sent by T3 Code"))}
             </Text>
+          ) : null}
+          {foldRowId === null ? (
+            <MessageSenderCaption
+              environmentId={props.environmentId}
+              threadId={props.threadId}
+              messageId={message.id}
+            />
           ) : null}
           {presentation.guestName !== undefined ? (
             <GuestMessageName name={presentation.guestName} />

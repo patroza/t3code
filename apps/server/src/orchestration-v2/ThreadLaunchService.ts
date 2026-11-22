@@ -86,6 +86,7 @@ export type ThreadLaunchWorkspaceStrategy =
     };
 
 export interface ThreadLaunchInitialMessage {
+  readonly source?: import("@t3tools/contracts").SourceRef;
   readonly messageId?: MessageId;
   readonly scheduledTaskId?: ScheduledTaskId;
   readonly senderThreadId?: ThreadId;
@@ -1433,6 +1434,7 @@ const make = Effect.gen(function* () {
                     .message({ threadId: candidateThreadId, ordinal: 1 })
                     .pipe(Effect.mapError(mapError(input, "dispatch-message", candidateThreadId)))),
                 text: input.initialMessage.text,
+                ...(input.initialMessage.source && { source: input.initialMessage.source }),
                 ...(input.initialMessage.scheduledTaskId === undefined
                   ? {}
                   : { scheduledTaskId: input.initialMessage.scheduledTaskId }),

@@ -95,6 +95,10 @@
       "types": "./src/userMessage.ts",
       "default": "./src/userMessage.ts"
     },
+    "./message-sender": {
+      "types": "./src/messageSender.ts",
+      "default": "./src/messageSender.ts"
+    },
     "./prompt-links": {
       "types": "./src/promptLinks.ts",
       "default": "./src/promptLinks.ts"
@@ -206,6 +210,10 @@
     "./state/auth": {
       "types": "./src/state/auth.ts",
       "default": "./src/state/auth.ts"
+    },
+    "./state/identity": {
+      "types": "./src/state/identity.ts",
+      "default": "./src/state/identity.ts"
     },
     "./state/assets": {
       "types": "./src/state/assets.ts",

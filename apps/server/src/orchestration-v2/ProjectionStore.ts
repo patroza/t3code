@@ -1,3 +1,4 @@
+import { threadAttributionFields, withStoredThreadAttribution } from "./sourceAttribution.ts";
 import type { ProjectThreadAwarenessV2Input } from "@t3tools/shared/agentAwareness";
 import { applyOrchestrationV2ThreadVisit, pendingGuestMessageCount } from "@t3tools/contracts";
 import { applyThreadPullRequestLinkUpdate } from "../sourceControl/threadPullRequests.ts";
@@ -1444,8 +1445,8 @@ const decodePullRequestThread = Schema.decodeUnknownEffect(
   Schema.fromJsonString(PullRequestThread),
 );
 
-const decodeThreadPayload = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(OrchestrationV2AppThreadJsonSchema),
+const decodeThreadPayload = withStoredThreadAttribution(
+  Schema.decodeUnknownEffect(Schema.fromJsonString(OrchestrationV2AppThreadJsonSchema)),
 );
 const decodeRunPayload = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationV2RunJsonSchema),
@@ -1926,6 +1927,7 @@ export function threadShellFromProjection(
     pullRequests: projection.thread.pullRequests,
   });
   return {
+    ...threadAttributionFields(projection.thread),
     createdBy: projection.thread.createdBy,
     creationSource: projection.thread.creationSource,
     id: projection.thread.id,
@@ -2240,6 +2242,7 @@ function shellFromState(input: {
   readonly visibleItemCount: number;
 }): OrchestrationV2ThreadShell {
   return {
+    ...threadAttributionFields(input.state.thread),
     createdBy: input.state.thread.createdBy,
     creationSource: input.state.thread.creationSource,
     id: input.state.thread.id,

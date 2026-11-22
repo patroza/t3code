@@ -95,6 +95,7 @@ import {
   resolvePreviewAnnotationImage,
   userMessageFileLabel,
 } from "./TimelineUserMessageRow.logic";
+import { MessageSenderCaption } from "./MessageSenderCaption";
 
 // Drawn inside the media so dark screenshots keep an edge on the dark background.
 const MEDIA_EDGE_CLASS_NAME =
@@ -912,7 +913,9 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
         >
           <T>Sent by T3 Code</T>
         </p>
-      ) : null}
+      ) : (
+        <MessageSenderCaption message={row.message} />
+      )}
       {/* The row's heading already names the guest for screen readers. */}
       {userMessage.guestName !== undefined ? (
         <div aria-hidden>

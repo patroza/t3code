@@ -13,6 +13,7 @@ import * as Schema from "effect/Schema";
 import { Argument, Command, Flag, GlobalFlag } from "effect/cli";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
+import { issueSessionCeiling, runtimeModeCeilingFlag } from "./mcpClientTokenCeiling.ts";
 
 import {
   formatConnectDeviceList,
@@ -296,6 +297,7 @@ const sessionIssueCommand = Command.make("issue", {
   ttl: ttlFlag,
   label: labelFlag,
   subject: subjectFlag,
+  runtimeModeCeiling: runtimeModeCeilingFlag,
   tokenOnly: tokenOnlyFlag,
   json: jsonFlag,
 }).pipe(
@@ -305,7 +307,9 @@ const sessionIssueCommand = Command.make("issue", {
       flags,
       (environmentAuth) =>
         Effect.gen(function* () {
+          const ceiling = yield* issueSessionCeiling(flags);
           const issued = yield* environmentAuth.issueSession({
+            ...ceiling,
             scopes: flags.scopes,
             ...(Option.isSome(flags.ttl) ? { ttl: flags.ttl.value } : {}),
             ...(Option.isSome(flags.label) ? { label: flags.label.value } : {}),
