@@ -2,7 +2,7 @@ import type { ConnectionTarget } from "@t3tools/client-runtime/connection";
 import {
   REMOTE_CAPABLE_EDITOR_IDS,
   type EditorId,
-  type EnvironmentId,
+  EnvironmentId,
   type RemoteOpenTarget,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
@@ -16,6 +16,7 @@ import { isLoopbackHostname } from "~/environments/primary/target";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { environmentPresentations } from "~/state/presentation";
 import { hostEnvironmentIdAtom } from "~/state/primaryEnvironment";
+import { sharesDesktopHostMachine } from "~/remoteOpenFork";
 
 export interface RemoteOpenHost {
   readonly kind: "ssh-alias" | RemoteOpenTarget["kind"];
@@ -56,6 +57,7 @@ export function resolveRemoteOpenState(input: {
   readonly remoteOpenTargets: ReadonlyArray<RemoteOpenTarget> | undefined;
   readonly isDesktopRenderer: boolean;
   readonly hostEnvironmentId: string | null;
+  readonly hostRemoteOpenTargets?: ReadonlyArray<RemoteOpenTarget> | undefined;
 }): RemoteOpenState {
   const { target } = input;
   if (target === null || target.environmentId === input.hostEnvironmentId) {
@@ -73,6 +75,7 @@ export function resolveRemoteOpenState(input: {
   } else if (isDesktopLocalConnectionTarget(target)) {
     return LOCAL_EXEC;
   }
+  if (sharesDesktopHostMachine(input)) return LOCAL_EXEC;
 
   if (input.sshTarget !== null && input.sshTarget.alias.length > 0) {
     const { alias } = input.sshTarget;
@@ -116,6 +119,7 @@ const remoteOpenResolutionAtom = Atom.family((environmentId: EnvironmentId) =>
       return UNRESOLVED_REMOTE_OPEN;
     }
     const profile = Option.getOrNull(entry.profile);
+    const hostEnvironmentId = get(hostEnvironmentIdAtom);
     const next: RemoteOpenResolution = {
       state: resolveRemoteOpenState({
         target: entry.target,
@@ -123,7 +127,12 @@ const remoteOpenResolutionAtom = Atom.family((environmentId: EnvironmentId) =>
           profile !== null && profile._tag === "SshConnectionProfile" ? profile.target : null,
         remoteOpenTargets: presentation?.serverConfig?.remoteOpenTargets,
         isDesktopRenderer: window.desktopBridge !== undefined,
-        hostEnvironmentId: get(hostEnvironmentIdAtom),
+        hostEnvironmentId,
+        hostRemoteOpenTargets:
+          hostEnvironmentId === null
+            ? undefined
+            : get(environmentPresentations.presentationAtom(EnvironmentId.make(hostEnvironmentId)))
+                ?.serverConfig?.remoteOpenTargets,
       }),
       isResolved: true,
     };
