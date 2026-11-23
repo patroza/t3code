@@ -130,9 +130,16 @@ for humans.
 - The full gate runs `vp check`, `vpr typecheck`, every other command of Fork CI's `Check` and
   `Test Packages` jobs (`CI_PARITY_STEPS` in `scripts/agent-pre-push.mjs`;
   `scripts/fork-ci-local-proof.test.mjs` fails when the workflow gains a step the gate lacks), then
-  `vp run test`. A pass on a clean worktree is cached per HEAD **tree** in
-  `.run/agent-ship-gate.json`, so a rebase or merge that lands on the same tree reuses it. Force a
-  rerun with `AGENT_SHIP_GATE_FORCE=1` or `--no-cache`.
+  Fork CI's test jobs one after another (`TEST_STEPS`). A pass on a clean worktree is cached per
+  HEAD **tree** in `.run/agent-ship-gate.json`, so a rebase or merge that lands on the same tree
+  reuses it. Force a rerun with `AGENT_SHIP_GATE_FORCE=1` or `--no-cache`.
+- On a Linux host with a systemd user manager the full gate runs in its own transient unit
+  (`agent-gate-<tree>`, log in `.run/`), so a deploy that restarts the T3 server kills only the
+  waiting process. Run the push or `pnpm pr:ready` again: it attaches to the running unit or reads
+  the cached pass. This is the intended exception to "do not detach with `systemd-run`".
+  `AGENT_SHIP_GATE_INLINE=1` runs it in the foreground.
+- The web browser step reruns its failed files once; a pass on rerun prints the flaky files. Fix
+  them. CI never retries.
 - `pnpm pr:ready` requires HEAD to contain the latest `fork/dev`, runs the full gate, then marks the
   draft ready. Raw `gh pr ready` reaches the same place: the `.tools/bin/gh` shim (installed by
   `scripts/fork-prepare.mjs`, put first on `PATH` by `.envrc`) runs the gate first. `.envrc` also
