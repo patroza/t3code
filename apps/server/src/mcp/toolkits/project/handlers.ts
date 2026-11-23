@@ -39,6 +39,7 @@ import { resolveProjectScripts } from "@t3tools/shared/projectScripts";
 import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
 import { resolveRuntimeMode } from "../../delegatedTaskModes.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import { sourceRefForMcpCaller } from "../../../identity/stampSource.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as OrchestrationMcp from "../../OrchestratorMcpService.ts";
 import { newCommandId, readCaller, resolveProjectId, unavailable } from "../../threadAccess.ts";
@@ -432,6 +433,10 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
             )?.supportedRuntimeModes,
           });
         }
+        const source = yield* sourceRefForMcpCaller({
+          parentOrigin: caller?.originSource,
+          clientSessionId: scope.client?.sessionId,
+        });
         const result = yield* ThreadMessageIntake.launchThread({
           commandId,
           threadId,
@@ -449,6 +454,7 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
                 initialMessage: {
                   messageId,
                   ...(caller === undefined ? {} : { senderThreadId: caller.id }),
+                  ...(source && { source }),
                   text: input.message ?? "",
                   attachments,
                   ...(input.outputSchema === undefined ? {} : { outputSchema: input.outputSchema }),
