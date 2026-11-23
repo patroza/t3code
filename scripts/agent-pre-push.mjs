@@ -46,6 +46,29 @@ const withRepoBin = (root, env) => {
  * suites. A local proof skips those jobs, so keep this in step with fork-ci.yml (the test
  * enforces it) and bump LOCAL_PROOF_VERSION when the gate stops covering them.
  */
+/**
+ * Fork CI's test jobs, run one after another (without --shard). Running the whole workspace at
+ * once makes web browser tests compete with every other suite; on a loaded machine a test that
+ * takes ~1s alone then misses its 15s timeout. The test keeps these in step with fork-ci.yml.
+ */
+export const TEST_STEPS = Object.freeze([
+  [
+    "test packages",
+    [
+      ["vp", "run", "--parallel", "--concurrency-limit", "4", "--filter", "!t3"],
+      ["--filter", "!@t3tools/monorepo", "--filter", "!@t3tools/web", "test"],
+    ].flat(),
+    ".",
+  ],
+  ["test server", ["vp", "run", "--filter", "t3", "test"], "."],
+  ["test web unit", ["vp", "test", "run", "--passWithNoTests", "--project", "unit"], "apps/web"],
+  [
+    "test web browser",
+    ["vp", "test", "run", "--passWithNoTests", "--project", "browser"],
+    "apps/web",
+  ],
+]);
+
 export const CI_PARITY_STEPS = Object.freeze([
   ["ensure electron", ["vp", "run", "--filter", "@t3tools/desktop", "ensure:electron"]],
   ["knip", ["vp", "run", "knip:check"]],
@@ -170,7 +193,10 @@ export const runAgentShipGate = async (opts = {}) => {
 
   const xdgRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-gate-xdg-"));
   try {
-    run("vp run test", ["vp", "run", "test"], { cwd: root, env: testEnv(env, { xdgRoot }) });
+    const testEnvironment = testEnv(env, { xdgRoot });
+    for (const [label, args, cwd] of TEST_STEPS) {
+      run(label, args, { cwd: NodePath.join(root, cwd), env: testEnvironment, shell: false });
+    }
   } finally {
     NodeFS.rmSync(xdgRoot, { recursive: true, force: true });
   }

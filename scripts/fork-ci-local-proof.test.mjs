@@ -4,7 +4,7 @@ import * as NodeURL from "node:url";
 
 import { assert, describe, it } from "@effect/vitest";
 
-import { CI_PARITY_STEPS } from "./agent-pre-push.mjs";
+import { CI_PARITY_STEPS, TEST_STEPS } from "./agent-pre-push.mjs";
 import { postLocalProof, postLocalProofAfterPush, pushesHead } from "./lib/agent-local-proof.mjs";
 import {
   LOCAL_PROOF_CONTEXT,
@@ -238,15 +238,17 @@ describe("local gate covers the jobs a proof skips", () => {
     const body = next === -1 ? workflow.slice(start) : workflow.slice(start, start + 1 + next);
     return [...body.matchAll(/\n {8}run: (?!\|)(.+)/g)].map((match) => match[1].trim());
   };
-  // Covered by the gate's own vp check / vpr typecheck / vp run test, its committed PR asset
+  // Covered by the gate's own vp check / vpr typecheck / TEST_STEPS, its committed PR asset
   // check, or machine setup a developer box already has.
   const coveredElsewhere = [
     "vp check",
     "vp run -r --cache --log labeled typecheck",
     "sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config",
-    "vp run --parallel --concurrency-limit 4 --filter '!t3' --filter '!@t3tools/monorepo' --filter '!@t3tools/web' test",
   ];
-  const parity = new Set(CI_PARITY_STEPS.map(([, args]) => args.join(" ")));
+  const quote = (arg) => (arg.startsWith("!") ? `'${arg}'` : arg);
+  const parity = new Set(
+    [...CI_PARITY_STEPS, ...TEST_STEPS].map(([, args]) => args.map(quote).join(" ")),
+  );
 
   it.each(["check", "test_packages"])("mirrors every %s step", (jobId) => {
     const runs = jobRuns(jobId);
@@ -256,6 +258,16 @@ describe("local gate covers the jobs a proof skips", () => {
         parity.has(command) || coveredElsewhere.includes(command),
         `${jobId} runs "${command}", which the local gate does not`,
       );
+    }
+  });
+
+  it.each(["test_server", "test_web"])("runs every %s suite unsharded", (jobId) => {
+    const suites = jobRuns(jobId)
+      .filter((command) => command.startsWith("vp "))
+      .map((command) => command.replace(/ --shard .*$/, ""));
+    assert.isAbove(suites.length, 0);
+    for (const command of suites) {
+      assert.ok(parity.has(command), `${jobId} runs "${command}", which the local gate does not`);
     }
   });
 
