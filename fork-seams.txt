@@ -32,6 +32,7 @@ apps/server/src/issue/IssueTrackerRegistry.ts  # jira: registers the Jira tracke
 apps/server/src/mcp/McpHttpServer.ts  # mcp-tools: merges fork-registered toolkits (mcp/forkMcpTools.ts) into the served MCP layer, beside layerTools so upstream budget/mock tests do not see them
 apps/server/src/mcp/McpToolAccess.ts  # identity: writing tools require an identity claim on outside MCP clients (identity/mcpClientClaim.ts)
 apps/server/src/mcp/OrchestratorMcpService.ts  # identity: MCP-created threads and sends carry the caller's source (sourceRefForMcpCaller)
+apps/server/src/mcp/toolkits/project/handlers.ts  # identity: t3_thread_launch stamps the MCP caller's person on the initial message (identity/stampSource.ts sourceRefForMcpCaller), which becomes the thread's origin
 apps/server/src/observability/RpcInstrumentation.ts  # identity: spreads identity RPC aggregates; bot-browser: spreads previewAutomationHostRpcAggregates
 apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts  # direnv: resolve the query environment through resolveCurrentProviderEnvironment
 apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts  # direnv: resolve the app-server environment through resolveCurrentProviderEnvironment (error mapped to open-session error)
