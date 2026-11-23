@@ -14,6 +14,12 @@ import * as NodeURL from "node:url";
 import { isCodingAgent } from "./lib/agent-env.mjs";
 import { postLocalProof, postLocalProofAfterPush, pushesHead } from "./lib/agent-local-proof.mjs";
 import { filesForChangedShipCheck } from "./lib/agent-fork-dev.mjs";
+import {
+  enterDetachedGate,
+  runGateDetached,
+  runWithFlakyRerun,
+  shouldDetachGate,
+} from "./lib/agent-gate-resilience.mjs";
 import { resolveOpenPrState, shipGateScopeForPush } from "./lib/agent-pr-state.mjs";
 import {
   isShipGateForce,
@@ -66,6 +72,8 @@ export const TEST_STEPS = Object.freeze([
     "test web browser",
     ["vp", "test", "run", "--passWithNoTests", "--project", "browser"],
     "apps/web",
+    // Under load a browser file sometimes fails to load a module or its worker; rerun those once.
+    { rerunFlaky: true },
   ],
 ]);
 
@@ -137,7 +145,7 @@ const rejectCommittedPrAssets = (root) => {
 /**
  * Cache full validation by HEAD's tree; changed-file checks never count as a full gate. Force with
  * AGENT_SHIP_GATE_FORCE. `proven` is true when a full gate passed on HEAD's committed tree.
- * @param {{ root?: string, scope?: "full" | "changed", force?: boolean, env?: NodeJS.ProcessEnv }} [opts]
+ * @param {{ root?: string, scope?: "full" | "changed", force?: boolean, env?: NodeJS.ProcessEnv, detach?: boolean }} [opts]
  * @returns {Promise<{ status: "cached" | "ok", sha: string | null, tree: string | null, scope: "full" | "changed", proven: boolean }>}
  */
 export const runAgentShipGate = async (opts = {}) => {
@@ -174,6 +182,12 @@ export const runAgentShipGate = async (opts = {}) => {
     return { status: "cached", sha: headSha, tree, scope, proven: true };
   }
 
+  if (opts.detach !== false && tree && shouldDetachGate(env)) {
+    const result = await runGateDetached({ root, tree, entry: thisFile, env, force });
+    if (result.code !== 0) NodeProcess.exit(result.code);
+    return /** @type {Awaited<ReturnType<typeof runAgentShipGate>>} */ (result.gate);
+  }
+
   // Uncommitted or untracked files make the run test something other than HEAD's tree.
   const cleanAtStart = isWorktreeClean(root);
 
@@ -194,7 +208,21 @@ export const runAgentShipGate = async (opts = {}) => {
   const xdgRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-gate-xdg-"));
   try {
     const testEnvironment = testEnv(env, { xdgRoot });
-    for (const [label, args, cwd] of TEST_STEPS) {
+    for (const [label, args, cwd, options] of TEST_STEPS) {
+      if (options?.rerunFlaky) {
+        const status = runWithFlakyRerun({
+          label,
+          args,
+          cwd: NodePath.join(root, cwd),
+          env: testEnvironment,
+          reportPath: NodePath.join(xdgRoot, "vitest-report.json"),
+        });
+        if (status !== 0) {
+          console.error(`agent ship-gate: failed: ${label} (exit ${status})`);
+          NodeProcess.exit(status);
+        }
+        continue;
+      }
       run(label, args, { cwd: NodePath.join(root, cwd), env: testEnvironment, shell: false });
     }
   } finally {
@@ -286,6 +314,16 @@ const main = async () => {
   }
 
   const force = args.includes("--no-cache");
+  const detachedIndex = args.indexOf("--detached-gate");
+  if (detachedIndex !== -1) {
+    const { env, recordGate } = enterDetachedGate({
+      envPath: args[detachedIndex + 1] ?? "",
+      resultPath: args[detachedIndex + 2] ?? "",
+    });
+    recordGate(await runAgentShipGate({ root, scope: "full", force, env, detach: false }));
+    return;
+  }
+
   if (args.includes("--prove")) {
     const gate = await runAgentShipGate({ root, scope: "full", force });
     reportLocalProof(root, gate);
