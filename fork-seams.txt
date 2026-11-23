@@ -9,8 +9,10 @@
 .github/workflows/pr-size.yml  # tooling: deleted; upstream's PR size labeler (pull_request_target) is not wanted on fork PRs
 .github/workflows/pr-vouch.yml  # tooling: deleted; upstream's contributor vouch gate (pull_request_target) would act on fork PRs
 AGENTS.md  # tooling: one line importing AGENTS.fork.md
+apps/desktop/src/main.ts  # dir-install-updates: provides updates/DesktopDirInstallUpdates.ts's updater to DesktopUpdates
 apps/desktop/src/preview/Manager.ts  # webauthn: popup window options and browser sessions go through the fork WebAuthn policy (preview/WebAuthnPolicy.ts)
 apps/desktop/src/preview/Passkeys.ts  # webauthn: registers the service's WebAuthn availability (bridge, platform, Touch ID configured) with preview/WebAuthnPolicy.ts
+apps/desktop/src/updates/DesktopUpdates.ts  # dir-install-updates: directory installs (no feed, not AppImage/.deb) are not disabled (updates/DesktopDirInstallUpdates.ts)
 apps/desktop/src/window/DesktopWindow.ts  # webauthn: preview guests disable the WebAuth blink feature when no authenticator works (preview/WebAuthnPolicy.ts)
 apps/mobile/app.config.ts  # tooling: wraps the default export in applyForkMobileConfig (app.config.fork.ts)
 apps/mobile/package.json  # tooling: eas-build-pre-install script for the trimmed EAS archive (.easignore)

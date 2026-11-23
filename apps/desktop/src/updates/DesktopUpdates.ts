@@ -38,6 +38,7 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as IpcChannels from "../ipc/channels.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopSshEnvironment from "../ssh/DesktopSshEnvironment.ts";
+import * as DesktopDirInstallUpdates from "./DesktopDirInstallUpdates.ts";
 import * as DesktopUpdatePolicy from "./DesktopUpdatePolicy.ts";
 import {
   normalizeDesktopUpdateReleaseNotes,
@@ -492,7 +493,7 @@ export const make = Effect.gen(function* () {
         hasUpdateFeedConfig: hasFeedConfig,
       }),
     );
-  });
+  }).pipe(yield* DesktopDirInstallUpdates.enableDirInstall);
 
   // Without nightly, an install on that channel stays put until its user picks stable: moving it
   // silently would be a downgrade nobody asked for, and checking nightly would break the policy.
