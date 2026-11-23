@@ -17,6 +17,8 @@ apps/discord-bot/*
 !/native/libghostty-vt
 /native/libghostty-vt/*
 !/native/libghostty-vt/LICENSE
+# Mobile native modules symlink their shared sources from here.
+!/native/apple-speech
 release/
 release-mock/
 dist-electron/
