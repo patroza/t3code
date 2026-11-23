@@ -16,6 +16,8 @@ import { isLoopbackHostname } from "~/environments/primary/target";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { environmentPresentations } from "~/state/presentation";
 import { hostEnvironmentIdAtom } from "~/state/primaryEnvironment";
+import { isReachedOverLoopback } from "~/remoteOpenFork";
+import { environmentSession } from "~/state/session";
 
 export interface RemoteOpenHost {
   readonly kind: "ssh-alias" | RemoteOpenTarget["kind"];
@@ -56,6 +58,7 @@ export function resolveRemoteOpenState(input: {
   readonly remoteOpenTargets: ReadonlyArray<RemoteOpenTarget> | undefined;
   readonly isDesktopRenderer: boolean;
   readonly hostEnvironmentId: string | null;
+  readonly activeHttpBaseUrl?: string | undefined;
 }): RemoteOpenState {
   const { target } = input;
   if (target === null || target.environmentId === input.hostEnvironmentId) {
@@ -73,6 +76,7 @@ export function resolveRemoteOpenState(input: {
   } else if (isDesktopLocalConnectionTarget(target)) {
     return LOCAL_EXEC;
   }
+  if (isReachedOverLoopback(input.activeHttpBaseUrl)) return LOCAL_EXEC;
 
   if (input.sshTarget !== null && input.sshTarget.alias.length > 0) {
     const { alias } = input.sshTarget;
@@ -124,6 +128,9 @@ const remoteOpenResolutionAtom = Atom.family((environmentId: EnvironmentId) =>
         remoteOpenTargets: presentation?.serverConfig?.remoteOpenTargets,
         isDesktopRenderer: window.desktopBridge !== undefined,
         hostEnvironmentId: get(hostEnvironmentIdAtom),
+        activeHttpBaseUrl: Option.getOrUndefined(
+          get(environmentSession.preparedConnectionValueAtom(environmentId)),
+        )?.httpBaseUrl,
       }),
       isResolved: true,
     };

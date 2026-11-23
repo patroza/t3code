@@ -57,6 +57,7 @@ apps/web/src/components/settings/AuthorizedClientsSettings.tsx  # identity: MCP 
 apps/web/src/components/sidebar/SidebarThreadHeader.tsx  # identity: renders the ownership filter menu (SidebarOwnershipFilter.tsx)
 apps/web/src/components/sidebar/SidebarThreadRow.tsx  # identity: rows show the origin/participant mark (identity/ParticipantStack.tsx)
 apps/web/src/i18n/initializeI18n.ts  # i18n: wraps the catalog loader with withForkTranslations (fork-translations/)
+apps/web/src/remoteOpen.ts  # desktop: a paired environment reached over its loopback route opens editors locally instead of an SSH link back to this machine (remoteOpenFork.ts); upstream candidate
 apps/web/src/routes/__root.tsx  # identity: mounts IdentityClaimGate
 knip.jsonc  # tooling: entry for scripts/agent-gh.mjs, which only the generated gh shim runs; i18n: entry for upstream scripts/i18n-check.ts, which fork-i18n.ts replaces
 package.json  # tooling: prepare runs scripts/fork-prepare.mjs; pr:ready and dist:desktop:linux:dir scripts; i18n: i18n:check runs scripts/fork-i18n.ts
