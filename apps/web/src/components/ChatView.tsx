@@ -320,6 +320,7 @@ import { sideThreadComposer, sideThreadKindOf } from "@t3tools/client-runtime/si
 import { useOpenSurfaceInMainView } from "../hooks/useOpenSurfaceInMainView";
 import { useRemoteOpenState } from "~/remoteOpen";
 import { shouldShowOpenInPicker } from "./chat/OpenInPicker.logic";
+import { useIsReachedOverLoopback } from "~/remoteOpenFork";
 import { useOpenFavoriteEditorShortcut } from "./chat/OpenInPickerShortcut";
 import {
   PanelLayoutControls,
@@ -1783,12 +1784,14 @@ export default function ChatView(props: ChatViewProps) {
     useAtomValue(serverEnvironment.configValueAtom(openInEnvironmentId))?.availableEditors ?? [];
   const hostEnvironmentId = useAtomValue(hostEnvironmentIdAtom);
   const remoteOpenState = useRemoteOpenState(openInEnvironmentId);
+  const reachedOverLoopback = useIsReachedOverLoopback(openInEnvironmentId);
   const showOpenInPicker = shouldShowOpenInPicker({
     activeProjectName: activeProject?.title,
     activeThreadEnvironmentId: openInEnvironmentId,
     primaryEnvironmentId: primaryEnvironment?.environmentId ?? null,
     hostEnvironmentId,
     remoteOpenMode: remoteOpenState.mode,
+    reachedOverLoopback,
   });
   useOpenFavoriteEditorShortcut({
     enabled: showOpenInPicker && !backgroundThread,

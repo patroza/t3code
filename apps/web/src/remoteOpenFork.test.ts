@@ -2,6 +2,7 @@ import { BearerConnectionTarget } from "@t3tools/client-runtime/connection";
 import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
+import { shouldShowOpenInPicker } from "./components/chat/OpenInPicker.logic";
 import { resolveRemoteOpenState } from "./remoteOpen";
 
 const target = new BearerConnectionTarget({
@@ -29,5 +30,23 @@ describe("paired environment open over its active route", () => {
         activeHttpBaseUrl: url,
       }).mode,
     ).toBe(mode);
+  });
+});
+
+describe("Open in for a paired environment that opens locally", () => {
+  it.each([
+    { reachedOverLoopback: true, shown: true },
+    { reachedOverLoopback: false, shown: false },
+  ])("loopback $reachedOverLoopback → shown $shown", ({ reachedOverLoopback, shown }) => {
+    expect(
+      shouldShowOpenInPicker({
+        activeProjectName: "t3code",
+        activeThreadEnvironmentId: EnvironmentId.make("environment-server"),
+        primaryEnvironmentId: EnvironmentId.make("environment-desktop"),
+        hostEnvironmentId: "environment-desktop",
+        remoteOpenMode: "local-exec",
+        reachedOverLoopback,
+      }),
+    ).toBe(shown);
   });
 });

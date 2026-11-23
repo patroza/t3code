@@ -8,8 +8,10 @@ export function shouldShowOpenInPicker(input: {
   readonly primaryEnvironmentId: EnvironmentId | null;
   readonly hostEnvironmentId: string | null;
   readonly remoteOpenMode: RemoteOpenMode;
+  readonly reachedOverLoopback?: boolean;
 }): boolean {
   if (!input.activeProjectName) return false;
+  if (input.reachedOverLoopback) return true;
   if (
     input.activeThreadEnvironmentId === input.primaryEnvironmentId ||
     input.activeThreadEnvironmentId === input.hostEnvironmentId
