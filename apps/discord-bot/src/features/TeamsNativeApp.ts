@@ -33,7 +33,6 @@ import { BridgeHub } from "./BridgeHub.ts";
 import { ThreadWarmCacheStore } from "../store/ThreadWarmCacheStore.ts";
 import { BotResponseTransport } from "./BotResponseTransport.ts";
 import { makeTeamsResponseTransport } from "../teams/ResponseTransport.ts";
-import { channelWeek, rememberChannelWeek } from "../teams/weeklyThreads.ts";
 
 interface TeamsConversationCoordinates {
   readonly tenantId: string;
@@ -489,16 +488,8 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
           return;
         }
 
-        const week = channelWeek({
-          dataDir: config.dataDir,
-          tenantId: location.tenantId,
-          teamId: location.teamId,
-          channelId: location.channelId,
-          at: DateTime.toDateUtc(yield* DateTime.now),
-        });
         const turn = yield* startOrContinueT3Turn(config, {
           source: { sourceKind: "teams", sourceThreadId: sourceKey },
-          joinT3ThreadId: week?.joinT3ThreadId,
           sourceActor: {
             platformId: activity.from.aadObjectId ?? activity.from.id,
             displayName: access.person.name,
@@ -513,7 +504,6 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
           stickyModelOnContinue: true,
           promptContext: { kind: "raw", value: prompt },
         });
-        yield* Effect.promise(() => rememberChannelWeek(week, turn));
 
         const receivedAt = yield* DateTime.now.pipe(Effect.map(DateTime.formatIso));
         const transport = makeTeamsResponseTransport({

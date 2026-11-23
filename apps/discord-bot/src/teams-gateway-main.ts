@@ -11,7 +11,6 @@ import { BridgeHub } from "./features/BridgeHub.ts";
 import { App } from "@microsoft/teams.apps";
 import { NodeRuntime } from "@effect/platform-node";
 import * as ConfigProvider from "effect/ConfigProvider";
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
@@ -31,7 +30,6 @@ import { layerFromOptionalPath as aliasesLayer } from "./projectAliases.ts";
 import { ThreadLinkStore, layer as linksLayer } from "./store/ThreadLinkStore.ts";
 import { T3Session, layer as sessionLayer } from "./t3/T3Session.ts";
 import { botWasAdded } from "./teams/groupChats.ts";
-import { channelWeek, rememberChannelWeek } from "./teams/weeklyThreads.ts";
 import { readGatewayConfig, readPrivateCredential } from "./teams/gatewayConfig.ts";
 import { ingestTeamsGroupChat, teamsChannelPoster } from "./features/TeamsGroupChatObserver.ts";
 import { mentionsTeamsRecipient, registerTeamsMessageEvents } from "./teams/messageEvents.ts";
@@ -548,16 +546,8 @@ const program = Effect.gen(function* () {
           ]
             .filter((part) => part.trim().length > 0)
             .join("\n\n");
-          const week = channelWeek({
-            dataDir: workspace.config.dataDir,
-            tenantId: lease.binding.tenantId,
-            teamId: lease.binding.teamId,
-            channelId: lease.binding.channelId,
-            at: DateTime.toDateUtc(yield* DateTime.now),
-          });
           const turn = yield* startOrContinueT3Turn(workspace.config, {
             source: { sourceKind: "teams", sourceThreadId: sourceKey },
-            joinT3ThreadId: week?.joinT3ThreadId,
             sourceActor: { platformId: lease.actorId },
             externalConversationId: lease.conversationId,
             externalParentId: lease.binding.teamId + "/" + lease.binding.channelId,
@@ -570,7 +560,6 @@ const program = Effect.gen(function* () {
             ...(images.uploads.length > 0 ? { attachments: images.uploads } : {}),
             promptContext: { kind: "raw", value: enriched },
           });
-          yield* Effect.promise(() => rememberChannelWeek(week, turn));
           const transport = makeTeamsResponseTransport({
             config: workspace.config,
             clientId: initial.identity.entraClientId,

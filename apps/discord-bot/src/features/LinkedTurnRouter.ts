@@ -1,5 +1,5 @@
 // @effect-diagnostics anyUnknownInErrorContext:off missingEffectContext:off globalDate:off globalErrorInEffectFailure:off outdatedApi:off
-import type { ClientSourceHint, ThreadId, UploadChatAttachment } from "@t3tools/contracts";
+import type { ClientSourceHint, UploadChatAttachment } from "@t3tools/contracts";
 import { DiscordREST } from "dfx";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -76,11 +76,6 @@ export interface TransportNeutralLinkedTurnInput {
   readonly stickyModelOnContinue?: boolean | undefined;
   readonly attachments?: ReadonlyArray<UploadChatAttachment> | undefined;
   readonly promptContext?: LinkedTurnInput["promptContext"];
-  /**
-   * When this source has no link yet, continue this T3 thread instead of opening one, and link
-   * the source to it. Ignored when the thread is gone or belongs to another project.
-   */
-  readonly joinT3ThreadId?: string | undefined;
 }
 
 /** Preserve the requester on every dispatch; the server keeps the first thread origin. */
@@ -150,26 +145,10 @@ export const startOrContinueT3Turn = Effect.fn("startOrContinueT3Turn")(function
   const hasExplicitModelFlags =
     input.flags.provider !== undefined || input.flags.model !== undefined;
   const resolved = yield* resolveProjectFromShortName(input.projectShortName);
-  const linkedSource = yield* links.getBySourceThread(
+  const existing = yield* links.getBySourceThread(
     input.source.sourceKind,
     input.source.sourceThreadId,
   );
-  const joinT3ThreadId = linkedSource === null ? input.joinT3ThreadId : undefined;
-  const joinable =
-    joinT3ThreadId === undefined
-      ? null
-      : yield* t3
-          .fetchThreadDetail(joinT3ThreadId as ThreadId)
-          .pipe(
-            Effect.map((snapshot) =>
-              snapshot !== null && snapshot.thread.projectId === resolved.project.id
-                ? (joinT3ThreadId as ThreadId)
-                : null,
-            ),
-          );
-  const existing =
-    linkedSource ??
-    (joinable === null ? null : { t3ThreadId: joinable, projectId: resolved.project.id });
 
   if (existing !== null) {
     if (input.source.sourceKind === "teams" && existing.projectId !== resolved.project.id) {
@@ -206,18 +185,6 @@ export const startOrContinueT3Turn = Effect.fn("startOrContinueT3Turn")(function
       ...(attachments.length > 0 ? { attachments } : {}),
       sourceHint,
     });
-    if (linkedSource === null) {
-      yield* links.put({
-        sourceKind: input.source.sourceKind,
-        sourceThreadId: input.source.sourceThreadId,
-        discordThreadId: input.externalConversationId,
-        t3ThreadId: existing.t3ThreadId,
-        projectId: resolved.project.id,
-        channelId: input.externalParentId,
-        guildId: input.externalTenantId,
-        createdAt: DateTime.formatIso(DateTime.nowUnsafe()),
-      });
-    }
     return { threadId: existing.t3ThreadId, messageId, isNew: false } as const;
   }
 
