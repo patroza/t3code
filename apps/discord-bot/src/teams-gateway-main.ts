@@ -29,7 +29,8 @@ import { IdentityMapStore, layerFromOptionalPath as identityMapLayer } from "./i
 import { layerFromOptionalPath as aliasesLayer } from "./projectAliases.ts";
 import { ThreadLinkStore, layer as linksLayer } from "./store/ThreadLinkStore.ts";
 import { T3Session, layer as sessionLayer } from "./t3/T3Session.ts";
-import { botWasAdded } from "./teams/groupChats.ts";
+import { botWasAdded, isTeamsGroupChat } from "./teams/groupChats.ts";
+import { makeGroupChatTitleResolver } from "./teams/groupChatTitles.ts";
 import { readGatewayConfig, readPrivateCredential } from "./teams/gatewayConfig.ts";
 import { ingestTeamsGroupChat, teamsChannelPoster } from "./features/TeamsGroupChatObserver.ts";
 import { mentionsTeamsRecipient, registerTeamsMessageEvents } from "./teams/messageEvents.ts";
@@ -280,18 +281,58 @@ const program = Effect.gen(function* () {
     };
   });
 
+  const groupChatTitle = makeGroupChatTitleResolver({
+    clientId: initial.identity.entraClientId,
+    clientSecret: () => readPrivateCredential(secretPath),
+    tokenCache: teamsTokenCache,
+  });
+  // One "not watched" line per chat per process, so a busy unwatched chat can't flood the log.
+  const reportedUnwatchedChats = new Set<string>();
   const observeGroupChat = async (
-    activity: GatewayActivity & {
+    incoming: GatewayActivity & {
       readonly replyToId?: string;
       readonly attachments?: ReadonlyArray<TeamsActivityAttachment>;
     },
     api: Parameters<typeof teamsChannelPoster>[0],
     event: "message" | "join",
   ): Promise<boolean> => {
+    if (
+      !isTeamsGroupChat({
+        conversationType: incoming.conversation.conversationType,
+        isGroup: incoming.conversation.isGroup,
+        teamId: incoming.channelData?.team?.id,
+      })
+    )
+      return false;
+    const title = await groupChatTitle({
+      tenantId:
+        incoming.channelData?.tenant?.id ??
+        incoming.conversation.tenantId ??
+        initial.identity.homeTenantId,
+      conversationId: incoming.conversation.id,
+      name: incoming.conversation.name,
+    });
+    const activity =
+      title.source === "graph" && title.title !== undefined
+        ? { ...incoming, conversation: { ...incoming.conversation, name: title.title } }
+        : incoming;
     const decision = policy.acceptGroupChat(activity);
     if (decision.kind === "not-group") return false;
+    const unwatched = decision.kind === "silent" && decision.reason === "unmapped";
+    const chatId = activity.conversation.id.split(";messageid=")[0] ?? activity.conversation.id;
+    if (unwatched && event !== "join" && !reportedUnwatchedChats.has(chatId)) {
+      reportedUnwatchedChats.add(chatId);
+      Effect.runSyncWith(gatewayContext)(
+        Effect.logInfo("Teams group chat not watched", {
+          chat: chatId.slice(0, 24),
+          title: title.title ?? null,
+          titleSource: title.source,
+          graph: title.graph ?? null,
+        }),
+      );
+    }
     const quiet =
-      (decision.kind === "silent" && decision.reason === "unmapped" && event !== "join") ||
+      (unwatched && event !== "join") ||
       (decision.kind === "reject" && decision.reason === "duplicate");
     if (!quiet) {
       Effect.runSyncWith(gatewayContext)(
