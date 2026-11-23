@@ -9,8 +9,10 @@
 .github/workflows/pr-size.yml  # tooling: deleted; upstream's PR size labeler (pull_request_target) is not wanted on fork PRs
 .github/workflows/pr-vouch.yml  # tooling: deleted; upstream's contributor vouch gate (pull_request_target) would act on fork PRs
 AGENTS.md  # tooling: one line importing AGENTS.fork.md
+apps/desktop/src/main.ts  # dir-install-updates: provides updates/DesktopDirInstallUpdates.ts's updater to DesktopUpdates
 apps/desktop/src/preview/Manager.ts  # webauthn: popup window options and browser sessions go through the fork WebAuthn policy (preview/WebAuthnPolicy.ts)
 apps/desktop/src/preview/Passkeys.ts  # webauthn: registers the service's WebAuthn availability (bridge, platform, Touch ID configured) with preview/WebAuthnPolicy.ts
+apps/desktop/src/updates/DesktopUpdates.ts  # dir-install-updates: directory installs (no feed, not AppImage/.deb) are not disabled (updates/DesktopDirInstallUpdates.ts)
 apps/desktop/src/window/DesktopWindow.ts  # webauthn: preview guests disable the WebAuth blink feature when no authenticator works (preview/WebAuthnPolicy.ts)
 apps/mobile/app.config.ts  # tooling: wraps the default export in applyForkMobileConfig (app.config.fork.ts)
 apps/mobile/package.json  # tooling: eas-build-pre-install script for the trimmed EAS archive (.easignore)
@@ -89,5 +91,6 @@ packages/provider-opencode/src/server/adapter.ts  # direnv: resolve the OpenCode
 packages/shared/package.json  # identity: subpath exports for identityAvatar, identityMap, sourceAttribution; jira: subpath exports for integrationThreadView, jiraBareKeyProjects, turnResponseStats (server, bot, extension); discord + vscode: discordProjectTopic, integrationPendingInteractions, integrationTasks, sessionWake exports shared by the bot, the extension and the server MCP tool; github + discord: providerModelSelection, shared by the bot and the GitHub PR bridge
 pnpm-lock.yaml  # vscode + discord: importers for the fork-only apps/vscode and apps/discord-bot, and the patched dfx catalog entry; regenerate with CI= pnpm install --no-frozen-lockfile, never take a side; bot-browser: playwright-core for apps/discord-bot
 pnpm-workspace.yaml  # discord: dfx catalog entry and its patchedDependencies line (patches/dfx@1.0.16.patch)
+scripts/build-desktop-artifact.ts  # dir-install-updates: Windows builds keep win-unpacked for the directory deploy
 scripts/install.test.ts  # tooling: SHELL "" instead of unset; where /bin/sh is bash (Arch), bash refills an unset SHELL from the login shell. Upstream candidate, drop once upstream has it
 scripts/release-smoke.ts  # discord: adds apps/discord-bot/package.json to the smoke workspace so the dfx patch in pnpm-workspace.yaml is used

@@ -4170,7 +4170,8 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
   const copiedArtifacts = yield* copyDesktopBuildArtifacts(
     stageDistDir,
     options.outputDir,
-    options.target === "dir",
+    // Fork: Windows keeps win-unpacked beside the installer for the directory deploy's swaps.
+    options.target === "dir" || options.platform === "win",
   );
 
   if (copiedArtifacts.length === 0) {
