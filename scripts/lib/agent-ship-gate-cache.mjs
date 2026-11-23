@@ -1,5 +1,7 @@
 /**
- * Cache HEAD validation in .run: static covers check/types; complete additionally covers tests.
+ * Cache validation of HEAD's tree in .run: static covers check/types; complete additionally
+ * covers tests. Keyed by tree, not commit, so a rebase or merge that lands on the same tree
+ * reuses the result; a dirty worktree is never cached.
  */
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
@@ -12,59 +14,80 @@ export const SHIP_GATE_CACHE_REL = NodePath.join(".run", "agent-ship-gate.json")
 export const shipGateCachePath = (root = NodeProcess.cwd()) =>
   NodePath.join(root, SHIP_GATE_CACHE_REL);
 
+const defaultRunGit = (args, runOpts) => {
+  const result = NodeChildProcess.spawnSync("git", args, {
+    encoding: "utf8",
+    cwd: runOpts.cwd,
+    shell: false,
+  });
+  return { status: result.status, stdout: result.stdout ?? "" };
+};
+
 /**
- * @param {string} [root]
- * @param {{ runGit?: (args: string[], opts: { cwd: string }) => { status: number | null, stdout: string } }} [opts]
- * @returns {string | null} full SHA or null
+ * @typedef {{ runGit?: (args: string[], opts: { cwd: string }) => { status: number | null, stdout: string } }} GitOpts
  */
-export const readHeadSha = (root = NodeProcess.cwd(), opts = {}) => {
-  const runGit =
-    opts.runGit ??
-    ((args, runOpts) => {
-      const result = NodeChildProcess.spawnSync("git", args, {
-        encoding: "utf8",
-        cwd: runOpts.cwd,
-        shell: false,
-      });
-      return { status: result.status, stdout: result.stdout ?? "" };
-    });
-  const result = runGit(["rev-parse", "HEAD"], { cwd: root });
+
+/**
+ * @param {string} root
+ * @param {string} rev
+ * @param {GitOpts} [opts]
+ * @returns {string | null} full object id or null
+ */
+const revParse = (root, rev, opts = {}) => {
+  const result = (opts.runGit ?? defaultRunGit)(["rev-parse", "--verify", "--quiet", rev], {
+    cwd: root,
+  });
   if (result.status !== 0) return null;
   const sha = String(result.stdout).trim();
   return /^[0-9a-f]{40}$/i.test(sha) ? sha.toLowerCase() : null;
 };
 
+/** @param {string} [root] @param {GitOpts} [opts] */
+export const readHeadSha = (root = NodeProcess.cwd(), opts = {}) => revParse(root, "HEAD", opts);
+
+/** @param {string} [root] @param {GitOpts} [opts] */
+export const readHeadTree = (root = NodeProcess.cwd(), opts = {}) =>
+  revParse(root, "HEAD^{tree}", opts);
+
+/**
+ * Untracked files count: a source file the gate imported but HEAD lacks would fail CI.
+ * Ignored files (.run, node_modules, build output) do not.
+ * @param {string} [root]
+ * @param {GitOpts} [opts]
+ */
+export const isWorktreeClean = (root = NodeProcess.cwd(), opts = {}) => {
+  const result = (opts.runGit ?? defaultRunGit)(["status", "--porcelain"], { cwd: root });
+  return result.status === 0 && String(result.stdout).trim() === "";
+};
+
+/** Cache files written before the tree key (commit `sha`) are ignored. */
+export const SHIP_GATE_CACHE_VERSION = 2;
+
 export const SHIP_GATE_STAGES = ["static", "complete"];
+
+const readObjectId = (value) => {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return /^[0-9a-f]{40}$/.test(normalized) ? normalized : undefined;
+};
 
 /**
  * @param {string} [root]
  * @param {{ readFileSync?: typeof NodeFS.readFileSync }} [opts]
- * @returns {{ sha?: string, validatedAt?: string, staticSha?: string, staticAt?: string } | null}
+ * @returns {{ tree?: string, validatedAt?: string, staticTree?: string, staticAt?: string } | null}
  */
 export const readShipGateCache = (root = NodeProcess.cwd(), opts = {}) => {
   const readFileSync = opts.readFileSync ?? NodeFS.readFileSync;
-  const file = shipGateCachePath(root);
-  const readSha = (value) => {
-    const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
-    return /^[0-9a-f]{40}$/i.test(normalized) ? normalized : undefined;
-  };
   try {
-    const raw = readFileSync(file, "utf8");
-    const parsed = JSON.parse(raw);
-    const sha = readSha(parsed?.sha);
-    // Legacy caches only had `sha` meaning full complete; treat as both stages.
-    const staticSha = readSha(parsed?.staticSha) ?? sha;
-    if (!sha && !staticSha) return null;
+    const parsed = JSON.parse(readFileSync(shipGateCachePath(root), "utf8"));
+    if (parsed?.version !== SHIP_GATE_CACHE_VERSION) return null;
+    const tree = readObjectId(parsed.tree);
+    const staticTree = readObjectId(parsed.staticTree) ?? tree;
+    if (!tree && !staticTree) return null;
     return {
-      sha,
+      tree,
       validatedAt: typeof parsed.validatedAt === "string" ? parsed.validatedAt : undefined,
-      staticSha,
-      staticAt:
-        typeof parsed.staticAt === "string"
-          ? parsed.staticAt
-          : typeof parsed.validatedAt === "string"
-            ? parsed.validatedAt
-            : undefined,
+      staticTree,
+      staticAt: typeof parsed.staticAt === "string" ? parsed.staticAt : undefined,
     };
   } catch {
     return null;
@@ -72,82 +95,65 @@ export const readShipGateCache = (root = NodeProcess.cwd(), opts = {}) => {
 };
 
 /**
- * Highest checkpoint the cache records for `headSha`, as an index into
- * SHIP_GATE_STAGES; -1 when the cache describes another commit.
- * @param {string | null | undefined} headSha
- * @param {{ sha?: string, staticSha?: string } | null | undefined} cache
+ * Highest checkpoint the cache records for `tree`, as an index into SHIP_GATE_STAGES; -1 when
+ * the cache describes another tree.
+ * @param {string | null | undefined} tree
+ * @param {{ tree?: string, staticTree?: string } | null | undefined} cache
  */
-export const cachedStage = (headSha, cache) => {
-  if (!headSha || !cache) return -1;
-  const h = headSha.toLowerCase();
-  if (cache.sha && cache.sha.toLowerCase() === h) return SHIP_GATE_STAGES.indexOf("complete");
-  if (cache.staticSha && cache.staticSha.toLowerCase() === h)
-    return SHIP_GATE_STAGES.indexOf("static");
+export const cachedStage = (tree, cache) => {
+  if (!tree || !cache) return -1;
+  const t = tree.toLowerCase();
+  if (cache.tree === t) return SHIP_GATE_STAGES.indexOf("complete");
+  if (cache.staticTree === t) return SHIP_GATE_STAGES.indexOf("static");
   return -1;
 };
 
 /**
  * @param {string} root
- * @param {string} sha
+ * @param {string} tree
  * @param {{ stage?: "static" | "complete"; writeFileSync?: typeof NodeFS.writeFileSync; mkdirSync?: typeof NodeFS.mkdirSync; readFileSync?: typeof NodeFS.readFileSync; now?: () => Date }} [opts]
  */
-export const writeShipGateCache = (root, sha, opts = {}) => {
+export const writeShipGateCache = (root, tree, opts = {}) => {
   const writeFileSync = opts.writeFileSync ?? NodeFS.writeFileSync;
   const mkdirSync = opts.mkdirSync ?? NodeFS.mkdirSync;
   const now = opts.now ?? (() => new Date());
   const stage = opts.stage ?? "complete";
-  const normalized = String(sha).trim().toLowerCase();
-  if (!/^[0-9a-f]{40}$/i.test(normalized)) {
-    throw new Error(`writeShipGateCache: invalid sha ${sha}`);
-  }
-  // Never demote the same commit: a draft push (static) landing after a full
-  // run would otherwise make the next publish re-pay tests it already passed.
-  if (SHIP_GATE_STAGES.indexOf(stage) < cachedStage(normalized, readShipGateCache(root, opts))) {
-    return;
-  }
-  const file = shipGateCachePath(root);
+  const normalized = readObjectId(tree);
+  if (!normalized) throw new Error(`writeShipGateCache: invalid tree ${tree}`);
+  const existing = readShipGateCache(root, opts);
+  // Never demote the same tree: a static run landing after a full run would otherwise make the
+  // next publish re-pay tests it already passed.
+  if (SHIP_GATE_STAGES.indexOf(stage) < cachedStage(normalized, existing)) return;
   const at = now().toISOString();
-  const existing = readShipGateCache(root, opts) ?? {};
   const value =
     stage === "static"
-      ? {
-          ...existing,
-          staticSha: normalized,
-          staticAt: at,
-        }
+      ? { ...existing, version: SHIP_GATE_CACHE_VERSION, staticTree: normalized, staticAt: at }
       : {
-          sha: normalized,
+          version: SHIP_GATE_CACHE_VERSION,
+          tree: normalized,
           validatedAt: at,
-          staticSha: normalized,
-          staticAt: existing.staticAt ?? at,
+          staticTree: normalized,
+          staticAt: existing?.staticTree === normalized ? (existing.staticAt ?? at) : at,
         };
+  const file = shipGateCachePath(root);
   mkdirSync(NodePath.dirname(file), { recursive: true });
   writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 };
 
 /**
- * Full gate (check + typecheck + test) already passed for this SHA.
- * @param {string | null | undefined} headSha
- * @param {{ sha?: string } | null | undefined} cache
+ * Full gate (check + typecheck + CI parity + test) already passed on this tree.
+ * @param {string | null | undefined} tree
+ * @param {{ tree?: string } | null | undefined} cache
  */
-export const isShipGateShaCached = (headSha, cache) => {
-  if (!headSha || !cache?.sha) return false;
-  return headSha.toLowerCase() === cache.sha.toLowerCase();
-};
+export const isShipGateTreeCached = (tree, cache) =>
+  cachedStage(tree, cache) === SHIP_GATE_STAGES.indexOf("complete");
 
 /**
- * Static gate (check + typecheck) already passed for this SHA.
- * Full cache also satisfies static.
- * @param {string | null | undefined} headSha
- * @param {{ sha?: string, staticSha?: string } | null | undefined} cache
+ * Static gate (check + typecheck) already passed on this tree. Full cache also satisfies static.
+ * @param {string | null | undefined} tree
+ * @param {{ tree?: string, staticTree?: string } | null | undefined} cache
  */
-export const isShipGateStaticCached = (headSha, cache) => {
-  if (!headSha || !cache) return false;
-  const h = headSha.toLowerCase();
-  if (cache.sha && cache.sha.toLowerCase() === h) return true;
-  if (cache.staticSha && cache.staticSha.toLowerCase() === h) return true;
-  return false;
-};
+export const isShipGateStaticCached = (tree, cache) => cachedStage(tree, cache) >= 0;
 
 /**
  * Force re-run even when SHA is cached.

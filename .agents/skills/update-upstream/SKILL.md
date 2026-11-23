@@ -121,7 +121,7 @@ Keep the weld a draft until the batch is ready to land, then publish once with `
 
 ## Land
 
-Wait until every required check on the PR head is green, `Fork Seams` included. A green local gate is not those checks. Fetch `origin/fork/dev`; it must be an ancestor of the head. If not, merge it into the weld branch, push, and wait for the new head to go green.
+Wait until every required check on the PR head is green, `Fork Seams` included. A green local gate is not those checks, though its posted `Local proof` lets the PR run skip Check and the test jobs (see `AGENTS.fork.md`). The `fork/dev` push after landing still runs them; that run is part of Verify deployment. Fetch `origin/fork/dev`; it must be an ancestor of the head. If not, merge it into the weld branch, push, and wait for the new head to go green.
 
 ```bash
 gh pr merge <n> --merge

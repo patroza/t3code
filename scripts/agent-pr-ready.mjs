@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 /**
  * Publish only after latest fork/dev ancestry and the full gate; avoid paying the shim gate twice.
+ * The green gate posts its Local proof before undrafting, so the ready_for_review run can use it.
  */
 import * as NodeChildProcess from "node:child_process";
 import * as NodeProcess from "node:process";
-import { runAgentShipGate } from "./agent-pre-push.mjs";
+import { reportLocalProof, runAgentShipGate } from "./agent-pre-push.mjs";
 import { assertUpToDateWithForkDev } from "./lib/agent-fork-dev.mjs";
 import { resolveOpenPrState } from "./lib/agent-pr-state.mjs";
 
@@ -34,7 +35,7 @@ if (prState.mode === "ready") {
   console.error(
     `agent pr:ready: PR${prState.pr?.number != null ? ` #${prState.pr.number}` : ""} is already ready — running ship gate only`,
   );
-  await runAgentShipGate({ root });
+  reportLocalProof(root, await runAgentShipGate({ root }));
   NodeProcess.exit(0);
 }
 
@@ -42,7 +43,7 @@ if (prState.mode === "ready") {
 console.error(
   `agent pr:ready: full ship gate then ready PR${prState.pr?.number != null ? ` #${prState.pr.number}` : ""}`,
 );
-await runAgentShipGate({ root });
+reportLocalProof(root, await runAgentShipGate({ root }));
 
 const env = { ...NodeProcess.env, AGENT_PR_SHIP: "1" };
 const readyArgs =
@@ -61,5 +62,5 @@ if (status !== 0) {
   NodeProcess.exit(status);
 }
 
-console.error("agent pr:ready: ok — PR is ready; CI will run the full suite");
+console.error("agent pr:ready: ok — PR is ready; CI runs what the Local proof does not cover");
 NodeProcess.exit(0);

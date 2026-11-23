@@ -2,6 +2,7 @@
 
 export const TREE_EVIDENCE_CONTEXT = "fork-ci/tree";
 export const FORK_CI_WORKFLOW = ".github/workflows/fork-ci.yml";
+export const MOBILE_STATIC_ANALYSIS_JOB = "Mobile Native Static Analysis";
 
 /** Job names Fork CI must have run, not skipped, before a later push can reuse them. */
 export const REQUIRED_FORK_CI_JOBS = Object.freeze([
@@ -16,7 +17,7 @@ export const REQUIRED_FORK_CI_JOBS = Object.freeze([
   "Test Web 1",
   "Test Web 2",
   "Test",
-  "Mobile Native Static Analysis",
+  MOBILE_STATIC_ANALYSIS_JOB,
   "Release Smoke",
 ]);
 
@@ -87,9 +88,30 @@ export const shortCircuitReason = (input) => {
   const conclusions = latestJobConclusions(input.run.jobs);
   for (const name of REQUIRED_FORK_CI_JOBS) {
     const conclusion = conclusions.get(name)?.conclusion;
-    if (conclusion !== "success") {
+    // This push skips the mobile job itself, so a run that skipped it is no weaker.
+    const optional = name === MOBILE_STATIC_ANALYSIS_JOB && input.mobileRequired === false;
+    if (conclusion !== "success" && !(optional && conclusion === "skipped")) {
       return `job ${name} was ${conclusion ?? "missing"}`;
     }
   }
   return null;
+};
+
+/**
+ * Mobile Native Static Analysis lints only apps/mobile's Swift and Kotlin with apps/mobile's
+ * Brewfile tools, so only those, its script, the workflow, and root manifests can change its
+ * result. A null diff (unknown base) always runs it.
+ * @param {ReadonlyArray<string> | null} changedPaths
+ */
+export const mobileStaticAnalysisRequired = (changedPaths) => {
+  if (changedPaths == null) return true;
+  return changedPaths.some(
+    (path) =>
+      path.startsWith("apps/mobile/") ||
+      path === "scripts/mobile-native-static-check.ts" ||
+      path === FORK_CI_WORKFLOW ||
+      path === "package.json" ||
+      path === "pnpm-lock.yaml" ||
+      path === "pnpm-workspace.yaml",
+  );
 };

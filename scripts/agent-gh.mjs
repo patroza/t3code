@@ -23,10 +23,10 @@ if (isCodingAgent() && isInsideCheckout(NodeProcess.cwd(), checkoutRoot)) {
     // Imported here rather than at module scope: `gh` is on the hot path for
     // ordinary commands and must not pay for the gate's dependencies to run
     // `gh pr view`.
-    const { runAgentShipGate } = await import("./agent-pre-push.mjs");
+    const { reportLocalProof, runAgentShipGate } = await import("./agent-pre-push.mjs");
     // Exits non-zero itself if any check fails, so a red gate stops the publish
     // and a green one falls through to the real `gh` below.
-    await runAgentShipGate({ root: NodeProcess.cwd() });
+    reportLocalProof(NodeProcess.cwd(), await runAgentShipGate({ root: NodeProcess.cwd() }));
     shipping = true;
   }
 }
