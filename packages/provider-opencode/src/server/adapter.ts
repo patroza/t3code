@@ -3497,7 +3497,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               status: "idle" as const,
               updatedAt: snapshotNow,
             },
-            providerTurns: state === undefined ? [] : [...state.providerTurns.values()],
             messages,
             runtimeRequests: state === undefined ? [] : [...state.runtimeRequests.values()],
             providerPayload: nativeMessages,
