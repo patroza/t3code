@@ -1124,6 +1124,76 @@ export function classifyUserMessageIngress(text: string): UserMessageIngressSurf
   return "t3-client";
 }
 
+type TurnOwnershipMessage = {
+  readonly id: string;
+  readonly role: string;
+  readonly turnId: string | null;
+  readonly text: string;
+};
+
+/**
+ * User messages that started (or steered) `turnId`. User messages carry the run id
+ * as `turnId`; when none is tagged, fall back to the latest user message before the
+ * turn's first assistant message (or the latest user message when it has none yet).
+ */
+export function userMessagesForTurn(
+  messages: ReadonlyArray<TurnOwnershipMessage>,
+  turnId: string | null,
+): ReadonlyArray<TurnOwnershipMessage> {
+  if (turnId !== null) {
+    const tagged = messages.filter(
+      (message) => message.role === "user" && message.turnId === turnId,
+    );
+    if (tagged.length > 0) return tagged;
+  }
+  const firstAssistantIndex =
+    turnId === null
+      ? -1
+      : messages.findIndex((message) => message.role === "assistant" && message.turnId === turnId);
+  const end = firstAssistantIndex >= 0 ? firstAssistantIndex : messages.length;
+  for (let index = end - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === "user") return [message];
+  }
+  return [];
+}
+
+/**
+ * Teams reply chains sharing a T3 thread render only turns whose user message they sent.
+ * Other turns (web UI, GitHub) go to the chain that last sent a Teams message before them,
+ * else to every chain. Legacy bridges without sent ids and Discord bridges own every turn.
+ */
+export function teamsBridgeOwnsTurn(input: {
+  readonly platform: "discord" | "teams";
+  readonly turnId: string | null;
+  readonly messages: ReadonlyArray<TurnOwnershipMessage>;
+  readonly ownedUserMessageIds: ReadonlySet<string> | ReadonlyArray<string>;
+}): boolean {
+  if (input.platform !== "teams") return true;
+  const owned =
+    input.ownedUserMessageIds instanceof Set
+      ? input.ownedUserMessageIds
+      : new Set(input.ownedUserMessageIds);
+  if (owned.size === 0) return true;
+  const turnUsers = userMessagesForTurn(input.messages, input.turnId);
+  if (turnUsers.length === 0) return true;
+  if (turnUsers.some((message) => owned.has(message.id))) return true;
+  if (turnUsers.some((message) => classifyUserMessageIngress(message.text) === "teams")) {
+    return false;
+  }
+  const firstIndex = input.messages.findIndex((message) => message.id === turnUsers[0]!.id);
+  for (let index = firstIndex - 1; index >= 0; index -= 1) {
+    const message = input.messages[index];
+    if (message?.role !== "user") continue;
+    if (owned.has(message.id)) return true;
+    if (classifyUserMessageIngress(message.text) === "teams") return false;
+  }
+  return true;
+}
+
+/** Cap for the durable per-chain ownership memory persisted on Teams links. */
+const TEAMS_OWNED_USER_MESSAGE_ID_LIMIT = 64;
+
 /**
  * User prompts this bot injected into T3 (Discord mention / bootstrap path).
  * Never mirror these back into Discord as "External User Input" — they originated here.
@@ -2391,8 +2461,46 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
     ),
     discardPersistedTips: freshWorkingTurn,
   });
-  const seedLastFinalized =
-    persistedLink?.lastFinalizedAssistantId ?? warmCacheEntry?.lastFinalizedAssistantId ?? null;
+  // Every user message this chain sent (resolved or not). `sentDiscordUserMessageIds`
+  // is pruned once a message lands in T3, so Teams turn ownership keeps its own memory.
+  const ownedUserMessageIds = new Set<string>([
+    ...(persistedLink?.sentDiscordUserMessageIds ?? []),
+    ...(input.sentDiscordUserMessageIds ?? []),
+  ]);
+  /** Per-snapshot Teams turn ownership (Discord always owns). */
+  const turnOwnershipFor = (thread: OrchestrationThread) => {
+    const cache = new Map<string | null, boolean>();
+    return (turnId: string | null): boolean => {
+      if (rest.platform !== "teams") return true;
+      const cached = cache.get(turnId);
+      if (cached !== undefined) return cached;
+      const owns = teamsBridgeOwnsTurn({
+        platform: rest.platform,
+        turnId,
+        messages: thread.messages,
+        ownedUserMessageIds,
+      });
+      cache.set(turnId, owns);
+      return owns;
+    };
+  };
+  // Teams persists the owned tail (not just unresolved ids) so ownership survives restarts.
+  const persistTeamsOwnedUserMessageIds = () =>
+    links.setSentDiscordUserMessageIds(
+      input.discordChannelId,
+      [...ownedUserMessageIds].slice(-TEAMS_OWNED_USER_MESSAGE_ID_LIMIT),
+    );
+  if (rest.platform === "teams" && (input.sentDiscordUserMessageIds ?? []).length > 0) {
+    yield* persistTeamsOwnedUserMessageIds().pipe(Effect.ignore);
+  }
+  // The warm cache is keyed by T3 thread, so on Teams it holds whichever reply chain
+  // finalized last. Once a chain renders only its own turns, another chain's cursor
+  // would hide this chain's unfinalized answers; keep it only for legacy all-turn links.
+  const warmCacheLastFinalizedSeed =
+    rest.platform === "teams" && ownedUserMessageIds.size > 0
+      ? null
+      : (warmCacheEntry?.lastFinalizedAssistantId ?? null);
+  const seedLastFinalized = persistedLink?.lastFinalizedAssistantId ?? warmCacheLastFinalizedSeed;
   const stateRef = yield* Ref.make({
     ...emptyState({
       workingAckMessageId: freshWorkingTurn ? (input.workingAckMessageId ?? null) : null,
@@ -2464,8 +2572,7 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
   // Mutable watermark for trim + warm cache (updated on finalize).
   const deliveredMemoryTrim = {
     lastFinalizedAssistantId: (persistedLink?.lastFinalizedAssistantId ??
-      warmCacheEntry?.lastFinalizedAssistantId ??
-      null) as string | null,
+      warmCacheLastFinalizedSeed) as string | null,
   };
   const projectThreadForDiscordMemory = (thread: OrchestrationThread): OrchestrationThread =>
     trimOrchestrationThreadForDiscordMemory({
@@ -2562,7 +2669,17 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
     Ref.update(stateRef, (current) => ({
       ...current,
       sentDiscordUserMessageIds: uniqueMessageIds([...current.sentDiscordUserMessageIds, ...ids]),
-    })).pipe(Effect.asVoid);
+    })).pipe(
+      Effect.andThen(
+        rest.platform === "teams"
+          ? Effect.suspend(() => {
+              for (const id of ids) ownedUserMessageIds.add(id);
+              return persistTeamsOwnedUserMessageIds().pipe(Effect.ignore);
+            })
+          : Effect.void,
+      ),
+      Effect.asVoid,
+    );
 
   controlSlot.adoptWorkingAckMessageId = Effect.fn("adoptWorkingAckMessageId")((messageId) =>
     Effect.gen(function* () {
@@ -2805,7 +2922,9 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
     );
 
   const persistSentDiscordUserMessageIds = (ids: ReadonlyArray<string>) =>
-    links.setSentDiscordUserMessageIds(input.discordChannelId, uniqueMessageIds(ids));
+    rest.platform === "teams"
+      ? persistTeamsOwnedUserMessageIds()
+      : links.setSentDiscordUserMessageIds(input.discordChannelId, uniqueMessageIds(ids));
 
   const postExternalUserMessages = Effect.fn("ResponseBridge.postExternalUserMessages")(function* (
     messages: ReadonlyArray<OrchestrationThread["messages"][number]>,
@@ -5307,12 +5426,24 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
 
     const activeTurnId = thread.latestTurn?.turnId ?? null;
     const turnInProgressNow = isTurnInProgress(thread);
+    // Teams reply chains sharing this T3 thread render only their own turns. Skipping
+    // leaves this bridge's delivery state untouched for its next owned turn.
+    const ownsTurn = turnOwnershipFor(thread);
+    const ownsActiveTurn = ownsTurn(activeTurnId);
+    if (!ownsActiveTurn) {
+      yield* Effect.logDebug("Teams bridge skipping turn owned by another reply chain", {
+        discordChannelId: input.discordChannelId,
+        t3ThreadId: input.t3ThreadId,
+        turnId: activeTurnId,
+      });
+    }
 
     // Interrupted session (Wake Required): convert open Working tips to a Continue notice
     // before catch-up finalize would treat partial stream as a finished answer.
     {
       const preWake = yield* Ref.get(stateRef);
       if (
+        ownsActiveTurn &&
         shouldConvertWorkingTipsToWakeUp({
           sessionStatus: thread.session?.status ?? null,
           activeTurnId: thread.session?.activeTurnId ?? null,
@@ -5349,15 +5480,21 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
         prior.delivery.lastFinalizedAssistantId ??
         durableLinkNow?.lastFinalizedAssistantId ??
         persistedLink?.lastFinalizedAssistantId ??
-        warmCacheEntry?.lastFinalizedAssistantId ??
-        null;
+        warmCacheLastFinalizedSeed;
       const lastFinalizedTextForDelivery = prior.delivery.lastFinalizedText ?? null;
-      const threadMessagesForDelivery = thread.messages.map((message) => ({
+      const allThreadMessagesForDelivery = thread.messages.map((message) => ({
         id: message.id,
         role: message.role,
         turnId: message.turnId,
         text: message.text,
       }));
+      // Teams: other chains' answers are invisible to this bridge's catch-up and delivery.
+      const threadMessagesForDelivery =
+        rest.platform === "teams"
+          ? allThreadMessagesForDelivery.filter(
+              (message) => message.role !== "assistant" || ownsTurn(message.turnId),
+            )
+          : allThreadMessagesForDelivery;
       const deliveryAssistants = assistantMessagesForDelivery({
         messages: threadMessagesForDelivery,
         turnId: activeTurnId,
@@ -5405,154 +5542,156 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
           Effect.asVoid,
         );
       }
-      const afterCatchUp = yield* Ref.get(stateRef);
-      const lastFinalizedAfterCatchUp =
-        afterCatchUp.delivery.lastFinalizedAssistantId ?? lastFinalizedForDelivery;
-      const lastFinalizedTextAfterCatchUp =
-        afterCatchUp.delivery.lastFinalizedText ?? lastFinalizedTextForDelivery;
-      const deliveryAssistantIds = new Set(deliveryAssistants.map((entry) => entry.id));
-      const turnAssistants = thread.messages.filter(
-        (message) => message.role === "assistant" && deliveryAssistantIds.has(message.id),
-      );
-      const images = turnAssistants.flatMap((message) => imageAttachmentsOf(message.attachments));
-      const streaming =
-        turnInProgressNow ||
-        (thread.latestTurn == null &&
-          turnAssistants.some(
-            (message) => isAssistantStreaming(thread, message.id) || message.streaming === true,
-          ));
+      if (ownsActiveTurn) {
+        const afterCatchUp = yield* Ref.get(stateRef);
+        const lastFinalizedAfterCatchUp =
+          afterCatchUp.delivery.lastFinalizedAssistantId ?? lastFinalizedForDelivery;
+        const lastFinalizedTextAfterCatchUp =
+          afterCatchUp.delivery.lastFinalizedText ?? lastFinalizedTextForDelivery;
+        const deliveryAssistantIds = new Set(deliveryAssistants.map((entry) => entry.id));
+        const turnAssistants = thread.messages.filter(
+          (message) => message.role === "assistant" && deliveryAssistantIds.has(message.id),
+        );
+        const images = turnAssistants.flatMap((message) => imageAttachmentsOf(message.attachments));
+        const streaming =
+          turnInProgressNow ||
+          (thread.latestTurn == null &&
+            turnAssistants.some(
+              (message) => isAssistantStreaming(thread, message.id) || message.streaming === true,
+            ));
 
-      const decision = decideAssistantDelivery({
-        state: {
-          ...afterCatchUp.delivery,
-          // Keep durable finalize memory from the link store in sync.
-          lastFinalizedAssistantId: lastFinalizedAfterCatchUp,
-          lastFinalizedText: lastFinalizedTextAfterCatchUp,
-        },
-        turnId: activeTurnId,
-        turnInProgress: turnInProgressNow,
-        assistants: deliveryAssistants.map((entry) => ({
-          id: entry.id,
-          text: entry.text,
-        })),
-        messages: threadMessagesForDelivery,
-        streaming,
-        presentationFull: (input.presentationMode ?? "full") === "full",
-        // Idle catch-up (rehydrate *or* interactive recovery after a comment) often
-        // gets a single settled snapshot — do not stream the previous final under
-        // `_Working.._` + Stop waiting for a second settle tick that never arrives.
-        // Substantial answers also finalize immediately inside decideAssistantDelivery.
-        skipSettleGrace: !turnInProgressNow,
-      });
+        const decision = decideAssistantDelivery({
+          state: {
+            ...afterCatchUp.delivery,
+            // Keep durable finalize memory from the link store in sync.
+            lastFinalizedAssistantId: lastFinalizedAfterCatchUp,
+            lastFinalizedText: lastFinalizedTextAfterCatchUp,
+          },
+          turnId: activeTurnId,
+          turnInProgress: turnInProgressNow,
+          assistants: deliveryAssistants.map((entry) => ({
+            id: entry.id,
+            text: entry.text,
+          })),
+          messages: threadMessagesForDelivery,
+          streaming,
+          presentationFull: (input.presentationMode ?? "full") === "full",
+          // Idle catch-up (rehydrate *or* interactive recovery after a comment) often
+          // gets a single settled snapshot — do not stream the previous final under
+          // `_Working.._` + Stop waiting for a second settle tick that never arrives.
+          // Substantial answers also finalize immediately inside decideAssistantDelivery.
+          skipSettleGrace: !turnInProgressNow,
+        });
 
-      yield* Effect.logInfo("Discord delivery decision", {
-        t3ThreadId: input.t3ThreadId,
-        turnId: activeTurnId,
-        intent: decision.intent._tag,
-        reason:
-          decision.intent._tag === "noop" || decision.intent._tag === "hold"
-            ? decision.intent.reason
-            : null,
-        phase: decision.state.phase,
-        epoch: decision.state.epoch,
-        settleReady: decision.state.settleReady,
-        deliveryAssistants: deliveryAssistants.length,
-        streaming,
-        turnInProgress: turnInProgressNow,
-      });
+        yield* Effect.logInfo("Discord delivery decision", {
+          t3ThreadId: input.t3ThreadId,
+          turnId: activeTurnId,
+          intent: decision.intent._tag,
+          reason:
+            decision.intent._tag === "noop" || decision.intent._tag === "hold"
+              ? decision.intent.reason
+              : null,
+          phase: decision.state.phase,
+          epoch: decision.state.epoch,
+          settleReady: decision.state.settleReady,
+          deliveryAssistants: deliveryAssistants.length,
+          streaming,
+          turnInProgress: turnInProgressNow,
+        });
 
-      // Apply non-terminal state before I/O; finalize commits only after successful post
-      // so a failed finalize can retry without being stuck in phase=finalized.
-      if (decision.intent._tag !== "finalize") {
-        // Late multi-bubble reopen: epoch left finalized → streaming/awaiting with a
-        // new assistant after lastFinalized. Clear bridge finalizedTurnId so stream /
-        // re-finalize is not treated as a no-op duplicate of the short status final.
-        const reopenedAfterPrematureFinal =
-          prior.delivery.phase === "finalized" &&
-          (decision.state.phase === "streaming" || decision.state.phase === "awaiting");
-        yield* Ref.update(stateRef, (current) => ({
-          ...current,
-          delivery: decision.state,
-          adoptedInitialSnapshot: true,
-          seededWorkingAckPending: decision.state.phase === "awaiting",
-          finalizedTurnId:
-            decision.state.phase === "awaiting" || reopenedAfterPrematureFinal
-              ? null
-              : current.finalizedTurnId,
-        }));
-      } else {
-        yield* Ref.update(stateRef, (current) => ({
-          ...current,
-          adoptedInitialSnapshot: true,
-        }));
-      }
-
-      if (decision.intent._tag === "stream") {
-        yield* postUserMessagesBefore(decision.intent.assistantId);
-        yield* postOrEditAssistant({
-          turnId: decision.intent.turnId,
-          t3MessageId: decision.intent.assistantId,
-          text: decision.intent.text,
-          streaming: true,
-          images,
-          worktreePath: thread.worktreePath,
-        }).pipe(Effect.tapCause(alertStreamFailure("live-stream")), Effect.asVoid);
-      } else if (decision.intent._tag === "finalize") {
-        yield* postUserMessagesBefore(decision.intent.assistantId);
-        yield* postOrEditAssistant({
-          turnId: decision.intent.turnId,
-          t3MessageId: decision.intent.assistantId,
-          text: decision.intent.text,
-          streaming: false,
-          images,
-          worktreePath: thread.worktreePath,
-        }).pipe(Effect.tapCause(alertStreamFailure("finalize")), Effect.asVoid);
-      } else if (
-        decision.intent._tag === "noop" &&
-        decision.intent.reason === "settled-without-content" &&
-        !prior.seededWorkingAckPending &&
-        prior.delivery.phase !== "finalized"
-      ) {
-        // Prefer posting whatever we already streamed over wiping Working with silence.
-        const fallbackText = prior.lastAssistantText.trim();
-        if (fallbackText !== "" && prior.t3AssistantMessageId !== null) {
-          yield* Effect.logInfo(
-            "Finalizing from last streamed body (settled without new content)",
-            {
-              t3ThreadId: input.t3ThreadId,
-              turnId: activeTurnId,
-              textLen: fallbackText.length,
-            },
-          );
-          yield* postUserMessagesBefore(prior.t3AssistantMessageId);
-          yield* postOrEditAssistant({
-            turnId: activeTurnId,
-            t3MessageId: prior.t3AssistantMessageId,
-            text: fallbackText,
-            streaming: false,
-            images: [],
-            worktreePath: thread.worktreePath,
-          }).pipe(Effect.tapCause(alertStreamFailure("finalize-stream-fallback")), Effect.asVoid);
+        // Apply non-terminal state before I/O; finalize commits only after successful post
+        // so a failed finalize can retry without being stuck in phase=finalized.
+        if (decision.intent._tag !== "finalize") {
+          // Late multi-bubble reopen: epoch left finalized → streaming/awaiting with a
+          // new assistant after lastFinalized. Clear bridge finalizedTurnId so stream /
+          // re-finalize is not treated as a no-op duplicate of the short status final.
+          const reopenedAfterPrematureFinal =
+            prior.delivery.phase === "finalized" &&
+            (decision.state.phase === "streaming" || decision.state.phase === "awaiting");
           yield* Ref.update(stateRef, (current) => ({
             ...current,
-            delivery: {
-              ...current.delivery,
-              phase: "finalized" as const,
-              streamText: "",
-              settleReady: false,
-              finalizedAssistantId: prior.t3AssistantMessageId,
-              lastFinalizedAssistantId: prior.t3AssistantMessageId,
-              lastFinalizedText: fallbackText,
-            },
-            seededWorkingAckPending: false,
-            lastAssistantText: "",
-            finalizedTurnId: activeTurnId,
+            delivery: decision.state,
+            adoptedInitialSnapshot: true,
+            seededWorkingAckPending: decision.state.phase === "awaiting",
+            finalizedTurnId:
+              decision.state.phase === "awaiting" || reopenedAfterPrematureFinal
+                ? null
+                : current.finalizedTurnId,
           }));
         } else {
-          yield* clearInProgressMessages("settled-without-final-content").pipe(
-            Effect.catchCause(Effect.logError),
-            Effect.asVoid,
-          );
+          yield* Ref.update(stateRef, (current) => ({
+            ...current,
+            adoptedInitialSnapshot: true,
+          }));
+        }
+
+        if (decision.intent._tag === "stream") {
+          yield* postUserMessagesBefore(decision.intent.assistantId);
+          yield* postOrEditAssistant({
+            turnId: decision.intent.turnId,
+            t3MessageId: decision.intent.assistantId,
+            text: decision.intent.text,
+            streaming: true,
+            images,
+            worktreePath: thread.worktreePath,
+          }).pipe(Effect.tapCause(alertStreamFailure("live-stream")), Effect.asVoid);
+        } else if (decision.intent._tag === "finalize") {
+          yield* postUserMessagesBefore(decision.intent.assistantId);
+          yield* postOrEditAssistant({
+            turnId: decision.intent.turnId,
+            t3MessageId: decision.intent.assistantId,
+            text: decision.intent.text,
+            streaming: false,
+            images,
+            worktreePath: thread.worktreePath,
+          }).pipe(Effect.tapCause(alertStreamFailure("finalize")), Effect.asVoid);
+        } else if (
+          decision.intent._tag === "noop" &&
+          decision.intent.reason === "settled-without-content" &&
+          !prior.seededWorkingAckPending &&
+          prior.delivery.phase !== "finalized"
+        ) {
+          // Prefer posting whatever we already streamed over wiping Working with silence.
+          const fallbackText = prior.lastAssistantText.trim();
+          if (fallbackText !== "" && prior.t3AssistantMessageId !== null) {
+            yield* Effect.logInfo(
+              "Finalizing from last streamed body (settled without new content)",
+              {
+                t3ThreadId: input.t3ThreadId,
+                turnId: activeTurnId,
+                textLen: fallbackText.length,
+              },
+            );
+            yield* postUserMessagesBefore(prior.t3AssistantMessageId);
+            yield* postOrEditAssistant({
+              turnId: activeTurnId,
+              t3MessageId: prior.t3AssistantMessageId,
+              text: fallbackText,
+              streaming: false,
+              images: [],
+              worktreePath: thread.worktreePath,
+            }).pipe(Effect.tapCause(alertStreamFailure("finalize-stream-fallback")), Effect.asVoid);
+            yield* Ref.update(stateRef, (current) => ({
+              ...current,
+              delivery: {
+                ...current.delivery,
+                phase: "finalized" as const,
+                streamText: "",
+                settleReady: false,
+                finalizedAssistantId: prior.t3AssistantMessageId,
+                lastFinalizedAssistantId: prior.t3AssistantMessageId,
+                lastFinalizedText: fallbackText,
+              },
+              seededWorkingAckPending: false,
+              lastAssistantText: "",
+              finalizedTurnId: activeTurnId,
+            }));
+          } else {
+            yield* clearInProgressMessages("settled-without-final-content").pipe(
+              Effect.catchCause(Effect.logError),
+              Effect.asVoid,
+            );
+          }
         }
       }
     } else {
@@ -5571,7 +5710,9 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
         seededWorkingAckPending: state.seededWorkingAckPending,
         state: summarizeBridgeStateForLog(state),
       });
-      if (
+      if (!ownsActiveTurn) {
+        // Another reply chain's turn: keep this chain's Working tip as-is.
+      } else if (
         turnRunningNoAssistant &&
         !state.seededWorkingAckPending &&
         shouldPublishAssistantUpdate({
@@ -5621,7 +5762,7 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
     // Deliver them through the normal final-message path so Working is removed and the
     // durable delivery receipt prevents duplicate notifications after reconnecting.
     const failureActivity =
-      thread.latestTurn?.state === "error"
+      ownsActiveTurn && thread.latestTurn?.state === "error"
         ? thread.activities.findLast((activity) => {
             if (activity.turnId !== activeTurnId || activity.tone !== "error") return false;
             const payload = activity.payload;
@@ -5699,7 +5840,9 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
 
       // Tasks first: first-class Discord progress UI from turn.plan (not External User Input).
       // Keep updating mid-turn / rehydrate; owned via taskDiscordMessageId so it never freezes Working.
-      const tasks = presentTasks(thread.activities, thread.latestTurn?.turnId ?? null);
+      const tasks = ownsActiveTurn
+        ? presentTasks(thread.activities, thread.latestTurn?.turnId ?? null)
+        : null;
       if (tasks !== null && input.presentationMode !== "final-only") {
         const content = formatTasksForDiscord(tasks);
         const key = `${tasks.explanation ?? ""}:${tasks.tasks.map((task) => `${task.status}:${task.step}`).join("|")}`;
@@ -5709,13 +5852,17 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
         );
       }
 
-      const pending = derivePendingInteractions(thread.activities);
+      const pending = derivePendingInteractions(
+        rest.platform === "teams"
+          ? thread.activities.filter((activity) => ownsTurn(activity.turnId))
+          : thread.activities,
+      );
       const approvals = pending.filter(
         (entry): entry is PendingApproval => entry.kind === "approval",
       );
       yield* postApprovals(approvals).pipe(Effect.catchCause(Effect.logError), Effect.asVoid);
 
-      if (thread.session?.status === "error" && thread.session.lastError) {
+      if (ownsActiveTurn && thread.session?.status === "error" && thread.session.lastError) {
         yield* rest
           .createMessage(input.discordChannelId, {
             content: `**T3 error:** ${thread.session.lastError}`,
