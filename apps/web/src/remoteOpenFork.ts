@@ -1,20 +1,13 @@
-import type { RemoteOpenTarget } from "@t3tools/contracts";
+import { isLoopbackHostname } from "~/environments/primary/target";
 
-// A paired server that advertises the same SSH route as the desktop's own backend runs on this
-// machine (e.g. a host service with its own T3 home), so it can open editors locally.
-export function sharesDesktopHostMachine(input: {
-  readonly isDesktopRenderer: boolean;
-  readonly remoteOpenTargets: ReadonlyArray<RemoteOpenTarget> | undefined;
-  readonly hostRemoteOpenTargets?: ReadonlyArray<RemoteOpenTarget> | undefined;
-}): boolean {
-  if (!input.isDesktopRenderer) return false;
-  const hostTargets = input.hostRemoteOpenTargets ?? [];
-  return (input.remoteOpenTargets ?? []).some((target) =>
-    hostTargets.some(
-      (hostTarget) =>
-        hostTarget.kind === target.kind &&
-        hostTarget.host === target.host &&
-        hostTarget.username === target.username,
-    ),
-  );
+// A paired environment reached over its loopback route ("This device") runs on the viewing
+// machine, e.g. a host service with its own T3 home next to the desktop app, so editors open
+// locally instead of through an SSH link back to this machine.
+export function isReachedOverLoopback(activeHttpBaseUrl: string | undefined): boolean {
+  if (activeHttpBaseUrl === undefined) return false;
+  try {
+    return isLoopbackHostname(new URL(activeHttpBaseUrl).hostname);
+  } catch {
+    return false;
+  }
 }
