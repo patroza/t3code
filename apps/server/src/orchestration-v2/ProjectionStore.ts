@@ -1962,6 +1962,9 @@ export function threadShellFromProjection(
     ...(projection.thread.delegatedFrom === undefined
       ? {}
       : { delegatedFrom: projection.thread.delegatedFrom }),
+    ...(projection.thread.workflowRun === undefined
+      ? {}
+      : { workflowRun: projection.thread.workflowRun }),
     latestRunId: latestRun?.id ?? null,
     latestRunRequestedAt: latestRun?.requestedAt ?? null,
     latestRunStartedAt: latestRun?.startedAt ?? null,
@@ -2277,6 +2280,9 @@ function shellFromState(input: {
     ...(input.state.thread.delegatedFrom === undefined
       ? {}
       : { delegatedFrom: input.state.thread.delegatedFrom }),
+    ...(input.state.thread.workflowRun === undefined
+      ? {}
+      : { workflowRun: input.state.thread.workflowRun }),
     latestRunId: input.state.latestRunId,
     latestRunRequestedAt: input.state.latestRunRequestedAt,
     latestRunStartedAt: input.state.latestRunStartedAt,
@@ -9623,6 +9629,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         readonly parent_thread_id: string | null;
         readonly root_thread_id: string;
         readonly side_chat: number | null;
+        readonly workflow_step: number | null;
         readonly delegated_from_environment_id: string | null;
         readonly delegated_from_thread_id: string | null;
         readonly delegated_from_title: string | null;
@@ -9639,6 +9646,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           json_extract(t.payload_json, '$.lineage.parentThreadId') AS parent_thread_id,
           json_extract(t.payload_json, '$.lineage.rootThreadId') AS root_thread_id,
           json_extract(t.payload_json, '$.lineage.sideChat') AS side_chat,
+          json_extract(t.payload_json, '$.lineage.workflowStep') AS workflow_step,
           json_extract(t.payload_json, '$.delegatedFrom.environmentId') AS delegated_from_environment_id,
           json_extract(t.payload_json, '$.delegatedFrom.threadId') AS delegated_from_thread_id,
           json_extract(t.payload_json, '$.delegatedFrom.title') AS delegated_from_title,
@@ -9653,7 +9661,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         id: ThreadId.make(row.thread_id),
         projectId: ProjectId.make(row.project_id),
         title: row.title,
-        lineage: shellIndexLineage(row),
+        lineage: {
+          ...shellIndexLineage(row),
+          ...(row.workflow_step === 1 ? { workflowStep: true } : {}),
+        },
         ...(row.delegated_from_environment_id === null || row.delegated_from_thread_id === null
           ? {}
           : {
