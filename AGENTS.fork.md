@@ -138,8 +138,8 @@ for humans.
   waiting process. Run the push or `pnpm pr:ready` again: it attaches to the running unit or reads
   the cached pass. This is the intended exception to "do not detach with `systemd-run`".
   `AGENT_SHIP_GATE_INLINE=1` runs it in the foreground.
-- The web browser step reruns its failed files once; a pass on rerun prints the flaky files. Fix
-  them. CI never retries.
+- The web browser step reruns what failed, up to twice (the whole step when a crash named no
+  file); a pass on rerun prints the flaky files. Fix them. CI never retries.
 - `pnpm pr:ready` requires HEAD to contain the latest `fork/dev`, runs the full gate, then marks the
   draft ready. Raw `gh pr ready` reaches the same place: the `.tools/bin/gh` shim (installed by
   `scripts/fork-prepare.mjs`, put first on `PATH` by `.envrc`) runs the gate first. `.envrc` also

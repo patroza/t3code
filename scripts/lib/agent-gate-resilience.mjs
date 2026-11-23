@@ -18,33 +18,49 @@ export const failedTestFiles = (report) =>
     .filter((result) => result.status === "failed" && typeof result.name === "string")
     .map((result) => /** @type {string} */ (result.name));
 
+// A crashed run names no file, so its full rerun can still lose one file: allow a second rerun.
+const MAX_RERUNS = 2;
+
 /**
- * Runs a Vitest step; on failure reruns only its failed files once (or the whole step when the
- * report names none, e.g. a crash before any file ran). Returns the final exit status.
+ * Runs a Vitest step; each failed attempt is rerun up to MAX_RERUNS times, limited to the files
+ * the previous attempt failed (the whole step when it named none, e.g. the browser crashed).
  * @param {{ label: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, reportPath: string }} input
- * @returns {number}
+ * @returns {number} the last attempt's exit status
  */
 export const runWithFlakyRerun = ({ label, args, cwd, env, reportPath }) => {
-  NodeFS.rmSync(reportPath, { force: true });
-  const first = spawnStatus(
-    [...args, "--reporter=default", "--reporter=json", `--outputFile.json=${reportPath}`],
-    { cwd, env },
-  );
-  if (first === 0) return 0;
-
-  const files = failedTestFiles(readJson(reportPath)).map((file) => NodePath.relative(cwd, file));
-  console.error(
-    files.length > 0
-      ? `agent ship-gate: ${label} failed in ${files.length} file(s); rerunning them once: ${files.join(", ")}`
-      : `agent ship-gate: ${label} failed before naming a file; rerunning the step once`,
-  );
-  const second = spawnStatus([...args, ...files], { cwd, env });
-  if (second === 0) {
+  /** @type {string[]} */
+  let files = [];
+  /** @type {string[]} */
+  const flaky = [];
+  for (let attempt = 0; ; attempt += 1) {
+    NodeFS.rmSync(reportPath, { force: true });
+    const status = spawnStatus(
+      [
+        ...args,
+        ...files,
+        "--reporter=default",
+        "--reporter=json",
+        `--outputFile.json=${reportPath}`,
+      ],
+      { cwd, env },
+    );
+    if (status === 0) {
+      if (attempt > 0) {
+        console.error(
+          `agent ship-gate: ${label} passed on rerun — flaky under load here, fix them: ${flaky.join(", ") || "(run crashed before naming a file)"}`,
+        );
+      }
+      return 0;
+    }
+    if (attempt === MAX_RERUNS) return status;
+    files = failedTestFiles(readJson(reportPath)).map((file) => NodePath.relative(cwd, file));
+    flaky.push(...files.filter((file) => !flaky.includes(file)));
     console.error(
-      `agent ship-gate: ${label} passed on rerun — flaky under load here, fix them: ${files.join(", ") || "(startup failure)"}`,
+      files.length > 0
+        ? `agent ship-gate: ${label} failed in ${files.length} file(s); rerunning them: ${files.join(", ")}`
+        : `agent ship-gate: ${label} failed before naming a file; rerunning the step`,
     );
   }
-  return second;
 };
 
 /**

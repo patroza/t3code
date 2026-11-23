@@ -64,19 +64,24 @@ it("reruns only the failed files once and passes when they pass", () => {
   assert.deepStrictEqual(calls, [[], [NodePath.relative(dir, "/w/b.browser.test.tsx")]]);
 });
 
-it("fails when the rerun fails too", () => {
-  const { status, calls } = fakeStep([
-    { code: 1, report: { testResults: [{ name: "/w/b.browser.test.tsx", status: "failed" }] } },
-    { code: 1 },
-  ]);
+it("fails when every rerun fails", () => {
+  const failing = {
+    code: 1,
+    report: { testResults: [{ name: "/w/b.browser.test.tsx", status: "failed" }] },
+  };
+  const { status, calls } = fakeStep([failing, failing, failing]);
   assert.strictEqual(status, 1);
-  assert.strictEqual(calls.length, 2);
+  assert.strictEqual(calls.length, 3);
 });
 
-it("reruns the whole step once when the run crashed before naming a file", () => {
-  const { status, calls } = fakeStep([{ code: 1 }, { code: 0 }]);
+it("after a crash, reruns the whole step and then only the file that run failed", () => {
+  const { status, calls, dir } = fakeStep([
+    { code: 1 },
+    { code: 1, report: { testResults: [{ name: "/w/u.browser.test.tsx", status: "failed" }] } },
+    { code: 0 },
+  ]);
   assert.strictEqual(status, 0);
-  assert.deepStrictEqual(calls[1], calls[0]);
+  assert.deepStrictEqual(calls, [[], [], [NodePath.relative(dir, "/w/u.browser.test.tsx")]]);
 });
 
 it("never detaches in CI, when opted out, inside a detached gate, or off Linux", () => {
