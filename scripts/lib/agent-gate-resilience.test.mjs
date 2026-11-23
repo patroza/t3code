@@ -1,9 +1,12 @@
 import { assert, it } from "@effect/vitest";
+import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { failedTestFiles, runWithFlakyRerun, shouldDetachGate } from "./agent-gate-resilience.mjs";
+
+const resilienceModule = new URL("./agent-gate-resilience.mjs", import.meta.url).href;
 
 // A stand-in for `vp test run`: each call appends its file arguments to calls.json, writes a JSON
 // report when asked for one, and exits with the next code from the plan.
@@ -81,4 +84,30 @@ it("never detaches in CI, when opted out, inside a detached gate, or off Linux",
   assert.strictEqual(shouldDetachGate({ AGENT_SHIP_GATE_INLINE: "1" }, "linux"), false);
   assert.strictEqual(shouldDetachGate({ AGENT_SHIP_GATE_DETACHED: "1" }, "linux"), false);
   assert.strictEqual(shouldDetachGate({}, "darwin"), false);
+});
+
+it("a detached gate records its exit code and result for the caller", () => {
+  const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-gate-detached-"));
+  const envPath = NodePath.join(dir, "env.json");
+  const resultPath = NodePath.join(dir, "result.json");
+  NodeFS.writeFileSync(envPath, JSON.stringify({ MARKER: "kept" }));
+  const child = NodeChildProcess.spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `const { enterDetachedGate } = await import(${JSON.stringify(resilienceModule)});
+       const { env, recordGate } = enterDetachedGate({ envPath: ${JSON.stringify(envPath)}, resultPath: ${JSON.stringify(resultPath)} });
+       recordGate({ marker: env.MARKER });
+       process.exit(3);`,
+    ],
+    { encoding: "utf8" },
+  );
+  assert.strictEqual(child.status, 3, child.stderr);
+  assert.deepStrictEqual(JSON.parse(NodeFS.readFileSync(resultPath, "utf8")), {
+    code: 3,
+    gate: { marker: "kept" },
+  });
+  assert.strictEqual(NodeFS.existsSync(envPath), false);
+  NodeFS.rmSync(dir, { recursive: true, force: true });
 });

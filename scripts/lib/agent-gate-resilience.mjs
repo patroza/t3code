@@ -198,7 +198,7 @@ export const enterDetachedGate = ({ envPath, resultPath }) => {
   const env = JSON.parse(NodeFS.readFileSync(envPath, "utf8"));
   NodeFS.rmSync(envPath, { force: true });
   let gate = /** @type {unknown} */ (null);
-  NodeProcess.on("exit", (code) => {
+  NodeProcess.default.on("exit", (code) => {
     NodeFS.writeFileSync(resultPath, JSON.stringify({ code, gate }));
   });
   return { env, recordGate: (value) => (gate = value) };
