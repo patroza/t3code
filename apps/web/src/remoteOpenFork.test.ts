@@ -23,7 +23,7 @@ describe("paired environment open over its active route", () => {
     expect(
       resolveRemoteOpenState({
         target,
-        sshTarget: null,
+        routes: [],
         isDesktopRenderer: true,
         remoteOpenTargets: [{ kind: "tailscale", host: "smart.tail1234.ts.net" }],
         hostEnvironmentId: "environment-desktop",
