@@ -6,6 +6,7 @@ import {
   queuedConversationMessages,
   canPromoteQueuedConversation,
 } from "./nativeConversation.ts";
+import { appendOmegentT3ProductHandshake } from "./lib/omegentProductHandshake.ts";
 import {
   integrationThreadView,
   integrationThreadShellView,
@@ -101,7 +102,7 @@ function localSocketUrl(httpBaseUrl: string): string {
   url.pathname = "/ws";
   url.search = "";
   url.hash = "";
-  return url.toString();
+  return appendOmegentT3ProductHandshake(url.toString());
 }
 
 function normalizedPath(path: string): string {
@@ -274,12 +275,14 @@ export class T3Client {
       const descriptor = await this.#runtime.runPromise(
         fetchRemoteEnvironmentDescriptor({ httpBaseUrl: normalizedBaseUrl }),
       );
-      socketUrl = await this.#runtime.runPromise(
-        resolveRemoteWebSocketConnectionUrl({
-          wsBaseUrl: wsBaseUrl(normalizedBaseUrl),
-          httpBaseUrl: normalizedBaseUrl,
-          bearerToken,
-        }),
+      socketUrl = appendOmegentT3ProductHandshake(
+        await this.#runtime.runPromise(
+          resolveRemoteWebSocketConnectionUrl({
+            wsBaseUrl: wsBaseUrl(normalizedBaseUrl),
+            httpBaseUrl: normalizedBaseUrl,
+            bearerToken,
+          }),
+        ),
       );
       label = descriptor.label;
       environmentId = descriptor.environmentId;

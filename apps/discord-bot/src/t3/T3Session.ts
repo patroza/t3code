@@ -75,6 +75,7 @@ import { claimBrowserHostThread, serveBrowserHost } from "../browser/browserHost
 import { followOrchestrationThread } from "./DiscordThreadFollower.ts";
 import { applyIntegrationShellStreamItem } from "./shellStream.ts";
 import { followBotServerConfig } from "./serverConfigStream.ts";
+import { appendOmegentT3ProductHandshake } from "../shared/omegentProductHandshake.ts";
 import { reconnectUntilReady } from "./reconnect.ts";
 import { newCommandId, newMessageId, newThreadId, newChatWorktreeBranch } from "./ids.ts";
 import {
@@ -97,7 +98,7 @@ function localSocketUrl(httpBaseUrl: string): string {
   url.search = "";
   url.hash = "";
   url.searchParams.set("orchestrationProtocol", "2");
-  return url.toString();
+  return appendOmegentT3ProductHandshake(url.toString());
 }
 
 function messageFromCause(cause: unknown): string {
@@ -575,7 +576,7 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
             );
             const protocolSocketUrl = new URL(socketUrl);
             protocolSocketUrl.searchParams.set("orchestrationProtocol", "2");
-            socketUrl = protocolSocketUrl.toString();
+            socketUrl = appendOmegentT3ProductHandshake(protocolSocketUrl.toString());
             label = descriptor.label;
             environmentId = descriptor.environmentId;
           }
