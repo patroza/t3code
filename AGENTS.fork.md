@@ -78,9 +78,17 @@ Merge upstream small and often; a short range is a short conflict list. The sequ
   range with `scripts/classify-deployment-diff.sh` and dispatches `fork-mobile-eas-production.yml`.
   Server, Discord, desktop, and VS Code are promoted by the private operations repository's
   poller, which keeps machine topology and deployment. They do not belong in this repo.
-- Upstream workflows that would misbehave here are `disabled_manually` at repository level: at
-  least `CI`, `Deploy T3 Connect relay`, and `Release`. **Do not re-enable them.** After an
-  accidental re-enable, run `gh workflow disable <name> --repo patroza/t3code`.
+- Upstream workflows that only run on upstream's Blacksmith runners, are guarded to
+  `pingdotgg/t3code`, or triage upstream's issues are `disabled_manually` at repository level, with
+  their files left byte-identical to upstream: `ci`, `deploy-relay`, `release`,
+  `mobile-eas-production`, `mobile-dev-client`, `mobile-android-apk`, `mobile-eas-preview`,
+  `mobile-eas-preview-fork`, `mobile-showcase-screenshots`, `web-preview`, `relay-preview`,
+  `relay-preview-cleanup`, `desktop-macos-preview`, `desktop-macos-preview-publish`,
+  `windows-tests`, `issue-vouch`, `issue-labels`, `stale-needs-more-info`, `publish-aur`.
+  **Do not re-enable them.** After an accidental re-enable, run
+  `gh workflow disable .github/workflows/<file>.yml --repo patroza/t3code`. When an upstream merge
+  adds a workflow, decide the same way: disable it unless it runs on GitHub-hosted runners and
+  does something for the fork.
 
 ## Pull requests (required handoff)
 
