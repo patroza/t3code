@@ -31,7 +31,7 @@ import * as Stream from "effect/Stream";
 import { FetchHttpClient, HttpRouter, HttpServer } from "effect/http";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 
-import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
+import * as SettledWorktreeFreeze from "./background/settledWorktreeFreeze.ts";
 import * as HostPowerMonitor from "./background/HostPowerMonitor.ts";
 import * as NonBlockingSpawner from "./process/NonBlockingSpawner.ts";
 import * as KeepAwake from "./background/KeepAwake.ts";
@@ -321,7 +321,8 @@ const layerDesktopAppUpdate = DesktopAppUpdate.layer.pipe(
   Layer.provide(layerDesktopTelemetryReceiver),
 );
 
-const layerBackground = BackgroundPolicy.layer.pipe(
+const layerBackground = SettledWorktreeFreeze.layer.pipe(
+  Layer.provide(Layer.suspend(() => layerPersistence)),
   Layer.provide(layerHostPowerMonitor),
   Layer.provideMerge(layerServerSettings),
 );
