@@ -75,7 +75,6 @@ apps/web/src/i18n/translations/ru.json  # identity: strings for claim gate, part
 apps/web/src/i18n/translations/sv.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
 apps/web/src/i18n/translations/zh.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
 apps/web/src/routes/__root.tsx  # identity: mounts IdentityClaimGate
-docs/user/outside-agents.md  # mcp-tokens: documents headless MCP bearer tokens and --runtime-mode-ceiling
 knip.jsonc  # tooling: entry for scripts/agent-gh.mjs, which only the generated gh shim runs
 package.json  # tooling: prepare runs scripts/fork-prepare.mjs; pr:ready and dist:desktop:linux:dir scripts
 packages/client-runtime/package.json  # identity: subpath exports for state/identity and message-sender
