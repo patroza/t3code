@@ -1,5 +1,6 @@
 import { initializeGTSPA } from "gt-react";
 
+import { withForkTranslations } from "./forkTranslations";
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES } from "./locales";
 
 // English is the source text, so it never loads a chunk.
@@ -15,7 +16,7 @@ export function initializeI18n(onLocaleRequest: (locale: string) => void): void 
     defaultLocale: DEFAULT_LOCALE,
     locales: [...SUPPORTED_LOCALES],
     locale: DEFAULT_LOCALE,
-    loadTranslations,
+    loadTranslations: withForkTranslations(loadTranslations),
     // GT's default drops a catalog from its cache after 60 s; call-time `m()` reads that cache.
     cacheExpiryTime: null,
     _reload: (state) => onLocaleRequest(state.locale),

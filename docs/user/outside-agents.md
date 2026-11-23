@@ -135,11 +135,6 @@ Any agent that supports remote MCP servers over HTTP with OAuth can connect. Giv
 it the MCP URL and choose OAuth, and the agent finds the sign-in settings itself.
 Agents without OAuth support cannot connect.
 
-A headless gateway can use a bearer token instead, issued on the host with
-`t3 auth session issue --subject mcp-client --scope orchestration:read --scope orchestration:operate --token-only`.
-It may start threads only in **approval-required** unless you add
-`--runtime-mode-ceiling auto` (or `auto-accept-edits`, `full-access`).
-
 A bot that supports MCP Events (`io.modelcontextprotocol/events`) can learn
 when something happens without reading threads over and over: a turn ended, an
 agent waits on a person, a guest asked something, a watched pull request woke

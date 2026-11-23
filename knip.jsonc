@@ -32,6 +32,8 @@
       "entry": [
         // Fork: the .tools/bin/gh shim runs this by path.
         "agent-gh.mjs",
+        // Fork: i18n:check runs fork-i18n.ts instead; upstream's checker stays for merges.
+        "i18n-check.ts",
         // These fixture scripts are injected into a browser page by path.
         "fixtures/*/*.js",
         "knip-schemas.ts",

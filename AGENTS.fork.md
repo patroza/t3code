@@ -47,6 +47,12 @@ Upstream merges stay cheap only while fork changes stay out of upstream's files.
   fork module.
 - Persistence: true upstream migrations stay in `Migrations.ts`; fork migrations go in
   `ForkMigrations.ts` (table `t3_fork_sql_migrations`) with stable ids. Never share a ledger.
+- Fork user docs are fork-only pages in `docs/user/` (`github-pr-conversations.md`,
+  `jira-issue-conversations.md`, `mcp-client-tokens.md`). Do not add fork text or links to
+  upstream pages or to `docs/README.md`; link from the fork page to upstream's instead.
+- Fork UI strings go in `apps/{web,mobile}/src/i18n/fork-translations/<locale>.json`, never in
+  upstream's `translations/`. `vp run i18n:generate` writes only the fork catalogs (keys upstream's
+  `en.json` lacks); translate new keys there. `vp run i18n:check` checks both layers.
 - Fork product and UI changes land with a test that fails if the surface disappears, such as an
   `aria-label` or `data-testid` existence check.
 
