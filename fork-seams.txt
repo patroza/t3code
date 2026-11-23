@@ -48,10 +48,11 @@ apps/server/src/server.ts  # identity: provides the persisted IdentityService la
 apps/server/src/ws.ts  # identity: spreads identity.* handlers and wraps dispatch/launch so operate commands carry the session's source (identity/identityWsHandlers.ts); bot-browser: spreads the previewAutomation.* external host handlers (preview/forkPreviewAutomationHost.ts)
 apps/web/package.json  # i18n: i18n:generate runs scripts/fork-i18n.ts, which keeps fork strings out of upstream catalogs
 apps/web/src/browser/browserSurfaceStore.ts  # browser: release removes the surface entry so closed tabs do not accumulate; in-place fix, upstream candidate
-apps/web/src/components/ChatView.tsx  # identity: passes message sender context to the timeline (chat/MessageSenderCaption.tsx)
+apps/web/src/components/ChatView.tsx  # identity: passes message sender context to the timeline (chat/MessageSenderCaption.tsx); desktop: passes reachedOverLoopback (remoteOpenFork.ts) so Open in stays for a loopback-reached environment
 apps/web/src/components/Sidebar.browser.test.tsx  # tooling: withoutComposerDrafts() empties persisted composer drafts while the draft-row tests run, so drafts another suite left in shared browser storage do not shift the rows. Upstream candidate
 apps/web/src/components/Sidebar.tsx  # identity: thread list follows the ownership filter (ownershipFilter.ts)
 apps/web/src/components/chat/MessagesTimeline.tsx  # identity: forwards messageSender into the row context
+apps/web/src/components/chat/OpenInPicker.logic.ts  # desktop: shows Open in for an environment reached over loopback, which opens editors locally (remoteOpenFork.ts); upstream candidate
 apps/web/src/components/chat/TimelineUserMessageRow.tsx  # identity: user messages show the sender caption
 apps/web/src/components/chat/timelineRowContext.ts  # identity: row context carries messageSender
 apps/web/src/components/settings/AuthorizedClientsSettings.tsx  # identity: MCP client rows show and assign who the client acts as (McpClientIdentityControl.tsx)
