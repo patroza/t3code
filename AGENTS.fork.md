@@ -127,12 +127,38 @@ for humans.
 | Ready PR               | full gate: `vp check`, `vpr typecheck`, `vp run test`                |
 | PR state can't resolve | full gate (fails closed)                                             |
 
-- A passing full gate is cached per HEAD SHA in `.run/agent-ship-gate.json`. Force a rerun with
-  `AGENT_SHIP_GATE_FORCE=1`.
+- The full gate runs `vp check`, `vpr typecheck`, every other command of Fork CI's `Check` and
+  `Test Packages` jobs (`CI_PARITY_STEPS` in `scripts/agent-pre-push.mjs`;
+  `scripts/fork-ci-local-proof.test.mjs` fails when the workflow gains a step the gate lacks), then
+  `vp run test`. A pass on a clean worktree is cached per HEAD **tree** in
+  `.run/agent-ship-gate.json`, so a rebase or merge that lands on the same tree reuses it. Force a
+  rerun with `AGENT_SHIP_GATE_FORCE=1` or `--no-cache`.
 - `pnpm pr:ready` requires HEAD to contain the latest `fork/dev`, runs the full gate, then marks the
   draft ready. Raw `gh pr ready` reaches the same place: the `.tools/bin/gh` shim (installed by
   `scripts/fork-prepare.mjs`, put first on `PATH` by `.envrc`) runs the gate first. `.envrc` also
   sets `GH_REPO` to the fork so bare `gh pr` commands do not target upstream.
+- **Local proof.** A green full gate posts a `Local proof` commit status (`v1 tree <tree> workflow
+  <fork-ci.yml blob> <host>`) on the commit: `pnpm pr:ready` and the `gh pr ready` shim post it on
+  the pushed HEAD before undrafting, the ready-PR pre-push hook posts it from a short-lived child
+  once the push lands (log: `.run/local-proof.log`), and `node scripts/agent-pre-push.mjs --prove`
+  runs the gate and posts it on an already pushed HEAD. Failed, changed-file, and dirty-worktree
+  gates post nothing.
+- On a `pull_request` run, `Verify tree evidence` reads that status. When the newest one from a
+  trusted creator is `success` for this run's tree (the PR merge commit's tree, so the PR must
+  contain the latest base) and `fork-ci.yml` blob, `Check`, `Test Packages`, `Test Server *`, and
+  `Test Web *` skip and `Test` counts them as passed. `Fork Seams`, `Release Smoke`, and `Mobile
+  Native Static Analysis` still run. A `fork/dev` push never skips on a local proof: such a PR run
+  records no tree evidence, so the merge runs everything on GitHub and CI-only regressions still
+  surface there.
+- Trusted creators are the repository owner plus the logins in the repository variable
+  `LOCAL_PROOF_TRUSTED_ACTORS` (comma separated, e.g. the GitHub App bot agents push as).
+  `github-actions[bot]` never counts, since any workflow's token posts as it. A trusted creator
+  revokes a proof by posting a newer non-success `Local proof` status. Bump
+  `LOCAL_PROOF_VERSION` (`scripts/lib/fork-ci-local-proof.mjs`) when the gate stops covering
+  what the skipped jobs run.
+- `Mobile Native Static Analysis` runs only when the diff against the first parent touches
+  `apps/mobile/`, its script, `fork-ci.yml`, or the root manifests and lockfile; otherwise it
+  skips, which satisfies the required check.
 - Do not hand-run the workspace suite as a pre-handoff ritual; the gate runs it on publish. While
   iterating, focused `vp test run <files>` and targeted typechecks are fine.
 - Cargo, mobile native, desktop packaging, and Release Smoke stay CI-only.

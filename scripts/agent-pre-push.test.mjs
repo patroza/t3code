@@ -24,8 +24,8 @@ import {
 } from "./lib/agent-pr-state.mjs";
 import {
   isShipGateForce,
-  isShipGateShaCached,
   isShipGateStaticCached,
+  isShipGateTreeCached,
   readShipGateCache,
   writeShipGateCache,
 } from "./lib/agent-ship-gate-cache.mjs";
@@ -309,58 +309,10 @@ it("gh policy: ready_for_review api paths need the ship gate", () => {
   );
 });
 
-it("ship-gate cache: match / miss / force", () => {
-  const sha = "a".repeat(40);
-  const other = "b".repeat(40);
-  assert.equal(isShipGateShaCached(sha, { sha }), true);
-  assert.equal(isShipGateShaCached(sha.toUpperCase(), { sha }), true);
-  assert.equal(isShipGateShaCached(other, { sha }), false);
-  assert.equal(isShipGateShaCached(null, { sha }), false);
-  assert.equal(isShipGateShaCached(sha, null), false);
-  assert.equal(isShipGateStaticCached(sha, { staticSha: sha }), true);
-  assert.equal(isShipGateStaticCached(sha, { sha }), true);
-  assert.equal(isShipGateStaticCached(sha, { staticSha: other }), false);
-  assert.equal(isShipGateForce({}), false);
-  assert.equal(isShipGateForce({ AGENT_SHIP_GATE_FORCE: "1" }), true);
-  assert.equal(isShipGateForce({ AGENT_SHIP_GATE_FORCE: "0" }), false);
-});
-
-it("ship-gate cache: write + read roundtrip (complete)", () => {
+const memoryFs = () => {
   const files = new Map();
-  const root = "/tmp/agent-ship-gate-test-root";
-  const sha = "c".repeat(40);
-  writeShipGateCache(root, sha, {
-    stage: "complete",
-    mkdirSync: () => {},
-    writeFileSync: (file, data) => {
-      files.set(file, data);
-    },
-    readFileSync: (file) => {
-      if (!files.has(file)) throw new Error("ENOENT");
-      return files.get(file);
-    },
-    now: () => new Date("2026-08-02T00:00:00.000Z"),
-  });
-  assert.equal(files.size, 1);
-  const written = [...files.values()][0];
-  assert.match(written, new RegExp(sha));
-  const cache = readShipGateCache(root, {
-    readFileSync: (file) => {
-      if (!files.has(file)) throw new Error("ENOENT");
-      return files.get(file);
-    },
-  });
-  assert.equal(cache?.sha, sha);
-  assert.equal(cache?.staticSha, sha);
-  assert.equal(isShipGateShaCached(sha, cache), true);
-  assert.equal(isShipGateStaticCached(sha, cache), true);
-});
-
-it("ship-gate cache: static does not demote complete", () => {
-  const files = new Map();
-  const root = "/tmp/agent-ship-gate-static-test";
-  const sha = "d".repeat(40);
-  const io = {
+  return {
+    files,
     mkdirSync: () => {},
     writeFileSync: (file, data) => {
       files.set(file, data);
@@ -371,11 +323,48 @@ it("ship-gate cache: static does not demote complete", () => {
     },
     now: () => new Date("2026-08-02T00:00:00.000Z"),
   };
-  writeShipGateCache(root, sha, { ...io, stage: "complete" });
-  writeShipGateCache(root, sha, { ...io, stage: "static" });
+};
+
+it("ship-gate cache: match / miss / force", () => {
+  const tree = "a".repeat(40);
+  const other = "b".repeat(40);
+  assert.equal(isShipGateTreeCached(tree, { tree }), true);
+  assert.equal(isShipGateTreeCached(tree.toUpperCase(), { tree }), true);
+  assert.equal(isShipGateTreeCached(other, { tree }), false);
+  assert.equal(isShipGateTreeCached(null, { tree }), false);
+  assert.equal(isShipGateTreeCached(tree, null), false);
+  assert.equal(isShipGateTreeCached(tree, { staticTree: tree }), false);
+  assert.equal(isShipGateStaticCached(tree, { staticTree: tree }), true);
+  assert.equal(isShipGateStaticCached(tree, { tree }), true);
+  assert.equal(isShipGateStaticCached(tree, { staticTree: other }), false);
+  assert.equal(isShipGateForce({}), false);
+  assert.equal(isShipGateForce({ AGENT_SHIP_GATE_FORCE: "1" }), true);
+  assert.equal(isShipGateForce({ AGENT_SHIP_GATE_FORCE: "0" }), false);
+});
+
+it("ship-gate cache: write + read roundtrip by tree; commit-keyed caches are ignored", () => {
+  const io = memoryFs();
+  const root = "/tmp/agent-ship-gate-test-root";
+  const tree = "c".repeat(40);
+  writeShipGateCache(root, tree, { ...io, stage: "complete" });
   const cache = readShipGateCache(root, io);
-  assert.equal(cache?.sha, sha);
-  assert.equal(isShipGateShaCached(sha, cache), true);
+  assert.equal(cache?.tree, tree);
+  assert.equal(isShipGateTreeCached(tree, cache), true);
+  assert.equal(isShipGateStaticCached(tree, cache), true);
+
+  // A cache from before the tree key named a commit; reusing it would skip an untested tree.
+  const legacy = memoryFs();
+  legacy.files.set(`${root}/.run/agent-ship-gate.json`, JSON.stringify({ sha: tree }));
+  assert.equal(readShipGateCache(root, legacy), null);
+});
+
+it("ship-gate cache: static does not demote complete", () => {
+  const io = memoryFs();
+  const root = "/tmp/agent-ship-gate-static-test";
+  const tree = "d".repeat(40);
+  writeShipGateCache(root, tree, { ...io, stage: "complete" });
+  writeShipGateCache(root, tree, { ...io, stage: "static" });
+  assert.equal(isShipGateTreeCached(tree, readShipGateCache(root, io)), true);
 });
 
 // The raw gh binary bypasses App installation-token minting; the shim must prefer the wrapper.
