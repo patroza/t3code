@@ -106,4 +106,43 @@ describe("EAS archive ignore rules", () => {
       NodeFS.rmSync(fixtureRoot, { force: true, recursive: true });
     }
   });
+
+  it("keeps the target of every tracked mobile symlink in the archive", () => {
+    const fixtureRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-easignore-"));
+
+    try {
+      NodeChildProcess.execFileSync("git", ["init", "--quiet"], {
+        cwd: fixtureRoot,
+        stdio: "ignore",
+      });
+      NodeFS.copyFileSync(
+        NodePath.join(repositoryRoot, ".easignore"),
+        NodePath.join(fixtureRoot, ".gitignore"),
+      );
+      const symlinks = NodeChildProcess.execFileSync("git", ["ls-files", "-s", "apps/mobile"], {
+        cwd: repositoryRoot,
+        encoding: "utf8",
+      })
+        .split("\n")
+        .filter((line) => line.startsWith("120000 "))
+        .map((line) => line.slice(line.indexOf("\t") + 1));
+      expect(symlinks.length).toBeGreaterThan(0);
+
+      for (const link of symlinks) {
+        const target = NodePath.relative(
+          repositoryRoot,
+          NodePath.resolve(
+            repositoryRoot,
+            NodePath.dirname(link),
+            NodeFS.readlinkSync(NodePath.join(repositoryRoot, link)),
+          ),
+        );
+        NodeFS.mkdirSync(NodePath.dirname(NodePath.join(fixtureRoot, target)), { recursive: true });
+        NodeFS.writeFileSync(NodePath.join(fixtureRoot, target), "fixture\n");
+        expect(isIgnored(fixtureRoot, target), `${link} -> ${target}`).toBe(false);
+      }
+    } finally {
+      NodeFS.rmSync(fixtureRoot, { force: true, recursive: true });
+    }
+  });
 });
