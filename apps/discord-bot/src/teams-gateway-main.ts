@@ -6,7 +6,7 @@ import {
   makeTeamsChannelDescriptionReader,
   teamsDescriptionProject,
 } from "./teams/channelDescription.ts";
-import { TeamsResponseReferences } from "./teams/responseReferences.ts";
+import { TeamsResponseReferences, restoredTeamsSender } from "./teams/responseReferences.ts";
 import { BridgeHub } from "./features/BridgeHub.ts";
 import { App } from "@microsoft/teams.apps";
 import { NodeRuntime } from "@effect/platform-node";
@@ -633,6 +633,11 @@ const program = Effect.gen(function* () {
     const { lease } = reference;
     const workspace = active(lease);
     const api = new ApiClient(reference.serviceUrl, app.api.http);
+    const sendRestored = restoredTeamsSender({
+      conversations: api.conversations,
+      conversationId: lease.conversationId,
+      botId: "28:" + initial.identity.entraClientId,
+    });
     const transport = makeTeamsResponseTransport({
       config: workspace.config,
       clientId: initial.identity.entraClientId,
@@ -648,18 +653,9 @@ const program = Effect.gen(function* () {
       assertActive: () => {
         active(lease);
       },
-      send: async (wire) => {
+      send: (wire) => {
         active(lease);
-        if (wire.id) {
-          await api.conversations.updateActivity(lease.conversationId, wire.id, wire);
-          return { id: wire.id };
-        }
-        const payload = {
-          ...wire,
-          from: { id: "28:" + initial.identity.entraClientId, role: "bot" as const },
-          conversation: { id: lease.conversationId },
-        };
-        return api.conversations.createActivity(lease.conversationId, payload);
+        return sendRestored(wire);
       },
       deleteMessage: (id) => api.conversations.deleteActivity(lease.conversationId, id),
     });

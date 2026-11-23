@@ -4,6 +4,7 @@ import * as NodePath from "node:path";
 import * as Schema from "effect/Schema";
 import type { TeamsGatewayConfig } from "./gatewayConfig.ts";
 import { safeTeamsServiceUrl, type GatewayLease } from "./gatewayPolicy.ts";
+import type { TeamsResponseActivity } from "./ResponseTransport.ts";
 
 const Reference = Schema.Struct({
   bindingId: Schema.String,
@@ -60,4 +61,41 @@ export class TeamsResponseReferences {
         : [];
     });
   }
+}
+
+type RestoredActivity = TeamsResponseActivity & {
+  readonly from: { readonly id: string; readonly role: "bot" };
+  readonly conversation: { readonly id: string };
+};
+
+interface RestoredConversationsApi {
+  createActivity(conversationId: string, activity: RestoredActivity): Promise<{ id?: string }>;
+  updateActivity(
+    conversationId: string,
+    activityId: string,
+    activity: RestoredActivity,
+  ): Promise<unknown>;
+}
+
+/**
+ * Restored bridges have no turn context. Edits after a restart failed while in-turn edits (the
+ * SDK's context sender) worked; match its `from` + `conversation` envelope for edits too.
+ */
+export function restoredTeamsSender(input: {
+  readonly conversations: RestoredConversationsApi;
+  readonly conversationId: string;
+  readonly botId: string;
+}) {
+  return async (wire: TeamsResponseActivity): Promise<{ id?: string }> => {
+    const payload: RestoredActivity = {
+      ...wire,
+      from: { id: input.botId, role: "bot" },
+      conversation: { id: input.conversationId },
+    };
+    if (wire.id) {
+      await input.conversations.updateActivity(input.conversationId, wire.id, payload);
+      return { id: wire.id };
+    }
+    return input.conversations.createActivity(input.conversationId, payload);
+  };
 }

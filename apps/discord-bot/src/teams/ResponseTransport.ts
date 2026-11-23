@@ -173,6 +173,25 @@ export function graphMessage(message: {
   };
 }
 
+/** Status and connector error only: SDK HTTP errors also carry request headers with the bot token. */
+export function describeTeamsError(cause: unknown): string {
+  if (typeof cause !== "object" || cause === null) return String(cause);
+  const { response, message } = cause as {
+    response?: { status?: unknown; data?: { error?: { code?: unknown; message?: unknown } } };
+    message?: unknown;
+  };
+  const parts = [
+    response?.status === undefined ? null : `status ${String(response.status)}`,
+    typeof response?.data?.error?.code === "string" ? response.data.error.code : null,
+    typeof response?.data?.error?.message === "string"
+      ? response.data.error.message
+      : typeof message === "string"
+        ? message
+        : null,
+  ].filter((part) => part !== null);
+  return parts.length > 0 ? parts.join(": ") : "unknown Teams error";
+}
+
 /** A card-only Stop/Continue activity has no prose. Channel history must not treat it as a reply. */
 function isTeamsControlActivity(message: {
   body?: { content?: string };
@@ -568,13 +587,26 @@ export function makeTeamsResponseTransport(input: {
           jiraBrowseBaseUrl: info.config.jiraBrowseBaseUrl,
         }),
       );
+      const fingerprint = NodeCrypto.createHash("sha256").update(content).digest("hex");
       const old = link?.infoDiscordMessageId;
-      const sent = old
-        ? yield* service
-            .updateMessage(info.conversationId, old, { content })
-            .pipe(Effect.catch(() => service.createMessage(info.conversationId, { content })))
-        : yield* service.createMessage(info.conversationId, { content });
-      yield* links.setInfoDiscordMessageId(info.conversationId, sent.id);
+      if (!old) {
+        const sent = yield* service.createMessage(info.conversationId, { content });
+        yield* links.setInfoDiscordMessageId(info.conversationId, sent.id, fingerprint);
+        return;
+      }
+      if (link?.infoContentFingerprint === fingerprint) return;
+      // A failed edit must never post a second card. The fingerprint stays stale, so the next
+      // change or restart retries the same card.
+      yield* service.updateMessage(info.conversationId, old, { content }).pipe(
+        Effect.andThen(() => links.setInfoDiscordMessageId(info.conversationId, old, fingerprint)),
+        Effect.catch((error) =>
+          Effect.logWarning("Teams thread info update failed; keeping the existing card", {
+            conversationId: info.conversationId,
+            messageId: old,
+            error: describeTeamsError(error.cause),
+          }),
+        ),
+      );
     }),
   };
   return service;
