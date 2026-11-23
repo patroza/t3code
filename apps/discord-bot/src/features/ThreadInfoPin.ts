@@ -46,6 +46,7 @@ import {
   type ThreadInfoPinRenderInput,
   type ThreadModelHistory,
 } from "../presentation/threadInfoPin.ts";
+import { messageUpdateError } from "./BotResponseTransport.ts";
 import { ThreadLinkStore, type ThreadLink } from "../store/ThreadLinkStore.ts";
 import { T3Session } from "../t3/T3Session.ts";
 
@@ -101,8 +102,11 @@ async function discordApiJson<T>(input: {
   });
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    throw new Error(
-      `Discord API ${input.method ?? "GET"} ${input.path} failed (${response.status}): ${body}`,
+    throw Object.assign(
+      new Error(
+        `Discord API ${input.method ?? "GET"} ${input.path} failed (${response.status}): ${body}`,
+      ),
+      { statusCode: response.status },
     );
   }
   if (response.status === 204) {
@@ -463,24 +467,35 @@ export const ensureThreadInfoPin = Effect.fn("ThreadInfoPin.ensureThreadInfoPin"
 
     // Prefer the stored id when still present among pins or when it still exists.
     if (messageId !== null) {
-      const patchOk = yield* Effect.tryPromise({
+      const storedId = messageId;
+      const patchError = yield* Effect.tryPromise({
         try: () =>
           discordApiJson({
             baseUrl,
             botToken,
-            path: `/channels/${input.channelId}/messages/${messageId}`,
+            path: `/channels/${input.channelId}/messages/${storedId}`,
             method: "PATCH",
             body: { content: input.content, flags: SUPPRESS_EMBEDS_FLAG },
           }),
         catch: (cause) => cause,
       }).pipe(
-        Effect.as(true as const),
-        Effect.orElseSucceed(() => false as const),
+        Effect.as(null),
+        Effect.catch((cause) => Effect.succeed(cause)),
       );
 
-      if (!patchOk) {
-        messageId = existingFromPins?.id ?? null;
-        if (messageId !== null) {
+      if (patchError !== null) {
+        // Only a deleted message may be replaced; any other failure keeps the card to avoid duplicates.
+        const missing = messageUpdateError(patchError).reason === "message-not-found";
+        const fallback = existingFromPins?.id ?? null;
+        messageId =
+          fallback !== null && fallback !== storedId ? fallback : missing ? null : storedId;
+        if (messageId === storedId) {
+          yield* Effect.logWarning("Thread info update failed; keeping the existing message", {
+            channelId: input.channelId,
+            messageId,
+            error: String(patchError),
+          });
+        } else if (messageId !== null) {
           yield* Effect.tryPromise({
             try: () =>
               discordApiJson({

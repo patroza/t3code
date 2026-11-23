@@ -24,6 +24,7 @@ import {
   graphMessage,
   type TeamsResponseActivity,
 } from "./ResponseTransport.ts";
+import { restoredTeamsSender } from "./responseReferences.ts";
 
 const options = {
   clientId: "bot",
@@ -105,6 +106,92 @@ describe("Teams response adapter", () => {
       expect(send.mock.calls[0]?.[0].textFormat).toBe("extendedmarkdown");
     }),
   );
+  it.effect("never posts a second thread-info card across restarts or failed edits", () =>
+    Effect.gen(function* () {
+      const config = yield* DiscordBotConfig.pipe(
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnvRecord({ T3_DISCORD_BOT_DATA_DIR: directory }),
+          ),
+        ),
+      );
+      yield* (yield* makeThreadLinkStore(directory)).put({
+        discordThreadId: options.conversationId,
+        t3ThreadId: ThreadId.make("scanner-thread"),
+        projectId: ProjectId.make("scanner"),
+        channelId: "channel",
+        guildId: "team",
+        createdAt: "2026-10-15T10:00:00.000Z",
+      });
+      const send = vi
+        .fn<(wire: TeamsResponseActivity) => Promise<{ id: string }>>()
+        .mockResolvedValue({ id: "info" });
+      // Each gateway restart builds a fresh store and adapter from disk.
+      const upsert = (worktreePath: string) =>
+        Effect.gen(function* () {
+          const links = yield* makeThreadLinkStore(directory);
+          yield* makeTeamsResponseTransport({ ...options, config, send })
+            .upsertThreadInfo({
+              config,
+              conversationId: options.conversationId,
+              threadId: "scanner-thread",
+              modelSelection: { instanceId: "grok", model: "grok-4.7" },
+              worktreePath,
+            })
+            .pipe(
+              Effect.provideService(ThreadLinkStore, links),
+              Effect.provideService(ProjectAliasStore, makeProjectAliasStore([])),
+              Effect.provideService(T3Session, {} as T3SessionService),
+            );
+          return yield* links.getByDiscordThreadId(options.conversationId);
+        });
+
+      yield* upsert("/worktrees/a");
+      expect(send.mock.calls.map(([wire]) => wire.id)).toEqual([undefined]);
+
+      yield* upsert("/worktrees/a");
+      expect(send).toHaveBeenCalledTimes(1);
+
+      yield* upsert("/worktrees/b");
+      expect(send.mock.calls.map(([wire]) => wire.id)).toEqual([undefined, "info"]);
+
+      send.mockRejectedValueOnce({ response: { status: 403 } });
+      const afterFailure = yield* upsert("/worktrees/c");
+      expect(send.mock.calls.map(([wire]) => wire.id)).toEqual([undefined, "info", "info"]);
+      expect(afterFailure?.infoDiscordMessageId).toBe("info");
+
+      // The stale fingerprint retries the same card instead of skipping the change.
+      yield* upsert("/worktrees/c");
+      expect(send.mock.calls.map(([wire]) => wire.id)).toEqual([undefined, "info", "info", "info"]);
+      expect(send.mock.calls[3]?.[0].text).toContain("/worktrees/c");
+    }),
+  );
+  it("sends restored edits with the same bot envelope as creates", async () => {
+    const createActivity = vi.fn(async () => ({ id: "created" }));
+    const updateActivity = vi.fn(async () => ({}));
+    const send = restoredTeamsSender({
+      conversations: { createActivity, updateActivity },
+      conversationId: options.conversationId,
+      botId: "28:bot",
+    });
+    const envelope = {
+      from: { id: "28:bot", role: "bot" },
+      conversation: { id: options.conversationId },
+    };
+    expect(await send({ ...teamsMessageFields({ content: "info" }), id: "info" })).toEqual({
+      id: "info",
+    });
+    expect(updateActivity).toHaveBeenCalledWith(
+      options.conversationId,
+      "info",
+      expect.objectContaining(envelope),
+    );
+    await send(teamsMessageFields({ content: "info" }));
+    expect(createActivity).toHaveBeenCalledWith(
+      options.conversationId,
+      expect.objectContaining(envelope),
+    );
+  });
   it("adopts an accepted final after a send timeout with Graph's HTML body", () => {
     const final = "**It’s 19:50.**\n\n[Open in T3 Code](https://example.com/?thread=t)";
     const remote = graphMessage({

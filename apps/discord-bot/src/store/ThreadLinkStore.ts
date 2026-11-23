@@ -97,6 +97,8 @@ export const ThreadLink = Schema.Struct({
   prUrls: Schema.optional(Schema.Array(Schema.String)),
   /** Discord message id of the pinned Model / worktree / Open in Omegent / Jira / PRs info message. */
   infoDiscordMessageId: Schema.optional(Schema.String),
+  /** Hash of the info message content last accepted by the platform; unchanged content is not re-sent. */
+  infoContentFingerprint: Schema.optional(Schema.String),
   /** First model used when this Discord↔T3 link was created (`instanceId/model`). */
   initialModelLine: Schema.optional(Schema.String),
   /** Last known model on the linked T3 thread (`instanceId/model`). */
@@ -141,6 +143,7 @@ export type ThreadLink = {
   readonly sentryIssueUrls?: ReadonlyArray<string> | undefined;
   readonly prUrls?: ReadonlyArray<string> | undefined;
   readonly infoDiscordMessageId?: string | undefined;
+  readonly infoContentFingerprint?: string | undefined;
   readonly initialModelLine?: string | undefined;
   readonly currentModelLine?: string | undefined;
   readonly modelSinceAt?: string | undefined;
@@ -176,6 +179,7 @@ export type ThreadLinkInput = {
   readonly sentryIssueUrls?: ReadonlyArray<string> | undefined;
   readonly prUrls?: ReadonlyArray<string> | undefined;
   readonly infoDiscordMessageId?: string | undefined;
+  readonly infoContentFingerprint?: string | undefined;
   readonly initialModelLine?: string | undefined;
   readonly currentModelLine?: string | undefined;
   readonly modelSinceAt?: string | undefined;
@@ -310,6 +314,7 @@ function asThreadLink(link: {
   readonly sentryIssueUrls?: ReadonlyArray<string> | undefined;
   readonly prUrls?: ReadonlyArray<string> | undefined;
   readonly infoDiscordMessageId?: string | undefined;
+  readonly infoContentFingerprint?: string | undefined;
   readonly initialModelLine?: string | undefined;
   readonly currentModelLine?: string | undefined;
   readonly modelSinceAt?: string | undefined;
@@ -343,6 +348,7 @@ function asThreadLink(link: {
     sentryIssueUrls: link.sentryIssueUrls,
     prUrls: link.prUrls,
     infoDiscordMessageId: link.infoDiscordMessageId,
+    infoContentFingerprint: link.infoContentFingerprint,
     initialModelLine: link.initialModelLine,
     currentModelLine: link.currentModelLine,
     modelSinceAt: link.modelSinceAt,
@@ -370,6 +376,7 @@ export function migrateV1Link(link: {
   readonly sentryIssueUrls?: ReadonlyArray<string> | undefined;
   readonly prUrls?: ReadonlyArray<string> | undefined;
   readonly infoDiscordMessageId?: string | undefined;
+  readonly infoContentFingerprint?: string | undefined;
   readonly initialModelLine?: string | undefined;
   readonly currentModelLine?: string | undefined;
   readonly modelSinceAt?: string | undefined;
@@ -401,6 +408,7 @@ export function migrateV1Link(link: {
     sentryIssueUrls: link.sentryIssueUrls,
     prUrls: link.prUrls,
     infoDiscordMessageId: link.infoDiscordMessageId,
+    infoContentFingerprint: link.infoContentFingerprint,
     initialModelLine: link.initialModelLine,
     currentModelLine: link.currentModelLine,
     modelSinceAt: link.modelSinceAt,
@@ -438,6 +446,7 @@ export function normalizeThreadLinkInput(link: ThreadLinkInput): ThreadLink {
     sentryIssueUrls: link.sentryIssueUrls,
     prUrls: link.prUrls,
     infoDiscordMessageId: link.infoDiscordMessageId,
+    infoContentFingerprint: link.infoContentFingerprint,
     initialModelLine: link.initialModelLine,
     currentModelLine: link.currentModelLine,
     modelSinceAt: link.modelSinceAt,
@@ -587,6 +596,7 @@ export interface ThreadLinkStoreService {
   readonly setInfoDiscordMessageId: (
     discordThreadId: string,
     infoDiscordMessageId: string | null,
+    infoContentFingerprint?: string,
   ) => Effect.Effect<void>;
   readonly setModelHistory: (
     discordThreadId: string,
@@ -786,6 +796,10 @@ export const makeThreadLinkStore = Effect.fn("ThreadLinkStore.makeThreadLinkStor
                       link.infoDiscordMessageId !== undefined
                         ? normalized.infoDiscordMessageId
                         : existing.infoDiscordMessageId,
+                    infoContentFingerprint:
+                      link.infoContentFingerprint !== undefined
+                        ? normalized.infoContentFingerprint
+                        : existing.infoContentFingerprint,
                     initialModelLine:
                       link.initialModelLine !== undefined
                         ? normalized.initialModelLine
@@ -1051,10 +1065,11 @@ export const makeThreadLinkStore = Effect.fn("ThreadLinkStore.makeThreadLinkStor
     ),
 
     setInfoDiscordMessageId: Effect.fn("ThreadLinkStore.setInfoDiscordMessageId")(
-      (discordThreadId, infoDiscordMessageId) =>
+      (discordThreadId, infoDiscordMessageId, infoContentFingerprint) =>
         updateLink(discordThreadId, (existing) => ({
           ...existing,
           infoDiscordMessageId: infoDiscordMessageId ?? undefined,
+          infoContentFingerprint,
           updatedAt: nowIso(),
         })).pipe(Effect.asVoid),
     ),
