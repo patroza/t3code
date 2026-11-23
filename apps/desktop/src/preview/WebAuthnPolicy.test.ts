@@ -84,7 +84,11 @@ app.whenReady().then(async () => {
         ? ["-a", electron, "--ozone-platform=x11", ...electronArgs]
         : electronArgs,
       { timeout: 30_000, env: { ...process.env, ELECTRON_RUN_AS_NODE: undefined } },
-    );
+    ).catch((error: { stdout?: string }) => {
+      // Arch's xvfb-run exits 1 when Xvfb is already gone at cleanup; the fixture result still counts.
+      if (error.stdout?.includes("AUTH_FIXTURE:")) return { stdout: error.stdout };
+      throw error;
+    });
     const result = JSON.parse(stdout.split("AUTH_FIXTURE:")[1]!) as {
       frames: unknown[];
       oauth: unknown;
