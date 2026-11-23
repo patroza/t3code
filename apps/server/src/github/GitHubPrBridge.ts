@@ -16,6 +16,7 @@ import {
   integrationThreadView,
   type IntegrationThreadShellView as OrchestrationThreadShell,
 } from "@t3tools/shared/integrationThreadView";
+import { readJiraBareKeyProjectsForWorkspaceRoots } from "@t3tools/shared/jiraBareKeyProjects";
 import {
   DISCORD_LINK_REQUEST_MARKER,
   parseProviderModelFlags,
@@ -37,6 +38,7 @@ import { buildIntegrationSourceRef } from "../identity/stampSource.ts";
 import { discoverTargetTurnId, resolveBridgeTurnOutcome } from "../integrations/turnOutcome.ts";
 import { OrchestratorV2 } from "../orchestration-v2/Orchestrator.ts";
 import { ProjectStoreV2 } from "../orchestration-v2/ProjectStore.ts";
+import { ThreadIssueService } from "../orchestration-v2/ThreadIssueService.ts";
 import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
 import { RepositoryIdentityResolver } from "../project/RepositoryIdentityResolver.ts";
 import { ProviderRegistry } from "../provider/ProviderRegistry.ts";
@@ -57,6 +59,14 @@ import {
   parseGitHubThreadMode,
 } from "./GitHubWebhookPayload.ts";
 import { classifyGitHubActorTrust } from "./githubActorTrust.ts";
+import {
+  extractGitHubJiraIssueKeys,
+  githubJiraSiteHost,
+  githubJiraSiteUrl,
+  isJoinableBridgeThread,
+  linkJiraIssuesToThread,
+  selectJiraLinkedThread,
+} from "./githubJiraIssues.ts";
 
 const FALLBACK_MODEL_SELECTION: ModelSelection = {
   instanceId: ProviderInstanceId.make("codex"),
@@ -210,13 +220,7 @@ export function selectPullRequestThread<T extends PullRequestThreadCandidate>(
   key: ThreadPullRequestKey & { readonly url: string },
 ): T | null {
   const ranked = threads.flatMap((thread) => {
-    if (
-      thread.archivedAt !== null ||
-      thread.lineage.sideChat === true ||
-      thread.lineage.relationshipToParent === "subagent"
-    ) {
-      return [];
-    }
+    if (!isJoinableBridgeThread(thread)) return [];
     const explicit = explicitPullRequestLink(thread, key);
     const branch =
       thread.branchPullRequest != null &&
@@ -231,6 +235,26 @@ export function selectPullRequestThread<T extends PullRequestThreadCandidate>(
         DateTime.toEpochMillis(right.thread.createdAt),
   );
   return ranked[0]?.thread ?? null;
+}
+
+/**
+ * The PR's main thread. A thread already linked to the PR wins, so a PR keeps its thread even
+ * when its title later names another issue; only an unlinked PR joins the one thread linked to
+ * a Jira key from its title or the comment.
+ */
+export function selectMainPullRequestThread<
+  T extends PullRequestThreadCandidate & Pick<OrchestrationV2ThreadShell, "issues">,
+>(
+  threads: ReadonlyArray<T>,
+  key: ThreadPullRequestKey & { readonly url: string },
+  jira: { readonly issueKeys: ReadonlyArray<string>; readonly siteHost: string | undefined },
+): { readonly thread: T | null; readonly via: "pull-request" | "jira" | null } {
+  const byPullRequest = selectPullRequestThread(threads, key);
+  if (byPullRequest !== null) return { thread: byPullRequest, via: "pull-request" };
+  const byJira = selectJiraLinkedThread(threads, jira.issueKeys, jira.siteHost);
+  return byJira._tag === "linked"
+    ? { thread: byJira.thread, via: "jira" }
+    : { thread: null, via: null };
 }
 
 function formatGitHubComment(body: string): string {
@@ -326,6 +350,9 @@ const make = Effect.gen(function* () {
   const deliveries = yield* GitHubDeliveryStore;
   const engine = yield* OrchestratorV2;
   const projectContext = yield* Effect.context<ProjectStoreV2 | RepositoryIdentityResolver>();
+  const threadIssueContext = yield* Effect.context<ThreadIssueService>();
+  const jiraSiteUrl = yield* githubJiraSiteUrl;
+  const jiraSiteHost = githubJiraSiteHost(jiraSiteUrl);
   const projection = {
     getShellSnapshot: () =>
       Effect.all(
@@ -482,6 +509,43 @@ const make = Effect.gen(function* () {
       selectedThreadId: selected?.id ?? null,
     });
     return selected === null ? null : integrationThreadShellView(selected);
+  });
+
+  const resolveMainThread = Effect.fn("GitHubPrBridge.resolveMainThread")(function* (
+    invocation: GitHubPrInvocation,
+    jiraIssueKeys: ReadonlyArray<string>,
+  ) {
+    const snapshot = yield* engine.getShellSnapshot().pipe(Effect.orElseSucceed(() => null));
+    if (snapshot === null) return null;
+    const selected = selectMainPullRequestThread(
+      snapshot.threads,
+      githubPullRequestKey(invocation),
+      { issueKeys: jiraIssueKeys, siteHost: jiraSiteHost },
+    );
+    yield* Effect.logInfo("Resolved GitHub PR to its main T3 thread", {
+      repository: invocation.repository,
+      pullRequestNumber: invocation.pullRequestNumber,
+      jiraIssueKeys,
+      selectedThreadId: selected.thread?.id ?? null,
+      via: selected.via,
+    });
+    return selected.thread === null ? null : integrationThreadShellView(selected.thread);
+  });
+
+  /** Jira keys in the PR title and comment; bare keys need the repo's t3.json `jiraProjects`. */
+  const resolveJiraIssueKeys = Effect.fn("GitHubPrBridge.resolveJiraIssueKeys")(function* (
+    invocation: GitHubPrInvocation,
+  ) {
+    const shell = yield* projection.getShellSnapshot().pipe(Effect.orElseSucceed(() => null));
+    const workspaceRoots = (shell?.projects ?? [])
+      .filter((project) =>
+        matchesGitHubRepository(project.repositoryIdentity, invocation.repository),
+      )
+      .map((project) => project.workspaceRoot);
+    const bareKeyProjects = yield* Effect.sync(() =>
+      readJiraBareKeyProjectsForWorkspaceRoots(workspaceRoots),
+    );
+    return extractGitHubJiraIssueKeys(invocation, bareKeyProjects);
   });
 
   /** Links the PR to the thread so the next mention and the PR panel find it; once is enough. */
@@ -673,15 +737,15 @@ const make = Effect.gen(function* () {
     requestedModelSelection: ModelSelection,
     threadMode: GitHubThreadMode,
     forceNewSibling: boolean,
+    jiraIssueKeys: ReadonlyArray<string>,
   ) {
-    const linked = yield* resolveLinkedThread(invocation);
-
     if (threadMode === "main") {
-      if (linked !== null) return provisioned(linked);
+      const main = yield* resolveMainThread(invocation, jiraIssueKeys);
+      if (main !== null) return provisioned(main);
 
       return yield* provisionLock.withPermit(
         Effect.gen(function* () {
-          const rechecked = yield* resolveLinkedThread(invocation);
+          const rechecked = yield* resolveMainThread(invocation, jiraIssueKeys);
           if (rechecked !== null) return provisioned(rechecked);
 
           const prepared = yield* preparePullRequestWorktree(invocation);
@@ -699,6 +763,8 @@ const make = Effect.gen(function* () {
         }),
       );
     }
+
+    const linked = yield* resolveLinkedThread(invocation);
 
     // Sibling: continue an existing assignment for this GH review discussion unless forced new.
     if (!forceNewSibling && invocation.commentSurface === "review") {
@@ -984,12 +1050,14 @@ const make = Effect.gen(function* () {
       prompt: parsedCommand.prompt,
     };
     const initialModelSelection = yield* resolveGitHubModelSelection(turnInvocation);
+    const jiraIssueKeys = threadMode === "main" ? yield* resolveJiraIssueKeys(turnInvocation) : [];
 
     const outcome = yield* resolveOrProvisionThread(
       turnInvocation,
       initialModelSelection,
       threadMode,
       forceNewSibling,
+      jiraIssueKeys,
     ).pipe(
       Effect.catchCause((cause) =>
         Effect.logError("Failed to resolve or provision GitHub PR thread", {
@@ -1020,6 +1088,13 @@ const make = Effect.gen(function* () {
           }),
         ),
       );
+      // Later Jira and Discord mentions of these issues then land on this thread too.
+      yield* linkJiraIssuesToThread({
+        threadId: thread.id,
+        projectId: thread.projectId,
+        issueKeys: jiraIssueKeys,
+        siteUrl: jiraSiteUrl,
+      }).pipe(Effect.provide(threadIssueContext));
     }
 
     if (isThreadBusy(thread)) {
