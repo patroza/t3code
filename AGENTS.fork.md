@@ -53,7 +53,9 @@ Upstream merges stay cheap only while fork changes stay out of upstream's files.
 ## Upstream merges
 
 Merge upstream small and often; a short range is a short conflict list. The sequence is
-`.agents/skills/update-upstream/SKILL.md`. The rules:
+`.agents/skills/update-upstream/SKILL.md`; `node scripts/merge-upstream.mjs` runs its mechanical
+steps up to a draft PR and stops for superseded-feature drops, real conflicts, and failed checks.
+The rules:
 
 - An upstream merge is a real merge commit. Land its PR with `gh pr merge <n> --merge`, never the
   GitHub button: ordinary fork PRs squash, so the button remembers squash and drops the second

@@ -11,9 +11,27 @@ Those phrases ask you to land one batch: the `upstream/main` already merged into
 
 Merge small and often. A weld of a few days of upstream is a short conflict list; a month is a rewrite.
 
-## Refresh the refs
+## Run the script first
 
 From a checkout of this repo, with direnv loaded (`.envrc` points `GH_REPO` at the fork and puts `.tools/bin` first):
+
+```bash
+node scripts/merge-upstream.mjs --dry-run   # fetch, print the range and its fork-seams.txt overlap
+node scripts/merge-upstream.mjs             # weld it, up to a draft PR
+```
+
+`scripts/merge-upstream.mjs` runs the mechanical part of this file: fetches `origin fork/dev` and `upstream main` separately, stops when `upstream/main` is already in `origin/fork/dev` (exit 0, "up to date") or a `sync/upstream-*` PR is open (exit 4, prints its number: finish that one, see One open weld). Otherwise it creates the sibling worktree `sync-upstream-<sha12>` on `sync/upstream-<sha12>` with tracking unset, runs `vp i`, prints the overlap report, merges with the message below, and resolves `pnpm-lock.yaml` (upstream's, then `CI= pnpm install --no-frozen-lockfile`) and locale catalogs under `apps/*/src/i18n/translations/` (key-level 3-way merge; keys both sides changed are left as conflicts). Then it runs the seams check, `vp run i18n:check`, and `vp run typecheck`, pushes through the normal pre-push gate, opens the draft PR, and adds `agent-context-increase` with an explaining comment when every value that grew in `agentContextBudget.json` equals upstream's. The last stdout line is a JSON summary. `--help` lists flags, exit codes, and the attribution env overrides.
+
+It never publishes or lands. What stays with you:
+
+- **Superseded fork changes.** Read the overlap report. When something must be dropped, run with `--prepare` (stops before merging), commit the drops in the weld worktree (see Drop what upstream now ships), then `node scripts/merge-upstream.mjs --continue` there. Name the drops in the PR body.
+- **Real conflicts (exit 2).** The script lists the files left. Resolve them as Merge upstream says, `git add` them, then `--continue` in the weld worktree.
+- **Failed checks (exit 3).** Fix in commits of their own (After the merge), then `--continue`. A failed push is exit 3 too; `--continue` retries it.
+- **Fork/dev moved, publishing, and landing.** One open weld and Land below.
+
+The sections below are the sequence the script follows and the reference for doing any step by hand.
+
+## Refresh the refs
 
 ```bash
 git fetch origin fork/dev
