@@ -7,6 +7,7 @@ import {
 import type * as Context from "effect/Context";
 import { DiscordREST } from "dfx";
 import * as Context_ from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -30,6 +31,7 @@ import {
   type GroupChatPlan,
   type GroupChatRule,
 } from "../teams/groupChats.ts";
+import { weeklyThreadKey } from "../teams/weeklyThreads.ts";
 import { startOrContinueLinkedTurn } from "./LinkedTurnRouter.ts";
 
 const decodeGroupChatAnswers = Schema.decodeEffect(Schema.fromJsonString(ProviderUserInputAnswers));
@@ -226,7 +228,7 @@ const runGroupChatCommand = Effect.fn("runGroupChatCommand")(function* (
 
 /**
  * Observe a Teams group chat without sending anything back to it.
- * One T3 thread, one Discord alerts thread, and one internal Teams channel thread.
+ * One T3 thread, one Discord alerts thread, and one internal Teams channel thread per week.
  */
 export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* (
   config: DiscordBotConfig,
@@ -283,28 +285,23 @@ export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* 
     return { handled: true as const };
   }
 
+  // Group chats have no reply chains, so the whole chat starts a fresh thread each week.
+  const sourceKey = weeklyThreadKey(plan.sourceKey, DateTime.toDateUtc(yield* DateTime.now));
   const links = yield* ThreadLinkStore;
-  const existing = yield* links.getBySourceThread("teams", plan.sourceKey);
+  const existing = yield* links.getBySourceThread("teams", sourceKey);
   const mirrorsFile = groupChatMirrorsFile(config.dataDir);
   if (plan.kind === "ignore") {
     if (existing !== null) {
       const line = groupChatLogLine(activity.author ?? "unknown", activity.text);
       yield* postDiscord(runtime, existing.discordThreadId, line);
-      yield* copyToChannelThread(
-        poster,
-        mirrorsFile,
-        plan.sourceKey,
-        plan.chat.mirror,
-        plan.chat,
-        line,
-      );
+      yield* copyToChannelThread(poster, mirrorsFile, sourceKey, plan.chat.mirror, plan.chat, line);
     }
     return { handled: true as const };
   }
   if (plan.kind === "command") {
     if (existing === null) {
       yield* Effect.logInfo("Ignored Teams group chat command before the chat thread exists", {
-        sourceKey: plan.sourceKey,
+        sourceKey,
         command: plan.command.kind,
       });
       return { handled: true as const };
@@ -318,7 +315,7 @@ export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* 
     yield* copyToChannelThread(
       poster,
       mirrorsFile,
-      plan.sourceKey,
+      sourceKey,
       plan.chat.mirror,
       plan.chat,
       groupChatLogLine(activity.author ?? "unknown", activity.text),
@@ -329,7 +326,7 @@ export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* 
 
   if (discordRest(runtime) === null) {
     yield* Effect.logError("Discord is unavailable; passive Teams group chat was not opened", {
-      sourceKey: plan.sourceKey,
+      sourceKey,
     });
     return { handled: true as const };
   }
@@ -337,7 +334,7 @@ export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* 
   if (existing === null && (alertsChannelId === undefined || alertsChannelId.length === 0)) {
     yield* Effect.logError(
       "DISCORD_ALERTS_CHANNEL_ID is unset; passive Teams group chat was not opened",
-      { sourceKey: plan.sourceKey },
+      { sourceKey },
     );
     return { handled: true as const };
   }
@@ -352,7 +349,7 @@ export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* 
   const channelThread = yield* copyToChannelThread(
     poster,
     mirrorsFile,
-    plan.sourceKey,
+    sourceKey,
     plan.chat.mirror,
     plan.chat,
     observation,
@@ -364,7 +361,7 @@ export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* 
   const t3ThreadId = yield* useRuntime(
     runtime,
     startOrContinueLinkedTurn(config, {
-      source: { sourceKind: "teams", sourceThreadId: plan.sourceKey },
+      source: { sourceKind: "teams", sourceThreadId: sourceKey },
       ...(knownPerson === null || plan.wake !== "instruction"
         ? {}
         : {
