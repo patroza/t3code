@@ -6,6 +6,7 @@ import { createContext, use, useDeferredValue, useEffect, useMemo, type ReactNod
 import { Platform, TurboModuleRegistry, View, type TurboModule } from "react-native";
 
 import { mobilePreferencesAtom } from "../state/preferences";
+import { withForkTranslations } from "./forkTranslations";
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES } from "./locales";
 import { setActiveLocale } from "./messages";
 
@@ -33,7 +34,7 @@ const CATALOGS: Readonly<Record<string, () => unknown>> = {
 initializeGT({
   defaultLocale: DEFAULT_LOCALE,
   locales: [...SUPPORTED_LOCALES],
-  loadTranslations: async (locale: string) => CATALOGS[locale]?.() ?? {},
+  loadTranslations: withForkTranslations(async (locale: string) => CATALOGS[locale]?.() ?? {}),
   // Loaded catalogs never go stale; GT's default 60 s expiry would only reload the same file.
   cacheExpiryTime: null,
 });

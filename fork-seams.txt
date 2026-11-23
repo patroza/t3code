@@ -15,7 +15,7 @@ apps/desktop/src/preview/Passkeys.ts  # webauthn: registers the service's WebAut
 apps/desktop/src/updates/DesktopUpdates.ts  # dir-install-updates: directory installs (no feed, not AppImage/.deb) are not disabled (updates/DesktopDirInstallUpdates.ts)
 apps/desktop/src/window/DesktopWindow.ts  # webauthn: preview guests disable the WebAuth blink feature when no authenticator works (preview/WebAuthnPolicy.ts)
 apps/mobile/app.config.ts  # tooling: wraps the default export in applyForkMobileConfig (app.config.fork.ts)
-apps/mobile/package.json  # tooling: eas-build-pre-install script for the trimmed EAS archive (.easignore)
+apps/mobile/package.json  # tooling: eas-build-pre-install script for the trimmed EAS archive (.easignore); i18n: i18n:generate runs scripts/fork-i18n.ts
 apps/mobile/src/App.tsx  # identity: mounts IdentityClaimGate
 apps/mobile/src/features/home/HomeRouteScreen.tsx  # identity: ownership-filters the home thread list and adds ownership to its filter menu (features/identity/OwnershipFilter.tsx)
 apps/mobile/src/features/home/ThreadListFilters.tsx  # identity: Mine/Theirs chip beside the environment and project chips
@@ -23,16 +23,7 @@ apps/mobile/src/features/threads/ThreadDetailScreen.tsx  # identity: passes rend
 apps/mobile/src/features/threads/ThreadFeed.tsx  # identity: optional renderMessageSender prop rendered above user messages; ThreadFeed imports no identity code
 apps/mobile/src/features/threads/ThreadNavigationSidebar.tsx  # identity: ownership-filters the sidebar thread list and adds ownership to its filter menu
 apps/mobile/src/features/threads/thread-list-v2-items.tsx  # identity: thread rows show the creator/participant mark (features/identity/ParticipantStack.tsx)
-apps/mobile/src/i18n/translations/de.json  # identity: mobile identity strings
-apps/mobile/src/i18n/translations/en.json  # identity: mobile identity strings
-apps/mobile/src/i18n/translations/es.json  # identity: mobile identity strings
-apps/mobile/src/i18n/translations/fr.json  # identity: mobile identity strings
-apps/mobile/src/i18n/translations/ja.json  # identity: mobile identity strings
-apps/mobile/src/i18n/translations/ko.json  # identity: mobile identity strings
-apps/mobile/src/i18n/translations/pt-BR.json  # identity: mobile identity strings
-apps/mobile/src/i18n/translations/ru.json  # identity: mobile identity strings
-apps/mobile/src/i18n/translations/sv.json  # identity: mobile identity strings
-apps/mobile/src/i18n/translations/zh.json  # identity: mobile identity strings
+apps/mobile/src/i18n/I18nProvider.tsx  # i18n: wraps the catalog loader with withForkTranslations (fork-translations/)
 apps/mobile/src/persistence/mobile-preferences.ts  # identity: persists the Mine/Theirs ownership choice (features/identity/ownershipFilterOptions.ts)
 apps/server/src/auth/EnvironmentAuth.ts  # identity + mcp-tokens: exports MCP_CLIENT_SUBJECT; issueSession passes a runtimeModeCeiling through
 apps/server/src/auth/RpcAuthorization.ts  # identity: spreads IDENTITY_READ_RPC_SCOPES into RPC_REQUIRED_SCOPES; bot-browser: spreads PREVIEW_AUTOMATION_HOST_RPC_SCOPES (previewAutomationHostRpc.ts)
@@ -54,6 +45,7 @@ apps/server/src/preview/ServerBrowserContexts.ts  # webauthn: optional prepareCo
 apps/server/src/processRunner.ts  # direnv: optional extendEnv so direnv runs with exactly the provider environment
 apps/server/src/server.ts  # identity: provides the persisted IdentityService layer; direnv: DirenvEnvironment.layerLive in the runtime core layer merge; jira: adds the /api/jira/webhook route layer (jira/JiraServerLayers.ts); github: adds the /api/github/webhook route layer (github/GitHubServerLayers.ts); discord: the command-readiness middleware lets the bot's token exchange and discovery through (discord/commandReadinessExemption.ts); bot-browser: provides preview/forkPreviewAutomationHost.ts layer in place of PreviewAutomationBroker.layer (same broker plus external hosts and thread claims)
 apps/server/src/ws.ts  # identity: spreads identity.* handlers and wraps dispatch/launch so operate commands carry the session's source (identity/identityWsHandlers.ts); bot-browser: spreads the previewAutomation.* external host handlers (preview/forkPreviewAutomationHost.ts)
+apps/web/package.json  # i18n: i18n:generate runs scripts/fork-i18n.ts, which keeps fork strings out of upstream catalogs
 apps/web/src/browser/browserSurfaceStore.ts  # browser: release removes the surface entry so closed tabs do not accumulate; in-place fix, upstream candidate
 apps/web/src/components/ChatView.tsx  # identity: passes message sender context to the timeline (chat/MessageSenderCaption.tsx)
 apps/web/src/components/Sidebar.browser.test.tsx  # tooling: withoutComposerDrafts() empties persisted composer drafts while the draft-row tests run, so drafts another suite left in shared browser storage do not shift the rows. Upstream candidate
@@ -64,19 +56,10 @@ apps/web/src/components/chat/timelineRowContext.ts  # identity: row context carr
 apps/web/src/components/settings/AuthorizedClientsSettings.tsx  # identity: MCP client rows show and assign who the client acts as (McpClientIdentityControl.tsx)
 apps/web/src/components/sidebar/SidebarThreadHeader.tsx  # identity: renders the ownership filter menu (SidebarOwnershipFilter.tsx)
 apps/web/src/components/sidebar/SidebarThreadRow.tsx  # identity: rows show the origin/participant mark (identity/ParticipantStack.tsx)
-apps/web/src/i18n/translations/de.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
-apps/web/src/i18n/translations/en.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
-apps/web/src/i18n/translations/es.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
-apps/web/src/i18n/translations/fr.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
-apps/web/src/i18n/translations/ja.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
-apps/web/src/i18n/translations/ko.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
-apps/web/src/i18n/translations/pt-BR.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
-apps/web/src/i18n/translations/ru.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
-apps/web/src/i18n/translations/sv.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
-apps/web/src/i18n/translations/zh.json  # identity: strings for claim gate, participants, ownership filter, MCP client identity
+apps/web/src/i18n/initializeI18n.ts  # i18n: wraps the catalog loader with withForkTranslations (fork-translations/)
 apps/web/src/routes/__root.tsx  # identity: mounts IdentityClaimGate
-knip.jsonc  # tooling: entry for scripts/agent-gh.mjs, which only the generated gh shim runs
-package.json  # tooling: prepare runs scripts/fork-prepare.mjs; pr:ready and dist:desktop:linux:dir scripts
+knip.jsonc  # tooling: entry for scripts/agent-gh.mjs, which only the generated gh shim runs; i18n: entry for upstream scripts/i18n-check.ts, which fork-i18n.ts replaces
+package.json  # tooling: prepare runs scripts/fork-prepare.mjs; pr:ready and dist:desktop:linux:dir scripts; i18n: i18n:check runs scripts/fork-i18n.ts
 packages/client-runtime/package.json  # identity: subpath exports for state/identity and message-sender
 packages/client-runtime/src/rpc/index.ts  # vscode + discord: re-exports RpcSessionFactory/rpcSessionFactoryLayer and applyServerConfigProjection so headless clients (extension, bot) open and follow their own RPC session
 packages/contracts/src/clientRpcPermissions.ts  # identity: spreads IDENTITY_GUARDED_RPC_SCOPES (identityRpc.ts) into CLIENT_GUARDED_RPC_SCOPES
