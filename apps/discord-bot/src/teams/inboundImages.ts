@@ -6,6 +6,8 @@ import {
   type UploadChatAttachment,
 } from "@t3tools/contracts";
 
+import { findReferencedMessages, loadReferencedMessages } from "./referencedMessages.ts";
+
 export const TEAMS_TURN_MAX_IMAGES = 8;
 const GRAPH_ORIGIN = "https://graph.microsoft.com/v1.0";
 const GRAPH_SCOPE = "https://graph.microsoft.com/.default";
@@ -35,6 +37,8 @@ export interface TeamsTurnImageRequest {
   readonly fetch?: typeof globalThis.fetch | undefined;
   readonly tokens?: { readonly graph?: string | undefined; readonly bot?: string | undefined };
   readonly tokenCache?: Map<string, { token: string; expiresAt: number }> | undefined;
+  /** How much of a quoted or linked message to load; see `loadReferencedMessages`. */
+  readonly referencedDetail?: "full" | "text" | undefined;
 }
 
 export interface TeamsTurnImageLoad {
@@ -521,6 +525,40 @@ export async function loadTeamsTurnImages(
     if (!opened && urls.length > 0) unopened.push(name);
   }
 
+  // Quotes and message links only carry a preview; read the real message, its images and context.
+  let referenced = "";
+  if (graphToken !== null) {
+    const references = findReferencedMessages({
+      text: input.plainText,
+      // Link previews arrive as cards, so scan every attachment's content, not only HTML.
+      htmlParts: (input.attachments ?? []).map((attachment) =>
+        typeof attachment.content === "string"
+          ? attachment.content
+          : `${JSON.stringify(attachment.content ?? null)} ${attachment.contentUrl ?? ""}`,
+      ),
+      location: input.location,
+      threadRootId: input.replyToId,
+      ownMessageId: input.messageId,
+    });
+    if (references.length > 0) {
+      const loaded = await loadReferencedMessages({
+        references,
+        detail: input.referencedDetail,
+        graphGet: (url) => fetchBody(fetchImpl, url, `Bearer ${graphToken}`),
+        addImage: (name, contentType, bytes) => {
+          const mime = imageMime(contentType, bytes);
+          if (mime === null) return false;
+          const extension = mime.split("/")[1]?.replace(/[^a-z0-9]+/giu, "") || "png";
+          return considerImage(`${name}.${extension}`, mime, bytes);
+        },
+      });
+      warnings.push(...loaded.warnings);
+      referenced = loaded.text;
+      // The quoted preview is redundant once the real message is in the prompt.
+      if (loaded.resolved > 0) quoted.length = 0;
+    }
+  }
+
   const lines: string[] = [];
   if (uploads.length > 0) {
     lines.push(`Teams screenshots attached: ${uploads.map((upload) => upload.name).join(", ")}`);
@@ -530,5 +568,8 @@ export async function loadTeamsTurnImages(
     lines.push(`Teams attached files that were not opened: ${unopened.join(", ")}`);
   }
   if (quoted.length > 0) lines.push(`Quoted Teams attachment text:\n${quoted.join("\n\n")}`);
-  return { uploads, note: lines.join("\n\n").slice(0, 4000), warnings };
+  const note = [lines.join("\n\n").slice(0, 4000), referenced]
+    .filter((part) => part.length > 0)
+    .join("\n\n");
+  return { uploads, note, warnings };
 }

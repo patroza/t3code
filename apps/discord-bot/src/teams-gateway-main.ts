@@ -363,6 +363,8 @@ const program = Effect.gen(function* () {
           location: { kind: "chat", conversationId: activity.conversation.id },
           ...(activity.attachments === undefined ? {} : { attachments: activity.attachments }),
           tokenCache: teamsTokenCache,
+          // The weekly log already holds this chat's earlier messages and their images.
+          referencedDetail: "text",
         });
       } catch (error) {
         images = {
