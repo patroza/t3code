@@ -37,6 +37,8 @@ export interface TeamsTurnImageRequest {
   readonly fetch?: typeof globalThis.fetch | undefined;
   readonly tokens?: { readonly graph?: string | undefined; readonly bot?: string | undefined };
   readonly tokenCache?: Map<string, { token: string; expiresAt: number }> | undefined;
+  /** How much of a quoted or linked message to load; see `loadReferencedMessages`. */
+  readonly referencedDetail?: "full" | "text" | undefined;
 }
 
 export interface TeamsTurnImageLoad {
@@ -541,6 +543,7 @@ export async function loadTeamsTurnImages(
     if (references.length > 0) {
       const loaded = await loadReferencedMessages({
         references,
+        detail: input.referencedDetail,
         graphGet: (url) => fetchBody(fetchImpl, url, `Bearer ${graphToken}`),
         addImage: (name, contentType, bytes) => {
           const mime = imageMime(contentType, bytes);

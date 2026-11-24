@@ -266,6 +266,8 @@ export async function loadReferencedMessages(input: {
   readonly references: ReadonlyArray<TeamsMessageReference>;
   readonly graphGet: (url: string) => Promise<GraphResponse | null>;
   readonly addImage: (name: string, contentType: string | null, bytes: Uint8Array) => boolean;
+  /** `text` skips images and earlier messages, for watched chats whose log already has them. */
+  readonly detail?: "full" | "text" | undefined;
 }): Promise<ReferencedMessagesLoad> {
   const sections: string[] = [];
   const warnings: string[] = [];
@@ -293,7 +295,8 @@ export async function loadReferencedMessages(input: {
     if (message.files.length > 0)
       parts.push(`Files on that message (not opened): ${message.files.join(", ")}`);
 
-    const hosted = parseJson(await input.graphGet(`${messageUrl}/hostedContents`));
+    const full = input.detail !== "text";
+    const hosted = full ? parseJson(await input.graphGet(`${messageUrl}/hostedContents`)) : null;
     const images: string[] = [];
     for (const entry of Array.isArray(hosted?.value) ? hosted.value : []) {
       const id = text(record(entry)?.id);
@@ -317,7 +320,7 @@ export async function loadReferencedMessages(input: {
       messageUrl.includes("/replies/")
         ? reference.parentId
         : undefined;
-    const listUrl = contextUrl(reference, rootId);
+    const listUrl = full ? contextUrl(reference, rootId) : null;
     if (listUrl !== null) {
       const listed = parseJson(await input.graphGet(listUrl));
       const earlier = (Array.isArray(listed?.value) ? listed.value : [])

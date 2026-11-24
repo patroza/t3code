@@ -168,6 +168,24 @@ describe("loadReferencedMessages", () => {
     expect(loaded.text).toMatch(/Armin: root text\n.*Ana: earlier reply/u);
   });
 
+  it("loads only the message text in text mode", async () => {
+    const urls: string[] = [];
+    const loaded = await loadReferencedMessages({
+      references: [{ kind: "chat", chatId: chat, messageId: "500" }],
+      detail: "text",
+      graphGet: async (url) => {
+        urls.push(url);
+        return json(message("500", "2026-11-24T08:56:00Z", "Jochen Brenner", "full text"));
+      },
+      addImage: () => true,
+    });
+    expect(loaded.text).toContain("Jochen Brenner: full text");
+    expect(loaded.text).not.toContain("Earlier messages");
+    expect(urls).toEqual([
+      `https://graph.microsoft.com/v1.0/chats/${encodeURIComponent(chat)}/messages/500`,
+    ]);
+  });
+
   it("reports a message it cannot read", async () => {
     const loaded = await loadReferencedMessages({
       references: [{ kind: "chat", chatId: chat, messageId: "9" }],
