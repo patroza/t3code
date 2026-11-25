@@ -380,6 +380,53 @@ export function readGroupChatMirror(filePath: string, sourceKey: string): string
   }
 }
 
+/** Discord alerts thread opened for each weekly group-chat key, so a failed T3 turn can't open a second one. */
+export function groupChatDiscordThreadsFile(dataDir: string): string {
+  return NodePath.join(dataDir, "group-chat-discord-threads.json");
+}
+
+function channelThreadKey(conversationId: string): string | null {
+  const [channelId, root] = conversationId.split(/;messageid=/iu);
+  if (channelId === undefined || root === undefined) return null;
+  return `${channelId.trim()};messageid=${root.trim()}`;
+}
+
+/** Weekly group-chat key whose Teams mirror thread is `conversationId`, or null. */
+export function findGroupChatSourceKeyForMirror(
+  filePath: string,
+  conversationId: string,
+): string | null {
+  const wanted = channelThreadKey(conversationId);
+  if (wanted === null) return null;
+  try {
+    const parsed = JSON.parse(NodeFS.readFileSync(filePath, "utf8")) as unknown;
+    if (!isRecord(parsed)) return null;
+    for (const [sourceKey, value] of Object.entries(parsed)) {
+      if (typeof value === "string" && channelThreadKey(value) === wanted) return sourceKey;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Link key for a Teams channel conversation. A group-chat mirror thread maps to its weekly
+ * group-chat key, so a mention there continues that T3 thread. Others keep the native key.
+ */
+export function teamsChannelSourceKey(input: {
+  readonly mirrorsFile: string;
+  readonly tenantId: string;
+  readonly teamId: string;
+  readonly channelId: string;
+  readonly conversationId: string;
+}): string {
+  return (
+    findGroupChatSourceKeyForMirror(input.mirrorsFile, input.conversationId) ??
+    "native/" + [input.tenantId, input.teamId, input.channelId, input.conversationId].join("/")
+  );
+}
+
 let mirrorWrite: Promise<void> = Promise.resolve();
 
 export function rememberGroupChatMirror(

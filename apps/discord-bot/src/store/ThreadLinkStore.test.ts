@@ -546,3 +546,38 @@ it.effect("persists and disables thread-talk mode", () =>
     assert.strictEqual(disabled?.sentDiscordUserMessageIds, undefined);
   }),
 );
+
+it.effect("rekeys a link to a new Discord thread so source lookups find the live row", () =>
+  Effect.gen(function* () {
+    const dataDir = yield* makeTempDir;
+    const store = yield* makeThreadLinkStore(dataDir);
+    yield* store.put({
+      sourceKind: "teams",
+      sourceThreadId: "native/t/group/chat/2026-W48",
+      discordThreadId: "teams-group:native/t/group/chat/2026-W48",
+      t3ThreadId: ThreadIdBrand.make("thread-1"),
+      projectId: ProjectIdBrand.make("project-1"),
+      channelId: "",
+      guildId: "",
+      createdAt: "2026-07-18T00:00:00.000Z",
+    });
+
+    const moved = yield* store.rekey("teams-group:native/t/group/chat/2026-W48", {
+      discordThreadId: "discord-1",
+      channelId: "alerts",
+    });
+    assert.strictEqual(moved?.t3ThreadId, "thread-1");
+    assert.strictEqual(yield* store.rekey("missing", { discordThreadId: "x" }), null);
+
+    const reloaded = yield* makeThreadLinkStore(dataDir);
+    assert.strictEqual(
+      yield* reloaded.getByDiscordThreadId("teams-group:native/t/group/chat/2026-W48"),
+      null,
+    );
+    const live = yield* reloaded.getBySourceThread("teams", "native/t/group/chat/2026-W48");
+    assert.strictEqual(live?.discordThreadId, "discord-1");
+    assert.strictEqual(live?.channelId, "alerts");
+    assert.strictEqual(live?.sourceKind, "teams");
+    assert.strictEqual((yield* reloaded.list()).length, 1);
+  }),
+);

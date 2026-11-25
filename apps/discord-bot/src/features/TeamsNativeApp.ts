@@ -3,6 +3,7 @@ import { App } from "@microsoft/teams.apps";
 import type * as Context from "effect/Context";
 import { ProviderUserInputAnswers } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
@@ -342,8 +343,8 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
           },
           teamsChannelPoster(api),
         ).pipe(
-          Effect.catch((error) =>
-            Effect.logError("Passive Teams group chat join failed", { error: String(error) }),
+          Effect.catchCause((cause) =>
+            Effect.logError("Passive Teams group chat join failed", { cause: Cause.pretty(cause) }),
           ),
         );
       }),
@@ -394,8 +395,8 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
             },
             teamsChannelPoster(api),
           ).pipe(
-            Effect.catch((error) =>
-              Effect.logError("Passive Teams group chat failed", { error: String(error) }),
+            Effect.catchCause((cause) =>
+              Effect.logError("Passive Teams group chat failed", { cause: Cause.pretty(cause) }),
             ),
           );
           return;

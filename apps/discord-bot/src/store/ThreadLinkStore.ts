@@ -524,6 +524,14 @@ export interface ThreadLinkStoreService {
   readonly put: (link: ThreadLinkInput) => Effect.Effect<void>;
   readonly touch: (discordThreadId: string, at?: string) => Effect.Effect<ThreadLink | null>;
   readonly tombstone: (discordThreadId: string) => Effect.Effect<ThreadLink | null>;
+  /**
+   * Move a link to another Discord thread id, keeping every other field. The old row is
+   * removed so source lookups cannot land on it.
+   */
+  readonly rekey: (
+    fromDiscordThreadId: string,
+    to: { readonly discordThreadId: string; readonly channelId?: string },
+  ) => Effect.Effect<ThreadLink | null>;
   readonly updateBridgeHints: (
     discordThreadId: string,
     partial: ThreadLinkBridgeHints,
@@ -849,6 +857,31 @@ export const makeThreadLinkStore = Effect.fn("ThreadLinkStore.makeThreadLinkStor
         updatedAt: when,
       }));
     }),
+
+    rekey: Effect.fn("ThreadLinkStore.rekey")((fromDiscordThreadId, to) =>
+      writeLock.withPermit(
+        Effect.gen(function* () {
+          let moved: ThreadLink | null = null;
+          const next = yield* Ref.updateAndGet(state, (map) => {
+            const current = map.get(fromDiscordThreadId);
+            if (current === undefined) return map;
+            moved = asThreadLink({
+              ...current,
+              discordThreadId: to.discordThreadId,
+              ...(to.channelId === undefined ? {} : { channelId: to.channelId }),
+              updatedAt: nowIso(),
+            });
+            const copy = new Map(map);
+            copy.delete(fromDiscordThreadId);
+            copy.set(to.discordThreadId, moved);
+            return copy;
+          });
+          if (moved === null) return null;
+          yield* persist(next);
+          return moved;
+        }).pipe(Effect.uninterruptible),
+      ),
+    ),
 
     updateBridgeHints: Effect.fn("ThreadLinkStore.updateBridgeHints")(
       (discordThreadId, partial) => {
