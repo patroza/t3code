@@ -6,6 +6,7 @@ import {
 } from "@t3tools/contracts";
 import type * as Context from "effect/Context";
 import { DiscordREST } from "dfx";
+import * as Cause from "effect/Cause";
 import * as Context_ from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -14,11 +15,13 @@ import * as Schema from "effect/Schema";
 
 import type { DiscordBotConfig } from "../config.ts";
 import { classifyTeamsAgentAccess, type PersonIdentity } from "../identityMap.ts";
-import { ThreadLinkStore } from "../store/ThreadLinkStore.ts";
+import { formatOpenInOmegentLink } from "../presentation/threadInfoPin.ts";
+import { ThreadLinkStore, type ThreadLink } from "../store/ThreadLinkStore.ts";
 import { T3Session } from "../t3/T3Session.ts";
 import type { TeamsMessageContext } from "../teams/messageEvents.ts";
 import {
   groupChatChannelSeed,
+  groupChatDiscordThreadsFile,
   groupChatLogLine,
   groupChatMirrorsFile,
   planTeamsGroupChat,
@@ -32,7 +35,8 @@ import {
   type GroupChatRule,
 } from "../teams/groupChats.ts";
 import { weeklyThreadKey } from "../teams/weeklyThreads.ts";
-import { startOrContinueLinkedTurn } from "./LinkedTurnRouter.ts";
+import { formatOmegentLinkMarker } from "./linkMarker.ts";
+import { startOrContinueT3Turn } from "./LinkedTurnRouter.ts";
 
 const decodeGroupChatAnswers = Schema.decodeEffect(Schema.fromJsonString(ProviderUserInputAnswers));
 
@@ -64,13 +68,26 @@ function useRuntime<A, E, R>(
   return effect.pipe(Effect.provideContext(runtime as Context.Context<R>)) as Effect.Effect<A, E>;
 }
 
+/**
+ * Link key until the weekly chat has a Discord thread. Links are keyed by Discord thread id,
+ * so this keeps the T3 thread linked while Discord is down. It never reaches Discord REST.
+ */
+export function groupChatPlaceholderThreadId(sourceKey: string): string {
+  return `teams-group:${sourceKey}`;
+}
+
+// Anything but a snowflake (the placeholder, or a Teams mirror id if a mirror mention
+// created the link first) is not a Discord thread yet.
+function isPlaceholderThreadId(discordThreadId: string): boolean {
+  return !/^\d+$/u.test(discordThreadId);
+}
+
 function openAlertThread(
   runtime: Context.Context<never>,
+  rest: NonNullable<ReturnType<typeof discordRest>>,
   channelId: string,
   chat: Extract<GroupChatPlan, { kind: "turn" }>["chat"],
 ) {
-  const rest = discordRest(runtime);
-  if (rest === null) return Effect.void.pipe(Effect.as(""));
   return useRuntime(
     runtime,
     Effect.gen(function* () {
@@ -92,9 +109,124 @@ function openAlertThread(
 
 function postDiscord(runtime: Context.Context<never>, channelId: string, content: string) {
   const rest = discordRest(runtime);
-  if (rest === null) return Effect.void;
-  return useRuntime(runtime, rest.createMessage(channelId, { content })).pipe(Effect.asVoid);
+  if (rest === null || isPlaceholderThreadId(channelId)) return Effect.void;
+  return useRuntime(runtime, rest.createMessage(channelId, { content })).pipe(
+    Effect.asVoid,
+    Effect.catchCause((cause) =>
+      Effect.logError("Could not post to the Discord group chat thread", {
+        discordThreadId: channelId,
+        cause: Cause.pretty(cause),
+      }),
+    ),
+  );
 }
+
+/** Real Discord thread for this week's chat: the link's, else one opened before T3 failed. */
+function knownAlertThread(threadsFile: string, sourceKey: string, existing: ThreadLink | null) {
+  if (existing !== null && !isPlaceholderThreadId(existing.discordThreadId)) {
+    return existing.discordThreadId;
+  }
+  return readGroupChatMirror(threadsFile, sourceKey);
+}
+
+const ensureAlertThread = Effect.fn("ensureAlertThread")(function* (
+  runtime: Context.Context<never>,
+  config: DiscordBotConfig,
+  sourceKey: string,
+  existing: ThreadLink | null,
+  chat: Extract<GroupChatPlan, { kind: "turn" }>["chat"],
+) {
+  const threadsFile = groupChatDiscordThreadsFile(config.dataDir);
+  const known = knownAlertThread(threadsFile, sourceKey, existing);
+  if (known !== null) return known;
+  const rest = discordRest(runtime);
+  if (rest === null) {
+    yield* Effect.logError("Discord is unavailable; the Teams group chat continues without it", {
+      sourceKey,
+    });
+    return null;
+  }
+  const alertsChannelId = config.alertsChannelId;
+  if (alertsChannelId === undefined || alertsChannelId.length === 0) {
+    yield* Effect.logError(
+      "DISCORD_ALERTS_CHANNEL_ID is unset; the Teams group chat continues without Discord",
+      { sourceKey },
+    );
+    return null;
+  }
+  const opened = yield* openAlertThread(runtime, rest, alertsChannelId, chat).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logError("Could not open the Discord group chat thread", {
+        sourceKey,
+        cause: Cause.pretty(cause),
+      }).pipe(Effect.as(null)),
+    ),
+  );
+  if (opened === null) return null;
+  yield* Effect.tryPromise({
+    try: () => rememberGroupChatMirror(threadsFile, sourceKey, opened),
+    catch: (error: unknown) => String(error),
+  }).pipe(
+    Effect.catch((error) =>
+      Effect.logError("Could not remember the Discord group chat thread", { sourceKey, error }),
+    ),
+  );
+  return opened;
+});
+
+/**
+ * Point the weekly link at its Discord thread and post the link message once. The guest
+ * Discord bot adopts the thread from the marker line and streams T3 output there.
+ * The marker message id is stored as the link's info message, which marks it posted.
+ */
+const attachAlertThread = Effect.fn("attachAlertThread")(function* (
+  runtime: Context.Context<never>,
+  config: DiscordBotConfig,
+  sourceKey: string,
+  discordThreadId: string,
+  chat: Extract<GroupChatPlan, { kind: "turn" }>["chat"],
+) {
+  const links = yield* ThreadLinkStore;
+  const rest = discordRest(runtime);
+  const link = yield* links.getBySourceThread("teams", sourceKey);
+  if (rest === null || link === null) return;
+  if (link.discordThreadId === discordThreadId && link.infoDiscordMessageId !== undefined) return;
+  const webLink =
+    config.webUiBaseUrl === undefined
+      ? null
+      : `${config.webUiBaseUrl.replace(/\/$/u, "")}/?thread=${link.t3ThreadId}`;
+  const content = [
+    `Linked **${chat.projectShortName}**`,
+    `Source: Teams group chat / ${chat.title}`,
+    "Omegent stays silent in that chat.",
+    ...(webLink === null ? [] : [formatOpenInOmegentLink(webLink)]),
+    formatOmegentLinkMarker({
+      t3ThreadId: link.t3ThreadId,
+      projectShortName: chat.projectShortName,
+      sourceKind: "teams",
+      sourceThreadId: sourceKey,
+    }),
+  ].join("\n");
+  const posted = yield* useRuntime(runtime, rest.createMessage(discordThreadId, { content })).pipe(
+    Effect.map((message) => message.id as string),
+    Effect.catchCause((cause) =>
+      Effect.logError("Could not post the Omegent link to the Discord group chat thread", {
+        sourceKey,
+        discordThreadId,
+        cause: Cause.pretty(cause),
+      }).pipe(Effect.as(null)),
+    ),
+  );
+  // Left as is, the next message retries the attach.
+  if (posted === null) return;
+  if (link.discordThreadId !== discordThreadId) {
+    yield* links.rekey(link.discordThreadId, {
+      discordThreadId,
+      ...(config.alertsChannelId === undefined ? {} : { channelId: config.alertsChannelId }),
+    });
+  }
+  yield* links.setInfoDiscordMessageId(discordThreadId, posted);
+});
 
 export interface TeamsChannelPoster {
   openThread(input: {
@@ -290,11 +422,26 @@ export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* 
   const links = yield* ThreadLinkStore;
   const existing = yield* links.getBySourceThread("teams", sourceKey);
   const mirrorsFile = groupChatMirrorsFile(config.dataDir);
+  // Teams mirror failures are logged and never stop Discord or T3 (and the reverse).
+  const copyToMirror = (text: string | null) =>
+    copyToChannelThread(poster, mirrorsFile, sourceKey, plan.chat.mirror, plan.chat, text).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logError("Could not copy to the Teams channel thread", {
+          sourceKey,
+          cause: Cause.pretty(cause),
+        }).pipe(Effect.as({ created: false, conversationId: null })),
+      ),
+    );
   if (plan.kind === "ignore") {
     if (existing !== null) {
       const line = groupChatLogLine(activity.author ?? "unknown", activity.text);
-      yield* postDiscord(runtime, existing.discordThreadId, line);
-      yield* copyToChannelThread(poster, mirrorsFile, sourceKey, plan.chat.mirror, plan.chat, line);
+      const alertThread = knownAlertThread(
+        groupChatDiscordThreadsFile(config.dataDir),
+        sourceKey,
+        existing,
+      );
+      if (alertThread !== null) yield* postDiscord(runtime, alertThread, line);
+      yield* copyToMirror(line);
     }
     return { handled: true as const };
   }
@@ -311,56 +458,36 @@ export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* 
       existing.discordThreadId,
       existing.t3ThreadId,
       plan.command,
+    ).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logError("Teams group chat command failed", {
+          sourceKey,
+          command: plan.command.kind,
+          cause: Cause.pretty(cause),
+        }),
+      ),
     );
-    yield* copyToChannelThread(
-      poster,
-      mirrorsFile,
-      sourceKey,
-      plan.chat.mirror,
-      plan.chat,
-      groupChatLogLine(activity.author ?? "unknown", activity.text),
-    );
+    yield* copyToMirror(groupChatLogLine(activity.author ?? "unknown", activity.text));
     return { handled: true as const };
   }
   if (plan.wake === "joined" && existing !== null) return { handled: true as const };
 
-  if (discordRest(runtime) === null) {
-    yield* Effect.logError("Discord is unavailable; passive Teams group chat was not opened", {
-      sourceKey,
-    });
-    return { handled: true as const };
-  }
-  const alertsChannelId = config.alertsChannelId;
-  if (existing === null && (alertsChannelId === undefined || alertsChannelId.length === 0)) {
-    yield* Effect.logError(
-      "DISCORD_ALERTS_CHANNEL_ID is unset; passive Teams group chat was not opened",
-      { sourceKey },
-    );
-    return { handled: true as const };
-  }
-  const discordThreadId =
-    existing?.discordThreadId ??
-    (yield* openAlertThread(runtime, alertsChannelId ?? "", plan.chat));
-  if (discordThreadId.length === 0) return { handled: true as const };
-
+  const discordThreadId = yield* ensureAlertThread(runtime, config, sourceKey, existing, plan.chat);
   const observation =
     plan.wake === "joined" ? null : groupChatLogLine(activity.author ?? "unknown", activity.text);
-  if (observation !== null) yield* postDiscord(runtime, discordThreadId, observation);
-  const channelThread = yield* copyToChannelThread(
-    poster,
-    mirrorsFile,
-    sourceKey,
-    plan.chat.mirror,
-    plan.chat,
-    observation,
-  );
+  if (discordThreadId !== null && observation !== null) {
+    yield* postDiscord(runtime, discordThreadId, observation);
+  }
+  const channelThread = yield* copyToMirror(observation);
 
   const knownPerson = access?.allowed === true ? access.person : null;
   const attachmentNote = options?.attachmentNote?.trim() ?? "";
   const prompt = attachmentNote.length === 0 ? plan.prompt : `${plan.prompt}\n\n${attachmentNote}`;
-  const t3ThreadId = yield* useRuntime(
+  // The gateway does not bridge output to Discord: the guest Discord bot adopts the thread
+  // from the link marker and owns its output, so nothing is posted twice.
+  const turn = yield* useRuntime(
     runtime,
-    startOrContinueLinkedTurn(config, {
+    startOrContinueT3Turn(config, {
       source: { sourceKind: "teams", sourceThreadId: sourceKey },
       ...(knownPerson === null || plan.wake !== "instruction"
         ? {}
@@ -370,9 +497,9 @@ export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* 
               displayName: knownPerson.name,
             },
           }),
-      discordThreadId,
-      discordParentChannelId: alertsChannelId ?? existing?.channelId ?? discordThreadId,
-      discordGuildId: existing?.guildId ?? "",
+      externalConversationId: existing?.discordThreadId ?? groupChatPlaceholderThreadId(sourceKey),
+      externalParentId: existing?.channelId ?? "",
+      externalTenantId: existing?.guildId ?? "",
       projectShortName: plan.chat.projectShortName,
       prompt,
       flags: {},
@@ -380,14 +507,21 @@ export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* 
       ...(options?.attachments !== undefined && options.attachments.length > 0
         ? { attachments: options.attachments }
         : {}),
-      announceLines: [
-        `Linked **${plan.chat.projectShortName}**`,
-        `Source: Teams group chat / ${plan.chat.title}`,
-        "Omegent stays silent in that chat.",
-      ],
       promptContext: { kind: "raw", value: prompt },
     }),
+  ).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logError("Could not start the T3 turn for the Teams group chat", {
+        sourceKey,
+        cause: Cause.pretty(cause),
+      }).pipe(Effect.as(null)),
+    ),
   );
+  if (turn === null) return { handled: true as const };
+  const t3ThreadId = turn.threadId;
+  if (discordThreadId !== null) {
+    yield* attachAlertThread(runtime, config, sourceKey, discordThreadId, plan.chat);
+  }
   const webBase = config.publicWebUiBaseUrl ?? config.webUiBaseUrl;
   if (
     channelThread.created &&

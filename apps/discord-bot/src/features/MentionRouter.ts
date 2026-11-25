@@ -16,6 +16,7 @@ import { DiscordGateway, InteractionsRegistry } from "dfx/gateway";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
 import * as Layer from "effect/Layer";
@@ -231,6 +232,8 @@ import {
 } from "./DiscordQueuedPromptRegistry.ts";
 import { BridgeHub } from "./BridgeHub.ts";
 import { bridgeThreadToDiscord, getLiveDiscordBridge } from "./ResponseBridge.ts";
+import { adoptMarkedDiscordThread, findSelfLinkMarker } from "./LinkAdoption.ts";
+import { parseOmegentLinkMarker } from "./linkMarker.ts";
 import { upsertThreadInfoPin } from "./ThreadInfoPin.ts";
 import {
   formatUnmentionedDiscordPrompt,
@@ -1182,6 +1185,24 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
     return listed.some((message) => messageOffersNewThread(message));
   });
 
+  // A thread the Teams gateway opened carries a link marker this bot posted (same token).
+  // Adopt it so a mention continues that T3 thread instead of starting a new one.
+  const adoptThreadFromHistory = Effect.fn("MentionRouter.adoptThreadFromHistory")(function* (
+    input: BridgedTurnInput,
+  ) {
+    const listed = yield* rest
+      .listMessages(input.discordThreadId, { limit: 50 })
+      .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<unknown>));
+    const marker = findSelfLinkMarker(listed, botUserId);
+    if (marker === null) return null;
+    return yield* adoptMarkedDiscordThread({
+      discordThreadId: input.discordThreadId,
+      parentChannelId: input.parentChannelId,
+      guildId: input.guildId,
+      marker,
+    });
+  });
+
   const startBridgedTurnUnlocked = Effect.fn("MentionRouter.startBridgedTurnUnlocked")(function* (
     input: BridgedTurnInput,
   ) {
@@ -1250,7 +1271,9 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
     const attachments = input.attachments ?? [];
     const parentUnavailable = input.parentUnavailable === true;
 
-    const existing = yield* links.getByDiscordThreadId(input.discordThreadId);
+    const existing =
+      (yield* links.getByDiscordThreadId(input.discordThreadId)) ??
+      (yield* adoptThreadFromHistory(input));
     if (input.forceNewThread === true && existing !== null) {
       yield* Effect.logInfo("New-thread button ignored; this Discord thread is already linked", {
         discordThreadId: input.discordThreadId,
@@ -2809,6 +2832,33 @@ const make = Effect.fn("MentionRouter.make")(function* (botConfig: DiscordBotCon
     if (source === "create") {
       const monitored = yield* startSentryMonitor(event);
       if (monitored) return;
+    }
+
+    if (source === "create" && event.author?.id === botUserId) {
+      const marker = parseOmegentLinkMarker(event.content ?? "");
+      if (marker !== null) {
+        const channel = yield* rest
+          .getChannel(event.channel_id)
+          .pipe(Effect.orElseSucceed(() => null));
+        const parentId =
+          channel !== null && "parent_id" in channel && typeof channel.parent_id === "string"
+            ? channel.parent_id
+            : null;
+        yield* adoptMarkedDiscordThread({
+          discordThreadId: event.channel_id,
+          parentChannelId: parentId,
+          guildId: guildId ?? "",
+          marker,
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logError("Could not adopt the Discord thread from its link marker", {
+              discordThreadId: event.channel_id,
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        );
+        return;
+      }
     }
 
     if (

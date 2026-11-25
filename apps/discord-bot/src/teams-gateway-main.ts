@@ -29,7 +29,12 @@ import { IdentityMapStore, layerFromOptionalPath as identityMapLayer } from "./i
 import { layerFromOptionalPath as aliasesLayer } from "./projectAliases.ts";
 import { ThreadLinkStore, layer as linksLayer } from "./store/ThreadLinkStore.ts";
 import { T3Session, layer as sessionLayer } from "./t3/T3Session.ts";
-import { botWasAdded, isTeamsGroupChat } from "./teams/groupChats.ts";
+import {
+  botWasAdded,
+  groupChatMirrorsFile,
+  isTeamsGroupChat,
+  teamsChannelSourceKey,
+} from "./teams/groupChats.ts";
 import { makeGroupChatTitleResolver } from "./teams/groupChatTitles.ts";
 import { readGatewayConfig, readPrivateCredential } from "./teams/gatewayConfig.ts";
 import { ingestTeamsGroupChat, teamsChannelPoster } from "./features/TeamsGroupChatObserver.ts";
@@ -175,6 +180,15 @@ const program = Effect.gen(function* () {
       throw new Error("Teams binding was revoked or changed");
     return workspaces.get(lease.binding.workspace)!;
   };
+  // A mention in a group-chat mirror thread continues that chat's weekly T3 thread.
+  const channelSourceKey = (lease: GatewayLease, dataDir: string) =>
+    teamsChannelSourceKey({
+      mirrorsFile: groupChatMirrorsFile(dataDir),
+      tenantId: lease.binding.tenantId,
+      teamId: lease.binding.teamId,
+      channelId: lease.binding.channelId,
+      conversationId: lease.conversationId,
+    });
   const channelTopic = async (lease: GatewayLease) => {
     active(lease);
     if (lease.binding.useChannelDescription !== true) return "";
@@ -208,14 +222,7 @@ const program = Effect.gen(function* () {
         Effect.gen(function* () {
           const links = yield* ThreadLinkStore;
           const t3 = yield* T3Session;
-          const sourceKey =
-            "native/" +
-            [
-              lease.binding.tenantId,
-              lease.binding.teamId,
-              lease.binding.channelId,
-              lease.conversationId,
-            ].join("/");
+          const sourceKey = channelSourceKey(lease, workspace.config.dataDir);
           const link = yield* links.getBySourceThread("teams", sourceKey);
           if (link === null || data.threadId !== link.t3ThreadId)
             return "This control belongs to another thread.";
@@ -473,14 +480,7 @@ const program = Effect.gen(function* () {
             project.id !== lease.binding.projectId
           )
             return yield* Effect.fail("Teams project binding mismatch" as const);
-          const sourceKey =
-            "native/" +
-            [
-              lease.binding.tenantId,
-              lease.binding.teamId,
-              lease.binding.channelId,
-              lease.conversationId,
-            ].join("/");
+          const sourceKey = channelSourceKey(lease, workspace.config.dataDir);
           const existing = yield* links.getBySourceThread("teams", sourceKey);
           if (existing !== null && existing.projectId !== project.id)
             return yield* Effect.fail("Existing Teams link belongs to another project" as const);

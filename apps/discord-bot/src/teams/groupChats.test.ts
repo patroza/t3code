@@ -7,12 +7,14 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import {
   SCANNER_GROUP_CHAT_PROJECT,
   botWasAdded,
+  findGroupChatSourceKeyForMirror,
   groupChatMirrorsFile,
   groupChatSourceKey,
   groupChatSpeaksInTeams,
   readGroupChatMirror,
   rememberGroupChatMirror,
   SCANNER_GROUP_CHAT_MIRROR,
+  teamsChannelSourceKey,
   teamsChannelThreadId,
   loadGroupChatRulesFromFileSync,
   planTeamsGroupChat,
@@ -314,6 +316,61 @@ describe("loadGroupChatRulesFromFileSync", () => {
     expect(readGroupChatMirror(mirrors, "native/tenant/group/19:chat@thread.v2")).toBe(
       "19:channel;messageid=1",
     );
+  });
+
+  it("finds the weekly group-chat key from its Teams mirror thread", async () => {
+    const dir = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "group-chat-mirror-"));
+    tempDirs.push(dir);
+    const mirrors = groupChatMirrorsFile(dir);
+    expect(findGroupChatSourceKeyForMirror(mirrors, "19:channel;messageid=1")).toBe(null);
+    await rememberGroupChatMirror(
+      mirrors,
+      "native/t/group/19:a@thread.v2/2026-W47",
+      "19:channel;messageid=1",
+    );
+    await rememberGroupChatMirror(
+      mirrors,
+      "native/t/group/19:a@thread.v2/2026-W48",
+      "19:channel;messageid=22",
+    );
+    expect(findGroupChatSourceKeyForMirror(mirrors, "19:channel;messageid=22")).toBe(
+      "native/t/group/19:a@thread.v2/2026-W48",
+    );
+    expect(findGroupChatSourceKeyForMirror(mirrors, "19:channel;messageId=1")).toBe(
+      "native/t/group/19:a@thread.v2/2026-W47",
+    );
+    // Top-level channel posts and other roots stay on the normal channel conversation path.
+    expect(findGroupChatSourceKeyForMirror(mirrors, "19:channel")).toBe(null);
+    expect(findGroupChatSourceKeyForMirror(mirrors, "19:channel;messageid=2")).toBe(null);
+    expect(findGroupChatSourceKeyForMirror(mirrors, "19:other;messageid=22")).toBe(null);
+  });
+
+  it("routes a channel mention in a mirror thread to the weekly group-chat key", async () => {
+    const dir = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "group-chat-mirror-"));
+    tempDirs.push(dir);
+    const mirrorsFile = groupChatMirrorsFile(dir);
+    const weekly = "native/t/group/19:a@thread.v2/2026-W48";
+    // Same id form the observer stores for a newly opened mirror thread.
+    const mirrorThread = teamsChannelThreadId(
+      { tenantId: "t", teamId: "team", channelId: "19:channel@thread.tacv2" },
+      { id: "19:channel@thread.tacv2", activityId: "1700000000000" },
+    );
+    await rememberGroupChatMirror(mirrorsFile, weekly, mirrorThread);
+    const location = {
+      mirrorsFile,
+      tenantId: "t",
+      teamId: "team",
+      channelId: "19:channel@thread.tacv2",
+    };
+    expect(
+      teamsChannelSourceKey({
+        ...location,
+        conversationId: "19:channel@thread.tacv2;messageid=1700000000000",
+      }),
+    ).toBe(weekly);
+    expect(
+      teamsChannelSourceKey({ ...location, conversationId: "19:channel@thread.tacv2;messageid=5" }),
+    ).toBe("native/t/team/19:channel@thread.tacv2/19:channel@thread.tacv2;messageid=5");
   });
 
   it("can turn the builtin scanner names off", () => {
