@@ -8,6 +8,7 @@ import {
   type ServerProvider,
   type ServerProviderModel,
   type ServerProviderSlashCommand,
+  type ServerProviderUsageLimits,
 } from "@t3tools/contracts";
 import { createModelCapabilities } from "@t3tools/shared/model";
 import * as DateTime from "effect/DateTime";
@@ -40,6 +41,7 @@ import {
 } from "@t3tools/provider-core/server/snapshotProbe";
 
 import { antigravityThinkingConfig } from "./acp/AntigravityAcpSupport.ts";
+import { makeAntigravityUsageLimitsController } from "./antigravityUsageLimitsFork.ts";
 
 const EMPTY_MODEL_CAPABILITIES = createModelCapabilities({ optionDescriptors: [] });
 const MAX_WORKSPACE_SNAPSHOTS = 32;
@@ -204,6 +206,9 @@ interface AntigravityProviderOptions {
     EffectAcpErrors.AcpError | ProviderSetupError | AntigravityProbeIncompatibility
   >;
   readonly supportsTextGeneration: Effect.Effect<boolean>;
+  readonly probeUsage?: Effect.Effect<ServerProviderUsageLimits | undefined>;
+  readonly clearUsage?: Effect.Effect<void>;
+  readonly watchUsageEnabled?: Stream.Stream<boolean>;
   readonly maintenanceCapabilities?: ProviderMaintenanceCapabilities;
   readonly auth?: { readonly type: string; readonly label: string };
   /** Modes the last session advertised, saved because initialize alone does not report them. */
@@ -305,6 +310,13 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
   const getSnapshot = SubscriptionRef.get(metadata).pipe(
     Effect.flatMap((state) => options.stampIdentity(state.draft)),
   );
+  const usageLimits = yield* makeAntigravityUsageLimitsController({
+    enabled: settings.enabled,
+    metadata,
+    ...(options.probeUsage ? { probeUsage: options.probeUsage } : {}),
+    ...(options.clearUsage ? { clearUsage: options.clearUsage } : {}),
+    ...(options.watchUsageEnabled ? { watchEnabled: options.watchUsageEnabled } : {}),
+  });
 
   const checkProvider = Effect.fn("checkAntigravityProvider")(function* () {
     if (!settings.enabled) return yield* getSnapshot;
@@ -383,6 +395,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
       const stored = deferFailure && state.draft.status === "ready" ? state : checked;
       return [checked, stored === state ? Option.none() : Option.some(stored)];
     });
+    if (initialized !== undefined) yield* usageLimits.refresh;
     return yield* options.stampIdentity(next.draft);
   });
 
@@ -406,6 +419,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
         ),
       ),
   });
+  yield* usageLimits.bindRepublish(managed.refresh);
 
   const onSessionStarted = Effect.fn("AntigravityProvider.onSessionStarted")(function* (
     started: AcpSessionRuntime.AcpSessionRuntimeStartResult,
@@ -473,6 +487,9 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
       return [draft.supportedRuntimeModes, next] as const;
     });
     yield* rememberRuntimeModes(previousModes, supportedRuntimeModes);
+    if (!before.draft.usageLimits || before.draft.usageLimits.unavailable) {
+      yield* usageLimits.refresh;
+    }
   });
 
   const onConfigOptionsUpdated = Effect.fn("AntigravityProvider.onConfigOptionsUpdated")(function* (
@@ -532,6 +549,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
   });
 
   const clearAccountMetadata = Effect.fn("AntigravityProvider.clearAccountMetadata")(function* () {
+    yield* usageLimits.reset;
     if (!settings.enabled) return;
     const updatedAt = DateTime.formatIso(yield* DateTime.now);
     const previousModes = yield* SubscriptionRef.modify(metadata, (state) => [
@@ -553,6 +571,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
           workspaceSnapshots: [],
           supportedRuntimeModes: RUNTIME_MODES_WITHOUT_AUTO,
           supportsTextGeneration: false,
+          usageLimits: undefined,
         },
       } satisfies AntigravityProviderState,
     ]);
@@ -599,6 +618,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
     onSessionStarted,
     onConfigOptionsUpdated,
     onAvailableCommands,
+    onSignedIn: usageLimits.onSignedIn,
     onSignedOut: clearAccountMetadata(),
     onAuthRequired: clearAccountMetadata(),
     snapshotForCwd,

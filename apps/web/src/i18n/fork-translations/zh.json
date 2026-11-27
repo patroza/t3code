@@ -17,6 +17,8 @@
   "df982961eb5a7acc": "你参与过",
   "fb2d5ddfe4f3317e": "来源 {channel}",
   "b6aab15c255e764e": " · 你",
+  "d7599fd1f46a5e68": "Antigravity 使用限制",
+  "56df303c290944d3": "从本地 agy CLI (/usage) 读取配额窗口。在已安装并配置 Antigravity 时，每 15 分钟最多检查一次。",
   "81f8b484f268376b": "{client} 的身份",
   "69b67899f1cd9e0b": "无法保存身份。",
   "bae6185cea3dbcb6": "身份",

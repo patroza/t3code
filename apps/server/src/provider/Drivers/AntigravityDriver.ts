@@ -76,6 +76,7 @@ import {
   AntigravityProbeIncompatibility,
   makeAntigravityProvider,
 } from "../AntigravityProvider.ts";
+import { makeAntigravityUsageLimitsProbe } from "../antigravityUsageLimitsFork.ts";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import * as ModelCatalog from "@t3tools/provider-core/server/ModelCatalog";
 import {
@@ -578,7 +579,10 @@ export const AntigravityDriver: ProviderDriver<
     const authFlow: AntigravityAuth = yield* makeAntigravityAuth({
       instanceId,
       makeRuntime: makeDisposableRuntime,
-      onAuthenticated: publishCatalog,
+      onAuthenticated: (started, runtime) =>
+        Effect.suspend(() => provider.onSignedIn).pipe(
+          Effect.andThen(publishCatalog(started, runtime)),
+        ),
       onSignedOut: Effect.suspend(() => provider.onSignedOut),
       usesBrowser: antigravityAuthUsesBrowser(auth.authMethod),
       codeLogin,
@@ -650,10 +654,26 @@ export const AntigravityDriver: ProviderDriver<
       };
     });
 
+    const usageLimits = yield* makeAntigravityUsageLimitsProbe({
+      profileDirectory,
+      authMethod: auth.authMethod,
+      binaryPath: settings.binaryPath,
+      processEnvironment,
+      resolveExecutable: () =>
+        installation
+          .resolve(settings.binaryPath, processEnvironment)
+          .pipe(Effect.orElseSucceed(() => undefined)),
+    }).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+    );
     const provider = yield* makeAntigravityProvider(settings, {
       environment: processEnvironment,
       stampIdentity: classifyModels,
       probe,
+      probeUsage: usageLimits.probe,
+      clearUsage: usageLimits.clear,
+      watchUsageEnabled: usageLimits.watchEnabled,
       auth: { type: auth.authMethod, label: antigravityAuthLabel(auth.authMethod) },
       ...(rememberedRuntimeModes ? { rememberedRuntimeModes } : {}),
       rememberRuntimeModes: (modes) =>

@@ -17,6 +17,8 @@
   "df982961eb5a7acc": "あなたも参加しました",
   "fb2d5ddfe4f3317e": "送信元 {channel}",
   "b6aab15c255e764e": " · あなた",
+  "d7599fd1f46a5e68": "Antigravity の使用制限",
+  "56df303c290944d3": "ローカルの agy CLI (/usage) からクォータウィンドウを読み取ります。Antigravity がインストールおよび設定されている場合、最大 15 分に 1 回確認します。",
   "81f8b484f268376b": "{client} のID",
   "69b67899f1cd9e0b": "IDを保存できませんでした。",
   "bae6185cea3dbcb6": "ID",
