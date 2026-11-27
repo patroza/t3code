@@ -17,6 +17,8 @@
   "df982961eb5a7acc": "Du deltog",
   "fb2d5ddfe4f3317e": "Källa {channel}",
   "b6aab15c255e764e": " · Du",
+  "d7599fd1f46a5e68": "Användningsgränser för Antigravity",
+  "56df303c290944d3": "Läser kvotfönster från lokala agy CLI (/usage). Kontrolleras högst en gång var 15:e minut när Antigravity är installerat och konfigurerat.",
   "81f8b484f268376b": "Identitet för {client}",
   "69b67899f1cd9e0b": "Det gick inte att spara identitet.",
   "bae6185cea3dbcb6": "Identitet",

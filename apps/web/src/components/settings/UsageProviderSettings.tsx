@@ -15,6 +15,7 @@ import {
 } from "../ui/alert-dialog";
 import { Button } from "../ui/button";
 import { AddUsageLimitSourceDialog } from "./AddUsageLimitSourceDialog";
+import { AntigravityUsageLimitsSetting } from "./AntigravityUsageLimitsSettingFork";
 import { useSearchableSetting } from "./settingsSearch";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 
@@ -84,6 +85,7 @@ export function UsageProviderSettings({
             );
           })
         )}
+        <AntigravityUsageLimitsSetting environmentId={environmentId} readOnly={readOnly} />
       </SettingsSection>
       {adding && !readOnly ? (
         <AddUsageLimitSourceDialog
