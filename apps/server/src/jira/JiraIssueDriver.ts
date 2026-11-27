@@ -378,7 +378,7 @@ export const trackers = Effect.gen(function* () {
       ? Effect.succeed(token)
       : host.credentials.get(KIND).pipe(
           Effect.flatMap((stored) => {
-            const value = Option.getOrUndefined(stored) ?? appToken;
+            const value = Option.getOrUndefined(stored)?.token ?? appToken;
             return value === undefined || value.trim().length === 0
               ? Effect.fail(failed(operation, "unauthenticated", "Jira is not connected."))
               : Effect.succeed(value);
@@ -437,7 +437,7 @@ export const trackers = Effect.gen(function* () {
     standalone: descriptor,
     parseIssueUrl: (url) => parseJiraIssueUrl(siteHost, url),
 
-    probeCredential: Effect.fn("JiraIssueDriver.probeCredential")(function* (token) {
+    probeCredential: Effect.fn("JiraIssueDriver.probeCredential")(function* ({ token }) {
       const viewer = yield* myself(token);
       const projects = yield* call(
         "probeCredential",
@@ -542,3 +542,14 @@ export const trackers = Effect.gen(function* () {
   };
   return [api];
 });
+
+/**
+ * A server with a fork Jira site keeps this tracker (app-account fallback, site-host thread links)
+ * in place of upstream's credential-only Jira tracker; one kind may register only once.
+ */
+export const withStandalone = <T extends { readonly kind: string }>(standalone: ReadonlyArray<T>) =>
+  Effect.map(trackers, (fork) =>
+    fork.length === 0
+      ? standalone
+      : [...standalone.filter((tracker) => tracker.kind !== KIND), ...fork],
+  );

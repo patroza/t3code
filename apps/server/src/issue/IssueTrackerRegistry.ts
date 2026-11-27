@@ -2,6 +2,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type { IssueTrackerKind } from "@t3tools/contracts";
+import * as JiraDriver from "@t3tools/issue-tracker-jira/server/driver";
 import * as LinearDriver from "@t3tools/issue-tracker-linear/server/driver";
 import {
   isStandaloneIssueTracker,
@@ -37,16 +38,14 @@ export function fromTrackers(
 }
 
 /** Trackers that are not a git host's own. Each signs requests with a credential from Settings. */
-const STANDALONE_TRACKERS = [LinearDriver.make];
+const STANDALONE_TRACKERS = [LinearDriver.make, JiraDriver.make];
 
 const make = Effect.gen(function* () {
   const drivers = yield* BuiltInDrivers.SourceControlDrivers;
-  const standalone = yield* Effect.all(STANDALONE_TRACKERS);
-  return fromTrackers([
-    ...drivers.flatMap(({ instance }) => instance.issues ?? []),
-    ...standalone,
-    ...(yield* JiraIssueDriver.trackers),
-  ]);
+  const standalone = yield* Effect.all(STANDALONE_TRACKERS).pipe(
+    Effect.flatMap(JiraIssueDriver.withStandalone),
+  );
+  return fromTrackers([...drivers.flatMap(({ instance }) => instance.issues ?? []), ...standalone]);
 });
 
 export const layer = Layer.effect(IssueTrackerRegistry, make).pipe(
