@@ -8,7 +8,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { parseGatewayConfig, type TeamsGatewayConfig } from "./gatewayConfig.ts";
 import { TeamsGatewayDispatcher, type MentionDecision } from "./gatewayDispatcher.ts";
 import { TeamsResponseReferences } from "./responseReferences.ts";
-import { TeamsGatewayPolicy, safeTeamsServiceUrl, type GatewayActivity } from "./gatewayPolicy.ts";
+import {
+  GROUP_CHAT_MIRROR_ACTOR,
+  TeamsGatewayPolicy,
+  safeTeamsServiceUrl,
+  type GatewayActivity,
+} from "./gatewayPolicy.ts";
 
 const appId = "11111111-1111-4111-8111-111111111111";
 const tenant = "22222222-2222-4222-8222-222222222222";
@@ -268,6 +273,38 @@ describe("shared Teams gateway", () => {
     expect(() =>
       references.remember(decision.lease, "https://attacker.invalid/", "root"),
     ).toThrow();
+  });
+  it("gives a group-chat mirror thread a delivery lease that shares the mention's reference", () => {
+    const mirror = { tenantId: tenant, teamId: team, channelId: "channel-alpha" };
+    const thread = "channel-alpha;messageid=77";
+    const lease = policy.mirrorLease("alpha", mirror, thread);
+    expect(lease?.actorId).toBe(GROUP_CHAT_MIRROR_ACTOR);
+    expect(lease?.binding.id).toBe("alpha");
+    expect(policy.mirrorLease("beta", mirror, thread)).toBeNull();
+    expect(policy.mirrorLease("alpha", mirror, "channel-beta;messageid=77")).toBeNull();
+    expect(policy.mirrorLease("alpha", mirror, "conversation-alpha")).toBeNull();
+
+    const mention = policy.accept(activity({ conversation: { id: thread, tenantId: tenant } }));
+    expect(mention.kind).toBe("mention");
+    if (mention.kind !== "mention" || lease === null) return;
+    expect(mention.lease.key).toBe(lease.key);
+    const references = new TeamsResponseReferences(directory);
+    references.remember(lease, "https://smba.trafficmanager.net/emea/", "77");
+    references.remember(mention.lease, "https://smba.trafficmanager.net/emea/", "77");
+    expect(
+      new TeamsResponseReferences(directory).restore(config, (l) => policy.isActive(l)),
+    ).toHaveLength(1);
+
+    // The delivery actor never authorizes intake, and the lease ends with its binding.
+    expect(
+      policy.accept(activity({ from: { id: "x", aadObjectId: GROUP_CHAT_MIRROR_ACTOR } })).kind,
+    ).toBe("reject");
+    config = {
+      ...config,
+      bindings: config.bindings.map((binding) => ({ ...binding, enabled: false })),
+    };
+    expect(policy.isActive(lease)).toBe(false);
+    expect(policy.mirrorLease("alpha", mirror, thread)).toBeNull();
   });
   it("authorizes card invokes through the same envelope and actor policy without a mention", () => {
     const invoke = activity({ type: "invoke", entities: [] });

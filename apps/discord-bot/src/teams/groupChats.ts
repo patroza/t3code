@@ -25,6 +25,10 @@ export interface GroupChatRule {
   readonly titleIncludes?: string | undefined;
   readonly projectShortName: string;
   readonly mirror?: GroupChatMirror | undefined;
+  /** Display name. Teams often omits chat titles, and Graph may not be allowed to read them. */
+  readonly title?: string | undefined;
+  /** Discord channel for this chat's weekly threads, instead of the alerts channel. */
+  readonly discordChannelId?: string | undefined;
 }
 
 interface ResolvedGroupChat {
@@ -32,6 +36,7 @@ interface ResolvedGroupChat {
   readonly passive: true;
   readonly title: string;
   readonly mirror: GroupChatMirror | null;
+  readonly discordChannelId: string | null;
 }
 
 type GroupChatEvent = "message" | "join";
@@ -124,6 +129,17 @@ export function groupChatThreadName(title: string): string {
   return name.length <= 100 ? name : `${name.slice(0, 99).trimEnd()}…`;
 }
 
+/**
+ * Explicit T3 title for the weekly thread. Without it the title is cut from the first prompt,
+ * which starts with the passive-chat rules, and the Discord thread mirrors that.
+ */
+export function groupChatT3ThreadTitle(title: string, weekBucket: string): string {
+  const week = ` · ${weekBucket.replace(/^week-/u, "week ")}`;
+  const name = groupChatThreadName(title);
+  const room = 72 - week.length;
+  return `${name.length <= room ? name : `${name.slice(0, room - 1).trimEnd()}…`}${week}`;
+}
+
 export function groupChatSpeaksInTeams(): false {
   return false;
 }
@@ -157,6 +173,7 @@ export function resolveGroupChat(input: {
   /** Omitted means the native listener, which keeps the scanner names. */
   readonly builtinScanner?: boolean;
   readonly builtinMirror?: GroupChatMirror;
+  readonly builtinDiscordChannelId?: string;
 }): ResolvedGroupChat | null {
   const title = input.title?.trim();
   const displayTitle = title !== undefined && title.length > 0 ? title : undefined;
@@ -165,8 +182,9 @@ export function resolveGroupChat(input: {
     return {
       projectShortName: rule.projectShortName,
       passive: true,
-      title: displayTitle ?? rule.titleIncludes ?? "Teams group chat",
+      title: rule.title ?? displayTitle ?? rule.titleIncludes ?? "Teams group chat",
       mirror: mirrorFor(rule.projectShortName, rule.mirror),
+      discordChannelId: rule.discordChannelId ?? null,
     };
   }
   if (
@@ -179,6 +197,7 @@ export function resolveGroupChat(input: {
       passive: true,
       title: displayTitle,
       mirror: input.builtinMirror ?? SCANNER_GROUP_CHAT_MIRROR,
+      discordChannelId: input.builtinDiscordChannelId ?? null,
     };
   }
   return null;
@@ -189,6 +208,7 @@ export interface GroupChatWorkspaceTarget {
   readonly rules: ReadonlyArray<GroupChatRule>;
   readonly scannerGroupChats: boolean;
   readonly builtinMirror?: GroupChatMirror;
+  readonly builtinDiscordChannelId?: string;
 }
 
 export function groupChatWorkspaceTarget(
@@ -198,6 +218,7 @@ export function groupChatWorkspaceTarget(
     readonly scannerMirrorTenantId?: string | undefined;
     readonly scannerMirrorTeamId?: string | undefined;
     readonly scannerMirrorChannelId?: string | undefined;
+    readonly scannerDiscordChannelId?: string | undefined;
     readonly groupChats?: ReadonlyArray<unknown> | undefined;
   },
 ): GroupChatWorkspaceTarget {
@@ -213,11 +234,19 @@ export function groupChatWorkspaceTarget(
   if (builtinMirror !== undefined && workspace.scannerGroupChats !== true) {
     throw new Error("scannerMirror requires scannerGroupChats");
   }
+  const builtinDiscordChannelId = discordChannelIdField(
+    workspace.scannerDiscordChannelId,
+    "scannerDiscordChannelId",
+  );
+  if (builtinDiscordChannelId !== undefined && workspace.scannerGroupChats !== true) {
+    throw new Error("scannerDiscordChannelId requires scannerGroupChats");
+  }
   return {
     id,
     rules,
     scannerGroupChats: workspace.scannerGroupChats === true,
     ...(builtinMirror === undefined ? {} : { builtinMirror }),
+    ...(builtinDiscordChannelId === undefined ? {} : { builtinDiscordChannelId }),
   };
 }
 
@@ -472,6 +501,7 @@ export function planTeamsGroupChat(input: {
   readonly rules: ReadonlyArray<GroupChatRule>;
   readonly builtinScanner?: boolean;
   readonly builtinMirror?: GroupChatMirror;
+  readonly builtinDiscordChannelId?: string;
   readonly event: GroupChatEvent;
   readonly text: string;
   readonly fromBot: boolean;
@@ -497,6 +527,9 @@ export function planTeamsGroupChat(input: {
     rules: input.rules,
     ...(input.builtinScanner === undefined ? {} : { builtinScanner: input.builtinScanner }),
     ...(input.builtinMirror === undefined ? {} : { builtinMirror: input.builtinMirror }),
+    ...(input.builtinDiscordChannelId === undefined
+      ? {}
+      : { builtinDiscordChannelId: input.builtinDiscordChannelId }),
   });
   if (chat === null) return { kind: "unmapped" };
   const sourceKey = groupChatSourceKey(input.tenantId, input.conversationId);
@@ -582,12 +615,31 @@ function parseGroupChatRule(value: unknown, index: number): GroupChatRule {
     );
   }
   const mirror = parseGroupChatMirror(value, index);
+  const title = value.title === undefined ? undefined : optionalTrimmed(value.title);
+  if (value.title !== undefined && (title === undefined || title.length > 100)) {
+    throw new Error(`Teams group chat rule #${index + 1} title must be 1 to 100 characters.`);
+  }
+  const discordChannelId = discordChannelIdField(
+    value.discordChannelId,
+    `Teams group chat rule #${index + 1} discordChannelId`,
+  );
   return {
     projectShortName,
     ...(conversationId === undefined ? {} : { conversationId }),
     ...(titleIncludes === undefined ? {} : { titleIncludes }),
     ...(mirror === undefined ? {} : { mirror }),
+    ...(title === undefined ? {} : { title }),
+    ...(discordChannelId === undefined ? {} : { discordChannelId }),
   };
+}
+
+function discordChannelIdField(value: unknown, label: string): string | undefined {
+  if (value === undefined) return undefined;
+  const id = optionalTrimmed(value);
+  if (id === undefined || !/^\d{17,20}$/u.test(id)) {
+    throw new Error(`${label} must be a Discord channel id.`);
+  }
+  return id;
 }
 
 const MIRROR_CHANNEL_ID = /^19:\S+@thread\.tacv2$/u;

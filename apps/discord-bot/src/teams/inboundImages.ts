@@ -187,9 +187,11 @@ function quotedAttachmentText(
   const type = mediaType(attachment.contentType);
   if (type !== "text/html" && type !== "text/plain") return null;
   if (typeof attachment.content !== "string") return null;
+  // Teams copies the message body into an HTML attachment. Its `<at>` mentions are stripped from
+  // the activity text, so drop them here too or the bot's name reads as attachment text.
   const text =
     type === "text/html"
-      ? htmlToText(attachment.content)
+      ? htmlToText(attachment.content.replace(/<at\b[^>]*>[\s\S]*?<\/at>/giu, " "))
       : attachment.content.replace(/\s+/gu, " ").trim();
   if (text.length === 0) return null;
   const plain = plainText.replace(/\s+/gu, " ").trim();

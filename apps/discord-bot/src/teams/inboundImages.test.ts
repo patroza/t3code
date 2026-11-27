@@ -176,6 +176,57 @@ describe("Teams turn images", () => {
     expect(result.note).not.toContain("please look into mako prod");
   });
 
+  it("does not read the mention in Teams' copy of the message body as attachment text", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(
+      async () => new Response("missing", { status: 404 }),
+    );
+    for (const [plainText, content] of [
+      ["do you receive?", '<p><at id="0">Omegent</at>&nbsp;do you receive?</p>'],
+      ["", '<p><at id="0">Omegent</at></p>'],
+    ] as const) {
+      const result = await loadTeamsTurnImages(
+        request({ fetch, plainText, attachments: [{ contentType: "text/html", content }] }),
+      );
+      expect(result.note).toBe("");
+      expect(result.uploads).toEqual([]);
+    }
+  });
+
+  it("still resolves a quoted reply next to a mention", async () => {
+    const chat = "19:mako@thread.v2";
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+      const url = href(input);
+      if (url.endsWith(`/chats/${encodeURIComponent(chat)}/messages/333`)) {
+        return Response.json({
+          id: "333",
+          messageType: "message",
+          createdDateTime: "2026-11-24T08:56:00Z",
+          from: { user: { displayName: "Jochen" } },
+          body: { contentType: "html", content: "<p>The scanner crashes on login</p>" },
+        });
+      }
+      return new Response("missing", { status: 404 });
+    });
+    const result = await loadTeamsTurnImages(
+      request({
+        fetch,
+        messageId: "m1",
+        location: { kind: "chat", conversationId: chat },
+        referencedDetail: "text",
+        plainText: "look at this",
+        attachments: [
+          {
+            contentType: "text/html",
+            content: `<blockquote itemscope="" itemtype="http://schema.skype.com/Reply" itemid="333"><strong>Jochen</strong><p>The scanner crashes…</p></blockquote><p><at id="0">Omegent</at> look at this</p>`,
+          },
+        ],
+      }),
+    );
+    expect(result.note).toContain("The scanner crashes on login");
+    expect(result.note).not.toContain("Quoted Teams attachment text");
+    expect(result.note).not.toContain("Omegent");
+  });
+
   it("reports a hosted-content denial and ignores a missing collection", async () => {
     const denied = vi.fn<typeof globalThis.fetch>(async () => new Response("no", { status: 403 }));
     const deniedResult = await loadTeamsTurnImages(request({ fetch: denied }));
