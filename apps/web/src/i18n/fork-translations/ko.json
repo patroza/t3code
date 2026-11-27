@@ -17,6 +17,8 @@
   "df982961eb5a7acc": "내가 참여함",
   "fb2d5ddfe4f3317e": "출처 {channel}",
   "b6aab15c255e764e": " · 나",
+  "d7599fd1f46a5e68": "Antigravity 사용량 제한",
+  "56df303c290944d3": "로컬 agy CLI(/usage)에서 할당량 창을 읽습니다. Antigravity가 설치되고 구성된 경우 최대 15분에 한 번 확인합니다.",
   "81f8b484f268376b": "{client}의 ID",
   "69b67899f1cd9e0b": "ID를 저장할 수 없습니다.",
   "bae6185cea3dbcb6": "ID",

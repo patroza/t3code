@@ -17,6 +17,8 @@
   "df982961eb5a7acc": "Participaste",
   "fb2d5ddfe4f3317e": "Origen {channel}",
   "b6aab15c255e764e": " · Tú",
+  "d7599fd1f46a5e68": "Límites de uso de Antigravity",
+  "56df303c290944d3": "Lee las ventanas de cuota desde la CLI local agy (/usage). Se comprueba como máximo una vez cada 15 minutos cuando Antigravity está instalado y configurado.",
   "81f8b484f268376b": "Identidad de {client}",
   "69b67899f1cd9e0b": "No se pudo guardar la identidad.",
   "bae6185cea3dbcb6": "Identidad",
