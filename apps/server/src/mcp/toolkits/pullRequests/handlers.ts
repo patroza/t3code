@@ -24,6 +24,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as GitManager from "../../../git/GitManager.ts";
+import * as GitHubAgentPrPolicy from "../../../github/GitHubAgentPrPolicy.ts";
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as PullRequestWatchService from "../../../pullRequest/PullRequestWatchService.ts";
@@ -1083,25 +1084,34 @@ const make = Effect.gen(function* () {
             : input.includeResolved === true;
         return {
           ...identityOf(target),
-          ...(yield* readSections(ref, sections, includeResolved, cursor)),
+          ...(yield* GitHubAgentPrPolicy.withGitHubAgentRead(
+            target,
+            readSections(ref, sections, includeResolved, cursor),
+          )),
         };
       }),
     ),
     pull_request_list: McpToolAccess.reads((input) =>
       Effect.gen(function* () {
         const thread = yield* requireThread(PullRequestForgeError, undefined);
-        const listed = yield* pullRequests
-          .list({
-            projectId: thread.projectId,
-            state: input.state ?? "open",
-            involvement: input.involvement ?? "all",
-            limit: input.limit ?? 30,
-            ...(input.query === undefined ? {} : { query: input.query }),
-            ...(input.cursor === undefined
-              ? {}
-              : { cursors: yield* listCursors.decode(input.cursor) }),
-          })
-          .pipe(Effect.mapError(forgeFailure));
+        const project = yield* projectOf(thread, PullRequestForgeError).pipe(
+          Effect.orElseSucceed(() => undefined),
+        );
+        const listed = yield* GitHubAgentPrPolicy.withGitHubAgentRead(
+          GitHubAgentPrPolicy.projectGitHubTarget(project),
+          pullRequests
+            .list({
+              projectId: thread.projectId,
+              state: input.state ?? "open",
+              involvement: input.involvement ?? "all",
+              limit: input.limit ?? 30,
+              ...(input.query === undefined ? {} : { query: input.query }),
+              ...(input.cursor === undefined
+                ? {}
+                : { cursors: yield* listCursors.decode(input.cursor) }),
+            })
+            .pipe(Effect.mapError(forgeFailure)),
+        );
         const failure = listed.errors[0];
         if (listed.entries.length === 0 && failure !== undefined) {
           return yield* new PullRequestForgeError({ detail: failure.message });
@@ -1216,9 +1226,17 @@ const make = Effect.gen(function* () {
             });
           }
         });
-        const created = yield* fullAccess
-          ? create().pipe(Effect.catchTags({ GitPushHooksUnapprovedError: forgeFailure }))
-          : createOnceApproved;
+        const {
+          value: created,
+          actor,
+          decision,
+        } = yield* GitHubAgentPrPolicy.withGitHubAgentWrite(
+          GitHubAgentPrPolicy.projectGitHubTarget(project),
+          { cwd, mapAuthError: forgeFailure },
+          fullAccess
+            ? create().pipe(Effect.catchTags({ GitPushHooksUnapprovedError: forgeFailure }))
+            : createOnceApproved,
+        );
         if (created.url === undefined) {
           return yield* new PullRequestForgeError({
             detail:
@@ -1227,8 +1245,22 @@ const make = Effect.gen(function* () {
         }
         const target = yield* resolveTarget({ url: created.url }, project);
         yield* linkToThread(thread, target);
+        if (input.draft !== true && created.status === "created") {
+          yield* GitHubAgentPrPolicy.assignAndRequestDirectingHuman({
+            thread,
+            ref: {
+              projectId: project.id,
+              host: target.host,
+              repository: target.repository,
+              number: target.number,
+            },
+            pullRequests,
+            decision,
+          });
+        }
         return {
           ...identityOf(target),
+          ...(actor === undefined ? {} : { actor }),
           created: created.status === "created",
           ...(hooksSkipped ? { note: PUSH_HOOKS_SKIPPED } : {}),
           ...(thread.lineage.relationshipToParent === "subagent"
@@ -1252,45 +1284,59 @@ const make = Effect.gen(function* () {
             detail: "Pass title, body, ready, state, addLabels, removeLabels, or requestReviewers.",
           });
         }
-        const { target, ref } = yield* locate(input);
-        if (input.title !== undefined || input.body !== undefined) {
-          yield* pullRequests
-            .update({
-              ...ref,
-              ...(input.title === undefined ? {} : { title: input.title }),
-              ...(input.body === undefined ? {} : { body: input.body }),
-            })
-            .pipe(Effect.mapError(forgeFailure));
+        const { thread, project, target, ref } = yield* locate(input);
+        const { actor, decision } = yield* GitHubAgentPrPolicy.withGitHubAgentWrite(
+          target,
+          { cwd: project.workspaceRoot, mapAuthError: forgeFailure },
+          Effect.gen(function* () {
+            if (input.title !== undefined || input.body !== undefined) {
+              yield* pullRequests
+                .update({
+                  ...ref,
+                  ...(input.title === undefined ? {} : { title: input.title }),
+                  ...(input.body === undefined ? {} : { body: input.body }),
+                })
+                .pipe(Effect.mapError(forgeFailure));
+            }
+            for (const [labels, applied] of [
+              [input.addLabels, true],
+              [input.removeLabels, false],
+            ] as const) {
+              if (labels !== undefined) {
+                yield* pullRequests
+                  .setLabels({ ...ref, labels, applied })
+                  .pipe(Effect.mapError(forgeFailure));
+              }
+            }
+            if (input.requestReviewers !== undefined) {
+              const reviewers = yield* Effect.forEach(input.requestReviewers, (name) =>
+                reviewerNamed(ref, name),
+              );
+              yield* pullRequests
+                .requestReviewers({ ...ref, reviewers, requested: true })
+                .pipe(Effect.mapError(forgeFailure));
+            }
+            if (input.ready !== undefined) {
+              yield* pullRequests
+                .runAction({ ...ref, action: input.ready ? "ready" : "draft" })
+                .pipe(Effect.mapError(forgeFailure));
+            }
+            if (input.state !== undefined) {
+              yield* pullRequests
+                .runAction({ ...ref, action: input.state === "closed" ? "close" : "reopen" })
+                .pipe(Effect.mapError(forgeFailure));
+            }
+          }),
+        );
+        if (input.ready === true) {
+          yield* GitHubAgentPrPolicy.assignAndRequestDirectingHuman({
+            thread,
+            ref,
+            pullRequests,
+            decision,
+          });
         }
-        for (const [labels, applied] of [
-          [input.addLabels, true],
-          [input.removeLabels, false],
-        ] as const) {
-          if (labels !== undefined) {
-            yield* pullRequests
-              .setLabels({ ...ref, labels, applied })
-              .pipe(Effect.mapError(forgeFailure));
-          }
-        }
-        if (input.requestReviewers !== undefined) {
-          const reviewers = yield* Effect.forEach(input.requestReviewers, (name) =>
-            reviewerNamed(ref, name),
-          );
-          yield* pullRequests
-            .requestReviewers({ ...ref, reviewers, requested: true })
-            .pipe(Effect.mapError(forgeFailure));
-        }
-        if (input.ready !== undefined) {
-          yield* pullRequests
-            .runAction({ ...ref, action: input.ready ? "ready" : "draft" })
-            .pipe(Effect.mapError(forgeFailure));
-        }
-        if (input.state !== undefined) {
-          yield* pullRequests
-            .runAction({ ...ref, action: input.state === "closed" ? "close" : "reopen" })
-            .pipe(Effect.mapError(forgeFailure));
-        }
-        return identityOf(target);
+        return { ...identityOf(target), ...(actor === undefined ? {} : { actor }) };
       }),
     ),
     pull_request_respond: McpToolAccess.writesWithCapability((input) =>
@@ -1308,32 +1354,47 @@ const make = Effect.gen(function* () {
             detail: "resolved needs reviewThreadId.",
           });
         }
-        const { target, ref } = yield* locate(input);
+        const { project, target, ref } = yield* locate(input);
         const reviewThreadId = input.reviewThreadId;
-        if (input.body !== undefined) {
-          yield* (
-            reviewThreadId === undefined
-              ? pullRequests.comment({ ...ref, body: input.body })
-              : pullRequests.replyToThread({ ...ref, threadId: reviewThreadId, body: input.body })
-          ).pipe(Effect.mapError(forgeFailure));
-        }
-        if (reviewThreadId !== undefined && input.resolved !== undefined) {
-          yield* pullRequests
-            .setThreadResolution({ ...ref, threadId: reviewThreadId, resolved: input.resolved })
-            .pipe(
-              Effect.mapError((error) =>
-                input.body === undefined
-                  ? forgeFailure(error)
-                  : new PullRequestForgeError({
-                      // A retry with the body would post the reply twice.
-                      detail: `The reply was posted, but setting resolved failed: ${error.message} Retry without body.`,
-                      cause: error,
-                    }),
-              ),
-            );
-        }
+        const { actor } = yield* GitHubAgentPrPolicy.withGitHubAgentWrite(
+          target,
+          { cwd: project.workspaceRoot, mapAuthError: forgeFailure },
+          Effect.gen(function* () {
+            if (input.body !== undefined) {
+              yield* (
+                reviewThreadId === undefined
+                  ? pullRequests.comment({ ...ref, body: input.body })
+                  : pullRequests.replyToThread({
+                      ...ref,
+                      threadId: reviewThreadId,
+                      body: input.body,
+                    })
+              ).pipe(Effect.mapError(forgeFailure));
+            }
+            if (reviewThreadId !== undefined && input.resolved !== undefined) {
+              yield* pullRequests
+                .setThreadResolution({
+                  ...ref,
+                  threadId: reviewThreadId,
+                  resolved: input.resolved,
+                })
+                .pipe(
+                  Effect.mapError((error) =>
+                    input.body === undefined
+                      ? forgeFailure(error)
+                      : new PullRequestForgeError({
+                          // A retry with the body would post the reply twice.
+                          detail: `The reply was posted, but setting resolved failed: ${error.message} Retry without body.`,
+                          cause: error,
+                        }),
+                  ),
+                );
+            }
+          }),
+        );
         return {
           ...identityOf(target),
+          ...(actor === undefined ? {} : { actor }),
           replied: input.body !== undefined,
           resolved: input.resolved ?? null,
         };
@@ -1341,66 +1402,104 @@ const make = Effect.gen(function* () {
     ),
     pull_request_review: McpToolAccess.writesWithCapability((input) =>
       Effect.gen(function* () {
+        yield* GitHubAgentPrPolicy.enforceAgentReviewPolicy(
+          input.verdict,
+          (detail) => new PullRequestForgeError({ detail }),
+        );
         if (input.verdict === "approve" && input.expectedHeadSha === undefined) {
           return yield* new PullRequestForgeError({
             detail:
               "Approving needs expectedHeadSha: the headSha pull_request_read reported for the commits you reviewed.",
           });
         }
-        const { target, ref } = yield* locate(input);
-        const comments = yield* reviewComments(ref, input.comments ?? []);
-        yield* pullRequests
-          .submitReview({
-            ...ref,
-            verdict: input.verdict,
-            body: input.body ?? "",
-            comments,
-            ...(input.expectedHeadSha === undefined
-              ? {}
-              : { expectedHeadSha: input.expectedHeadSha }),
-          })
-          .pipe(Effect.mapError(forgeFailure));
-        return identityOf(target);
+        const { project, target, ref } = yield* locate(input);
+        const { actor } = yield* GitHubAgentPrPolicy.withGitHubAgentWrite(
+          target,
+          { cwd: project.workspaceRoot, mapAuthError: forgeFailure },
+          Effect.gen(function* () {
+            const comments = yield* reviewComments(ref, input.comments ?? []);
+            yield* pullRequests
+              .submitReview({
+                ...ref,
+                verdict: input.verdict,
+                body: input.body ?? "",
+                comments,
+                ...(input.expectedHeadSha === undefined
+                  ? {}
+                  : { expectedHeadSha: input.expectedHeadSha }),
+              })
+              .pipe(Effect.mapError(forgeFailure));
+          }),
+        );
+        return { ...identityOf(target), ...(actor === undefined ? {} : { actor }) };
       }),
     ),
     pull_request_merge: McpToolAccess.writesWithCapability((input) =>
       Effect.gen(function* () {
-        const { target, ref } = yield* locate(input);
-        const stack = input.stack === true ? yield* stackMergeScope(ref, input) : {};
-        yield* pullRequests
-          .runAction({
-            ...ref,
-            action: input.auto === true ? "enable-auto-merge" : "merge",
+        const { project, target, ref } = yield* locate(input);
+        yield* GitHubAgentPrPolicy.enforceAgentMergePolicy(
+          {
+            host: target.host,
+            repository: target.repository,
+            number: target.number,
             expectedHeadSha: input.expectedHeadSha,
-            ...(input.method === undefined ? {} : { mergeMethod: input.method }),
-            ...stack,
-          })
-          .pipe(Effect.mapError(forgeFailure));
-        const after = yield* pullRequests
-          .summary({ ...ref, allowStale: false })
-          .pipe(Effect.mapError(forgeFailure));
-        return { ...identityOf(target), state: after.state };
+            auto: input.auto,
+            method: input.method,
+          },
+          (detail) => new PullRequestForgeError({ detail }),
+        );
+        const { value: after, actor } = yield* GitHubAgentPrPolicy.withGitHubAgentWrite(
+          target,
+          { cwd: project.workspaceRoot, mapAuthError: forgeFailure },
+          Effect.gen(function* () {
+            const stack = input.stack === true ? yield* stackMergeScope(ref, input) : {};
+            yield* pullRequests
+              .runAction({
+                ...ref,
+                action: input.auto === true ? "enable-auto-merge" : "merge",
+                expectedHeadSha: input.expectedHeadSha,
+                ...(input.method === undefined ? {} : { mergeMethod: input.method }),
+                ...stack,
+              })
+              .pipe(Effect.mapError(forgeFailure));
+            return yield* pullRequests
+              .summary({ ...ref, allowStale: false })
+              .pipe(Effect.mapError(forgeFailure));
+          }),
+        );
+        return {
+          ...identityOf(target),
+          ...(actor === undefined ? {} : { actor }),
+          state: after.state,
+        };
       }),
     ),
     ci_logs: McpToolAccess.reads((input) =>
       Effect.gen(function* () {
         const { target, ref } = yield* locate(input);
-        const checks = yield* pullRequests
-          .checkLogs({
-            ...ref,
-            tailLines: input.tailLines ?? 200,
-            ...(input.check === undefined ? {} : { check: input.check }),
-          })
-          .pipe(Effect.mapError(forgeFailure));
+        const checks = yield* GitHubAgentPrPolicy.withGitHubAgentRead(
+          target,
+          pullRequests
+            .checkLogs({
+              ...ref,
+              tailLines: input.tailLines ?? 200,
+              ...(input.check === undefined ? {} : { check: input.check }),
+            })
+            .pipe(Effect.mapError(forgeFailure)),
+        );
         return { ...identityOf(target), checks };
       }),
     ),
     ci_rerun: McpToolAccess.writesWithCapability((input) =>
       Effect.gen(function* () {
-        const { thread, target, ref } = yield* locate(input);
-        const checks = yield* pullRequests
-          .rerunChecks({ ...ref, ...(input.check === undefined ? {} : { check: input.check }) })
-          .pipe(Effect.mapError(forgeFailure));
+        const { thread, project, target, ref } = yield* locate(input);
+        const { value: checks } = yield* GitHubAgentPrPolicy.withGitHubAgentWrite(
+          target,
+          { cwd: project.workspaceRoot, mapAuthError: forgeFailure },
+          pullRequests
+            .rerunChecks({ ...ref, ...(input.check === undefined ? {} : { check: input.check }) })
+            .pipe(Effect.mapError(forgeFailure)),
+        );
         // Like a push, a rerun makes a watch's finished checks stale, so the thread keeps working
         // until a read sees them run. The rerun already happened, so a failed reopen only logs.
         if (
