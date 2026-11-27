@@ -41,8 +41,9 @@ import type * as AntigravityInstallation from "./AntigravityInstallation.ts";
 export const ANTIGRAVITY_LIMITS_MIN_REFRESH_MS = 15 * 60 * 1_000;
 const ANTIGRAVITY_LIMITS_DEFAULT_TIMEOUT_MS = 20_000;
 
-const PTY_ROWS = 50;
-const PTY_COLS = 120;
+const PTY_ROWS = 80;
+const PTY_COLS = 160;
+const MAX_VT_SCROLLBACK = 200;
 const FIVE_HOUR_MINS = 5 * 60;
 const WEEKLY_MINS = 7 * 24 * 60;
 
@@ -89,7 +90,7 @@ const DiskCacheWindow = Schema.Struct({
 });
 
 const DiskCachePayload = Schema.Struct({
-  version: Schema.Literal(1),
+  version: Schema.Literal(2),
   fetchedAtMs: Schema.optional(Schema.Number),
   lastAttemptAtMs: Schema.Number,
   lastError: Schema.optional(Schema.String),
@@ -132,6 +133,7 @@ function safePtyKill(pty: PtyAdapter.PtyProcess, signal: "SIGTERM" | "SIGKILL"):
 export class MinimalVtScreen {
   private readonly rows: number;
   private readonly cols: number;
+  private readonly scrollback: string[] = [];
   private grid: string[][];
   private r = 0;
   private c = 0;
@@ -145,6 +147,7 @@ export class MinimalVtScreen {
   }
 
   clear(): void {
+    this.scrollback.length = 0;
     this.grid = Array.from({ length: this.rows }, () =>
       Array.from({ length: this.cols }, () => " "),
     );
@@ -154,7 +157,13 @@ export class MinimalVtScreen {
 
   private newline(): void {
     if (this.r + 1 >= this.rows) {
-      this.grid.shift();
+      const top = this.grid.shift();
+      if (top) {
+        this.scrollback.push(top.join("").trimEnd());
+        if (this.scrollback.length > MAX_VT_SCROLLBACK) {
+          this.scrollback.shift();
+        }
+      }
       this.grid.push(Array.from({ length: this.cols }, () => " "));
     } else {
       this.r += 1;
@@ -349,7 +358,7 @@ export class MinimalVtScreen {
   }
 
   text(): string {
-    const lines = this.grid.map((row) => row.join("").trimEnd());
+    const lines = [...this.scrollback, ...this.grid.map((row) => row.join("").trimEnd())];
     while (lines.length > 0 && !lines[0]) lines.shift();
     while (lines.length > 0 && !lines[lines.length - 1]) lines.pop();
     return lines.join("\n");
@@ -450,12 +459,19 @@ export function parseAgyUsageScreen(
   for (const line of lines) {
     if (!line) continue;
 
-    if (
-      /^(GEMINI|CLAUDE\s+AND\s+GPT|CLAUDE\s*\/\s*GPT|[A-Z0-9 /&-]+)\s+MODELS$/i.test(line) &&
-      !/^Models within this group/i.test(line)
-    ) {
+    // Match known all-caps group headers even if Bubble Tea leaves trailing redraw artifacts
+    // on the same row (e.g. `GEMINI MODELSe · enter Select · tab Complete`).
+    const knownGroupMatch = line.match(
+      /^(GEMINI\s+MODELS|CLAUDE\s+AND\s+GPT\s+MODELS|CLAUDE\s*\/\s*GPT\s+MODELS)(?:$|[^A-Z0-9])/u,
+    );
+    const groupHeader =
+      knownGroupMatch?.[1] ??
+      (/^[A-Z0-9 /&-]+\s+MODELS$/i.test(line) && !/^Models within this group/i.test(line)
+        ? line
+        : undefined);
+    if (groupHeader !== undefined) {
       flush();
-      const tag = shortGroupLabel(line);
+      const tag = shortGroupLabel(groupHeader);
       currentGroup = { isGemini: tag === "Gemini", tag };
       continue;
     }
@@ -977,7 +993,7 @@ export const makeAntigravityUsageLimitsProbe = Effect.fn("makeAntigravityUsageLi
         const reason = capture.reason ?? "Could not read Antigravity usage limits.";
         yield* writeCache({
           ...cached,
-          version: 1,
+          version: 2,
           lastAttemptAtMs: doneMs,
           lastError: reason,
         });
@@ -995,7 +1011,7 @@ export const makeAntigravityUsageLimitsProbe = Effect.fn("makeAntigravityUsageLi
         const reason = parsed.error ?? "Could not parse Antigravity usage limits.";
         yield* writeCache({
           ...cached,
-          version: 1,
+          version: 2,
           lastAttemptAtMs: doneMs,
           lastError: reason,
         });
@@ -1007,7 +1023,7 @@ export const makeAntigravityUsageLimitsProbe = Effect.fn("makeAntigravityUsageLi
 
       const limits = makeUsageLimits({ checkedAt, windows: parsed.windows });
       yield* writeCache({
-        version: 1,
+        version: 2,
         fetchedAtMs: doneMs,
         lastAttemptAtMs: doneMs,
         checkedAt: limits.checkedAt,

@@ -78,6 +78,7 @@ packages/provider-acp/src/server/adapter.ts  # direnv: wrap the flavor with with
 packages/provider-core/package.json  # direnv: export ./server/DirenvEnvironment
 packages/provider-opencode/src/server/adapter.ts  # direnv: resolve the OpenCode server environment through resolveCurrentProviderEnvironment
 packages/shared/package.json  # identity: subpath exports for identityAvatar, identityMap, sourceAttribution; jira: subpath exports for integrationThreadView, jiraBareKeyProjects, turnResponseStats (server, bot, extension); discord + vscode: discordProjectTopic, integrationPendingInteractions, integrationTasks, sessionWake exports shared by the bot, the extension and the server MCP tool; github + discord: providerModelSelection, shared by the bot and the GitHub PR bridge
+packages/shared/src/usageLimits.ts  # antigravity-usage-limits: orders Antigravity displayLimitWindows with Gemini 5-hour/Weekly before scoped Claude/GPT windows (antigravityUsageLimitsFork.ts)
 pnpm-lock.yaml  # vscode + discord: importers for the fork-only apps/vscode and apps/discord-bot, and the patched dfx catalog entry; regenerate with CI= pnpm install --no-frozen-lockfile, never take a side; bot-browser: playwright-core for apps/discord-bot
 pnpm-workspace.yaml  # discord: dfx catalog entry and its patchedDependencies line (patches/dfx@1.0.16.patch)
 scripts/build-desktop-artifact.ts  # dir-install-updates: Windows builds keep win-unpacked for the directory deploy
