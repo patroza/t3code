@@ -716,6 +716,79 @@ describe("GitHubAppInstallationAuth routing, caching, and failures", () => {
       }),
   );
 
+  it.effect(
+    "routes fork base repo to its mapped App and unmapped upstream base repo to personal",
+    () =>
+      Effect.gen(function* () {
+        const files = {
+          "/keys/omegent.pem": TEST_KEY_A,
+          "/etc/github-apps.json": JSON.stringify({
+            apps: [
+              {
+                name: "omegent-app",
+                appId: 4331997,
+                privateKeyPath: "/keys/omegent.pem",
+                owners: ["macs-holding", "aaaomega"],
+                repos: ["patroza/effect-ui-ssr-lazy-routes", "patroza/t3code"],
+              },
+            ],
+          }),
+        };
+        const config = yield* loadGitHubAppAgentAuthConfig({
+          env: { T3_GITHUB_APPS_FILE: "/etc/github-apps.json" },
+          fileSystem: fakeFileSystem(files),
+        });
+        const http = makeFakeHttp((req) => {
+          if (req.url.endsWith("/repos/patroza/t3code/installation")) {
+            return { status: 200, body: { id: 401 } };
+          }
+          if (req.url.endsWith("/app/installations/401/access_tokens")) {
+            return {
+              status: 201,
+              body: { token: "tok-fork-401", expires_at: "2099-01-01T01:00:00Z" },
+            };
+          }
+          if (req.url.endsWith("/app")) {
+            return { status: 200, body: { slug: "omegent-app" } };
+          }
+          return { status: 404, body: { message: "Not Found" } };
+        });
+        const layer = provideAuth(config, files, http.layer);
+
+        yield* Effect.gen(function* () {
+          const auth = yield* GitHubAppInstallationAuth;
+
+          // PR opened in the mapped fork (head + base in patroza/t3code) -> omegent-app
+          const forkPr = yield* auth.resolve({
+            host: "github.com",
+            repository: "patroza/t3code",
+            access: "write",
+          });
+          expect(forkPr.mode).toBe("app");
+          if (forkPr.mode === "app") {
+            expect(forkPr.appId).toBe("4331997");
+            expect(forkPr.actor).toBe("omegent-app[bot]");
+          }
+
+          // PR opened against unmapped upstream base repo (pingdotgg/t3code) -> personal
+          const upstreamPr = yield* auth.resolve({
+            host: "github.com",
+            repository: "pingdotgg/t3code",
+            access: "write",
+          });
+          expect(upstreamPr).toEqual({ mode: "personal", configured: true });
+
+          // Another repo under patroza not in repos[] -> personal
+          const otherPersonal = yield* auth.resolve({
+            host: "github.com",
+            repository: "patroza/other-repo",
+            access: "write",
+          });
+          expect(otherPersonal).toEqual({ mode: "personal", configured: true });
+        }).pipe(Effect.provide(layer));
+      }),
+  );
+
   it.effect("does nothing when App auth is unconfigured", () =>
     Effect.gen(function* () {
       const http = makeFakeHttp(() => ({ status: 500, body: {} }));
