@@ -1,5 +1,6 @@
 import type { OrchestrationV2ThreadProjection } from "@t3tools/contracts";
 import { type IntegrationThreadView as OrchestrationThread } from "@t3tools/shared/integrationThreadView";
+import { isWeeklyGroupChatSourceKey } from "../teams/weeklyThreads.ts";
 // @effect-diagnostics anyUnknownInErrorContext:off missingEffectContext:off globalFetchInEffect:off unknownInEffectCatch:off nodeBuiltinImport:off
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
@@ -1275,6 +1276,8 @@ export function externalUserMessagesToEcho(input: {
   readonly observedInitialUserSnapshot: boolean;
   readonly seenUserMessageIds: ReadonlyArray<string>;
   readonly sentDiscordUserMessageIds: ReadonlyArray<string>;
+  /** Weekly Teams group-chat log: the gateway already posted each observation as a clean line. */
+  readonly teamsGroupChatLog?: boolean;
 }): ReadonlyArray<OrchestrationThread["messages"][number]> {
   if (!input.observedInitialUserSnapshot) return [];
   const seen = new Set(input.seenUserMessageIds);
@@ -1282,6 +1285,7 @@ export function externalUserMessagesToEcho(input: {
   return input.messages.filter(
     (message) =>
       message.role === "user" &&
+      !(input.teamsGroupChatLog === true && message.source?.channel === "teams") &&
       shouldEchoUserMessageToDiscord({
         text: message.text,
         messageId: message.id,
@@ -5262,6 +5266,9 @@ export const runBridge = Effect.fn("ResponseBridge.runBridge")(function* (
       observedInitialUserSnapshot: priorState.observedInitialUserSnapshot,
       seenUserMessageIds: priorState.seenUserMessageIds,
       sentDiscordUserMessageIds: priorState.sentDiscordUserMessageIds,
+      teamsGroupChatLog:
+        persistedLink?.sourceKind === "teams" &&
+        isWeeklyGroupChatSourceKey(persistedLink.sourceThreadId),
     });
     const pendingEchoIds = new Set<string>(unseenExternalUserMessages.map((message) => message.id));
     const unresolvedSentDiscordUserMessageIds = priorState.sentDiscordUserMessageIds.filter(

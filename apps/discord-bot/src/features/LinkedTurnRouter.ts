@@ -76,6 +76,8 @@ export interface TransportNeutralLinkedTurnInput {
   readonly stickyModelOnContinue?: boolean | undefined;
   readonly attachments?: ReadonlyArray<UploadChatAttachment> | undefined;
   readonly promptContext?: LinkedTurnInput["promptContext"];
+  /** T3 title for a new thread; otherwise it is cut from the prompt. */
+  readonly title?: string | undefined;
 }
 
 /** Preserve the requester on every dispatch; the server keeps the first thread origin. */
@@ -214,6 +216,7 @@ export const startOrContinueT3Turn = Effect.fn("startOrContinueT3Turn")(function
   const { threadId, messageId } = yield* t3.startTurnWithWorktree({
     project: resolved.project,
     prompt: enrichedPrompt,
+    ...(input.title === undefined ? {} : { titleSeed: input.title }),
     modelSelection,
     interactionMode: input.flags.plan ? "plan" : "default",
     ...launchWorkspaceFields(workspace),

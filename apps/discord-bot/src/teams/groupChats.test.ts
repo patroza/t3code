@@ -11,6 +11,8 @@ import {
   groupChatMirrorsFile,
   groupChatSourceKey,
   groupChatSpeaksInTeams,
+  groupChatT3ThreadTitle,
+  groupChatWorkspaceTarget,
   readGroupChatMirror,
   rememberGroupChatMirror,
   SCANNER_GROUP_CHAT_MIRROR,
@@ -442,5 +444,77 @@ describe("loadGroupChatRulesFromFileSync", () => {
     const filePath = NodePath.join(dir, "teams.json");
     await NodeFSP.writeFile(filePath, "[]", "utf8");
     expect(loadGroupChatRulesFromFileSync(filePath)).toEqual([]);
+  });
+});
+
+describe("group chat display names and Discord channels", () => {
+  const workspace = (groupChats: ReadonlyArray<unknown>, extra = {}) =>
+    groupChatWorkspaceTarget("alpha", { groupChats, ...extra });
+
+  it("parses a rule title and Discord channel, and rejects bad values", () => {
+    expect(
+      workspace([
+        {
+          conversationId: "19:chat@thread.v2",
+          projectShortName: "macs-scanner",
+          title: "  Easy Life Scanner ",
+          discordChannelId: "1345512665602330664",
+        },
+      ]).rules,
+    ).toEqual([
+      {
+        conversationId: "19:chat@thread.v2",
+        projectShortName: "macs-scanner",
+        title: "Easy Life Scanner",
+        discordChannelId: "1345512665602330664",
+      },
+    ]);
+    const rule = { conversationId: "19:chat@thread.v2", projectShortName: "macs-scanner" };
+    expect(() => workspace([{ ...rule, title: "  " }])).toThrow(/title/u);
+    expect(() => workspace([{ ...rule, title: "x".repeat(101) }])).toThrow(/title/u);
+    expect(() => workspace([{ ...rule, discordChannelId: "#macs-scanner" }])).toThrow(
+      /discordChannelId/u,
+    );
+    expect(
+      workspace([], { scannerGroupChats: true, scannerDiscordChannelId: "1345512665602330664" })
+        .builtinDiscordChannelId,
+    ).toBe("1345512665602330664");
+    expect(() => workspace([], { scannerDiscordChannelId: "1345512665602330664" })).toThrow(
+      /requires scannerGroupChats/u,
+    );
+  });
+
+  it("prefers the rule title and falls back to the scanner channel default", () => {
+    const pinned = resolveGroupChat({
+      title: "Teams group chat",
+      conversationId: "19:chat@thread.v2",
+      rules: [
+        {
+          conversationId: "19:chat@thread.v2",
+          projectShortName: "macs-scanner",
+          title: "Easy Life Scanner",
+        },
+      ],
+    });
+    expect(pinned).toMatchObject({ title: "Easy Life Scanner", discordChannelId: null });
+    const builtin = resolveGroupChat({
+      title: "MAKO Scanner",
+      conversationId: "19:other@thread.v2",
+      rules: [],
+      builtinDiscordChannelId: "1345512665602330664",
+    });
+    expect(builtin).toMatchObject({
+      title: "MAKO Scanner",
+      discordChannelId: "1345512665602330664",
+    });
+  });
+
+  it("keeps the week in a shortened T3 title", () => {
+    expect(groupChatT3ThreadTitle("MAKO Scanner", "week-2026-11-23")).toBe(
+      "Teams: MAKO Scanner · week 2026-11-23",
+    );
+    const long = groupChatT3ThreadTitle("x".repeat(200), "week-2026-11-23");
+    expect(long.length).toBeLessThanOrEqual(72);
+    expect(long.endsWith("… · week 2026-11-23")).toBe(true);
   });
 });

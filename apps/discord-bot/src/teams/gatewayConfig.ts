@@ -13,6 +13,8 @@ const GatewayGroupChatRule = Schema.Struct({
   mirrorTenantId: Schema.optional(Schema.String),
   mirrorTeamId: Schema.optional(Schema.String),
   mirrorChannelId: Schema.optional(Schema.String),
+  title: Schema.optional(Schema.String),
+  discordChannelId: Schema.optional(Schema.String),
   passive: Schema.optional(Schema.Boolean),
 });
 const Workspace = Schema.Struct({
@@ -31,6 +33,7 @@ const Workspace = Schema.Struct({
   scannerMirrorTenantId: Schema.optional(Schema.String),
   scannerMirrorTeamId: Schema.optional(Schema.String),
   scannerMirrorChannelId: Schema.optional(Schema.String),
+  scannerDiscordChannelId: Schema.optional(Schema.String),
   groupChats: Schema.optional(Schema.Array(GatewayGroupChatRule)),
 });
 const Binding = Schema.Struct({

@@ -24,7 +24,10 @@ import { bridgeThreadToPlatform, runBridge } from "./features/ResponseBridge.ts"
 import { layer as bridgeHubLayer } from "./features/BridgeHub.ts";
 import { BotResponseTransport } from "./features/BotResponseTransport.ts";
 import { layer as warmCacheLayer } from "./store/ThreadWarmCacheStore.ts";
-import { makeTeamsResponseTransport } from "./teams/ResponseTransport.ts";
+import {
+  makeTeamsResponseTransport,
+  type TeamsResponseActivity,
+} from "./teams/ResponseTransport.ts";
 import { IdentityMapStore, layerFromOptionalPath as identityMapLayer } from "./identityMap.ts";
 import { layerFromOptionalPath as aliasesLayer } from "./projectAliases.ts";
 import { ThreadLinkStore, layer as linksLayer } from "./store/ThreadLinkStore.ts";
@@ -54,7 +57,12 @@ import {
   type GraphChatMessage,
   type GraphNotificationBatch,
 } from "./teams/graphNotifications.ts";
-import { ingestTeamsGroupChat, teamsChannelPoster } from "./features/TeamsGroupChatObserver.ts";
+import {
+  ensureTeamsMirrorLink,
+  ingestTeamsGroupChat,
+  teamsChannelPoster,
+  type TeamsMirrorTurn,
+} from "./features/TeamsGroupChatObserver.ts";
 import { mentionsTeamsRecipient, registerTeamsMessageEvents } from "./teams/messageEvents.ts";
 import { TeamsGatewayDispatcher } from "./teams/gatewayDispatcher.ts";
 import {
@@ -242,6 +250,48 @@ const program = Effect.gen(function* () {
       throw new Error("Teams binding was revoked or changed");
     return workspaces.get(lease.binding.workspace)!;
   };
+  const transportFor = (
+    lease: GatewayLease,
+    rootMessageId: string,
+    send: (wire: TeamsResponseActivity) => Promise<{ id?: string }>,
+    deleteMessage: (id: string) => Promise<unknown>,
+  ) =>
+    makeTeamsResponseTransport({
+      config: active(lease).config,
+      clientId: initial.identity.entraClientId,
+      tenantId: lease.binding.tenantId,
+      clientSecret: readPrivateCredential(secretPath),
+      teamId: lease.binding.teamId,
+      channelId: lease.binding.channelId,
+      fileDestination: lease.binding.fileDestination,
+      includeProgressHistory: lease.binding.includeProgressHistory,
+      getChannelTopic: () => channelTopic(lease),
+      conversationId: lease.conversationId,
+      rootMessageId,
+      assertActive: () => {
+        active(lease);
+      },
+      send,
+      deleteMessage,
+    });
+  // Turn-less delivery (restored or group-chat mirror bridges) posts with the bot's own envelope.
+  const restoredTransport = (lease: GatewayLease, serviceUrl: string, rootMessageId: string) => {
+    const api = new ApiClient(serviceUrl, app.api.http);
+    const sendRestored = restoredTeamsSender({
+      conversations: api.conversations,
+      conversationId: lease.conversationId,
+      botId: "28:" + initial.identity.entraClientId,
+    });
+    return transportFor(
+      lease,
+      rootMessageId,
+      (wire) => {
+        active(lease);
+        return sendRestored(wire);
+      },
+      (id) => api.conversations.deleteActivity(lease.conversationId, id),
+    );
+  };
   // A mention in a group-chat mirror thread continues that chat's weekly T3 thread.
   const channelSourceKey = (lease: GatewayLease, dataDir: string) =>
     teamsChannelSourceKey({
@@ -314,24 +364,16 @@ const program = Effect.gen(function* () {
               stickyModelOnContinue: true,
               promptContext: { kind: "raw", value: "Authorized Teams request: Continue" },
             });
-            const transport = makeTeamsResponseTransport({
-              config: workspace.config,
-              clientId: initial.identity.entraClientId,
-              tenantId: lease.binding.tenantId,
-              clientSecret: readPrivateCredential(secretPath),
-              teamId: lease.binding.teamId,
-              channelId: lease.binding.channelId,
-              fileDestination: lease.binding.fileDestination,
-              includeProgressHistory: lease.binding.includeProgressHistory,
-              getChannelTopic: () => channelTopic(lease),
+            const transport = transportFor(
+              lease,
+              lease.conversationId.split(";messageid=")[1] ?? activity.replyToId ?? activity.id,
+              (wire) => send(wire),
+              (id) => api.conversations.deleteActivity(lease.conversationId, id),
+            );
+            yield* ensureTeamsMirrorLink({
               conversationId: lease.conversationId,
-              rootMessageId:
-                lease.conversationId.split(";messageid=")[1] ?? activity.replyToId ?? activity.id,
-              assertActive: () => {
-                active(lease);
-              },
-              send: (wire) => send(wire),
-              deleteMessage: (id) => api.conversations.deleteActivity(lease.conversationId, id),
+              sourceKey,
+              t3ThreadId: turn.threadId,
             });
             yield* bridgeThreadToPlatform({
               conversationId: lease.conversationId,
@@ -506,9 +548,14 @@ const program = Effect.gen(function* () {
               ...(handled.builtinMirror === undefined
                 ? {}
                 : { builtinMirror: handled.builtinMirror }),
+              ...(handled.builtinDiscordChannelId === undefined
+                ? {}
+                : { builtinDiscordChannelId: handled.builtinDiscordChannelId }),
               ...(images.uploads.length > 0 || images.note.length > 0 ? { hasImages: true } : {}),
               ...(images.uploads.length > 0 ? { attachments: images.uploads } : {}),
               ...(images.note.length > 0 ? { attachmentNote: images.note } : {}),
+              bridgeMirror: (turn) =>
+                Effect.tryPromise(() => bridgeGroupChatMirror(handled.workspaceId, api, turn)),
             },
           );
         }),
@@ -518,6 +565,37 @@ const program = Effect.gen(function* () {
           Effect.logError("Passive Teams group chat failed", { error: String(error) }),
         );
       });
+  };
+
+  // Same delivery as after a mention in the mirror thread, without one: the gateway started this
+  // weekly T3 thread itself, so only its output is delivered; nothing new is authorized.
+  const bridgeGroupChatMirror = async (
+    workspaceId: string,
+    api: Parameters<typeof teamsChannelPoster>[0],
+    turn: TeamsMirrorTurn,
+  ) => {
+    const lease = policy.mirrorLease(workspaceId, turn.mirror, turn.conversationId);
+    if (lease === null) {
+      log("warning", "No active channel binding for the Teams group chat mirror", {
+        workspaceId,
+        channelId: turn.mirror.channelId,
+      });
+      return;
+    }
+    const workspace = active(lease);
+    const rootMessageId = turn.conversationId.split(";messageid=")[1]!;
+    references.remember(lease, api.serviceUrl, rootMessageId);
+    const transport = restoredTransport(lease, api.serviceUrl, rootMessageId);
+    await workspace.runtime.runPromise(
+      Effect.gen(function* () {
+        yield* ensureTeamsMirrorLink(turn);
+        yield* bridgeThreadToPlatform({
+          conversationId: turn.conversationId,
+          threadId: turn.t3ThreadId,
+          sentUserMessageIds: [turn.messageId],
+        }).pipe(Effect.provideService(BotResponseTransport, transport));
+      }),
+    );
   };
 
   // Graph work per chat runs in arrival order, so reads cannot overtake each other.
@@ -733,24 +811,16 @@ const program = Effect.gen(function* () {
             ...(images.uploads.length > 0 ? { attachments: images.uploads } : {}),
             promptContext: { kind: "raw", value: enriched },
           });
-          const transport = makeTeamsResponseTransport({
-            config: workspace.config,
-            clientId: initial.identity.entraClientId,
-            tenantId: lease.binding.tenantId,
-            clientSecret: readPrivateCredential(secretPath),
-            teamId: lease.binding.teamId,
-            channelId: lease.binding.channelId,
-            fileDestination: lease.binding.fileDestination,
-            includeProgressHistory: lease.binding.includeProgressHistory,
-            getChannelTopic: () => channelTopic(lease),
+          const transport = transportFor(
+            lease,
+            lease.conversationId.split(";messageid=")[1] ?? activity.replyToId ?? activity.id,
+            (wire) => send(wire),
+            (id) => api.conversations.deleteActivity(lease.conversationId, id),
+          );
+          yield* ensureTeamsMirrorLink({
             conversationId: lease.conversationId,
-            rootMessageId:
-              lease.conversationId.split(";messageid=")[1] ?? activity.replyToId ?? activity.id,
-            assertActive: () => {
-              active(lease);
-            },
-            send: (wire) => send(wire),
-            deleteMessage: (id) => api.conversations.deleteActivity(lease.conversationId, id),
+            sourceKey,
+            t3ThreadId: turn.threadId,
           });
           yield* bridgeThreadToPlatform({
             conversationId: lease.conversationId,
@@ -825,45 +895,12 @@ const program = Effect.gen(function* () {
   for (const reference of references.restore(initial, (lease) => policy.isActive(lease))) {
     const { lease } = reference;
     const workspace = active(lease);
-    const api = new ApiClient(reference.serviceUrl, app.api.http);
-    const sendRestored = restoredTeamsSender({
-      conversations: api.conversations,
-      conversationId: lease.conversationId,
-      botId: "28:" + initial.identity.entraClientId,
-    });
-    const transport = makeTeamsResponseTransport({
-      config: workspace.config,
-      clientId: initial.identity.entraClientId,
-      tenantId: lease.binding.tenantId,
-      clientSecret: readPrivateCredential(secretPath),
-      teamId: lease.binding.teamId,
-      channelId: lease.binding.channelId,
-      fileDestination: lease.binding.fileDestination,
-      includeProgressHistory: lease.binding.includeProgressHistory,
-      getChannelTopic: () => channelTopic(lease),
-      conversationId: lease.conversationId,
-      rootMessageId: reference.rootMessageId,
-      assertActive: () => {
-        active(lease);
-      },
-      send: (wire) => {
-        active(lease);
-        return sendRestored(wire);
-      },
-      deleteMessage: (id) => api.conversations.deleteActivity(lease.conversationId, id),
-    });
+    const transport = restoredTransport(lease, reference.serviceUrl, reference.rootMessageId);
     workspace.runtime.runFork(
       Effect.gen(function* () {
         const links = yield* ThreadLinkStore;
-        const sourceKey =
-          "native/" +
-          [
-            lease.binding.tenantId,
-            lease.binding.teamId,
-            lease.binding.channelId,
-            lease.conversationId,
-          ].join("/");
-        const link = yield* links.getBySourceThread("teams", sourceKey);
+        // Keyed by conversation: native channel threads and group-chat mirror threads alike.
+        const link = yield* links.getByDiscordThreadId(lease.conversationId);
         if (link === null) return;
         const session = yield* T3Session;
         // Startup connection runs in another fiber; rehydration must not subscribe before it is ready.

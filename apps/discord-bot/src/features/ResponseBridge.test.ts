@@ -1,5 +1,6 @@
 import { MessageId, TurnId, type VcsStatusResult } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
+import { isWeeklyGroupChatSourceKey } from "../teams/weeklyThreads.ts";
 
 import {
   activeStreamTipIdsForDelivery,
@@ -1576,6 +1577,36 @@ describe("rewriteInlinePathCodeSpansForDiscord", () => {
 });
 
 describe("externalUserMessagesToEcho", () => {
+  it("leaves gateway observations out of a weekly Teams group-chat log, and only there", () => {
+    const user = (id: string, text: string, channel: "teams" | "web") => ({
+      id: MessageId.make(id),
+      role: "user" as const,
+      text,
+      turnId: null,
+      streaming: false,
+      createdAt: "2026-11-27T00:00:00.000Z",
+      updatedAt: "2026-11-27T00:00:00.000Z",
+      source: { channel },
+    });
+    const messages = [
+      user("observed", "This Teams group chat is passive. Do not send a message…", "teams"),
+      user("web", "check the scanner logs too", "web"),
+    ];
+    const echoed = (teamsGroupChatLog: boolean) =>
+      externalUserMessagesToEcho({
+        messages,
+        observedInitialUserSnapshot: true,
+        seenUserMessageIds: [],
+        sentDiscordUserMessageIds: [],
+        teamsGroupChatLog,
+      }).map((message) => message.id);
+    const weekly = "native/tenant/group/19:chat@thread.v2/week-2026-11-23";
+    expect(isWeeklyGroupChatSourceKey(weekly)).toBe(true);
+    expect(isWeeklyGroupChatSourceKey("native/tenant/team/19:c@thread.tacv2/conv")).toBe(false);
+    expect(echoed(true)).toEqual(["web"]);
+    expect(echoed(false)).toEqual(["observed", "web"]);
+  });
+
   it("includes unseen user messages from other clients", () => {
     const messages = externalUserMessagesToEcho({
       messages: [
