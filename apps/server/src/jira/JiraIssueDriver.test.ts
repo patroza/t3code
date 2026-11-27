@@ -72,7 +72,14 @@ const withTracker = <A, E>(
         Layer.succeed(
           IssueTrackerHost.IssueTrackerHost,
           IssueTrackerHost.IssueTrackerHost.of({
-            credentials: { get: () => Effect.succeed(Option.fromNullishOr(options.stored)) },
+            credentials: {
+              get: () =>
+                Effect.succeed(
+                  Option.fromNullishOr(options.stored).pipe(
+                    Option.map((token) => ({ token, fields: {} })),
+                  ),
+                ),
+            },
           }),
         ),
         ConfigProvider.layer(ConfigProvider.fromEnv({ env: options.env })),
