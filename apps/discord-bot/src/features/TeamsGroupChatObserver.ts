@@ -11,6 +11,7 @@ import * as Context_ from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 
 import type { DiscordBotConfig } from "../config.ts";
@@ -362,6 +363,12 @@ const runGroupChatCommand = Effect.fn("runGroupChatCommand")(function* (
  * Observe a Teams group chat without sending anything back to it.
  * One T3 thread, one Discord alerts thread, and one internal Teams channel thread per week.
  */
+/** About three minutes in total: covers a gateway restart and short T3 disconnects. */
+const GROUP_CHAT_T3_RETRY = Schedule.max([
+  Schedule.min([Schedule.exponential("2 seconds"), Schedule.spaced("1 minute")]),
+  Schedule.recurs(7),
+]);
+
 export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* (
   config: DiscordBotConfig,
   rules: ReadonlyArray<GroupChatRule>,
@@ -375,6 +382,7 @@ export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* 
     readonly hasImages?: boolean;
     readonly attachments?: ReadonlyArray<UploadChatAttachment>;
     readonly attachmentNote?: string;
+    readonly t3RetrySchedule?: Schedule.Schedule<unknown, unknown>;
   },
 ) {
   const access =
@@ -510,6 +518,15 @@ export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* 
       promptContext: { kind: "raw", value: prompt },
     }),
   ).pipe(
+    // T3 drops briefly and is not ready right after a gateway restart; retry rather than lose
+    // the message, because the intake claim and Graph last-seen already moved past it.
+    Effect.tapCause((cause) =>
+      Effect.logWarning("T3 turn for the Teams group chat failed; retrying", {
+        sourceKey,
+        cause: Cause.pretty(cause),
+      }),
+    ),
+    Effect.retry(options?.t3RetrySchedule ?? GROUP_CHAT_T3_RETRY),
     Effect.catchCause((cause) =>
       Effect.logError("Could not start the T3 turn for the Teams group chat", {
         sourceKey,

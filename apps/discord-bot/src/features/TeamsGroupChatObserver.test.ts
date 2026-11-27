@@ -12,6 +12,7 @@ import { it } from "@effect/vitest";
 import { DiscordREST } from "dfx";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
+import * as Schedule from "effect/Schedule";
 import { describe, expect } from "vite-plus/test";
 
 import { DiscordBotConfig } from "../config.ts";
@@ -71,7 +72,7 @@ function makeHarness() {
       mirrorThreads: 0,
       mirrorReplies: [] as Array<string>,
     };
-    const state = { discordFails: false, mirrorFails: false, t3Fails: false };
+    const state = { discordFails: false, mirrorFails: false, t3Fails: false, t3FailsOnce: false };
     const projectId = ProjectId.make("project:scanner");
     const session = {
       findProjectByWorkspaceRoot: () =>
@@ -83,8 +84,10 @@ function makeHarness() {
         Effect.succeed({ settings: DEFAULT_SERVER_SETTINGS, newProjectsRoot: "/projects" }),
       shell: () => Effect.succeed({ threads: [] }),
       startTurnWithWorktree: () =>
-        state.t3Fails
-          ? Effect.fail(new Error("T3 down"))
+        state.t3Fails || state.t3FailsOnce
+          ? Effect.sync(() => {
+              state.t3FailsOnce = false;
+            }).pipe(Effect.andThen(Effect.fail(new Error("T3 down"))))
           : Effect.sync(() => {
               calls.t3Starts += 1;
               return { threadId: ThreadId.make("thread:weekly"), messageId: "message:1" };
@@ -121,10 +124,12 @@ function makeHarness() {
         calls.mirrorReplies.push(text);
       },
     };
-    const ingest = (text: string, withDiscord = true) =>
+    const ingest = (text: string, withDiscord = true, t3Retries = 0) =>
       Effect.gen(function* () {
         const runtime = yield* Effect.context<never>();
-        return yield* ingestTeamsGroupChat(config, rules, [], runtime, message(text), poster);
+        return yield* ingestTeamsGroupChat(config, rules, [], runtime, message(text), poster, {
+          t3RetrySchedule: Schedule.recurs(t3Retries),
+        });
       }).pipe(
         (effect) => (withDiscord ? Effect.provideService(effect, DiscordREST, rest) : effect),
         Effect.provideService(ThreadLinkStore, links),
@@ -150,6 +155,16 @@ const markers = (posts: ReadonlyArray<{ content: string }>) =>
   });
 
 describe("Teams group chat observer failure isolation", () => {
+  it.effect("retries a T3 turn that fails once instead of dropping the message", () =>
+    Effect.gen(function* () {
+      const { calls, state, ingest, weeklyLink } = yield* makeHarness();
+      state.t3FailsOnce = true;
+      yield* ingest("Paketnummern fehlen", true, 2);
+      expect(calls.t3Starts).toBe(1);
+      expect((yield* weeklyLink).t3ThreadId).toBe("thread:weekly");
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("still copies to the Teams mirror and starts T3 when Discord fails", () =>
     Effect.gen(function* () {
       const { calls, state, ingest, weeklyLink } = yield* makeHarness();
