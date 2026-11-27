@@ -17,11 +17,15 @@ apps/desktop/src/window/DesktopWindow.ts  # webauthn: preview guests disable the
 apps/mobile/app.config.ts  # tooling: wraps the default export in applyForkMobileConfig (app.config.fork.ts)
 apps/mobile/package.json  # tooling: eas-build-pre-install script for the trimmed EAS archive (.easignore); i18n: i18n:generate runs scripts/fork-i18n.ts
 apps/mobile/src/App.tsx  # identity: mounts IdentityClaimGate
+apps/mobile/src/features/files/ThreadFilesRouteScreen.tsx  # mobile-download: header and File actions save any workspace file, not only images and video
 apps/mobile/src/features/home/HomeRouteScreen.tsx  # identity: ownership-filters the home thread list and adds ownership to its filter menu (features/identity/OwnershipFilter.tsx)
 apps/mobile/src/features/home/ThreadListFilters.tsx  # identity: Mine/Theirs chip beside the environment and project chips
 apps/mobile/src/features/threads/ThreadDetailScreen.tsx  # identity: passes renderMessageSender (features/identity/MessageSenderCaption.tsx) to ThreadFeed
-apps/mobile/src/features/threads/ThreadFeed.tsx  # identity: optional renderMessageSender prop rendered above user messages; ThreadFeed imports no identity code
+apps/mobile/src/features/threads/ThreadFeed.tsx  # identity: optional renderMessageSender prop rendered above user messages; ThreadFeed imports no identity code; mobile-download: file attachments show a download button
+apps/mobile/src/features/threads/ThreadInlineFilePreview.tsx  # mobile-download: audio cards take a download button
 apps/mobile/src/features/threads/ThreadNavigationSidebar.tsx  # identity: ownership-filters the sidebar thread list and adds ownership to its filter menu
+apps/mobile/src/features/threads/fileChipMenu.test.ts  # mobile-download: file-chip save covers files the preview endpoint will not inline
+apps/mobile/src/features/threads/fileChipMenu.ts  # mobile-download: every file chip offers Save or share through an attachment asset URL
 apps/mobile/src/features/threads/thread-list-v2-items.tsx  # identity: thread rows show the creator/participant mark (features/identity/ParticipantStack.tsx)
 apps/mobile/src/i18n/I18nProvider.tsx  # i18n: wraps the catalog loader with withForkTranslations (fork-translations/)
 apps/mobile/src/persistence/mobile-preferences.ts  # identity: persists the Mine/Theirs ownership choice (features/identity/ownershipFilterOptions.ts)

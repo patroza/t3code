@@ -25,6 +25,7 @@ import * as Schema from "effect/Schema";
 import { videoMimeType } from "@t3tools/shared/video";
 import {
   filePreviewKind,
+  hostPreviewMimeTypeFromExtension,
   isWorkspaceBrowserPreviewPath,
   isWorkspaceImagePreviewPath,
   mediaMimeTypeFromExtension,
@@ -123,11 +124,16 @@ function FileHeader(props: {
   readonly fileInspectorSupported: boolean;
   readonly onBack: () => void;
   readonly onReturnToThread: () => void;
+  readonly onDownload?: (() => void) | undefined;
+  readonly downloadLabel?: string;
+  readonly downloading?: boolean;
+  readonly downloadDisabled?: boolean;
   readonly actions: ReadonlyArray<{
     readonly id: string;
     readonly title: string;
     readonly icon: string;
     readonly inline: boolean;
+    readonly disabled?: boolean;
     readonly onPress: () => unknown;
   }>;
 }) {
@@ -150,20 +156,33 @@ function FileHeader(props: {
             }
           : undefined
       }
-      actions={
-        props.fileInspectorSupported
+      actions={[
+        ...(props.onDownload
+          ? [
+              {
+                accessibilityLabel: props.downloading
+                  ? gt("Opening share sheet…")
+                  : (props.downloadLabel ?? gt("Save or share")),
+                icon: "tray.and.arrow.down" as const,
+                onPress: props.onDownload,
+                disabled: props.downloading || props.downloadDisabled,
+                loading: props.downloading,
+              },
+            ]
+          : []),
+        ...(props.fileInspectorSupported
           ? [
               {
                 accessibilityLabel: panes.auxiliaryPaneVisible
                   ? gt("Hide file navigator")
                   : gt("Show file navigator"),
-                icon: "sidebar.right",
+                icon: "sidebar.right" as const,
                 selected: panes.auxiliaryPaneVisible,
                 onPress: toggleAuxiliaryPane,
               },
             ]
-          : undefined
-      }
+          : []),
+      ]}
       menus={[
         {
           title: gt("File actions"),
@@ -178,11 +197,14 @@ function FileHeader(props: {
                     items: modes.map((action) => ({
                       ...action,
                       selected: action.id === props.activeMode,
+                      disabled: action.disabled,
                     })),
                   },
                 ]
               : []),
-            ...props.actions.filter(({ inline }) => !inline),
+            ...props.actions
+              .filter(({ inline }) => !inline)
+              .map((action) => ({ ...action, disabled: action.disabled })),
           ],
         },
       ]}
@@ -213,6 +235,15 @@ function normalizeRouteLine(value: string | null): number | null {
   }
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function hostDownloadMimeType(path: string): string {
+  const name = basename(path);
+  const dot = name.lastIndexOf(".");
+  return (
+    (dot > 0 ? hostPreviewMimeTypeFromExtension(name.slice(dot)) : null) ??
+    "application/octet-stream"
+  );
 }
 
 function defaultViewMode(path: string | null): FileViewMode {
@@ -829,7 +860,41 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
           resource: assetPreview.resource,
         }
       : undefined;
-  const mediaActions = useMediaActions(mediaSource);
+  // Preview URLs refuse spreadsheets, source, and other non-media files. A download asks for the
+  // file as an attachment, which the server will serve for any type.
+  const downloadSource: MediaActionsSource | undefined =
+    mediaSource !== undefined ||
+    environmentId === null ||
+    relativePath === null ||
+    directoryPath !== null
+      ? undefined
+      : threadId !== null && targetPath !== null
+        ? {
+            name: basename(relativePath),
+            mimeType: hostDownloadMimeType(relativePath),
+            environmentId,
+            threadId,
+            resource: {
+              _tag: "media-file",
+              threadId,
+              path: targetPath,
+              disposition: "attachment",
+            },
+          }
+        : cwd !== null
+          ? {
+              name: basename(relativePath),
+              mimeType: hostDownloadMimeType(relativePath),
+              environmentId,
+              resource: {
+                _tag: "draft-workspace-file",
+                cwd,
+                path: relativePath,
+                disposition: "attachment",
+              },
+            }
+          : undefined;
+  const mediaActions = useMediaActions(mediaSource ?? downloadSource);
   const videoSource: MediaVideoPreviewSource | null =
     environmentId !== null &&
     relativePath !== null &&
@@ -966,11 +1031,22 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
               id: action.id,
               title: action.title,
               icon:
-                action.id === "save" ? ("square.and.arrow.up" as const) : ("doc.on.doc" as const),
+                action.id === "save" ? ("tray.and.arrow.down" as const) : ("doc.on.doc" as const),
               inline: false,
+              disabled: action.disabled,
               onPress: action.run,
             }))
         : [
+            ...mediaActions.actions
+              .filter(({ id }) => id === "save")
+              .map((action) => ({
+                id: action.id,
+                title: action.title,
+                icon: "tray.and.arrow.down" as const,
+                inline: false as const,
+                disabled: action.disabled,
+                onPress: action.run,
+              })),
             {
               id: "copy-path",
               title: gt("Copy path"),
@@ -1138,6 +1214,7 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
   }
 
   const headerSubtitle = fileHeaderSubtitle(projectName, relativePath);
+  const saveFile = mediaActions.actions.find((action) => action.id === "save");
 
   return withInspector(
     <View className="flex-1 bg-sheet">
@@ -1148,6 +1225,14 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
         fileInspectorSupported={fileInspector.supported}
         onBack={handleBack}
         onReturnToThread={handleReturnToThread}
+        {...(saveFile
+          ? {
+              onDownload: saveFile.run,
+              downloadLabel: saveFile.title,
+              downloading: mediaActions.sharing,
+              downloadDisabled: saveFile.disabled === true && !mediaActions.sharing,
+            }
+          : {})}
         actions={fileMenuActions}
       />
       <ScreenContent>

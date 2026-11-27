@@ -27,34 +27,47 @@ type PreviewProps = {
   readonly onOpen: () => void;
   readonly onPlaybackStart?: () => void;
   readonly onLongPress?: () => void;
+  readonly onDownload?: () => void;
 };
 
 function FileCardHeader(props: PreviewProps) {
   const gt = useGT();
   const messages = useMessages();
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={gt("Open {name}", { name: props.source.name })}
-      onPress={props.onOpen}
-      onLongPress={props.onLongPress}
-      className="h-[72px] flex-row items-center gap-3 p-3 active:bg-subtle"
-    >
-      <View className="h-12 w-10 shrink-0 items-center justify-center rounded-lg bg-subtle">
-        <PierreEntryIcon path={props.source.name ?? "file"} kind="file" size={26} />
-      </View>
-      <View className="min-w-0 flex-1 gap-1">
-        <Text className="text-sm font-t3-medium text-foreground" numberOfLines={1}>
-          {props.source.name}
-        </Text>
-        <Text className="text-xs text-foreground-muted" numberOfLines={1}>
-          {props.sizeBytes !== undefined
-            ? gt("Audio · {size}", { size: formatAttachmentSize(props.sizeBytes, messages) })
-            : gt("Audio")}
-        </Text>
-      </View>
-      <SymbolView name="chevron.right" size={12} tintColorClassName="accent-foreground-muted" />
-    </Pressable>
+    <View className="h-[72px] flex-row items-center">
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={gt("Open {name}", { name: props.source.name })}
+        onPress={props.onOpen}
+        onLongPress={props.onLongPress}
+        className="h-full min-w-0 flex-1 flex-row items-center gap-3 p-3 active:bg-subtle"
+      >
+        <View className="h-12 w-10 shrink-0 items-center justify-center rounded-lg bg-subtle">
+          <PierreEntryIcon path={props.source.name ?? "file"} kind="file" size={26} />
+        </View>
+        <View className="min-w-0 flex-1 gap-1">
+          <Text className="text-sm font-t3-medium text-foreground" numberOfLines={1}>
+            {props.source.name}
+          </Text>
+          <Text className="text-xs text-foreground-muted" numberOfLines={1}>
+            {props.sizeBytes !== undefined
+              ? gt("Audio · {size}", { size: formatAttachmentSize(props.sizeBytes, messages) })
+              : gt("Audio")}
+          </Text>
+        </View>
+        <SymbolView name="chevron.right" size={12} tintColorClassName="accent-foreground-muted" />
+      </Pressable>
+      {props.onDownload ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={gt("Download {name}", { name: props.source.name })}
+          onPress={props.onDownload}
+          className="mr-1 min-h-11 w-11 items-center justify-center rounded-lg active:bg-subtle"
+        >
+          <SymbolView name="arrow.down" size={16} tintColorClassName="accent-foreground-muted" />
+        </Pressable>
+      ) : null}
+    </View>
   );
 }
 

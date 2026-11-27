@@ -49,23 +49,31 @@ export function resolveFileChipTarget(
   };
 }
 
-function fileChipMetadata(target: FileChipTarget) {
+function fileChipFile(target: FileChipTarget) {
   const path = target.fullPath ?? target.relativePath;
   if (!path) return null;
   const name = fileBasename(path);
   const dot = name.lastIndexOf(".");
-  const mimeType = dot < 0 ? null : hostPreviewMimeTypeFromExtension(name.slice(dot));
-  return mimeType ? { path, name, mimeType } : null;
+  // An attachment disposition serves every file. Preview types keep their own media type.
+  const mimeType =
+    (dot < 0 ? null : hostPreviewMimeTypeFromExtension(name.slice(dot))) ??
+    "application/octet-stream";
+  return { path, name, mimeType };
 }
 
 /** Use literal resolved paths so encoded filename characters are not decoded twice. */
 export function fileChipShareSource(target: FileChipTarget, threadId: ThreadId) {
-  const metadata = fileChipMetadata(target);
-  return metadata
+  const file = fileChipFile(target);
+  return file
     ? {
-        name: metadata.name,
-        mimeType: metadata.mimeType,
-        resource: { _tag: "media-file" as const, threadId, path: metadata.path },
+        name: file.name,
+        mimeType: file.mimeType,
+        resource: {
+          _tag: "media-file" as const,
+          threadId,
+          path: file.path,
+          disposition: "attachment" as const,
+        },
       }
     : null;
 }
@@ -82,14 +90,7 @@ export function fileChipMenu(
         ? [{ id: "copy-relative-path", title: resolve(msg("Copy relative path")) }]
         : []),
       { id: "open-file", title: resolve(msg("Open in file viewer")) },
-      ...(fileChipMetadata(target)
-        ? [
-            {
-              id: "save",
-              title: resolve(msg("Save or share")),
-            },
-          ]
-        : []),
+      { id: "save", title: resolve(msg("Save or share")) },
     ],
   };
 }
