@@ -36,7 +36,24 @@ import {
   teamsChannelSourceKey,
 } from "./teams/groupChats.ts";
 import { makeGroupChatTitleResolver } from "./teams/groupChatTitles.ts";
-import { readGatewayConfig, readPrivateCredential } from "./teams/gatewayConfig.ts";
+import {
+  GRAPH_NOTIFICATIONS_PATH,
+  graphNotificationUrl,
+  readGatewayConfig,
+  readPrivateCredential,
+} from "./teams/gatewayConfig.ts";
+import {
+  GraphChatSubscriptions,
+  makeGraphClient,
+  pinnedGroupChatIds,
+} from "./teams/graphChatSubscriptions.ts";
+import {
+  KeyedSerialQueue,
+  graphChatMessageToActivity,
+  graphNotificationRoute,
+  type GraphChatMessage,
+  type GraphNotificationBatch,
+} from "./teams/graphNotifications.ts";
 import { ingestTeamsGroupChat, teamsChannelPoster } from "./features/TeamsGroupChatObserver.ts";
 import { mentionsTeamsRecipient, registerTeamsMessageEvents } from "./teams/messageEvents.ts";
 import { TeamsGatewayDispatcher } from "./teams/gatewayDispatcher.ts";
@@ -45,7 +62,11 @@ import {
   type TeamsActivityAttachment,
   type TeamsTurnImageLoad,
 } from "./teams/inboundImages.ts";
-import { LoopbackTeamsAdapter, RedactedTeamsLogger } from "./teams/gatewayHttp.ts";
+import {
+  LoopbackTeamsAdapter,
+  RedactedTeamsLogger,
+  type LoopbackRoute,
+} from "./teams/gatewayHttp.ts";
 import {
   TeamsGatewayPolicy,
   type GatewayActivity,
@@ -153,6 +174,47 @@ const program = Effect.gen(function* () {
   let running = true;
   const dispatcher = new TeamsGatewayDispatcher(policy);
   const teamsTokenCache = new Map<string, { token: string; expiresAt: number }>();
+  const log = (level: "info" | "warning" | "error", message: string, fields = {}) =>
+    Effect.runSyncWith(gatewayContext)(
+      level === "info"
+        ? Effect.logInfo(message, fields)
+        : level === "warning"
+          ? Effect.logWarning(message, fields)
+          : Effect.logError(message, fields),
+    );
+  // Teams bot push misses chat messages; Graph change notifications deliver them as well.
+  const notificationUrl = graphNotificationUrl(initial);
+  const subscriptions =
+    notificationUrl === null
+      ? null
+      : new GraphChatSubscriptions({
+          graph: makeGraphClient({
+            tenantId: initial.identity.homeTenantId,
+            clientId: initial.identity.entraClientId,
+            clientSecret: () => readPrivateCredential(secretPath),
+            tokenCache: teamsTokenCache,
+          }),
+          stateDir,
+          notificationUrl,
+          chatIds: pinnedGroupChatIds(initial),
+          log,
+        });
+  // Assigned below once the ingest path exists; Graph only calls it after app.start.
+  let onGraphNotifications: (batch: GraphNotificationBatch) => Promise<void> = async () => {};
+  const extraRoutes = new Map<string, LoopbackRoute>(
+    subscriptions === null
+      ? []
+      : [
+          [
+            GRAPH_NOTIFICATIONS_PATH,
+            graphNotificationRoute({
+              clientState: subscriptions.clientState,
+              onNotifications: (batch) => onGraphNotifications(batch),
+              onError: (reason) => log("error", "Graph notification processing failed", { reason }),
+            }),
+          ],
+        ],
+  );
   const app = new App({
     clientId: initial.identity.entraClientId,
     clientSecret: readPrivateCredential(secretPath),
@@ -161,7 +223,7 @@ const program = Effect.gen(function* () {
     skipAuth: false,
     activity: { mentions: { stripText: true } },
     logger: new RedactedTeamsLogger(),
-    httpServerAdapter: new LoopbackTeamsAdapter(),
+    httpServerAdapter: new LoopbackTeamsAdapter(extraRoutes),
   });
   yield* Effect.addFinalizer(() =>
     Effect.promise(() => {
@@ -295,6 +357,9 @@ const program = Effect.gen(function* () {
   });
   // One "not watched" line per chat per process, so a busy unwatched chat can't flood the log.
   const reportedUnwatchedChats = new Set<string>();
+  // One chat's messages ingest one at a time, whichever path delivered them.
+  const groupChatQueue = new KeyedSerialQueue();
+  let latestApi: Parameters<typeof teamsChannelPoster>[0] | undefined;
   const observeGroupChat = async (
     incoming: GatewayActivity & {
       readonly replyToId?: string;
@@ -302,6 +367,7 @@ const program = Effect.gen(function* () {
     },
     api: Parameters<typeof teamsChannelPoster>[0],
     event: "message" | "join",
+    source: "bot" | "graph" = "bot",
   ): Promise<boolean> => {
     if (
       !isTeamsGroupChat({
@@ -323,7 +389,7 @@ const program = Effect.gen(function* () {
       title.source === "graph" && title.title !== undefined
         ? { ...incoming, conversation: { ...incoming.conversation, name: title.title } }
         : incoming;
-    const decision = policy.acceptGroupChat(activity);
+    const decision = policy.acceptGroupChat(activity, source);
     if (decision.kind === "not-group") return false;
     const unwatched = decision.kind === "silent" && decision.reason === "unmapped";
     const chatId = activity.conversation.id.split(";messageid=")[0] ?? activity.conversation.id;
@@ -354,6 +420,19 @@ const program = Effect.gen(function* () {
     const workspace = workspaces.get(decision.workspaceId);
     if (workspace === undefined) return true;
     const handled = decision;
+    if (source === "bot") latestApi = api;
+    await groupChatQueue.run(chatId, () =>
+      ingestGroupChat(activity, api, event, handled, workspace),
+    );
+    return true;
+  };
+  const ingestGroupChat = async (
+    activity: Parameters<typeof observeGroupChat>[0],
+    api: Parameters<typeof teamsChannelPoster>[0],
+    event: "message" | "join",
+    handled: Extract<ReturnType<typeof policy.acceptGroupChat>, { kind: "handle" }>,
+    workspace: NonNullable<ReturnType<typeof workspaces.get>>,
+  ): Promise<void> => {
     let images: TeamsTurnImageLoad = { uploads: [], note: "", warnings: [] };
     if (event === "message") {
       try {
@@ -439,7 +518,58 @@ const program = Effect.gen(function* () {
           Effect.logError("Passive Teams group chat failed", { error: String(error) }),
         );
       });
-    return true;
+  };
+
+  // Graph work per chat runs in arrival order, so reads cannot overtake each other.
+  const graphQueue = new KeyedSerialQueue();
+  const ingestGraphMessage = async (chatId: string, message: GraphChatMessage) => {
+    const converted = graphChatMessageToActivity(message, {
+      chatId,
+      // Must equal the bot activity's tenant: it is part of the claim and the weekly thread key.
+      tenantId: (await subscriptions?.chatTenant(chatId)) ?? initial.identity.homeTenantId,
+      botAppId: initial.identity.entraClientId,
+      serviceUrl: app.api.serviceUrl,
+    });
+    if (converted.kind === "skip") {
+      subscriptions?.recordSeen(chatId, message.createdDateTime ?? undefined);
+      return;
+    }
+    await observeGroupChat(converted.activity, latestApi ?? app.api, "message", "graph");
+    subscriptions?.recordSeen(chatId, message.createdDateTime ?? undefined);
+  };
+  const catchUpChat = (chatId: string) =>
+    graphQueue.run(chatId, async () => {
+      const missed = await subscriptions?.missedMessages(chatId);
+      if (missed === undefined || missed === null) return;
+      if (missed.length > 0)
+        log("info", "Graph catch-up", { chat: chatId.slice(0, 24), messages: missed.length });
+      for (const message of missed) await ingestGraphMessage(chatId, message);
+    });
+  onGraphNotifications = async (batch) => {
+    if (subscriptions === null || !running) return;
+    const changes = batch.changes
+      .filter((change) => subscriptions.isWatched(change.chatId))
+      .toSorted((left, right) => Number(left.messageId) - Number(right.messageId));
+    const reads = changes.map((change) =>
+      graphQueue.run(change.chatId, async () => {
+        const message = await subscriptions.getMessage(change.chatId, change.messageId);
+        if (message !== null) await ingestGraphMessage(change.chatId, message);
+      }),
+    );
+    for (const event of batch.lifecycle) {
+      const chatId = subscriptions.chatForSubscription(event.subscriptionId);
+      if (chatId === undefined) continue;
+      log("info", "Graph subscription lifecycle", {
+        chat: chatId.slice(0, 24),
+        event: event.event,
+      });
+      if (event.event === "reauthorizationRequired") {
+        if ((await subscriptions.renew(chatId)) === "created") await catchUpChat(chatId);
+      } else if (event.event === "subscriptionRemoved") {
+        if (await subscriptions.recreate(chatId)) await catchUpChat(chatId);
+      } else await catchUpChat(chatId);
+    }
+    await Promise.all(reads);
   };
 
   registerTeamsMessageEvents(app, async ({ activity, send, reply, api }, edited) => {
@@ -672,6 +802,26 @@ const program = Effect.gen(function* () {
     },
   }));
   yield* Effect.promise(() => app.start(Number(initial.ingress.dispatcherListen.split(":")[1])));
+  if (subscriptions !== null) {
+    const graph = subscriptions;
+    // Graph validates the callback while creating a subscription, so this runs after start.
+    const maintain = (catchUpAll: boolean) =>
+      Effect.tryPromise(async () => {
+        const created = await graph.reconcile();
+        const chats = catchUpAll ? pinnedGroupChatIds(initial) : created;
+        await Promise.all(chats.map((chatId) => catchUpChat(chatId)));
+      }).pipe(Effect.catchCause(() => Effect.logWarning("Graph subscription maintenance failed")));
+    yield* Effect.forkScoped(
+      maintain(true).pipe(
+        Effect.andThen(
+          maintain(false).pipe(
+            Effect.repeat(Schedule.spaced("1 minute")),
+            Effect.delay("1 minute"),
+          ),
+        ),
+      ),
+    );
+  }
   for (const reference of references.restore(initial, (lease) => policy.isActive(lease))) {
     const { lease } = reference;
     const workspace = active(lease);

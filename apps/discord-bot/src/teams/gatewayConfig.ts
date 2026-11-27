@@ -64,6 +64,8 @@ const GatewayConfig = Schema.Struct({
     }),
   ),
   bindings: Schema.Array(Binding),
+  // Top level on purpose: the policy rejects intake when identity or a workspace changes.
+  graphNotifications: Schema.optional(Schema.Struct({ publicBaseUrl: Schema.String })),
   messageIntake: Schema.Struct({
     ambient: Schema.Literal("context-only"),
     ambientActorPolicy: Schema.Literal("authorized-actors-only"),
@@ -117,6 +119,14 @@ const InputGatewayConfig = Schema.Union([GatewayConfig, InstalledGatewayConfig])
 export type TeamsGatewayConfig = typeof GatewayConfig.Type;
 export type TeamsGatewayBinding = typeof Binding.Type;
 export type TeamsGatewayWorkspace = typeof Workspace.Type;
+
+export const GRAPH_NOTIFICATIONS_PATH = "/api/graph/notifications";
+
+/** Graph change notification callback, or null when the feature is off. */
+export function graphNotificationUrl(config: TeamsGatewayConfig): string | null {
+  const base = config.graphNotifications?.publicBaseUrl;
+  return base === undefined ? null : base.replace(/\/+$/u, "") + GRAPH_NOTIFICATIONS_PATH;
+}
 export const isUuid = (value: string) =>
   /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu.test(value);
 
@@ -298,6 +308,24 @@ export function parseGatewayConfig(value: unknown): TeamsGatewayConfig {
     }
   } else if (groupChatRouting) {
     throw new Error("Group chat routing requires discord.tokenFile and discord.alertsChannelId");
+  }
+  if (config.graphNotifications !== undefined) {
+    let base: URL | null;
+    try {
+      base = new URL(config.graphNotifications.publicBaseUrl);
+    } catch {
+      base = null;
+    }
+    if (
+      base === null ||
+      base.protocol !== "https:" ||
+      base.username ||
+      base.password ||
+      base.search ||
+      base.hash
+    ) {
+      throw new Error("graphNotifications.publicBaseUrl must be an HTTPS URL without credentials");
+    }
   }
   return config;
 }
