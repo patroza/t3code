@@ -241,6 +241,44 @@ describe("antigravityUsageLimitsFork parser & VT emulator", () => {
     assert.strictEqual(parsed.windows[0]?.usedPercent, 25);
   });
 
+  it("parses GEMINI MODELS when Bubble Tea leaves autocomplete redraw artifacts on the header line (live T3 regression)", () => {
+    const capturedWithRedrawArtifact = [
+      "└ Models & Quota",
+      "",
+      "  Account: u@example.invalid",
+      "",
+      "GEMINI MODELSe · enter Select · tab Complete",
+      "  Models within this group: Gemini 4 Neon, Gemini 4 Carbon, Gemini 4 Argon, Gemini 4 Hydrogen, Orchestrator (Neon), Orch",
+      "",
+      "",
+      "  Weekly Limit Remaining",
+      "    [██████████████████████████████████░░░░░░░░░░░░░░░░] 67.83%",
+      "    Refreshes in 5d 18h 25m",
+      "",
+      "  Five Hour Limit Remaining",
+      "    [███████████████████████████████████████░░░░░░░░░░░] 77.55%",
+      "    Refreshes in 2h 39m",
+      "",
+      "",
+      "CLAUDE AND GPT MODELS",
+      "  Models within this group: Claude Opus 5.5, Claude Sonnet 5.5, GPT-OSS 120B",
+      "",
+      "  Weekly Limit Remaining",
+      "    [█████████████████████████████████░░░░░░░░░░░░░░░░░] 65.81%",
+      "    Refreshes in 4d 20h 15m",
+      "",
+      "  Five Hour Limit Remaining",
+      "    [██████████████████████████████████████████████████] 100.00%",
+      "    Quota available",
+    ].join("\n");
+    const parsed = parseAgyUsageScreen(capturedWithRedrawArtifact, { nowMs: FIXED_NOW_MS });
+    assert.strictEqual(parsed.ok, true);
+    assert.deepStrictEqual(
+      parsed.windows.map((w) => w.id),
+      ["weekly", "5h", "weekly_claude_gpt", "5h_claude_gpt"],
+    );
+  });
+
   it("enforces the 15-minute minimum refresh interval floor and allows upward overrides", () => {
     assert.strictEqual(resolveAntigravityLimitsRefreshMs({}), ANTIGRAVITY_LIMITS_MIN_REFRESH_MS);
     assert.strictEqual(
