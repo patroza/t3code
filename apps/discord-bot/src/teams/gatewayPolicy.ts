@@ -296,8 +296,10 @@ export class TeamsGatewayPolicy {
   /**
    * Group chats have no channel binding. Claim the activity once and name the
    * single workspace that should observe it. Never store the customer text.
+   * `graph` messages were read by the gateway itself with its app token, so they carry no
+   * Bot Framework envelope; they share the claim, so a message pushed both ways runs once.
    */
-  acceptGroupChat(activity: GatewayActivity): GroupChatIntake {
+  acceptGroupChat(activity: GatewayActivity, source: "bot" | "graph" = "bot"): GroupChatIntake {
     let config: TeamsGatewayConfig;
     try {
       config = this.config();
@@ -313,11 +315,12 @@ export class TeamsGatewayPolicy {
     ) {
       return { kind: "not-group" };
     }
-    const envelope = this.rejectedEnvelope(
-      activity,
-      config,
-      activity.type === "conversationUpdate",
-    );
+    const envelope =
+      source === "graph"
+        ? !activity.id || !activity.conversation.id
+          ? "invalid-envelope"
+          : null
+        : this.rejectedEnvelope(activity, config, activity.type === "conversationUpdate");
     if (envelope !== null) return { kind: "reject", reason: envelope };
     let routed: ReturnType<typeof routeGroupChat>;
     let targets: ReturnType<typeof groupChatWorkspaceTarget>[];
