@@ -161,10 +161,15 @@ describe("terminatePosixOwnedProcessTree", () => {
       expect(AcpSessionRuntime.resolveLinuxCgroupTargetCommand("grok", scratch, { PATH: "" })).toBe(
         bareGrok,
       );
-      // Undefined PATH searches /usr/bin:/bin; the bareGrok fixture lives only in cwd.
+      // Undefined PATH searches /usr/bin:/bin. An installed grok is that binary, not the cwd fixture.
+      const defaultPathGrok = AcpSessionRuntime.resolveLinuxCgroupTargetCommand("grok", scratch, {
+        PATH: undefined,
+      });
       expect(
-        AcpSessionRuntime.resolveLinuxCgroupTargetCommand("grok", scratch, { PATH: undefined }),
-      ).toBeUndefined();
+        defaultPathGrok === undefined ||
+          defaultPathGrok === "/usr/bin/grok" ||
+          defaultPathGrok === "/bin/grok",
+      ).toBe(true);
       expect(
         AcpSessionRuntime.resolveLinuxCgroupTargetCommand("sh", scratch, { PATH: undefined }),
       ).toBeDefined();
