@@ -542,3 +542,14 @@ export const trackers = Effect.gen(function* () {
   };
   return [api];
 });
+
+/**
+ * A server with a fork Jira site keeps this tracker (app-account fallback, site-host thread links)
+ * in place of upstream's credential-only Jira tracker; one kind may register only once.
+ */
+export const withStandalone = <T extends { readonly kind: string }>(standalone: ReadonlyArray<T>) =>
+  Effect.map(trackers, (fork) =>
+    fork.length === 0
+      ? standalone
+      : [...standalone.filter((tracker) => tracker.kind !== KIND), ...fork],
+  );

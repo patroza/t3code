@@ -2,7 +2,6 @@ import { useAtomValue } from "@effect/atom-react";
 import * as Dialog from "../../components/ui/Dialog";
 import type { ThreadRowProviderInstance } from "./thread-provider-instance";
 import {
-  THREAD_LIST_V2_MONO_FONT as MONO_FONT,
   THREAD_LIST_V2_ROW_CONTENT_CLASS_NAME,
   THREAD_LIST_V2_ROW_DIVIDERS,
   selectedThreadRowColors,
@@ -79,7 +78,7 @@ import { canTurnThreadIntoProject, turnThreadIntoProject } from "./turnThreadInt
 import { threadCanArchive } from "../home/threadArchive";
 import { useCanShareWithGuest } from "./useCanShareWithGuest";
 import {
-  THREAD_LIST_V2_SETTLED_PAGE_COUNT,
+  threadListV2ShowMoreAccessibilityLabel,
   resolveThreadListV2SnoozeGateExpiryMs,
   resolveThreadListV2SnoozeMenuSelection,
   resolveThreadListV2SnoozePresets,
@@ -398,6 +397,7 @@ export const ThreadListV2ShowMoreRow = memo(function ThreadListV2ShowMoreRow(pro
   readonly onPress: () => void;
 }) {
   const gt = useGT();
+  const messages = useMessages();
   const label =
     props.state === "loading"
       ? gt("Loading", { $context: "older threads are loading" })
@@ -412,12 +412,7 @@ export const ThreadListV2ShowMoreRow = memo(function ThreadListV2ShowMoreRow(pro
       accessibilityRole="button"
       accessibilityLabel={
         props.state === undefined
-          ? gt(
-              "{count, plural, one {Show {count} more settled threads} other {Show {count} more settled threads}}",
-              {
-                count: Math.min(props.hiddenCount, THREAD_LIST_V2_SETTLED_PAGE_COUNT),
-              },
-            )
+          ? threadListV2ShowMoreAccessibilityLabel(props.hiddenCount, messages)
           : label
       }
       disabled={props.state === "loading"}
@@ -644,12 +639,11 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
             {branch ? (
               <Text
                 className={cn(
-                  "text-xs",
+                  "font-mono text-xs",
                   selected
                     ? selectedThreadRowColors.mutedForegroundClassName
                     : rowAppearance.mutedForegroundClassName,
                 )}
-                style={{ fontFamily: MONO_FONT }}
               >
                 {branch}
               </Text>
@@ -1594,8 +1588,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             />
             <Text
               accessibilityLabel={pr.accessibilityLabel}
-              className={cn("text-xs", pr.textClassName)}
-              style={{ fontFamily: MONO_FONT }}
+              className={cn("font-mono text-xs", pr.textClassName)}
             >
               {pr.label}
             </Text>
@@ -1756,14 +1749,13 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           {props.hasQueuedMessages ? <QueuedMessageIcon selected={selected} /> : null}
           <Text
             className={cn(
-              "text-sm tabular-nums",
+              "font-mono text-sm tabular-nums",
               selected
                 ? selectedThreadRowColors.mutedForegroundClassName
                 : snoozedRow
                   ? rowAppearance.mutedForegroundClassName
                   : rowAppearance.tertiaryForegroundClassName,
             )}
-            style={{ fontFamily: MONO_FONT }}
           >
             {!pendingSync && snoozedRow && snoozeWakeLabelText !== undefined
               ? snoozeWakeLabelText
