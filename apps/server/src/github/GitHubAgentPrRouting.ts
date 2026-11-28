@@ -14,11 +14,11 @@ export const PullRequestActorResultFields = {
   }),
 };
 
-export const PULL_REQUEST_REVIEW_ROUTING_NOTE =
-  " On repos with a reviewer App, routes through the reviewer App to review and approve; the author enables auto-merge or merges via pull_request_merge.";
+export const PULL_REQUEST_REVIEW_DESCRIPTION =
+  "Review a PR (approve, request changes, comment), optional line comments (reviewer App). Approving needs expectedHeadSha (from pull_request_read); refuses if head moved.";
 
-export const PULL_REQUEST_MERGE_ROUTING_NOTE =
-  " Always uses the opener App (author enables auto-merge or merges; reviewer reviews and approves via pull_request_review).";
+export const PULL_REQUEST_MERGE_DESCRIPTION =
+  "Merge or enable auto-merge (opener App). Refuses if head moved from expectedHeadSha (pull_request_read).";
 
 export interface GitHubRepositoryTarget {
   readonly host: string;
