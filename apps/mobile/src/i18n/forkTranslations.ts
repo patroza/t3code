@@ -10,6 +10,7 @@ const FORK_CATALOGS: Readonly<Record<string, () => unknown>> = {
   ko: () => require("./fork-translations/ko.json"),
   ru: () => require("./fork-translations/ru.json"),
   sv: () => require("./fork-translations/sv.json"),
+  pl: () => require("./fork-translations/pl.json"),
 };
 
 type LoadTranslations = (locale: string) => Promise<unknown>;
