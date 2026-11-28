@@ -509,6 +509,7 @@ export interface LimitPoolWindow {
   readonly remainingPercent: number;
   readonly usedPercent: number;
   readonly pace: LimitPace | null;
+  readonly paceRemainingPercent: number | null;
   readonly resets: ReadonlyArray<{
     readonly member: LimitPoolMember;
     readonly at: number;
@@ -748,6 +749,7 @@ function poolWindows(accounts: readonly LimitAccount[], now: number): readonly L
       usedPercent: Math.round(usedPercent),
       remainingPercent: Math.round(100 - usedPercent),
       pace: meanElapsed === null ? null : paceOfShares(timedUsed, meanElapsed),
+      paceRemainingPercent: meanElapsed === null ? null : Math.round((1 - meanElapsed) * 100),
       resets,
     };
   });
