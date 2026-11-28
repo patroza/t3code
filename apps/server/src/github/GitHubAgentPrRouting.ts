@@ -9,9 +9,16 @@ import { sourceControlDefinitions } from "../sourceControl/sourceControlDefiniti
 
 export const PullRequestActorResultFields = {
   actor: Schema.optional(Schema.String).annotate({
-    description: "GitHub account that acted (App bot login or personal login), when known.",
+    description:
+      "GitHub account that acted (opener or reviewer App bot login, or personal login), when known.",
   }),
 };
+
+export const PULL_REQUEST_REVIEW_DESCRIPTION =
+  "Review a PR (approve, request changes, comment), optional line comments (reviewer App). Approving needs expectedHeadSha (from pull_request_read); refuses if head moved.";
+
+export const PULL_REQUEST_MERGE_DESCRIPTION =
+  "Merge or enable auto-merge (opener App). Refuses if head moved from expectedHeadSha (pull_request_read).";
 
 export interface GitHubRepositoryTarget {
   readonly host: string;
@@ -81,15 +88,17 @@ export interface GitHubAgentWriteOutcome<A> {
 }
 
 /**
- * Route a GitHub write tool call through the configured App installation credential.
+ * Route a GitHub write tool call through the configured App installation credential
+ * (using the entry's `reviewer` App when `role === "reviewer"` and configured).
  * Fails closed on configuration, key, or mint errors for mapped/installed repos; never
- * silently falls back to the personal credential.
+ * silently falls back to the opener App or personal credential.
  */
 export const withGitHubAgentWrite = Effect.fn("GitHubAgentPrRouting.withGitHubAgentWrite")(
   function* <A, E, R, E2>(
     target: GitHubRepositoryTarget | undefined,
     options: {
       readonly cwd?: string | undefined;
+      readonly role?: GitHubAppInstallationAuth.GitHubAppRole | undefined;
       readonly mapAuthError: (error: GitHubAppInstallationAuth.GitHubAppInstallationError) => E2;
     },
     effect: Effect.Effect<A, E, R>,
@@ -102,7 +111,12 @@ export const withGitHubAgentWrite = Effect.fn("GitHubAgentPrRouting.withGitHubAg
       return { value: yield* effect, actor: undefined, decision: undefined };
     }
     const decision = yield* auth.value
-      .resolve({ host: target.host, repository: target.repository, access: "write" })
+      .resolve({
+        host: target.host,
+        repository: target.repository,
+        access: "write",
+        ...(options.role === undefined ? {} : { role: options.role }),
+      })
       .pipe(Effect.mapError(options.mapAuthError));
     if (decision.mode === "app") {
       const value = yield* effect.pipe(

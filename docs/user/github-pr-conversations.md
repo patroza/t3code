@@ -173,6 +173,34 @@ Temporary GitHub/T3 failures are logged and answered with a stable failure respo
 
 The route returns 404 unless all four required variables are configured.
 
+### Agent MCP PR tool routing (`github-apps.json`)
+
+Agent MCP PR tools (`pull_request_create`, `pull_request_update`, `pull_request_respond`, `pull_request_review`, `pull_request_merge`, `pull_request_read`, `pull_request_list`, `ci_logs`, `ci_rerun`) can route per owner or per repository through `~/.config/t3/github-apps.json` (or `T3_GITHUB_APPS_FILE`):
+
+```json
+{
+  "apps": [
+    {
+      "name": "project-opener",
+      "appId": 123456,
+      "privateKeyPath": "~/.config/t3/opener.pem",
+      "owners": ["my-org"],
+      "repos": ["other-owner/specific-repo"],
+      "reviewer": {
+        "name": "project-reviewer",
+        "appId": 654321,
+        "privateKeyPath": "~/.config/t3/reviewer.pem"
+      }
+    }
+  ]
+}
+```
+
+- Entries match by `repos` first, then `owners` (case-insensitive). Unmapped repositories use the personal login.
+- When an entry defines `reviewer`, `pull_request_review` (all verdicts: `approve`, `request-changes`, `comment`, including inline line comments and the diff/permission/head checks performed during review) authenticates as the `reviewer` App so it can review and approve PRs opened by the opener App. The result `actor` reports the reviewer bot login.
+- All other MCP PR tools—including `pull_request_merge` (with or without `auto`, and `stack`), `pull_request_create`, `pull_request_update`, `pull_request_respond`, `ci_rerun`, and standalone reads—always use the opener App (the author enables auto-merge or merges).
+- Writes fail closed: if a configured `reviewer` App's key, installation lookup, or token mint fails, `pull_request_review` returns an error instead of falling back to the opener App or personal login. Entries without `reviewer` keep using the opener App.
+
 ## Failure semantics
 
 | Condition                                      | Result                                                 |

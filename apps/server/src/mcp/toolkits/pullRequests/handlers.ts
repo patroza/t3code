@@ -1392,7 +1392,7 @@ const make = Effect.gen(function* () {
         const { project, target, ref } = yield* locate(input);
         const { actor } = yield* GitHubAgentPrRouting.withGitHubAgentWrite(
           target,
-          { cwd: project.workspaceRoot, mapAuthError: forgeFailure },
+          { cwd: project.workspaceRoot, role: "reviewer", mapAuthError: forgeFailure },
           Effect.gen(function* () {
             const comments = yield* reviewComments(ref, input.comments ?? []);
             yield* pullRequests
