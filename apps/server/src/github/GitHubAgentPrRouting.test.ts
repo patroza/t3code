@@ -487,7 +487,7 @@ describe("GitHubAgentPrRouting", () => {
   );
 
   it.effect(
-    "routes pull_request_review (all verdicts + inline diff/comments) and pull_request_merge (normal, auto, stack) to reviewer App while create/update/respond/ci_rerun stay on opener",
+    "routes pull_request_review and direct pull_request_merge to reviewer App while auto-merge and create/update/respond/ci_rerun stay on opener",
     () =>
       Effect.gen(function* () {
         const openerKey = NodeCrypto.generateKeyPairSync("rsa", {
@@ -730,7 +730,7 @@ describe("GitHubAgentPrRouting", () => {
           expectedHeadSha: "deadbeef1234",
           auto: true,
         });
-        expect(autoMergeRes.actor).toBe("omegent-reviewer[bot]");
+        expect(autoMergeRes.actor).toBe("omegent-app[bot]");
 
         const stackMergeRes = yield* harness.call("pull_request_merge", {
           number: 42,
@@ -750,8 +750,8 @@ describe("GitHubAgentPrRouting", () => {
           { op: "review:comment", token: "tok-reviewer" },
           { op: "action:merge", token: "tok-reviewer" },
           { op: "summary", token: "tok-reviewer" },
-          { op: "action:enable-auto-merge", token: "tok-reviewer" },
-          { op: "summary", token: "tok-reviewer" },
+          { op: "action:enable-auto-merge", token: "tok-opener" },
+          { op: "summary", token: "tok-opener" },
           { op: "stack", token: "tok-reviewer" },
           { op: "action:merge", token: "tok-reviewer" },
           { op: "summary", token: "tok-reviewer" },
@@ -760,12 +760,12 @@ describe("GitHubAgentPrRouting", () => {
   );
 
   it.effect(
-    "fails pull_request_review and pull_request_merge closed when reviewer App resolution fails without calling submitReview or runAction",
+    "fails pull_request_review and direct pull_request_merge closed when reviewer App fails, while auto-merge uses opener App and fails closed if opener fails",
     () =>
       Effect.gen(function* () {
         let submitted = false;
-        let ranAction = false;
-        const harness = yield* makeToolkitHarness({
+        const ranActions: Array<string> = [];
+        const reviewerFailingHarness = yield* makeToolkitHarness({
           authLayer: makeFakeAuthService({
             resolve: ({ role }) =>
               role === "reviewer"
@@ -784,15 +784,30 @@ describe("GitHubAgentPrRouting", () => {
               Effect.sync(() => {
                 submitted = true;
               }),
-            runAction: () =>
+            runAction: (input) =>
               Effect.sync(() => {
-                ranAction = true;
+                ranActions.push(input.action);
                 return undefined;
+              }),
+            summary: () =>
+              Effect.succeed({
+                provider: SourceControlProviderKind.make("github"),
+                projectId: PROJECT_ID,
+                repository: "macs-holding/shop",
+                number: 42,
+                title: "Shop PR",
+                url: "https://github.com/macs-holding/shop/pull/42",
+                baseBranch: "main",
+                headBranch: "feat/shop",
+                state: "open",
+                isDraft: false,
+                headSha: "deadbeef1234",
+                updatedAt: "2026-08-27T00:00:00.000Z",
               }),
           },
         });
 
-        const reviewError = yield* harness
+        const reviewError = yield* reviewerFailingHarness
           .call("pull_request_review", {
             number: 42,
             verdict: "approve",
@@ -804,7 +819,7 @@ describe("GitHubAgentPrRouting", () => {
         expect(reviewError.message).toContain("reviewer omegent-reviewer");
         expect(submitted).toBe(false);
 
-        const mergeError = yield* harness
+        const mergeError = yield* reviewerFailingHarness
           .call("pull_request_merge", {
             number: 42,
             expectedHeadSha: "deadbeef1234",
@@ -812,7 +827,50 @@ describe("GitHubAgentPrRouting", () => {
           .pipe(Effect.flip);
 
         expect(mergeError.message).toContain("reviewer omegent-reviewer");
-        expect(ranAction).toBe(false);
+        expect(ranActions).toEqual([]);
+
+        // auto: true uses opener App, so it succeeds even when reviewer fails
+        const autoMergeRes = yield* reviewerFailingHarness.call("pull_request_merge", {
+          number: 42,
+          expectedHeadSha: "deadbeef1234",
+          auto: true,
+        });
+        expect(autoMergeRes.actor).toBe("omegent-app[bot]");
+        expect(ranActions).toEqual(["enable-auto-merge"]);
+
+        // auto: true fails closed when opener App fails
+        let openerRanAction = false;
+        const openerFailingHarness = yield* makeToolkitHarness({
+          authLayer: makeFakeAuthService({
+            resolve: () =>
+              Effect.fail(
+                new GitHubAppInstallationAuth.GitHubAppInstallationError({
+                  operation: "mint-installation-token",
+                  status: 500,
+                  detail:
+                    "Failed to mint GitHub App installation token for omegent-app (App 4331997) on macs-holding/shop (HTTP 500).",
+                }),
+              ),
+          }),
+          pullRequests: {
+            runAction: () =>
+              Effect.sync(() => {
+                openerRanAction = true;
+                return undefined;
+              }),
+          },
+        });
+
+        const autoMergeErr = yield* openerFailingHarness
+          .call("pull_request_merge", {
+            number: 42,
+            expectedHeadSha: "deadbeef1234",
+            auto: true,
+          })
+          .pipe(Effect.flip);
+
+        expect(autoMergeErr.message).toContain("omegent-app");
+        expect(openerRanAction).toBe(false);
       }),
   );
 });

@@ -1061,7 +1061,7 @@ describe("GitHubAppInstallationAuth routing, caching, and failures", () => {
   );
 
   it.effect(
-    "falls back to unscoped permissions when reviewer App lacks an optional permission on 422",
+    "downgrades reviewer token mint from contents:write to contents:read on 422, and falls back to unscoped permissions if contents:read is also rejected",
     () =>
       Effect.gen(function* () {
         const files = {
@@ -1087,14 +1087,16 @@ describe("GitHubAppInstallationAuth routing, caching, and failures", () => {
           env: { T3_GITHUB_APPS_FILE: "/etc/github-apps.json" },
           fileSystem: fakeFileSystem(files),
         });
-        const mintBodies: Array<unknown> = [];
-        const http = makeFakeHttp((req) => {
+
+        // Case 1: reviewer App has contents:read + pull_requests:write (no contents:write)
+        const readOnlyMintBodies: Array<unknown> = [];
+        const readOnlyHttp = makeFakeHttp((req) => {
           if (req.url.endsWith("/repos/macs-holding/shop/installation")) {
             return { status: 200, body: { id: 901 } };
           }
           if (req.url.endsWith("/app/installations/901/access_tokens")) {
-            mintBodies.push(req.body);
-            if (mintBodies.length === 1) {
+            readOnlyMintBodies.push(req.body);
+            if (readOnlyMintBodies.length === 1) {
               return {
                 status: 422,
                 body: {
@@ -1104,7 +1106,7 @@ describe("GitHubAppInstallationAuth routing, caching, and failures", () => {
             }
             return {
               status: 201,
-              body: { token: "reviewer-fallback-tok", expires_at: "2099-01-01T01:00:00Z" },
+              body: { token: "reviewer-read-contents-tok", expires_at: "2099-01-01T01:00:00Z" },
             };
           }
           if (req.url.endsWith("/app")) {
@@ -1113,23 +1115,77 @@ describe("GitHubAppInstallationAuth routing, caching, and failures", () => {
           return { status: 404, body: {} };
         });
 
-        const layer = provideAuth(config, files, http.layer);
-        const decision = yield* Effect.flatMap(GitHubAppInstallationAuth, (auth) =>
+        const readOnlyDecision = yield* Effect.flatMap(GitHubAppInstallationAuth, (auth) =>
           auth.resolve({
             host: "github.com",
             repository: "macs-holding/shop",
             access: "write",
             role: "reviewer",
           }),
-        ).pipe(Effect.provide(layer));
+        ).pipe(Effect.provide(provideAuth(config, files, readOnlyHttp.layer)));
 
-        expect(decision.mode).toBe("app");
-        if (decision.mode === "app") {
-          expect(Redacted.value(decision.token)).toBe("reviewer-fallback-tok");
+        expect(readOnlyDecision.mode).toBe("app");
+        if (readOnlyDecision.mode === "app") {
+          expect(Redacted.value(readOnlyDecision.token)).toBe("reviewer-read-contents-tok");
         }
-        expect(mintBodies).toEqual([
+        expect(readOnlyMintBodies).toEqual([
           {
             permissions: { contents: "write", pull_requests: "write", metadata: "read" },
+            repositories: ["shop"],
+          },
+          {
+            permissions: { contents: "read", pull_requests: "write", metadata: "read" },
+            repositories: ["shop"],
+          },
+        ]);
+
+        // Case 2: reviewer App lacks even contents:read -> falls back to unscoped repositories
+        const minimalMintBodies: Array<unknown> = [];
+        const minimalHttp = makeFakeHttp((req) => {
+          if (req.url.endsWith("/repos/macs-holding/shop/installation")) {
+            return { status: 200, body: { id: 901 } };
+          }
+          if (req.url.endsWith("/app/installations/901/access_tokens")) {
+            minimalMintBodies.push(req.body);
+            if (minimalMintBodies.length <= 2) {
+              return {
+                status: 422,
+                body: {
+                  message: "The permissions requested are not granted to this installation.",
+                },
+              };
+            }
+            return {
+              status: 201,
+              body: { token: "reviewer-unscoped-tok", expires_at: "2099-01-01T01:00:00Z" },
+            };
+          }
+          if (req.url.endsWith("/app")) {
+            return { status: 200, body: { slug: "omegent-reviewer" } };
+          }
+          return { status: 404, body: {} };
+        });
+
+        const minimalDecision = yield* Effect.flatMap(GitHubAppInstallationAuth, (auth) =>
+          auth.resolve({
+            host: "github.com",
+            repository: "macs-holding/shop",
+            access: "write",
+            role: "reviewer",
+          }),
+        ).pipe(Effect.provide(provideAuth(config, files, minimalHttp.layer)));
+
+        expect(minimalDecision.mode).toBe("app");
+        if (minimalDecision.mode === "app") {
+          expect(Redacted.value(minimalDecision.token)).toBe("reviewer-unscoped-tok");
+        }
+        expect(minimalMintBodies).toEqual([
+          {
+            permissions: { contents: "write", pull_requests: "write", metadata: "read" },
+            repositories: ["shop"],
+          },
+          {
+            permissions: { contents: "read", pull_requests: "write", metadata: "read" },
             repositories: ["shop"],
           },
           { repositories: ["shop"] },
