@@ -26,7 +26,7 @@ export const appAuthLayer = GitHubAppInstallationAuth.layer.pipe(
       GitHubAppInstallationAuth.GitHubAppInstallationAuthConfig,
       Effect.map(
         GitHubAppConfig.GitHubAppConfig,
-        (config) => config.agentAuth ?? { mode: "disabled" as const, agentPolicy: false },
+        (config) => config.agentAuth ?? { mode: "disabled" as const },
       ),
     ),
   ),
