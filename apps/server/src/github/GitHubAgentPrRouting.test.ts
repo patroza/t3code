@@ -487,7 +487,7 @@ describe("GitHubAgentPrRouting", () => {
   );
 
   it.effect(
-    "routes pull_request_review and direct pull_request_merge to reviewer App while auto-merge and create/update/respond/ci_rerun stay on opener",
+    "routes pull_request_review to reviewer App while all pull_request_merge variants and create/update/respond/ci_rerun stay on opener",
     () =>
       Effect.gen(function* () {
         const openerKey = NodeCrypto.generateKeyPairSync("rsa", {
@@ -723,7 +723,7 @@ describe("GitHubAgentPrRouting", () => {
           number: 42,
           expectedHeadSha: "deadbeef1234",
         });
-        expect(mergeRes.actor).toBe("omegent-reviewer[bot]");
+        expect(mergeRes.actor).toBe("omegent-app[bot]");
 
         const autoMergeRes = yield* harness.call("pull_request_merge", {
           number: 42,
@@ -737,7 +737,7 @@ describe("GitHubAgentPrRouting", () => {
           expectedHeadSha: "deadbeef1234",
           stack: true,
         });
-        expect(stackMergeRes.actor).toBe("omegent-reviewer[bot]");
+        expect(stackMergeRes.actor).toBe("omegent-app[bot]");
 
         expect(recordedTokens).toEqual([
           { op: "create", token: "tok-opener" },
@@ -748,19 +748,19 @@ describe("GitHubAgentPrRouting", () => {
           { op: "review:approve", token: "tok-reviewer" },
           { op: "review:request-changes", token: "tok-reviewer" },
           { op: "review:comment", token: "tok-reviewer" },
-          { op: "action:merge", token: "tok-reviewer" },
-          { op: "summary", token: "tok-reviewer" },
+          { op: "action:merge", token: "tok-opener" },
+          { op: "summary", token: "tok-opener" },
           { op: "action:enable-auto-merge", token: "tok-opener" },
           { op: "summary", token: "tok-opener" },
-          { op: "stack", token: "tok-reviewer" },
-          { op: "action:merge", token: "tok-reviewer" },
-          { op: "summary", token: "tok-reviewer" },
+          { op: "stack", token: "tok-opener" },
+          { op: "action:merge", token: "tok-opener" },
+          { op: "summary", token: "tok-opener" },
         ]);
       }),
   );
 
   it.effect(
-    "fails pull_request_review and direct pull_request_merge closed when reviewer App fails, while auto-merge uses opener App and fails closed if opener fails",
+    "fails pull_request_review closed when reviewer App fails, while all pull_request_merge calls use opener App and fail closed if opener fails",
     () =>
       Effect.gen(function* () {
         let submitted = false;
@@ -819,26 +819,22 @@ describe("GitHubAgentPrRouting", () => {
         expect(reviewError.message).toContain("reviewer omegent-reviewer");
         expect(submitted).toBe(false);
 
-        const mergeError = yield* reviewerFailingHarness
-          .call("pull_request_merge", {
-            number: 42,
-            expectedHeadSha: "deadbeef1234",
-          })
-          .pipe(Effect.flip);
+        // Both direct merge and auto-merge use opener App, so they succeed even when reviewer fails
+        const directMergeRes = yield* reviewerFailingHarness.call("pull_request_merge", {
+          number: 42,
+          expectedHeadSha: "deadbeef1234",
+        });
+        expect(directMergeRes.actor).toBe("omegent-app[bot]");
 
-        expect(mergeError.message).toContain("reviewer omegent-reviewer");
-        expect(ranActions).toEqual([]);
-
-        // auto: true uses opener App, so it succeeds even when reviewer fails
         const autoMergeRes = yield* reviewerFailingHarness.call("pull_request_merge", {
           number: 42,
           expectedHeadSha: "deadbeef1234",
           auto: true,
         });
         expect(autoMergeRes.actor).toBe("omegent-app[bot]");
-        expect(ranActions).toEqual(["enable-auto-merge"]);
+        expect(ranActions).toEqual(["merge", "enable-auto-merge"]);
 
-        // auto: true fails closed when opener App fails
+        // pull_request_merge fails closed when opener App fails
         let openerRanAction = false;
         const openerFailingHarness = yield* makeToolkitHarness({
           authLayer: makeFakeAuthService({
@@ -861,16 +857,252 @@ describe("GitHubAgentPrRouting", () => {
           },
         });
 
-        const autoMergeErr = yield* openerFailingHarness
+        const mergeErr = yield* openerFailingHarness
           .call("pull_request_merge", {
             number: 42,
             expectedHeadSha: "deadbeef1234",
-            auto: true,
           })
           .pipe(Effect.flip);
 
-        expect(autoMergeErr.message).toContain("omegent-app");
+        expect(mergeErr.message).toContain("omegent-app");
         expect(openerRanAction).toBe(false);
+      }),
+  );
+
+  it.effect(
+    "routes smart's 3-entry live list so review hits shop-reviewer on shop, omegent-reviewer on other macs-holding/aaaomega/patroza repos, scrapline-reviewer on scrapline-hq, and merge stays on opener everywhere",
+    () =>
+      Effect.gen(function* () {
+        const keyA = NodeCrypto.generateKeyPairSync("rsa", {
+          modulusLength: 2048,
+          privateKeyEncoding: { type: "pkcs8", format: "pem" },
+          publicKeyEncoding: { type: "spki", format: "pem" },
+        }).privateKey;
+        const keyB = NodeCrypto.generateKeyPairSync("rsa", {
+          modulusLength: 2048,
+          privateKeyEncoding: { type: "pkcs8", format: "pem" },
+          publicKeyEncoding: { type: "spki", format: "pem" },
+        }).privateKey;
+
+        const files: Readonly<Record<string, string>> = {
+          "/home/smart/.config/t3/github-app/private-key.pem": keyA,
+          "/home/smart/.config/t3/github-app-shop-reviewer/private-key.pem": keyB,
+          "/home/smart/.config/t3/github-app-omegent-reviewer/private-key.pem": keyB,
+          "/home/smart/.config/t3/github-app-scrapline/private-key.pem": keyA,
+          "/home/smart/.config/t3/github-app-scrapline-reviewer/private-key.pem": keyB,
+          "/home/smart/.config/t3/github-apps.json": JSON.stringify({
+            apps: [
+              {
+                name: "omegent-app",
+                appId: 4331997,
+                privateKeyPath: "~/.config/t3/github-app/private-key.pem",
+                owners: ["macs-holding", "aaaomega"],
+                repos: ["patroza/effect-ui-ssr-lazy-routes", "patroza/t3code"],
+                reviewer: {
+                  name: "omegent-reviewer",
+                  appId: 5966233,
+                  privateKeyPath: "~/.config/t3/github-app-omegent-reviewer/private-key.pem",
+                },
+              },
+              {
+                name: "omegent-app",
+                appId: 4331997,
+                privateKeyPath: "~/.config/t3/github-app/private-key.pem",
+                repos: ["macs-holding/shop"],
+                reviewer: {
+                  name: "shop-reviewer",
+                  appId: 5906950,
+                  privateKeyPath: "~/.config/t3/github-app-shop-reviewer/private-key.pem",
+                },
+              },
+              {
+                name: "scrapline-multica",
+                appId: 5677773,
+                privateKeyPath: "~/.config/t3/github-app-scrapline/private-key.pem",
+                owners: ["scrapline-hq"],
+                reviewer: {
+                  name: "scrapline-reviewer",
+                  appId: 5729514,
+                  privateKeyPath: "~/.config/t3/github-app-scrapline-reviewer/private-key.pem",
+                },
+              },
+            ],
+          }),
+        };
+        const fakeFs = FileSystem.makeNoop({
+          exists: (path) => Effect.succeed(Object.prototype.hasOwnProperty.call(files, path)),
+          readFileString: (path) =>
+            Object.prototype.hasOwnProperty.call(files, path)
+              ? Effect.succeed(files[path]!)
+              : Effect.fail({ _tag: "SystemError", message: `ENOENT: ${path}` } as never),
+        });
+        const config = yield* GitHubAppInstallationAuth.loadGitHubAppAgentAuthConfig({
+          env: { T3_GITHUB_APPS_FILE: "~/.config/t3/github-apps.json" },
+          homeDir: "/home/smart",
+          fileSystem: fakeFs,
+        });
+
+        const jwtIssuer = (authHeader: string | undefined): string | null => {
+          const parts = authHeader?.replace(/^Bearer\s+/iu, "").split(".");
+          if (!parts || parts.length !== 3) return null;
+          const payload = JSON.parse(Buffer.from(parts[1]!, "base64url").toString("utf8")) as {
+            iss?: string;
+          };
+          return payload.iss ?? null;
+        };
+
+        const httpLayer = Layer.succeed(
+          HttpClient.HttpClient,
+          HttpClient.make((request) =>
+            Effect.sync(() => {
+              const iss = jwtIssuer(request.headers.authorization) ?? "unknown";
+              const reply = (() => {
+                if (request.url.endsWith("/installation")) {
+                  return { status: 200, body: { id: Number(iss) } };
+                }
+                if (request.url.endsWith("/access_tokens")) {
+                  return {
+                    status: 201,
+                    body: { token: `tok-${iss}`, expires_at: "2099-01-01T01:00:00Z" },
+                  };
+                }
+                if (request.url.endsWith("/app")) {
+                  const slugs: Record<string, string> = {
+                    "4331997": "omegent-app",
+                    "5906950": "shop-reviewer",
+                    "5966233": "omegent-reviewer",
+                    "5677773": "scrapline-multica",
+                    "5729514": "scrapline-reviewer",
+                  };
+                  return { status: 200, body: { slug: slugs[iss] ?? "unknown" } };
+                }
+                return { status: 404, body: {} };
+              })();
+              return HttpClientResponse.fromWeb(
+                request,
+                new Response(JSON.stringify(reply.body), {
+                  status: reply.status,
+                  headers: { "content-type": "application/json" },
+                }),
+              );
+            }),
+          ),
+        );
+
+        const authLayer = GitHubAppInstallationAuth.layer.pipe(
+          Layer.provide(
+            Layer.succeed(GitHubAppInstallationAuth.GitHubAppInstallationAuthConfig, config),
+          ),
+          Layer.provide(Layer.succeed(FileSystem.FileSystem, fakeFs)),
+          Layer.provide(httpLayer),
+        );
+
+        const recorded: Array<{
+          readonly op: string;
+          readonly repo: string;
+          readonly token: string | null;
+        }> = [];
+        const record = (op: string, repo: string) =>
+          Effect.map(GitHubAppInstallationAuth.PinnedGitHubCredential, (pinned) => {
+            recorded.push({
+              op,
+              repo,
+              token: pinned === null ? null : Redacted.value(pinned.token),
+            });
+          });
+
+        const harness = yield* makeToolkitHarness({
+          authLayer,
+          pullRequests: {
+            submitReview: (input) => record("review", input.repository),
+            runAction: (input) => record("merge", input.repository).pipe(Effect.as(undefined)),
+            summary: (input) =>
+              Effect.succeed({
+                provider: SourceControlProviderKind.make("github"),
+                projectId: PROJECT_ID,
+                repository: input.repository,
+                number: input.number,
+                title: "PR",
+                url: `https://github.com/${input.repository}/pull/${input.number}`,
+                baseBranch: "main",
+                headBranch: "feat/test",
+                state: "merged",
+                isDraft: false,
+                headSha: "deadbeef1234",
+                updatedAt: "2026-08-27T00:00:00.000Z",
+              }),
+          },
+        });
+
+        const cases = [
+          {
+            repository: "macs-holding/shop",
+            reviewActor: "shop-reviewer[bot]",
+            reviewToken: "tok-5906950",
+            mergeActor: "omegent-app[bot]",
+            mergeToken: "tok-4331997",
+          },
+          {
+            repository: "patroza/t3code",
+            reviewActor: "omegent-reviewer[bot]",
+            reviewToken: "tok-5966233",
+            mergeActor: "omegent-app[bot]",
+            mergeToken: "tok-4331997",
+          },
+          {
+            repository: "patroza/effect-ui-ssr-lazy-routes",
+            reviewActor: "omegent-reviewer[bot]",
+            reviewToken: "tok-5966233",
+            mergeActor: "omegent-app[bot]",
+            mergeToken: "tok-4331997",
+          },
+          {
+            repository: "scrapline-hq/scrapline",
+            reviewActor: "scrapline-reviewer[bot]",
+            reviewToken: "tok-5729514",
+            mergeActor: "scrapline-multica[bot]",
+            mergeToken: "tok-5677773",
+          },
+          {
+            repository: "macs-holding/other",
+            reviewActor: "omegent-reviewer[bot]",
+            reviewToken: "tok-5966233",
+            mergeActor: "omegent-app[bot]",
+            mergeToken: "tok-4331997",
+          },
+          {
+            repository: "aaaomega/ops",
+            reviewActor: "omegent-reviewer[bot]",
+            reviewToken: "tok-5966233",
+            mergeActor: "omegent-app[bot]",
+            mergeToken: "tok-4331997",
+          },
+        ] as const;
+
+        for (const c of cases) {
+          const rev = yield* harness.call("pull_request_review", {
+            repository: c.repository,
+            number: 10,
+            verdict: "approve",
+            expectedHeadSha: "deadbeef1234",
+            body: "LGTM",
+          });
+          expect(rev.actor).toBe(c.reviewActor);
+
+          const mrg = yield* harness.call("pull_request_merge", {
+            repository: c.repository,
+            number: 10,
+            expectedHeadSha: "deadbeef1234",
+          });
+          expect(mrg.actor).toBe(c.mergeActor);
+        }
+
+        expect(recorded).toEqual(
+          cases.flatMap((c) => [
+            { op: "review", repo: c.repository, token: c.reviewToken },
+            { op: "merge", repo: c.repository, token: c.mergeToken },
+          ]),
+        );
       }),
   );
 });

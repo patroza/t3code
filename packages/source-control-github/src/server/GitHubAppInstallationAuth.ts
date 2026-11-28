@@ -467,12 +467,6 @@ const DEFAULT_TOKEN_PERMISSIONS = {
 } as const;
 
 const REVIEWER_TOKEN_PERMISSIONS = {
-  contents: "write",
-  pull_requests: "write",
-  metadata: "read",
-} as const;
-
-const REVIEWER_READ_CONTENTS_TOKEN_PERMISSIONS = {
   contents: "read",
   pull_requests: "write",
   metadata: "read",
@@ -719,11 +713,10 @@ export const make = Effect.gen(function* () {
       repositories: [repo.name],
     });
 
-    if (response.status === 422 && /permission/iu.test(response.body)) {
+    if (role !== "reviewer" && response.status === 422 && /permission/iu.test(response.body)) {
       const { workflows: _drop, ...withoutWorkflows } = DEFAULT_TOKEN_PERMISSIONS;
       response = yield* postMint({
-        permissions:
-          role === "reviewer" ? REVIEWER_READ_CONTENTS_TOKEN_PERMISSIONS : withoutWorkflows,
+        permissions: withoutWorkflows,
         repositories: [repo.name],
       });
     }

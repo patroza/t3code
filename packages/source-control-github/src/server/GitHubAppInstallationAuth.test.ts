@@ -1051,7 +1051,7 @@ describe("GitHubAppInstallationAuth routing, caching, and failures", () => {
         const reviewerMint = mintBodies.find((entry) => entry.iss === "9988776");
         expect(reviewerMint?.body).toEqual({
           permissions: {
-            contents: "write",
+            contents: "read",
             pull_requests: "write",
             metadata: "read",
           },
@@ -1061,7 +1061,7 @@ describe("GitHubAppInstallationAuth routing, caching, and failures", () => {
   );
 
   it.effect(
-    "downgrades reviewer token mint from contents:write to contents:read on 422, and falls back to unscoped permissions if contents:read is also rejected",
+    "falls back to unscoped permissions when reviewer App lacks an optional permission on 422",
     () =>
       Effect.gen(function* () {
         const files = {
@@ -1087,67 +1087,14 @@ describe("GitHubAppInstallationAuth routing, caching, and failures", () => {
           env: { T3_GITHUB_APPS_FILE: "/etc/github-apps.json" },
           fileSystem: fakeFileSystem(files),
         });
-
-        // Case 1: reviewer App has contents:read + pull_requests:write (no contents:write)
-        const readOnlyMintBodies: Array<unknown> = [];
-        const readOnlyHttp = makeFakeHttp((req) => {
+        const mintBodies: Array<unknown> = [];
+        const http = makeFakeHttp((req) => {
           if (req.url.endsWith("/repos/macs-holding/shop/installation")) {
             return { status: 200, body: { id: 901 } };
           }
           if (req.url.endsWith("/app/installations/901/access_tokens")) {
-            readOnlyMintBodies.push(req.body);
-            if (readOnlyMintBodies.length === 1) {
-              return {
-                status: 422,
-                body: {
-                  message: "The permissions requested are not granted to this installation.",
-                },
-              };
-            }
-            return {
-              status: 201,
-              body: { token: "reviewer-read-contents-tok", expires_at: "2099-01-01T01:00:00Z" },
-            };
-          }
-          if (req.url.endsWith("/app")) {
-            return { status: 200, body: { slug: "omegent-reviewer" } };
-          }
-          return { status: 404, body: {} };
-        });
-
-        const readOnlyDecision = yield* Effect.flatMap(GitHubAppInstallationAuth, (auth) =>
-          auth.resolve({
-            host: "github.com",
-            repository: "macs-holding/shop",
-            access: "write",
-            role: "reviewer",
-          }),
-        ).pipe(Effect.provide(provideAuth(config, files, readOnlyHttp.layer)));
-
-        expect(readOnlyDecision.mode).toBe("app");
-        if (readOnlyDecision.mode === "app") {
-          expect(Redacted.value(readOnlyDecision.token)).toBe("reviewer-read-contents-tok");
-        }
-        expect(readOnlyMintBodies).toEqual([
-          {
-            permissions: { contents: "write", pull_requests: "write", metadata: "read" },
-            repositories: ["shop"],
-          },
-          {
-            permissions: { contents: "read", pull_requests: "write", metadata: "read" },
-            repositories: ["shop"],
-          },
-        ]);
-
-        // Case 2: reviewer App lacks even contents:read -> falls back to unscoped repositories
-        const minimalMintBodies: Array<unknown> = [];
-        const minimalHttp = makeFakeHttp((req) => {
-          if (req.url.endsWith("/repos/macs-holding/shop/installation")) {
-            return { status: 200, body: { id: 901 } };
-          }
-          if (req.url.endsWith("/app/installations/901/access_tokens")) {
-            minimalMintBodies.push(req.body);
-            if (minimalMintBodies.length <= 2) {
+            mintBodies.push(req.body);
+            if (mintBodies.length === 1) {
               return {
                 status: 422,
                 body: {
@@ -1166,24 +1113,20 @@ describe("GitHubAppInstallationAuth routing, caching, and failures", () => {
           return { status: 404, body: {} };
         });
 
-        const minimalDecision = yield* Effect.flatMap(GitHubAppInstallationAuth, (auth) =>
+        const decision = yield* Effect.flatMap(GitHubAppInstallationAuth, (auth) =>
           auth.resolve({
             host: "github.com",
             repository: "macs-holding/shop",
             access: "write",
             role: "reviewer",
           }),
-        ).pipe(Effect.provide(provideAuth(config, files, minimalHttp.layer)));
+        ).pipe(Effect.provide(provideAuth(config, files, http.layer)));
 
-        expect(minimalDecision.mode).toBe("app");
-        if (minimalDecision.mode === "app") {
-          expect(Redacted.value(minimalDecision.token)).toBe("reviewer-unscoped-tok");
+        expect(decision.mode).toBe("app");
+        if (decision.mode === "app") {
+          expect(Redacted.value(decision.token)).toBe("reviewer-unscoped-tok");
         }
-        expect(minimalMintBodies).toEqual([
-          {
-            permissions: { contents: "write", pull_requests: "write", metadata: "read" },
-            repositories: ["shop"],
-          },
+        expect(mintBodies).toEqual([
           {
             permissions: { contents: "read", pull_requests: "write", metadata: "read" },
             repositories: ["shop"],
@@ -1300,12 +1243,13 @@ describe("GitHubAppInstallationAuth routing, caching, and failures", () => {
   );
 
   it.effect(
-    "accepts two entries sharing name/appId where the repo entry overrides the owner entry with a reviewer",
+    "routes smart's 3-entry live list where repo entry macs-holding/shop overrides owner entry omegent-reviewer",
     () =>
       Effect.gen(function* () {
         const files = {
           "/home/smart/.config/t3/github-app/private-key.pem": TEST_KEY_A,
           "/home/smart/.config/t3/github-app-shop-reviewer/private-key.pem": TEST_KEY_B,
+          "/home/smart/.config/t3/github-app-omegent-reviewer/private-key.pem": TEST_KEY_B,
           "/home/smart/.config/t3/github-app-scrapline/private-key.pem": TEST_KEY_A,
           "/home/smart/.config/t3/github-app-scrapline-reviewer/private-key.pem": TEST_KEY_B,
           "/home/smart/.config/t3/github-apps.json": JSON.stringify({
@@ -1315,7 +1259,12 @@ describe("GitHubAppInstallationAuth routing, caching, and failures", () => {
                 appId: 4331997,
                 privateKeyPath: "~/.config/t3/github-app/private-key.pem",
                 owners: ["macs-holding", "aaaomega"],
-                repos: ["patroza/t3code"],
+                repos: ["patroza/effect-ui-ssr-lazy-routes", "patroza/t3code"],
+                reviewer: {
+                  name: "omegent-reviewer",
+                  appId: 5966233,
+                  privateKeyPath: "~/.config/t3/github-app-omegent-reviewer/private-key.pem",
+                },
               },
               {
                 name: "omegent-app",
@@ -1356,7 +1305,16 @@ describe("GitHubAppInstallationAuth routing, caching, and failures", () => {
             return { status: 200, body: { id: iss === "5906950" ? 601 : 101 } };
           }
           if (req.url.endsWith("/repos/macs-holding/other/installation")) {
-            return { status: 200, body: { id: 102 } };
+            return { status: 200, body: { id: iss === "5966233" ? 803 : 102 } };
+          }
+          if (req.url.endsWith("/repos/aaaomega/ops/installation")) {
+            return { status: 200, body: { id: iss === "5966233" ? 804 : 105 } };
+          }
+          if (req.url.endsWith("/repos/patroza/t3code/installation")) {
+            return { status: 200, body: { id: iss === "5966233" ? 801 : 103 } };
+          }
+          if (req.url.endsWith("/repos/patroza/effect-ui-ssr-lazy-routes/installation")) {
+            return { status: 200, body: { id: iss === "5966233" ? 802 : 104 } };
           }
           if (req.url.endsWith("/repos/scrapline-hq/scrapline/installation")) {
             return { status: 200, body: { id: iss === "5729514" ? 701 : 201 } };
@@ -1372,6 +1330,7 @@ describe("GitHubAppInstallationAuth routing, caching, and failures", () => {
             const slugs: Record<string, string> = {
               "4331997": "omegent-app",
               "5906950": "shop-reviewer",
+              "5966233": "omegent-reviewer",
               "5677773": "scrapline-multica",
               "5729514": "scrapline-reviewer",
             };
@@ -1384,7 +1343,7 @@ describe("GitHubAppInstallationAuth routing, caching, and failures", () => {
         yield* Effect.gen(function* () {
           const auth = yield* GitHubAppInstallationAuth;
 
-          // macs-holding/shop: opener is omegent-app, reviewer is shop-reviewer
+          // macs-holding/shop: repo entry wins -> opener omegent-app, reviewer shop-reviewer
           const shopOpener = yield* auth.resolve({
             host: "github.com",
             repository: "macs-holding/shop",
@@ -1427,18 +1386,33 @@ describe("GitHubAppInstallationAuth routing, caching, and failures", () => {
             expect(Redacted.value(shopReviewerCached.token)).toBe("tok-5906950-601");
           }
 
-          // Other macs-holding repo matches owner entry (no reviewer) -> stays on omegent-app
-          const otherReview = yield* auth.resolve({
-            host: "github.com",
-            repository: "macs-holding/other",
-            access: "write",
-            role: "reviewer",
-          });
-          expect(otherReview.mode).toBe("app");
-          if (otherReview.mode === "app") {
-            expect(otherReview.appId).toBe("4331997");
-            expect(otherReview.actor).toBe("omegent-app[bot]");
-            expect(Redacted.value(otherReview.token)).toBe("tok-4331997-102");
+          // macs-holding/other, aaaomega/ops, patroza/t3code, patroza/effect-ui-ssr-lazy-routes:
+          // opener omegent-app, reviewer omegent-reviewer
+          for (const repo of [
+            "macs-holding/other",
+            "aaaomega/ops",
+            "patroza/t3code",
+            "patroza/effect-ui-ssr-lazy-routes",
+          ] as const) {
+            const opener = yield* auth.resolve({
+              host: "github.com",
+              repository: repo,
+              access: "write",
+            });
+            const reviewer = yield* auth.resolve({
+              host: "github.com",
+              repository: repo,
+              access: "write",
+              role: "reviewer",
+            });
+            expect(opener.mode).toBe("app");
+            expect(reviewer.mode).toBe("app");
+            if (opener.mode === "app" && reviewer.mode === "app") {
+              expect(opener.appId).toBe("4331997");
+              expect(opener.actor).toBe("omegent-app[bot]");
+              expect(reviewer.appId).toBe("5966233");
+              expect(reviewer.actor).toBe("omegent-reviewer[bot]");
+            }
           }
 
           // scrapline-hq owner entry routes opener to scrapline-multica and reviewer to scrapline-reviewer
