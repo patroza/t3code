@@ -1242,4 +1242,173 @@ describe("GitHubAppInstallationAuth routing, caching, and failures", () => {
         }).pipe(Effect.provide(layer));
       }),
   );
+
+  it.effect(
+    "accepts two entries sharing name/appId where the repo entry overrides the owner entry with a reviewer",
+    () =>
+      Effect.gen(function* () {
+        const files = {
+          "/home/smart/.config/t3/github-app/private-key.pem": TEST_KEY_A,
+          "/home/smart/.config/t3/github-app-shop-reviewer/private-key.pem": TEST_KEY_B,
+          "/home/smart/.config/t3/github-app-scrapline/private-key.pem": TEST_KEY_A,
+          "/home/smart/.config/t3/github-app-scrapline-reviewer/private-key.pem": TEST_KEY_B,
+          "/home/smart/.config/t3/github-apps.json": JSON.stringify({
+            apps: [
+              {
+                name: "omegent-app",
+                appId: 4331997,
+                privateKeyPath: "~/.config/t3/github-app/private-key.pem",
+                owners: ["macs-holding", "aaaomega"],
+                repos: ["patroza/t3code"],
+              },
+              {
+                name: "omegent-app",
+                appId: 4331997,
+                privateKeyPath: "~/.config/t3/github-app/private-key.pem",
+                repos: ["macs-holding/shop"],
+                reviewer: {
+                  name: "shop-reviewer",
+                  appId: 5906950,
+                  privateKeyPath: "~/.config/t3/github-app-shop-reviewer/private-key.pem",
+                },
+              },
+              {
+                name: "scrapline-multica",
+                appId: 5677773,
+                privateKeyPath: "~/.config/t3/github-app-scrapline/private-key.pem",
+                owners: ["scrapline-hq"],
+                reviewer: {
+                  name: "scrapline-reviewer",
+                  appId: 5729514,
+                  privateKeyPath: "~/.config/t3/github-app-scrapline-reviewer/private-key.pem",
+                },
+              },
+            ],
+          }),
+        };
+
+        const config = yield* loadGitHubAppAgentAuthConfig({
+          env: { T3_GITHUB_APPS_FILE: "~/.config/t3/github-apps.json" },
+          homeDir: "/home/smart",
+          fileSystem: fakeFileSystem(files),
+        });
+        expect(config.mode).toBe("apps-file");
+
+        const http = makeFakeHttp((req) => {
+          const iss = jwtIssuer(req.authHeader);
+          if (req.url.endsWith("/repos/macs-holding/shop/installation")) {
+            return { status: 200, body: { id: iss === "5906950" ? 601 : 101 } };
+          }
+          if (req.url.endsWith("/repos/macs-holding/other/installation")) {
+            return { status: 200, body: { id: 102 } };
+          }
+          if (req.url.endsWith("/repos/scrapline-hq/scrapline/installation")) {
+            return { status: 200, body: { id: iss === "5729514" ? 701 : 201 } };
+          }
+          if (req.url.includes("/app/installations/") && req.url.endsWith("/access_tokens")) {
+            const installId = req.url.split("/").at(-2);
+            return {
+              status: 201,
+              body: { token: `tok-${iss}-${installId}`, expires_at: "2099-01-01T01:00:00Z" },
+            };
+          }
+          if (req.url.endsWith("/app")) {
+            const slugs: Record<string, string> = {
+              "4331997": "omegent-app",
+              "5906950": "shop-reviewer",
+              "5677773": "scrapline-multica",
+              "5729514": "scrapline-reviewer",
+            };
+            return { status: 200, body: { slug: slugs[iss ?? ""] ?? "unknown" } };
+          }
+          return { status: 404, body: {} };
+        });
+
+        const layer = provideAuth(config, files, http.layer);
+        yield* Effect.gen(function* () {
+          const auth = yield* GitHubAppInstallationAuth;
+
+          // macs-holding/shop: opener is omegent-app, reviewer is shop-reviewer
+          const shopOpener = yield* auth.resolve({
+            host: "github.com",
+            repository: "macs-holding/shop",
+            access: "write",
+          });
+          const shopReviewer = yield* auth.resolve({
+            host: "github.com",
+            repository: "macs-holding/shop",
+            access: "write",
+            role: "reviewer",
+          });
+          expect(shopOpener.mode).toBe("app");
+          expect(shopReviewer.mode).toBe("app");
+          if (shopOpener.mode === "app" && shopReviewer.mode === "app") {
+            expect(shopOpener.appId).toBe("4331997");
+            expect(shopOpener.actor).toBe("omegent-app[bot]");
+            expect(Redacted.value(shopOpener.token)).toBe("tok-4331997-101");
+
+            expect(shopReviewer.appId).toBe("5906950");
+            expect(shopReviewer.actor).toBe("shop-reviewer[bot]");
+            expect(Redacted.value(shopReviewer.token)).toBe("tok-5906950-601");
+          }
+
+          // Re-resolving hits separate caches without mixing opener and reviewer tokens
+          const callsBeforeCache = http.calls.length;
+          const shopOpenerCached = yield* auth.resolve({
+            host: "github.com",
+            repository: "macs-holding/shop",
+            access: "write",
+          });
+          const shopReviewerCached = yield* auth.resolve({
+            host: "github.com",
+            repository: "macs-holding/shop",
+            access: "write",
+            role: "reviewer",
+          });
+          expect(http.calls.length).toBe(callsBeforeCache);
+          if (shopOpenerCached.mode === "app" && shopReviewerCached.mode === "app") {
+            expect(Redacted.value(shopOpenerCached.token)).toBe("tok-4331997-101");
+            expect(Redacted.value(shopReviewerCached.token)).toBe("tok-5906950-601");
+          }
+
+          // Other macs-holding repo matches owner entry (no reviewer) -> stays on omegent-app
+          const otherReview = yield* auth.resolve({
+            host: "github.com",
+            repository: "macs-holding/other",
+            access: "write",
+            role: "reviewer",
+          });
+          expect(otherReview.mode).toBe("app");
+          if (otherReview.mode === "app") {
+            expect(otherReview.appId).toBe("4331997");
+            expect(otherReview.actor).toBe("omegent-app[bot]");
+            expect(Redacted.value(otherReview.token)).toBe("tok-4331997-102");
+          }
+
+          // scrapline-hq owner entry routes opener to scrapline-multica and reviewer to scrapline-reviewer
+          const scraplineOpener = yield* auth.resolve({
+            host: "github.com",
+            repository: "scrapline-hq/scrapline",
+            access: "write",
+          });
+          const scraplineReviewer = yield* auth.resolve({
+            host: "github.com",
+            repository: "scrapline-hq/scrapline",
+            access: "write",
+            role: "reviewer",
+          });
+          expect(scraplineOpener.mode).toBe("app");
+          expect(scraplineReviewer.mode).toBe("app");
+          if (scraplineOpener.mode === "app" && scraplineReviewer.mode === "app") {
+            expect(scraplineOpener.appId).toBe("5677773");
+            expect(scraplineOpener.actor).toBe("scrapline-multica[bot]");
+            expect(Redacted.value(scraplineOpener.token)).toBe("tok-5677773-201");
+
+            expect(scraplineReviewer.appId).toBe("5729514");
+            expect(scraplineReviewer.actor).toBe("scrapline-reviewer[bot]");
+            expect(Redacted.value(scraplineReviewer.token)).toBe("tok-5729514-701");
+          }
+        }).pipe(Effect.provide(layer));
+      }),
+  );
 });
