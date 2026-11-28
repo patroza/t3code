@@ -26,12 +26,16 @@ const DEFAULT_FALLBACK_TOKEN_TTL_MS = 5 * 60_000;
 
 export const DEFAULT_GITHUB_APPS_RELATIVE_PATH = ".config/t3/github-apps.json";
 
-export interface GitHubAppCredentialEntry {
+export interface GitHubAppIdentity {
   readonly name?: string | undefined;
   readonly appId: string;
   readonly privateKeyPath: string;
+}
+
+export interface GitHubAppCredentialEntry extends GitHubAppIdentity {
   readonly owners: ReadonlyArray<string>;
   readonly repos: ReadonlyArray<string>;
+  readonly reviewer?: GitHubAppIdentity | undefined;
 }
 
 export type GitHubAppRoutingMode = "installed-or-personal" | "app-only";
@@ -60,6 +64,8 @@ export type GitHubAppAgentAuthConfig =
     };
 
 export type GitHubAppAccessKind = "read" | "write";
+
+export type GitHubAppRole = "opener" | "reviewer";
 
 export type GitHubAppRoutingDecision =
   | {
@@ -107,6 +113,7 @@ export class GitHubAppInstallationAuth extends Context.Service<
       readonly host: string;
       readonly repository: string;
       readonly access: GitHubAppAccessKind;
+      readonly role?: GitHubAppRole | undefined;
     }) => Effect.Effect<GitHubAppRoutingDecision, GitHubAppInstallationError>;
     readonly invalidate: (input: {
       readonly appId: string;
@@ -128,12 +135,19 @@ const RawAppId = Schema.Union([
   Schema.String,
 ]);
 
+const RawGitHubAppReviewer = Schema.Struct({
+  name: Schema.optional(Schema.String),
+  appId: RawAppId,
+  privateKeyPath: Schema.String,
+});
+
 const RawGitHubAppEntry = Schema.Struct({
   name: Schema.optional(Schema.String),
   appId: RawAppId,
   privateKeyPath: Schema.String,
   owners: Schema.optional(Schema.Array(Schema.String)),
   repos: Schema.optional(Schema.Array(Schema.String)),
+  reviewer: Schema.optional(RawGitHubAppReviewer),
 });
 
 const RawGitHubAppsFile = Schema.Struct({
@@ -225,12 +239,37 @@ export function parseGitHubAppsFile(
       repos.push(parsedRepo.fullName);
     }
 
+    let reviewer: GitHubAppIdentity | undefined;
+    if (raw.reviewer !== undefined) {
+      const reviewerAppId = String(raw.reviewer.appId).trim();
+      if (!reviewerAppId || !/^\d+$/u.test(reviewerAppId)) {
+        return {
+          ok: false,
+          message: `Invalid GitHub Apps config at ${filePath}: apps[${index}].reviewer.appId must be a numeric App ID.`,
+        };
+      }
+      const reviewerPrivateKeyPath = expandHomePath(raw.reviewer.privateKeyPath, homeDir);
+      if (!reviewerPrivateKeyPath) {
+        return {
+          ok: false,
+          message: `Invalid GitHub Apps config at ${filePath}: apps[${index}].reviewer.privateKeyPath must be non-empty.`,
+        };
+      }
+      const reviewerName = raw.reviewer.name?.trim() || undefined;
+      reviewer = {
+        ...(reviewerName === undefined ? {} : { name: reviewerName }),
+        appId: reviewerAppId,
+        privateKeyPath: reviewerPrivateKeyPath,
+      };
+    }
+
     const entry: GitHubAppCredentialEntry = {
       ...(name === undefined ? {} : { name }),
       appId,
       privateKeyPath,
       owners,
       repos,
+      ...(reviewer === undefined ? {} : { reviewer }),
     };
     apps.push(entry);
 
@@ -427,6 +466,12 @@ const DEFAULT_TOKEN_PERMISSIONS = {
   workflows: "write",
 } as const;
 
+const REVIEWER_TOKEN_PERMISSIONS = {
+  pull_requests: "write",
+  contents: "read",
+  metadata: "read",
+} as const;
+
 interface CachedToken {
   readonly token: Redacted.Redacted<string>;
   readonly fingerprint: string;
@@ -450,8 +495,9 @@ type InstallationLookupResult =
   | { readonly status: "installed"; readonly installationId: number }
   | { readonly status: "not-installed" };
 
-function appLabel(app: GitHubAppCredentialEntry): string {
-  return app.name ? `${app.name} (App ${app.appId})` : `GitHub App ${app.appId}`;
+function appLabel(app: GitHubAppIdentity, role: GitHubAppRole = "opener"): string {
+  const base = app.name ? `${app.name} (App ${app.appId})` : `GitHub App ${app.appId}`;
+  return role === "reviewer" ? `reviewer ${base}` : base;
 }
 
 export const make = Effect.gen(function* () {
@@ -528,7 +574,8 @@ export const make = Effect.gen(function* () {
     );
 
   const signAppJwt = Effect.fn("GitHubAppInstallationAuth.signAppJwt")(function* (
-    app: GitHubAppCredentialEntry,
+    app: GitHubAppIdentity,
+    role: GitHubAppRole = "opener",
   ) {
     const privateKey = yield* fileSystem.readFileString(app.privateKeyPath).pipe(
       Effect.mapError(
@@ -536,7 +583,7 @@ export const make = Effect.gen(function* () {
           new GitHubAppInstallationError({
             operation: "read-private-key",
             status: null,
-            detail: `Could not read private key for ${appLabel(app)} at ${app.privateKeyPath}.`,
+            detail: `Could not read private key for ${appLabel(app, role)} at ${app.privateKeyPath}.`,
             cause,
           }),
       ),
@@ -553,14 +600,14 @@ export const make = Effect.gen(function* () {
         new GitHubAppInstallationError({
           operation: "sign-app-jwt",
           status: null,
-          detail: `Could not sign JWT for ${appLabel(app)}; check the private key PEM.`,
+          detail: `Could not sign JWT for ${appLabel(app, role)}; check the private key PEM.`,
           cause,
         }),
     });
   });
 
   const resolveAppSlug = Effect.fn("GitHubAppInstallationAuth.resolveAppSlug")(function* (
-    app: GitHubAppCredentialEntry,
+    app: GitHubAppIdentity,
     host: string,
     jwt: string,
   ) {
@@ -593,10 +640,11 @@ export const make = Effect.gen(function* () {
   });
 
   const lookupInstallation = Effect.fn("GitHubAppInstallationAuth.lookupInstallation")(function* (
-    app: GitHubAppCredentialEntry,
+    app: GitHubAppIdentity,
     host: string,
     repo: { readonly owner: string; readonly name: string; readonly fullName: string },
     jwt: string,
+    role: GitHubAppRole = "opener",
   ): Effect.fn.Return<InstallationLookupResult, GitHubAppInstallationError> {
     const key = `${app.appId}\0${host}\0${repo.fullName.toLowerCase()}`;
     const nowMs = yield* Clock.currentTimeMillis;
@@ -620,7 +668,7 @@ export const make = Effect.gen(function* () {
       return yield* new GitHubAppInstallationError({
         operation: "lookup-installation",
         status: response.status,
-        detail: `Installation lookup failed for ${appLabel(app)} on ${repo.fullName} (HTTP ${response.status}).`,
+        detail: `Installation lookup failed for ${appLabel(app, role)} on ${repo.fullName} (HTTP ${response.status}).`,
       });
     }
     const decoded = yield* decodeJson(
@@ -641,11 +689,12 @@ export const make = Effect.gen(function* () {
   });
 
   const mintAccessToken = Effect.fn("GitHubAppInstallationAuth.mintAccessToken")(function* (
-    app: GitHubAppCredentialEntry,
+    app: GitHubAppIdentity,
     host: string,
     installationId: number,
     repo: { readonly owner: string; readonly name: string; readonly fullName: string },
     jwt: string,
+    role: GitHubAppRole = "opener",
   ) {
     const restUrl = GitHubRequestPolicy.gitHubApiUrls(host).rest;
     const url = `${restUrl}/app/installations/${encodeURIComponent(String(installationId))}/access_tokens`;
@@ -660,11 +709,11 @@ export const make = Effect.gen(function* () {
       );
 
     let response = yield* postMint({
-      permissions: DEFAULT_TOKEN_PERMISSIONS,
+      permissions: role === "reviewer" ? REVIEWER_TOKEN_PERMISSIONS : DEFAULT_TOKEN_PERMISSIONS,
       repositories: [repo.name],
     });
 
-    if (response.status === 422 && /permission/iu.test(response.body)) {
+    if (role !== "reviewer" && response.status === 422 && /permission/iu.test(response.body)) {
       const { workflows: _drop, ...withoutWorkflows } = DEFAULT_TOKEN_PERMISSIONS;
       response = yield* postMint({
         permissions: withoutWorkflows,
@@ -680,7 +729,7 @@ export const make = Effect.gen(function* () {
       return yield* new GitHubAppInstallationError({
         operation: "mint-installation-token",
         status: response.status,
-        detail: `Failed to mint GitHub App installation token for ${appLabel(app)} on ${repo.fullName} (HTTP ${response.status}).`,
+        detail: `Failed to mint GitHub App installation token for ${appLabel(app, role)} on ${repo.fullName} (HTTP ${response.status}).`,
       });
     }
 
@@ -704,12 +753,13 @@ export const make = Effect.gen(function* () {
   });
 
   const resolveForApp = Effect.fn("GitHubAppInstallationAuth.resolveForApp")(function* (input: {
-    readonly app: GitHubAppCredentialEntry;
+    readonly app: GitHubAppIdentity;
+    readonly role: GitHubAppRole;
     readonly host: string;
     readonly repo: { readonly owner: string; readonly name: string; readonly fullName: string };
     readonly treatNotInstalledAsPersonal: boolean;
   }): Effect.fn.Return<GitHubAppRoutingDecision, GitHubAppInstallationError> {
-    const cacheKey = `${input.app.appId}\0${input.host}\0${input.repo.fullName.toLowerCase()}`;
+    const cacheKey = `${input.app.appId}\0${input.role}\0${input.host}\0${input.repo.fullName.toLowerCase()}`;
     const checkFresh = Effect.gen(function* () {
       const nowMs = yield* Clock.currentTimeMillis;
       const cached = (yield* Ref.get(tokenCache)).get(cacheKey);
@@ -738,16 +788,26 @@ export const make = Effect.gen(function* () {
         const hitAfterLock = yield* checkFresh;
         if (hitAfterLock !== null) return hitAfterLock;
 
-        const jwt = yield* signAppJwt(input.app);
-        const lookup = yield* lookupInstallation(input.app, input.host, input.repo, jwt);
+        const jwt = yield* signAppJwt(input.app, input.role);
+        const lookup = yield* lookupInstallation(
+          input.app,
+          input.host,
+          input.repo,
+          jwt,
+          input.role,
+        );
         if (lookup.status === "not-installed") {
           if (input.treatNotInstalledAsPersonal) {
             return { mode: "personal" as const, configured: true };
           }
+          const refusal =
+            input.role === "reviewer"
+              ? "refusing to fall back to opener App or personal account."
+              : "refusing to fall back to personal account.";
           return yield* new GitHubAppInstallationError({
             operation: "lookup-installation",
             status: 404,
-            detail: `${appLabel(input.app)} is not installed on ${input.repo.fullName}; refusing to fall back to personal account.`,
+            detail: `${appLabel(input.app, input.role)} is not installed on ${input.repo.fullName}; ${refusal}`,
           });
         }
 
@@ -757,6 +817,7 @@ export const make = Effect.gen(function* () {
           lookup.installationId,
           input.repo,
           jwt,
+          input.role,
         );
         const appSlug = yield* resolveAppSlug(input.app, input.host, jwt);
         const actor = `${appSlug}[bot]`;
@@ -834,8 +895,12 @@ export const make = Effect.gen(function* () {
       if (mappedApp === undefined) {
         return { mode: "personal" as const, configured: true };
       }
+      const useReviewer = input.role === "reviewer" && mappedApp.reviewer !== undefined;
+      const targetApp: GitHubAppIdentity = useReviewer ? mappedApp.reviewer! : mappedApp;
+      const tokenRole: GitHubAppRole = useReviewer ? "reviewer" : "opener";
       return yield* resolveForApp({
-        app: mappedApp,
+        app: targetApp,
+        role: tokenRole,
         host,
         repo,
         treatNotInstalledAsPersonal: false,
@@ -845,7 +910,8 @@ export const make = Effect.gen(function* () {
             return Effect.logWarning(
               "GitHub App token unavailable for read; falling back to personal",
               {
-                appId: mappedApp.appId,
+                appId: targetApp.appId,
+                role: tokenRole,
                 repository: repo.fullName,
                 operation: error.operation,
               },
@@ -874,6 +940,7 @@ export const make = Effect.gen(function* () {
 
     return yield* resolveForApp({
       app: config.app,
+      role: "opener",
       host,
       repo,
       treatNotInstalledAsPersonal: config.routing === "installed-or-personal",
@@ -900,15 +967,17 @@ export const make = Effect.gen(function* () {
     const host = normalizeHost(input.host);
     const repo = parseOwnerAndRepo(input.repository);
     if (repo === null) return;
-    const key = `${input.appId}\0${host}\0${repo.fullName.toLowerCase()}`;
+    const repoKey = repo.fullName.toLowerCase();
+    const baseKey = `${input.appId}\0${host}\0${repoKey}`;
     yield* Ref.update(tokenCache, (map) => {
       const next = new Map(map);
-      next.delete(key);
+      next.delete(`${input.appId}\0opener\0${host}\0${repoKey}`);
+      next.delete(`${input.appId}\0reviewer\0${host}\0${repoKey}`);
       return next;
     });
     yield* Ref.update(installationCache, (map) => {
       const next = new Map(map);
-      next.delete(key);
+      next.delete(baseKey);
       return next;
     });
   });

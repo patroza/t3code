@@ -20,6 +20,9 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
 import { type Tool } from "effect/ai";
+import { HttpClient, HttpClientResponse } from "effect/http";
+// @effect-diagnostics nodeBuiltinImport:off -- RSA keypair generation for offline unit tests.
+import * as NodeCrypto from "node:crypto";
 
 import * as GitManager from "../git/GitManager.ts";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
@@ -480,6 +483,272 @@ describe("GitHubAgentPrRouting", () => {
             pinnedToken: "app-token-xyz",
           },
         ]);
+      }),
+  );
+
+  it.effect(
+    "routes pull_request_review (all verdicts + inline diff/comments) to reviewer App while create/update/respond/merge stay on opener",
+    () =>
+      Effect.gen(function* () {
+        const openerKey = NodeCrypto.generateKeyPairSync("rsa", {
+          modulusLength: 2048,
+          privateKeyEncoding: { type: "pkcs8", format: "pem" },
+          publicKeyEncoding: { type: "spki", format: "pem" },
+        }).privateKey;
+        const reviewerKey = NodeCrypto.generateKeyPairSync("rsa", {
+          modulusLength: 2048,
+          privateKeyEncoding: { type: "pkcs8", format: "pem" },
+          publicKeyEncoding: { type: "spki", format: "pem" },
+        }).privateKey;
+
+        const files: Readonly<Record<string, string>> = {
+          "/keys/opener.pem": openerKey,
+          "/keys/reviewer.pem": reviewerKey,
+          "/etc/github-apps.json": JSON.stringify({
+            apps: [
+              {
+                name: "omegent-app",
+                appId: 4331997,
+                privateKeyPath: "/keys/opener.pem",
+                owners: ["macs-holding"],
+                reviewer: {
+                  name: "omegent-reviewer",
+                  appId: 9988776,
+                  privateKeyPath: "/keys/reviewer.pem",
+                },
+              },
+            ],
+          }),
+        };
+        const fakeFs = FileSystem.makeNoop({
+          exists: (path) => Effect.succeed(Object.prototype.hasOwnProperty.call(files, path)),
+          readFileString: (path) =>
+            Object.prototype.hasOwnProperty.call(files, path)
+              ? Effect.succeed(files[path]!)
+              : Effect.fail({ _tag: "SystemError", message: `ENOENT: ${path}` } as never),
+        });
+        const config = yield* GitHubAppInstallationAuth.loadGitHubAppAgentAuthConfig({
+          env: { T3_GITHUB_APPS_FILE: "/etc/github-apps.json" },
+          fileSystem: fakeFs,
+        });
+        expect(config.mode).toBe("apps-file");
+
+        const jwtIssuer = (authHeader: string | undefined): string | null => {
+          const parts = authHeader?.replace(/^Bearer\s+/iu, "").split(".");
+          if (!parts || parts.length !== 3) return null;
+          const payload = JSON.parse(Buffer.from(parts[1]!, "base64url").toString("utf8")) as {
+            iss?: string;
+          };
+          return payload.iss ?? null;
+        };
+
+        const httpLayer = Layer.succeed(
+          HttpClient.HttpClient,
+          HttpClient.make((request) =>
+            Effect.sync(() => {
+              const iss = jwtIssuer(request.headers.authorization);
+              const reply = (() => {
+                if (request.url.endsWith("/repos/macs-holding/shop/installation")) {
+                  return { status: 200, body: { id: iss === "9988776" ? 901 : 101 } };
+                }
+                if (request.url.endsWith("/app/installations/101/access_tokens")) {
+                  return {
+                    status: 201,
+                    body: { token: "tok-opener", expires_at: "2099-01-01T01:00:00Z" },
+                  };
+                }
+                if (request.url.endsWith("/app/installations/901/access_tokens")) {
+                  return {
+                    status: 201,
+                    body: { token: "tok-reviewer", expires_at: "2099-01-01T01:00:00Z" },
+                  };
+                }
+                if (request.url.endsWith("/app")) {
+                  return {
+                    status: 200,
+                    body: { slug: iss === "9988776" ? "omegent-reviewer" : "omegent-app" },
+                  };
+                }
+                return { status: 404, body: {} };
+              })();
+              return HttpClientResponse.fromWeb(
+                request,
+                new Response(JSON.stringify(reply.body), {
+                  status: reply.status,
+                  headers: { "content-type": "application/json" },
+                }),
+              );
+            }),
+          ),
+        );
+
+        const authLayer = GitHubAppInstallationAuth.layer.pipe(
+          Layer.provide(
+            Layer.succeed(GitHubAppInstallationAuth.GitHubAppInstallationAuthConfig, config),
+          ),
+          Layer.provide(Layer.succeed(FileSystem.FileSystem, fakeFs)),
+          Layer.provide(httpLayer),
+        );
+
+        const recordedTokens: Array<{ readonly op: string; readonly token: string | null }> = [];
+        const recordToken = (op: string) =>
+          Effect.map(GitHubAppInstallationAuth.PinnedGitHubCredential, (pinned) => {
+            recordedTokens.push({
+              op,
+              token: pinned === null ? null : Redacted.value(pinned.token),
+            });
+          });
+
+        const harness = yield* makeToolkitHarness({
+          authLayer,
+          git: {
+            createPullRequest: () =>
+              recordToken("create").pipe(
+                Effect.as({
+                  status: "created" as const,
+                  url: "https://github.com/macs-holding/shop/pull/42",
+                  baseBranch: "main",
+                  headBranch: "feat/shop",
+                  title: "Shop PR",
+                }),
+              ),
+          },
+          pullRequests: {
+            diff: () =>
+              recordToken("diff").pipe(
+                Effect.as({
+                  patch: [
+                    "diff --git a/src/app.ts b/src/app.ts",
+                    "--- a/src/app.ts",
+                    "+++ b/src/app.ts",
+                    "@@ -1,2 +1,2 @@",
+                    " const a = 1;",
+                    "+const b = 2;",
+                  ].join("\n"),
+                  truncated: false,
+                  nextCursor: null,
+                }),
+              ),
+            submitReview: (input) => recordToken(`review:${input.verdict}`),
+            update: () => recordToken("update"),
+            comment: () => recordToken("respond"),
+            runAction: (input) => recordToken(`action:${input.action}`).pipe(Effect.as(undefined)),
+            summary: () =>
+              Effect.succeed({
+                provider: SourceControlProviderKind.make("github"),
+                projectId: PROJECT_ID,
+                repository: "macs-holding/shop",
+                number: 42,
+                title: "Shop PR",
+                url: "https://github.com/macs-holding/shop/pull/42",
+                baseBranch: "main",
+                headBranch: "feat/shop",
+                state: "merged",
+                isDraft: false,
+                headSha: "deadbeef1234",
+                updatedAt: "2026-08-27T00:00:00.000Z",
+              }),
+          },
+        });
+
+        const createRes = yield* harness.call("pull_request_create", {
+          title: "Shop PR",
+          body: "body",
+        });
+        expect(createRes.actor).toBe("omegent-app[bot]");
+
+        const updateRes = yield* harness.call("pull_request_update", {
+          number: 42,
+          title: "Updated",
+        });
+        expect(updateRes.actor).toBe("omegent-app[bot]");
+
+        const respondRes = yield* harness.call("pull_request_respond", {
+          number: 42,
+          body: "Thanks!",
+        });
+        expect(respondRes.actor).toBe("omegent-app[bot]");
+
+        const approveRes = yield* harness.call("pull_request_review", {
+          number: 42,
+          verdict: "approve",
+          expectedHeadSha: "deadbeef1234",
+          body: "LGTM",
+          comments: [{ path: "src/app.ts", line: 2, body: "Nice addition" }],
+        });
+        expect(approveRes.actor).toBe("omegent-reviewer[bot]");
+
+        const requestChangesRes = yield* harness.call("pull_request_review", {
+          number: 42,
+          verdict: "request-changes",
+          body: "Fix this",
+        });
+        expect(requestChangesRes.actor).toBe("omegent-reviewer[bot]");
+
+        const commentReviewRes = yield* harness.call("pull_request_review", {
+          number: 42,
+          verdict: "comment",
+          body: "Just a note",
+        });
+        expect(commentReviewRes.actor).toBe("omegent-reviewer[bot]");
+
+        const mergeRes = yield* harness.call("pull_request_merge", {
+          number: 42,
+          expectedHeadSha: "deadbeef1234",
+        });
+        expect(mergeRes.actor).toBe("omegent-app[bot]");
+
+        expect(recordedTokens).toEqual([
+          { op: "create", token: "tok-opener" },
+          { op: "update", token: "tok-opener" },
+          { op: "respond", token: "tok-opener" },
+          { op: "diff", token: "tok-reviewer" },
+          { op: "review:approve", token: "tok-reviewer" },
+          { op: "review:request-changes", token: "tok-reviewer" },
+          { op: "review:comment", token: "tok-reviewer" },
+          { op: "action:merge", token: "tok-opener" },
+        ]);
+      }),
+  );
+
+  it.effect(
+    "fails pull_request_review closed when reviewer App resolution fails without calling submitReview",
+    () =>
+      Effect.gen(function* () {
+        let submitted = false;
+        const harness = yield* makeToolkitHarness({
+          authLayer: makeFakeAuthService({
+            resolve: ({ role }) =>
+              role === "reviewer"
+                ? Effect.fail(
+                    new GitHubAppInstallationAuth.GitHubAppInstallationError({
+                      operation: "lookup-installation",
+                      status: 404,
+                      detail:
+                        "reviewer omegent-reviewer (App 9988776) is not installed on macs-holding/shop; refusing to fall back to opener App or personal account.",
+                    }),
+                  )
+                : Effect.succeed(APP_DECISION),
+          }),
+          pullRequests: {
+            submitReview: () =>
+              Effect.sync(() => {
+                submitted = true;
+              }),
+          },
+        });
+
+        const error = yield* harness
+          .call("pull_request_review", {
+            number: 42,
+            verdict: "approve",
+            expectedHeadSha: "deadbeef1234",
+            body: "LGTM",
+          })
+          .pipe(Effect.flip);
+
+        expect(error.message).toContain("reviewer omegent-reviewer");
+        expect(submitted).toBe(false);
       }),
   );
 });
