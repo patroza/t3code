@@ -37,8 +37,8 @@ apps/server/src/mcp/McpHttpServer.ts  # mcp-tools: merges fork-registered toolki
 apps/server/src/mcp/McpToolAccess.ts  # identity: writing tools require an identity claim on outside MCP clients (identity/mcpClientClaim.ts)
 apps/server/src/mcp/OrchestratorMcpService.ts  # identity: MCP-created threads and sends carry the caller's source (sourceRefForMcpCaller)
 apps/server/src/mcp/toolkits/project/handlers.ts  # identity: t3_thread_launch stamps the MCP caller's person on the initial message (identity/stampSource.ts sourceRefForMcpCaller), which becomes the thread's origin
-apps/server/src/mcp/toolkits/pullRequests/handlers.ts  # github-app-auth: routes GitHub PR MCP reads/writes through GitHubAgentPrPolicy (github/GitHubAgentPrPolicy.ts), enforces agent review/merge policy, reports acting identity, and assigns/requests the directing human on ready PRs
-apps/server/src/mcp/toolkits/pullRequests/tools.ts  # github-app-auth: spreads PullRequestActorResultFields (github/GitHubAgentPrPolicy.ts) into PR write tool results so the acting GitHub account is visible
+apps/server/src/mcp/toolkits/pullRequests/handlers.ts  # github-app-auth: routes GitHub PR MCP reads/writes through GitHubAgentPrRouting (github/GitHubAgentPrRouting.ts) and reports acting identity
+apps/server/src/mcp/toolkits/pullRequests/tools.ts  # github-app-auth: spreads PullRequestActorResultFields (github/GitHubAgentPrRouting.ts) into PR write tool results so the acting GitHub account is visible
 apps/server/src/observability/RpcInstrumentation.ts  # identity: spreads identity RPC aggregates; bot-browser: spreads previewAutomationHostRpcAggregates
 apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts  # direnv: resolve the query environment through resolveCurrentProviderEnvironment
 apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts  # direnv: resolve the app-server environment through resolveCurrentProviderEnvironment (error mapped to open-session error)

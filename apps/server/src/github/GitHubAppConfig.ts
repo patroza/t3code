@@ -65,7 +65,6 @@ const configEffect = Effect.gen(function* () {
     ),
     agentAuthFlag: optionalString("T3_GITHUB_APP_AUTH"),
     agentAuthRouting: optionalString("T3_GITHUB_APP_ROUTING"),
-    agentPolicyFlag: optionalString("T3_GITHUB_APP_AGENT_POLICY"),
     appsFile: optionalString("T3_GITHUB_APPS_FILE"),
   });
 
@@ -73,7 +72,6 @@ const configEffect = Effect.gen(function* () {
     env: {
       T3_GITHUB_APP_AUTH: values.agentAuthFlag,
       T3_GITHUB_APP_ROUTING: values.agentAuthRouting,
-      T3_GITHUB_APP_AGENT_POLICY: values.agentPolicyFlag,
       T3_GITHUB_APPS_FILE: values.appsFile,
       T3CODE_GITHUB_APP_ID: values.appId,
       T3CODE_GITHUB_APP_PRIVATE_KEY_PATH: values.privateKeyPath,

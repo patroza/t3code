@@ -42,7 +42,7 @@ import {
 } from "../../../pullRequest/pullRequestTarget.ts";
 import * as PullRequestService from "../../../pullRequest/PullRequestService.ts";
 import * as PullRequestReviewGuideService from "../../../pullRequest/PullRequestReviewGuideService.ts";
-import { PullRequestActorResultFields } from "../../../github/GitHubAgentPrPolicy.ts";
+import { PullRequestActorResultFields } from "../../../github/GitHubAgentPrRouting.ts";
 
 const dependencies = [
   McpInvocationContext.McpInvocationContext,

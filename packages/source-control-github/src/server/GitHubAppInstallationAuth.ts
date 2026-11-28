@@ -39,7 +39,6 @@ export type GitHubAppRoutingMode = "installed-or-personal" | "app-only";
 export type GitHubAppAgentAuthConfig =
   | {
       readonly mode: "disabled";
-      readonly agentPolicy: boolean;
     }
   | {
       readonly mode: "apps-file";
@@ -47,20 +46,17 @@ export type GitHubAppAgentAuthConfig =
       readonly apps: ReadonlyArray<GitHubAppCredentialEntry>;
       readonly ownerMap: ReadonlyMap<string, GitHubAppCredentialEntry>;
       readonly repoMap: ReadonlyMap<string, GitHubAppCredentialEntry>;
-      readonly agentPolicy: boolean;
     }
   | {
       readonly mode: "apps-file-error";
       readonly filePath: string;
       readonly message: string;
-      readonly agentPolicy: boolean;
     }
   | {
       readonly mode: "single-app";
       readonly routing: GitHubAppRoutingMode;
       readonly app: GitHubAppCredentialEntry | null;
       readonly missingReason?: string | undefined;
-      readonly agentPolicy: boolean;
     };
 
 export type GitHubAppAccessKind = "read" | "write";
@@ -117,13 +113,6 @@ export class GitHubAppInstallationAuth extends Context.Service<
       readonly host: string;
       readonly repository: string;
     }) => Effect.Effect<void>;
-    readonly addIssueAssignees: (input: {
-      readonly host: string;
-      readonly repository: string;
-      readonly number: number;
-      readonly assignees: ReadonlyArray<string>;
-      readonly token: Redacted.Redacted<string>;
-    }) => Effect.Effect<void, GitHubAppInstallationError>;
   }
 >()("@t3tools/source-control-github/server/GitHubAppInstallationAuth") {}
 
@@ -295,11 +284,9 @@ export const loadGitHubAppAgentAuthConfig = Effect.fn("GitHubAppInstallationAuth
     const authExplicitlyOff = authFlag === "0" || authFlag === "false";
     const authOn = authFlag === "1" || authFlag === "true";
     const routingRaw = env.T3_GITHUB_APP_ROUTING?.trim().toLowerCase();
-    const agentPolicy =
-      env.T3_GITHUB_APP_AGENT_POLICY?.trim() === "1" || routingRaw === "installed-or-personal";
 
     if (authExplicitlyOff) {
-      return { mode: "disabled", agentPolicy } satisfies GitHubAppAgentAuthConfig;
+      return { mode: "disabled" } satisfies GitHubAppAgentAuthConfig;
     }
 
     const explicitFile = env.T3_GITHUB_APPS_FILE?.trim();
@@ -320,7 +307,6 @@ export const loadGitHubAppAgentAuthConfig = Effect.fn("GitHubAppInstallationAuth
             mode: "apps-file-error",
             filePath: candidateFile,
             message: `Could not read GitHub Apps config at ${candidateFile}.`,
-            agentPolicy,
           } satisfies GitHubAppAgentAuthConfig;
         }
         const parsed = parseGitHubAppsFile(read.success, candidateFile, homeDir);
@@ -329,7 +315,6 @@ export const loadGitHubAppAgentAuthConfig = Effect.fn("GitHubAppInstallationAuth
             mode: "apps-file-error",
             filePath: candidateFile,
             message: parsed.message,
-            agentPolicy,
           } satisfies GitHubAppAgentAuthConfig;
         }
         return {
@@ -338,7 +323,6 @@ export const loadGitHubAppAgentAuthConfig = Effect.fn("GitHubAppInstallationAuth
           apps: parsed.apps,
           ownerMap: parsed.ownerMap,
           repoMap: parsed.repoMap,
-          agentPolicy,
         } satisfies GitHubAppAgentAuthConfig;
       }
     }
@@ -357,7 +341,6 @@ export const loadGitHubAppAgentAuthConfig = Effect.fn("GitHubAppInstallationAuth
           mode: "single-app",
           routing,
           app: { appId, privateKeyPath: keyPath, owners: [], repos: [] },
-          agentPolicy,
         } satisfies GitHubAppAgentAuthConfig;
       }
       return {
@@ -366,11 +349,10 @@ export const loadGitHubAppAgentAuthConfig = Effect.fn("GitHubAppInstallationAuth
         app: null,
         missingReason:
           "GitHub App auth is enabled (T3_GITHUB_APP_AUTH=1) but T3CODE_GITHUB_APP_ID or T3CODE_GITHUB_APP_PRIVATE_KEY_PATH is missing.",
-        agentPolicy,
       } satisfies GitHubAppAgentAuthConfig;
     }
 
-    return { mode: "disabled", agentPolicy } satisfies GitHubAppAgentAuthConfig;
+    return { mode: "disabled" } satisfies GitHubAppAgentAuthConfig;
   },
 );
 
@@ -931,37 +913,10 @@ export const make = Effect.gen(function* () {
     });
   });
 
-  const addIssueAssignees: GitHubAppInstallationAuth["Service"]["addIssueAssignees"] = Effect.fn(
-    "GitHubAppInstallationAuth.addIssueAssignees",
-  )(function* (input) {
-    if (input.assignees.length === 0) return;
-    const host = normalizeHost(input.host);
-    const repo = parseOwnerAndRepo(input.repository);
-    if (repo === null) return;
-    const restUrl = GitHubRequestPolicy.gitHubApiUrls(host).rest;
-    const response = yield* executeRaw(
-      "add-assignees",
-      HttpClientRequest.post(
-        `${restUrl}/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/issues/${input.number}/assignees`,
-      ).pipe(
-        HttpClientRequest.bearerToken(Redacted.value(input.token)),
-        HttpClientRequest.bodyJsonUnsafe({ assignees: [...input.assignees] }),
-      ),
-    );
-    if (response.status < 200 || response.status >= 300) {
-      return yield* new GitHubAppInstallationError({
-        operation: "add-assignees",
-        status: response.status,
-        detail: `Could not assign ${input.assignees.join(", ")} on ${repo.fullName}#${input.number} (HTTP ${response.status}).`,
-      });
-    }
-  });
-
   return GitHubAppInstallationAuth.of({
     config,
     resolve,
     invalidate,
-    addIssueAssignees,
   });
 });
 

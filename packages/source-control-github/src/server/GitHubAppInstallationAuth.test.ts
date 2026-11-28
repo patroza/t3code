@@ -217,7 +217,6 @@ describe("GitHubAppInstallationAuth config parsing", () => {
         const fromFile = yield* loadGitHubAppAgentAuthConfig({
           env: {
             T3_GITHUB_APP_AUTH: "1",
-            T3_GITHUB_APP_AGENT_POLICY: "1",
             T3CODE_GITHUB_APP_ID: "9999",
             T3CODE_GITHUB_APP_PRIVATE_KEY_PATH: "/other.pem",
           },
@@ -225,7 +224,6 @@ describe("GitHubAppInstallationAuth config parsing", () => {
           fileSystem: fakeFileSystem(files),
         });
         expect(fromFile.mode).toBe("apps-file");
-        expect(fromFile.agentPolicy).toBe(true);
 
         const fallback = yield* loadGitHubAppAgentAuthConfig({
           env: {
@@ -250,7 +248,6 @@ describe("GitHubAppInstallationAuth config parsing", () => {
           fileSystem: fakeFileSystem(files),
         });
         expect(disabled.mode).toBe("disabled");
-        expect(disabled.agentPolicy).toBe(false);
       }),
   );
 });
@@ -281,7 +278,7 @@ describe("GitHubAppInstallationAuth routing, caching, and failures", () => {
           }),
         };
         const config = yield* loadGitHubAppAgentAuthConfig({
-          env: { T3_GITHUB_APPS_FILE: "/etc/github-apps.json", T3_GITHUB_APP_AGENT_POLICY: "1" },
+          env: { T3_GITHUB_APPS_FILE: "/etc/github-apps.json" },
           fileSystem: fakeFileSystem(files),
         });
         const http = makeFakeHttp((req) => {
@@ -792,12 +789,40 @@ describe("GitHubAppInstallationAuth routing, caching, and failures", () => {
   it.effect("does nothing when App auth is unconfigured", () =>
     Effect.gen(function* () {
       const http = makeFakeHttp(() => ({ status: 500, body: {} }));
-      const layer = provideAuth({ mode: "disabled", agentPolicy: false }, {}, http.layer);
+      const layer = provideAuth({ mode: "disabled" }, {}, http.layer);
       const decision = yield* Effect.flatMap(GitHubAppInstallationAuth, (auth) =>
         auth.resolve({ host: "github.com", repository: "macs-holding/shop", access: "write" }),
       ).pipe(Effect.provide(layer));
       expect(decision).toEqual({ mode: "personal", configured: false });
       expect(http.calls).toHaveLength(0);
+    }),
+  );
+
+  it.effect("harmlessly ignores leftover policy env vars when loading config", () =>
+    Effect.gen(function* () {
+      const files = {
+        "/etc/github-apps.json": JSON.stringify({
+          apps: [
+            {
+              name: "omegent-app",
+              appId: 4331997,
+              privateKeyPath: "/keys/omegent.pem",
+              owners: ["macs-holding"],
+            },
+          ],
+        }),
+      };
+      const legacyEnvKey = ["T3_GITHUB_APP", "AGENT", "POLICY"].join("_");
+      const config = yield* loadGitHubAppAgentAuthConfig({
+        env: {
+          T3_GITHUB_APPS_FILE: "/etc/github-apps.json",
+          T3_GITHUB_APP_ROUTING: "installed-or-personal",
+          [legacyEnvKey]: "1",
+        },
+        fileSystem: fakeFileSystem(files),
+      });
+      expect(config.mode).toBe("apps-file");
+      expect("agentPolicy" in config).toBe(false);
     }),
   );
 });
