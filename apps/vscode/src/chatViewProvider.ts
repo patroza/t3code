@@ -24,6 +24,7 @@ import { composePrompt, type TextContext } from "./editorContext.ts";
 import { derivePendingInteractions } from "@t3tools/shared/integrationPendingInteractions";
 import { fitPromptStashImages } from "./promptStashModel.ts";
 import { PromptStashStore, type PromptStashEntry } from "./promptStashStore.ts";
+import { isAuthenticationError } from "./connectionErrors.ts";
 import type { T3Client } from "./t3Client.ts";
 import { resolveThreadDisplayStatus } from "./threadStatus.ts";
 import { presentTasks } from "@t3tools/shared/integrationTasks";
@@ -55,11 +56,19 @@ interface ChatViewActions {
   readonly toggleProviderFavorite: (instanceId: string) => Promise<void>;
   readonly toggleModelFavorite: (modelKey: string) => Promise<void>;
   readonly onFavoritesChanged: vscode.Event<void>;
+  readonly pair: () => Promise<void>;
 }
 
 type WebviewRequest =
   | {
-      readonly type: "ready" | "refresh" | "stop" | "toggleContext" | "archiveThread" | "visitT3";
+      readonly type:
+        | "ready"
+        | "refresh"
+        | "stop"
+        | "toggleContext"
+        | "archiveThread"
+        | "visitT3"
+        | "pair";
     }
   | {
       readonly type: "sendNewThread";
@@ -160,7 +169,8 @@ function isRequest(value: unknown): value is WebviewRequest {
     type === "resumeQueue" ||
     type === "toggleContext" ||
     type === "archiveThread" ||
-    type === "visitT3"
+    type === "visitT3" ||
+    type === "pair"
   ) {
     return true;
   }
@@ -307,6 +317,7 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
   #view: vscode.WebviewView | null = null;
   #busy = false;
   #error: string | null = null;
+  #needsPairing = false;
   #hostResourcesLive = false;
   #hostResourceTimer: ReturnType<typeof setInterval> | null = null;
   readonly client: T3Client;
@@ -332,7 +343,13 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
       client.onThreadChanged(() => this.#publish()),
       client.onVcsStatusChanged(() => this.#publish()),
       client.onConnectionChanged((connected) => {
-        if (!connected) this.#error = "Connection lost. Refresh to reconnect to T3 Code.";
+        if (connected) {
+          this.#error = null;
+          this.#needsPairing = false;
+        } else {
+          this.#error = "Connection lost. Refresh to reconnect to T3 Code.";
+          this.#needsPairing = false;
+        }
         this.#publish();
       }),
       vscode.window.onDidChangeActiveTextEditor(() => this.#publish()),
@@ -370,6 +387,10 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
     this.#stopHostResourcePolling();
     for (const disposable of this.#disposables) disposable.dispose();
     this.#disposables.length = 0;
+  }
+
+  async refresh(): Promise<void> {
+    await this.#refresh();
   }
 
   async reveal(): Promise<void> {
@@ -414,6 +435,9 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
           await this.openInT3();
           return;
         }
+        case "pair":
+          await this.actions.pair();
+          return;
         case "listPromptStash":
           await this.#publishPromptStash(message.providerInstanceId);
           return;
@@ -647,6 +671,7 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
       }
     } catch (cause) {
       this.#error = cause instanceof Error ? cause.message : String(cause);
+      this.#needsPairing = isAuthenticationError(cause);
       this.#publish();
     }
   }
@@ -710,11 +735,13 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
     if (this.#busy) return;
     this.#busy = true;
     this.#error = null;
+    this.#needsPairing = false;
     this.#publish();
     try {
       await action();
     } catch (cause) {
       this.#error = cause instanceof Error ? cause.message : String(cause);
+      this.#needsPairing = isAuthenticationError(cause);
     } finally {
       this.#busy = false;
       this.#publish();
@@ -738,6 +765,7 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
       state: {
         busy: this.#busy,
         error: this.#error,
+        needsPairing: this.#needsPairing,
         connected: this.client.serverConfig !== null,
         supportsQueuedMessages: this.client.serverCapabilities.queuedMessages,
         environmentLabel: this.client.serverConfig?.environment.label ?? "T3 Code",
@@ -965,6 +993,8 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
     #status.error { color: var(--vscode-errorForeground); padding-top: 7px; padding-bottom: 7px; }
     #status:not(:empty) { padding: 0 10px 6px; }
     #status:not(.error)::before { content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: var(--vscode-descriptionForeground); vertical-align: 1px; }
+    #status-actions { padding: 0 10px 8px; }
+    #status-actions[hidden] { display: none; }
     #status.working { color: var(--vscode-charts-blue); }
     #status.working::before, #status.connecting::before { background: var(--vscode-charts-blue); animation: status-pulse 1.4s ease-in-out infinite; }
     #status.completed { color: var(--vscode-charts-green); }
@@ -1174,6 +1204,7 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
     <div class="messages-shell"><main id="messages"><div class="empty">Connecting to T3 Code…</div></main><button id="new-activity" type="button" hidden aria-label="Scroll to latest">↓ <span id="new-activity-dot" class="new-activity-dot" hidden></span><span id="new-activity-label">Scroll to latest</span></button></div>
     <div class="composer">
       <div id="status"></div>
+      <div id="status-actions" hidden><button id="pair-server" class="primary" type="button" data-testid="pair-server-button" aria-label="Pair with Server">Pair with Server…</button></div>
       <div id="plan-ready"></div>
       <div id="queued-messages"></div>
       <div id="pending-attachments"></div>

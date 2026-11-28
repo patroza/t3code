@@ -20,9 +20,10 @@ import {
   ORCHESTRATION_PROTOCOL_VERSION_TEXT,
   DEFAULT_MODEL,
   DEFAULT_RUNTIME_MODE,
-  EnvironmentId,
+  EnvironmentAuthInvalidError,
+  EnvironmentResourceNotFoundError,
+  type ExecutionEnvironmentDescriptor,
   ORCHESTRATION_V2_WS_METHODS,
-  PRIMARY_LOCAL_ENVIRONMENT_ID,
   ProviderInstanceId,
   type OrchestrationV2Command,
   type ModelSelection,
@@ -46,29 +47,47 @@ import {
 } from "@t3tools/contracts";
 import { applyVcsStatusStreamEvent } from "./lib/gitStatus.ts";
 import {
+  appendOrchestrationProtocol,
+  ConnectionBlockedError,
+  orchestrationProtocolCompatibilityError,
   PrimaryConnectionTarget,
   type PreparedConnection,
 } from "@t3tools/client-runtime/connection";
 import {
+  executeEnvironmentHttpRequest,
   layerRemoteHttpClient,
+  makeEnvironmentHttpApiGroupClient,
+  RemoteEnvironmentAuthUndeclaredStatusError,
   RpcSessionFactory,
   rpcSessionFactoryLayer,
   type RpcSession,
 } from "@t3tools/client-runtime/rpc";
-import { resolveRemoteWebSocketConnectionUrl } from "@t3tools/client-runtime/authorization";
-import { bootstrapRemoteBearerSession } from "@t3tools/client-runtime/authorization";
-import { fetchRemoteEnvironmentDescriptor } from "@t3tools/client-runtime/environment";
+import {
+  bootstrapRemoteBearerSession,
+  resolveRemoteWebSocketConnectionUrl,
+} from "@t3tools/client-runtime/authorization";
+import {
+  environmentEndpointUrl,
+  fetchRemoteEnvironmentDescriptor,
+} from "@t3tools/client-runtime/environment";
 import { applyShellStreamEvent } from "@t3tools/client-runtime/state/shell";
 
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as Socket from "effect/socket/Socket";
 
+import {
+  T3AuthenticationError,
+  isAuthenticationError,
+  isConnectionBlockedError,
+} from "./connectionErrors.ts";
 import { newCommandId, newMessageId, newProjectId, newThreadId } from "./ids.ts";
 import type { IdentitySnapshot, IdentityStatus, SessionIdentityClaim } from "./identity.ts";
 import {
@@ -97,12 +116,16 @@ function wsBaseUrl(httpBaseUrl: string): string {
   return url.toString();
 }
 
-function localSocketUrl(httpBaseUrl: string): string {
+export function buildRpcSocketUrl(socketUrl: string): string {
+  return appendOmegentT3ProductHandshake(appendOrchestrationProtocol(socketUrl));
+}
+
+export function localSocketUrl(httpBaseUrl: string): string {
   const url = new URL(wsBaseUrl(httpBaseUrl));
   url.pathname = "/ws";
   url.search = "";
   url.hash = "";
-  return appendOmegentT3ProductHandshake(url.toString());
+  return buildRpcSocketUrl(url.toString());
 }
 
 function normalizedPath(path: string): string {
@@ -114,14 +137,20 @@ function messageFromCause(cause: unknown): string {
   return String(cause);
 }
 
+const isEnvironmentAuthInvalidError = Schema.is(EnvironmentAuthInvalidError);
+const isEnvironmentResourceNotFoundError = Schema.is(EnvironmentResourceNotFoundError);
+const isRemoteEnvironmentAuthUndeclaredStatusError = Schema.is(
+  RemoteEnvironmentAuthUndeclaredStatusError,
+);
+
+const clientRuntimeLayer = Layer.merge(
+  rpcSessionFactoryLayer({}).pipe(Layer.provide(Socket.layerWebSocketConstructorGlobal)),
+  layerRemoteHttpClient((input, init) => globalThis.fetch(input, init)),
+);
+
 export class T3Client {
   readonly #log: (message: string) => void;
-  readonly #runtime = ManagedRuntime.make(
-    Layer.merge(
-      rpcSessionFactoryLayer({}).pipe(Layer.provide(Socket.layerWebSocketConstructorGlobal)),
-      layerRemoteHttpClient((input, init) => globalThis.fetch(input, init)),
-    ),
-  );
+  readonly #runtime = ManagedRuntime.make(clientRuntimeLayer);
   #scope: Scope.Closeable | null = null;
   #session: RpcSession | null = null;
   #shellFiber: Fiber.Fiber<void, unknown> | null = null;
@@ -260,32 +289,102 @@ export class T3Client {
     return new Promise((resolve) => this.#threadWaiters.add(resolve));
   }
 
+  async #runEffect<A, E>(
+    effect: Effect.Effect<A, E, Layer.Success<typeof clientRuntimeLayer>>,
+  ): Promise<A> {
+    const exit = await this.#runtime.runPromiseExit(effect);
+    if (Exit.isFailure(exit)) {
+      throw Cause.squash(exit.cause);
+    }
+    return exit.value;
+  }
+
+  async fetchCompatibleDescriptor(httpBaseUrl: string): Promise<ExecutionEnvironmentDescriptor> {
+    const normalizedBaseUrl = new URL(httpBaseUrl).toString();
+    const descriptor = await this.#runEffect(
+      fetchRemoteEnvironmentDescriptor({ httpBaseUrl: normalizedBaseUrl }),
+    );
+    const compatibilityError = orchestrationProtocolCompatibilityError(descriptor);
+    if (compatibilityError !== null) {
+      throw compatibilityError;
+    }
+    return descriptor;
+  }
+
+  async #checkUnauthenticatedSession(httpBaseUrl: string): Promise<boolean> {
+    try {
+      const state = await this.#runEffect(
+        Effect.gen(function* () {
+          const client = yield* makeEnvironmentHttpApiGroupClient(httpBaseUrl, "auth");
+          return yield* executeEnvironmentHttpRequest(
+            environmentEndpointUrl(httpBaseUrl, "/api/auth/session"),
+            10_000,
+            client.session({ headers: {} }),
+          );
+        }),
+      );
+      return state.authenticated;
+    } catch (err) {
+      if (
+        isEnvironmentResourceNotFoundError(err) ||
+        (isRemoteEnvironmentAuthUndeclaredStatusError(err) && err.status === 404)
+      ) {
+        return true;
+      }
+      throw err;
+    }
+  }
+
   async connect(httpBaseUrl: string, bearerToken?: string): Promise<void> {
     const startedAt = Date.now();
     const normalizedBaseUrl = new URL(httpBaseUrl).toString();
-    const key = `${normalizedBaseUrl}|${bearerToken ?? ""}`;
+    const effectiveBearerToken =
+      bearerToken !== undefined && bearerToken !== "" ? bearerToken : null;
+    const key = `${normalizedBaseUrl}|${effectiveBearerToken ?? ""}`;
     if (this.#session !== null && this.#connectionKey === key) return;
     this.#log(`connect start endpoint=${normalizedBaseUrl}`);
+    if (this.#httpBaseUrl !== null && this.#httpBaseUrl !== normalizedBaseUrl) {
+      this.#activeThreadId = null;
+    }
     await this.#closeConnection();
 
-    let environmentId = EnvironmentId.make(PRIMARY_LOCAL_ENVIRONMENT_ID);
-    let socketUrl = localSocketUrl(normalizedBaseUrl);
-    let label = "T3 Code";
-    if (bearerToken !== undefined && bearerToken !== "") {
-      const descriptor = await this.#runtime.runPromise(
-        fetchRemoteEnvironmentDescriptor({ httpBaseUrl: normalizedBaseUrl }),
-      );
-      socketUrl = appendOmegentT3ProductHandshake(
-        await this.#runtime.runPromise(
+    const descriptor = await this.fetchCompatibleDescriptor(normalizedBaseUrl);
+    const environmentId = descriptor.environmentId;
+    const label = descriptor.label;
+    let socketUrl: string;
+    if (effectiveBearerToken !== null) {
+      let rawSocketUrl: string;
+      try {
+        rawSocketUrl = await this.#runEffect(
           resolveRemoteWebSocketConnectionUrl({
             wsBaseUrl: wsBaseUrl(normalizedBaseUrl),
             httpBaseUrl: normalizedBaseUrl,
-            bearerToken,
+            bearerToken: effectiveBearerToken,
           }),
-        ),
-      );
-      label = descriptor.label;
-      environmentId = descriptor.environmentId;
+        );
+      } catch (err) {
+        if (isEnvironmentAuthInvalidError(err)) {
+          throw new T3AuthenticationError({
+            reason:
+              err.reason === "missing_credential" ? "missing_credential" : "invalid_credential",
+            endpoint: normalizedBaseUrl,
+            serverLabel: label,
+            cause: err,
+          });
+        }
+        throw err;
+      }
+      socketUrl = buildRpcSocketUrl(rawSocketUrl);
+    } else {
+      const authenticated = await this.#checkUnauthenticatedSession(normalizedBaseUrl);
+      if (!authenticated) {
+        throw new T3AuthenticationError({
+          reason: "missing_credential",
+          endpoint: normalizedBaseUrl,
+          serverLabel: label,
+        });
+      }
+      socketUrl = localSocketUrl(normalizedBaseUrl);
     }
     const target = new PrimaryConnectionTarget({
       environmentId,
@@ -299,14 +398,13 @@ export class T3Client {
       httpBaseUrl: normalizedBaseUrl,
       socketUrl,
       httpAuthorization:
-        bearerToken === undefined || bearerToken === ""
-          ? null
-          : { _tag: "Bearer", token: bearerToken },
+        effectiveBearerToken === null ? null : { _tag: "Bearer", token: effectiveBearerToken },
       target,
+      descriptor,
     };
     const scope = await this.#runtime.runPromise(Scope.make());
     try {
-      const session = await this.#runtime.runPromise(
+      const session = await this.#runEffect(
         Effect.gen(function* () {
           const factory = yield* RpcSessionFactory;
           const connected = yield* factory.connect(prepared);
@@ -314,24 +412,34 @@ export class T3Client {
           return connected;
         }).pipe(Scope.provide(scope)),
       );
-      this.#scope = scope;
-      this.#session = session;
-      this.#connectionKey = key;
-      this.#serverConfig = await this.#runtime.runPromise(session.initialConfig);
+      const serverConfig = await this.#runEffect(session.initialConfig);
       const compatibilityClient = session.client as unknown as CompatibilityRpcClient;
       const identityProbe = compatibilityClient["identity.getSnapshot"];
-      this.#serverCapabilities = await detectServerCapabilities(() => {
+      const serverCapabilities = await detectServerCapabilities(() => {
         if (identityProbe === undefined)
           return Promise.reject(new Error("identity RPC unavailable"));
         return this.#runtime.runPromise(identityProbe({}));
       });
-      this.#log(
-        `server compatibility=${this.#serverCapabilities.forkExtensions ? "fork" : "upstream"}`,
-      );
+      this.#log(`server compatibility=${serverCapabilities.forkExtensions ? "fork" : "upstream"}`);
       this.#log(`rpc ready in ${Date.now() - startedAt}ms endpoint=${normalizedBaseUrl}`);
+      const shell = await this.#fetchShellSnapshot(
+        normalizedBaseUrl,
+        effectiveBearerToken ?? undefined,
+        label,
+      );
+      // Commit state only after config and initial shell hydration succeed so a
+      // failed handshake never leaves a closed session cached for future connects.
+      this.#scope = scope;
+      this.#session = session;
+      this.#connectionKey = key;
+      this.#serverConfig = serverConfig;
+      this.#serverCapabilities = serverCapabilities;
       this.#httpBaseUrl = normalizedBaseUrl;
-      this.#bearerToken = bearerToken ?? null;
-      await this.#loadShellSnapshot(normalizedBaseUrl, bearerToken);
+      this.#bearerToken = effectiveBearerToken;
+      this.#shell = shell;
+      for (const resolve of this.#shellWaiters) resolve(this.shell!);
+      this.#shellWaiters.clear();
+      for (const listener of this.#shellListeners) listener(this.shell!);
       this.#emitConnection(true);
       this.#startShellSubscription(session);
       if (this.#vcsStatusCwd !== null)
@@ -356,24 +464,11 @@ export class T3Client {
       this.#log(`connect complete in ${Date.now() - startedAt}ms endpoint=${normalizedBaseUrl}`);
     } catch (cause) {
       await this.#runtime.runPromise(Scope.close(scope, Exit.void));
+      if (isAuthenticationError(cause) || isConnectionBlockedError(cause)) {
+        throw cause;
+      }
       throw new Error(`Could not connect to T3 Code: ${messageFromCause(cause)}`, { cause });
     }
-  }
-
-  async connectWithBootstrap(httpBaseUrl: string, credential: string): Promise<void> {
-    const baseUrl = new URL(httpBaseUrl);
-    if (this.#session !== null && this.#httpBaseUrl === baseUrl.toString()) return;
-    const startedAt = Date.now();
-    this.#log(`bootstrap start endpoint=${baseUrl}`);
-    const session = await this.#runtime.runPromise(
-      bootstrapRemoteBearerSession({
-        httpBaseUrl,
-        credential,
-        clientMetadata: { label: "T3 Code for VS Code", deviceType: "desktop" },
-      }),
-    );
-    this.#log(`bootstrap complete in ${Date.now() - startedAt}ms endpoint=${baseUrl}`);
-    await this.connect(httpBaseUrl, session.access_token);
   }
 
   /**
@@ -387,7 +482,7 @@ export class T3Client {
   ): Promise<{ accessToken: string; expiresInSeconds: number }> {
     const startedAt = Date.now();
     this.#log(`pairing exchange start endpoint=${httpBaseUrl}`);
-    const session = await this.#runtime.runPromise(
+    const session = await this.#runEffect(
       bootstrapRemoteBearerSession({
         httpBaseUrl,
         credential,
@@ -784,7 +879,11 @@ export class T3Client {
     this.#shellFiber = this.#runtime.runFork(stream);
   }
 
-  async #loadShellSnapshot(httpBaseUrl: string, bearerToken?: string): Promise<void> {
+  async #fetchShellSnapshot(
+    httpBaseUrl: string,
+    bearerToken?: string,
+    label = "T3 Code",
+  ): Promise<OrchestrationV2ShellSnapshot> {
     const startedAt = Date.now();
     const url = new URL("/api/orchestration/shell", httpBaseUrl);
     const headers =
@@ -795,16 +894,29 @@ export class T3Client {
       headers: { ...headers, [ORCHESTRATION_PROTOCOL_HEADER]: ORCHESTRATION_PROTOCOL_VERSION_TEXT },
     });
     if (!response.ok) {
+      if (response.status === 401) {
+        throw new T3AuthenticationError({
+          reason:
+            bearerToken !== undefined && bearerToken !== ""
+              ? "invalid_credential"
+              : "missing_credential",
+          endpoint: httpBaseUrl,
+          serverLabel: label,
+        });
+      }
+      if (response.status === 426) {
+        throw new ConnectionBlockedError({
+          reason: "unsupported",
+          detail: `This client is not compatible with T3 Code at ${label} (HTTP 426). Update T3 Code or the VS Code extension.`,
+        });
+      }
       throw new Error(`Could not load T3 Code threads (HTTP ${response.status}).`);
     }
-    const decode = decodeShellSnapshotText;
-    this.#shell = decode(await response.text());
+    const shell = decodeShellSnapshotText(await response.text());
     this.#log(
-      `shell HTTP complete in ${Date.now() - startedAt}ms projects=${this.#shell.projects.length} threads=${this.#shell.threads.length} sequence=${this.#shell.snapshotSequence}`,
+      `shell HTTP complete in ${Date.now() - startedAt}ms projects=${shell.projects.length} threads=${shell.threads.length} sequence=${shell.snapshotSequence}`,
     );
-    for (const resolve of this.#shellWaiters) resolve(this.shell!);
-    this.#shellWaiters.clear();
-    for (const listener of this.#shellListeners) listener(this.shell!);
+    return shell;
   }
 
   #startVcsStatusSubscription(session: RpcSession, cwd: string): void {
@@ -890,6 +1002,23 @@ export class T3Client {
       headers: { ...headers, [ORCHESTRATION_PROTOCOL_HEADER]: ORCHESTRATION_PROTOCOL_VERSION_TEXT },
     });
     if (!response.ok) {
+      if (response.status === 401) {
+        throw new T3AuthenticationError({
+          reason:
+            this.#bearerToken !== null && this.#bearerToken !== ""
+              ? "invalid_credential"
+              : "missing_credential",
+          endpoint: this.#httpBaseUrl,
+          serverLabel: this.#serverConfig?.environment.label ?? "T3 Code",
+        });
+      }
+      if (response.status === 426) {
+        const label = this.#serverConfig?.environment.label ?? "T3 Code";
+        throw new ConnectionBlockedError({
+          reason: "unsupported",
+          detail: `This client is not compatible with T3 Code at ${label} (HTTP 426). Update T3 Code or the VS Code extension.`,
+        });
+      }
       throw new Error(`Could not load the T3 Code thread (HTTP ${response.status}).`);
     }
     const decode = decodeThreadSnapshotText;
