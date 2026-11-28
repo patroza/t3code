@@ -24,7 +24,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as GitManager from "../../../git/GitManager.ts";
-import * as GitHubAgentPrPolicy from "../../../github/GitHubAgentPrPolicy.ts";
+import * as GitHubAgentPrRouting from "../../../github/GitHubAgentPrRouting.ts";
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as PullRequestWatchService from "../../../pullRequest/PullRequestWatchService.ts";
@@ -1084,7 +1084,7 @@ const make = Effect.gen(function* () {
             : input.includeResolved === true;
         return {
           ...identityOf(target),
-          ...(yield* GitHubAgentPrPolicy.withGitHubAgentRead(
+          ...(yield* GitHubAgentPrRouting.withGitHubAgentRead(
             target,
             readSections(ref, sections, includeResolved, cursor),
           )),
@@ -1097,8 +1097,8 @@ const make = Effect.gen(function* () {
         const project = yield* projectOf(thread, PullRequestForgeError).pipe(
           Effect.orElseSucceed(() => undefined),
         );
-        const listed = yield* GitHubAgentPrPolicy.withGitHubAgentRead(
-          GitHubAgentPrPolicy.projectGitHubTarget(project),
+        const listed = yield* GitHubAgentPrRouting.withGitHubAgentRead(
+          GitHubAgentPrRouting.projectGitHubTarget(project),
           pullRequests
             .list({
               projectId: thread.projectId,
@@ -1226,12 +1226,8 @@ const make = Effect.gen(function* () {
             });
           }
         });
-        const {
-          value: created,
-          actor,
-          decision,
-        } = yield* GitHubAgentPrPolicy.withGitHubAgentWrite(
-          GitHubAgentPrPolicy.projectGitHubTarget(project),
+        const { value: created, actor } = yield* GitHubAgentPrRouting.withGitHubAgentWrite(
+          GitHubAgentPrRouting.projectGitHubTarget(project),
           { cwd, mapAuthError: forgeFailure },
           fullAccess
             ? create().pipe(Effect.catchTags({ GitPushHooksUnapprovedError: forgeFailure }))
@@ -1245,19 +1241,6 @@ const make = Effect.gen(function* () {
         }
         const target = yield* resolveTarget({ url: created.url }, project);
         yield* linkToThread(thread, target);
-        if (input.draft !== true && created.status === "created") {
-          yield* GitHubAgentPrPolicy.assignAndRequestDirectingHuman({
-            thread,
-            ref: {
-              projectId: project.id,
-              host: target.host,
-              repository: target.repository,
-              number: target.number,
-            },
-            pullRequests,
-            decision,
-          });
-        }
         return {
           ...identityOf(target),
           ...(actor === undefined ? {} : { actor }),
@@ -1284,8 +1267,8 @@ const make = Effect.gen(function* () {
             detail: "Pass title, body, ready, state, addLabels, removeLabels, or requestReviewers.",
           });
         }
-        const { thread, project, target, ref } = yield* locate(input);
-        const { actor, decision } = yield* GitHubAgentPrPolicy.withGitHubAgentWrite(
+        const { project, target, ref } = yield* locate(input);
+        const { actor } = yield* GitHubAgentPrRouting.withGitHubAgentWrite(
           target,
           { cwd: project.workspaceRoot, mapAuthError: forgeFailure },
           Effect.gen(function* () {
@@ -1328,14 +1311,6 @@ const make = Effect.gen(function* () {
             }
           }),
         );
-        if (input.ready === true) {
-          yield* GitHubAgentPrPolicy.assignAndRequestDirectingHuman({
-            thread,
-            ref,
-            pullRequests,
-            decision,
-          });
-        }
         return { ...identityOf(target), ...(actor === undefined ? {} : { actor }) };
       }),
     ),
@@ -1356,7 +1331,7 @@ const make = Effect.gen(function* () {
         }
         const { project, target, ref } = yield* locate(input);
         const reviewThreadId = input.reviewThreadId;
-        const { actor } = yield* GitHubAgentPrPolicy.withGitHubAgentWrite(
+        const { actor } = yield* GitHubAgentPrRouting.withGitHubAgentWrite(
           target,
           { cwd: project.workspaceRoot, mapAuthError: forgeFailure },
           Effect.gen(function* () {
@@ -1402,10 +1377,6 @@ const make = Effect.gen(function* () {
     ),
     pull_request_review: McpToolAccess.writesWithCapability((input) =>
       Effect.gen(function* () {
-        yield* GitHubAgentPrPolicy.enforceAgentReviewPolicy(
-          input.verdict,
-          (detail) => new PullRequestForgeError({ detail }),
-        );
         if (input.verdict === "approve" && input.expectedHeadSha === undefined) {
           return yield* new PullRequestForgeError({
             detail:
@@ -1413,7 +1384,7 @@ const make = Effect.gen(function* () {
           });
         }
         const { project, target, ref } = yield* locate(input);
-        const { actor } = yield* GitHubAgentPrPolicy.withGitHubAgentWrite(
+        const { actor } = yield* GitHubAgentPrRouting.withGitHubAgentWrite(
           target,
           { cwd: project.workspaceRoot, mapAuthError: forgeFailure },
           Effect.gen(function* () {
@@ -1437,18 +1408,7 @@ const make = Effect.gen(function* () {
     pull_request_merge: McpToolAccess.writesWithCapability((input) =>
       Effect.gen(function* () {
         const { project, target, ref } = yield* locate(input);
-        yield* GitHubAgentPrPolicy.enforceAgentMergePolicy(
-          {
-            host: target.host,
-            repository: target.repository,
-            number: target.number,
-            expectedHeadSha: input.expectedHeadSha,
-            auto: input.auto,
-            method: input.method,
-          },
-          (detail) => new PullRequestForgeError({ detail }),
-        );
-        const { value: after, actor } = yield* GitHubAgentPrPolicy.withGitHubAgentWrite(
+        const { value: after, actor } = yield* GitHubAgentPrRouting.withGitHubAgentWrite(
           target,
           { cwd: project.workspaceRoot, mapAuthError: forgeFailure },
           Effect.gen(function* () {
@@ -1477,7 +1437,7 @@ const make = Effect.gen(function* () {
     ci_logs: McpToolAccess.reads((input) =>
       Effect.gen(function* () {
         const { target, ref } = yield* locate(input);
-        const checks = yield* GitHubAgentPrPolicy.withGitHubAgentRead(
+        const checks = yield* GitHubAgentPrRouting.withGitHubAgentRead(
           target,
           pullRequests
             .checkLogs({
@@ -1493,7 +1453,7 @@ const make = Effect.gen(function* () {
     ci_rerun: McpToolAccess.writesWithCapability((input) =>
       Effect.gen(function* () {
         const { thread, project, target, ref } = yield* locate(input);
-        const { value: checks } = yield* GitHubAgentPrPolicy.withGitHubAgentWrite(
+        const { value: checks } = yield* GitHubAgentPrRouting.withGitHubAgentWrite(
           target,
           { cwd: project.workspaceRoot, mapAuthError: forgeFailure },
           pullRequests
