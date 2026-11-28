@@ -11,6 +11,7 @@ import * as Context_ from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 
 import type { DiscordBotConfig } from "../config.ts";
@@ -26,6 +27,7 @@ import {
   groupChatMirrorsFile,
   planTeamsGroupChat,
   groupChatThreadName,
+  groupChatT3ThreadTitle,
   readGroupChatMirror,
   rememberGroupChatMirror,
   teamsChannelThreadId,
@@ -34,7 +36,7 @@ import {
   type GroupChatPlan,
   type GroupChatRule,
 } from "../teams/groupChats.ts";
-import { weeklyThreadKey } from "../teams/weeklyThreads.ts";
+import { teamsWeekBucket, weeklyThreadKey } from "../teams/weeklyThreads.ts";
 import { formatOmegentLinkMarker } from "./linkMarker.ts";
 import { startOrContinueT3Turn } from "./LinkedTurnRouter.ts";
 
@@ -129,6 +131,14 @@ function knownAlertThread(threadsFile: string, sourceKey: string, existing: Thre
   return readGroupChatMirror(threadsFile, sourceKey);
 }
 
+/** Parent channel for a new weekly Discord thread: the chat's own, else the alerts channel. */
+function groupChatDiscordChannel(
+  config: DiscordBotConfig,
+  chat: Extract<GroupChatPlan, { kind: "turn" }>["chat"],
+): string | undefined {
+  return chat.discordChannelId ?? config.alertsChannelId;
+}
+
 const ensureAlertThread = Effect.fn("ensureAlertThread")(function* (
   runtime: Context.Context<never>,
   config: DiscordBotConfig,
@@ -146,7 +156,7 @@ const ensureAlertThread = Effect.fn("ensureAlertThread")(function* (
     });
     return null;
   }
-  const alertsChannelId = config.alertsChannelId;
+  const alertsChannelId = groupChatDiscordChannel(config, chat);
   if (alertsChannelId === undefined || alertsChannelId.length === 0) {
     yield* Effect.logError(
       "DISCORD_ALERTS_CHANNEL_ID is unset; the Teams group chat continues without Discord",
@@ -220,13 +230,22 @@ const attachAlertThread = Effect.fn("attachAlertThread")(function* (
   // Left as is, the next message retries the attach.
   if (posted === null) return;
   if (link.discordThreadId !== discordThreadId) {
+    const channelId = groupChatDiscordChannel(config, chat);
     yield* links.rekey(link.discordThreadId, {
       discordThreadId,
-      ...(config.alertsChannelId === undefined ? {} : { channelId: config.alertsChannelId }),
+      ...(channelId === undefined ? {} : { channelId }),
     });
   }
   yield* links.setInfoDiscordMessageId(discordThreadId, posted);
 });
+
+export interface TeamsMirrorTurn {
+  readonly mirror: GroupChatMirror;
+  readonly conversationId: string;
+  readonly sourceKey: string;
+  readonly t3ThreadId: ThreadId;
+  readonly messageId: string;
+}
 
 export interface TeamsChannelPoster {
   openThread(input: {
@@ -307,6 +326,44 @@ const copyToChannelThread = Effect.fn("copyToChannelThread")(function* (
   return { created: savedId === null, conversationId: openedId };
 });
 
+/**
+ * The weekly link is keyed by its Discord thread, so a Teams mirror thread gets its own delivery
+ * link. Bridge state (info card, stream tips, delivered answers) then stays per conversation.
+ */
+export const ensureTeamsMirrorLink = Effect.fn("ensureTeamsMirrorLink")(function* (input: {
+  readonly conversationId: string;
+  readonly sourceKey: string;
+  readonly t3ThreadId: ThreadId;
+}) {
+  const links = yield* ThreadLinkStore;
+  const current = yield* links.getByDiscordThreadId(input.conversationId);
+  if (current !== null && current.t3ThreadId === input.t3ThreadId) return;
+  const weekly = yield* links.getBySourceThread("teams", input.sourceKey);
+  if (weekly === null || weekly.t3ThreadId !== input.t3ThreadId) return;
+  // An answer finished before this link existed was not meant for this thread; don't replay it.
+  const t3 = yield* T3Session;
+  const snapshot = yield* t3
+    .fetchThreadDetail(input.t3ThreadId)
+    .pipe(Effect.orElseSucceed(() => null));
+  const latest = snapshot?.thread.latestTurn;
+  yield* links.put({
+    sourceKind: "teams",
+    sourceThreadId: `${input.sourceKey}#teams-mirror`,
+    discordThreadId: input.conversationId,
+    t3ThreadId: input.t3ThreadId,
+    projectId: weekly.projectId,
+    channelId: "",
+    guildId: "",
+    createdAt: DateTime.formatIso(yield* DateTime.now),
+    ...(latest?.state === "completed"
+      ? {
+          lastSeenTurnId: latest.turnId,
+          lastFinalizedAssistantId: latest.assistantMessageId,
+        }
+      : {}),
+  });
+});
+
 const runGroupChatCommand = Effect.fn("runGroupChatCommand")(function* (
   runtime: Context.Context<never>,
   discordThreadId: string,
@@ -362,6 +419,12 @@ const runGroupChatCommand = Effect.fn("runGroupChatCommand")(function* (
  * Observe a Teams group chat without sending anything back to it.
  * One T3 thread, one Discord alerts thread, and one internal Teams channel thread per week.
  */
+/** About three minutes in total: covers a gateway restart and short T3 disconnects. */
+const GROUP_CHAT_T3_RETRY = Schedule.max([
+  Schedule.min([Schedule.exponential("2 seconds"), Schedule.spaced("1 minute")]),
+  Schedule.recurs(7),
+]);
+
 export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* (
   config: DiscordBotConfig,
   rules: ReadonlyArray<GroupChatRule>,
@@ -372,9 +435,13 @@ export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* 
   options?: {
     readonly builtinScanner?: boolean;
     readonly builtinMirror?: GroupChatMirror;
+    readonly builtinDiscordChannelId?: string;
     readonly hasImages?: boolean;
     readonly attachments?: ReadonlyArray<UploadChatAttachment>;
     readonly attachmentNote?: string;
+    readonly t3RetrySchedule?: Schedule.Schedule<unknown, unknown>;
+    /** Streams the weekly T3 thread's output into its Teams mirror thread, as a mention would. */
+    readonly bridgeMirror?: (input: TeamsMirrorTurn) => Effect.Effect<void, unknown>;
   },
 ) {
   const access =
@@ -401,6 +468,9 @@ export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* 
     mentionedBot: activity.mentionedBot,
     ...(options?.builtinScanner === undefined ? {} : { builtinScanner: options.builtinScanner }),
     ...(options?.builtinMirror === undefined ? {} : { builtinMirror: options.builtinMirror }),
+    ...(options?.builtinDiscordChannelId === undefined
+      ? {}
+      : { builtinDiscordChannelId: options.builtinDiscordChannelId }),
     ...(activity.messageId === undefined ? {} : { messageId: activity.messageId }),
     ...(activity.author === undefined ? {} : { author: activity.author }),
     ...(options?.hasImages === true ? { hasImages: true } : {}),
@@ -418,7 +488,8 @@ export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* 
   }
 
   // Group chats have no reply chains, so the whole chat starts a fresh thread each week.
-  const sourceKey = weeklyThreadKey(plan.sourceKey, DateTime.toDateUtc(yield* DateTime.now));
+  const now = DateTime.toDateUtc(yield* DateTime.now);
+  const sourceKey = weeklyThreadKey(plan.sourceKey, now);
   const links = yield* ThreadLinkStore;
   const existing = yield* links.getBySourceThread("teams", sourceKey);
   const mirrorsFile = groupChatMirrorsFile(config.dataDir);
@@ -502,6 +573,7 @@ export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* 
       externalTenantId: existing?.guildId ?? "",
       projectShortName: plan.chat.projectShortName,
       prompt,
+      title: groupChatT3ThreadTitle(plan.chat.title, teamsWeekBucket(now)),
       flags: {},
       stickyModelOnContinue: true,
       ...(options?.attachments !== undefined && options.attachments.length > 0
@@ -510,6 +582,15 @@ export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* 
       promptContext: { kind: "raw", value: prompt },
     }),
   ).pipe(
+    // T3 drops briefly and is not ready right after a gateway restart; retry rather than lose
+    // the message, because the intake claim and Graph last-seen already moved past it.
+    Effect.tapCause((cause) =>
+      Effect.logWarning("T3 turn for the Teams group chat failed; retrying", {
+        sourceKey,
+        cause: Cause.pretty(cause),
+      }),
+    ),
+    Effect.retry(options?.t3RetrySchedule ?? GROUP_CHAT_T3_RETRY),
     Effect.catchCause((cause) =>
       Effect.logError("Could not start the T3 turn for the Teams group chat", {
         sourceKey,
@@ -539,6 +620,23 @@ export const ingestTeamsGroupChat = Effect.fn("ingestTeamsGroupChat")(function* 
         Effect.logError("Could not post the Omegent link to the Teams channel thread", {
           error,
         }).pipe(Effect.asVoid),
+      ),
+    );
+  }
+  const bridgeMirror = options?.bridgeMirror;
+  if (bridgeMirror !== undefined && plan.chat.mirror !== null && channelThread.conversationId) {
+    yield* bridgeMirror({
+      mirror: plan.chat.mirror,
+      conversationId: channelThread.conversationId,
+      sourceKey,
+      t3ThreadId,
+      messageId: turn.messageId,
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logError("Could not stream T3 output to the Teams channel thread", {
+          sourceKey,
+          cause: Cause.pretty(cause),
+        }),
       ),
     );
   }

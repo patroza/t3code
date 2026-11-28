@@ -68,6 +68,7 @@ export type GroupChatIntake =
       readonly rules: ReadonlyArray<GroupChatRule>;
       readonly builtinScanner: boolean;
       readonly builtinMirror?: GroupChatMirror;
+      readonly builtinDiscordChannelId?: string;
     };
 
 const digest = (value: unknown) =>
@@ -75,6 +76,11 @@ const digest = (value: unknown) =>
 const teamKey = (tenant: string, team: string) => digest([tenant, team]);
 const fingerprint = (config: TeamsGatewayConfig, binding: TeamsGatewayBinding) =>
   digest([config.identity, binding, config.workspaces[binding.workspace]]);
+// Same key for every actor in one conversation, so one response reference per conversation.
+const leaseKey = (config: TeamsGatewayConfig, binding: TeamsGatewayBinding, conversation: string) =>
+  digest([binding.workspace, binding.id, fingerprint(config, binding), conversation]);
+/** Not an Entra object id (bindings only allow UUID actors), so no activity can carry it. */
+export const GROUP_CHAT_MIRROR_ACTOR = "system:group-chat-mirror";
 const botId = (value: string | undefined) => value?.replace(/^28:/u, "").toLowerCase();
 // Bot activities use a conversation ID in team.id; bindings use the Entra group ID.
 const matchesTeam = (binding: TeamsGatewayBinding, activity: GatewayActivity) => {
@@ -215,12 +221,50 @@ export class TeamsGatewayPolicy {
         config.workspaces[current.workspace]?.enabled === true &&
         !this.revoked.has(teamKey(current.tenantId, current.teamId)) &&
         fingerprint(config, current) === lease.fingerprint &&
-        this.identityAllowed(current.workspace, lease.actorId) &&
-        current.allowedActorIds.some((id) => id.toLowerCase() === lease.actorId)
+        (lease.actorId === GROUP_CHAT_MIRROR_ACTOR ||
+          (this.identityAllowed(current.workspace, lease.actorId) &&
+            current.allowedActorIds.some((id) => id.toLowerCase() === lease.actorId)))
       );
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Delivery-only lease for a group-chat mirror thread, so T3 output for the weekly thread the
+   * gateway started reaches it without a mention. It never authorizes intake or card actions:
+   * those always build their lease from the authenticated actor in `accept`.
+   */
+  mirrorLease(
+    workspace: string,
+    mirror: GroupChatMirror,
+    conversationId: string,
+  ): GatewayLease | null {
+    let config: TeamsGatewayConfig;
+    try {
+      config = this.config();
+    } catch {
+      return null;
+    }
+    if (!conversationId.startsWith(`${mirror.channelId};messageid=`)) return null;
+    const matches = config.bindings.filter(
+      (binding) =>
+        binding.enabled &&
+        binding.workspace === workspace &&
+        binding.tenantId.toLowerCase() === mirror.tenantId.toLowerCase() &&
+        binding.teamId.toLowerCase() === mirror.teamId.toLowerCase() &&
+        binding.channelId === mirror.channelId,
+    );
+    if (matches.length !== 1) return null;
+    const binding = matches[0]!;
+    const lease: GatewayLease = {
+      binding,
+      fingerprint: fingerprint(config, binding),
+      actorId: GROUP_CHAT_MIRROR_ACTOR,
+      conversationId,
+      key: leaseKey(config, binding, conversationId),
+    };
+    return this.isActive(lease) ? lease : null;
   }
 
   /** Uninstall revokes delivery even when the installer is not an authorized work actor. */
@@ -296,8 +340,10 @@ export class TeamsGatewayPolicy {
   /**
    * Group chats have no channel binding. Claim the activity once and name the
    * single workspace that should observe it. Never store the customer text.
+   * `graph` messages were read by the gateway itself with its app token, so they carry no
+   * Bot Framework envelope; they share the claim, so a message pushed both ways runs once.
    */
-  acceptGroupChat(activity: GatewayActivity): GroupChatIntake {
+  acceptGroupChat(activity: GatewayActivity, source: "bot" | "graph" = "bot"): GroupChatIntake {
     let config: TeamsGatewayConfig;
     try {
       config = this.config();
@@ -313,11 +359,12 @@ export class TeamsGatewayPolicy {
     ) {
       return { kind: "not-group" };
     }
-    const envelope = this.rejectedEnvelope(
-      activity,
-      config,
-      activity.type === "conversationUpdate",
-    );
+    const envelope =
+      source === "graph"
+        ? !activity.id || !activity.conversation.id
+          ? "invalid-envelope"
+          : null
+        : this.rejectedEnvelope(activity, config, activity.type === "conversationUpdate");
     if (envelope !== null) return { kind: "reject", reason: envelope };
     let routed: ReturnType<typeof routeGroupChat>;
     let targets: ReturnType<typeof groupChatWorkspaceTarget>[];
@@ -354,6 +401,9 @@ export class TeamsGatewayPolicy {
       rules: target.rules,
       builtinScanner: target.scannerGroupChats,
       ...(target.builtinMirror === undefined ? {} : { builtinMirror: target.builtinMirror }),
+      ...(target.builtinDiscordChannelId === undefined
+        ? {}
+        : { builtinDiscordChannelId: target.builtinDiscordChannelId }),
     };
   }
 
@@ -404,12 +454,7 @@ export class TeamsGatewayPolicy {
       fingerprint: fingerprint(config, binding),
       actorId,
       conversationId: activity.conversation.id,
-      key: digest([
-        binding.workspace,
-        binding.id,
-        fingerprint(config, binding),
-        activity.conversation.id,
-      ]),
+      key: leaseKey(config, binding, activity.conversation.id),
     };
     if (!this.isActive(lease)) return reject("revoked-binding");
     // Expired receipts cannot be replayed because their activity timestamp is now too old.

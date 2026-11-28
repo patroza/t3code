@@ -706,7 +706,6 @@ function MessageAttachmentFile(props: {
   readonly attachment: ChatFileAttachment;
   readonly onPressPreview: (source: FilePreviewSource) => void;
   readonly onPlaybackStart: () => void;
-  readonly standaloneFile?: boolean;
   readonly available?: boolean;
 }) {
   const gt = useGT();
@@ -837,6 +836,7 @@ function MessageAttachmentFile(props: {
           sizeBytes={attachment.sizeBytes}
           onOpen={openAttachment}
           onPlaybackStart={props.onPlaybackStart}
+          onDownload={() => shareFile(sourceIdentifier)}
           onLongPress={() => shareFile(sourceIdentifier)}
         />
       </PresentationSource>
@@ -894,18 +894,16 @@ function MessageAttachmentFile(props: {
             type="monochrome"
           />
         </Pressable>
-        {props.standaloneFile ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={gt("Download {name}", { name: attachment.name })}
-            accessibilityState={{ disabled, busy: opening }}
-            disabled={disabled}
-            className="mr-1 min-h-11 w-11 items-center justify-center rounded-lg active:bg-subtle disabled:opacity-40"
-            onPress={() => shareFile(sourceIdentifier)}
-          >
-            <SymbolView name="arrow.down" size={16} tintColorClassName="accent-foreground-muted" />
-          </Pressable>
-        ) : null}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={gt("Download {name}", { name: attachment.name })}
+          accessibilityState={{ disabled, busy: opening }}
+          disabled={disabled}
+          className="mr-1 min-h-11 w-11 items-center justify-center rounded-lg active:bg-subtle disabled:opacity-40"
+          onPress={() => shareFile(sourceIdentifier)}
+        >
+          <SymbolView name="arrow.down" size={16} tintColorClassName="accent-foreground-muted" />
+        </Pressable>
       </View>
     </PresentationSource>
   );
@@ -2449,7 +2447,6 @@ function renderFeedEntry(
                     }
                     onPressPreview={props.onPressPreview}
                     onPlaybackStart={props.onPlaybackStart}
-                    standaloneFile
                   />
                 );
               })}

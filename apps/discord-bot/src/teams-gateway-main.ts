@@ -24,7 +24,10 @@ import { bridgeThreadToPlatform, runBridge } from "./features/ResponseBridge.ts"
 import { layer as bridgeHubLayer } from "./features/BridgeHub.ts";
 import { BotResponseTransport } from "./features/BotResponseTransport.ts";
 import { layer as warmCacheLayer } from "./store/ThreadWarmCacheStore.ts";
-import { makeTeamsResponseTransport } from "./teams/ResponseTransport.ts";
+import {
+  makeTeamsResponseTransport,
+  type TeamsResponseActivity,
+} from "./teams/ResponseTransport.ts";
 import { IdentityMapStore, layerFromOptionalPath as identityMapLayer } from "./identityMap.ts";
 import { layerFromOptionalPath as aliasesLayer } from "./projectAliases.ts";
 import { ThreadLinkStore, layer as linksLayer } from "./store/ThreadLinkStore.ts";
@@ -36,8 +39,30 @@ import {
   teamsChannelSourceKey,
 } from "./teams/groupChats.ts";
 import { makeGroupChatTitleResolver } from "./teams/groupChatTitles.ts";
-import { readGatewayConfig, readPrivateCredential } from "./teams/gatewayConfig.ts";
-import { ingestTeamsGroupChat, teamsChannelPoster } from "./features/TeamsGroupChatObserver.ts";
+import {
+  GRAPH_NOTIFICATIONS_PATH,
+  graphNotificationUrl,
+  readGatewayConfig,
+  readPrivateCredential,
+} from "./teams/gatewayConfig.ts";
+import {
+  GraphChatSubscriptions,
+  makeGraphClient,
+  pinnedGroupChatIds,
+} from "./teams/graphChatSubscriptions.ts";
+import {
+  KeyedSerialQueue,
+  graphChatMessageToActivity,
+  graphNotificationRoute,
+  type GraphChatMessage,
+  type GraphNotificationBatch,
+} from "./teams/graphNotifications.ts";
+import {
+  ensureTeamsMirrorLink,
+  ingestTeamsGroupChat,
+  teamsChannelPoster,
+  type TeamsMirrorTurn,
+} from "./features/TeamsGroupChatObserver.ts";
 import { mentionsTeamsRecipient, registerTeamsMessageEvents } from "./teams/messageEvents.ts";
 import { TeamsGatewayDispatcher } from "./teams/gatewayDispatcher.ts";
 import {
@@ -45,7 +70,11 @@ import {
   type TeamsActivityAttachment,
   type TeamsTurnImageLoad,
 } from "./teams/inboundImages.ts";
-import { LoopbackTeamsAdapter, RedactedTeamsLogger } from "./teams/gatewayHttp.ts";
+import {
+  LoopbackTeamsAdapter,
+  RedactedTeamsLogger,
+  type LoopbackRoute,
+} from "./teams/gatewayHttp.ts";
 import {
   TeamsGatewayPolicy,
   type GatewayActivity,
@@ -153,6 +182,47 @@ const program = Effect.gen(function* () {
   let running = true;
   const dispatcher = new TeamsGatewayDispatcher(policy);
   const teamsTokenCache = new Map<string, { token: string; expiresAt: number }>();
+  const log = (level: "info" | "warning" | "error", message: string, fields = {}) =>
+    Effect.runSyncWith(gatewayContext)(
+      level === "info"
+        ? Effect.logInfo(message, fields)
+        : level === "warning"
+          ? Effect.logWarning(message, fields)
+          : Effect.logError(message, fields),
+    );
+  // Teams bot push misses chat messages; Graph change notifications deliver them as well.
+  const notificationUrl = graphNotificationUrl(initial);
+  const subscriptions =
+    notificationUrl === null
+      ? null
+      : new GraphChatSubscriptions({
+          graph: makeGraphClient({
+            tenantId: initial.identity.homeTenantId,
+            clientId: initial.identity.entraClientId,
+            clientSecret: () => readPrivateCredential(secretPath),
+            tokenCache: teamsTokenCache,
+          }),
+          stateDir,
+          notificationUrl,
+          chatIds: pinnedGroupChatIds(initial),
+          log,
+        });
+  // Assigned below once the ingest path exists; Graph only calls it after app.start.
+  let onGraphNotifications: (batch: GraphNotificationBatch) => Promise<void> = async () => {};
+  const extraRoutes = new Map<string, LoopbackRoute>(
+    subscriptions === null
+      ? []
+      : [
+          [
+            GRAPH_NOTIFICATIONS_PATH,
+            graphNotificationRoute({
+              clientState: subscriptions.clientState,
+              onNotifications: (batch) => onGraphNotifications(batch),
+              onError: (reason) => log("error", "Graph notification processing failed", { reason }),
+            }),
+          ],
+        ],
+  );
   const app = new App({
     clientId: initial.identity.entraClientId,
     clientSecret: readPrivateCredential(secretPath),
@@ -161,7 +231,7 @@ const program = Effect.gen(function* () {
     skipAuth: false,
     activity: { mentions: { stripText: true } },
     logger: new RedactedTeamsLogger(),
-    httpServerAdapter: new LoopbackTeamsAdapter(),
+    httpServerAdapter: new LoopbackTeamsAdapter(extraRoutes),
   });
   yield* Effect.addFinalizer(() =>
     Effect.promise(() => {
@@ -179,6 +249,48 @@ const program = Effect.gen(function* () {
     if (!running || !policy.isActive(lease))
       throw new Error("Teams binding was revoked or changed");
     return workspaces.get(lease.binding.workspace)!;
+  };
+  const transportFor = (
+    lease: GatewayLease,
+    rootMessageId: string,
+    send: (wire: TeamsResponseActivity) => Promise<{ id?: string }>,
+    deleteMessage: (id: string) => Promise<unknown>,
+  ) =>
+    makeTeamsResponseTransport({
+      config: active(lease).config,
+      clientId: initial.identity.entraClientId,
+      tenantId: lease.binding.tenantId,
+      clientSecret: readPrivateCredential(secretPath),
+      teamId: lease.binding.teamId,
+      channelId: lease.binding.channelId,
+      fileDestination: lease.binding.fileDestination,
+      includeProgressHistory: lease.binding.includeProgressHistory,
+      getChannelTopic: () => channelTopic(lease),
+      conversationId: lease.conversationId,
+      rootMessageId,
+      assertActive: () => {
+        active(lease);
+      },
+      send,
+      deleteMessage,
+    });
+  // Turn-less delivery (restored or group-chat mirror bridges) posts with the bot's own envelope.
+  const restoredTransport = (lease: GatewayLease, serviceUrl: string, rootMessageId: string) => {
+    const api = new ApiClient(serviceUrl, app.api.http);
+    const sendRestored = restoredTeamsSender({
+      conversations: api.conversations,
+      conversationId: lease.conversationId,
+      botId: "28:" + initial.identity.entraClientId,
+    });
+    return transportFor(
+      lease,
+      rootMessageId,
+      (wire) => {
+        active(lease);
+        return sendRestored(wire);
+      },
+      (id) => api.conversations.deleteActivity(lease.conversationId, id),
+    );
   };
   // A mention in a group-chat mirror thread continues that chat's weekly T3 thread.
   const channelSourceKey = (lease: GatewayLease, dataDir: string) =>
@@ -252,24 +364,16 @@ const program = Effect.gen(function* () {
               stickyModelOnContinue: true,
               promptContext: { kind: "raw", value: "Authorized Teams request: Continue" },
             });
-            const transport = makeTeamsResponseTransport({
-              config: workspace.config,
-              clientId: initial.identity.entraClientId,
-              tenantId: lease.binding.tenantId,
-              clientSecret: readPrivateCredential(secretPath),
-              teamId: lease.binding.teamId,
-              channelId: lease.binding.channelId,
-              fileDestination: lease.binding.fileDestination,
-              includeProgressHistory: lease.binding.includeProgressHistory,
-              getChannelTopic: () => channelTopic(lease),
+            const transport = transportFor(
+              lease,
+              lease.conversationId.split(";messageid=")[1] ?? activity.replyToId ?? activity.id,
+              (wire) => send(wire),
+              (id) => api.conversations.deleteActivity(lease.conversationId, id),
+            );
+            yield* ensureTeamsMirrorLink({
               conversationId: lease.conversationId,
-              rootMessageId:
-                lease.conversationId.split(";messageid=")[1] ?? activity.replyToId ?? activity.id,
-              assertActive: () => {
-                active(lease);
-              },
-              send: (wire) => send(wire),
-              deleteMessage: (id) => api.conversations.deleteActivity(lease.conversationId, id),
+              sourceKey,
+              t3ThreadId: turn.threadId,
             });
             yield* bridgeThreadToPlatform({
               conversationId: lease.conversationId,
@@ -295,6 +399,9 @@ const program = Effect.gen(function* () {
   });
   // One "not watched" line per chat per process, so a busy unwatched chat can't flood the log.
   const reportedUnwatchedChats = new Set<string>();
+  // One chat's messages ingest one at a time, whichever path delivered them.
+  const groupChatQueue = new KeyedSerialQueue();
+  let latestApi: Parameters<typeof teamsChannelPoster>[0] | undefined;
   const observeGroupChat = async (
     incoming: GatewayActivity & {
       readonly replyToId?: string;
@@ -302,6 +409,7 @@ const program = Effect.gen(function* () {
     },
     api: Parameters<typeof teamsChannelPoster>[0],
     event: "message" | "join",
+    source: "bot" | "graph" = "bot",
   ): Promise<boolean> => {
     if (
       !isTeamsGroupChat({
@@ -323,7 +431,7 @@ const program = Effect.gen(function* () {
       title.source === "graph" && title.title !== undefined
         ? { ...incoming, conversation: { ...incoming.conversation, name: title.title } }
         : incoming;
-    const decision = policy.acceptGroupChat(activity);
+    const decision = policy.acceptGroupChat(activity, source);
     if (decision.kind === "not-group") return false;
     const unwatched = decision.kind === "silent" && decision.reason === "unmapped";
     const chatId = activity.conversation.id.split(";messageid=")[0] ?? activity.conversation.id;
@@ -354,6 +462,19 @@ const program = Effect.gen(function* () {
     const workspace = workspaces.get(decision.workspaceId);
     if (workspace === undefined) return true;
     const handled = decision;
+    if (source === "bot") latestApi = api;
+    await groupChatQueue.run(chatId, () =>
+      ingestGroupChat(activity, api, event, handled, workspace),
+    );
+    return true;
+  };
+  const ingestGroupChat = async (
+    activity: Parameters<typeof observeGroupChat>[0],
+    api: Parameters<typeof teamsChannelPoster>[0],
+    event: "message" | "join",
+    handled: Extract<ReturnType<typeof policy.acceptGroupChat>, { kind: "handle" }>,
+    workspace: NonNullable<ReturnType<typeof workspaces.get>>,
+  ): Promise<void> => {
     let images: TeamsTurnImageLoad = { uploads: [], note: "", warnings: [] };
     if (event === "message") {
       try {
@@ -427,9 +548,14 @@ const program = Effect.gen(function* () {
               ...(handled.builtinMirror === undefined
                 ? {}
                 : { builtinMirror: handled.builtinMirror }),
+              ...(handled.builtinDiscordChannelId === undefined
+                ? {}
+                : { builtinDiscordChannelId: handled.builtinDiscordChannelId }),
               ...(images.uploads.length > 0 || images.note.length > 0 ? { hasImages: true } : {}),
               ...(images.uploads.length > 0 ? { attachments: images.uploads } : {}),
               ...(images.note.length > 0 ? { attachmentNote: images.note } : {}),
+              bridgeMirror: (turn) =>
+                Effect.tryPromise(() => bridgeGroupChatMirror(handled.workspaceId, api, turn)),
             },
           );
         }),
@@ -439,7 +565,89 @@ const program = Effect.gen(function* () {
           Effect.logError("Passive Teams group chat failed", { error: String(error) }),
         );
       });
-    return true;
+  };
+
+  // Same delivery as after a mention in the mirror thread, without one: the gateway started this
+  // weekly T3 thread itself, so only its output is delivered; nothing new is authorized.
+  const bridgeGroupChatMirror = async (
+    workspaceId: string,
+    api: Parameters<typeof teamsChannelPoster>[0],
+    turn: TeamsMirrorTurn,
+  ) => {
+    const lease = policy.mirrorLease(workspaceId, turn.mirror, turn.conversationId);
+    if (lease === null) {
+      log("warning", "No active channel binding for the Teams group chat mirror", {
+        workspaceId,
+        channelId: turn.mirror.channelId,
+      });
+      return;
+    }
+    const workspace = active(lease);
+    const rootMessageId = turn.conversationId.split(";messageid=")[1]!;
+    references.remember(lease, api.serviceUrl, rootMessageId);
+    const transport = restoredTransport(lease, api.serviceUrl, rootMessageId);
+    await workspace.runtime.runPromise(
+      Effect.gen(function* () {
+        yield* ensureTeamsMirrorLink(turn);
+        yield* bridgeThreadToPlatform({
+          conversationId: turn.conversationId,
+          threadId: turn.t3ThreadId,
+          sentUserMessageIds: [turn.messageId],
+        }).pipe(Effect.provideService(BotResponseTransport, transport));
+      }),
+    );
+  };
+
+  // Graph work per chat runs in arrival order, so reads cannot overtake each other.
+  const graphQueue = new KeyedSerialQueue();
+  const ingestGraphMessage = async (chatId: string, message: GraphChatMessage) => {
+    const converted = graphChatMessageToActivity(message, {
+      chatId,
+      // Must equal the bot activity's tenant: it is part of the claim and the weekly thread key.
+      tenantId: (await subscriptions?.chatTenant(chatId)) ?? initial.identity.homeTenantId,
+      botAppId: initial.identity.entraClientId,
+      serviceUrl: app.api.serviceUrl,
+    });
+    if (converted.kind === "skip") {
+      subscriptions?.recordSeen(chatId, message.createdDateTime ?? undefined);
+      return;
+    }
+    await observeGroupChat(converted.activity, latestApi ?? app.api, "message", "graph");
+    subscriptions?.recordSeen(chatId, message.createdDateTime ?? undefined);
+  };
+  const catchUpChat = (chatId: string) =>
+    graphQueue.run(chatId, async () => {
+      const missed = await subscriptions?.missedMessages(chatId);
+      if (missed === undefined || missed === null) return;
+      if (missed.length > 0)
+        log("info", "Graph catch-up", { chat: chatId.slice(0, 24), messages: missed.length });
+      for (const message of missed) await ingestGraphMessage(chatId, message);
+    });
+  onGraphNotifications = async (batch) => {
+    if (subscriptions === null || !running) return;
+    const changes = batch.changes
+      .filter((change) => subscriptions.isWatched(change.chatId))
+      .toSorted((left, right) => Number(left.messageId) - Number(right.messageId));
+    const reads = changes.map((change) =>
+      graphQueue.run(change.chatId, async () => {
+        const message = await subscriptions.getMessage(change.chatId, change.messageId);
+        if (message !== null) await ingestGraphMessage(change.chatId, message);
+      }),
+    );
+    for (const event of batch.lifecycle) {
+      const chatId = subscriptions.chatForSubscription(event.subscriptionId);
+      if (chatId === undefined) continue;
+      log("info", "Graph subscription lifecycle", {
+        chat: chatId.slice(0, 24),
+        event: event.event,
+      });
+      if (event.event === "reauthorizationRequired") {
+        if ((await subscriptions.renew(chatId)) === "created") await catchUpChat(chatId);
+      } else if (event.event === "subscriptionRemoved") {
+        if (await subscriptions.recreate(chatId)) await catchUpChat(chatId);
+      } else await catchUpChat(chatId);
+    }
+    await Promise.all(reads);
   };
 
   registerTeamsMessageEvents(app, async ({ activity, send, reply, api }, edited) => {
@@ -603,24 +811,16 @@ const program = Effect.gen(function* () {
             ...(images.uploads.length > 0 ? { attachments: images.uploads } : {}),
             promptContext: { kind: "raw", value: enriched },
           });
-          const transport = makeTeamsResponseTransport({
-            config: workspace.config,
-            clientId: initial.identity.entraClientId,
-            tenantId: lease.binding.tenantId,
-            clientSecret: readPrivateCredential(secretPath),
-            teamId: lease.binding.teamId,
-            channelId: lease.binding.channelId,
-            fileDestination: lease.binding.fileDestination,
-            includeProgressHistory: lease.binding.includeProgressHistory,
-            getChannelTopic: () => channelTopic(lease),
+          const transport = transportFor(
+            lease,
+            lease.conversationId.split(";messageid=")[1] ?? activity.replyToId ?? activity.id,
+            (wire) => send(wire),
+            (id) => api.conversations.deleteActivity(lease.conversationId, id),
+          );
+          yield* ensureTeamsMirrorLink({
             conversationId: lease.conversationId,
-            rootMessageId:
-              lease.conversationId.split(";messageid=")[1] ?? activity.replyToId ?? activity.id,
-            assertActive: () => {
-              active(lease);
-            },
-            send: (wire) => send(wire),
-            deleteMessage: (id) => api.conversations.deleteActivity(lease.conversationId, id),
+            sourceKey,
+            t3ThreadId: turn.threadId,
           });
           yield* bridgeThreadToPlatform({
             conversationId: lease.conversationId,
@@ -672,48 +872,35 @@ const program = Effect.gen(function* () {
     },
   }));
   yield* Effect.promise(() => app.start(Number(initial.ingress.dispatcherListen.split(":")[1])));
+  if (subscriptions !== null) {
+    const graph = subscriptions;
+    // Graph validates the callback while creating a subscription, so this runs after start.
+    const maintain = (catchUpAll: boolean) =>
+      Effect.tryPromise(async () => {
+        const created = await graph.reconcile();
+        const chats = catchUpAll ? pinnedGroupChatIds(initial) : created;
+        await Promise.all(chats.map((chatId) => catchUpChat(chatId)));
+      }).pipe(Effect.catchCause(() => Effect.logWarning("Graph subscription maintenance failed")));
+    yield* Effect.forkScoped(
+      maintain(true).pipe(
+        Effect.andThen(
+          maintain(false).pipe(
+            Effect.repeat(Schedule.spaced("1 minute")),
+            Effect.delay("1 minute"),
+          ),
+        ),
+      ),
+    );
+  }
   for (const reference of references.restore(initial, (lease) => policy.isActive(lease))) {
     const { lease } = reference;
     const workspace = active(lease);
-    const api = new ApiClient(reference.serviceUrl, app.api.http);
-    const sendRestored = restoredTeamsSender({
-      conversations: api.conversations,
-      conversationId: lease.conversationId,
-      botId: "28:" + initial.identity.entraClientId,
-    });
-    const transport = makeTeamsResponseTransport({
-      config: workspace.config,
-      clientId: initial.identity.entraClientId,
-      tenantId: lease.binding.tenantId,
-      clientSecret: readPrivateCredential(secretPath),
-      teamId: lease.binding.teamId,
-      channelId: lease.binding.channelId,
-      fileDestination: lease.binding.fileDestination,
-      includeProgressHistory: lease.binding.includeProgressHistory,
-      getChannelTopic: () => channelTopic(lease),
-      conversationId: lease.conversationId,
-      rootMessageId: reference.rootMessageId,
-      assertActive: () => {
-        active(lease);
-      },
-      send: (wire) => {
-        active(lease);
-        return sendRestored(wire);
-      },
-      deleteMessage: (id) => api.conversations.deleteActivity(lease.conversationId, id),
-    });
+    const transport = restoredTransport(lease, reference.serviceUrl, reference.rootMessageId);
     workspace.runtime.runFork(
       Effect.gen(function* () {
         const links = yield* ThreadLinkStore;
-        const sourceKey =
-          "native/" +
-          [
-            lease.binding.tenantId,
-            lease.binding.teamId,
-            lease.binding.channelId,
-            lease.conversationId,
-          ].join("/");
-        const link = yield* links.getBySourceThread("teams", sourceKey);
+        // Keyed by conversation: native channel threads and group-chat mirror threads alike.
+        const link = yield* links.getByDiscordThreadId(lease.conversationId);
         if (link === null) return;
         const session = yield* T3Session;
         // Startup connection runs in another fiber; rehydration must not subscribe before it is ready.

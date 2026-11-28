@@ -20,6 +20,7 @@ import {
 
 import * as DateTime from "effect/DateTime";
 
+import { sortAntigravityDisplayLimitWindows } from "./antigravityUsageLimitsFork.ts";
 import { isLocalLoopbackHost, isWildcardHost } from "./hostClassification.ts";
 
 const MINUTE = 60_000;
@@ -542,6 +543,7 @@ function hasDuplicateCursorTotal(pool: LimitPool): boolean {
 }
 
 export function displayLimitWindows(pool: LimitPool) {
+  if (pool.driver === "antigravity") return sortAntigravityDisplayLimitWindows(pool.windows);
   if (pool.driver !== "cursor") return pool.windows;
   const hasAuto = pool.windows.some((window) => window.id === "autoPercentUsed");
   const hasApi = pool.windows.some((window) => window.id === "apiPercentUsed");

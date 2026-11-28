@@ -25,6 +25,7 @@ import {
   type TeamsResponseActivity,
 } from "./ResponseTransport.ts";
 import { restoredTeamsSender } from "./responseReferences.ts";
+import { ensureTeamsMirrorLink } from "../features/TeamsGroupChatObserver.ts";
 
 const options = {
   clientId: "bot",
@@ -164,6 +165,66 @@ describe("Teams response adapter", () => {
       yield* upsert("/worktrees/c");
       expect(send.mock.calls.map(([wire]) => wire.id)).toEqual([undefined, "info", "info", "info"]);
       expect(send.mock.calls[3]?.[0].text).toContain("/worktrees/c");
+    }),
+  );
+  it.effect("posts one thread-info card in a group-chat mirror thread across activations", () =>
+    Effect.gen(function* () {
+      const config = yield* DiscordBotConfig.pipe(
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnvRecord({ T3_DISCORD_BOT_DATA_DIR: directory }),
+          ),
+        ),
+      );
+      const links = yield* makeThreadLinkStore(directory);
+      const sourceKey = "native/tenant/group/19:chat@thread.v2/week-2026-11-23";
+      const t3ThreadId = ThreadId.make("weekly-thread");
+      // The weekly link belongs to the Discord thread; the mirror thread has none of its own yet.
+      yield* links.put({
+        sourceKind: "teams",
+        sourceThreadId: sourceKey,
+        discordThreadId: "1400000000000000000",
+        t3ThreadId,
+        projectId: ProjectId.make("scanner"),
+        channelId: "900",
+        guildId: "",
+        infoDiscordMessageId: "discord-marker",
+        createdAt: "2026-11-23T10:00:00.000Z",
+      });
+      const send = vi
+        .fn<(wire: TeamsResponseActivity) => Promise<{ id: string }>>()
+        .mockResolvedValue({ id: "info" });
+      const session = {
+        fetchThreadDetail: () => Effect.succeed(null),
+      } as unknown as T3SessionService;
+      // A group-chat turn, then a mention in the mirror thread, each activate the bridge.
+      for (let activation = 0; activation < 2; activation += 1) {
+        yield* ensureTeamsMirrorLink({
+          conversationId: options.conversationId,
+          sourceKey,
+          t3ThreadId,
+        }).pipe(
+          Effect.andThen(
+            makeTeamsResponseTransport({ ...options, config, send }).upsertThreadInfo({
+              config,
+              conversationId: options.conversationId,
+              threadId: t3ThreadId,
+              modelSelection: { instanceId: "grok", model: "grok-4.7" },
+            }),
+          ),
+          Effect.provideService(ThreadLinkStore, links),
+          Effect.provideService(ProjectAliasStore, makeProjectAliasStore([])),
+          Effect.provideService(T3Session, session),
+        );
+      }
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(
+        (yield* links.getByDiscordThreadId(options.conversationId))?.infoDiscordMessageId,
+      ).toBe("info");
+      // The Discord marker id on the weekly link is untouched.
+      expect((yield* links.getBySourceThread("teams", sourceKey))?.infoDiscordMessageId).toBe(
+        "discord-marker",
+      );
     }),
   );
   it("sends restored edits with the same bot envelope as creates", async () => {

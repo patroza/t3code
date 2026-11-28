@@ -2,10 +2,22 @@
 import * as NodeHttp from "node:http";
 import type { HttpRouteHandler, IHttpServerAdapter } from "@microsoft/teams.apps";
 
+/** A route outside the SDK. It owns its own authentication, method and body checks. */
+export type LoopbackRoute = (
+  request: NodeHttp.IncomingMessage,
+  response: NodeHttp.ServerResponse,
+) => Promise<void>;
+
 /** The SDK still owns JWT validation. This adapter exposes only its bounded callback. */
 export class LoopbackTeamsAdapter implements IHttpServerAdapter {
   private handler: HttpRouteHandler | undefined;
   private server: NodeHttp.Server | undefined;
+  private readonly routes: ReadonlyMap<string, LoopbackRoute>;
+
+  constructor(routes: ReadonlyMap<string, LoopbackRoute> = new Map()) {
+    if (routes.has("/api/messages")) throw new Error("/api/messages belongs to the Teams SDK");
+    this.routes = routes;
+  }
 
   get port(): number | undefined {
     const address = this.server?.address();
@@ -22,6 +34,16 @@ export class LoopbackTeamsAdapter implements IHttpServerAdapter {
     const handler = this.handler;
     if (!handler) throw new Error("Teams callback is not registered");
     const server = NodeHttp.createServer(async (request, response) => {
+      const route = this.routes.get(request.url?.split("?")[0] ?? "");
+      if (route !== undefined) {
+        try {
+          await route(request, response);
+        } catch {
+          if (!response.headersSent) response.writeHead(500);
+          response.end();
+        }
+        return;
+      }
       if (request.url !== "/api/messages") {
         response.writeHead(404).end();
         return;

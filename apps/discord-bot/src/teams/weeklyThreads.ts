@@ -33,3 +33,11 @@ export function teamsWeekBucket(at: Date, timeZone: string = TEAMS_THREAD_WEEK_T
 export function weeklyThreadKey(locationKey: string, at: Date): string {
   return `${locationKey}/${teamsWeekBucket(at)}`;
 }
+
+/** Weekly group-chat link key (`native/<tenant>/group/<chat>/week-…`), as opposed to a channel. */
+export function isWeeklyGroupChatSourceKey(sourceThreadId: string | undefined): boolean {
+  return (
+    sourceThreadId !== undefined &&
+    /^native\/[^/]+\/group\/[^/]+\/week-\d{4}-\d{2}-\d{2}$/u.test(sourceThreadId)
+  );
+}

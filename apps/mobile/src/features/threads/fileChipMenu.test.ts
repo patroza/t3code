@@ -76,15 +76,25 @@ describe("file chip downloads", () => {
     expect(fileChipShareSource(target, threadId)).toEqual({
       name: path.split("/").at(-1),
       mimeType,
-      resource: { _tag: "media-file", threadId, path },
+      resource: { _tag: "media-file", threadId, path, disposition: "attachment" },
     });
   });
 
-  it("does not offer downloads the host asset endpoint cannot serve", () => {
-    for (const href of ["src/app.ts", "/tmp/archive.7z", "/tmp/clip.mp4.txt"]) {
-      const target = resolveFileChipTarget(href, "/repo")!;
-      expect(fileChipShareSource(target, threadId)).toBeNull();
-      expect(fileChipMenu(target).actions.some(({ id }) => id === "save")).toBe(false);
-    }
+  it.each([
+    ["src/app.ts", "/repo/src/app.ts", "app.ts"],
+    ["/tmp/archive.7z", "/tmp/archive.7z", "archive.7z"],
+    ["/tmp/clip.mp4.txt", "/tmp/clip.mp4.txt", "clip.mp4.txt"],
+    ["exports/close-list.csv", "/repo/exports/close-list.csv", "close-list.csv"],
+  ])("offers a download for %s, which the preview endpoint will not inline", (href, path, name) => {
+    const target = resolveFileChipTarget(href, "/repo")!;
+    expect(fileChipMenu(target).actions).toContainEqual({
+      id: "save",
+      title: "Save or share",
+    });
+    expect(fileChipShareSource(target, threadId)).toEqual({
+      name,
+      mimeType: "application/octet-stream",
+      resource: { _tag: "media-file", threadId, path, disposition: "attachment" },
+    });
   });
 });
