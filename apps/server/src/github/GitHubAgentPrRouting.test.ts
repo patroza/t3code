@@ -487,7 +487,7 @@ describe("GitHubAgentPrRouting", () => {
   );
 
   it.effect(
-    "routes pull_request_review (all verdicts + inline diff/comments) to reviewer App while create/update/respond/merge stay on opener",
+    "routes pull_request_review (all verdicts + inline diff/comments) and pull_request_merge (normal, auto, stack) to reviewer App while create/update/respond/ci_rerun stay on opener",
     () =>
       Effect.gen(function* () {
         const openerKey = NodeCrypto.generateKeyPairSync("rsa", {
@@ -632,22 +632,47 @@ describe("GitHubAgentPrRouting", () => {
             submitReview: (input) => recordToken(`review:${input.verdict}`),
             update: () => recordToken("update"),
             comment: () => recordToken("respond"),
+            rerunChecks: () =>
+              recordToken("ci_rerun").pipe(
+                Effect.as([{ name: "Check", rerun: true, detail: null }]),
+              ),
+            stack: () =>
+              recordToken("stack").pipe(
+                Effect.as({
+                  id: "stack-1",
+                  number: 1,
+                  url: "https://github.com/macs-holding/shop/pull/42",
+                  base: "main",
+                  layers: [
+                    {
+                      number: 42,
+                      state: "open" as const,
+                      headSha: "deadbeef1234",
+                      headBranch: "feat/shop",
+                      title: "Shop PR",
+                      isDraft: false,
+                    },
+                  ],
+                }),
+              ),
             runAction: (input) => recordToken(`action:${input.action}`).pipe(Effect.as(undefined)),
             summary: () =>
-              Effect.succeed({
-                provider: SourceControlProviderKind.make("github"),
-                projectId: PROJECT_ID,
-                repository: "macs-holding/shop",
-                number: 42,
-                title: "Shop PR",
-                url: "https://github.com/macs-holding/shop/pull/42",
-                baseBranch: "main",
-                headBranch: "feat/shop",
-                state: "merged",
-                isDraft: false,
-                headSha: "deadbeef1234",
-                updatedAt: "2026-08-27T00:00:00.000Z",
-              }),
+              recordToken("summary").pipe(
+                Effect.as({
+                  provider: SourceControlProviderKind.make("github"),
+                  projectId: PROJECT_ID,
+                  repository: "macs-holding/shop",
+                  number: 42,
+                  title: "Shop PR",
+                  url: "https://github.com/macs-holding/shop/pull/42",
+                  baseBranch: "main",
+                  headBranch: "feat/shop",
+                  state: "merged" as const,
+                  isDraft: false,
+                  headSha: "deadbeef1234",
+                  updatedAt: "2026-08-27T00:00:00.000Z",
+                }),
+              ),
           },
         });
 
@@ -668,6 +693,8 @@ describe("GitHubAgentPrRouting", () => {
           body: "Thanks!",
         });
         expect(respondRes.actor).toBe("omegent-app[bot]");
+
+        yield* harness.call("ci_rerun", { number: 42 });
 
         const approveRes = yield* harness.call("pull_request_review", {
           number: 42,
@@ -696,26 +723,48 @@ describe("GitHubAgentPrRouting", () => {
           number: 42,
           expectedHeadSha: "deadbeef1234",
         });
-        expect(mergeRes.actor).toBe("omegent-app[bot]");
+        expect(mergeRes.actor).toBe("omegent-reviewer[bot]");
+
+        const autoMergeRes = yield* harness.call("pull_request_merge", {
+          number: 42,
+          expectedHeadSha: "deadbeef1234",
+          auto: true,
+        });
+        expect(autoMergeRes.actor).toBe("omegent-reviewer[bot]");
+
+        const stackMergeRes = yield* harness.call("pull_request_merge", {
+          number: 42,
+          expectedHeadSha: "deadbeef1234",
+          stack: true,
+        });
+        expect(stackMergeRes.actor).toBe("omegent-reviewer[bot]");
 
         expect(recordedTokens).toEqual([
           { op: "create", token: "tok-opener" },
           { op: "update", token: "tok-opener" },
           { op: "respond", token: "tok-opener" },
+          { op: "ci_rerun", token: "tok-opener" },
           { op: "diff", token: "tok-reviewer" },
           { op: "review:approve", token: "tok-reviewer" },
           { op: "review:request-changes", token: "tok-reviewer" },
           { op: "review:comment", token: "tok-reviewer" },
-          { op: "action:merge", token: "tok-opener" },
+          { op: "action:merge", token: "tok-reviewer" },
+          { op: "summary", token: "tok-reviewer" },
+          { op: "action:enable-auto-merge", token: "tok-reviewer" },
+          { op: "summary", token: "tok-reviewer" },
+          { op: "stack", token: "tok-reviewer" },
+          { op: "action:merge", token: "tok-reviewer" },
+          { op: "summary", token: "tok-reviewer" },
         ]);
       }),
   );
 
   it.effect(
-    "fails pull_request_review closed when reviewer App resolution fails without calling submitReview",
+    "fails pull_request_review and pull_request_merge closed when reviewer App resolution fails without calling submitReview or runAction",
     () =>
       Effect.gen(function* () {
         let submitted = false;
+        let ranAction = false;
         const harness = yield* makeToolkitHarness({
           authLayer: makeFakeAuthService({
             resolve: ({ role }) =>
@@ -735,10 +784,15 @@ describe("GitHubAgentPrRouting", () => {
               Effect.sync(() => {
                 submitted = true;
               }),
+            runAction: () =>
+              Effect.sync(() => {
+                ranAction = true;
+                return undefined;
+              }),
           },
         });
 
-        const error = yield* harness
+        const reviewError = yield* harness
           .call("pull_request_review", {
             number: 42,
             verdict: "approve",
@@ -747,8 +801,18 @@ describe("GitHubAgentPrRouting", () => {
           })
           .pipe(Effect.flip);
 
-        expect(error.message).toContain("reviewer omegent-reviewer");
+        expect(reviewError.message).toContain("reviewer omegent-reviewer");
         expect(submitted).toBe(false);
+
+        const mergeError = yield* harness
+          .call("pull_request_merge", {
+            number: 42,
+            expectedHeadSha: "deadbeef1234",
+          })
+          .pipe(Effect.flip);
+
+        expect(mergeError.message).toContain("reviewer omegent-reviewer");
+        expect(ranAction).toBe(false);
       }),
   );
 });

@@ -197,9 +197,9 @@ Agent MCP PR tools (`pull_request_create`, `pull_request_update`, `pull_request_
 ```
 
 - Entries match by `repos` first, then `owners` (case-insensitive). Unmapped repositories use the personal login.
-- When an entry defines `reviewer`, `pull_request_review` (all verdicts: `approve`, `request-changes`, `comment`, including inline line comments and the diff/permission/head checks performed during review) authenticates as the `reviewer` App so an agent can review and approve PRs opened by the opener App. The result `actor` reports the reviewer bot login.
-- All other MCP PR tools keep the opener App.
-- Writes fail closed: if a configured `reviewer` App's key, installation lookup, or token mint fails, `pull_request_review` returns an error instead of falling back to the opener App or personal login. Entries without `reviewer` keep using the opener App.
+- When an entry defines `reviewer`, `pull_request_review` (all verdicts: `approve`, `request-changes`, `comment`, including inline line comments and the diff/permission/head checks performed during review) and `pull_request_merge` (including `auto` and `stack`) authenticate as the `reviewer` App so an agent can review, approve, and merge PRs opened by the opener App. The result `actor` reports the reviewer bot login.
+- All other MCP PR tools (`pull_request_create`, `pull_request_update`, `pull_request_respond`, `ci_rerun`, and standalone reads) keep the opener App.
+- Writes fail closed: if a configured `reviewer` App's key, installation lookup, or token mint fails, `pull_request_review` and `pull_request_merge` return an error instead of falling back to the opener App or personal login. Entries without `reviewer` keep using the opener App.
 
 ## Failure semantics
 

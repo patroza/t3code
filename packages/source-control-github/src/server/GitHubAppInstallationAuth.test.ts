@@ -1051,8 +1051,8 @@ describe("GitHubAppInstallationAuth routing, caching, and failures", () => {
         const reviewerMint = mintBodies.find((entry) => entry.iss === "9988776");
         expect(reviewerMint?.body).toEqual({
           permissions: {
+            contents: "write",
             pull_requests: "write",
-            contents: "read",
             metadata: "read",
           },
           repositories: ["shop"],
@@ -1129,7 +1129,7 @@ describe("GitHubAppInstallationAuth routing, caching, and failures", () => {
         }
         expect(mintBodies).toEqual([
           {
-            permissions: { pull_requests: "write", contents: "read", metadata: "read" },
+            permissions: { contents: "write", pull_requests: "write", metadata: "read" },
             repositories: ["shop"],
           },
           { repositories: ["shop"] },

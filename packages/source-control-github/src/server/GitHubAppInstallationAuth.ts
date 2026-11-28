@@ -467,8 +467,8 @@ const DEFAULT_TOKEN_PERMISSIONS = {
 } as const;
 
 const REVIEWER_TOKEN_PERMISSIONS = {
+  contents: "write",
   pull_requests: "write",
-  contents: "read",
   metadata: "read",
 } as const;
 

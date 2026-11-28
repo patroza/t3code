@@ -1410,7 +1410,7 @@ const make = Effect.gen(function* () {
         const { project, target, ref } = yield* locate(input);
         const { value: after, actor } = yield* GitHubAgentPrRouting.withGitHubAgentWrite(
           target,
-          { cwd: project.workspaceRoot, mapAuthError: forgeFailure },
+          { cwd: project.workspaceRoot, role: "reviewer", mapAuthError: forgeFailure },
           Effect.gen(function* () {
             const stack = input.stack === true ? yield* stackMergeScope(ref, input) : {};
             yield* pullRequests
