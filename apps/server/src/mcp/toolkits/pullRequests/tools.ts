@@ -42,6 +42,7 @@ import {
 } from "../../../pullRequest/pullRequestTarget.ts";
 import * as PullRequestService from "../../../pullRequest/PullRequestService.ts";
 import * as PullRequestReviewGuideService from "../../../pullRequest/PullRequestReviewGuideService.ts";
+import { PullRequestActorResultFields } from "../../../github/GitHubAgentPrPolicy.ts";
 
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
@@ -611,6 +612,7 @@ export type ListPullRequestsResult = typeof ListPullRequestsResult.Type;
 
 export const CreatePullRequestResult = Schema.Struct({
   ...PullRequestIdentity,
+  ...PullRequestActorResultFields,
   created: Schema.Boolean.annotate({
     description: "False when the branch already had an open PR.",
   }),
@@ -621,6 +623,7 @@ export type CreatePullRequestResult = typeof CreatePullRequestResult.Type;
 
 export const RespondToPullRequestResult = Schema.Struct({
   ...PullRequestIdentity,
+  ...PullRequestActorResultFields,
   replied: Schema.Boolean,
   resolved: Schema.NullOr(Schema.Boolean),
 });
@@ -628,6 +631,7 @@ export type RespondToPullRequestResult = typeof RespondToPullRequestResult.Type;
 
 export const MergePullRequestResult = Schema.Struct({
   ...PullRequestIdentity,
+  ...PullRequestActorResultFields,
   state: PullRequestState.annotate({
     description: "open while auto-merge or a merge queue waits for checks.",
   }),
@@ -722,7 +726,7 @@ const UpdatePullRequestTool = Tool.make("pull_request_update", {
       UpdateNames.annotate({ description: "Logins, or org/team for a team." }),
     ),
   }),
-  success: Schema.Struct(PullRequestIdentity),
+  success: Schema.Struct({ ...PullRequestIdentity, ...PullRequestActorResultFields }),
   failure: PullRequestToolError,
   dependencies: forgeDependencies,
 })
@@ -776,7 +780,7 @@ const ReviewPullRequestTool = Tool.make("pull_request_review", {
     body: Schema.optional(Schema.String),
     comments: Schema.optional(Schema.Array(ReviewLineComment).check(Schema.isMaxLength(50))),
   }),
-  success: Schema.Struct(PullRequestIdentity),
+  success: Schema.Struct({ ...PullRequestIdentity, ...PullRequestActorResultFields }),
   failure: PullRequestToolError,
   dependencies: forgeDependencies,
 })

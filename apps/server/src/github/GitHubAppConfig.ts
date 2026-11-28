@@ -1,6 +1,11 @@
+import {
+  loadGitHubAppAgentAuthConfig,
+  type GitHubAppAgentAuthConfig,
+} from "@t3tools/source-control-github/server/appInstallationAuth";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
@@ -16,11 +21,13 @@ export interface EnabledGitHubAppConfig {
   readonly allowedRepositories: ReadonlySet<string>;
   readonly minimumPermission: GitHubRepositoryPermission;
   readonly turnTimeoutMs: number;
+  readonly agentAuth?: GitHubAppAgentAuthConfig | undefined;
 }
 
 export interface DisabledGitHubAppConfig {
   readonly enabled: false;
   readonly missing: ReadonlyArray<string>;
+  readonly agentAuth?: GitHubAppAgentAuthConfig | undefined;
 }
 
 export type GitHubAppConfigValue = EnabledGitHubAppConfig | DisabledGitHubAppConfig;
@@ -40,6 +47,7 @@ const optionalSecret = (name: string) =>
   );
 
 const configEffect = Effect.gen(function* () {
+  const fileSystem = yield* FileSystem.FileSystem;
   const values = yield* Config.all({
     appId: optionalString("T3CODE_GITHUB_APP_ID"),
     privateKeyPath: optionalString("T3CODE_GITHUB_APP_PRIVATE_KEY_PATH"),
@@ -55,6 +63,22 @@ const configEffect = Effect.gen(function* () {
     turnTimeoutMs: Config.Number("T3CODE_GITHUB_TURN_TIMEOUT_MS").pipe(
       Config.withDefault(30 * 60_000),
     ),
+    agentAuthFlag: optionalString("T3_GITHUB_APP_AUTH"),
+    agentAuthRouting: optionalString("T3_GITHUB_APP_ROUTING"),
+    agentPolicyFlag: optionalString("T3_GITHUB_APP_AGENT_POLICY"),
+    appsFile: optionalString("T3_GITHUB_APPS_FILE"),
+  });
+
+  const agentAuth = yield* loadGitHubAppAgentAuthConfig({
+    env: {
+      T3_GITHUB_APP_AUTH: values.agentAuthFlag,
+      T3_GITHUB_APP_ROUTING: values.agentAuthRouting,
+      T3_GITHUB_APP_AGENT_POLICY: values.agentPolicyFlag,
+      T3_GITHUB_APPS_FILE: values.appsFile,
+      T3CODE_GITHUB_APP_ID: values.appId,
+      T3CODE_GITHUB_APP_PRIVATE_KEY_PATH: values.privateKeyPath,
+    },
+    fileSystem,
   });
 
   const required = [
@@ -65,7 +89,7 @@ const configEffect = Effect.gen(function* () {
   ] as const;
   const missing = required.filter(([, value]) => !value?.trim()).map(([name]) => name);
   if (missing.length > 0) {
-    return GitHubAppConfig.of({ enabled: false, missing });
+    return GitHubAppConfig.of({ enabled: false, missing, agentAuth });
   }
 
   const allowedRepositories = new Set(
@@ -84,6 +108,7 @@ const configEffect = Effect.gen(function* () {
     allowedRepositories,
     minimumPermission: values.minimumPermission,
     turnTimeoutMs: Math.max(10_000, values.turnTimeoutMs),
+    agentAuth,
   });
 });
 

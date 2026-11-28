@@ -10,6 +10,10 @@
     "./server/driver": {
       "types": "./src/server/driver.ts",
       "import": "./src/server/driver.ts"
+    },
+    "./server/appInstallationAuth": {
+      "types": "./src/server/GitHubAppInstallationAuth.ts",
+      "import": "./src/server/GitHubAppInstallationAuth.ts"
     }
   },
   "scripts": {
