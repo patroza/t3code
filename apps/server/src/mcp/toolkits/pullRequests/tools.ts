@@ -42,7 +42,11 @@ import {
 } from "../../../pullRequest/pullRequestTarget.ts";
 import * as PullRequestService from "../../../pullRequest/PullRequestService.ts";
 import * as PullRequestReviewGuideService from "../../../pullRequest/PullRequestReviewGuideService.ts";
-import { PullRequestActorResultFields } from "../../../github/GitHubAgentPrRouting.ts";
+import {
+  PULL_REQUEST_MERGE_ROUTING_NOTE,
+  PULL_REQUEST_REVIEW_ROUTING_NOTE,
+  PullRequestActorResultFields,
+} from "../../../github/GitHubAgentPrRouting.ts";
 
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
@@ -772,7 +776,8 @@ export type ReviewLineComment = typeof ReviewLineComment.Type;
 
 const ReviewPullRequestTool = Tool.make("pull_request_review", {
   description:
-    "Submit a review: approve, request changes, or comment, with optional line comments. Approving needs expectedHeadSha (headSha in pull_request_read). Refuses if the head moved from it.",
+    "Submit a review: approve, request changes, or comment, with optional line comments. Approving needs expectedHeadSha (headSha in pull_request_read). Refuses if the head moved from it." +
+    PULL_REQUEST_REVIEW_ROUTING_NOTE,
   parameters: Schema.Struct({
     ...ThreadPullRequestInput.fields,
     verdict: PullRequestReviewVerdict,
@@ -793,7 +798,8 @@ const ReviewPullRequestTool = Tool.make("pull_request_review", {
 
 const MergePullRequestTool = Tool.make("pull_request_merge", {
   description:
-    "Merge a PR. Refuses if the head moved from expectedHeadSha (headSha in pull_request_read).",
+    "Merge a PR. Refuses if the head moved from expectedHeadSha (headSha in pull_request_read)." +
+    PULL_REQUEST_MERGE_ROUTING_NOTE,
   parameters: Schema.Struct({
     ...ThreadPullRequestInput.fields,
     expectedHeadSha: TrimmedNonEmptyString,

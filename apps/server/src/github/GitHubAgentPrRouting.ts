@@ -14,6 +14,12 @@ export const PullRequestActorResultFields = {
   }),
 };
 
+export const PULL_REQUEST_REVIEW_ROUTING_NOTE =
+  " On repos with a reviewer App, routes through the reviewer App; author enables auto-merge (pull_request_merge with auto: true) when ready and reviewer approves.";
+
+export const PULL_REQUEST_MERGE_ROUTING_NOTE =
+  " On repos with a reviewer App, auto: true uses the opener App (author enables auto-merge when ready; reviewer approves) while direct merge uses the reviewer App.";
+
 export interface GitHubRepositoryTarget {
   readonly host: string;
   readonly repository: string;

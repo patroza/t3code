@@ -472,6 +472,12 @@ const REVIEWER_TOKEN_PERMISSIONS = {
   metadata: "read",
 } as const;
 
+const REVIEWER_READ_CONTENTS_TOKEN_PERMISSIONS = {
+  contents: "read",
+  pull_requests: "write",
+  metadata: "read",
+} as const;
+
 interface CachedToken {
   readonly token: Redacted.Redacted<string>;
   readonly fingerprint: string;
@@ -713,10 +719,11 @@ export const make = Effect.gen(function* () {
       repositories: [repo.name],
     });
 
-    if (role !== "reviewer" && response.status === 422 && /permission/iu.test(response.body)) {
+    if (response.status === 422 && /permission/iu.test(response.body)) {
       const { workflows: _drop, ...withoutWorkflows } = DEFAULT_TOKEN_PERMISSIONS;
       response = yield* postMint({
-        permissions: withoutWorkflows,
+        permissions:
+          role === "reviewer" ? REVIEWER_READ_CONTENTS_TOKEN_PERMISSIONS : withoutWorkflows,
         repositories: [repo.name],
       });
     }
