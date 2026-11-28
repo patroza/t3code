@@ -132,6 +132,7 @@ interface ViewPendingUserInput {
 interface ViewState {
   readonly busy: boolean;
   readonly error: string | null;
+  readonly needsPairing: boolean;
   readonly connected: boolean;
   readonly supportsQueuedMessages: boolean;
   readonly environmentLabel: string;
@@ -221,6 +222,8 @@ const threadActions = requiredElement<HTMLDetailsElement>("thread-actions");
 const archiveThread = requiredElement<HTMLButtonElement>("archive-thread");
 const visitT3 = requiredElement<HTMLButtonElement>("visit-t3");
 const status = requiredElement<HTMLElement>("status");
+const statusActions = requiredElement<HTMLElement>("status-actions");
+const pairServer = requiredElement<HTMLButtonElement>("pair-server");
 const queuedMessages = requiredElement<HTMLElement>("queued-messages");
 const prompt = requiredElement<HTMLTextAreaElement>("prompt");
 const slashCommands = requiredElement<HTMLElement>("slash-commands");
@@ -1391,6 +1394,7 @@ function renderFavoriteControls(state: ViewState): void {
 function renderActiveStatus(state: ViewState): void {
   const activeStatus = draftSelection === null ? state.activeThread?.status : undefined;
   status.className = state.error === null ? (activeStatus?.kind ?? "") : "error";
+  statusActions.hidden = !(state.error !== null && state.needsPairing);
   if (state.error !== null) {
     status.textContent = state.error;
     return;
@@ -2113,6 +2117,7 @@ globalThis.addEventListener("resize", () => {
 });
 requiredElement("new").addEventListener("click", beginNewThread);
 requiredElement("refresh").addEventListener("click", () => post({ type: "refresh" }));
+pairServer.addEventListener("click", () => vscode.postMessage({ type: "pair" }));
 visitT3.addEventListener("click", () => {
   threadActions.open = false;
   post({ type: "visitT3" });

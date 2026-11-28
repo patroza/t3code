@@ -17,8 +17,11 @@ remain synchronized. It also provides an optional native `@t3` participant insid
 The extension first uses the backend advertised by the T3 Desktop runtime beside its extension
 host. This works independently in local, SSH, and other remote windows and avoids treating a
 synced `127.0.0.1` setting as the same machine. For a fallback backend, set `t3Code.serverUrl`.
-Remote servers can use **T3 Code: Set Server Bearer Token**; the token is stored in VS Code secret
-storage and exchanged for a short-lived WebSocket ticket.
+If the local T3 Desktop server or a remote server requires pairing, run **T3 Code: Pair with
+Server…** (or click **Pair with Server…** in the sidebar) with a pairing URL or token from T3 Code
+(Settings → Sharing & access, or `t3 pair`). You can also use **T3 Code: Set Server Bearer Token**
+for a pre-issued access token; credentials are stored in VS Code secret storage and exchanged for
+short-lived WebSocket tickets.
 
 ## Dedicated chat workflow
 

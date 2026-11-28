@@ -9,11 +9,8 @@ import { resolveRemotePairingTarget } from "@t3tools/shared/remote";
 import * as vscode from "vscode";
 
 import { composePrompt, type TextContext } from "./editorContext.ts";
-import {
-  DesktopFavoritesStore,
-  readDesktopBootstrapCredential,
-  readDesktopServerUrl,
-} from "./desktopFavorites.ts";
+import { formatPairingError, selectCandidateFailure } from "./connectionErrors.ts";
+import { DesktopFavoritesStore, readDesktopServerUrl } from "./desktopFavorites.ts";
 import { classifyPairingInput, describeTokenExpiry } from "./pairing.ts";
 import { bearerTokenAppliesTo, serverCandidates } from "./serverResolution.ts";
 import { T3ChatViewProvider } from "./chatViewProvider.ts";
@@ -229,45 +226,33 @@ export function activate(context: vscode.ExtensionContext): void {
     const config = configuration();
     const bearerToken = await context.secrets.get(BEARER_TOKEN_SECRET);
     const bearerEndpoint = (await context.secrets.get(BEARER_TOKEN_ENDPOINT_SECRET)) ?? null;
-    const bootstrapCredential = await readDesktopBootstrapCredential();
-    const connect = async (serverUrl: string): Promise<void> => {
-      if (
-        bearerToken !== undefined &&
-        bearerToken !== "" &&
-        bearerTokenAppliesTo(bearerEndpoint, serverUrl)
-      ) {
-        try {
-          await client.connect(serverUrl, bearerToken);
-          return;
-        } catch (bearerCause) {
-          if (bootstrapCredential === null) throw bearerCause;
-        }
-      }
-      if (bootstrapCredential !== null) {
-        await client.connectWithBootstrap(serverUrl, bootstrapCredential);
-      } else {
-        await client.connect(serverUrl);
-      }
-    };
     const desktopServerUrl = await readDesktopServerUrl();
     const candidates = serverCandidates(desktopServerUrl, config.serverUrl, bearerEndpoint);
-    let lastCause: unknown = new Error("No T3 Code server endpoint is available.");
+    const failures: Array<unknown> = [];
     let connected = false;
     for (const candidate of candidates) {
       try {
         log(`connection candidate source=${candidate.source} endpoint=${candidate.url}`);
-        await connect(candidate.url);
+        if (
+          bearerToken !== undefined &&
+          bearerToken !== "" &&
+          bearerTokenAppliesTo(bearerEndpoint, candidate.url)
+        ) {
+          await client.connect(candidate.url, bearerToken);
+        } else {
+          await client.connect(candidate.url);
+        }
         await client.waitForShell();
         connected = true;
         break;
       } catch (cause) {
-        lastCause = cause;
+        failures.push(cause);
         log(
           `connection candidate failed source=${candidate.source} endpoint=${candidate.url} error=${cause instanceof Error ? cause.message : String(cause)}`,
         );
       }
     }
-    if (!connected) throw lastCause;
+    if (!connected) throw selectCandidateFailure(failures);
     await ensureIdentityClaim();
   };
 
@@ -370,10 +355,57 @@ export function activate(context: vscode.ExtensionContext): void {
       toggleProviderFavorite: (instanceId) => desktopFavorites.toggleProvider(instanceId),
       toggleModelFavorite: (modelKey) => desktopFavorites.toggleModel(modelKey),
       onFavoritesChanged: desktopFavorites.onDidChange,
+      pair: () => pairWithServer(),
     },
     context.extensionUri,
     context.storageUri,
   );
+
+  const pairWithServer = async (): Promise<void> => {
+    const input = await vscode.window.showInputBox({
+      password: true,
+      ignoreFocusOut: true,
+      prompt: "Paste the T3 Code pairing URL or pairing token",
+      placeHolder: "http://127.0.0.1:3773/pair#token=… or the bare token",
+    });
+    if (input === undefined || input.trim() === "") return;
+    try {
+      const trimmed = input.trim();
+      const fallbackUrl = trimmed.includes("://")
+        ? ""
+        : (serverCandidates(await readDesktopServerUrl(), configuration().serverUrl)[0]?.url ??
+          configuration().serverUrl);
+      const classified = classifyPairingInput(trimmed, fallbackUrl);
+      const { credential, httpBaseUrl } =
+        classified.kind === "url"
+          ? resolveRemotePairingTarget({ pairingUrl: classified.pairingUrl })
+          : resolveRemotePairingTarget({
+              host: classified.host,
+              pairingCode: classified.pairingCode,
+            });
+      await client.fetchCompatibleDescriptor(httpBaseUrl);
+      const { accessToken, expiresInSeconds } = await client.exchangePairingCredential(
+        httpBaseUrl,
+        credential,
+      );
+      // Validate against the issuing endpoint before touching SecretStorage.
+      // Storing first would destroy a working credential whenever pairing
+      // failed, and the token is only ever valid for the server that issued
+      // it, so this must not fall back to the desktop or configured candidate.
+      await client.connect(httpBaseUrl, accessToken);
+      await client.waitForShell();
+      await context.secrets.store(BEARER_TOKEN_SECRET, accessToken);
+      await context.secrets.store(BEARER_TOKEN_ENDPOINT_SECRET, httpBaseUrl);
+      void vscode.window.showInformationMessage(
+        `T3 Code paired with ${httpBaseUrl}, valid ${describeTokenExpiry(expiresInSeconds)}.`,
+      );
+      await chatView.refresh();
+    } catch (cause) {
+      const message = formatPairingError(cause);
+      log(`pairing failed error=${message}`);
+      void vscode.window.showErrorMessage(`T3 Code pairing failed: ${message}`);
+    }
+  };
 
   const handler: vscode.ChatRequestHandler = async (request, _chatContext, response, token) => {
     try {
@@ -521,49 +553,7 @@ export function activate(context: vscode.ExtensionContext): void {
         );
       }
     }),
-    vscode.commands.registerCommand("t3Code.pair", async () => {
-      const input = await vscode.window.showInputBox({
-        password: true,
-        ignoreFocusOut: true,
-        prompt: "Paste the T3 Code pairing URL or pairing token",
-        placeHolder: "http://127.0.0.1:3773/pair#token=… or the bare token",
-      });
-      if (input === undefined || input.trim() === "") return;
-      try {
-        const desktopServerUrl = await readDesktopServerUrl();
-        const fallbackUrl =
-          serverCandidates(desktopServerUrl, configuration().serverUrl)[0]?.url ??
-          configuration().serverUrl;
-        const classified = classifyPairingInput(input, fallbackUrl);
-        const { credential, httpBaseUrl } =
-          classified.kind === "url"
-            ? resolveRemotePairingTarget({ pairingUrl: classified.pairingUrl })
-            : resolveRemotePairingTarget({
-                host: classified.host,
-                pairingCode: classified.pairingCode,
-              });
-        const { accessToken, expiresInSeconds } = await client.exchangePairingCredential(
-          httpBaseUrl,
-          credential,
-        );
-        // Validate against the issuing endpoint before touching SecretStorage.
-        // Storing first would destroy a working credential whenever pairing
-        // failed, and the token is only ever valid for the server that issued
-        // it, so this must not fall back to the desktop or configured candidate.
-        await client.connect(httpBaseUrl, accessToken);
-        await client.waitForShell();
-        await context.secrets.store(BEARER_TOKEN_SECRET, accessToken);
-        await context.secrets.store(BEARER_TOKEN_ENDPOINT_SECRET, httpBaseUrl);
-        await ensureIdentityClaim();
-        void vscode.window.showInformationMessage(
-          `T3 Code paired with ${httpBaseUrl}, valid ${describeTokenExpiry(expiresInSeconds)}.`,
-        );
-      } catch (cause) {
-        const message = cause instanceof Error ? cause.message : String(cause);
-        log(`pairing failed error=${message}`);
-        void vscode.window.showErrorMessage(`T3 Code pairing failed: ${message}`);
-      }
-    }),
+    vscode.commands.registerCommand("t3Code.pair", pairWithServer),
     vscode.commands.registerCommand("t3Code.clearBearerToken", async () => {
       await context.secrets.delete(BEARER_TOKEN_SECRET);
       await context.secrets.delete(BEARER_TOKEN_ENDPOINT_SECRET);
